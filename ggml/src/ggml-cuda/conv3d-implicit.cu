@@ -62,28 +62,6 @@ static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, co
     }
 }
 
-template<const int layout>
-__device__ int4 inputIndices(const uint kidx, param_t param) {
-
-    const uint cur0 = fastdiv(kidx,
-        layout == 0 ? param.RSC_fastdiv : param.TRS_fastdiv);             // channel offset
-    const uint cur0_res = fastmodulo(kidx,
-        layout == 0 ? param.RSC_fastdiv : param.TRS_fastdiv);             // channel offset
-    const uint cur1 = fastdiv(cur0_res,
-        layout == 0 ? param.SC_fastdiv  : param.RS_fastdiv); // kernel r offset
-    const uint cur1_res = fastmodulo(cur0_res,
-        layout == 0 ? param.SC_fastdiv  : param.RS_fastdiv); // kernel r offset
-    const uint cur2 = fastdiv(cur1_res,
-        layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-    const uint cur3 = fastmodulo(cur1_res,
-        layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-    const uint curC = layout == 0 ? cur3 : cur0;
-    const uint curT = layout == 0 ? cur0 : cur1;
-    const uint curR = layout == 0 ? cur1 : cur2;
-    const uint curS = layout == 0 ? cur2 : cur3;
-    return make_int4(curC, curT, curR, curS);
-
-}
 
 template<typename T, const int BM, const int BN, const int BK, const int WM, const int WN,
           const int WNITER, const int TM, const int TN, const int NUM_THREADS,
@@ -553,7 +531,6 @@ static __global__ void conv3d_implicit_kernel(const float * __restrict__ input,
     }
 }
 
-#if 0
 
 template <unsigned int mma_tiles_per_warp_m, unsigned int mma_tiles_per_warp_k, unsigned int smem_stride>
 __device__ __forceinline__ void ldmatrix_a(
@@ -805,13 +782,16 @@ static __global__ void conv3d_implicit_kernel(const half * __restrict__ input,
                                               const param_t param) {
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 
-constexpr unsigned int MMA_M = 16;
-constexpr unsigned int MMA_N = 8;
+  constexpr unsigned int MMA_M = 16;
+  constexpr unsigned int MMA_N = 8;
 
+  const uint PQZ = param.Oh * param.Ow * param.Od;
 
-  const unsigned int K = param.c * param.r * param.s;
+  const unsigned int K = param.c * param.r * param.s * param.t;
+  const uint weightKOffset = K; //param.c * param.r * param.s * param.t;
   const uint inChannelOffset = param.c * param.w;
-  const uint weightKOffset = param.c * param.r * param.s;
+  const uint inDepthOffset = param.h * param.c * param.w;  
+  const uint inNOffset = param.c * param.w * param.h * param.d;
 
   // loop bounds, constexpr where possible allows for loop unrolling
   constexpr unsigned int mma_tiles_per_warp_k = 4;
@@ -863,7 +843,7 @@ constexpr unsigned int MMA_N = 8;
 
   const half* A_block_gmem = input;
   const half* B_block_gmem = kernel + block_n * BN * weightKOffset;
-  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, inChannelOffset, param);
+  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, inNOffset, inDepthOffset, inChannelOffset, param);
   tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, weightKOffset, param);
 
   int offset_direction = 1;
@@ -874,7 +854,8 @@ constexpr unsigned int MMA_N = 8;
     if (block_k != num_block_tiles_k){
       const half* A_block_gmem = input;
       const half* B_block_gmem = kernel + (block_n * BN * weightKOffset);
-      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, block_k * BK, inChannelOffset, param);
+      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, block_k * BK, 
+                                             inNOffset, inDepthOffset, inChannelOffset, param);
       tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, block_k * BK, weightKOffset, param);
     }
     half* A_warp_tile = A_block_smem + (warp_m * WM * BK);
@@ -954,10 +935,13 @@ constexpr unsigned int MMA_N = 8;
             for (int j = 0; j < 4; ++j){
                 const uint row =  m_idx + subk + i * WN / 2;
                 const uint gemm_i =  n_idx + j*32;
-                const int n = fastdiv(gemm_i, param.OHOW_fastdiv);
-                const int col = fastmodulo(gemm_i, param.OHOW_fastdiv);
-                if(n < param.n && row < param.k && col < param.Oh * param.Ow){
-                    const uint outOffset = n * param.k * param.Oh * param.Ow + row * param.Oh * param.Ow + col;
+                // const int n = fastdiv(gemm_i, param.OHOW_fastdiv);
+                // const int col = fastmodulo(gemm_i, param.OHOW_fastdiv);
+                const int n = fastdiv(gemm_i, param.PQZ_fastdiv);
+                const int col = fastmodulo(gemm_i, param.PQZ_fastdiv);
+                if(n < param.n && row < param.k && col < PQZ){
+                    // const uint outOffset = n * param.k * param.Oh * param.Ow + row * param.Oh * param.Ow + col;
+                    const uint outOffset = (n * param.k + row) * PQZ + col;
                     uint idx = output_lds_addr + subk + j*32*BN/2;
                     idx = idx ^ ((idx & 0b1110000000) >> 4);
                     output[outOffset] = smemoutput[idx];
@@ -973,8 +957,6 @@ constexpr unsigned int MMA_N = 8;
     NO_DEVICE_CODE;
 #endif
 }
-
-#endif
 
 #define NUM_VARIANTS 4
 
@@ -1021,64 +1003,64 @@ static void conv3d_implicit_cuda(const float * X_D, const T * K_D, float * Y_D, 
 
 static void conv3d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const float * X_D, const half * K_D, float * Y_D, int cc, const param_t P, cudaStream_t st) {
 
-    // if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0 && (P.r > 1 || P.s > 1 || P.t > 1)) {
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0 && (P.r > 1 || P.s > 1 || P.t > 1)) {
 
-    //     int id = ggml_cuda_get_device();
+        int id = ggml_cuda_get_device();
 
-    //     int64_t ne = P.c * P.h * P.w * P.n;
-    //     int64_t ne00 = P.c;
-    //     int64_t ne01 = P.h * P.w;
-    //     ggml_cuda_pool_alloc<half> input_f16(ctx.pool(id), ne);
+        int64_t ne = P.c * P.h * P.w * P.n;
+        int64_t ne00 = P.c;
+        int64_t ne01 = P.h * P.w;
+        ggml_cuda_pool_alloc<half> input_f16(ctx.pool(id), ne);
 
-    //     dim3 dimGrid( (ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
-    //                   (ne00 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
-    //                   (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM) ;
-    //     dim3 dimBlock(CUDA_NCHW_2_NHWC_TILE_DIM,CUDA_NCHW_2_NHWC_BLOCK_ROWS, 1);
-    //     NCHW2NHWC<float, half><<<dimGrid, dimBlock, 0, st>>>(X_D, input_f16.get(), ne, ne00, ne01);
+        dim3 dimGrid( (ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                      (ne00 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                      (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM) ;
+        dim3 dimBlock(CUDA_NCHW_2_NHWC_TILE_DIM,CUDA_NCHW_2_NHWC_BLOCK_ROWS, 1);
+        NCHW2NHWC<float, half><<<dimGrid, dimBlock, 0, st>>>(X_D, input_f16.get(), ne, ne00, ne01);
 
-    //     ne = P.c * P.r * P.s * P.k;
-    //     ne01 = P.r * P.s;
-    //     ggml_cuda_pool_alloc<half> kernel_f16(ctx.pool(id), ne);
-    //     dim3 dimGrid1((ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
-    //                   (ne00 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
-    //                   (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM) ;
-    //     NCHW2NHWC<half, half><<<dimGrid1, dimBlock, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+        ne = P.c * P.r * P.s * P.k;
+        ne01 = P.r * P.s;
+        ggml_cuda_pool_alloc<half> kernel_f16(ctx.pool(id), ne);
+        dim3 dimGrid1((ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                      (ne00 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                      (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM) ;
+        NCHW2NHWC<half, half><<<dimGrid1, dimBlock, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
 
-    //     const half *X_H = input_f16.get();
-    //     const half *K_H = kernel_f16.get();
-    //     ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), P.k * P.Oh * P.Ow * P.n);
+        const half *X_H = input_f16.get();
+        const half *K_H = kernel_f16.get();
+        ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), P.k * P.Od *P.Oh * P.Ow * P.n);
 
-    //     constexpr unsigned int BM_dim = 256;
-    //     constexpr unsigned int BN_dim = 256;
-    //     constexpr unsigned int BK_dim = 32;
+        constexpr unsigned int BM_dim = 256;
+        constexpr unsigned int BN_dim = 256;
+        constexpr unsigned int BK_dim = 32;
 
-    //     constexpr unsigned int WARPS_PER_BLOCK_M = 2;
-    //     constexpr unsigned int WARPS_PER_BLOCK_N = 4;
-    //     constexpr unsigned int WARPS_PER_BLOCK_K = 4;
+        constexpr unsigned int WARPS_PER_BLOCK_M = 2;
+        constexpr unsigned int WARPS_PER_BLOCK_N = 4;
+        constexpr unsigned int WARPS_PER_BLOCK_K = 4;
 
-    //     constexpr unsigned int WM_dim = BM_dim / WARPS_PER_BLOCK_M;
-    //     constexpr unsigned int WN_dim = BN_dim / WARPS_PER_BLOCK_N;
-    //     constexpr unsigned int WK_dim = BK_dim / WARPS_PER_BLOCK_K;
-    //     const unsigned int BlocksM =  (P.n * P.Oh * P.Ow + BM_dim - 1) / BM_dim;
-    //     const unsigned int BlocksN =  (P.k + BN_dim - 1) / BN_dim;
-    //     constexpr unsigned int ThreadsM = WARPS_PER_BLOCK_M;
-    //     constexpr unsigned int ThreadsN = WARPSIZE * WARPS_PER_BLOCK_N;
-    //     constexpr unsigned int NumThreads = ThreadsM * ThreadsN;
-    //     const unsigned int shmem_bytes = (BM_dim * BK_dim + BK_dim * BN_dim) * 2 * sizeof(half);
+        constexpr unsigned int WM_dim = BM_dim / WARPS_PER_BLOCK_M;
+        constexpr unsigned int WN_dim = BN_dim / WARPS_PER_BLOCK_N;
+        constexpr unsigned int WK_dim = BK_dim / WARPS_PER_BLOCK_K;
+        const unsigned int BlocksM =  (P.n * P.Oh * P.Ow * P.Od + BM_dim - 1) / BM_dim;
+        const unsigned int BlocksN =  (P.k + BN_dim - 1) / BN_dim;
+        constexpr unsigned int ThreadsM = WARPS_PER_BLOCK_M;
+        constexpr unsigned int ThreadsN = WARPSIZE * WARPS_PER_BLOCK_N;
+        constexpr unsigned int NumThreads = ThreadsM * ThreadsN;
+        const unsigned int shmem_bytes = (BM_dim * BK_dim + BK_dim * BN_dim) * 2 * sizeof(half);
 
-    //     cudaFuncSetAttribute(conv3d_implicit_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, NumThreads>,
-    //            cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
-    //     dim3 gridDim(BlocksN, BlocksM);
-    //     dim3 blockDim(ThreadsN, ThreadsM);
+        cudaFuncSetAttribute(conv3d_implicit_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, NumThreads>,
+               cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
+        dim3 gridDim(BlocksN, BlocksM);
+        dim3 blockDim(ThreadsN, ThreadsM);
 
-    //     conv3d_implicit_kernel<BM_dim, BN_dim, BK_dim,
-    //         WM_dim, WN_dim, WK_dim, NumThreads>
-    //         <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_H.get(), P);
-    //     const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
-    //     to_fp32_cuda(Y_H.get(), Y_D, P.k * P.Oh * P.Ow * P.n, st);
-    // } else{
+        conv3d_implicit_kernel<BM_dim, BN_dim, BK_dim,
+            WM_dim, WN_dim, WK_dim, NumThreads>
+            <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_H.get(), P);
+        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
+        to_fp32_cuda(Y_H.get(), Y_D, P.k * P.Oh * P.Ow *P.Od * P.n, st);
+    } else{
        conv3d_implicit_cuda<half, 1>(X_D, K_D, Y_D, P, st);
-    // }
+    }
 
 }
 
