@@ -4440,6 +4440,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // TODO: should we have a separate n_parallel parameter for the server?
+    //       https://github.com/ggml-org/llama.cpp/pull/16736#discussion_r2483763177
     if (params.n_parallel == 1 && params.kv_unified == false) {
         LOG_WRN("%s: setting n_parallel = 4 and kv_unified = true\n", __func__);
 

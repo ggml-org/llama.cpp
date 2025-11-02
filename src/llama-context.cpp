@@ -115,8 +115,16 @@ llama_context::llama_context(
     if (cparams.kv_unified) {
         cparams.n_ctx_seq = cparams.n_ctx;
     } else {
-        cparams.n_ctx_seq = cparams.n_ctx     / cparams.n_seq_max;
-        cparams.n_ctx     = cparams.n_ctx_seq * cparams.n_seq_max;
+        cparams.n_ctx_seq = cparams.n_ctx / cparams.n_seq_max;
+
+        if (cparams.n_ctx_seq == 0) {
+            throw std::runtime_error("n_ctx_seq == 0");
+        }
+
+        if (cparams.n_ctx != cparams.n_ctx_seq * cparams.n_seq_max) {
+            cparams.n_ctx =  cparams.n_ctx_seq * cparams.n_seq_max;
+            LLAMA_LOG_WARN("%s: n_ctx is not divisible by n_seq_max - rounding down to %u\n", __func__, cparams.n_ctx);
+        }
     }
 
     LLAMA_LOG_INFO("%s: n_seq_max     = %u\n",   __func__, cparams.n_seq_max);
