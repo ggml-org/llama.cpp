@@ -28,6 +28,10 @@
     background-color: lightpink;
 }
 
+#UsageNote {
+    margin: 0.0vmin;
+}
+
 .chat-message {
     border-style: solid;
     border-color: grey;
