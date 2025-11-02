@@ -94,13 +94,17 @@ remember to
 
   * cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config simpleproxy.json
 
-  * remember that this is a relatively minimal dumb proxy logic along with optional stripping of non textual
-  content like head, scripts, styles, headers, footers, ... Be careful when accessing web through this and
-  use it only with known safe sites.
+  * remember that this is a relatively minimal dumb proxy logic which can fetch html or pdf content and
+  inturn optionally provide plain text version of the content by stripping off non textual/core contents.
+  Be careful when accessing web through this and use it only with known safe sites.
 
   * look into local.tools/simpleproxy.json for specifying
 
+    * the white list of allowed.schemes
+      * you may want to use this to disable local file access and or disable http access,
+        and inturn retaining only https based urls or so.
     * the white list of allowed.domains
+      * review and update this to match your needs.
     * the shared bearer token between server and client ui
 
 * other builtin tool / function calls like calculator, javascript runner, DataStore dont require the
@@ -389,14 +393,14 @@ like
 sessions by getting it to also create and execute mathematical expressions or code to verify
 such stuff and so.
 
-* access content from internet and augment the ai model's context with additional data as
-needed to help generate better responses. this can also be used for
+* access content (including html, pdf, text based...) from local file system or the internet
+and augment the ai model's context with additional data as needed to help generate better
+responses. This can also be used for
   * generating the latest news summary by fetching from news aggregator sites and collating
   organising and summarising the same
-  * searching for specific topics and summarising the results
+  * searching for specific topics and summarising the search results and or fetching and
+  analysing found data to generate summary or to explore / answer queries around that data ...
   * or so
-
-* one could also augment additional data / info by accessing text content from pdf files
 
 * save collated data or generated analysis or more to the provided data store and retrieve
 them later to augment the analysis / generation then. Also could be used to summarise chat
@@ -444,16 +448,18 @@ Either way always remember to cross check the tool requests and generated respon
 * search_web_text - search for the specified words using the configured search engine and return the
 plain textual content from the search result page.
 
+* pdf2text - fetch/read specified pdf file and extract its textual content
+  * this depends on the pypdf python based open source library
+
 the above set of web related tool calls work by handshaking with a bundled simple local web proxy
 (/caching in future) server logic, this helps bypass the CORS restrictions applied if trying to
 directly fetch from the browser js runtime environment.
 
-* pdf2text - fetch/read specified pdf file and extract its textual content
+Local file access is also enabled for web fetch and pdf tool calls, if one uses the file:/// scheme
+in the url, so be careful as to where and under which user id the simple proxy will be run.
 
-  * local file access is enabled for this feature, so be careful as to where and under which user id
-  the simple proxy will be run.
-
-  * this depends on the pypdf python based open source library
+* one can always disable local file access by removing 'file' from the list of allowed.schemes in
+simpleproxy.json config file.
 
 Implementing some of the tool calls through the simpleproxy.py server and not directly in the browser
 js env, allows one to isolate the core of these logic within a discardable VM or so, by running the
@@ -463,7 +469,7 @@ Depending on the path specified wrt the proxy server, it executes the correspond
 urltext path is used (and not urlraw), the logic in addition to fetching content from given url, it
 tries to convert html content into equivalent plain text content to some extent in a simple minded
 manner by dropping head block as well as all scripts/styles/footers/headers/nav blocks and inturn
-dropping the html tags.
+also dropping the html tags. Similarly for pdf2text.
 
 The client ui logic does a simple check to see if the bundled simpleproxy is running at specified
 proxyUrl before enabling these web and related tool calls.
@@ -475,7 +481,8 @@ The bundled simple proxy
 
 * it provides for a basic white list of allowed domains to access, to be specified by the end user.
   This should help limit web access to a safe set of sites determined by the end user. There is also
-  a provision for shared bearer token to be specified by the end user.
+  a provision for shared bearer token to be specified by the end user. One could even control what
+  schemes are supported wrt the urls.
 
 * it tries to mimic the client/browser making the request to it by propogating header entries like
   user-agent, accept and accept-language from the got request to the generated request during proxying
@@ -572,13 +579,15 @@ users) own data or data of ai model.
 
 Trap http response errors and inform user the specific error returned by ai server.
 
-Initial go at a pdf2text tool call. For now it allows local pdf files to be read and their text content
-extracted and passed to ai model for further processing, as decided by ai and end user.
+Initial go at a pdf2text tool call. It allows web / local pdf files to be read and their text content
+extracted and passed to ai model for further processing, as decided by ai and end user. One could
+either work with the full pdf or a subset of adjacent pages.
 
 SimpleProxy
 * Convert from a single monolithic file into a collection of modules.
 * UrlValidator to cross check scheme and domain of requested urls,
   the whitelist inturn picked from config json
+* Helpers to fetch file from local file system or the web, transparently
 
 #### ToDo
 
@@ -594,8 +603,6 @@ same when saved chat is loaded.
 
 MAYBE make the settings in general chat session specific, rather than the current global config flow.
 
-Provide tool to allow for specified pdf files to be converted to equivalent plain text form, so that ai
-can be used to work with the content in those PDFs.
 
 ### Debuging the handshake and beyond
 
