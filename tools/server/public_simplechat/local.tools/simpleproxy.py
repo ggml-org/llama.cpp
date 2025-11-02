@@ -24,9 +24,9 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 import html.parser
-import re
 import time
 import urlvalidator as uv
+from typing import Callable
 
 
 gMe = {
@@ -109,6 +109,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return { 'AllOk': False, 'Msg': "Invalid auth" }
         return { 'AllOk': True, 'Msg': "Auth Ok" }
 
+    def auth_and_run(self, pr:urllib.parse.ParseResult, handler:Callable[['ProxyHandler', urllib.parse.ParseResult], None]):
+        """
+        If authorisation is ok for the request, run the specified handler.
+        """
+        acGot = self.auth_check()
+        if not acGot['AllOk']:
+            self.send_error(400, f"WARN:{acGot['Msg']}")
+        else:
+            try:
+                handler(self, pr)
+            except Exception as e:
+                self.send_error(400, f"ERRR:ProxyHandler:{e}")
+
     def do_GET(self):
         """
         Handle GET requests
@@ -119,23 +132,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         print(f"DBUG:ProxyHandler:GET:{pr}")
         match pr.path:
             case '/urlraw':
-                acGot = self.auth_check()
-                if not acGot['AllOk']:
-                    self.send_error(400, f"WARN:{acGot['Msg']}")
-                else:
-                    handle_urlraw(self, pr)
+                self.auth_and_run(pr, handle_urlraw)
             case '/urltext':
-                acGot = self.auth_check()
-                if not acGot['AllOk']:
-                    self.send_error(400, f"WARN:{acGot['Msg']}")
-                else:
-                    handle_urltext(self, pr)
+                self.auth_and_run(pr, handle_urltext)
             case '/pdf2text':
-                acGot = self.auth_check()
-                if not acGot['AllOk']:
-                    self.send_error(400, f"WARN:{acGot['Msg']}")
-                else:
-                    handle_pdf2text(self, pr)
+                self.auth_and_run(pr, handle_pdf2text)
             case '/aum':
                 handle_aum(self, pr)
             case _:
