@@ -3249,7 +3249,6 @@ struct clip_model_loader {
         }
     }
 
-    // return false if at least one op is not supported by the backend
     static support_info_graph alloc_compute_meta(clip_ctx & ctx_clip) {
         const auto & hparams = ctx_clip.model.hparams;
         ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
