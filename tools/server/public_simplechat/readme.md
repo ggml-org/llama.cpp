@@ -575,6 +575,11 @@ Trap http response errors and inform user the specific error returned by ai serv
 Initial go at a pdf2text tool call. For now it allows local pdf files to be read and their text content
 extracted and passed to ai model for further processing, as decided by ai and end user.
 
+SimpleProxy
+* Convert from a single monolithic file into a collection of modules.
+* UrlValidator to cross check scheme and domain of requested urls,
+  the whitelist inturn picked from config json
+
 #### ToDo
 
 Is the tool call promise land trap deep enough, need to think through and explore around this once later.
