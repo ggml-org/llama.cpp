@@ -1664,6 +1664,7 @@ struct server_slot {
     bool has_new_line   = false;
     bool truncated      = false;
     bool minimax_reasoning_prefix_injected = false;
+    bool minimax_reasoning_prefix_streamed = false;
 
     stop_type stop;
 
@@ -1735,6 +1736,7 @@ struct server_slot {
         has_new_line   = false;
         truncated      = false;
         minimax_reasoning_prefix_injected = false;
+        minimax_reasoning_prefix_streamed  = false;
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
@@ -2804,16 +2806,8 @@ struct server_context {
 
         const bool needs_minimax_prefix =
             slot.task->params.oaicompat_chat_syntax.reasoning_format == COMMON_REASONING_FORMAT_MINIMAX_M2;
-        if (needs_minimax_prefix) {
-            slot.minimax_reasoning_prefix_injected = true;
-            if (slot.task->params.stream) {
-                completion_token_output prefix_chunk{};
-                prefix_chunk.tok          = LLAMA_TOKEN_NULL;
-                prefix_chunk.prob         = 0.0f;
-                prefix_chunk.text_to_send = "<think>\n";
-                send_partial_response(slot, prefix_chunk, false);
-            }
-        }
+        slot.minimax_reasoning_prefix_injected = needs_minimax_prefix;
+        slot.minimax_reasoning_prefix_streamed = false;
 
         SLT_INF(slot, "%s", "processing task\n");
 
@@ -2874,8 +2868,26 @@ struct server_context {
             result.text_to_send = token_str;
             slot.add_token(result);
             result.text_to_send = std::move(delta_to_send);
-            if (slot.task->params.stream) {
-                send_partial_response(slot, result, false);
+
+            auto stream_with_minimax_prefix = [&](const completion_token_output & chunk) {
+                if (!slot.task->params.stream) {
+                    return;
+                }
+
+                if (slot.minimax_reasoning_prefix_injected && !slot.minimax_reasoning_prefix_streamed) {
+                    completion_token_output prefix_chunk{};
+                    prefix_chunk.tok          = LLAMA_TOKEN_NULL;
+                    prefix_chunk.prob         = 0.0f;
+                    prefix_chunk.text_to_send = "<think>\n";
+                    send_partial_response(slot, prefix_chunk, false);
+                    slot.minimax_reasoning_prefix_streamed = true;
+                }
+
+                send_partial_response(slot, chunk, false);
+            };
+
+            if (send_text) {
+                stream_with_minimax_prefix(result);
             }
         }
 
