@@ -4844,7 +4844,9 @@ struct test_moe_expert_reduce : public test_case {
 
             std::string name = "expert_view_" + std::to_string(i);
             ggml_set_name(expert_views[i], name.c_str());
-            ggml_build_forward_expand(gf, expert_views[i]);
+            if (gf) {
+                ggml_build_forward_expand(gf, expert_views[i]);
+            }
         }
 
         ggml_tensor * moe_out = expert_views[0];
