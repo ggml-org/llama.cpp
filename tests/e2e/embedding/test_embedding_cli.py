@@ -1,14 +1,17 @@
-import os, json, subprocess, hashlib
+import json
+import hashlib
+import os
+import pytest
+import subprocess
 from pathlib import Path
 import numpy as np
-import pytest
 
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
 
 EPS = 1e-3
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 EXE = REPO_ROOT / ("build/bin/llama-embedding.exe" if os.name == "nt" else "build/bin/llama-embedding")
 DEFAULT_ENV = {**os.environ, "LLAMA_CACHE": os.environ.get("LLAMA_CACHE", "tmp")}
 SEED = "42"
@@ -95,6 +98,7 @@ def embedding_hash(vec: np.ndarray) -> str:
 
 # Register custom mark so pytest doesn't warn about it
 pytestmark = pytest.mark.filterwarnings("ignore::pytest.PytestUnknownMarkWarning")
+
 
 @pytest.mark.slow
 @pytest.mark.parametrize("fmt", ["raw", "json"])

@@ -4,19 +4,25 @@ name: Embedding CLI
 on:
     workflow_dispatch:
     push:
-        branches:
-            - feature/*
-            - master
+        branches: [master, feature/**]
         paths:
-            - '.github/workflows/embeddings.yml'
-            - 'examples/embedding/**'
-            - 'examples/tests/**'
+            - '.github/workflows/embedding.yml'
+            - 'examples/**'
+            - 'src/**'
+            - 'ggml/**'
+            - 'include/**'
+            - '**/CMakeLists.txt'
+            - 'tests/e2e/embedding/**'
     pull_request:
         types: [opened, synchronize, reopened]
         paths:
-            - '.github/workflows/embeddings.yml'
-            - 'examples/embedding/**'
-            - 'examples/tests/**'
+            - '.github/workflows/embedding.yml'
+            - 'examples/**'
+            - 'src/**'
+            - 'ggml/**'
+            - 'include/**'
+            - '**/CMakeLists.txt'
+            - 'tests/e2e/embedding/**'
 
 jobs:
     embedding-cli-tests:
@@ -56,4 +62,4 @@ jobs:
 
             - name: Run embedding tests
               run: |
-                  pytest -v examples/tests
+                  pytest -v tests/e2e/embedding
