@@ -478,47 +478,6 @@ class SimpleChat {
     }
 
     /**
-     * Show the chat contents in the specified div.
-     * Also update the user query input box, with ToolTemp role message, if any.
-     *
-     * If requested to clear prev stuff and inturn no chat content then show
-     * * usage info
-     * * option to load prev saved chat if any
-     * * as well as settings/info.
-     * @param {HTMLDivElement} div
-     * @param {HTMLInputElement} elInUser
-     * @param {boolean} bClear
-     * @param {boolean} bShowInfoAll
-     */
-    showTOREMOVE(div, elInUser, bClear=true, bShowInfoAll=false) {
-        if (bClear) {
-            div.replaceChildren();
-        }
-        let last = undefined;
-        for(const [i, x] of this.recent_chat(gMe.chatProps.iRecentUserMsgCnt).entries()) {
-            if (x.ns.role === Roles.ToolTemp) {
-                if (i == (this.xchat.length - 1)) {
-                    elInUser.value = x.ns.content;
-                }
-                continue
-            }
-            let entry = ui.el_create_append_p(`${x.ns.role}: ${x.content_equiv()}`, div);
-            entry.className = `role-${x.ns.role}`;
-            last = entry;
-        }
-        if (last !== undefined) {
-            last.scrollIntoView(false);
-        } else {
-            if (bClear) {
-                div.innerHTML = gUsageMsg;
-                gMe.setup_load(div, this);
-                gMe.show_info(div, bShowInfoAll);
-            }
-        }
-        return last;
-    }
-
-    /**
      * Setup the fetch headers.
      * It picks the headers from gMe.headers.
      * It inserts Authorization only if its non-empty.
