@@ -201,6 +201,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
             msg.role = message.at("role");
 
             auto has_content = message.contains("content");
+            auto has_reasoning_content = message.contains("reasoning_content");
             auto has_tool_calls = message.contains("tool_calls");
             if (has_content) {
                 const auto & content = message.at("content");
@@ -249,8 +250,8 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                     msg.tool_calls.push_back(tc);
                 }
             }
-            if (!has_content && !has_tool_calls) {
-                throw std::runtime_error("Expected 'content' or 'tool_calls' (ref: https://github.com/ggml-org/llama.cpp/issues/8367 & https://github.com/ggml-org/llama.cpp/issues/12279)");
+            if (!has_content && !has_tool_calls && !has_reasoning_content) {
+                throw std::runtime_error("Expected 'content', 'reasoning_content' or 'tool_calls' (ref: https://github.com/ggml-org/llama.cpp/issues/8367 & https://github.com/ggml-org/llama.cpp/issues/12279)");
             }
             if (message.contains("reasoning_content")) {
                 msg.reasoning_content = message.at("reasoning_content");

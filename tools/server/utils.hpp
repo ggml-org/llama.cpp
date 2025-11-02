@@ -595,8 +595,8 @@ static json oaicompat_chat_params_parse(
             throw std::runtime_error("All non-assistant messages must contain 'content'");
         }
         if (role == "assistant") {
-            if (!msg.contains("content") && !msg.contains("tool_calls")) {
-                throw std::runtime_error("Assistant message must contain either 'content' or 'tool_calls'!");
+            if (!msg.contains("content") && !msg.contains("tool_calls") && !msg.contains("reasoning_content")) {
+                throw std::runtime_error("Assistant message must contain either 'content' or 'tool_calls' or 'reasoning_content'!");
             }
             if (!msg.contains("content")) {
                 continue; // avoid errors with no content
