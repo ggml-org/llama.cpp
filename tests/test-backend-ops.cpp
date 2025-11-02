@@ -3840,18 +3840,6 @@ struct test_floor : public test_case {
             init_tensor_uniform(t, -6.5f, 6.5f); // Covers interval [-2*pi, 2*pi].
         }
     }
-
-    double max_maa_err() override {
-        return 1e-3;
-    }
-
-    float grad_eps() override {
-        return 0.2f;
-    }
-
-    bool grad_precise() override {
-        return true;
-    }
 };
 // GGML_OP_CEIL
 struct test_ceil : public test_case {
@@ -3881,18 +3869,6 @@ struct test_ceil : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             init_tensor_uniform(t, -6.5f, 6.5f); // Covers interval [-2*pi, 2*pi].
         }
-    }
-
-    double max_maa_err() override {
-        return 1e-3;
-    }
-
-    float grad_eps() override {
-        return 0.2f;
-    }
-
-    bool grad_precise() override {
-        return true;
     }
 };
 
@@ -3925,18 +3901,6 @@ struct test_round : public test_case {
             init_tensor_uniform(t, -6.5f, 6.5f); // Covers interval [-2*pi, 2*pi].
         }
     }
-
-    double max_maa_err() override {
-        return 1e-3;
-    }
-
-    float grad_eps() override {
-        return 0.2f;
-    }
-
-    bool grad_precise() override {
-        return true;
-    }
 };
 
 // GGML_OP_TRUNC
@@ -3967,18 +3931,6 @@ struct test_trunc : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             init_tensor_uniform(t, -6.5f, 6.5f); // Covers interval [-2*pi, 2*pi].
         }
-    }
-
-    double max_maa_err() override {
-        return 1e-3;
-    }
-
-    float grad_eps() override {
-        return 0.2f;
-    }
-
-    bool grad_precise() override {
-        return true;
     }
 };
 

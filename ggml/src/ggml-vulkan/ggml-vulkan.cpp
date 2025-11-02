@@ -8249,26 +8249,6 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_cos_f32;
         }
         return nullptr;
-    case GGML_OP_FLOOR:
-        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_floor_f32;
-        }
-        return nullptr;
-    case GGML_OP_CEIL:
-        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_ceil_f32;
-        }
-        return nullptr;
-    case GGML_OP_ROUND:
-        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_round_f32;
-        }
-        return nullptr;
-    case GGML_OP_TRUNC:
-        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_trunc_f32;
-        }
-        return nullptr;
     case GGML_OP_CLAMP:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_clamp_f32;
@@ -8366,6 +8346,26 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 return ctx->device->pipeline_hardsigmoid[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_HARDSWISH:
                 return ctx->device->pipeline_hardswish[dst->type == GGML_TYPE_F16];
+            case GGML_UNARY_OP_FLOOR:
+                if (dst->type == GGML_TYPE_F32) {
+                    return ctx->device->pipeline_floor_f32;
+                }
+                break;
+            case GGML_UNARY_OP_CEIL:
+                if (dst->type == GGML_TYPE_F32) {
+                    return ctx->device->pipeline_ceil_f32;
+                }
+                break;
+            case GGML_UNARY_OP_ROUND:
+                if (dst->type == GGML_TYPE_F32) {
+                    return ctx->device->pipeline_round_f32;
+                }
+                break;
+            case GGML_UNARY_OP_TRUNC:
+                if (dst->type == GGML_TYPE_F32) {
+                    return ctx->device->pipeline_trunc_f32;
+                }
+                break;
             default:
                 break;
         }
@@ -8660,10 +8660,6 @@ static bool ggml_vk_op_supports_incontiguous(ggml_op op) {
     case GGML_OP_SUM:
     case GGML_OP_SUM_ROWS:
     case GGML_OP_MEAN:
-    case GGML_OP_FLOOR:
-    case GGML_OP_CEIL:
-    case GGML_OP_ROUND:
-    case GGML_OP_TRUNC:
         return true;
     default:
         return false;
@@ -9037,10 +9033,6 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_UNARY:
     case GGML_OP_GLU:
     case GGML_OP_CONV_2D_DW:
-    case GGML_OP_FLOOR:
-    case GGML_OP_CEIL:
-    case GGML_OP_ROUND:
-    case GGML_OP_TRUNC:
         {
             uint32_t ne = ggml_nelements(dst);
             if (op == GGML_OP_CPY && ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
@@ -9844,19 +9836,19 @@ static void ggml_vk_cos(ggml_backend_vk_context * ctx, vk_context& subctx, const
 }
 
 static void ggml_vk_floor(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
-    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_FLOOR, vk_op_unary_push_constants_init(src0, dst), dryrun);
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_UNARY, vk_op_unary_push_constants_init(src0, dst), dryrun);
 }
 
 static void ggml_vk_ceil(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
-    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_CEIL, vk_op_unary_push_constants_init(src0, dst), dryrun);
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_UNARY, vk_op_unary_push_constants_init(src0, dst), dryrun);
 }
 
 static void ggml_vk_round(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
-    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_ROUND, vk_op_unary_push_constants_init(src0, dst), dryrun);
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_UNARY, vk_op_unary_push_constants_init(src0, dst), dryrun);
 }
 
 static void ggml_vk_trunc(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
-    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_TRUNC, vk_op_unary_push_constants_init(src0, dst), dryrun);
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_UNARY, vk_op_unary_push_constants_init(src0, dst), dryrun);
 }
 
 static void ggml_vk_clamp(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
@@ -11541,6 +11533,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_SIGMOID:
         case GGML_UNARY_OP_HARDSIGMOID:
         case GGML_UNARY_OP_HARDSWISH:
+        case GGML_UNARY_OP_FLOOR:
+        case GGML_UNARY_OP_CEIL:
+        case GGML_UNARY_OP_ROUND:
+        case GGML_UNARY_OP_TRUNC:
             break;
         default:
             return false;
@@ -11630,10 +11626,6 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_FLASH_ATTN_EXT:
     case GGML_OP_OPT_STEP_ADAMW:
     case GGML_OP_OPT_STEP_SGD:
-    case GGML_OP_FLOOR:
-    case GGML_OP_CEIL:
-    case GGML_OP_ROUND:
-    case GGML_OP_TRUNC:
         break;
     default:
         std::cerr << "ggml_vulkan: Error: Missing op: " << ggml_op_name(node->op) << std::endl;
@@ -11701,10 +11693,6 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_LEAKY_RELU:
         case GGML_OP_OPT_STEP_SGD:
-        case GGML_OP_FLOOR:
-        case GGML_OP_CEIL:
-        case GGML_OP_ROUND:
-        case GGML_OP_TRUNC:
             {
                 // These operations all go through ggml_vk_op_f32, so short-circuit and
                 // do the only thing needed for the dryrun.
@@ -11885,22 +11873,6 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_cos(ctx, compute_ctx, src0, node, dryrun);
 
         break;
-    case GGML_OP_FLOOR:
-        ggml_vk_floor(ctx, compute_ctx, src0, node, dryrun);
-
-        break;
-    case GGML_OP_CEIL:
-        ggml_vk_ceil(ctx, compute_ctx, src0, node, dryrun);
-
-        break;
-    case GGML_OP_ROUND:
-        ggml_vk_round(ctx, compute_ctx, src0, node, dryrun);
-
-        break;
-    case GGML_OP_TRUNC:
-        ggml_vk_trunc(ctx, compute_ctx, src0, node, dryrun);
-
-        break;
     case GGML_OP_CLAMP:
         ggml_vk_clamp(ctx, compute_ctx, src0, node, dryrun);
 
@@ -11965,6 +11937,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_SIGMOID:
         case GGML_UNARY_OP_HARDSIGMOID:
         case GGML_UNARY_OP_HARDSWISH:
+        case GGML_UNARY_OP_FLOOR:
+        case GGML_UNARY_OP_CEIL:
+        case GGML_UNARY_OP_ROUND:
+        case GGML_UNARY_OP_TRUNC:
             ggml_vk_unary(ctx, compute_ctx, src0, node, dryrun);
             break;
         default:
@@ -13933,10 +13909,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_LEAKY_RELU:
         case GGML_OP_OPT_STEP_ADAMW:
         case GGML_OP_OPT_STEP_SGD:
-        case GGML_OP_FLOOR:
-        case GGML_OP_CEIL:
-        case GGML_OP_ROUND:
-        case GGML_OP_TRUNC:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_ARGSORT:
             return op->ne[0] <= max_argsort_cols;
@@ -14450,20 +14422,30 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         tensor_clone = ggml_sin(ggml_ctx, src_clone[0]);
     } else if (tensor->op == GGML_OP_COS) {
         tensor_clone = ggml_cos(ggml_ctx, src_clone[0]);
-    } else if (tensor->op == GGML_OP_FLOOR) {
-        tensor_clone = ggml_floor(ggml_ctx, src_clone[0]);
-    } else if (tensor->op == GGML_OP_CEIL) {
-        tensor_clone = ggml_ceil(ggml_ctx, src_clone[0]);
-    } else if (tensor->op == GGML_OP_ROUND) {
-        tensor_clone = ggml_round(ggml_ctx, src_clone[0]);
-    } else if (tensor->op == GGML_OP_TRUNC) {
-        tensor_clone = ggml_trunc(ggml_ctx, src_clone[0]);
+    } else if (tensor->op == GGML_OP_UNARY) {
+        switch (ggml_get_unary_op(tensor)) {
+            case GGML_UNARY_OP_FLOOR:
+                tensor_clone = ggml_floor(ggml_ctx, src_clone[0]);
+                break;
+            case GGML_UNARY_OP_CEIL:
+                tensor_clone = ggml_ceil(ggml_ctx, src_clone[0]);
+                break;
+            case GGML_UNARY_OP_ROUND:
+                tensor_clone = ggml_round(ggml_ctx, src_clone[0]);
+                break;
+            case GGML_UNARY_OP_TRUNC:
+                tensor_clone = ggml_trunc(ggml_ctx, src_clone[0]);
+                break;
+            default:
+                std::cerr << "Unsupported unary op: " << ggml_unary_op_name(ggml_get_unary_op(tensor)) << std::endl;
+                GGML_ABORT("fatal error");
+        }
     } else if (tensor->op == GGML_OP_CLAMP) {
         const float * params = (const float *)tensor->op_params;
         tensor_clone = ggml_clamp(ggml_ctx, src_clone[0], params[0], params[1]);
     } else if (tensor->op == GGML_OP_PAD) {
         tensor_clone = ggml_pad_ext(ggml_ctx, src_clone[0], tensor->op_params[0], tensor->op_params[1], tensor->op_params[2], tensor->op_params[3],
-        tensor->op_params[4], tensor->op_params[5], tensor->op_params[6], tensor->op_params[7]);
+                                                            tensor->op_params[4], tensor->op_params[5], tensor->op_params[6], tensor->op_params[7]);
     } else if (tensor->op == GGML_OP_REPEAT) {
         tensor_clone = ggml_repeat(ggml_ctx, src_clone[0], tensor);
     } else if (tensor->op == GGML_OP_REPEAT_BACK) {
