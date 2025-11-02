@@ -3,10 +3,15 @@
 
 import urllib.parse
 import urllib.request
-import simpleproxy as root
 import urlvalidator as uv
 from dataclasses import dataclass
 import html.parser
+import debug
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from simpleproxy import ProxyHandler
+
 
 
 @dataclass(frozen=True)
@@ -21,7 +26,7 @@ class UrlReqResp:
     contentData: str = ""
 
 
-def handle_urlreq(ph: root.ProxyHandler, pr: urllib.parse.ParseResult, tag: str):
+def handle_urlreq(ph: 'ProxyHandler', pr: urllib.parse.ParseResult, tag: str):
     """
     Common part of the url request handling used by both urlraw and urltext.
 
@@ -58,13 +63,13 @@ def handle_urlreq(ph: root.ProxyHandler, pr: urllib.parse.ParseResult, tag: str)
             contentData = response.read().decode('utf-8')
             statusCode = response.status or 200
             contentType = response.getheader('Content-Type') or 'text/html'
-            root.debug_dump({ 'url': req.full_url, 'headers': req.headers, 'ctype': contentType }, { 'cdata': contentData })
+            debug.dump({ 'url': req.full_url, 'headers': req.headers, 'ctype': contentType }, { 'cdata': contentData })
         return UrlReqResp(True, statusCode, "", contentType, contentData)
     except Exception as exc:
         return UrlReqResp(False, 502, f"WARN:{tag}:Failed:{exc}")
 
 
-def handle_urlraw(ph: root.ProxyHandler, pr: urllib.parse.ParseResult):
+def handle_urlraw(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
     try:
         # Get requested url
         got = handle_urlreq(ph, pr, "HandleUrlRaw")
@@ -159,7 +164,7 @@ class TextHtmlParser(html.parser.HTMLParser):
         return self.textStripped
 
 
-def handle_urltext(ph: root.ProxyHandler, pr: urllib.parse.ParseResult):
+def handle_urltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
     try:
         # Get requested url
         got = handle_urlreq(ph, pr, "HandleUrlText")
@@ -176,6 +181,6 @@ def handle_urltext(ph: root.ProxyHandler, pr: urllib.parse.ParseResult):
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
         ph.wfile.write(textHtml.get_stripped_text().encode('utf-8'))
-        root.debug_dump({ 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textHtml.text, 'StrippedText': textHtml.get_stripped_text() })
+        debug.dump({ 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textHtml.text, 'StrippedText': textHtml.get_stripped_text() })
     except Exception as exc:
         ph.send_error(502, f"WARN:UrlTextFailed:{exc}")
