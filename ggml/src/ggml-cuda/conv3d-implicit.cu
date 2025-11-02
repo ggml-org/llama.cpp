@@ -1007,7 +1007,7 @@ static void conv3d_implicit_cuda(const float * X_D, const T * K_D, float * Y_D, 
     const uint TM = conv_shapes[6][CONV_SHAPE];
     const uint TN = conv_shapes[7][CONV_SHAPE];
     const uint NUM_THREADS = conv_shapes[8][CONV_SHAPE];
-    int blockx = ((P.Oh * P.Ow + BM - 1) / BM); // blockx  number
+    int blockx = ((P.Od * P.Oh * P.Ow + BM - 1) / BM); // blockx  number
     int blocky = (P.k + BN-1) / BN;             // blocky  number
     int blockz = P.n;                           // blockz  number
     int thready = 1;   // thready number per block

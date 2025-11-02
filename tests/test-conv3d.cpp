@@ -241,7 +241,7 @@ struct ggml_cgraph * build_graph_1(const test_model& model, const int64_t ic, co
                                        ic, n, oc);
     ggml_set_name(wino_res, "wino_res");
     ggml_build_forward_expand(gf, wino_res);
-    // ne = wino_res->ne;
+    // int64_t *ne = wino_res->ne;
     // printf("wino: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
     ggml_free(ctx0);
     return gf;
@@ -323,9 +323,13 @@ int main(void)
         // std::make_tuple(960,320,104,152,3,3),
         // std::make_tuple(1280,1280,26,38,3,3),
         std::make_tuple(320,1280,26,38,8,3,3,3),
-        // std::make_tuple(1280,1280,26,38,8,3,3,3),
-        // std::make_tuple(320,1280,52,76,8,3,3,3),
-        // std::make_tuple(1280,1280,52,76,8,3,3,3),
+        std::make_tuple(1280,1280,26,38,8,3,3,3),
+        std::make_tuple(320,1280,52,76,8,3,3,3),
+        std::make_tuple(1280,1280,52,76,8,3,3,3),
+        std::make_tuple(320,1280,104,152,8,3,3,3),
+        std::make_tuple(1280,1280,104,152,8,3,3,3),
+        std::make_tuple(320,1280,208,304,4,3,3,3),
+        std::make_tuple(640,1280,208,304,4,3,3,3),
         // std::make_tuple(1280,1280,26,38,1,1),
         // std::make_tuple(256,128,768,1024,3,3),
         // std::make_tuple(128,3,768,1024,3,3),
@@ -393,29 +397,27 @@ int main(void)
 
         if(k==0) { 
             k = 1;
-            fprintf(stderr, "| (IC, OC, IW, IH, KW, KH) | im2col+GEMM TIME | im2col+GEMM VRAM | implicit GEMM TIME | implicit GEMM VRAM \n");
+            fprintf(stderr, "| (IC, OC, IW, IH, ID, KW, KH, KD) | im2col+GEMM TIME | im2col+GEMM VRAM | implicit GEMM TIME | implicit GEMM VRAM \n");
             fprintf(stderr, "| --- | --- | --- | --- | --- \n");
         }
 
-        fprintf(stderr, " | (%d, %d, %d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n", 
-                std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c), std::get<4>(c), std::get<5>(c),
+        fprintf(stderr, " | (%d, %d, %d, %d, %d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n", 
+                std::get<0>(c), std::get<1>(c), std::get<2>(c), 
+                std::get<3>(c), std::get<4>(c), std::get<5>(c),
+                std::get<6>(c), std::get<7>(c),
                 run_time0, mem_size0/1024.0f/1024.0f,
                 run_time1, mem_size1/1024.0f/1024.0f);
 
 
-        // for(int i = 0; i < ggml_nelements(wino_res); i++) {
-        // for(int i = 0; i < 26*38; i++) {
-        for(int i = 0; i < conv2d_data.size(); i++) {
-            // float diff = fabs(conv2d_data[i] - wino_data[i]);
-            
-            float diff = fabs(im2col_data[i] - conv2d_data[i]);
-            // if(diff > 0.5) {
-                  printf("(%7.3f, %7.3f, %.2f, %d) \n",
-                  im2col_data[i], conv2d_data[i],
-                   diff,  i);
-                // break;
-            // }
-        }
+        // for(int i = 0; i < conv2d_data.size(); i++) {
+        //     float diff = fabs(im2col_data[i] - conv2d_data[i]);
+        //     // if(diff > 0.5) {
+        //         printf("(%7.3f, %7.3f, %.2f, %d) \n",
+        //           im2col_data[i], conv2d_data[i],
+        //            diff,  i);
+        //         // break;
+        //     // }
+        // }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);
