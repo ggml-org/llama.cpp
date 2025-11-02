@@ -7,6 +7,7 @@ import urlvalidator as uv
 from dataclasses import dataclass
 import html.parser
 import debug
+import filemagic as mFile
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -48,23 +49,17 @@ def handle_urlreq(ph: 'ProxyHandler', pr: urllib.parse.ParseResult, tag: str):
     if not gotVU.callOk:
         return UrlReqResp(gotVU.callOk, gotVU.statusCode, gotVU.statusMsg)
     try:
-        hUA = ph.headers.get('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0')
-        hAL = ph.headers.get('Accept-Language', "en-US,en;q=0.9")
-        hA = ph.headers.get('Accept', "text/html,*/*")
+        hUA = ph.headers.get('User-Agent', None)
+        hAL = ph.headers.get('Accept-Language', None)
+        hA = ph.headers.get('Accept', None)
         headers = {
             'User-Agent': hUA,
             'Accept': hA,
             'Accept-Language': hAL
         }
-        req = urllib.request.Request(url, headers=headers)
         # Get requested url
-        print(f"DBUG:{tag}:Req:{req.full_url}:{req.headers}")
-        with urllib.request.urlopen(req, timeout=10) as response:
-            contentData = response.read().decode('utf-8')
-            statusCode = response.status or 200
-            contentType = response.getheader('Content-Type') or 'text/html'
-            debug.dump({ 'url': req.full_url, 'headers': req.headers, 'ctype': contentType }, { 'cdata': contentData })
-        return UrlReqResp(True, statusCode, "", contentType, contentData)
+        gotFile = mFile.get_file(url, tag, "text/html", headers)
+        return UrlReqResp(gotFile.callOk, gotFile.statusCode, gotFile.statusMsg, gotFile.contentType, gotFile.contentData.decode('utf-8'))
     except Exception as exc:
         return UrlReqResp(False, 502, f"WARN:{tag}:Failed:{exc}")
 
