@@ -1572,27 +1572,38 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         return out;
     };
 
-    //builder.consume_spaces();
-    //builder.try_parse_reasoning(start_think, end_think);
-
     const common_regex tool_call_start_regex(escape_regex(form.scope_start) + "\\s*" + escape_regex(form.tool_start));
     LOG_DBG("Regex for tool start: %s\n", (escape_regex(form.scope_start) + "\\s*" + escape_regex(form.tool_start)).c_str());
 
-    // GLM 4.5 uses format: <tool_call>function_name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>
+    // Parse content
     bool reasoning_unclosed = builder.syntax().thinking_forced_open;
     std::string unclosed_reasoning_content("");
-    while (auto tc = builder.try_find_regex(tool_call_start_regex, std::string::npos, false)) {
-        auto &content = tc->prelude;
-        auto tool_call_start = builder.str(tc->groups[0]);
-        LOG_DBG("Matched tool start: %s\n", gbnf_format_literal(tool_call_start).c_str());
+    for (;;) {
+        auto tc = builder.try_find_regex(tool_call_start_regex, std::string::npos, false);
+        std::string content;
+        std::string tool_call_start;
+       
+        if (tc) {
+            content = std::move(tc->prelude);
+            tool_call_start = builder.str(tc->groups[0]);
+            LOG_DBG("Matched tool start: %s\n", gbnf_format_literal(tool_call_start).c_str());
+        } else {
+            content = builder.consume_rest();
+        }
 
+        // Handle unclosed think block
         if (reasoning_unclosed) {
-            if (auto pos = content.find(end_think); pos == std::string::npos) {
+            if (auto pos = content.find(end_think); pos == std::string::npos && builder.pos() != builder.input().size()) {
                 unclosed_reasoning_content += content + tool_call_start;
                 continue;
             } else {
-                auto reasoning_content = content.substr(0, pos);
-                rstrip(reasoning_content);
+                std::string reasoning_content;
+                if (pos == std::string::npos) {
+                    reasoning_content = std::move(content);
+                } else {
+                    reasoning_content = content.substr(0, pos);
+                    content.erase(0, pos + end_think.size());
+                }
                 if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
                     if (builder.result().content.size() != 0) {
                         builder.add_content("\n\n");
@@ -1600,12 +1611,12 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
                     builder.add_content(start_think);
                     builder.add_content(unclosed_reasoning_content);
                     builder.add_content(reasoning_content);
-                    builder.add_content(end_think);
+                    if (builder.pos() != builder.input().size() || std::any_of(content.begin(), content.end(), [](unsigned char c) { return !std::isspace(c); }))
+                        builder.add_content(end_think);
                 } else {
                     builder.add_reasoning_content(unclosed_reasoning_content);
                     builder.add_reasoning_content(reasoning_content);
                 }
-                content.erase(0, pos + end_think.size());
                 unclosed_reasoning_content.clear();
                 reasoning_unclosed = false;
             }
@@ -1616,14 +1627,13 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         for (auto think_start = content.rfind(start_think); think_start != std::string::npos; think_start = content.rfind(start_think, think_start - 1)) {
             if (auto think_end = content.find(end_think, think_start + start_think.size()); think_end != std::string::npos) {
                 if (builder.syntax().reasoning_format != COMMON_REASONING_FORMAT_NONE && !builder.syntax().reasoning_in_content) {
-                    auto reasoning_content = string_strip(content.substr(think_start + start_think.size(), think_end - think_start - start_think.size()));
+                    auto reasoning_content = content.substr(think_start + start_think.size(), think_end - think_start - start_think.size());
                     builder.add_reasoning_content(reasoning_content);
                     think_start = erase_spaces(content, think_start, think_end + end_think.size() - 1);
                 }
             } else {
                 // This <tool_call> start is in thinking block, skip this tool call
                 auto pos = think_start + start_think.size();
-                while (pos < content.size() && std::isspace(static_cast<unsigned char>(content[pos++])));
                 unclosed_reasoning_content = content.substr(pos) + tool_call_start;
                 reasoning_unclosed = true;
                 content.resize(think_start);
@@ -1654,6 +1664,14 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
             continue;
         }
 
+        // There is no tool call and all content is parsed
+        if (!tc) {
+            GGML_ASSERT(builder.pos() == builder.input().size());
+            GGML_ASSERT(unclosed_reasoning_content.empty());
+            GGML_ASSERT(!reasoning_unclosed);
+            break;
+        }
+
         builder.move_to(tc->groups[0].begin);
         if (!parse_xml_tool_calls(builder, form)) {
             static const common_regex next_char_regex(".");
@@ -1661,35 +1679,6 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
             rstrip(c);
             builder.add_content(c);
         }
-    }
-
-    builder.consume_spaces();
-    while (builder.pos() != builder.input().size()) {
-        builder.try_parse_reasoning(start_think, end_think);
-        builder.consume_spaces();
-        std::string content;
-        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
-            content = builder.consume_rest();
-        } else {
-            if (auto rsn = builder.try_find_literal(start_think)) {
-                builder.move_to(rsn->groups[0].begin);
-                content = std::move(rsn->prelude);
-            } else {
-                content = builder.consume_rest();
-            }
-            filter_unclosed_think(content, builder, end_think);
-        }
-        rstrip(content);
-        if (content.size() != 0) {
-            if (builder.result().content.size() != 0) {
-                builder.add_content("\n\n");
-            }
-            builder.add_content(content);
-        }
-        if (!builder.try_consume_literal(start_think)) {
-            break;
-        }
-        builder.move_to(builder.pos() - start_think.size());
     }
 }
 
