@@ -3,7 +3,10 @@
 
 import urllib.parse
 import urlvalidator as uv
-import simpleproxy as root
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from simpleproxy import ProxyHandler
 
 
 def process_pdf2text(url: str, startPN: int, endPN: int):
@@ -27,7 +30,7 @@ def process_pdf2text(url: str, startPN: int, endPN: int):
     return { 'status': 200, 'msg': "Pdf2Text Response follows", 'data': tPdf }
 
 
-def handle_pdf2text(ph: root.ProxyHandler, pr: urllib.parse.ParseResult):
+def handle_pdf2text(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
     """
     Handle requests to pdf2text path, which is used to extract plain text
     from the specified pdf file.

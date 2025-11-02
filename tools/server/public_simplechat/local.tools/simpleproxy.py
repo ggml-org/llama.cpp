@@ -173,18 +173,6 @@ def handle_aum(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     ph.end_headers()
 
 
-def debug_dump(meta: dict, data: dict):
-    if not gMe['--debug']:
-        return
-    timeTag = f"{time.time():0.12f}"
-    with open(f"/tmp/simpleproxy.{timeTag}.meta", '+w') as f:
-        for k in meta:
-            f.write(f"\n\n\n\n{k}:{meta[k]}\n\n\n\n")
-    with open(f"/tmp/simpleproxy.{timeTag}.data", '+w') as f:
-        for k in data:
-            f.write(f"\n\n\n\n{k}:{data[k]}\n\n\n\n")
-
-
 def load_config():
     """
     Allow loading of a json based config file
