@@ -235,7 +235,8 @@ static inline void thermal_control_check() {
         finished = true;
     
         // 온도에 맞는 주파수 찾기
-        int target_freq = get_freq_for_temp(temp_celsius);
+        int target_freq = get_freq_for_temp(TARGET_TEMPERATURE);
+        // int target_freq = TARGET_TEMPERATURE;
         
         // 주파수가 바뀌어야 할 때만 설정
         if (set_gpu_freq(target_freq)) {
