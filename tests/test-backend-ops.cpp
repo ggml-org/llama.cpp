@@ -4632,6 +4632,20 @@ struct test_conv_2d_dw : public test_case {
     }
 };
 
+static inline int64_t conv_out_size(int64_t ins, int64_t ks, int stride, int pad, int dilation) {
+    return (ins + 2 * pad - dilation * (ks - 1) - 1) / stride + 1;
+}
+// GGML_OP_PAD
+static inline int64_t wrap_coord_circular(int64_t coord, int64_t size) {
+    GGML_ASSERT(size > 0);
+    const int64_t mod = coord % size;
+    return mod < 0 ? mod + size : mod;
+}
+
+static inline int64_t offset4d(const int64_t ne[4], int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+    return ((i3 * ne[2] + i2) * ne[1] + i1) * ne[0] + i0;
+}
+
 struct test_conv_2d_direct_circular_manual : public test_case {
     const std::array<int64_t, 4> ne_input{5, 4, 1, 1};
     const std::array<int64_t, 4> ne_kernel{3, 3, 1, 1};
@@ -5597,20 +5611,7 @@ struct test_acc : public test_case {
     }
 };
 
-// GGML_OP_PAD
-static inline int64_t wrap_coord_circular(int64_t coord, int64_t size) {
-    GGML_ASSERT(size > 0);
-    const int64_t mod = coord % size;
-    return mod < 0 ? mod + size : mod;
-}
 
-static inline int64_t offset4d(const int64_t ne[4], int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
-    return ((i3 * ne[2] + i2) * ne[1] + i1) * ne[0] + i0;
-}
-
-static inline int64_t conv_out_size(int64_t ins, int64_t ks, int stride, int pad, int dilation) {
-    return (ins + 2 * pad - dilation * (ks - 1) - 1) / stride + 1;
-}
 
 struct test_pad : public test_case {
     const ggml_type type;
