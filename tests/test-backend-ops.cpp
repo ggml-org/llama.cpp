@@ -1454,6 +1454,8 @@ struct test_case {
         ggml_context_ptr ctx(ggml_init(params)); // smart ptr
         GGML_ASSERT(ctx);
 
+        gf = ggml_new_graph_custom(ctx.get(), graph_nodes, false);
+
         ggml_tensor * out = build_graph(ctx.get());
         current_op_name   = op_desc(out);
 
@@ -7225,8 +7227,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, v));
     }
 
-    for (int hsk : { 40, 64, 80, 96, 128, 192, 256, 576 }) {
-        for (int hsv : { 40, 64, 80, 96, 128, 192, 256, 512 }) {
+    for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 576 }) {
+        for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {
             if (hsk != 192 && hsk != 576 && hsk != hsv) continue;
             if (hsk == 192 && (hsv != 128 && hsv != 192)) continue;
             if (hsk == 576 && hsv != 512) continue; // DeepSeek MLA
@@ -7569,6 +7571,15 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     if (mode == MODE_SUPPORT) {
         auto test_cases = make_test_cases_eval();
         filter_test_cases(test_cases, params_filter);
+
+        // Filter out fusion cases
+        test_cases.erase(
+            std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case> & tc) {
+                return tc->run_whole_graph();
+            }),
+            test_cases.end()
+        );
+
         for (auto & test : test_cases) {
             test->eval_support(backend, op_names_filter, output_printer);
         }
@@ -7619,6 +7630,14 @@ static void show_test_coverage() {
         all_ops.insert(ggml_glu_op_name((enum ggml_glu_op)i));
     }
     auto test_cases = make_test_cases_eval();
+    // Filter out fusion cases
+    test_cases.erase(
+        std::remove_if(test_cases.begin(), test_cases.end(), [](const std::unique_ptr<test_case> & tc) {
+            return tc->run_whole_graph();
+        }),
+        test_cases.end()
+    );
+
     std::set<std::string> tested_ops;
 
     ggml_init_params params = {

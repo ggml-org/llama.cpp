@@ -3229,6 +3229,7 @@ class VisionProjectorType:
     GLM4V = "glm4v_moe"
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
+    JANUS_PRO = "janus_pro"
 
 
 # Items here are (block size, type size)

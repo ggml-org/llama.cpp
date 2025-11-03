@@ -132,10 +132,13 @@ struct mtmd_cli_context {
     void init_vision_context(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
-        mparams.use_gpu = params.mmproj_use_gpu;
-        mparams.print_timings = true;
-        mparams.n_threads = params.cpuparams.n_threads;
-        mparams.verbosity = params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
+        mparams.use_gpu          = params.mmproj_use_gpu;
+        mparams.print_timings    = true;
+        mparams.n_threads        = params.cpuparams.n_threads;
+        mparams.verbosity        = params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
+        mparams.flash_attn_type  = params.flash_attn_type;
+        mparams.image_min_tokens = params.image_min_tokens;
+        mparams.image_max_tokens = params.image_max_tokens;
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
