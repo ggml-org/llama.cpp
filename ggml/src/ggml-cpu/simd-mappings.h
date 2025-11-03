@@ -1005,28 +1005,28 @@ static inline void __lasx_f32cx8_store(ggml_fp16_t * x, __m256 y) {
 #define GGML_F32x4_FMA(a, b, c) __lsx_vfmadd_s(b, c, a)
 #define GGML_F32x4_ADD     __lsx_vfadd_s
 #define GGML_F32x4_MUL     __lsx_vfmul_s
-#define GGML_F32x4_REDUCE(res, x)                                                     \
-{                                                                                     \
-    int offset = GGML_F32_ARR >> 1;                                                   \
-    for (int i = 0; i < offset; ++i) {                                                \
-        x[i] = __lsx_vfadd_s(x[i], x[offset + i]);                                    \
-    }                                                                                 \
-    offset >>= 1;                                                                     \
-    for (int i = 0; i < offset; ++i) {                                                \
-        x[i] = __lsx_vfadd_s(x[i], x[offset + i]);                                    \
-    }                                                                                 \
-    offset >>= 1;                                                                     \
-    for (int i = 0; i < offset; ++i) {                                                \
-        x[i] = __lsx_vfadd_s(x[i], x[offset + i]);                                    \
-    }                                                                                 \
-    __m128i tmp     = __lsx_vsrli_d((__m128i) x[0], 32);                              \
-    tmp             = (__m128i) __lsx_vfadd_s((__m128) tmp, x[0]);                    \
-    tmp             = __lsx_vpickev_w(__lsx_vldi(0), tmp);                            \
-    const __m128 t0 = (__m128)__lsx_vshuf4i_w(tmp, 0x88);                                     \
-    tmp             = __lsx_vsrli_d((__m128i) t0, 32);                                \
-    tmp             = (__m128i) __lsx_vfadd_s((__m128) tmp, t0);                      \
-    tmp             = __lsx_vpickev_w(__lsx_vldi(0), tmp);                            \
-    res             = (ggml_float) __lsx_vpickve2gr_w(__lsx_vshuf4i_w(tmp, 0x88), 0); \
+
+#define GGML_F32x4_REDUCE(res, x)                               \
+{                                                               \
+    int offset = GGML_F32_ARR >> 1;                             \
+    for (int i = 0; i < offset; ++i) {                          \
+        x[i] = __lsx_vfadd_s(x[i], x[offset+i]);                \
+    }                                                           \
+    offset >>= 1;                                               \
+    for (int i = 0; i < offset; ++i) {                          \
+        x[i] = __lsx_vfadd_s(x[i], x[offset+i]);                \
+    }                                                           \
+    offset >>= 1;                                               \
+    for (int i = 0; i < offset; ++i) {                          \
+        x[i] = __lsx_vfadd_s(x[i], x[offset+i]);                \
+    }                                                           \
+    __m128i t0 = __lsx_vpickev_w((__m128i)x[0], (__m128i)x[0]); \
+    __m128i t1 = __lsx_vpickod_w((__m128i)x[0], (__m128i)x[0]); \
+    __m128 t2 = __lsx_vfadd_s((__m128)t0, (__m128)t1);          \
+    __m128i t3 = __lsx_vpickev_w((__m128i)t2, (__m128i)t2);     \
+    __m128i t4 = __lsx_vpickod_w((__m128i)t2, (__m128i)t2);     \
+    __m128 t5 = __lsx_vfadd_s((__m128)t3, (__m128)t4);          \
+    res = (ggml_float) ((v4f32)t5)[0];                          \
 }
 
 #define GGML_F32_VEC        GGML_F32x4
