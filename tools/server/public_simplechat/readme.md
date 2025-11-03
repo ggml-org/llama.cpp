@@ -448,7 +448,7 @@ Either way always remember to cross check the tool requests and generated respon
 * search_web_text - search for the specified words using the configured search engine and return the
 plain textual content from the search result page.
 
-* pdf2text - fetch/read specified pdf file and extract its textual content
+* pdf_to_text - fetch/read specified pdf file and extract its textual content
   * this depends on the pypdf python based open source library
 
 the above set of web related tool calls work by handshaking with a bundled simple local web proxy
@@ -469,7 +469,7 @@ Depending on the path specified wrt the proxy server, it executes the correspond
 urltext path is used (and not urlraw), the logic in addition to fetching content from given url, it
 tries to convert html content into equivalent plain text content to some extent in a simple minded
 manner by dropping head block as well as all scripts/styles/footers/headers/nav blocks and inturn
-also dropping the html tags. Similarly for pdf2text.
+also dropping the html tags. Similarly for pdftext.
 
 The client ui logic does a simple check to see if the bundled simpleproxy is running at specified
 proxyUrl before enabling these web and related tool calls.
@@ -579,7 +579,7 @@ users) own data or data of ai model.
 
 Trap http response errors and inform user the specific error returned by ai server.
 
-Initial go at a pdf2text tool call. It allows web / local pdf files to be read and their text content
+Initial go at a pdftext tool call. It allows web / local pdf files to be read and their text content
 extracted and passed to ai model for further processing, as decided by ai and end user. One could
 either work with the full pdf or a subset of adjacent pages.
 
