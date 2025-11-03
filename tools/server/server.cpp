@@ -2452,11 +2452,13 @@ struct server_context {
         std::string & mmproj_path = params_base.mmproj.path;
         if (!mmproj_path.empty()) {
             mtmd_context_params mparams = mtmd_context_params_default();
-            mparams.use_gpu       = params_base.mmproj_use_gpu;
-            mparams.print_timings = false;
-            mparams.n_threads     = params_base.cpuparams.n_threads;
-            mparams.verbosity     = params_base.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
-            mparams.flash_attn_type = params_base.flash_attn_type;
+            mparams.use_gpu          = params_base.mmproj_use_gpu;
+            mparams.print_timings    = false;
+            mparams.n_threads        = params_base.cpuparams.n_threads;
+            mparams.verbosity        = params_base.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
+            mparams.flash_attn_type  = params_base.flash_attn_type;
+            mparams.image_min_tokens = params_base.image_min_tokens;
+            mparams.image_max_tokens = params_base.image_max_tokens;
             mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
             if (mctx == nullptr) {
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());

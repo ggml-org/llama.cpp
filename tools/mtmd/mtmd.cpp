@@ -109,6 +109,8 @@ mtmd_context_params mtmd_context_params_default() {
     params.image_marker = MTMD_DEFAULT_IMAGE_MARKER;
     params.media_marker = mtmd_default_marker();
     params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+    params.image_min_tokens = -1;
+    params.image_max_tokens = -1;
     return params;
 }
 
@@ -171,9 +173,13 @@ struct mtmd_context {
         }
 
         clip_context_params ctx_clip_params;
-        ctx_clip_params.use_gpu   = ctx_params.use_gpu;
-        ctx_clip_params.verbosity = ctx_params.verbosity;
-        ctx_clip_params.flash_attn_type = mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type);
+        ctx_clip_params.use_gpu          = ctx_params.use_gpu;
+        ctx_clip_params.verbosity        = ctx_params.verbosity;
+        ctx_clip_params.flash_attn_type  = mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type);
+        // custom image token limits
+        ctx_clip_params.image_min_tokens = ctx_params.image_min_tokens;
+        ctx_clip_params.image_max_tokens = ctx_params.image_max_tokens;
+
         auto res = clip_init(mmproj_fname, ctx_clip_params);
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;

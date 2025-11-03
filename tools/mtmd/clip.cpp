@@ -169,8 +169,8 @@ struct clip_hparams {
     int32_t n_layer;
     // idefics3
     int32_t image_longest_edge = 0;
-    int32_t image_min_pixels = 0;
-    int32_t image_max_pixels = 0;
+    int32_t image_min_pixels = -1;
+    int32_t image_max_pixels = -1;
     int32_t n_merge = 0; // number of patch merges **per-side**
 
     float image_mean[3];
@@ -203,11 +203,15 @@ struct clip_hparams {
     int minicpmv_version = 0;
     int32_t minicpmv_query_num = 0;         // MiniCPM-V query number
 
+    // custom value provided by user, can be undefined if not set
+    int32_t custom_image_min_tokens = -1;
+    int32_t custom_image_max_tokens = -1;
+
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
         const int cur_merge = n_merge == 0 ? 1 : n_merge;
         const int patch_area = patch_size * patch_size * cur_merge * cur_merge;
-        image_min_pixels = n_tokens_min * patch_area;
-        image_max_pixels = n_tokens_max * patch_area;
+        image_min_pixels = (custom_image_min_tokens > 0 ? custom_image_min_tokens : n_tokens_min) * patch_area;
+        image_max_pixels = (custom_image_max_tokens > 0 ? custom_image_max_tokens : n_tokens_max) * patch_area;
         warmup_image_size = static_cast<int>(std::sqrt(image_max_pixels));
     }
 
@@ -216,6 +220,7 @@ struct clip_hparams {
         GGML_ASSERT(n_tok_per_side * n_tok_per_side == n_tokens && "n_tokens must be n*n");
         const int cur_merge = n_merge == 0 ? 1 : n_merge;
         warmup_image_size = n_tok_per_side * patch_size * cur_merge;
+        // TODO: support warmup size for custom token numbers
     }
 };
 
@@ -457,6 +462,13 @@ struct clip_ctx {
         } else {
             backend = backend_cpu;
             LOG_INF("%s: CLIP using CPU backend\n", __func__);
+        }
+
+        if (ctx_params.image_min_tokens > 0) {
+            model.hparams.custom_image_min_tokens = ctx_params.image_min_tokens;
+        }
+        if (ctx_params.image_max_tokens > 0) {
+            model.hparams.custom_image_max_tokens = ctx_params.image_max_tokens;
         }
 
         backend_ptrs.push_back(backend_cpu);
@@ -2786,6 +2798,12 @@ struct clip_model_loader {
                         //           see: https://github.com/ggml-org/llama.cpp/issues/16842#issuecomment-3475144858
                         hparams.set_limit_image_tokens(8, 2048);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
+                        const int warn_min_pixels = 1024 * hparams.n_merge * hparams.n_merge * hparams.patch_size * hparams.patch_size;
+                        if (hparams.image_min_pixels < warn_min_pixels) {
+                            LOG_WRN("%s: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks\n", __func__);
+                            LOG_WRN("%s: if you encounter problems with accuracy, try adding --image-min-tokens 1024\n", __func__);
+                            LOG_WRN("%s: more info: https://github.com/ggml-org/llama.cpp/issues/16842\n\n", __func__);
+                        }
                     } break;
                 case PROJECTOR_TYPE_LLAMA4:
                     {
@@ -2810,6 +2828,13 @@ struct clip_model_loader {
                     break;
             }
 
+            // sanity check
+            {
+                if (hparams.image_max_pixels < hparams.image_min_pixels) {
+                    throw std::runtime_error(string_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
+                }
+            }
+
             LOG_INF("%s: projector:          %s\n", __func__, proj_type.c_str());
             LOG_INF("%s: n_embd:             %d\n", __func__, hparams.n_embd);
             LOG_INF("%s: n_head:             %d\n", __func__, hparams.n_head);
@@ -2826,10 +2851,10 @@ struct clip_model_loader {
                 LOG_INF("%s: n_merge:            %d\n", __func__, hparams.n_merge);
                 LOG_INF("%s: n_wa_pattern:       %d\n", __func__, hparams.n_wa_pattern);
                 if (hparams.image_min_pixels > 0) {
-                    LOG_INF("%s: image_min_pixels:   %d\n", __func__, hparams.image_min_pixels);
+                    LOG_INF("%s: image_min_pixels:   %d%s\n", __func__, hparams.image_min_pixels, hparams.custom_image_min_tokens > 0 ? " (custom value)" : "");
                 }
                 if (hparams.image_max_pixels > 0) {
-                    LOG_INF("%s: image_max_pixels:   %d\n", __func__, hparams.image_max_pixels);
+                    LOG_INF("%s: image_max_pixels:   %d%s\n", __func__, hparams.image_max_pixels, hparams.custom_image_max_tokens > 0 ? " (custom value)" : "");
                 }
             } else if (is_audio) {
                 LOG_INF("\n--- audio hparams ---\n");
@@ -4169,7 +4194,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
             {
-                // step 1: make a blank canvas which aligns to the grid
+                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized;
                 const clip_image_size new_size = img_tool::calc_size_preserved_ratio(
                     original_size,
@@ -4262,7 +4287,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
-                GGML_ASSERT(params.image_min_pixels && params.image_max_pixels);
+                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized_image;
                 // the original pixtral model doesn't have n_merge
                 const int cur_merge = params.n_merge == 0 ? 1 : params.n_merge;
@@ -4296,7 +4321,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
             {
-                GGML_ASSERT(params.image_min_pixels && params.image_max_pixels);
+                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
                     original_size,
                     params.patch_size * params.n_merge,
