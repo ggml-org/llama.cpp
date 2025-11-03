@@ -276,14 +276,14 @@ async function searchwebtext_setup(tcs) {
 
 
 //
-// Pdf2Text
+// PdfText
 //
 
 
-let pdf2text_meta = {
+let pdftext_meta = {
         "type": "function",
         "function": {
-            "name": "pdf2text",
+            "name": "pdf_to_text",
             "description": "Read pdf from requested local file path / web url through a proxy server and return its text content after converting pdf to text, in few seconds. One is allowed to get a part of the pdf by specifying the starting and ending page numbers",
             "parameters": {
                 "type": "object",
@@ -312,7 +312,7 @@ let pdf2text_meta = {
  * Expects a simple minded proxy server to be running locally
  * * listening on a configured port
  * * expecting http requests
- *   * with a query token named url wrt pdf2text path,
+ *   * with a query token named url wrt pdftext path,
  *     which gives the actual url to fetch
  * * gets the requested pdf and converts to text, before returning same.
  * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
@@ -321,20 +321,20 @@ let pdf2text_meta = {
  * @param {string} toolname
  * @param {any} obj
  */
-function pdf2text_run(chatid, toolcallid, toolname, obj) {
-    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'pdf2text');
+function pdftext_run(chatid, toolcallid, toolname, obj) {
+    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'pdftext');
 }
 
 
 /**
- * Setup pdf2text for tool calling
+ * Setup pdftext for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
  * @param {Object<string, Object<string, any>>} tcs
  */
-async function pdf2text_setup(tcs) {
-    return proxyserver_tc_setup('Pdf2Text', 'pdf2text', 'pdf2text', {
-        "handler": pdf2text_run,
-        "meta": pdf2text_meta,
+async function pdftext_setup(tcs) {
+    return proxyserver_tc_setup('PdfText', 'pdftext', 'pdf_to_text', {
+        "handler": pdftext_run,
+        "meta": pdftext_meta,
         "result": ""
     }, tcs);
 }
@@ -355,6 +355,6 @@ export async function init(toolsWorker) {
     await fetchweburlraw_setup(tc_switch)
     await fetchweburltext_setup(tc_switch)
     await searchwebtext_setup(tc_switch)
-    await pdf2text_setup(tc_switch)
+    await pdftext_setup(tc_switch)
     return tc_switch
 }
