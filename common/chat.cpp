@@ -794,6 +794,35 @@ common_chat_templates_ptr common_chat_templates_init(
     };
     default_template_src = replaceToJsonInTemplate(default_template_src);
 
+    // Fix MiniMax-M2 template bug: message.tool_calls[-1] silently fail
+    // Upstream minja seems do not support id[-1] and cause silently fail
+    // TODO: remove this once the template is fixed.
+    if (default_template_src.find("]~!b[") != std::string::npos
+            && default_template_src.find("]~b]") != std::string::npos
+            && default_template_src.find("[-1]") != std::string::npos) {
+        LOG_INF("Detected MiniMax-M2 template with unsupported syntax \"[-1]\", applying automatic fix...\n");
+        string_replace_all(default_template_src,
+            "{%- set reasoning_content = content.split('</think>')[0].strip('\\n').split('<think>')[-1].strip('\\n') %}",
+            "{%- set reasoning_content = content.split('</think>') -%} {%- set reasoning_content = reasoning_content|first -%} {%- set reasoning_content = reasoning_content.strip('\\n').split('<think>') -%} {%- set reasoning_content = reasoning_content|last -%} {%- set reasoning_content = reasoning_content.strip('\\n') %}");
+        string_replace_all(default_template_src,
+            "{%- set content = content.split('</think>')[-1].strip('\\n') %}",
+            "{%- set content = content.split('</think>') -%} {%- set content = content|last -%} {%- set content = content.strip('\\n') %}");
+        if (default_template_src.find("{%- set last_tool_call.name = message.tool_calls[-1].name -%}") != std::string::npos &&
+            default_template_src.find("{%- for tool_call in message.tool_calls -%}") != std::string::npos) {
+            string_replace_all(default_template_src, "{%- set last_tool_call.name = message.tool_calls[-1].name -%}", "");
+            string_replace_all(default_template_src,
+                "{%- for tool_call in message.tool_calls -%}",
+                "{%- for tool_call in message.tool_calls -%} {%- set last_tool_call.name = tool_call.function.name -%}");
+        }
+        LOG_INF("MiniMax-M2 template fixed\n");
+    }
+    if (default_template_src.find("]~!b[") != std::string::npos
+            && default_template_src.find("]~b]") != std::string::npos
+            && default_template_src.find("{% set _args = tool_call.arguments %}") != std::string::npos) {
+        string_replace_all(default_template_src, "{% set _args = tool_call.arguments %}",
+            "{%- if tool_call.arguments is defined and tool_call.arguments is mapping -%} {%- set _args = tool_call.arguments -%} {%- else -%} {%- set _args = {} -%} {%- endif -%}");
+    }
+
     std::string token_bos = bos_token_override;
     std::string token_eos = eos_token_override;
     bool add_bos = false;
