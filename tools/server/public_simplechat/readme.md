@@ -583,20 +583,29 @@ Initial go at a pdftext tool call. It allows web / local pdf files to be read an
 extracted and passed to ai model for further processing, as decided by ai and end user. One could
 either work with the full pdf or a subset of adjacent pages.
 
-SimpleProxy
+SimpleProxy updates
 * Convert from a single monolithic file into a collection of modules.
 * UrlValidator to cross check scheme and domain of requested urls,
   the whitelist inturn picked from config json
 * Helpers to fetch file from local file system or the web, transparently
+* Help check for needed modules before a particular service path is acknowledged as available
+  through /aum service path
 
-Chances are for ai models which dont support tool calling, things will be such that the tool calls
-meta data shared will be silently ignored without much issue. So enabling tool calling feature by default,
-so that in case one is using a ai model with tool calling the feature is readily available for use.
+Settings/Config default changes
 
-Revert SlidingWindow ChatHistory in Context from last 10 to last 5 (rather 2 more then origianl,
+* Chances are for ai models which dont support tool calling, things will be such that the tool calls
+meta data shared will be silently ignored without much issue. So enabling tool calling feature by
+default, so that in case one is using a ai model with tool calling the feature is readily available
+for use.
+
+* Revert SlidingWindow ChatHistory in Context from last 10 to last 5 (rather 2 more then origianl,
 given more context support in todays models) by default, given that now tool handshakes go through
 the tools related side channel in the http handshake and arent morphed into normal user-assistant
 channel of the handshake.
+
+* Enable CachePrompt api option given that tool calling based interactions could involve chat sessions
+having ai responses built over multiple steps of tool callings etal. So independent of our client side
+sliding window based drop off or even before they kick in, this can help in many cases.
 
 
 #### ToDo

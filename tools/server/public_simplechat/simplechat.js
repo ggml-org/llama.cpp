@@ -1356,7 +1356,7 @@ class Me {
             "temperature": 0.7,
             "max_tokens": 2048,
             "n_predict": 2048,
-            "cache_prompt": false,
+            "cache_prompt": true,
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
