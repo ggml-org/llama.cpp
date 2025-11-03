@@ -163,7 +163,7 @@ static __global__ void conv3d_implicit_kernel(const float * __restrict__ input,
     const uint inKOffset = start_k + innerColA * 4;
 #pragma unroll
     for (uint offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
-        const unsigned int gemm_i = bx * BM + innerRowA + offset; 
+        const unsigned int gemm_i = bx * BM + innerRowA + offset;
         // int n = (ksplit > 0) ? (bx * BM + innerRowA + offset) / PQZ : z;
         int n = (ksplit > 0) ? fastdiv(gemm_i, param.PQZ_fastdiv) : z;
         const unsigned int npqz_res = fastmodulo(gemm_i, param.PQZ_fastdiv);
@@ -173,26 +173,7 @@ static __global__ void conv3d_implicit_kernel(const float * __restrict__ input,
         const int posw_ori = fastmodulo(ohow_res, param.OW_fastdiv) * param.stride0 - param.padding0;
         int inOffset = n * inNOffset;
         if(vec_load){
-            // const uint cur0 = fastdiv(inKOffset,
-            //        layout == 0 ? param.RSC_fastdiv : param.TRS_fastdiv);             // channel offset
-            // const uint cur0_res = fastmodulo(inKOffset,
-            //        layout == 0 ? param.RSC_fastdiv : param.TRS_fastdiv);             // channel offset
-            // const uint cur1 = fastdiv(cur0_res,
-            //     layout == 0 ? param.SC_fastdiv  : param.RS_fastdiv); // kernel r offset
-            // const uint cur1_res = fastmodulo(cur0_res,
-            //     layout == 0 ? param.SC_fastdiv  : param.RS_fastdiv); // kernel r offset
-            // const uint cur2 = fastdiv(cur1_res,
-            //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-            // const uint cur3 = fastmodulo(cur1_res,
-            //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-            // const uint curC = layout == 0 ? cur3 : cur0;
-            // const uint curT = layout == 0 ? cur0 : cur1;
-            // const uint curR = layout == 0 ? cur1 : cur2;
-            // const uint curS = layout == 0 ? cur2 : cur3;
             const int4 curIdx = inputIndices<layout>(inKOffset, param);
-            // const int curD = posd_ori + curT * param.dilation2; // input w
-            // const int curH = posh_ori + curR * param.dilation1; // input h
-            // const int curW = posw_ori + curS * param.dilation0; // input w
             const int curD = posd_ori + curIdx.y * param.dilation2; // input w
             const int curH = posh_ori + curIdx.z * param.dilation1; // input h
             const int curW = posw_ori + curIdx.w * param.dilation0; // input w
@@ -214,43 +195,11 @@ static __global__ void conv3d_implicit_kernel(const float * __restrict__ input,
         } else {
 #pragma unroll
             for (int i = 0; i < 4; ++i){
-                // const uint cur0 = fastdiv(inKOffset + i,
-                //     layout == 0 ? param.RSC_fastdiv : param.TRS_fastdiv);             // channel offset
-                // const uint cur0_res = fastmodulo(inKOffset + i,
-                //     layout == 0 ? param.RSC_fastdiv : param.TRS_fastdiv);             // channel offset
-                // const uint cur1 = fastdiv(cur0_res,
-                //     layout == 0 ? param.SC_fastdiv  : param.RS_fastdiv); // kernel r offset
-                // const uint cur1_res = fastmodulo(cur0_res,
-                //     layout == 0 ? param.SC_fastdiv  : param.RS_fastdiv); // kernel r offset
-                // const uint cur2 = fastdiv(cur1_res,
-                //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-                // const uint cur3 = fastmodulo(cur1_res,
-                //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-                // const uint curC = layout == 0 ? cur3 : cur0;
-                // const uint curT = layout == 0 ? cur0 : cur1;
-                // const uint curR = layout == 0 ? cur1 : cur2;
-                // const uint curS = layout == 0 ? cur2 : cur3;
                 const int4 curIdx = inputIndices<layout>(inKOffset + i, param);
-                // const int curD = posd_ori + curT * param.dilation2; // input w
-                // const int curH = posh_ori + curR * param.dilation1; // input h
-                // const int curW = posw_ori + curS * param.dilation0; // input w
                 const int curD = posd_ori + curIdx.y * param.dilation2; // input w
                 const int curH = posh_ori + curIdx.z * param.dilation1; // input h
                 const int curW = posw_ori + curIdx.w * param.dilation0; // input w
                 const int curC = curIdx.x;
-                // const uint cur0 = fastdiv(start_k + innerColA * 4 + i,
-                //     layout == 0 ? param.SC_fastdiv : param.RS_fastdiv);             // channel offset
-                // const uint cur1 = fastdiv(fastmodulo(start_k + innerColA * 4 + i,
-                //     layout == 0 ? param.SC_fastdiv : param.RS_fastdiv),
-                //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-                // const uint cur2 = fastmodulo(fastmodulo(start_k + innerColA * 4 + i,
-                //     layout == 0 ? param.SC_fastdiv : param.RS_fastdiv),
-                //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-                // const uint curC = layout == 0 ? cur2 : cur0;
-                // const uint curR = layout == 0 ? cur0 : cur1;
-                // const uint curS = layout == 0 ? cur1 : cur2;
-                // const int curH = posh_ori + curR * param.d_h; // input h
-                // const int curW = posw_ori + curS * param.d_w; // input w
                 if (curH >= 0 && curW >= 0 && curD >= 0 && curW < param.w && curH < param.h && curD < param.d && inKOffset + i < end_k){
                     int inOffsetTmp = layout == 0 ?
                                 curD * inDepthOffset + curH * inChannelOffset + curW * param.c + curC:
@@ -360,12 +309,7 @@ static __global__ void conv3d_implicit_kernel(const float * __restrict__ input,
         const uint inKkOffset = innerColA * 4 + crs + BK;
 #pragma unroll
         for (uint offset = 0; offset + rowStrideA <= BM; offset += rowStrideA) {
-            // int n = (ksplit > 0) ? (bx * BM + innerRowA + offset) / PQ : z;
-            // const unsigned int npq_res = (bx * BM + innerRowA + offset) % PQ;
-            // const int posh_ori = fastdiv((ksplit > 0) ? npq_res: bx * BM + innerRowA + offset, param.OW_fastdiv) * param.u - param.p;
-            // const int posw_ori = fastmodulo((ksplit > 0) ? npq_res: bx * BM + innerRowA + offset, param.OW_fastdiv) * param.v - param.q;
-            // int inOffset = n * param.c * param.h * param.w ;
-            const unsigned int gemm_i = bx * BM + innerRowA + offset; 
+            const unsigned int gemm_i = bx * BM + innerRowA + offset;
             int n = (ksplit > 0) ? fastdiv(gemm_i, param.PQZ_fastdiv) : z;
             const unsigned int npqz_res = fastmodulo(gemm_i, param.PQZ_fastdiv);
             const int posd_ori = fastdiv((ksplit > 0) ? npqz_res: gemm_i, param.OHOW_fastdiv) * param.stride2 - param.padding2;
@@ -379,28 +323,10 @@ static __global__ void conv3d_implicit_kernel(const float * __restrict__ input,
                 const int curH = posh_ori + curIdx.z * param.dilation1; // input h
                 const int curW = posw_ori + curIdx.w * param.dilation0; // input w
                 const int curC = curIdx.x;
-                // const uint cur0 = fastdiv(innerColA * 4 + crs + BK,
-                //     layout == 0 ? param.SC_fastdiv : param.RS_fastdiv);             // channel offset
-                // const uint cur1 = fastdiv(fastmodulo(innerColA * 4 + crs + BK,
-                //     layout == 0 ? param.SC_fastdiv : param.RS_fastdiv),
-                //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-                // const uint cur2 = fastmodulo(fastmodulo(innerColA * 4 + crs + BK,
-                //     layout == 0 ? param.SC_fastdiv : param.RS_fastdiv),
-                //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-                // const uint curC = layout == 0 ? cur2 : cur0;
-                // const uint curR = layout == 0 ? cur0 : cur1;
-                // const uint curS = layout == 0 ? cur1 : cur2;
-
-                // const int curH = posh_ori + curR * param.d_h; // input h
-                // const int curW = posw_ori + curS * param.d_w; // input w
                 if (curH >= 0 && curW >= 0 && curD >= 0 && curW < param.w && curH < param.h && curD < param.d && inKkOffset < end_k){
                     int inOffsetTmp = layout == 0 ?
                                 curD * inDepthOffset + curH * inChannelOffset + curW * param.c + curC:
                                 curC * inDepthOffset + curD * inChannelOffset + curH * param.w + curW;
-                // if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h && inKkOffset < end_k){
-                //     int inOffsetTmp = layout == 0 ?
-                //                 curH * inChannelOffset + curW * param.c + curC:
-                //                 curC * inChannelOffset + curH * param.w + curW;
                     float4 tmp = reinterpret_cast<const float4 *>(&input[inOffset + inOffsetTmp])[0];
                     smeminput[write_flag * (BM+PAD) * BK + input_sts_addr + offset +           0] = tmp.x;
                     smeminput[write_flag * (BM+PAD) * BK + input_sts_addr + offset +      BM+PAD] = tmp.y;
@@ -414,29 +340,11 @@ static __global__ void conv3d_implicit_kernel(const float * __restrict__ input,
             } else {
 #pragma unroll
                 for (int i = 0; i < 4; ++i){
-                    // const uint cur0 = fastdiv(innerColA * 4 + crs + BK + i,
-                    //     layout == 0 ? param.SC_fastdiv : param.RS_fastdiv);             // channel offset
-                    // const uint cur1 = fastdiv(fastmodulo(innerColA * 4 + crs + BK + i,
-                    //     layout == 0 ? param.SC_fastdiv : param.RS_fastdiv),
-                    //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-                    // const uint cur2 = fastmodulo(fastmodulo(innerColA * 4 + crs + BK + i,
-                    //     layout == 0 ? param.SC_fastdiv : param.RS_fastdiv),
-                    //     layout == 0 ? param.C_fastdiv  : param.S_fastdiv); // kernel r offset
-                    // const uint curC = layout == 0 ? cur2 : cur0;
-                    // const uint curR = layout == 0 ? cur0 : cur1;
-                    // const uint curS = layout == 0 ? cur1 : cur2;
-
-                    // const int curH = posh_ori + curR * param.d_h; // input h
-                    // const int curW = posw_ori + curS * param.d_w; // input w
                     const int4 curIdx = inputIndices<layout>(inKkOffset + i, param);
                     const int curD = posd_ori + curIdx.y * param.dilation2; // input w
                     const int curH = posh_ori + curIdx.z * param.dilation1; // input h
                     const int curW = posw_ori + curIdx.w * param.dilation0; // input w
                     const int curC = curIdx.x;
-                    // if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h && innerColA * 4 + crs + BK + i < end_k){
-                    //     int inOffsetTmp = layout == 0 ?
-                    //             curH * inChannelOffset + curW * param.c + curC:
-                    //             curC * inChannelOffset + curH * param.w + curW;
                     if (curH >= 0 && curW >= 0 && curD >= 0 && curW < param.w && curH < param.h && curD < param.d && inKkOffset + i < end_k){
                         int inOffsetTmp = layout == 0 ?
                                 curD * inDepthOffset + curH * inChannelOffset + curW * param.c + curC:
@@ -521,7 +429,6 @@ static __global__ void conv3d_implicit_kernel(const float * __restrict__ input,
                 const int col = (ksplit > 0) ? fastmodulo(gemm_i, param.PQZ_fastdiv) : gemm_i;
                 if (n < param.n && row < param.k && col < PQZ){
                     const uint outOffset = ksplit > 0 ?
-                                // z * param.n * param.k * PQZ + n * param.k * PQZ + row * PQZ + col :
                                 ((z * param.n + n) * param.k + row) * PQZ  + col :
                                 (z * param.k + row) * PQZ + col;
                     output[outOffset] = smemoutput[output_lds_addr + subk * WARPSIZE];
@@ -790,7 +697,7 @@ static __global__ void conv3d_implicit_kernel(const half * __restrict__ input,
   const unsigned int K = param.c * param.r * param.s * param.t;
   const uint weightKOffset = K; //param.c * param.r * param.s * param.t;
   const uint inChannelOffset = param.c * param.w;
-  const uint inDepthOffset = param.h * param.c * param.w;  
+  const uint inDepthOffset = param.h * param.c * param.w;
   const uint inNOffset = param.c * param.w * param.h * param.d;
 
   // loop bounds, constexpr where possible allows for loop unrolling
@@ -854,7 +761,7 @@ static __global__ void conv3d_implicit_kernel(const half * __restrict__ input,
     if (block_k != num_block_tiles_k){
       const half* A_block_gmem = input;
       const half* B_block_gmem = kernel + (block_n * BN * weightKOffset);
-      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, block_k * BK, 
+      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, block_k * BK,
                                              inNOffset, inDepthOffset, inChannelOffset, param);
       tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, block_k * BK, weightKOffset, param);
     }
@@ -935,12 +842,9 @@ static __global__ void conv3d_implicit_kernel(const half * __restrict__ input,
             for (int j = 0; j < 4; ++j){
                 const uint row =  m_idx + subk + i * WN / 2;
                 const uint gemm_i =  n_idx + j*32;
-                // const int n = fastdiv(gemm_i, param.OHOW_fastdiv);
-                // const int col = fastmodulo(gemm_i, param.OHOW_fastdiv);
                 const int n = fastdiv(gemm_i, param.PQZ_fastdiv);
                 const int col = fastmodulo(gemm_i, param.PQZ_fastdiv);
                 if(n < param.n && row < param.k && col < PQZ){
-                    // const uint outOffset = n * param.k * param.Oh * param.Ow + row * param.Oh * param.Ow + col;
                     const uint outOffset = (n * param.k + row) * PQZ + col;
                     uint idx = output_lds_addr + subk + j*32*BN/2;
                     idx = idx ^ ((idx & 0b1110000000) >> 4);
@@ -1109,19 +1013,15 @@ void ggml_cuda_op_conv3d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const uint KW = kernel->ne[0];  // kernel_w
     const uint KH = kernel->ne[1];  // kernel_h
     const uint KD = kernel->ne[2];  // kernel_h
-    // const uint IC = input->ne[2];   // input_channels
 
-    // const uint OC = kernel->ne[3];  // ouptut_chanles
-    // const uint B  = input->ne[3];   // n_batches
-
-    param_t params = { B, 
-                      IC, 
+    param_t params = { B,
+                      IC,
                       IH, IW, ID,
-                      OC, 
+                      OC,
                       KH, KW, KD,
-                      ST_Y, ST_X, ST_Z,
-                      PD_Y, PD_X, PD_Z,
-                      DL_Y, DL_X, DL_Z,
+                      ST_X, ST_Y, ST_Z,
+                      PD_X, PD_Y, PD_Z,
+                      DL_X, DL_Y, DL_Z,
                       OH, OW, OD,
                       init_fastdiv_values(KW*IC),
                       init_fastdiv_values(OW),
