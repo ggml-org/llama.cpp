@@ -4454,6 +4454,7 @@ struct test_conv_2d : public test_case {
     const int                    dilation1;
     // Whether the inputs are contiguous in the channel dim or the width dim
     const bool                   cwhn;
+    const bool                   circular;
 
     // If true, the direct CONV_2D will be used in the graph, otherwise it
     // uses ggml_conv_2d:
@@ -4463,7 +4464,7 @@ struct test_conv_2d : public test_case {
     // IM2COL -> MUL_MM graph will be built.
 
     std::string vars() override {
-        return VARS_TO_STR10(ne_input, ne_kernel, type_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
+        return VARS_TO_STR11(ne_input, ne_kernel, type_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn, circular);
     }
 
     double max_nmse_err() override {
@@ -4499,7 +4500,8 @@ struct test_conv_2d : public test_case {
 
     test_conv_2d(std::array<int64_t, 4> ne_input  = { 64, 64, 16, 1 },
                  std::array<int64_t, 4> ne_kernel = { 3, 3, 1, 16 }, ggml_type type_kernel = GGML_TYPE_F32, int stride0 = 1,
-                 int stride1 = 1, int padding0 = 0, int padding1 = 0, int dilation0 = 1, int dilation1 = 1, bool cwhn = false) :
+                 int stride1 = 1, int padding0 = 0, int padding1 = 0, int dilation0 = 1, int dilation1 = 1,
+                 bool cwhn = false, bool circular = false) :
         ne_input(ne_input),
         ne_kernel(ne_kernel),
         type_kernel(type_kernel),
@@ -4509,7 +4511,8 @@ struct test_conv_2d : public test_case {
         padding1(padding1),
         dilation0(dilation0),
         dilation1(dilation1),
-        cwhn(cwhn) {}
+        cwhn(cwhn),
+        circular(circular) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
@@ -4527,8 +4530,58 @@ struct test_conv_2d : public test_case {
             kernel = ggml_permute(ctx, kernel, 3, 2, 0, 1);
         }
 
-        ggml_tensor * out =
-            ggml_conv_2d_direct(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1);
+        ggml_tensor * out = circular
+            ? ggml_conv_2d_direct_circular(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1)
+            : ggml_conv_2d_direct(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+struct test_conv_2d_im2col : public test_case {
+    const std::array<int64_t, 4> ne_input;
+    const std::array<int64_t, 4> ne_kernel;
+    const ggml_type              type_kernel;
+    const int                    stride0;
+    const int                    stride1;
+    const int                    padding0;
+    const int                    padding1;
+    const int                    dilation0;
+    const int                    dilation1;
+    const bool                   circular;
+
+    std::string vars() override {
+        return VARS_TO_STR10(ne_input, ne_kernel, type_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, circular);
+    }
+
+    test_conv_2d_im2col(std::array<int64_t, 4> ne_input  = { 32, 24, 8, 2 },
+                        std::array<int64_t, 4> ne_kernel = { 3, 3, 8, 4 },
+                        ggml_type type_kernel = GGML_TYPE_F32,
+                        int stride0 = 1, int stride1 = 1,
+                        int padding0 = 0, int padding1 = 0,
+                        int dilation0 = 1, int dilation1 = 1,
+                        bool circular = false)
+        : ne_input(ne_input),
+          ne_kernel(ne_kernel),
+          type_kernel(type_kernel),
+          stride0(stride0),
+          stride1(stride1),
+          padding0(padding0),
+          padding1(padding1),
+          dilation0(dilation0),
+          dilation1(dilation1),
+          circular(circular) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
+        ggml_set_name(input, "input");
+
+        ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
+        ggml_set_name(kernel, "kernel");
+
+        ggml_tensor * out = circular
+            ? ggml_conv_2d_circular(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1)
+            : ggml_conv_2d(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1);
         ggml_set_name(out, "out");
         return out;
     }
@@ -4542,15 +4595,16 @@ struct test_conv_2d_dw : public test_case {
     const int padding;
     const int dilation;
     const bool cwhn;
+    const bool circular;
 
     std::string vars() override {
-        return VARS_TO_STR6(ne_input, ne_kernel, stride, padding, dilation, cwhn);
+        return VARS_TO_STR7(ne_input, ne_kernel, stride, padding, dilation, cwhn, circular);
     }
 
     test_conv_2d_dw(std::array<int64_t, 4> ne_input = {64, 64, 16, 1},
             std::array<int64_t, 4> ne_kernel = {3, 3, 1, 16},
-            int stride = 1, int padding = 0, int dilation = 1, bool cwhn = false)
-        : ne_input(ne_input), ne_kernel(ne_kernel), stride(stride), padding(padding), dilation(dilation), cwhn(cwhn) {}
+            int stride = 1, int padding = 0, int dilation = 1, bool cwhn = false, bool circular = false)
+        : ne_input(ne_input), ne_kernel(ne_kernel), stride(stride), padding(padding), dilation(dilation), cwhn(cwhn), circular(circular) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
@@ -4568,11 +4622,267 @@ struct test_conv_2d_dw : public test_case {
             kernel = ggml_permute(ctx, kernel, 3, 2, 0, 1);
         }
 
-        ggml_tensor * out = ggml_conv_2d_dw_direct(
-            ctx, kernel, input,
-            stride, stride, padding, padding, dilation, dilation);
+        ggml_tensor * out = circular
+            ? ggml_conv_2d_dw_direct_circular(ctx, kernel, input,
+                                              stride, stride, padding, padding, dilation, dilation)
+            : ggml_conv_2d_dw_direct(ctx, kernel, input,
+                                     stride, stride, padding, padding, dilation, dilation);
         ggml_set_name(out, "out");
         return out;
+    }
+};
+
+struct test_conv_2d_direct_circular_manual : public test_case {
+    const std::array<int64_t, 4> ne_input{5, 4, 1, 1};
+    const std::array<int64_t, 4> ne_kernel{3, 3, 1, 1};
+    const int stride0   = 1;
+    const int stride1   = 1;
+    const int padding0  = 2;
+    const int padding1  = 1;
+    const int dilation0 = 1;
+    const int dilation1 = 1;
+
+    ggml_tensor * input    = nullptr;
+    ggml_tensor * kernel   = nullptr;
+    ggml_tensor * expected = nullptr;
+
+    std::string vars() override {
+        return "manual_conv2d_direct_circular";
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        input  = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
+        kernel = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_kernel.data());
+        ggml_set_name(input, "input");
+        ggml_set_name(kernel, "kernel");
+
+        ggml_tensor * actual = ggml_conv_2d_direct_circular(
+            ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1);
+        ggml_set_name(actual, "actual");
+
+        int64_t ne_out[4] = {
+            conv_out_size(ne_input[0], ne_kernel[0], stride0, padding0, dilation0),
+            conv_out_size(ne_input[1], ne_kernel[1], stride1, padding1, dilation1),
+            ne_kernel[3],
+            ne_input[3],
+        };
+
+        expected = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_out);
+        ggml_set_name(expected, "expected");
+
+        ggml_tensor * diff = ggml_sub(ctx, actual, expected);
+        ggml_tensor * sq   = ggml_sqr(ctx, diff);
+        ggml_tensor * loss = ggml_sum(ctx, sq);
+        ggml_set_name(loss, "loss");
+        return loss;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+
+        std::vector<float> input_data(ggml_nelements(input));
+        for (size_t i = 0; i < input_data.size(); ++i) {
+            input_data[i] = static_cast<float>(std::sin(static_cast<double>(i + 1)));
+        }
+        ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+
+        std::vector<float> kernel_data(ggml_nelements(kernel));
+        for (size_t i = 0; i < kernel_data.size(); ++i) {
+            kernel_data[i] = static_cast<float>(std::cos(static_cast<double>(i + 1)));
+        }
+        ggml_backend_tensor_set(kernel, kernel_data.data(), 0, kernel_data.size() * sizeof(float));
+
+        int64_t ne_out[4] = {
+            conv_out_size(ne_input[0], ne_kernel[0], stride0, padding0, dilation0),
+            conv_out_size(ne_input[1], ne_kernel[1], stride1, padding1, dilation1),
+            ne_kernel[3],
+            ne_input[3],
+        };
+        std::vector<float> expected_data(ggml_nelements(expected), 0.0f);
+
+        for (int64_t n = 0; n < ne_input[3]; ++n) {
+            for (int64_t oc = 0; oc < ne_kernel[3]; ++oc) {
+                for (int64_t oy = 0; oy < ne_out[1]; ++oy) {
+                    for (int64_t ox = 0; ox < ne_out[0]; ++ox) {
+                        float sum = 0.0f;
+                        for (int64_t ic = 0; ic < ne_kernel[2]; ++ic) {
+                            for (int64_t ky = 0; ky < ne_kernel[1]; ++ky) {
+                                const int64_t in_y = wrap_coord_circular(
+                                        oy * stride1 + ky * dilation1 - padding1, ne_input[1]);
+                                for (int64_t kx = 0; kx < ne_kernel[0]; ++kx) {
+                                    const int64_t in_x = wrap_coord_circular(
+                                            ox * stride0 + kx * dilation0 - padding0, ne_input[0]);
+                                    const int64_t src_idx = offset4d(ne_input.data(), in_x, in_y, ic, n);
+                                    const int64_t ker_idx = offset4d(ne_kernel.data(), kx, ky, ic, oc);
+                                    sum += input_data[src_idx] * kernel_data[ker_idx];
+                                }
+                            }
+                        }
+                        expected_data[offset4d(ne_out, ox, oy, oc, n)] = sum;
+                    }
+                }
+            }
+        }
+
+        ggml_backend_tensor_set(expected, expected_data.data(), 0, expected_data.size() * sizeof(float));
+    }
+
+    double max_nmse_err() override {
+        return 1e-8;
+    }
+};
+
+struct test_conv_2d_dw_direct_circular_manual : public test_case {
+    const std::array<int64_t, 4> ne_input{4, 3, 2, 1};
+    const std::array<int64_t, 4> ne_kernel{3, 2, 1, 2};
+    const int stride   = 1;
+    const int padding  = 1;
+    const int dilation = 1;
+
+    ggml_tensor * input    = nullptr;
+    ggml_tensor * kernel   = nullptr;
+    ggml_tensor * expected = nullptr;
+
+    std::string vars() override {
+        return "manual_conv2d_dw_direct_circular";
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        input  = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
+        kernel = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_kernel.data());
+        ggml_set_name(input, "input");
+        ggml_set_name(kernel, "kernel");
+
+        ggml_tensor * actual = ggml_conv_2d_dw_direct_circular(
+                ctx, kernel, input, stride, stride, padding, padding, dilation, dilation);
+        ggml_set_name(actual, "actual");
+
+        int64_t ne_out[4] = {
+            conv_out_size(ne_input[0], ne_kernel[0], stride, padding, dilation),
+            conv_out_size(ne_input[1], ne_kernel[1], stride, padding, dilation),
+            ne_input[2],
+            ne_input[3],
+        };
+        expected = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_out);
+        ggml_set_name(expected, "expected");
+
+        ggml_tensor * diff = ggml_sub(ctx, actual, expected);
+        ggml_tensor * sq   = ggml_sqr(ctx, diff);
+        ggml_tensor * loss = ggml_sum(ctx, sq);
+        ggml_set_name(loss, "loss");
+        return loss;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+
+        std::vector<float> input_data(ggml_nelements(input));
+        for (size_t i = 0; i < input_data.size(); ++i) {
+            input_data[i] = static_cast<float>(i % 7);
+        }
+        ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+
+        std::vector<float> kernel_data(ggml_nelements(kernel));
+        for (size_t i = 0; i < kernel_data.size(); ++i) {
+            kernel_data[i] = static_cast<float>((i % 5) - 2);
+        }
+        ggml_backend_tensor_set(kernel, kernel_data.data(), 0, kernel_data.size() * sizeof(float));
+
+        int64_t ne_out[4] = {
+            conv_out_size(ne_input[0], ne_kernel[0], stride, padding, dilation),
+            conv_out_size(ne_input[1], ne_kernel[1], stride, padding, dilation),
+            ne_input[2],
+            ne_input[3],
+        };
+
+        std::vector<float> expected_data(ggml_nelements(expected), 0.0f);
+        for (int64_t n = 0; n < ne_input[3]; ++n) {
+            for (int64_t c = 0; c < ne_input[2]; ++c) {
+                for (int64_t oy = 0; oy < ne_out[1]; ++oy) {
+                    for (int64_t ox = 0; ox < ne_out[0]; ++ox) {
+                        float sum = 0.0f;
+                        for (int64_t ky = 0; ky < ne_kernel[1]; ++ky) {
+                            const int64_t in_y = wrap_coord_circular(
+                                    oy * stride + ky * dilation - padding, ne_input[1]);
+                            for (int64_t kx = 0; kx < ne_kernel[0]; ++kx) {
+                                const int64_t in_x = wrap_coord_circular(
+                                        ox * stride + kx * dilation - padding, ne_input[0]);
+                                const int64_t src_idx = offset4d(ne_input.data(), in_x, in_y, c, n);
+                                const int64_t ker_idx = offset4d(ne_kernel.data(), kx, ky, 0, c);
+                                sum += input_data[src_idx] * kernel_data[ker_idx];
+                            }
+                        }
+                        expected_data[offset4d(ne_out, ox, oy, c, n)] = sum;
+                    }
+                }
+            }
+        }
+
+        ggml_backend_tensor_set(expected, expected_data.data(), 0, expected_data.size() * sizeof(float));
+    }
+
+    double max_nmse_err() override {
+        return 1e-8;
+    }
+};
+
+struct test_conv_2d_circular_pipeline : public test_case {
+    const std::array<int64_t, 4> ne_input{6, 5, 3, 2};
+    const std::array<int64_t, 4> ne_kernel{3, 3, 3, 4};
+    const int stride0   = 2;
+    const int stride1   = 1;
+    const int padding0  = 1;
+    const int padding1  = 2;
+    const int dilation0 = 1;
+    const int dilation1 = 2;
+
+    ggml_tensor * input  = nullptr;
+    ggml_tensor * kernel = nullptr;
+
+    std::string vars() override {
+        return "conv2d_circular_vs_pipeline";
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        input  = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
+        kernel = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_kernel.data());
+        ggml_set_name(input, "input");
+        ggml_set_name(kernel, "kernel");
+
+        ggml_tensor * actual = ggml_conv_2d_circular(
+            ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1);
+        ggml_set_name(actual, "actual");
+
+        ggml_tensor * padded = ggml_pad_ext_circular(ctx, input, padding0, padding0, padding1, padding1, 0, 0, 0, 0);
+        ggml_set_name(padded, "padded");
+        ggml_tensor * reference = ggml_conv_2d(ctx, kernel, padded, stride0, stride1, 0, 0, dilation0, dilation1);
+        ggml_set_name(reference, "reference");
+
+        ggml_tensor * diff = ggml_sub(ctx, actual, reference);
+        ggml_tensor * sq   = ggml_sqr(ctx, diff);
+        ggml_tensor * loss = ggml_sum(ctx, sq);
+        ggml_set_name(loss, "loss");
+        return loss;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+
+        std::vector<float> input_data(ggml_nelements(input));
+        for (size_t i = 0; i < input_data.size(); ++i) {
+            input_data[i] = static_cast<float>(std::fmod(static_cast<double>(i * 3 + 1), 17.0));
+        }
+        ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+
+        std::vector<float> kernel_data(ggml_nelements(kernel));
+        for (size_t i = 0; i < kernel_data.size(); ++i) {
+            kernel_data[i] = static_cast<float>(std::fmod(static_cast<double>(i * 7 + 3), 11.0) - 5.0);
+        }
+        ggml_backend_tensor_set(kernel, kernel_data.data(), 0, kernel_data.size() * sizeof(float));
+    }
+
+    double max_nmse_err() override {
+        return 1e-8;
     }
 };
 
@@ -5288,26 +5598,43 @@ struct test_acc : public test_case {
 };
 
 // GGML_OP_PAD
+static inline int64_t wrap_coord_circular(int64_t coord, int64_t size) {
+    GGML_ASSERT(size > 0);
+    const int64_t mod = coord % size;
+    return mod < 0 ? mod + size : mod;
+}
+
+static inline int64_t offset4d(const int64_t ne[4], int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+    return ((i3 * ne[2] + i2) * ne[1] + i1) * ne[0] + i0;
+}
+
+static inline int64_t conv_out_size(int64_t ins, int64_t ks, int stride, int pad, int dilation) {
+    return (ins + 2 * pad - dilation * (ks - 1) - 1) / stride + 1;
+}
+
 struct test_pad : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
     const int pad_0;
     const int pad_1;
+    const bool circular;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne_a, pad_0, pad_1);
+        return VARS_TO_STR5(type, ne_a, pad_0, pad_1, circular);
     }
 
     test_pad(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {512, 512, 1, 1},
-            int pad_0 = 1, int pad_1 = 1)
-        : type(type), ne_a(ne_a), pad_0(pad_0), pad_1(pad_1)  {}
+            int pad_0 = 1, int pad_1 = 1, bool circular = false)
+        : type(type), ne_a(ne_a), pad_0(pad_0), pad_1(pad_1), circular(circular) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
         ggml_set_name(a, "a");
 
-        ggml_tensor * out = ggml_pad(ctx, a, pad_0, pad_1, 0, 0);
+        ggml_tensor * out = circular
+            ? ggml_pad_circular(ctx, a, pad_0, pad_1, 0, 0)
+            : ggml_pad(ctx, a, pad_0, pad_1, 0, 0);
         ggml_set_name(out, "out");
 
         return out;
@@ -5326,17 +5653,19 @@ struct test_pad_ext : public test_case {
     const int lp3;
     const int rp3;
     const bool v;
+    const bool circular;
 
     std::string vars() override {
-        return VARS_TO_STR11(type, ne_a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, v);
+        return VARS_TO_STR12(type, ne_a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, v, circular);
     }
 
     test_pad_ext(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {512, 512, 3, 1},
             int lp0 = 1, int rp0 = 1, int lp1 = 1, int rp1 = 1,
             int lp2 = 1, int rp2 = 1, int lp3 = 1, int rp3 = 1,
-            bool v = false)
-        : type(type), ne_a(ne_a), lp0(lp0), rp0(rp0), lp1(lp1), rp1(rp1), lp2(lp2), rp2(rp2), lp3(lp3), rp3(rp3), v(v) {}
+            bool v = false, bool circular = false)
+        : type(type), ne_a(ne_a), lp0(lp0), rp0(rp0), lp1(lp1), rp1(rp1), lp2(lp2), rp2(rp2), lp3(lp3), rp3(rp3),
+          v(v), circular(circular) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
@@ -5347,7 +5676,9 @@ struct test_pad_ext : public test_case {
             ggml_set_name(a, "view of a");
         }
 
-        ggml_tensor * out = ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+        ggml_tensor * out = circular
+            ? ggml_pad_ext_circular(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3)
+            : ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
         ggml_set_name(out, "out");
 
         return out;
@@ -5355,6 +5686,83 @@ struct test_pad_ext : public test_case {
 };
 
 // GGML_OP_PAD_REFLECT_1D
+
+struct test_pad_ext_circular_manual : public test_case {
+    const std::array<int64_t, 4> ne_src{4, 3, 1, 1};
+    const std::array<int64_t, 4> pads_l{1, 2, 0, 0};
+    const std::array<int64_t, 4> pads_r{2, 1, 0, 0};
+
+    ggml_tensor * input     = nullptr;
+    ggml_tensor * expected  = nullptr;
+
+    std::string vars() override {
+        return "manual_pad_ext_circular";
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_src.data());
+        ggml_set_name(input, "input");
+
+        ggml_tensor * actual = ggml_pad_ext_circular(ctx, input,
+                pads_l[0], pads_r[0], pads_l[1], pads_r[1], pads_l[2], pads_r[2], pads_l[3], pads_r[3]);
+        ggml_set_name(actual, "actual");
+
+        int64_t ne_dst[4] = {
+            ne_src[0] + pads_l[0] + pads_r[0],
+            ne_src[1] + pads_l[1] + pads_r[1],
+            ne_src[2] + pads_l[2] + pads_r[2],
+            ne_src[3] + pads_l[3] + pads_r[3],
+        };
+
+        expected = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_dst);
+        ggml_set_name(expected, "expected");
+
+        ggml_tensor * diff = ggml_sub(ctx, actual, expected);
+        ggml_tensor * sq   = ggml_sqr(ctx, diff);
+        ggml_tensor * loss = ggml_sum(ctx, sq);
+        ggml_set_name(loss, "loss");
+        return loss;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+
+        std::vector<float> src_data(ggml_nelements(input));
+        for (size_t i = 0; i < src_data.size(); ++i) {
+            src_data[i] = static_cast<float>(i + 1);
+        }
+        ggml_backend_tensor_set(input, src_data.data(), 0, src_data.size() * sizeof(float));
+
+        int64_t ne_dst[4] = {
+            ne_src[0] + pads_l[0] + pads_r[0],
+            ne_src[1] + pads_l[1] + pads_r[1],
+            ne_src[2] + pads_l[2] + pads_r[2],
+            ne_src[3] + pads_l[3] + pads_r[3],
+        };
+
+        std::vector<float> exp_data(ggml_nelements(expected));
+        for (int64_t i3 = 0; i3 < ne_dst[3]; ++i3) {
+            for (int64_t i2 = 0; i2 < ne_dst[2]; ++i2) {
+                for (int64_t i1 = 0; i1 < ne_dst[1]; ++i1) {
+                    for (int64_t i0 = 0; i0 < ne_dst[0]; ++i0) {
+                        const int64_t src_i0 = wrap_coord_circular(i0 - pads_l[0], ne_src[0]);
+                        const int64_t src_i1 = wrap_coord_circular(i1 - pads_l[1], ne_src[1]);
+                        const int64_t src_i2 = wrap_coord_circular(i2 - pads_l[2], ne_src[2]);
+                        const int64_t src_i3 = wrap_coord_circular(i3 - pads_l[3], ne_src[3]);
+                        exp_data[offset4d(ne_dst, i0, i1, i2, i3)] =
+                            src_data[offset4d(ne_src.data(), src_i0, src_i1, src_i2, src_i3)];
+                    }
+                }
+            }
+        }
+        ggml_backend_tensor_set(expected, exp_data.data(), 0, exp_data.size() * sizeof(float));
+    }
+
+    double max_nmse_err() override {
+        return 1e-8;
+    }
+};
+
 struct test_pad_reflect_1d : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
@@ -6477,10 +6885,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {1024, 1024, 256, 1}, {3, 3, 256, 1}, 1, 1, 1, 1, 1, 1, true));
     // test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, {1024, 1024, 256, 1}, {3, 3, 256, 1}, 1, 1, 1, 1, 1, 1, true));
 
+    test_cases.emplace_back(new test_conv_2d({37, 29, 3, 2}, {3, 2, 3, 5}, GGML_TYPE_F32, 1, 1, 4, 3, 1, 1, false, true));
+    test_cases.emplace_back(new test_conv_2d({19, 23, 4, 1}, {5, 3, 4, 4}, GGML_TYPE_F16, 2, 1, 3, 2, 1, 2, false, true));
+    test_cases.emplace_back(new test_conv_2d({16, 18, 6, 3}, {3, 3, 6, 8}, GGML_TYPE_F32, 1, 2, 2, 3, 1, 1, true, true));
+
+    test_cases.emplace_back(new test_conv_2d_im2col());
+    test_cases.emplace_back(new test_conv_2d_im2col({17, 13, 6, 2}, {3, 3, 6, 4}, GGML_TYPE_F32, 1, 2, 2, 3, 1, 1, true));
+    test_cases.emplace_back(new test_conv_2d_im2col({11, 7, 2, 1}, {3, 3, 2, 3}, GGML_TYPE_F16, 1, 1, 1, 1, 2, 1, true));
+    test_cases.emplace_back(new test_conv_2d_direct_circular_manual());
+
     test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9}, 1, 0, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9}, 1, 0, 1, true));
     test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, 2, 1, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, 2, 1, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({29, 19, 8, 2}, {5, 3, 1, 8}, 1, 2, 1, false, true));
+    test_cases.emplace_back(new test_conv_2d_dw({24, 14, 16, 1}, {3, 3, 1, 16}, 2, 1, 2, true, true));
+    test_cases.emplace_back(new test_conv_2d_dw_direct_circular_manual());
+    test_cases.emplace_back(new test_conv_2d_circular_pipeline());
 
     // CONV_3D
     auto calc_conv_output_size_3d = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
@@ -7214,7 +7635,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_acc());
     test_cases.emplace_back(new test_pad());
+    test_cases.emplace_back(new test_pad_ext_circular_manual());
+    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true));
     test_cases.emplace_back(new test_pad_ext());
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {19, 11, 5, 2}, 2, 4, 1, 3, 0, 0, 0, 0, false, true));
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
     test_cases.emplace_back(new test_roll());
@@ -7225,6 +7649,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (bool v : {false, true}) {
         test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 1, 0, 1, 0, 0, 0, 0, v));
         test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, v));
+        test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {23, 17, 7, 3}, 2, 1, 3, 0, 1, 2, 0, 0, v, true));
     }
 
     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 576 }) {
