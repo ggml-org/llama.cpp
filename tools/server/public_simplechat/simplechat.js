@@ -1290,10 +1290,19 @@ class MultiChatUI {
  * The SEARCHWORDS keyword will get replaced by the actual user specified search words at runtime.
  */
 const SearchURLS = {
-    duckduckgo: "https://duckduckgo.com/html/?q=SEARCHWORDS",
-    bing: "https://www.bing.com/search?q=SEARCHWORDS", // doesnt seem to like google chrome clients in particular
-    brave: "https://search.brave.com/search?q=SEARCHWORDS",
-    google: "https://www.google.com/search?q=SEARCHWORDS", // doesnt seem to like any client in general
+    duckduckgo: {
+        'template': "https://duckduckgo.com/html/?q=SEARCHWORDS",
+        'drop': [ { 'tag': 'div', 'id': "header" } ]
+    },
+    bing: {
+        'template': "https://www.bing.com/search?q=SEARCHWORDS", // doesnt seem to like google chrome clients in particular
+    },
+    brave: {
+        'template': "https://search.brave.com/search?q=SEARCHWORDS",
+    },
+    google: {
+        'template': "https://www.google.com/search?q=SEARCHWORDS", // doesnt seem to like any client in general
+    },
 }
 
 
@@ -1307,7 +1316,8 @@ class Me {
             enabled: true,
             proxyUrl: "http://127.0.0.1:3128",
             proxyAuthInsecure: "NeverSecure",
-            searchUrl: SearchURLS.duckduckgo,
+            searchUrl: SearchURLS.duckduckgo.template,
+            searchDrops: SearchURLS.duckduckgo.drop,
             toolNames: /** @type {Array<string>} */([]),
             /**
              * Control the length of the tool call result data returned to ai after tool call.
