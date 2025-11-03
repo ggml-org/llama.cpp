@@ -48,7 +48,7 @@ gConfigType = {
 
 gConfigNeeded = [ '--allowed.schemes', '--allowed.domains', '--bearer.insecure' ]
 
-gAllowedCalls = [ "urltext", "urlraw", "pdf2text" ]
+gAllowedCalls = [ "urltext", "urlraw", "pdftext" ]
 
 
 def bearer_transform():
@@ -135,8 +135,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.auth_and_run(pr, mWeb.handle_urlraw)
             case '/urltext':
                 self.auth_and_run(pr, mWeb.handle_urltext)
-            case '/pdf2text':
-                self.auth_and_run(pr, mPdf.handle_pdf2text)
+            case '/pdftext':
+                self.auth_and_run(pr, mPdf.handle_pdftext)
             case '/aum':
                 handle_aum(self, pr)
             case _:

@@ -10,11 +10,12 @@ if TYPE_CHECKING:
     from simpleproxy import ProxyHandler
 
 
-def process_pdf2text(url: str, startPN: int, endPN: int):
+def process_pdftext(url: str, startPN: int, endPN: int):
     """
     Extract textual content from given pdf.
 
     * Validate the got url.
+    * Get the pdf file.
     * Extract textual contents of the pdf from given start page number to end page number (inclusive).
         * if -1 | 0 is specified wrt startPN, the actual starting page number (rather 1) will be used.
         * if -1 | 0 is specified wrt endPN, the actual ending page number will be used.
@@ -23,10 +24,10 @@ def process_pdf2text(url: str, startPN: int, endPN: int):
     """
     import pypdf
     import io
-    gotVU = uv.validate_url(url, "HandlePdf2Text")
+    gotVU = uv.validate_url(url, "HandlePdfText")
     if not gotVU.callOk:
         return { 'status': gotVU.statusCode, 'msg': gotVU.statusMsg }
-    gotFile = mFile.get_file(url, "ProcessPdf2Text", "application/pdf", {})
+    gotFile = mFile.get_file(url, "ProcessPdfText", "application/pdf", {})
     if not gotFile.callOk:
         return { 'status': gotFile.statusCode, 'msg': gotFile.statusMsg, 'data': gotFile.contentData}
     tPdf = ""
@@ -38,12 +39,12 @@ def process_pdf2text(url: str, startPN: int, endPN: int):
     for i in range(startPN, endPN+1):
         pd = oPdf.pages[i-1]
         tPdf = tPdf + pd.extract_text()
-    return { 'status': 200, 'msg': "Pdf2Text Response follows", 'data': tPdf }
+    return { 'status': 200, 'msg': "PdfText Response follows", 'data': tPdf }
 
 
-def handle_pdf2text(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
+def handle_pdftext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
     """
-    Handle requests to pdf2text path, which is used to extract plain text
+    Handle requests to pdftext path, which is used to extract plain text
     from the specified pdf file.
     """
     queryParams = urllib.parse.parse_qs(pr.query)
@@ -54,8 +55,8 @@ def handle_pdf2text(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
     endP = queryParams.get('endPageNumber', -1)
     if isinstance(endP, list):
         endP = int(endP[0])
-    print(f"INFO:HandlePdf2Text:Processing:{url}:{startP}:{endP}...")
-    gotP2T = process_pdf2text(url, startP, endP)
+    print(f"INFO:HandlePdfText:Processing:{url}:{startP}:{endP}...")
+    gotP2T = process_pdftext(url, startP, endP)
     if (gotP2T['status'] != 200):
         ph.send_error(gotP2T['status'], gotP2T['msg'] )
         return
@@ -64,5 +65,5 @@ def handle_pdf2text(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
     # Add CORS for browser fetch, just in case
     ph.send_header('Access-Control-Allow-Origin', '*')
     ph.end_headers()
-    print(f"INFO:HandlePdf2Text:ExtractedText:{url}...")
+    print(f"INFO:HandlePdfText:ExtractedText:{url}...")
     ph.wfile.write(gotP2T['data'].encode('utf-8'))
