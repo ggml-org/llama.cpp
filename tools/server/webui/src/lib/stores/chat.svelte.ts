@@ -1742,20 +1742,30 @@ class ChatStore {
 			this.setConversationLoading(this.activeConversation.id, true);
 			this.clearConversationStreaming(this.activeConversation.id);
 
+			// Get current content (includes any edits made to the message)
+			// This comes from activeMessages which is kept in sync with the database
 			const originalContent = messageToContinue.content;
 			const originalThinking = messageToContinue.thinking || '';
 
-			// Get conversation context up to and including the message to continue
-			const conversationContext = this.activeMessages.slice(0, messageIndex + 1);
+			// Get conversation context up to (but not including) the message to continue
+			const conversationContext = this.activeMessages.slice(0, messageIndex);
 
 			// Add a synthetic "continue" prompt to signal continuation
+			// We check if original content ends with whitespace to preserve it in the instruction
+			const endsWithWhitespace = /\s$/.test(originalContent);
+			const continueInstruction = endsWithWhitespace
+				? 'Continue your response. Start directly without adding extra spacing.'
+				: 'Continue your response from where you left off.';
+
 			const continuePrompt: ApiChatMessageData = {
 				role: 'user',
-				content: 'Continue from where you left off.'
+				content: continueInstruction
 			};
 
+			// Build context: all previous messages + assistant message + synthetic user prompt
+			// The user prompt is only sent to the API, not saved to the database
 			const contextWithContinue = [
-				...conversationContext.slice(0, -1).map((msg) => {
+				...conversationContext.map((msg) => {
 					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
 						return msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
 					}
@@ -1778,6 +1788,8 @@ class ChatStore {
 
 					onChunk: (chunk: string) => {
 						appendedContent += chunk;
+						// Preserve originalContent exactly as-is, including any trailing whitespace
+						// The concatenation naturally preserves any whitespace at the end of originalContent
 						const fullContent = originalContent + appendedContent;
 						this.setConversationStreaming(
 							messageToContinue.convId,

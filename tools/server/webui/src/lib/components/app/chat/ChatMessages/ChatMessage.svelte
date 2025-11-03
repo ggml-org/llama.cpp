@@ -119,9 +119,12 @@
 
 	function handleSaveEdit() {
 		if (message.role === 'user') {
+			// For user messages, trim to avoid accidental whitespace
 			onEditWithBranching?.(message, editedContent.trim());
 		} else {
-			onEditWithReplacement?.(message, editedContent.trim(), shouldBranchAfterEdit);
+			// For assistant messages, preserve exact content including trailing whitespace
+			// This is important for the Continue feature to work properly
+			onEditWithReplacement?.(message, editedContent, shouldBranchAfterEdit);
 		}
 
 		isEditing = false;
@@ -130,6 +133,7 @@
 
 	function handleSaveEditOnly() {
 		if (message.role === 'user') {
+			// For user messages, trim to avoid accidental whitespace
 			onEditUserMessagePreserveResponses?.(message, editedContent.trim());
 		}
 
