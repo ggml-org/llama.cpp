@@ -1709,7 +1709,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         while (current_chunk < nchunk) {
             int64_t src0_start = (current_chunk * ne01) / nchunk;
             int64_t src0_end   = ((current_chunk + 1) * ne01) / nchunk;
-            
+
             // Align boundaries to NB_COLS - round up to ensure all data is included
             // The chunk size limiting above ensures chunks are large enough to prevent overlaps
             src0_start = (src0_start % NB_COLS) ? src0_start + NB_COLS - (src0_start % NB_COLS) : src0_start;
