@@ -49,15 +49,18 @@ function bearer_transform() {
  * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
- * @param {any} obj
+ * @param {any} objSearchParams
  * @param {string} path
+ * @param {any} objHeaders
  */
-async function proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, path) {
+async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchParams, path, objHeaders={}) {
     if (gToolsWorker.onmessage != null) {
-        let params = new URLSearchParams(obj)
+        let params = new URLSearchParams(objSearchParams)
         let newUrl = `${get_gme().tools.proxyUrl}/${path}?${params}`
+        let headers = new Headers(objHeaders)
         let btoken = await bearer_transform()
-        fetch(newUrl, { headers: { 'Authorization': `Bearer ${btoken}` }}).then(resp => {
+        headers.append('Authorization', `Bearer ${btoken}`)
+        fetch(newUrl, { headers: headers}).then(resp => {
             if (!resp.ok) {
                 throw new Error(`${resp.status}:${resp.statusText}`);
             }
@@ -256,7 +259,8 @@ function searchwebtext_run(chatid, toolcallid, toolname, obj) {
         searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words));
         delete(obj.words)
         obj['url'] = searchUrl
-        return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urltext');
+        let headers = { 'Search-Drops': get_gme().tools.searchDrops }
+        return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urltext', headers);
     }
 }
 
