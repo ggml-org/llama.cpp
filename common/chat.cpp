@@ -598,30 +598,11 @@ common_chat_templates_ptr common_chat_templates_init(
             "{%- if false %}");
     }
 
-    // Fix "Unknown argument ensure_ascii for function tojson" by replace tojson(ensure_ascii=False) to tojson()
     // Fix "Unknown method: items at row NN, column MM" by replace receiver.items() to (receiver | items)
     // TODO: Delete this when upstream minja fix tojson problem
     constexpr auto replaceToJsonInTemplate = [](const std::string& input) {
         constexpr auto isIdentifierChar = [](char c) {
             return std::isalnum(c) || c == '_';
-        };
-        constexpr auto skipWhitespace = [](const std::string& s, size_t pos) {
-            while (pos < s.length() && std::isspace(s[pos])) {
-                pos++;
-            }
-            return pos;
-        };
-        constexpr auto isCompleteToJson = [isIdentifierChar](const std::string& s, size_t pos) {
-            if (s.compare(pos, 6, "tojson") != 0) return false;
-            size_t start = pos;
-            size_t end = pos + 6;
-            if (start > 0 && isIdentifierChar(s[start - 1])) {
-                return false;
-            }
-            if (end < s.length() && isIdentifierChar(s[end])) {
-                return false;
-            }
-            return true;
         };
         constexpr auto matchBrackets = [](const std::string& s, size_t startPos, size_t& endPos) {
             size_t pos = startPos;
@@ -660,46 +641,6 @@ common_chat_templates_ptr common_chat_templates_init(
             }
             return false;
         };
-        constexpr auto isToJsonInString = [](const std::string& s, size_t toJsonPos) {
-            bool inString = false;
-            char stringChar = 0;
-            for (size_t i = 0; i < toJsonPos; i++) {
-                char c = s[i];
-                if (!inString && (c == '"' || c == '\'')) {
-                    inString = true;
-                    stringChar = c;
-                }
-                else if (inString && c == stringChar) {
-                    int backslashCount = 0;
-                    size_t checkPos = i - 1;
-                    while (checkPos >= 0 && s[checkPos] == '\\') {
-                        backslashCount++;
-                        checkPos--;
-                    }
-                    if (backslashCount % 2 == 0) {
-                        inString = false;
-                        stringChar = 0;
-                    }
-                }
-            }
-            return inString;
-        };
-        constexpr auto replaceToJsonCall = [isToJsonInString, skipWhitespace, matchBrackets](const std::string& s, size_t startPos) {
-            if (isToJsonInString(s, startPos)) {
-                return s;
-            }
-            size_t pos = startPos + 6;
-            pos = skipWhitespace(s, pos);
-            if (pos >= s.length() || s[pos] != '(') {
-                return s;
-            }
-            size_t endPos;
-            if (!matchBrackets(s, pos, endPos)) {
-                return s;
-            }
-            std::string result = s.substr(0, startPos) + "tojson()" + s.substr(endPos + 1);
-            return result;
-        };
         constexpr auto isCompleteItemsCall = [matchBrackets](const std::string& s, size_t dotPos) {
             if (s.compare(dotPos, 6, ".items") != 0) return false;
             size_t itemsEnd = dotPos + 6;
@@ -712,8 +653,7 @@ common_chat_templates_ptr common_chat_templates_init(
             }
             return true;
         };
-        constexpr auto replaceItemsCall = [isToJsonInString, isCompleteItemsCall, matchBrackets, isIdentifierChar](const std::string& s, size_t dotPos) -> std::string {
-            if (isToJsonInString(s, dotPos)) return s;
+        constexpr auto replaceItemsCall = [isCompleteItemsCall, matchBrackets, isIdentifierChar](const std::string& s, size_t dotPos) -> std::string {
             if (!isCompleteItemsCall(s, dotPos)) return s;
             size_t itemsEnd = dotPos + 6;
             size_t openParen = itemsEnd;
@@ -726,11 +666,11 @@ common_chat_templates_ptr common_chat_templates_init(
             std::string var = s.substr(varStart, dotPos - varStart);
             return s.substr(0, varStart) + "(" + var + " | items)" + s.substr(closeParen + 1);
         };
-        constexpr auto processTemplateBlock = [isCompleteToJson, skipWhitespace, replaceToJsonCall, replaceItemsCall](const std::string& block) {
+        constexpr auto processTemplateBlock = [replaceItemsCall](const std::string& block) {
             std::string result = block;
             size_t pos = 0;
             while (pos < result.length()) {
-                size_t nextToJson = result.find("tojson", pos);
+                size_t nextToJson = std::string::npos;
                 size_t nextItems = result.find(".items", pos);
                 size_t nextPos = std::string::npos;
                 bool isToJson = false;
@@ -743,18 +683,7 @@ common_chat_templates_ptr common_chat_templates_init(
                 }
                 if (nextPos == std::string::npos) break;
                 if (isToJson) {
-                    if (isCompleteToJson(result, nextPos)) {
-                        size_t afterToJson = skipWhitespace(result, nextPos + 6);
-                        if (afterToJson < result.length() && result[afterToJson] == '(') {
-                            std::string replaced = replaceToJsonCall(result, nextPos);
-                            if (replaced != result) {
-                                result = replaced;
-                                pos = nextPos + 7;
-                                continue;
-                            }
-                        }
-                    }
-                    pos = nextPos + 1;
+                    GGML_ASSERT(false);
                 } else {
                     std::string replaced = replaceItemsCall(result, nextPos);
                     if (replaced != result) {
@@ -793,19 +722,13 @@ common_chat_templates_ptr common_chat_templates_init(
     };
     default_template_src = replaceToJsonInTemplate(default_template_src);
 
-    // Fix MiniMax-M2 template bug: message.tool_calls[-1] silently fail
-    // Upstream minja seems do not support id[-1] and cause silently fail
+    // Fix MiniMax-M2 template bug:
+    //   1. Type of tool_call.arguments not checked
+    //   2. last_tool_call.name should be tool_call.function.name rather than tool_call.name
     // TODO: remove this once the template is fixed.
     if (default_template_src.find("]~!b[") != std::string::npos
-            && default_template_src.find("]~b]") != std::string::npos
-            && default_template_src.find("[-1]") != std::string::npos) {
-        LOG_INF("Detected MiniMax-M2 template with unsupported syntax \"[-1]\", applying automatic fix...\n");
-        string_replace_all(default_template_src,
-            "{%- set reasoning_content = content.split('</think>')[0].strip('\\n').split('<think>')[-1].strip('\\n') %}",
-            "{%- set reasoning_content = content.split('</think>') -%} {%- set reasoning_content = reasoning_content|first -%} {%- set reasoning_content = reasoning_content.strip('\\n').split('<think>') -%} {%- set reasoning_content = reasoning_content|last -%} {%- set reasoning_content = reasoning_content.strip('\\n') %}");
-        string_replace_all(default_template_src,
-            "{%- set content = content.split('</think>')[-1].strip('\\n') %}",
-            "{%- set content = content.split('</think>') -%} {%- set content = content|last -%} {%- set content = content.strip('\\n') %}");
+            && default_template_src.find("]~b]") != std::string::npos) {
+        LOG_INF("Detected MiniMax-M2 template , applying automatic fix...\n");
         if (default_template_src.find("{%- set last_tool_call.name = message.tool_calls[-1].name -%}") != std::string::npos &&
             default_template_src.find("{%- for tool_call in message.tool_calls -%}") != std::string::npos) {
             LOG_INF("Detected MiniMax-M2 official template bug: \"last_tool_call.name = message.tool_calls[-1].name\" , applying automatic fix...\n");
@@ -814,22 +737,12 @@ common_chat_templates_ptr common_chat_templates_init(
                 "{%- for tool_call in message.tool_calls -%}",
                 "{%- for tool_call in message.tool_calls -%} {%- set last_tool_call.name = tool_call.function.name -%}");
         }
-        if (default_template_src.find("{%- set last_tool_call.name = message.tool_calls[-1].function.name -%}") != std::string::npos &&
-            default_template_src.find("{%- for tool_call in message.tool_calls -%}") != std::string::npos) {
-            LOG_INF("Detected MiniMax-M2 unsloth template, applying automatic fix...\n");
-            string_replace_all(default_template_src, "{%- set last_tool_call.name = message.tool_calls[-1].function.name -%}", "");
-            string_replace_all(default_template_src,
-                "{%- for tool_call in message.tool_calls -%}",
-                "{%- for tool_call in message.tool_calls -%} {%- set last_tool_call.name = tool_call.function.name -%}");
+        if (default_template_src.find("{% set _args = tool_call.arguments %}") != std::string::npos) {
+            LOG_INF("Detected MiniMax-M2 official template bug: unchecked tool_call.arguments , applying automatic fix...\n");
+            string_replace_all(default_template_src, "{% set _args = tool_call.arguments %}",
+                "{%- if tool_call.arguments is defined and tool_call.arguments is mapping -%} {%- set _args = tool_call.arguments -%} {%- else -%} {%- set _args = {} -%} {%- endif -%}");
         }
         LOG_INF("MiniMax-M2 template fixed\n");
-    }
-    if (default_template_src.find("]~!b[") != std::string::npos
-            && default_template_src.find("]~b]") != std::string::npos
-            && default_template_src.find("{% set _args = tool_call.arguments %}") != std::string::npos) {
-        LOG_INF("Detected MiniMax-M2 official template bug: unchecked tool_call.arguments , applying automatic fix...\n");
-        string_replace_all(default_template_src, "{% set _args = tool_call.arguments %}",
-            "{%- if tool_call.arguments is defined and tool_call.arguments is mapping -%} {%- set _args = tool_call.arguments -%} {%- else -%} {%- set _args = {} -%} {%- endif -%}");
     }
 
     std::string token_bos = bos_token_override;
@@ -879,8 +792,6 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_GENERIC: return "Generic";
         case COMMON_CHAT_FORMAT_MISTRAL_NEMO: return "Mistral Nemo";
         case COMMON_CHAT_FORMAT_MAGISTRAL: return "Magistral";
-        case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
-        case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         case COMMON_CHAT_FORMAT_LLAMA_3_X: return "Llama 3.x";
         case COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS: return "Llama 3.x with builtin tools";
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1: return "DeepSeek R1";
@@ -896,6 +807,8 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_NEMOTRON_V2: return "Nemotron V2";
         case COMMON_CHAT_FORMAT_APERTUS: return "Apertus";
         case COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS: return "LFM2 with JSON tools";
+        case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
+        case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -4106,12 +4019,6 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
         case COMMON_CHAT_FORMAT_MAGISTRAL:
             common_chat_parse_magistral(builder);
             break;
-        case COMMON_CHAT_FORMAT_MINIMAX_M2:
-            common_chat_parse_minimax_m2(builder);
-            break;
-        case COMMON_CHAT_FORMAT_GLM_4_5:
-            common_chat_parse_glm_4_5(builder);
-            break;
         case COMMON_CHAT_FORMAT_LLAMA_3_X:
             common_chat_parse_llama_3_1(builder);
             break;
@@ -4156,6 +4063,12 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS:
             common_chat_parse_lfm2(builder);
+            break;
+        case COMMON_CHAT_FORMAT_MINIMAX_M2:
+            common_chat_parse_minimax_m2(builder);
+            break;
+        case COMMON_CHAT_FORMAT_GLM_4_5:
+            common_chat_parse_glm_4_5(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
