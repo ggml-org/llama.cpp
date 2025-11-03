@@ -24,6 +24,7 @@
 #include <memory>
 #include <cmath>
 #include <fstream>
+#include <queue>
 
 #define LOG_INF(...) fprintf(stdout, __VA_ARGS__)
 #define LOG_WRN(...) fprintf(stdout, __VA_ARGS__)
