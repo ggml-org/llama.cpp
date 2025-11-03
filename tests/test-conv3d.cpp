@@ -358,14 +358,15 @@ int main(void)
 {
     ggml_time_init();
     std::vector<std::tuple<int, int, int, int, int, int, int, int>> configs = {
-        std::make_tuple(320,1280,26,38,8,3,3,3),
-        std::make_tuple(1280,1280,26,38,8,3,3,3),
-        std::make_tuple(320,1280,52,76,8,3,3,3),
-        std::make_tuple(1280,1280,52,76,8,3,3,3),
-        std::make_tuple(320,1280,104,152,8,3,3,3),
-        std::make_tuple(1280,1280,104,152,8,3,3,3),
-        std::make_tuple(320,1280,208,304,4,3,3,3),
-        std::make_tuple(640,1280,208,304,4,3,3,3),
+        std::make_tuple(1,2,16,32,4,3,3,3),
+        // std::make_tuple(320,1280,26,38,8,3,3,3),
+        // std::make_tuple(1280,1280,26,38,8,3,3,3),
+        // std::make_tuple(320,1280,52,76,8,3,3,3),
+        // std::make_tuple(1280,1280,52,76,8,3,3,3),
+        // std::make_tuple(320,1280,104,152,8,3,3,3),
+        // std::make_tuple(1280,1280,104,152,8,3,3,3),
+        // std::make_tuple(320,1280,208,304,4,3,3,3),
+        // std::make_tuple(640,1280,208,304,4,3,3,3),
     };
 
     int k = 0;
