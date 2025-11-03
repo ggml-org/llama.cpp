@@ -135,6 +135,15 @@
 	}
 
 	$effect(() => {
+		if (open) {
+			pdfImages = [];
+			pdfImagesLoading = false;
+			pdfImagesError = null;
+			pdfViewMode = 'pages';
+		}
+	});
+
+	$effect(() => {
 		if (open && isPdf && pdfViewMode === 'pages') {
 			loadPdfImages();
 		}
