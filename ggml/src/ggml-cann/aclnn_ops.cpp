@@ -488,7 +488,6 @@ void ggml_cann_cross_entropy_loss(ggml_backend_cann_context & ctx, ggml_tensor *
     size_t logits_nb[2];
     logits_nb[0] = ggml_type_size(src0->type);
     logits_nb[1] = logits_nb[0] * logits_ne[0];
-    
     aclTensor * acl_logits = ggml_cann_create_tensor(src0->data, ACL_FLOAT, sizeof(float), logits_ne, logits_nb, 2);
 
     size_t log_softmax_type_size = sizeof(float);
@@ -527,7 +526,7 @@ void ggml_cann_cross_entropy_loss(ggml_backend_cann_context & ctx, ggml_tensor *
     int64_t sum_per_sample_n_bytes = nr * sum_per_sample_type_size;
     ggml_cann_pool_alloc sum_per_sample_allocator(ctx.pool(), sum_per_sample_n_bytes);
     void * sum_per_sample_buffer = sum_per_sample_allocator.get();
-    
+
     int64_t sum_per_sample_ne[] = {nr};
     size_t sum_per_sample_nb[1];
     sum_per_sample_nb[0] = sum_per_sample_type_size;
@@ -543,11 +542,11 @@ void ggml_cann_cross_entropy_loss(ggml_backend_cann_context & ctx, ggml_tensor *
     int64_t total_sum_n_bytes = 1 * total_sum_type_size;
     ggml_cann_pool_alloc total_sum_allocator(ctx.pool(), total_sum_n_bytes);
     void * total_sum_buffer = total_sum_allocator.get();
-    
+
     int64_t total_sum_ne[] = {1};
     size_t total_sum_nb[1];
     total_sum_nb[0] = total_sum_type_size;
-    
+
     aclTensor * acl_total_sum = ggml_cann_create_tensor(total_sum_buffer, ACL_FLOAT, total_sum_type_size, total_sum_ne, total_sum_nb, 1);
 
     std::vector<int64_t> total_sum_dims = {0};
@@ -561,8 +560,7 @@ void ggml_cann_cross_entropy_loss(ggml_backend_cann_context & ctx, ggml_tensor *
 
     GGML_CANN_CALL_ACLNN_OP(ctx, Muls, acl_total_sum, scale_factor, acl_dst);
 
-    ggml_cann_release_resources(ctx, acl_logits, acl_log_softmax, acl_labels, acl_mul_result, acl_sum_per_sample, acl_total_sum, acl_dst, 
-                                scale_factor, dims_array, total_sum_dims_array);
+    ggml_cann_release_resources(ctx, acl_logits, acl_log_softmax, acl_labels, acl_mul_result, acl_sum_per_sample, acl_total_sum, acl_dst, scale_factor, dims_array, total_sum_dims_array);
 }
 
 void ggml_cann_group_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
