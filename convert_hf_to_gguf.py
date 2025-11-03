@@ -3577,7 +3577,7 @@ class Qwen2VLModel(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
-@ModelBase.register("Qwen2VLModel", "Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
+@ModelBase.register("Qwen2VLModel", "Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration", "Eagle2_5_VLForConditionalGeneration")
 class Qwen2VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -3612,6 +3612,9 @@ class Qwen2VLVisionModel(MmprojModel):
                 if fullatt_block_indexes[i] - fullatt_block_indexes[i - 1] != n_wa_pattern:
                     raise ValueError(f"Invalid fullatt_block_indexes: {fullatt_block_indexes}")
             self.gguf_writer.add_vision_n_wa_pattern(n_wa_pattern)
+        elif model_type in ['eagle_2_5_vl', 'eagle2_vl', 'eagle2_5_vl']:
+            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN25VL)
+            self.gguf_writer.add_vision_use_silu(True)
         else:
             raise ValueError(f"Unknown QwenVL model type: {self.global_config['model_type']}")
         # default values below are taken from HF tranformers code
