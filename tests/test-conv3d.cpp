@@ -28,6 +28,7 @@ static void ggml_log_callback_default(ggml_log_level level, const char * text, v
     fflush(stderr);
 }
 
+
 struct test_model {
     struct ggml_tensor * a;
     struct ggml_tensor * b;
@@ -36,6 +37,14 @@ struct test_model {
     struct ggml_context * ctx;
 };
 
+struct ggml_cgraph * build_graph_0(const test_model& model, const int64_t ic, const int64_t n, const int64_t oc);
+struct ggml_cgraph * build_graph_1(const test_model& model, const int64_t ic, const int64_t n, const int64_t oc);
+typedef struct ggml_cgraph* (*build_graph_t)(const test_model& model,
+     const int64_t i0,  const int64_t i1, const int64_t i2);
+
+std::vector<float> compute_graph(const test_model & model, ggml_gallocr_t allocr,
+            build_graph_t build_graph, int iters,
+            const int64_t ic, const int64_t n, const int64_t oc, double *t);
 
 
 void load_model(test_model & model, int ic, int oc, int iw, int ih, int id,
@@ -101,6 +110,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, int id,
             fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
         }
     }
+#else
+    GGML_UNUSED(use_gpu);
 #endif
 
 #ifdef GGML_USE_METAL
@@ -112,6 +123,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, int id,
             fprintf(stderr, "%s: ggml_backend_metal_init() failed\n", __func__);
         }
     }
+#else
+    GGML_UNUSED(use_gpu);
 #endif
 
     if(!model.backend) {
@@ -164,10 +177,11 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, int id,
     }
 }
 
-typedef struct ggml_cgraph* (*build_graph_t)(const test_model& model,
-     const int64_t i0,  const int64_t i1, const int64_t i2);
-
 struct ggml_cgraph * build_graph_0(const test_model& model, const int64_t ic, const int64_t n, const int64_t oc) {
+
+    GGML_UNUSED(n);
+    GGML_UNUSED(oc);
+
     static size_t buf_size = ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
     static std::vector<uint8_t> buf(buf_size);
 
@@ -370,7 +384,6 @@ int main(void)
         // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
 
 
-        struct ggml_cgraph * gf_res_0 = NULL;
         int iterations = 20;
 
         double run_time0;
@@ -389,12 +402,8 @@ int main(void)
         // compute the required memory
         ggml_gallocr_reserve(allocr, gf);
         size_t mem_size1 = ggml_gallocr_get_buffer_size(allocr, 0);
-            // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
-
-        struct ggml_cgraph * gf_res_1 = NULL;
 
         double run_time1;
-        // std::vector<float> wino_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
         std::vector<float> conv2d_data = compute_graph(model, allocr, build_graph_1, iterations,
             std::get<0>(c), 1, std::get<1>(c), &run_time1);
 
