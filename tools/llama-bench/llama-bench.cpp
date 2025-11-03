@@ -2144,10 +2144,18 @@ int main(int argc, char ** argv) {
             llama_memory_clear(llama_get_memory(ctx), false);
 
             if (t.n_depth > 0) {
-                if (t.n_depth == cstate.depth) {
+                bool is_cached = t.n_depth == cstate.depth;
+
+                if (is_cached) {
                     // if previously we have computed at this depth, just restore the state
-                    llama_state_seq_set_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
-                } else {
+                    const size_t ret = llama_state_seq_set_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
+                    if (ret == 0) {
+                        // if the old state is incompatible with the current context - reprocess from scratch
+                        is_cached = false;
+                    }
+                }
+
+                if (!is_cached) {
                     if (params.progress) {
                         fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d\n", params_idx, params_count,
                                 i + 1, params.reps);
