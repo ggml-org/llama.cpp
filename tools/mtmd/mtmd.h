@@ -112,10 +112,6 @@ MTMD_API bool mtmd_support_audio(mtmd_context * ctx);
 // return -1 if audio is not supported
 MTMD_API int mtmd_get_audio_bitrate(mtmd_context * ctx);
 
-// set MiniCPM-V UHD slicing upper bound (used when preprocessing images for MiniCPM-V)
-// values < 1 will be clamped to 1
-MTMD_API void mtmd_set_minicpmv_max_slice_nums(mtmd_context * ctx, int n);
-
 // mtmd_bitmap
 //
 // if bitmap is image:
@@ -127,17 +123,20 @@ MTMD_API void mtmd_set_minicpmv_max_slice_nums(mtmd_context * ctx, int n);
 // if bitmap is video:
 //     length of data must be nx * ny * nframes * 3
 //     the data is in RGBRGBRGB... format for each frame, frames are stored sequentially
+//     if data is nullptr, an empty bitmap is created (you can init content later)
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init           (uint32_t nx, uint32_t ny, const unsigned char * data);
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init_from_audio(size_t n_samples,         const float         * data);
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init_from_video(uint32_t nx, uint32_t ny, uint32_t nframes, const unsigned char * data);
 MTMD_API uint32_t              mtmd_bitmap_get_nx     (const mtmd_bitmap * bitmap);
 MTMD_API uint32_t              mtmd_bitmap_get_ny     (const mtmd_bitmap * bitmap);
 MTMD_API const unsigned char * mtmd_bitmap_get_data   (const mtmd_bitmap * bitmap);
-MTMD_API unsigned char * mtmd_bitmap_get_data_mutable (mtmd_bitmap * bitmap);
 MTMD_API size_t                mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap);
 MTMD_API bool                  mtmd_bitmap_is_audio   (const mtmd_bitmap * bitmap);
 MTMD_API bool                  mtmd_bitmap_is_video   (const mtmd_bitmap * bitmap);
 MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
+// set single frame i of the video bitmap
+// return false if bitmap is not video or i is out of range
+MTMD_API bool                  mtmd_bitmap_set_frame  (mtmd_bitmap * bitmap, size_t i, const unsigned char * data);
 // bitmap ID is optional, but useful for KV cache tracking
 // these getters/setters are dedicated functions, so you can for example calculate the hash of the image based on mtmd_bitmap_get_data()
 MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);

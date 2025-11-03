@@ -4842,12 +4842,6 @@ bool clip_has_whisper_encoder(const struct clip_ctx * ctx) {
         || ctx->proj_type() == PROJECTOR_TYPE_VOXTRAL;
 }
 
-void clip_set_minicpmv_max_slice_nums(struct clip_ctx * ctx, int n) {
-    if (!ctx) return;
-    if (n < 0) n = 0;
-    ctx->model.hparams.minicpmv_max_slice_nums = n;
-}
-
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec) {
     clip_image_f32 clip_img;
     clip_img.buf.resize(h * w * 3);

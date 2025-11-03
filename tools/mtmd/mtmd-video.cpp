@@ -1,5 +1,17 @@
+#include <cstdint>
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
+
 #include "mtmd-video.h"
-#include "clip-impl.h"
 #include "ggml.h"
 #include "mtmd-helper.h"
 
@@ -11,11 +23,123 @@
 #include <cstring>
 #include <memory>
 #include <cmath>
+#include <fstream>
 
+#define LOG_INF(...) fprintf(stdout, __VA_ARGS__)
+#define LOG_WRN(...) fprintf(stdout, __VA_ARGS__)
+#define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
+
+static bool is_image_file(const std::string & path) {
+    // check extension first
+    std::string lower = path;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c){ return (char)std::tolower(c); });
+
+    bool has_ext = lower.rfind(".jpg")  != std::string::npos ||
+                   lower.rfind(".jpeg") != std::string::npos ||
+                   lower.rfind(".png")  != std::string::npos ||
+                   lower.rfind(".bmp")  != std::string::npos ||
+                   lower.rfind(".gif")  != std::string::npos ||
+                   lower.rfind(".webp") != std::string::npos;
+
+    if (!has_ext) return false;
+
+    // check magic bytes then
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) return false;
+
+    std::vector<unsigned char> header(16);
+    f.read(reinterpret_cast<char*>(header.data()), header.size());
+    size_t n = f.gcount();
+    if (n < 4) return false; // too small to be an image
+
+    // JPEG: FF D8 FF
+    if (n >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF)
+        return true;
+
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (n >= 8 &&
+        header[0] == 0x89 && header[1] == 0x50 &&
+        header[2] == 0x4E && header[3] == 0x47 &&
+        header[4] == 0x0D && header[5] == 0x0A &&
+        header[6] == 0x1A && header[7] == 0x0A)
+        return true;
+
+    // BMP: 42 4D
+    if (n >= 2 && header[0] == 0x42 && header[1] == 0x4D)
+        return true;
+
+    // GIF: "GIF87a" or "GIF89a"
+    if (n >= 6 &&
+        header[0] == 'G' && header[1] == 'I' && header[2] == 'F' &&
+        header[3] == '8' &&
+        (header[4] == '7' || header[4] == '9') &&
+        header[5] == 'a')
+        return true;
+
+    // WEBP: "RIFF....WEBP"
+    if (n >= 12 &&
+        header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F' &&
+        header[8] == 'W' && header[9] == 'E' && header[10] == 'B' && header[11] == 'P')
+        return true;
+
+    return false;
+}
+
+static bool is_dir(const std::string & path) {
+#if defined(_WIN32)
+    DWORD attrs = GetFileAttributesA(path.c_str());
+    return (attrs != INVALID_FILE_ATTRIBUTES) && (attrs & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) return false;
+    return S_ISDIR(st.st_mode);
+#endif
+}
+
+static void list_files(const std::string & dir, std::vector<std::string> & out, bool recursive) {
+#if defined(_WIN32)
+    std::string pattern = dir;
+    if (!pattern.empty() && pattern.back() != '/' && pattern.back() != '\\') pattern += "\\";
+    pattern += "*";
+    WIN32_FIND_DATAA ffd;
+    HANDLE hFind = FindFirstFileA(pattern.c_str(), &ffd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+    do {
+        std::string name = ffd.cFileName;
+        if (name == "." || name == "..") continue;
+        std::string path = dir;
+        if (!path.empty() && path.back() != '/' && path.back() != '\\') path += "\\";
+        path += name;
+        if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (recursive) list_files(path, out, recursive);
+        } else {
+            out.push_back(path);
+        }
+    } while (FindNextFileA(hFind, &ffd) != 0);
+    FindClose(hFind);
+#else
+    DIR * dp = opendir(dir.c_str());
+    if (!dp) return;
+    struct dirent * de;
+    while ((de = readdir(dp)) != nullptr) {
+        std::string name = de->d_name;
+        if (name == "." || name == "..") continue;
+        std::string path = dir + "/" + name;
+        if (is_dir(path)) {
+            if (recursive) list_files(path, out, recursive);
+        } else {
+            out.push_back(path);
+        }
+    }
+    closedir(dp);
+#endif
+}
 
 namespace mtmd_video {
 
 bool is_video_file(const std::string & path){
+    if(is_dir(path)) return true; // a directory containing frames images is also considered a video
     auto lower = path;
     std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return (char)std::tolower(c); });
     return lower.rfind(".mp4")  != std::string::npos ||
@@ -28,23 +152,22 @@ bool is_video_file(const std::string & path){
 static void get_video_info_from_dir(const std::string &path, VideoInfo &info){
     info.fps = 1; // do not care
     std::vector<std::string> files;
-    mtmd_helper::list_files(path, files, true); // recursive
+    list_files(path, files, true); // recursive
     info.total_frames = files.size();
 }
 // untested
 static mtmd_bitmap* load_frames_from_dir(mtmd_context * ctx,
                           const std::string & dir_path,
                           const LoadVideoOptions & opts) {
-    if (!ctx || dir_path.empty() || !mtmd_helper::is_dir(dir_path) || opts.max_frames < 1) {
+    if (!ctx || dir_path.empty() || !is_dir(dir_path) || opts.max_frames < 1) {
         return nullptr;
     }
     std::vector<std::string> files;
-    mtmd_helper::list_files(dir_path, files, opts.recursive);
+    list_files(dir_path, files, opts.recursive);
     std::sort(files.begin(), files.end());
 
     auto stride = std::max(1u, opts.stride);
     size_t loaded = 0;
-    unsigned char* dest = nullptr;
     mtmd_bitmap* out_frames = nullptr;
     const auto nframes = std::min(files.size() / stride, (size_t)opts.max_frames);
 
@@ -52,20 +175,16 @@ static mtmd_bitmap* load_frames_from_dir(mtmd_context * ctx,
     for (size_t i = 0; i < files.size(); i++) {
         if (i % stride != 0) continue;
         const std::string & f = files[i];
-        if (!mtmd_helper::has_image_ext(f)) continue;
+        if (!is_image_file(f)) continue;
         mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx, f.c_str()));
         if (!bmp.ptr) continue;
         if(loaded==0){
             w = bmp.nx();
             h = bmp.ny();
             out_frames = mtmd_bitmap_init_from_video(w, h, nframes, nullptr);
-            dest = mtmd_bitmap_get_data_mutable(out_frames);
         }
         GGML_ASSERT(bmp.nx() == w && bmp.ny() == h); // all frames must have the same size
-        std::memcpy(dest,
-                    bmp.data(),
-                    bmp.n_bytes());
-        dest += bmp.n_bytes();
+        mtmd_bitmap_set_frame(out_frames, loaded, bmp.data());
         loaded++;
         if (loaded >= nframes) break;
     }
@@ -73,10 +192,14 @@ static mtmd_bitmap* load_frames_from_dir(mtmd_context * ctx,
     return out_frames;
 }
 
-struct DecodedFrameRGBA {
+// This Frames Queue is useful for streaming use case, 
+// This frame queue is designed for streaming scenarios,
+// where an FFmpeg-related thread acts as the producer generating frames,
+// and the main program (the LLM inference thread) acts as the consumer processing them.
+struct DecodedFramesQueue {
     int width;
     int height;
-    std::vector<unsigned char> rgba; // size = width * height * 4
+    std::queue<std::vector<unsigned char>> frames; // frame size = width * height * 3
 };
 
 static mtmd_video::LoadVideoOptions get_video_sample_options(mtmd_video::VideoInfo info){
@@ -86,13 +209,12 @@ static mtmd_video::LoadVideoOptions get_video_sample_options(mtmd_video::VideoIn
     opts.recursive  = false;
 
     /* MiniCPM-V normal-speed video frames sample method */
-
-#ifdef MTMD_MAX_VIDEO_FRAMES_SMALL
-    // set a small number of frames for fast test locally
-    const int32_t minicpmv_max_video_frames = 4;
-#else
-    const int32_t minicpmv_max_video_frames = 64;
-#endif
+    bool debug_use_small_frames_for_video = std::getenv("MTMD_MAX_VIDEO_FRAMES_SMALL") != nullptr;
+    int32_t minicpmv_max_video_frames = 64;
+    if(debug_use_small_frames_for_video){
+        // set a small number of frames for fast test locally
+        minicpmv_max_video_frames = 4;
+    }
     opts.max_frames = minicpmv_max_video_frames;
     if(info.total_frames > minicpmv_max_video_frames) {
         // uniform sample
@@ -114,6 +236,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
+#include <libavutil/imgutils.h>
 }
 #pragma GCC diagnostic pop
 
@@ -338,23 +461,35 @@ static bool get_video_info_from_format_ctx(AVFormatContext *fmt, VideoInfo &info
 
 static bool decode_video_ffmpeg_to_rgba_from_format_ctx(
     AVFormatContext* fmt,
-    std::vector<DecodedFrameRGBA>& frames,
+    DecodedFramesQueue& out_q,
     mtmd_video::LoadVideoOptions opts) 
 {
     const auto stride = opts.stride;
     const auto max_frames = opts.max_frames;
     if(!fmt || stride <= 0 || max_frames <= 0) return false;
-    if (avformat_find_stream_info(fmt, nullptr) < 0) return false;
+    // vstream checked before in get_video_info_from_format_ctx
     int vstream = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (vstream < 0) return false;
     AVStream * st = fmt->streams[vstream];
     const AVCodec * dec = avcodec_find_decoder(st->codecpar->codec_id);
-    if (!dec) return false;
+    if (!dec){
+        LOG_ERR("%s: Could not find decoder for codec id %d\n", __func__, st->codecpar->codec_id);
+        return false;
+    }
     AVCodecContext * ctx = avcodec_alloc_context3(dec);
-    if (!ctx) return false;
+    if (!ctx){
+        LOG_ERR("%s: Could not allocate codec context\n", __func__);
+        return false;
+    }
     std::unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> ctx_guard(ctx, [](AVCodecContext *c){ if (c) avcodec_free_context(&c); });
-    if (avcodec_parameters_to_context(ctx, st->codecpar) < 0) return false;
-    if (avcodec_open2(ctx, dec, nullptr) < 0) return false;
+    if (avcodec_parameters_to_context(ctx, st->codecpar) < 0){
+        LOG_ERR("%s: Could not copy codec parameters to codec context\n", __func__);
+        return false;
+    }
+    if (avcodec_open2(ctx, dec, nullptr) < 0){
+        LOG_ERR("%s: Could not open codec2\n", __func__);
+        return false;
+    }
 
     AVFrame * frame = av_frame_alloc();
     AVPacket * pkt  = av_packet_alloc();
@@ -364,56 +499,66 @@ static bool decode_video_ffmpeg_to_rgba_from_format_ctx(
     SwsContext * sws = nullptr;
     uint32_t idx = 0;
     uint32_t taken = 0;
+    const int w = ctx->width;
+    const int h = ctx->height;
+
+    if(!out_q.frames.empty() && (out_q.height!=h || out_q.width!=w)){
+        LOG_ERR("Different size frames remain in decoded frames queue");
+        return false;
+    }
+    out_q.width = w;
+    out_q.height = h;
+
     while (av_read_frame(fmt, pkt) >= 0) {
         if (pkt->stream_index != vstream) { av_packet_unref(pkt); continue; }
         if (avcodec_send_packet(ctx, pkt) < 0) { av_packet_unref(pkt); break; }
         av_packet_unref(pkt);
         while (avcodec_receive_frame(ctx, frame) == 0) {
-            if (idx++ % stride != stride/2) continue;
+            if (idx++ % stride != stride/2) { av_frame_unref(frame); continue; }
             if (!sws) {
                 sws = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format,
-                                     frame->width, frame->height, AV_PIX_FMT_RGBA,
-                                     SWS_BILINEAR, nullptr, nullptr, nullptr);
-                if (!sws) return false;
+                                        frame->width, frame->height, AV_PIX_FMT_RGB24,
+                                        SWS_BILINEAR, nullptr, nullptr, nullptr);
+                if (frame->format == AV_PIX_FMT_NONE) { av_frame_unref(frame); continue; }
+                if (!sws){
+                    LOG_ERR("%s: Could not initialize sws context\n", __func__);
+                    av_frame_unref(frame);
+                    return false;
+                }
             }
-            DecodedFrameRGBA out;
-            out.width = frame->width;
-            out.height = frame->height;
-            out.rgba.resize((size_t)frame->width * frame->height * 4);
-            uint8_t * dst_data[4] = { out.rgba.data(), nullptr, nullptr, nullptr };
-            int dst_linesize[4] = { frame->width * 4, 0, 0, 0 };
+
+            GGML_ASSERT(w==frame->width && h==frame->height);
+
+            std::vector<uint8_t> out;
+            out.resize((size_t)frame->width * frame->height * 3);
+
+            uint8_t *dst_data[4] = { out.data(), nullptr, nullptr, nullptr };
+            int dst_linesize[4] = { frame->width * 3, 0, 0, 0 };
             sws_scale(sws, frame->data, frame->linesize, 0, frame->height, dst_data, dst_linesize);
-            frames.push_back(std::move(out));
+        
+            out_q.frames.emplace(out);
             taken++;
-            if (taken >= max_frames) break;
+            av_frame_unref(frame);
+            if (max_frames > 0 && taken >= max_frames) break;
         }
     }
     if (sws) sws_freeContext(sws);
     return taken > 0;
 }
 
-static mtmd_bitmap* convert_frames_to_bitmap(mtmd_context * ctx, const std::vector<DecodedFrameRGBA>& decoded) {
+static mtmd_bitmap* convert_frames_to_bitmap(mtmd_context * ctx, DecodedFramesQueue& decoded) {
     if (!ctx) return nullptr;
-    if(decoded.empty()) return nullptr;
-    const size_t nframes = decoded.size();
+    if(decoded.frames.empty()) return nullptr;
+    const size_t nframes = decoded.frames.size();
     if(nframes < 1){
         return nullptr;
     }
-    const int w = decoded[0].width;
-    const int h = decoded[0].height;
+    const int w = decoded.width;
+    const int h = decoded.height;
     mtmd_bitmap* out_frames = mtmd_bitmap_init_from_video(uint32_t(w), uint32_t(h), uint32_t(nframes), nullptr);
-    unsigned char * dst = mtmd_bitmap_get_data_mutable(out_frames);
-
-    for (const auto & fr : decoded) {
-        GGML_ASSERT(w == fr.width && h == fr.height);
-        const unsigned char * src = fr.rgba.data();
-        for (int i = 0; i < w * h; ++i) {
-            dst[0] = src[0]; // R
-            dst[1] = src[1]; // G
-            dst[2] = src[2]; // B
-            dst += 3;
-            src += 4; // skip A
-        }
+    for(size_t i=0;i<nframes;++i){
+        mtmd_bitmap_set_frame(out_frames, i, decoded.frames.front().data());
+        decoded.frames.pop();
     }
 
     return out_frames;
@@ -433,7 +578,7 @@ mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const uint8_t* buffer, size_t
 
     const auto opts = get_video_sample_options(info);
 
-    std::vector<DecodedFrameRGBA> frames;
+    DecodedFramesQueue frames;
     if(!decode_video_ffmpeg_to_rgba_from_format_ctx(fmt, frames, opts)){
         LOG_ERR("Unable to decode video from buffer\n");
         free_format_context_from_buffer(fmt, avio_ctx);
@@ -458,7 +603,7 @@ mtmd_bitmap* init_video_bitmap(mtmd_context * /*ctx*/, const uint8_t* /*buffer*/
 mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const std::string & path) {
     auto info = mtmd_video::VideoInfo{};
     
-    if(mtmd_helper::is_dir(path)){
+    if(is_dir(path)){
         get_video_info_from_dir(path, info);
         const auto opts = get_video_sample_options(info);
         return load_frames_from_dir(ctx, path, opts);
@@ -468,12 +613,13 @@ mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const std::string & path) {
 
     #ifdef MTMD_WITH_FFMPEG
     AVFormatContext* fmt = nullptr;
-
+    LOG_INF("Loading video from path: %s\n", path.c_str());
     if (avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) < 0){
         LOG_ERR("Unable to open video from path: %s\n", path.c_str());
         if(fmt) avformat_close_input(&fmt);
         return nullptr;
     }
+    LOG_INF("get_video_info_from_format_ctx...\n");
     if(!get_video_info_from_format_ctx(fmt, info)) {
         LOG_ERR("Unable to get video info from path: %s\n", path.c_str());
         if(fmt) avformat_close_input(&fmt);
@@ -482,7 +628,9 @@ mtmd_bitmap* init_video_bitmap(mtmd_context * ctx, const std::string & path) {
 
     const auto opts = get_video_sample_options(info);
 
-    std::vector<DecodedFrameRGBA> frames;
+    LOG_INF("decode_video_ffmpeg_to_rgba_from_format_ctx...\n");
+
+    DecodedFramesQueue frames;
     if(!decode_video_ffmpeg_to_rgba_from_format_ctx(fmt, frames, opts)){
         LOG_ERR("Unable to decode video from path: %s\n", path.c_str());
         if(fmt) avformat_close_input(&fmt);

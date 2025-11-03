@@ -447,9 +447,11 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
 }
 
 mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * path) {
-    // although we could read the file into memory and call mtmd_helper_bitmap_init_from_buf,
+    // Attention! A directory containing frames images is also considered a video
+    // so path which is a directory should be handled by mtmd_video::init_video_bitmap
+    // Besides, although we could read the file into memory and call mtmd_helper_bitmap_init_from_buf,
     // but for video files, it's better to let ffmpeg read from file
-    if(mtmd_video::is_video_file(path) || mtmd_helper::is_dir(path)){
+    if(mtmd_video::is_video_file(path)){
         return mtmd_video::init_video_bitmap(ctx, path);
     }
 
@@ -474,69 +476,4 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char *
     auto * res = mtmd_helper_bitmap_init_from_buf(ctx, buf, file_size);
     delete [] buf;
     return res;
-}
-
-namespace mtmd_helper{
-
-bool has_image_ext(const std::string & name) {
-    auto lower = name;
-    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return (char)std::tolower(c); });
-    return lower.rfind(".jpg")  != std::string::npos ||
-           lower.rfind(".jpeg") != std::string::npos ||
-           lower.rfind(".png")  != std::string::npos ||
-           lower.rfind(".bmp")  != std::string::npos ||
-           lower.rfind(".gif")  != std::string::npos ||
-           lower.rfind(".webp") != std::string::npos;
-}
-
-bool is_dir(const std::string & path) {
-#if defined(_WIN32)
-    DWORD attrs = GetFileAttributesA(path.c_str());
-    return (attrs != INVALID_FILE_ATTRIBUTES) && (attrs & FILE_ATTRIBUTE_DIRECTORY);
-#else
-    struct stat st;
-    if (stat(path.c_str(), &st) != 0) return false;
-    return S_ISDIR(st.st_mode);
-#endif
-}
-
-void list_files(const std::string & dir, std::vector<std::string> & out, bool recursive) {
-#if defined(_WIN32)
-    std::string pattern = dir;
-    if (!pattern.empty() && pattern.back() != '/' && pattern.back() != '\\') pattern += "\\";
-    pattern += "*";
-    WIN32_FIND_DATAA ffd;
-    HANDLE hFind = FindFirstFileA(pattern.c_str(), &ffd);
-    if (hFind == INVALID_HANDLE_VALUE) return;
-    do {
-        std::string name = ffd.cFileName;
-        if (name == "." || name == "..") continue;
-        std::string path = dir;
-        if (!path.empty() && path.back() != '/' && path.back() != '\\') path += "\\";
-        path += name;
-        if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            if (recursive) list_files(path, out, recursive);
-        } else {
-            out.push_back(path);
-        }
-    } while (FindNextFileA(hFind, &ffd) != 0);
-    FindClose(hFind);
-#else
-    DIR * dp = opendir(dir.c_str());
-    if (!dp) return;
-    struct dirent * de;
-    while ((de = readdir(dp)) != nullptr) {
-        std::string name = de->d_name;
-        if (name == "." || name == "..") continue;
-        std::string path = dir + "/" + name;
-        if (is_dir(path)) {
-            if (recursive) list_files(path, out, recursive);
-        } else {
-            out.push_back(path);
-        }
-    }
-    closedir(dp);
-#endif
-}
-
 }

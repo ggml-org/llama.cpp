@@ -39,11 +39,6 @@ if (MTMD_WITH_FFMPEG)
     endif()
 endif()
 
-option(MTMD_MAX_VIDEO_FRAMES_SMALL "Set a small number of frames for fast test locally" OFF)
-if(MTMD_MAX_VIDEO_FRAMES_SMALL)
-    target_compile_definitions(mtmd PRIVATE MTMD_MAX_VIDEO_FRAMES_SMALL)
-endif()
-
 if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(mtmd PRIVATE LLAMA_BUILD)

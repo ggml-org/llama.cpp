@@ -21,7 +21,8 @@ extern "C" {
 //
 
 // helper function to construct a mtmd_bitmap from a file
-// it calls mtmd_helper_bitmap_init_from_buf() internally
+// for image and audio, it calls mtmd_helper_bitmap_init_from_buf() internally
+// for video, it it calls init_video_bitmap() to reads and decodes and streams individual image frames to a bitmap
 // returns nullptr on failure
 // this function is thread-safe
 MTMD_API mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * path);
@@ -87,11 +88,5 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
 //
 // C++ wrappers
 //
-
-namespace mtmd_helper{
-    bool has_image_ext(const std::string & name);
-    bool is_dir(const std::string & path);
-    void list_files(const std::string & dir, std::vector<std::string> & out, bool recursive);
-}
 
 #endif
