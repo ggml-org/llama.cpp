@@ -214,7 +214,7 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_SEED_OSS;
     } else if (tmpl_contains("'Assistant: '  + message['content'] + '<|separator|>")) {
         return LLM_CHAT_TEMPLATE_GROK_2;
-    } else if (tmpl_contains("[unused9]") && tmpl_contains("[unused10]")) {
+    } else if (tmpl_contains("[unused9]") && tmpl_contains("message['content'] + '[unused10]'")) {
         return LLM_CHAT_TEMPLATE_PANGU_EMBED;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
@@ -840,9 +840,6 @@ int32_t llm_chat_apply_template(
                 ss << "[unused9]工具：" << content << "[unused10]";
             } else if (role == "function") {
                 ss << "[unused9]方法：" << content << "[unused10]";
-            } else {
-                // unknown role
-                ss << "[unused9]" << role << "：" << content << "[unused10]";
             }
         }
         if (add_ass) {
