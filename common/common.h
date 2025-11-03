@@ -407,6 +407,8 @@ struct common_params {
     bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
     std::vector<std::string> video; // path to video file(s) or frame directories
+    int image_min_tokens = -1;
+    int image_max_tokens = -1;
 
     // finetune
     struct lr_opt lr;

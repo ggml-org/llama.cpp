@@ -20,7 +20,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <vector>
 
 enum mtmd_bitmap_type {
@@ -113,6 +112,15 @@ const char * mtmd_default_marker() {
     return "<__media__>";
 }
 
+static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_type flash_attn_type) {
+    switch (flash_attn_type) {
+        case LLAMA_FLASH_ATTN_TYPE_AUTO:     return CLIP_FLASH_ATTN_TYPE_AUTO;
+        case LLAMA_FLASH_ATTN_TYPE_DISABLED: return CLIP_FLASH_ATTN_TYPE_DISABLED;
+        case LLAMA_FLASH_ATTN_TYPE_ENABLED:  return CLIP_FLASH_ATTN_TYPE_ENABLED;
+    }
+    return CLIP_FLASH_ATTN_TYPE_AUTO;
+}
+
 mtmd_context_params mtmd_context_params_default() {
     mtmd_context_params params;
     params.use_gpu = true;
@@ -121,6 +129,9 @@ mtmd_context_params mtmd_context_params_default() {
     params.verbosity = GGML_LOG_LEVEL_INFO;
     params.image_marker = MTMD_DEFAULT_IMAGE_MARKER;
     params.media_marker = mtmd_default_marker();
+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+    params.image_min_tokens = -1;
+    params.image_max_tokens = -1;
     return params;
 }
 
@@ -184,8 +195,13 @@ struct mtmd_context {
         }
 
         clip_context_params ctx_clip_params;
-        ctx_clip_params.use_gpu   = ctx_params.use_gpu;
-        ctx_clip_params.verbosity = ctx_params.verbosity;
+        ctx_clip_params.use_gpu          = ctx_params.use_gpu;
+        ctx_clip_params.verbosity        = ctx_params.verbosity;
+        ctx_clip_params.flash_attn_type  = mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type);
+        // custom image token limits
+        ctx_clip_params.image_min_tokens = ctx_params.image_min_tokens;
+        ctx_clip_params.image_max_tokens = ctx_params.image_max_tokens;
+
         auto res = clip_init(mmproj_fname, ctx_clip_params);
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
@@ -400,9 +416,7 @@ mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
 }
 
 void mtmd_free(mtmd_context * ctx) {
-    if (ctx) {
-        delete ctx;
-    }
+    delete ctx;
 }
 
 struct mtmd_tokenizer {

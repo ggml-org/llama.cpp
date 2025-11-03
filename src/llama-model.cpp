@@ -6712,14 +6712,14 @@ float llama_model::get_rope_freq_scale(const llama_cparams & cparams, int il) co
 }
 
 ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int il) const {
-    const uint32_t n_ctx_per_seq = cparams.n_ctx / cparams.n_seq_max;
+    const uint32_t n_ctx_seq = cparams.n_ctx_seq;
 
     // choose long/short freq factors based on the context size
     if (layers[il].rope_freqs != nullptr) {
         return layers[il].rope_freqs;
     }
 
-    if (n_ctx_per_seq > hparams.n_ctx_orig_yarn) {
+    if (n_ctx_seq > hparams.n_ctx_orig_yarn) {
         return layers[il].rope_long;
     }
 
@@ -6795,12 +6795,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         /* filter_attn       */ std::move(filter_attn),
                         /* filter_recr       */ std::move(filter_recr));
                 } else {
-                    uint32_t n_ctx_per_stream = cparams.n_ctx;
-
-                    if (!cparams.kv_unified) {
-                        n_ctx_per_stream = (cparams.n_ctx + cparams.n_seq_max - 1)/cparams.n_seq_max;
-                    }
-
                     llama_memory_i::layer_reuse_cb reuse = nullptr;
 
                     if (arch == LLM_ARCH_GEMMA3N) {
@@ -6824,7 +6818,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 cparams.offload_kqv,
                                 params.swa_full,
                                 cparams.kv_unified,
-                                n_ctx_per_stream,
+                                cparams.n_ctx_seq,
                                 cparams.n_seq_max,
                                 cparams.n_ubatch,
                                 1,
@@ -6840,7 +6834,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 !cparams.flash_attn,
                                 cparams.offload_kqv,
                                 cparams.kv_unified,
-                                n_ctx_per_stream,
+                                cparams.n_ctx_seq,
                                 cparams.n_seq_max,
                                 1,
                                 hparams.n_swa,
