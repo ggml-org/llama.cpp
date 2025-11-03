@@ -809,7 +809,16 @@ common_chat_templates_ptr common_chat_templates_init(
             "{%- set content = content.split('</think>') -%} {%- set content = content|last -%} {%- set content = content.strip('\\n') %}");
         if (default_template_src.find("{%- set last_tool_call.name = message.tool_calls[-1].name -%}") != std::string::npos &&
             default_template_src.find("{%- for tool_call in message.tool_calls -%}") != std::string::npos) {
+            LOG_INF("Detected MiniMax-M2 official template bug: \"last_tool_call.name = message.tool_calls[-1].name\" , applying automatic fix...\n");
             string_replace_all(default_template_src, "{%- set last_tool_call.name = message.tool_calls[-1].name -%}", "");
+            string_replace_all(default_template_src,
+                "{%- for tool_call in message.tool_calls -%}",
+                "{%- for tool_call in message.tool_calls -%} {%- set last_tool_call.name = tool_call.function.name -%}");
+        }
+        if (default_template_src.find("{%- set last_tool_call.name = message.tool_calls[-1].function.name -%}") != std::string::npos &&
+            default_template_src.find("{%- for tool_call in message.tool_calls -%}") != std::string::npos) {
+            LOG_INF("Detected MiniMax-M2 unsloth template, applying automatic fix...\n");
+            string_replace_all(default_template_src, "{%- set last_tool_call.name = message.tool_calls[-1].function.name -%}", "");
             string_replace_all(default_template_src,
                 "{%- for tool_call in message.tool_calls -%}",
                 "{%- for tool_call in message.tool_calls -%} {%- set last_tool_call.name = tool_call.function.name -%}");
@@ -819,6 +828,7 @@ common_chat_templates_ptr common_chat_templates_init(
     if (default_template_src.find("]~!b[") != std::string::npos
             && default_template_src.find("]~b]") != std::string::npos
             && default_template_src.find("{% set _args = tool_call.arguments %}") != std::string::npos) {
+        LOG_INF("Detected MiniMax-M2 official template bug: unchecked tool_call.arguments , applying automatic fix...\n");
         string_replace_all(default_template_src, "{% set _args = tool_call.arguments %}",
             "{%- if tool_call.arguments is defined and tool_call.arguments is mapping -%} {%- set _args = tool_call.arguments -%} {%- else -%} {%- set _args = {} -%} {%- endif -%}");
     }
@@ -870,6 +880,8 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_GENERIC: return "Generic";
         case COMMON_CHAT_FORMAT_MISTRAL_NEMO: return "Mistral Nemo";
         case COMMON_CHAT_FORMAT_MAGISTRAL: return "Magistral";
+        case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
+        case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         case COMMON_CHAT_FORMAT_LLAMA_3_X: return "Llama 3.x";
         case COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS: return "Llama 3.x with builtin tools";
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1: return "DeepSeek R1";
@@ -885,8 +897,6 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_NEMOTRON_V2: return "Nemotron V2";
         case COMMON_CHAT_FORMAT_APERTUS: return "Apertus";
         case COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS: return "LFM2 with JSON tools";
-        case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
-        case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1611,7 +1621,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         auto tc = builder.try_find_regex(tool_call_start_regex, std::string::npos, false);
         std::string content;
         std::string tool_call_start;
-       
+
         if (tc) {
             content = std::move(tc->prelude);
             tool_call_start = builder.str(tc->groups[0]);
@@ -2696,7 +2706,7 @@ static common_chat_params common_chat_params_init_minimax_m2(const common_chat_t
     common_chat_params data;
 
     // Disable every Minja polyfill except object_arguments
-    minja::chat_template_options topts;
+    minja::chat_template_options topts {};
     topts.apply_polyfills = true;
     topts.polyfill_tools = false;
     topts.polyfill_tool_call_examples = false;
@@ -2745,21 +2755,14 @@ static common_chat_params common_chat_params_init_minimax_m2(const common_chat_t
 }
 
 static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
-    if (!builder.syntax().parse_tool_calls) {
-        // MiniMax-M2 uses <think>...</think> tags for reasoning content
-        builder.try_parse_reasoning("<think>", "</think>");
-        builder.add_content(builder.consume_rest());
-        return;
-    }
-
     static const xml_tool_call_format form {
-        /* form.scope_start = */ "<minimax:tool_call>\n",
+        /* form.scope_start = */ "<minimax:tool_call>",
         /* form.tool_start  = */ "<invoke name=\"",
-        /* form.tool_sep    = */ "\">\n",
+        /* form.tool_sep    = */ "\">",
         /* form.key_start   = */ "<parameter name=\"",
         /* form.key_val_sep = */ "\">",
-        /* form.val_end     = */ "</parameter>\n",
-        /* form.tool_end    = */ "</invoke>\n",
+        /* form.val_end     = */ "</parameter>",
+        /* form.tool_end    = */ "</invoke>",
         /* form.scope_end   = */ "</minimax:tool_call>",
     };
     parse_msg_with_xml_tool_calls(builder, form, "<think>", "</think>");
@@ -2987,7 +2990,7 @@ static common_chat_params common_chat_params_init_glm_4_5(const common_chat_temp
     common_chat_params data;
 
     // Disable every Minja polyfill except object_arguments
-    minja::chat_template_options topts;
+    minja::chat_template_options topts {};
     topts.apply_polyfills = true;
     topts.polyfill_tools = false;
     topts.polyfill_tool_call_examples = false;
@@ -3075,13 +3078,6 @@ static common_chat_params common_chat_params_init_glm_4_5(const common_chat_temp
 }
 
 static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
-    if (!builder.syntax().parse_tool_calls) {
-        builder.consume_spaces();
-        builder.try_parse_reasoning("<think>", "</think>");
-        builder.add_content(builder.consume_rest());
-        return;
-    }
-
     static const xml_tool_call_format form {
         /* form.scope_start  = */ "",
         /* form.tool_start   = */ "<tool_call>",
@@ -3759,13 +3755,6 @@ static void common_chat_parse_lfm2(common_chat_msg_parser & builder) {
 }
 
 static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
-    if (!builder.syntax().parse_tool_calls) {
-        // Parse thinking tags first - this handles the main reasoning content
-        builder.try_parse_reasoning("<seed:think>", "</seed:think>");
-        builder.add_content(builder.consume_rest());
-        return;
-    }
-
     //static const xml_tool_call_format form {
     //    /* form.scope_start = */ "<seed:tool_call>\n",
     //    /* form.tool_start  = */ "<function=",
@@ -4102,6 +4091,12 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
         case COMMON_CHAT_FORMAT_MAGISTRAL:
             common_chat_parse_magistral(builder);
             break;
+        case COMMON_CHAT_FORMAT_MINIMAX_M2:
+            common_chat_parse_minimax_m2(builder);
+            break;
+        case COMMON_CHAT_FORMAT_GLM_4_5:
+            common_chat_parse_glm_4_5(builder);
+            break;
         case COMMON_CHAT_FORMAT_LLAMA_3_X:
             common_chat_parse_llama_3_1(builder);
             break;
@@ -4146,12 +4141,6 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS:
             common_chat_parse_lfm2(builder);
-            break;
-        case COMMON_CHAT_FORMAT_GLM_4_5:
-            common_chat_parse_glm_4_5(builder);
-            break;
-        case COMMON_CHAT_FORMAT_MINIMAX_M2:
-            common_chat_parse_minimax_m2(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
