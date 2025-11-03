@@ -611,11 +611,6 @@ common_chat_templates_ptr common_chat_templates_init(
                 "{%- for tool_call in message.tool_calls -%}",
                 "{%- for tool_call in message.tool_calls -%} {%- set last_tool_call.name = tool_call.function.name -%}");
         }
-        if (default_template_src.find("{% set _args = tool_call.arguments %}") != std::string::npos) {
-            LOG_INF("Detected MiniMax-M2 official template bug: unchecked tool_call.arguments , applying automatic fix...\n");
-            string_replace_all(default_template_src, "{% set _args = tool_call.arguments %}",
-                "{%- if tool_call.arguments is defined and tool_call.arguments is mapping -%} {%- set _args = tool_call.arguments -%} {%- else -%} {%- set _args = {} -%} {%- endif -%}");
-        }
         LOG_INF("MiniMax-M2 template fixed\n");
     }
 
