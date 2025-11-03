@@ -1304,7 +1304,7 @@ class Me {
         this.defaultChatIds = [ "Default", "Other" ];
         this.multiChat = new MultiChatUI();
         this.tools = {
-            enabled: false,
+            enabled: true,
             proxyUrl: "http://127.0.0.1:3128",
             proxyAuthInsecure: "NeverSecure",
             searchUrl: SearchURLS.duckduckgo,
@@ -1328,7 +1328,7 @@ class Me {
         this.chatProps = {
             apiEP: ApiEP.Type.Chat,
             stream: true,
-            iRecentUserMsgCnt: 10,
+            iRecentUserMsgCnt: 5,
             bCompletionFreshChatAlways: true,
             bCompletionInsertStandardRolePrefix: false,
             bTrimGarbage: true,
