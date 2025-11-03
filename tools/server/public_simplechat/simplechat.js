@@ -762,7 +762,7 @@ class MultiChatUI {
         this.curChatId = "";
 
         this.TimePeriods = {
-            ToolCallAutoTimeUnit: 1000
+            ToolCallAutoSecsTimeUnit: 1000
         }
 
         this.timers = {
@@ -840,10 +840,10 @@ class MultiChatUI {
             this.elInToolName.dataset.tool_call_id = ar.ns.tool_calls[0].id
             this.elInToolArgs.value = ar.ns.tool_calls[0].function.arguments
             this.elBtnTool.disabled = false
-            if ((gMe.tools.auto > 0) && (bAuto)) {
+            if ((gMe.tools.autoSecs > 0) && (bAuto)) {
                 this.timers.toolcallTriggerClick = setTimeout(()=>{
                     this.elBtnTool.click()
-                }, gMe.tools.auto*this.TimePeriods.ToolCallAutoTimeUnit)
+                }, gMe.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
             }
         } else {
             this.elDivTool.hidden = true
@@ -1066,10 +1066,10 @@ class MultiChatUI {
             }
             chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(tcid, name, limitedData)))
             if (this.chat_show(cid)) {
-                if (gMe.tools.auto > 0) {
+                if (gMe.tools.autoSecs > 0) {
                     this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
                         this.elBtnUser.click()
-                    }, gMe.tools.auto*this.TimePeriods.ToolCallAutoTimeUnit)
+                    }, gMe.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
                 }
             }
             this.ui_reset_userinput(false)
@@ -1333,7 +1333,7 @@ class Me {
              * Control how many seconds to wait before auto triggering tool call or its response submission.
              * A value of 0 is treated as auto triggering disable.
              */
-            auto: 0
+            autoSecs: 0
         };
         this.chatProps = {
             apiEP: ApiEP.Type.Chat,
