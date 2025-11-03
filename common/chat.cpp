@@ -617,7 +617,7 @@ common_chat_templates_ptr common_chat_templates_init(
                 } else if (inString && c == stringChar) {
                     int backslashCount = 0;
                     size_t checkPos = pos - 1;
-                    while (checkPos >= 0 && s[checkPos] == '\\') {
+                    while (/* checkPos >= 0 && */ checkPos < s.size() && s[checkPos] == '\\') {
                         backslashCount++;
                         checkPos--;
                     }
