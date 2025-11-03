@@ -1717,7 +1717,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             if (src0_end > ne01) {
                 src0_end = ne01;
             }
-            
+
             if (src0_start >= src0_end) {
                 break;
             }
