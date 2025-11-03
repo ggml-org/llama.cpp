@@ -40,7 +40,6 @@ struct llama_hparams {
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
-    uint32_t n_embd_full; // main + auxiliary embeds
     uint32_t n_embd_features = 0;
     uint32_t n_layer;
     int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
@@ -227,6 +226,9 @@ struct llama_hparams {
     uint32_t n_ff(uint32_t il = 0) const;
 
     uint32_t n_gqa(uint32_t il = 0) const;
+
+    // dimension of main + auxiliary input embeddings
+    uint32_t n_embd_inp() const;
 
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;

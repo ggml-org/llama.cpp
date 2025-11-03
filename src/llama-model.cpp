@@ -276,8 +276,8 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             } break;
         case GGML_OP_IM2COL:
             {
-                const int n_embd = hparams.n_embd_full;
-                ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_embd, w->ne[1], 1, 1);
+                const int n_embd_inp = hparams.n_embd_inp();
+                ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_embd_inp, w->ne[1], 1, 1);
                 op_tensor = ggml_im2col(ctx, w, b, 1, 0, 0, 0, 1, 0, false, GGML_TYPE_F16);
             } break;
         case GGML_OP_SCALE:
@@ -505,7 +505,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
     ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT, hparams.n_group_used,    false);
-    hparams.n_embd_full = hparams.n_embd;
 
     if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
         ml.get_key(LLM_KV_FEATURES_LENGTH, hparams.n_embd_features);
@@ -1040,9 +1039,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case 64: type = LLM_TYPE_32B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
-                // since vision model stacks deepstack features along feature dim
-                // we also create a fake "n_embd" for text model to be the main embd + deepstack embds
-                hparams.n_embd_full *= hparams.n_deepstack_layers + 1;
             } break;
         case LLM_ARCH_QWEN3MOE:
             {
@@ -1066,9 +1062,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case 94: type = LLM_TYPE_235B_A22B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
-                // since vision model stacks deepstack features along feature dim
-                // we also create a fake "n_embd" for text model to be the main embd + deepstack embds
-                hparams.n_embd_full *= hparams.n_deepstack_layers + 1;
             } break;
         case LLM_ARCH_PHI2:
             {
@@ -6475,6 +6468,7 @@ void llama_model::print_info() const {
     if (!hparams.vocab_only) {
         LLAMA_LOG_INFO("%s: n_ctx_train      = %u\n",     __func__, hparams.n_ctx_train);
         LLAMA_LOG_INFO("%s: n_embd           = %u\n",     __func__, hparams.n_embd);
+        LLAMA_LOG_INFO("%s: n_embd_inp       = %u\n",     __func__, hparams.n_embd_inp());
         LLAMA_LOG_INFO("%s: n_layer          = %u\n",     __func__, hparams.n_layer);
         LLAMA_LOG_INFO("%s: n_head           = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_head(il);    }, hparams.n_layer).c_str());
         LLAMA_LOG_INFO("%s: n_head_kv        = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_head_kv(il); }, hparams.n_layer).c_str());
@@ -6674,8 +6668,9 @@ ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
     return ::select_buft(
             *pimpl->dev_layer.at(il).buft_list,
             [&](ggml_context * ctx) {
-                ggml_tensor * cur = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd_full);
-                ggml_tensor * layer_dir = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd_full);
+                const int n_embd_inp = hparams.n_embd_inp();
+                ggml_tensor * cur = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd_inp);
+                ggml_tensor * layer_dir = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd_inp);
                 return ggml_add(ctx, cur, layer_dir);
             });
 }
@@ -7322,8 +7317,8 @@ int32_t llama_model_n_embd(const llama_model * model) {
     return model->hparams.n_embd;
 }
 
-int32_t llama_model_n_embd_full(const llama_model * model) {
-    return model->hparams.n_embd_full;
+int32_t llama_model_n_embd_inp(const llama_model * model) {
+    return model->hparams.n_embd_inp();
 }
 
 int32_t llama_model_n_layer(const llama_model * model) {
