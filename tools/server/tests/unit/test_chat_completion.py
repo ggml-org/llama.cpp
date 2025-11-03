@@ -476,3 +476,16 @@ def test_return_progress(n_batch, batch_count, reuse_cache):
     assert last_progress["total"] > 0
     assert last_progress["processed"] == last_progress["total"]
     assert total_batch_count == batch_count
+
+
+def test_standalone_reasoning_content_is_accepted():
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [
+            {"role": "user", "content": "How much is 102 + 7?"},
+            {"role": "assistant", "reasoning_content": "Calculate."},
+        ]
+    })
+    assert res.status_code == 200
