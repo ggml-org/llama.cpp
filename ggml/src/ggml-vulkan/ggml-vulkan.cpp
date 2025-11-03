@@ -940,6 +940,7 @@ struct vk_op_pad_push_constants {
     uint32_t ne00; uint32_t ne01; uint32_t ne02; uint32_t ne03; uint32_t nb00; uint32_t nb01; uint32_t nb02; uint32_t nb03;
     uint32_t ne10; uint32_t ne11; uint32_t ne12; uint32_t ne13; uint32_t nb10; uint32_t nb11; uint32_t nb12; uint32_t nb13;
     uint32_t misalign_offsets;
+    uint32_t circular;
 
     uint32_t lp0; uint32_t rp0;
     uint32_t lp1; uint32_t rp1;
@@ -982,6 +983,7 @@ static vk_op_pad_push_constants vk_op_pad_push_constants_init(const ggml_tensor 
     p.rp2 = dst->op_params[5];
     p.lp3 = dst->op_params[6];
     p.rp3 = dst->op_params[7];
+    p.circular = dst->op_params[8];
 
     return p; // fastdiv values and offsets are initialized later in ggml_vk_op
 }
@@ -1249,6 +1251,8 @@ struct vk_op_conv2d_push_constants {
     uint32_t KWKHmp; uint32_t KWKHL;
     uint32_t OWmp;   uint32_t OWL;
     uint32_t OWOHmp; uint32_t OWOHL;
+
+    uint32_t circular;
 };
 
 template <> void init_pushconst_fastdiv(vk_op_conv2d_push_constants &p) {
@@ -1297,6 +1301,8 @@ struct vk_op_conv_transpose_2d_push_constants {
     uint32_t OWOHmp; uint32_t OWOHL;
     uint32_t s0mp; uint32_t s0L;
     uint32_t s1mp; uint32_t s1L;
+
+    uint32_t circular;
 };
 
 template <> void init_pushconst_fastdiv(vk_op_conv_transpose_2d_push_constants &p) {
@@ -1325,6 +1331,7 @@ struct vk_op_conv2d_dw_push_constants {
     int32_t pad_y;
     int32_t dilation_x;
     int32_t dilation_y;
+    uint32_t circular;
 };
 
 struct vk_op_upscale_push_constants {
@@ -10420,6 +10427,8 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context & subctx, 
     p.nb2 = static_cast<uint32_t>(nb2 / nb0);
     p.nb3 = static_cast<uint32_t>(nb3 / nb0);
 
+    p.circular = static_cast<uint32_t>(dst->op_params[6]);
+
     GGML_ASSERT(ne03 == ne2);
     GGML_ASSERT(ne02 == ne12);
 
@@ -10469,6 +10478,8 @@ static void ggml_vk_conv_transpose_2d(ggml_backend_vk_context * ctx, vk_context 
     p.nb2 = static_cast<uint32_t>(nb2 / nb0);
     p.nb3 = static_cast<uint32_t>(nb3 / nb0);
 
+    p.circular = static_cast<uint32_t>(dst->op_params[1]);
+
     GGML_ASSERT(ne02 == ne2);
     GGML_ASSERT(ne03 == ne12);
 
@@ -10492,6 +10503,7 @@ static void ggml_vk_conv_2d_dw(ggml_backend_vk_context * ctx, vk_context& subctx
     p.pad_y = dst->op_params[3];
     p.dilation_x = dst->op_params[4];
     p.dilation_y = dst->op_params[5];
+    p.circular = dst->op_params[6];
 
     GGML_ASSERT(src0->ne[3] == p.channels);
     GGML_ASSERT(src1->ne[3] == p.batches);

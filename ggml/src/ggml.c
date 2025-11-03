@@ -4457,6 +4457,29 @@ struct ggml_tensor * ggml_conv_2d(
     return result;
 }
 
+
+// ggml_conv_2d_circular
+
+// a: [OC，IC, KH, KW]
+// b: [N, IC, IH, IW]
+// result: [N, OC, OH, OW]
+struct ggml_tensor * ggml_conv_2d_circular(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        int                   s0,
+        int                   s1,
+        int                   p0,
+        int                   p1,
+        int                   d0,
+        int                   d1) {
+    if (p0 == 0 && p1 == 0) {
+        return ggml_conv_2d(ctx, a, b, s0, s1, p0, p1, d0, d1);
+    }
+    struct ggml_tensor * b_padded = ggml_pad_ext_circular(ctx, b, p0, p0, p1, p1, 0, 0, 0, 0);
+    return ggml_conv_2d(ctx, a, b_padded, s0, s1, 0, 0, d0, d1);
+}
+
 // a: [OC*IC, KD, KH, KW]
 // b: [N*IC, ID, IH, IW]
 // result: [N*OD, OH, OW, IC * KD * KH * KW]
@@ -4585,6 +4608,25 @@ struct ggml_tensor * ggml_conv_2d_dw(
     return result;
 }
 
+// ggml_conv_2d_dw_circular
+
+struct ggml_tensor * ggml_conv_2d_dw_circular(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        int                   s0,
+        int                   s1,
+        int                   p0,
+        int                   p1,
+        int                   d0,
+        int                   d1) {
+    if (p0 == 0 && p1 == 0) {
+        return ggml_conv_2d_dw(ctx, a, b, s0, s1, p0, p1, d0, d1);
+    }
+    struct ggml_tensor * b_padded = ggml_pad_ext_circular(ctx, b, p0, p0, p1, p1, 0, 0, 0, 0);
+    return ggml_conv_2d_dw(ctx, a, b_padded, s0, s1, 0, 0, d0, d1);
+}
+
 // ggml_conv_2d_dw_direct
 
 struct ggml_tensor * ggml_conv_2d_dw_direct(
@@ -4616,12 +4658,32 @@ struct ggml_tensor * ggml_conv_2d_dw_direct(
         result->nb[2] = type_size;
     }
 
-    int32_t params[] = { stride0, stride1, pad0, pad1, dilation0, dilation1 };
+    int circular = 0; // default not circular
+
+    int32_t params[] = { stride0, stride1, pad0, pad1, dilation0, dilation1, circular };
     ggml_set_op_params(result, params, sizeof(params));
 
     result->op     = GGML_OP_CONV_2D_DW;
     result->src[0] = a;
     result->src[1] = b;
+    return result;
+}
+
+// ggml_conv_2d_dw_direct_circular
+
+struct ggml_tensor * ggml_conv_2d_dw_direct_circular(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        int                   stride0,
+        int                   stride1,
+        int                   pad0,
+        int                   pad1,
+        int                   dilation0,
+        int                   dilation1) {
+    struct ggml_tensor * result =
+        ggml_conv_2d_dw_direct(ctx, a, b, stride0, stride1, pad0, pad1, dilation0, dilation1);
+    ggml_set_op_params_i32(result, 6, 1); // circular
     return result;
 }
 
@@ -4655,11 +4717,29 @@ struct ggml_tensor * ggml_conv_2d_direct(
     ggml_set_op_params_i32(result, 3, p1);
     ggml_set_op_params_i32(result, 4, d0);
     ggml_set_op_params_i32(result, 5, d1);
+    ggml_set_op_params_i32(result, 6, 0); // default not circularc
 
     result->op = GGML_OP_CONV_2D;
     result->src[0] = a;
     result->src[1] = b;
 
+    return result;
+}
+
+// ggml_conv_2d_direct_circular
+
+struct ggml_tensor * ggml_conv_2d_direct_circular(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        int                   s0,
+        int                   s1,
+        int                   p0,
+        int                   p1,
+        int                   d0,
+        int                   d1) {
+    struct ggml_tensor * result = ggml_conv_2d_direct(ctx, a, b, s0, s1, p0, p1, d0, d1);
+    ggml_set_op_params_i32(result, 6, 1); // circular
     return result;
 }
 
@@ -4735,11 +4815,24 @@ struct ggml_tensor * ggml_conv_transpose_2d_p0(
     struct ggml_tensor* result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     ggml_set_op_params_i32(result, 0, stride);
+    ggml_set_op_params_i32(result, 1, 0); // circular default off
 
     result->op     = GGML_OP_CONV_TRANSPOSE_2D;
     result->src[0] = a;
     result->src[1] = b;
 
+    return result;
+}
+
+// ggml_conv_transpose_2d_p0_circular
+
+struct ggml_tensor * ggml_conv_transpose_2d_p0_circular(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        int                   stride) {
+    struct ggml_tensor * result = ggml_conv_transpose_2d_p0(ctx, a, b, stride);
+    ggml_set_op_params_i32(result, 1, 1); // circular enabled
     return result;
 }
 
@@ -4894,6 +4987,18 @@ struct ggml_tensor * ggml_pad(
     return ggml_pad_ext(ctx, a, 0, p0, 0, p1, 0, p2, 0, p3);
 }
 
+// ggml_pad_circular
+
+struct ggml_tensor * ggml_pad_circular(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   p0,
+        int                   p1,
+        int                   p2,
+        int                   p3) {
+    return ggml_pad_ext_circular(ctx, a, 0, p0, 0, p1, 0, p2, 0, p3);
+}
+
 struct ggml_tensor * ggml_pad_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -4920,11 +5025,31 @@ struct ggml_tensor * ggml_pad_ext(
     ggml_set_op_params_i32(result, 5, rp2);
     ggml_set_op_params_i32(result, 6, lp3);
     ggml_set_op_params_i32(result, 7, rp3);
+    ggml_set_op_params_i32(result, 8, 0); // not circular by default
 
 
     result->op     = GGML_OP_PAD;
     result->src[0] = a;
 
+    return result;
+}
+
+// ggml_pad_ext_circular
+
+struct ggml_tensor * ggml_pad_ext_circular(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                  lp0,
+        int                  rp0,
+        int                  lp1,
+        int                  rp1,
+        int                  lp2,
+        int                  rp2,
+        int                  lp3,
+        int                  rp3
+        ) {
+    struct ggml_tensor * result = ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+    ggml_set_op_params_i32(result, 8, 1); // circular
     return result;
 }
 
