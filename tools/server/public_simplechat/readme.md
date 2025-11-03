@@ -589,6 +589,16 @@ SimpleProxy
   the whitelist inturn picked from config json
 * Helpers to fetch file from local file system or the web, transparently
 
+Chances are for ai models which dont support tool calling, things will be such that the tool calls
+meta data shared will be silently ignored without much issue. So enabling tool calling feature by default,
+so that in case one is using a ai model with tool calling the feature is readily available for use.
+
+Revert SlidingWindow ChatHistory in Context from last 10 to last 5 (rather 2 more then origianl,
+given more context support in todays models) by default, given that now tool handshakes go through
+the tools related side channel in the http handshake and arent morphed into normal user-assistant
+channel of the handshake.
+
+
 #### ToDo
 
 Is the tool call promise land trap deep enough, need to think through and explore around this once later.
