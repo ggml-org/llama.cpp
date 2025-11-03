@@ -8,11 +8,13 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	showThoughtInProgress: false,
 	disableReasoningFormat: false,
 	keepStatsVisible: false,
+	showMessageStats: true,
 	askForTitleConfirmation: false,
 	pasteLongTextToFileLen: 2500,
 	pdfAsImage: false,
 	showModelInfo: false,
 	renderUserContentAsMarkdown: false,
+	modelSelectorEnabled: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
 	temperature: 0.8,
@@ -81,11 +83,15 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	disableReasoningFormat:
 		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
+	showMessageStats:
+		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
 	askForTitleConfirmation:
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
 	pdfAsImage: 'Parse PDF as image instead of text (requires vision-capable model).',
 	showModelInfo: 'Display the model name used to generate each message below the message content.',
 	renderUserContentAsMarkdown: 'Render user messages using markdown formatting in the chat.',
+	modelSelectorEnabled:
+		'Enable the model selector in the chat input to choose the inference model. Sends the associated model field in API requests.',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.'
 };

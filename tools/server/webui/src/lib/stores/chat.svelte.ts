@@ -1,7 +1,8 @@
 import { DatabaseStore } from '$lib/stores/database';
 import { chatService, slotsService } from '$lib/services';
-import { serverStore } from '$lib/stores/server.svelte';
 import { config } from '$lib/stores/settings.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
+import { normalizeModelName } from '$lib/utils/model-names';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
@@ -359,29 +360,80 @@ class ChatStore {
 	): Promise<void> {
 		let streamedContent = '';
 		let streamedReasoningContent = '';
-		let modelCaptured = false;
 
-		const captureModelIfNeeded = (updateDbImmediately = true): string | undefined => {
-			if (!modelCaptured) {
-				const currentModelName = serverStore.modelName;
+		let resolvedModel: string | null = null;
+		let modelPersisted = false;
+		const currentConfig = config();
+		const preferServerPropsModel = !currentConfig.modelSelectorEnabled;
+		let serverPropsRefreshed = false;
+		let updateModelFromServerProps: ((persistImmediately?: boolean) => void) | null = null;
 
-				if (currentModelName) {
-					if (updateDbImmediately) {
-						DatabaseStore.updateMessage(assistantMessage.id, { model: currentModelName }).catch(
-							console.error
-						);
-					}
-
-					const messageIndex = this.findMessageIndex(assistantMessage.id);
-
-					this.updateMessageAtIndex(messageIndex, { model: currentModelName });
-					modelCaptured = true;
-
-					return currentModelName;
-				}
+		const refreshServerPropsOnce = () => {
+			if (serverPropsRefreshed) {
+				return;
 			}
-			return undefined;
+
+			serverPropsRefreshed = true;
+
+			const hasExistingProps = serverStore.serverProps !== null;
+
+			serverStore
+				.fetchServerProps({ silent: hasExistingProps })
+				.then(() => {
+					updateModelFromServerProps?.(true);
+				})
+				.catch((error) => {
+					console.warn('Failed to refresh server props after streaming started:', error);
+				});
 		};
+
+		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
+			const serverModelName = serverStore.modelName;
+			const preferredModelSource = preferServerPropsModel
+				? (serverModelName ?? modelName ?? null)
+				: (modelName ?? serverModelName ?? null);
+
+			if (!preferredModelSource) {
+				return;
+			}
+
+			const normalizedModel = normalizeModelName(preferredModelSource);
+
+			if (!normalizedModel || normalizedModel === resolvedModel) {
+				return;
+			}
+
+			resolvedModel = normalizedModel;
+
+			const messageIndex = this.findMessageIndex(assistantMessage.id);
+
+			this.updateMessageAtIndex(messageIndex, { model: normalizedModel });
+
+			if (persistImmediately && !modelPersisted) {
+				modelPersisted = true;
+				DatabaseStore.updateMessage(assistantMessage.id, { model: normalizedModel }).catch(
+					(error) => {
+						console.error('Failed to persist model name:', error);
+						modelPersisted = false;
+						resolvedModel = null;
+					}
+				);
+			}
+		};
+
+		if (preferServerPropsModel) {
+			updateModelFromServerProps = (persistImmediately = true) => {
+				const currentServerModel = serverStore.modelName;
+
+				if (!currentServerModel) {
+					return;
+				}
+
+				recordModel(currentServerModel, persistImmediately);
+			};
+
+			updateModelFromServerProps(false);
+		}
 
 		slotsService.startStreaming();
 		slotsService.setActiveConversation(assistantMessage.convId);
@@ -391,6 +443,9 @@ class ChatStore {
 			{
 				...this.getApiOptions(),
 
+				onFirstValidChunk: () => {
+					refreshServerPropsOnce();
+				},
 				onChunk: (chunk: string) => {
 					streamedContent += chunk;
 					this.setConversationStreaming(
@@ -399,7 +454,6 @@ class ChatStore {
 						assistantMessage.id
 					);
 
-					captureModelIfNeeded();
 					const messageIndex = this.findMessageIndex(assistantMessage.id);
 					this.updateMessageAtIndex(messageIndex, {
 						content: streamedContent
@@ -409,11 +463,13 @@ class ChatStore {
 				onReasoningChunk: (reasoningChunk: string) => {
 					streamedReasoningContent += reasoningChunk;
 
-					captureModelIfNeeded();
-
 					const messageIndex = this.findMessageIndex(assistantMessage.id);
 
 					this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
+				},
+
+				onModel: (modelName: string) => {
+					recordModel(modelName);
 				},
 
 				onComplete: async (
@@ -434,10 +490,9 @@ class ChatStore {
 						timings: timings
 					};
 
-					const capturedModel = captureModelIfNeeded(false);
-
-					if (capturedModel) {
-						updateData.model = capturedModel;
+					if (resolvedModel && !modelPersisted) {
+						updateData.model = resolvedModel;
+						modelPersisted = true;
 					}
 
 					await DatabaseStore.updateMessage(assistantMessage.id, updateData);
@@ -565,7 +620,8 @@ class ChatStore {
 				content: '',
 				timestamp: Date.now(),
 				thinking: '',
-				children: []
+				children: [],
+				model: null
 			},
 			parentId || null
 		);
@@ -1533,7 +1589,8 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: []
+					children: [],
+					model: null
 				},
 				parentMessage.id
 			);
@@ -1590,7 +1647,8 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
-					children: []
+					children: [],
+					model: null
 				},
 				userMessageId
 			);

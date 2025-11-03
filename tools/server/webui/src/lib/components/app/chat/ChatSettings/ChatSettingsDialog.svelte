@@ -53,6 +53,11 @@
 					]
 				},
 				{
+					key: 'showMessageStats',
+					label: 'Show message generation statistics',
+					type: 'checkbox'
+				},
+				{
 					key: 'showTokensPerSecond',
 					label: 'Show tokens per second',
 					type: 'checkbox'
@@ -216,6 +221,11 @@
 			title: 'Developer',
 			icon: Code,
 			fields: [
+				{
+					key: 'modelSelectorEnabled',
+					label: 'Enable model selector',
+					type: 'checkbox'
+				},
 				{
 					key: 'disableReasoningFormat',
 					label: 'Show raw LLM output',

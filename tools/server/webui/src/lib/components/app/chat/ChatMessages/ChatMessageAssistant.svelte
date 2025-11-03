@@ -3,13 +3,23 @@
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { fade } from 'svelte/transition';
-	import { Check, Copy, Package, X } from '@lucide/svelte';
+	import {
+		Check,
+		Copy,
+		Package,
+		X,
+		Gauge,
+		Clock,
+		WholeWord,
+		ChartNoAxesColumn
+	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { modelName as serverModelName } from '$lib/stores/server.svelte';
 	import { copyToClipboard } from '$lib/utils/copy';
 
 	interface Props {
@@ -70,6 +80,23 @@
 	}: Props = $props();
 
 	const processingState = useProcessingState();
+	let currentConfig = $derived(config());
+	let serverModel = $derived(serverModelName());
+	let displayedModel = $derived((): string | null => {
+		if (!currentConfig.showModelInfo) return null;
+
+		if (message.model) {
+			return message.model;
+		}
+
+		return serverModel;
+	});
+
+	function handleCopyModel() {
+		const model = displayedModel();
+
+		void copyToClipboard(model ?? '');
+	}
 </script>
 
 <div
@@ -142,22 +169,58 @@
 		</div>
 	{/if}
 
-	{#if config().showModelInfo && message.model}
-		<span class="mt-6 mb-4 inline-flex items-center gap-1 text-xs text-muted-foreground">
-			<Package class="h-3.5 w-3.5" />
+	<div class="info my-6 grid gap-4">
+		{#if displayedModel()}
+			<span class="inline-flex items-center gap-2 text-xs text-muted-foreground">
+				<span class="inline-flex items-center gap-1">
+					<Package class="h-3.5 w-3.5" />
 
-			<span>Model used:</span>
+					<span>Model used:</span>
+				</span>
 
-			<button
-				class="inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-				onclick={() => copyToClipboard(message.model)}
-			>
-				{message.model}
+				<button
+					class="inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
+					onclick={handleCopyModel}
+				>
+					{displayedModel()}
 
-				<Copy class="ml-1 h-3 w-3 " />
-			</button>
-		</span>
-	{/if}
+					<Copy class="ml-1 h-3 w-3 " />
+				</button>
+			</span>
+		{/if}
+
+		{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
+			{@const tokensPerSecond = (message.timings.predicted_n / message.timings.predicted_ms) * 1000}
+			<span class="inline-flex items-center gap-2 text-xs text-muted-foreground">
+				<span class="inline-flex items-center gap-1">
+					<ChartNoAxesColumn class="h-3.5 w-3.5" />
+
+					<span>Statistics:</span>
+				</span>
+
+				<div class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+					<span
+						class="inline-flex items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
+					>
+						<Gauge class="h-3 w-3" />
+						{tokensPerSecond.toFixed(2)} tokens/s
+					</span>
+					<span
+						class="inline-flex items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
+					>
+						<WholeWord class="h-3 w-3" />
+						{message.timings.predicted_n} tokens
+					</span>
+					<span
+						class="inline-flex items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
+					>
+						<Clock class="h-3 w-3" />
+						{(message.timings.predicted_ms / 1000).toFixed(2)}s
+					</span>
+				</div>
+			</span>
+		{/if}
+	</div>
 
 	{#if message.timestamp && !isEditing}
 		<ChatMessageActions

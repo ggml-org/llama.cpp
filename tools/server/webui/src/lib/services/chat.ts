@@ -1,4 +1,5 @@
 import { config } from '$lib/stores/settings.svelte';
+import { selectedModelName } from '$lib/stores/models.svelte';
 import { slotsService } from './slots';
 /**
  * ChatService - Low-level API communication layer for llama.cpp server interactions
@@ -51,6 +52,9 @@ export class ChatService {
 			onChunk,
 			onComplete,
 			onError,
+			onReasoningChunk,
+			onModel,
+			onFirstValidChunk,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -117,6 +121,13 @@ export class ChatService {
 			})),
 			stream
 		};
+
+		const modelSelectorEnabled = Boolean(currentConfig.modelSelectorEnabled);
+		const activeModel = modelSelectorEnabled ? selectedModelName() : null;
+
+		if (modelSelectorEnabled && activeModel) {
+			requestBody.model = activeModel;
+		}
 
 		requestBody.reasoning_format = currentConfig.disableReasoningFormat ? 'none' : 'auto';
 
@@ -189,13 +200,15 @@ export class ChatService {
 					onChunk,
 					onComplete,
 					onError,
-					options.onReasoningChunk,
+					onReasoningChunk,
+					onModel,
+					onFirstValidChunk,
 					conversationId,
 					abortController.signal
 				);
 				return;
 			} else {
-				return this.handleNonStreamResponse(response, onComplete, onError);
+				return this.handleNonStreamResponse(response, onComplete, onError, onModel);
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
@@ -255,6 +268,8 @@ export class ChatService {
 		) => void,
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void,
+		onModel?: (model: string) => void,
+		onFirstValidChunk?: () => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal
 	): Promise<void> {
@@ -270,6 +285,8 @@ export class ChatService {
 		let hasReceivedData = false;
 		let lastTimings: ChatMessageTimings | undefined;
 		let streamFinished = false;
+		let modelEmitted = false;
+		let firstValidChunkEmitted = false;
 
 		try {
 			let chunk = '';
@@ -298,10 +315,24 @@ export class ChatService {
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
 
+							if (!firstValidChunkEmitted && parsed.object === 'chat.completion.chunk') {
+								firstValidChunkEmitted = true;
+
+								if (!abortSignal?.aborted) {
+									onFirstValidChunk?.();
+								}
+							}
+
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
 							const timings = parsed.timings;
 							const promptProgress = parsed.prompt_progress;
+
+							const chunkModel = this.extractModelName(parsed);
+							if (chunkModel && !modelEmitted) {
+								modelEmitted = true;
+								onModel?.(chunkModel);
+							}
 
 							if (timings || promptProgress) {
 								this.updateProcessingState(timings, promptProgress, conversationId);
@@ -372,7 +403,8 @@ export class ChatService {
 			reasoningContent?: string,
 			timings?: ChatMessageTimings
 		) => void,
-		onError?: (error: Error) => void
+		onError?: (error: Error) => void,
+		onModel?: (model: string) => void
 	): Promise<string> {
 		try {
 			const responseText = await response.text();
@@ -383,6 +415,12 @@ export class ChatService {
 			}
 
 			const data: ApiChatCompletionResponse = JSON.parse(responseText);
+
+			const responseModel = this.extractModelName(data);
+			if (responseModel) {
+				onModel?.(responseModel);
+			}
+
 			const content = data.choices[0]?.message?.content || '';
 			const reasoningContent = data.choices[0]?.message?.reasoning_content;
 
@@ -459,6 +497,19 @@ export class ChatService {
 			contentParts.push({
 				type: 'text',
 				text: `\n\n--- File: ${textFile.name} ---\n${textFile.content}`
+			});
+		}
+
+		// Handle legacy 'context' type from old webui (pasted content)
+		const legacyContextFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraLegacyContext =>
+				extra.type === 'context'
+		);
+
+		for (const legacyContextFile of legacyContextFiles) {
+			contentParts.push({
+				type: 'text',
+				text: `\n\n--- File: ${legacyContextFile.name} ---\n${legacyContextFile.content}`
 			});
 		}
 
@@ -610,6 +661,39 @@ export class ChatService {
 			fallback.name = 'HttpError';
 			return fallback;
 		}
+	}
+
+	private extractModelName(data: unknown): string | undefined {
+		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+			return typeof value === 'object' && value !== null
+				? (value as Record<string, unknown>)
+				: undefined;
+		};
+
+		const getTrimmedString = (value: unknown): string | undefined => {
+			return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+		};
+
+		const root = asRecord(data);
+		if (!root) return undefined;
+
+		// 1) root (some implementations provide `model` at the top level)
+		const rootModel = getTrimmedString(root.model);
+		if (rootModel) return rootModel;
+
+		// 2) streaming choice (delta) or final response (message)
+		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
+		if (!firstChoice) return undefined;
+
+		// priority: delta.model (first chunk) else message.model (final response)
+		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
+		if (deltaModel) return deltaModel;
+
+		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
+		if (messageModel) return messageModel;
+
+		// avoid guessing from non-standard locations (metadata, etc.)
+		return undefined;
 	}
 
 	private updateProcessingState(
