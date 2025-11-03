@@ -598,133 +598,7 @@ common_chat_templates_ptr common_chat_templates_init(
             "{%- if false %}");
     }
 
-    // Fix "Unknown method: items at row NN, column MM" by replace receiver.items() to (receiver | items)
-    // TODO: Delete this when upstream minja fix tojson problem
-    constexpr auto replaceToJsonInTemplate = [](const std::string& input) {
-        constexpr auto isIdentifierChar = [](char c) {
-            return std::isalnum(c) || c == '_';
-        };
-        constexpr auto matchBrackets = [](const std::string& s, size_t startPos, size_t& endPos) {
-            size_t pos = startPos;
-            int bracketCount = 0;
-            bool inString = false;
-            char stringChar = 0;
-            while (pos < s.length()) {
-                char c = s[pos];
-                if (!inString && (c == '"' || c == '\'')) {
-                    inString = true;
-                    stringChar = c;
-                } else if (inString && c == stringChar) {
-                    int backslashCount = 0;
-                    size_t checkPos = pos - 1;
-                    while (/* checkPos >= 0 && */ checkPos < s.size() && s[checkPos] == '\\') {
-                        backslashCount++;
-                        checkPos--;
-                    }
-                    if (backslashCount % 2 == 0) {
-                        inString = false;
-                        stringChar = 0;
-                    }
-                }
-                if (!inString) {
-                    if (c == '(') {
-                        bracketCount++;
-                    } else if (c == ')') {
-                        bracketCount--;
-                        if (bracketCount == 0) {
-                            endPos = pos;
-                            return true;
-                        }
-                    }
-                }
-                pos++;
-            }
-            return false;
-        };
-        constexpr auto isCompleteItemsCall = [matchBrackets](const std::string& s, size_t dotPos) {
-            if (s.compare(dotPos, 6, ".items") != 0) return false;
-            size_t itemsEnd = dotPos + 6;
-            if (itemsEnd >= s.length() || s[itemsEnd] != '(') return false;
-            size_t openParen = itemsEnd;
-            size_t closeParen;
-            if (!matchBrackets(s, openParen, closeParen)) return false;
-            for (size_t i = openParen + 1; i < closeParen; i++) {
-                if (!std::isspace(s[i])) return false;
-            }
-            return true;
-        };
-        constexpr auto replaceItemsCall = [isCompleteItemsCall, matchBrackets, isIdentifierChar](const std::string& s, size_t dotPos) -> std::string {
-            if (!isCompleteItemsCall(s, dotPos)) return s;
-            size_t itemsEnd = dotPos + 6;
-            size_t openParen = itemsEnd;
-            size_t closeParen;
-            if (!matchBrackets(s, openParen, closeParen)) return s;
-            size_t varStart = dotPos;
-            while (varStart > 0 && (isIdentifierChar(s[varStart - 1]) || s[varStart - 1] == '.')) {
-                varStart--;
-            }
-            std::string var = s.substr(varStart, dotPos - varStart);
-            return s.substr(0, varStart) + "(" + var + " | items)" + s.substr(closeParen + 1);
-        };
-        constexpr auto processTemplateBlock = [replaceItemsCall](const std::string& block) {
-            std::string result = block;
-            size_t pos = 0;
-            while (pos < result.length()) {
-                size_t nextToJson = std::string::npos;
-                size_t nextItems = result.find(".items", pos);
-                size_t nextPos = std::string::npos;
-                bool isToJson = false;
-                if (nextToJson != std::string::npos && (nextItems == std::string::npos || nextToJson < nextItems)) {
-                    nextPos = nextToJson;
-                    isToJson = true;
-                } else if (nextItems != std::string::npos) {
-                    nextPos = nextItems;
-                    isToJson = false;
-                }
-                if (nextPos == std::string::npos) break;
-                if (isToJson) {
-                    GGML_ASSERT(false);
-                } else {
-                    std::string replaced = replaceItemsCall(result, nextPos);
-                    if (replaced != result) {
-                        result = replaced;
-                        pos = nextPos + 8;
-                    } else {
-                        pos = nextPos + 1;
-                    }
-                }
-            }
-            return result;
-        };
-        if (input.empty()) {
-            return input;
-        }
-        std::string result = input;
-        size_t pos = 0;
-        while (pos < result.length()) {
-            if (result.compare(pos, 2, "{{") == 0 || result.compare(pos, 2, "{%") == 0) {
-                std::string endMarker = result.compare(pos, 2, "{{") == 0 ? "}}" : "%}";
-                size_t endPos = result.find(endMarker, pos + 2);
-                if (endPos != std::string::npos) {
-                    std::string block = result.substr(pos + 2, endPos - pos - 2);
-                    std::string processedBlock = processTemplateBlock(block);
-                    if (processedBlock != block) {
-                        result = result.substr(0, pos + 2) + processedBlock + result.substr(endPos);
-                        endPos = pos + 2 + processedBlock.length();
-                        pos = endPos;
-                        continue;
-                    }
-                    pos = endPos + 2;
-                } else break;
-            } else pos++;
-        }
-        return result;
-    };
-    default_template_src = replaceToJsonInTemplate(default_template_src);
-
-    // Fix MiniMax-M2 template bug:
-    //   1. Type of tool_call.arguments not checked
-    //   2. last_tool_call.name should be tool_call.function.name rather than tool_call.name
+    // Fix MiniMax-M2 template bug: last_tool_call.name should be tool_call.function.name rather than tool_call.name
     // TODO: remove this once the template is fixed.
     if (default_template_src.find("]~!b[") != std::string::npos
             && default_template_src.find("]~b]") != std::string::npos) {
@@ -1254,7 +1128,7 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                 return;
             }
         }
-        LOG_DBG("Failed to parse partial GLM 4.5 tool call, fallback to non-partial: %s\n", tool_str.c_str());
+        LOG_DBG("Failed to parse partial XML-Style tool call, fallback to non-partial: %s\n", tool_str.c_str());
     };
 
     bool recovery = true;
@@ -1413,7 +1287,7 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
             if (tc->groups[0].end - tc->groups[0].begin == form.tool_end.size()) {
                 // Add the parsed tool call
                 if (!builder.add_tool_call(function_name, "", arguments.dump())) {
-                    throw common_chat_msg_partial_exception("Failed to add GLM tool call");
+                    throw common_chat_msg_partial_exception("Failed to add XML-Style tool call");
                 }
                 recovery = false;
                 continue;
