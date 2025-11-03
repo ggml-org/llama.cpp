@@ -38,8 +38,8 @@ struct test_model {
 };
 
 void load_model(test_model & model, int ic, int oc, int iw, int ih, int id,
-                                    int kw = 3, int kh = 3, int kd = 3,
-                                    bool use_fp16 = true, bool use_gpu = false );
+                                    int kw, int kh, int kd,
+                                    bool use_fp16, bool use_gpu);
 struct ggml_cgraph * build_graph_0(const test_model& model, const int64_t ic, const int64_t n, const int64_t oc);
 struct ggml_cgraph * build_graph_1(const test_model& model, const int64_t ic, const int64_t n, const int64_t oc);
 typedef struct ggml_cgraph* (*build_graph_t)(const test_model& model,
