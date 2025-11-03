@@ -37,6 +37,9 @@ struct test_model {
     struct ggml_context * ctx;
 };
 
+void load_model(test_model & model, int ic, int oc, int iw, int ih, int id,
+                                    int kw = 3, int kh = 3, int kd = 3,
+                                    bool use_fp16 = true, bool use_gpu = false );
 struct ggml_cgraph * build_graph_0(const test_model& model, const int64_t ic, const int64_t n, const int64_t oc);
 struct ggml_cgraph * build_graph_1(const test_model& model, const int64_t ic, const int64_t n, const int64_t oc);
 typedef struct ggml_cgraph* (*build_graph_t)(const test_model& model,
@@ -49,7 +52,7 @@ std::vector<float> compute_graph(const test_model & model, ggml_gallocr_t allocr
 
 void load_model(test_model & model, int ic, int oc, int iw, int ih, int id,
                                     int kw = 3, int kh = 3, int kd = 3,
-                    bool use_fp16 = true, bool use_gpu = false ) {
+                                    bool use_fp16 = true, bool use_gpu = false ) {
     // create data
     int KW = kw, KH = kh, KD = kd;
     int IC = ic, OC = oc;
