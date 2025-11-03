@@ -259,7 +259,7 @@ function searchwebtext_run(chatid, toolcallid, toolname, obj) {
         searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words));
         delete(obj.words)
         obj['url'] = searchUrl
-        let headers = { 'Search-Drops': get_gme().tools.searchDrops }
+        let headers = { 'urltext-tag-drops': get_gme().tools.searchDrops }
         return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urltext', headers);
     }
 }
