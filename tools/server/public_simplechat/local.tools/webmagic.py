@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import html.parser
 import debug
 import filemagic as mFile
+import json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -95,36 +96,52 @@ class TextHtmlParser(html.parser.HTMLParser):
     This helps return a relatively clean textual representation of the html file/content being parsed.
     """
 
-    def __init__(self):
+    def __init__(self, tagDrops: dict):
         super().__init__()
+        self.tagDrops = tagDrops
         self.inside = {
             'body': False,
             'script': False,
             'style': False,
             'header': False,
             'footer': False,
-            'nav': False
+            'nav': False,
         }
         self.monitored = [ 'body', 'script', 'style', 'header', 'footer', 'nav' ]
         self.bCapture = False
         self.text = ""
         self.textStripped = ""
+        self.droptagType = None
+        self.droptagCount = 0
 
     def do_capture(self):
         """
         Helps decide whether to capture contents or discard them.
         """
-        if self.inside['body'] and not (self.inside['script'] or self.inside['style'] or self.inside['header'] or self.inside['footer'] or self.inside['nav']):
+        if self.inside['body'] and not (self.inside['script'] or self.inside['style'] or self.inside['header'] or self.inside['footer'] or self.inside['nav'] or (self.droptagCount > 0)):
             return True
         return False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
         if tag in self.monitored:
             self.inside[tag] = True
+        for tagMeta in self.tagDrops:
+            if tag != tagMeta.tag:
+                continue
+            for attr in attrs:
+                if attr[0] != 'id':
+                    continue
+                if attr[1] == tagMeta.id:
+                    self.droptagCount += 1
+                    self.droptagType = tag
 
     def handle_endtag(self, tag: str):
         if tag in self.monitored:
             self.inside[tag] = False
+        if tag == self.droptagType:
+            self.droptagCount -= 1
+            if self.droptagCount < 0:
+                self.droptagCount = 0
 
     def handle_data(self, data: str):
         if self.do_capture():
@@ -167,7 +184,12 @@ def handle_urltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
             ph.send_error(got.httpStatus, got.httpStatusMsg)
             return
         # Extract Text
-        textHtml = TextHtmlParser()
+        tagDrops = ph.headers.get('urltext-tag-drops')
+        if not tagDrops:
+            tagDrops = {}
+        else:
+            tagDrops = json.loads(tagDrops)
+        textHtml = TextHtmlParser(tagDrops)
         textHtml.feed(got.contentData)
         # Send back to client
         ph.send_response(got.httpStatus)
