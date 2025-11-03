@@ -956,7 +956,7 @@ do {                                                              \
 
 #define GGML_F32Cx8          __m256
 #define GGML_F32Cx8_ZERO    (__m256)__lasx_xvldi(0)
-#define GGML_F32Cx8_SET1(x) (__m256)__lasx_xvreplgr2vr_w((x))
+#define GGML_F32Cx8_SET1(x) (__m256)__lasx_xvreplfr2vr_s((x))
 
 static inline __m256 __lasx_f32cx8_load(const ggml_fp16_t * x) {
     __m256i a;
@@ -999,7 +999,7 @@ static inline void __lasx_f32cx8_store(ggml_fp16_t * x, __m256 y) {
 
 #define GGML_F32x4         __m128
 #define GGML_F32x4_ZERO    (__m128)__lsx_vldi(0)
-#define GGML_F32x4_SET1(x) (__m128)__lsx_vinsgr2vr_w(__lsx_vldi(0),(x), 0)
+#define GGML_F32x4_SET1(x) (__m128)__lsx_vreplfr2vr_s((x))
 #define GGML_F32x4_LOAD(x) (__m128)__lsx_vld((x), 0)
 #define GGML_F32x4_STORE(x, y)   __lsx_vst(y, x, 0)
 #define GGML_F32x4_FMA(a, b, c) __lsx_vfmadd_s(b, c, a)
@@ -1068,7 +1068,7 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 
 #define GGML_F32Cx4             __m128
 #define GGML_F32Cx4_ZERO        (__m128)__lsx_vldi(0)
-#define GGML_F32Cx4_SET1(x)     (__m128)__lsx_vinsgr2vr_w(__lsx_vldi(0),(x), 0)
+#define GGML_F32Cx4_SET1(x)     (__m128)__lsx_vreplfr2vr_s((x))
 #define GGML_F32Cx4_LOAD(x)     (__m128)__lsx_f16x4_load(x)
 #define GGML_F32Cx4_STORE(x, y) __lsx_f16x4_store(x, y)
 #define GGML_F32Cx4_FMA         GGML_F32x4_FMA
