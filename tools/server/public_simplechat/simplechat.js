@@ -277,7 +277,8 @@ class ChatMessageEx {
 }
 
 
-let gUsageMsg = `
+function usage_note() {
+    let sUsageNote = `
     <details>
     <summary id="UsageNote" class="role-system">Usage Note</summary>
     <ul class="ul1">
@@ -286,19 +287,20 @@ let gUsageMsg = `
         <li> Completion mode - no system prompt normally.</li>
         </ul>
     <li> Use shift+enter for inserting enter/newline.</li>
-    <li> Enter your query/response to ai assistant in textarea provided below.</li>
-    <li> settings-tools-enable should be true to enable tool calling.</li>
+    <li> Enter your query/response to ai assistant in text area provided below.</li>
+    <li> settings-tools-enabled should be true to enable tool calling.</li>
         <ul class="ul2">
         <li> If ai assistant requests a tool call, verify same before triggering.</li>
-        <li> submit tool response placed into user query textarea</li>
+        <li> submit tool response placed into user query/response text area</li>
         </ul>
-    <li> Default ContextWindow = [System, Last9 Query+Resp, Cur Query].</li>
+    <li> ContextWindow = [System, Last[${gMe.chatProps.iRecentUserMsgCnt-1}] User Query/Resp, Cur Query].</li>
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
         </ul>
     </ul>
-    </details>
-`;
+    </details>`;
+    return sUsageNote;
+}
 
 
 /** @typedef {ChatMessageEx[]} ChatMessages */
@@ -1001,7 +1003,7 @@ class MultiChatUI {
             /** @type{HTMLElement} */(this.elLastChatMessage).scrollIntoView(false); // Stupid ts-check js-doc intersection ???
         } else {
             if (bClear) {
-                this.elDivChat.innerHTML = gUsageMsg;
+                this.elDivChat.innerHTML = usage_note();
                 gMe.setup_load(this.elDivChat, chat);
                 gMe.show_info(this.elDivChat, bShowInfoAll);
             }
@@ -1457,7 +1459,7 @@ function startme() {
     document["du"] = du;
     // @ts-ignore
     document["tools"] = tools;
-    tools.init().then((toolNames)=>gMe.tools.toolNames=toolNames)
+    tools.init().then((toolNames)=>gMe.tools.toolNames=toolNames).then(()=>gMe.multiChat.chat_show(gMe.multiChat.curChatId))
     for (let cid of gMe.defaultChatIds) {
         gMe.multiChat.new_chat_session(cid);
     }
