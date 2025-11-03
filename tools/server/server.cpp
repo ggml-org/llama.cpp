@@ -3926,20 +3926,20 @@ struct server_context {
 
                     SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
-                    // check if we should process the media chunk (image, audio, video, ...)
+                    // check if we should process the image
                     if (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
-                        // process the media
+                        // process the image
                         size_t n_tokens_out = 0;
                         int32_t res = input_tokens.process_chunk(ctx, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
                         if (res != 0) {
-                            SLT_ERR(slot, "failed to process media, res = %d\n", res);
-                            send_error(slot, "failed to process media", ERROR_TYPE_SERVER);
+                            SLT_ERR(slot, "failed to process image, res = %d\n", res);
+                            send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
                             slot.release();
                             continue;
                         }
 
                         slot.n_prompt_tokens_processed += n_tokens_out;
-                        // add the media chunk to cache
+                        // add the image chunk to cache
                         {
                             const auto & chunk = input_tokens.find_chunk(slot.prompt.n_tokens());
                             slot.prompt.tokens.push_back(chunk.get()); // copy
