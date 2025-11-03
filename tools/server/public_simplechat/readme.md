@@ -590,6 +590,13 @@ SimpleProxy updates
 * Helpers to fetch file from local file system or the web, transparently
 * Help check for needed modules before a particular service path is acknowledged as available
   through /aum service path
+* urltext and related - logic to drop contents of specified tag with a given id
+  * allow its use for the web search tool flow
+    * setup wrt default duckduckgo search result urltext plain text cleanup and found working.
+  * this works properly only if the html being processed has proper opening and ending tags
+    around the area of interest.
+  * remember to specify non overlapping tag blocks, if more than one specified for dropping.
+    * this path not tested, but should logically work
 
 Settings/Config default changes
 
