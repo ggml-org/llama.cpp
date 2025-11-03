@@ -9,7 +9,7 @@ import html.parser
 import debug
 import filemagic as mFile
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from simpleproxy import ProxyHandler
@@ -93,12 +93,21 @@ class TextHtmlParser(html.parser.HTMLParser):
     html content, that logic wont be triggered, so also such client side dynamic content wont be
     got.
 
+    Supports one to specify a list of tags and their corresponding id attributes, so that contents
+    within such specified blocks will be dropped.
+
+    * this works properly only if the html being processed has proper opening and ending tags
+    around the area of interest.
+    * remember to specify non overlapping tag blocks, if more than one specified for dropping.
+        * this path not tested, but should logically work
+
     This helps return a relatively clean textual representation of the html file/content being parsed.
     """
 
-    def __init__(self, tagDrops: dict):
+    def __init__(self, tagDrops: list[dict[str, Any]]):
         super().__init__()
         self.tagDrops = tagDrops
+        print(f"DBUG:TextHtmlParser:{self.tagDrops}")
         self.inside = {
             'body': False,
             'script': False,
@@ -126,20 +135,27 @@ class TextHtmlParser(html.parser.HTMLParser):
         if tag in self.monitored:
             self.inside[tag] = True
         for tagMeta in self.tagDrops:
-            if tag != tagMeta.tag:
+            if tag != tagMeta['tag']:
+                continue
+            if (self.droptagCount > 0) and (self.droptagType == tag):
+                self.droptagCount += 1
                 continue
             for attr in attrs:
                 if attr[0] != 'id':
                     continue
-                if attr[1] == tagMeta.id:
+                if attr[1] == tagMeta['id']:
                     self.droptagCount += 1
                     self.droptagType = tag
+                    print(f"DBUG:THP:Start:Tag found [{tag}:{attr[1]}]...")
 
     def handle_endtag(self, tag: str):
         if tag in self.monitored:
             self.inside[tag] = False
-        if tag == self.droptagType:
+        if self.droptagType and (tag == self.droptagType):
             self.droptagCount -= 1
+            if self.droptagCount == 0:
+                self.droptagType = None
+                print("DBUG:THP:End:Tag found...")
             if self.droptagCount < 0:
                 self.droptagCount = 0
 
@@ -186,9 +202,9 @@ def handle_urltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
         # Extract Text
         tagDrops = ph.headers.get('urltext-tag-drops')
         if not tagDrops:
-            tagDrops = {}
+            tagDrops = []
         else:
-            tagDrops = json.loads(tagDrops)
+            tagDrops = cast(list[dict[str,Any]], json.loads(tagDrops))
         textHtml = TextHtmlParser(tagDrops)
         textHtml.feed(got.contentData)
         # Send back to client
