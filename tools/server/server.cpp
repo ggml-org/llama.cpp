@@ -4910,6 +4910,7 @@ int main(int argc, char ** argv) {
         json data = {
             { "default_generation_settings", default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params_base.n_parallel },
+            { "model_alias",                 ctx_server.params_base.model_alias },
             { "model_path",                  ctx_server.params_base.model.path },
             { "modalities",                  json {
                 {"vision", ctx_server.oai_parser_opt.allow_image},
