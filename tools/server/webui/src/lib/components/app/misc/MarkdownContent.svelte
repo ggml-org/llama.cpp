@@ -8,13 +8,15 @@
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
 	import { copyCodeToClipboard } from '$lib/utils/copy';
+	import { preprocessLaTeX } from '$lib/utils/latex-protection';
 	import { browser } from '$app/environment';
-	import 'katex/dist/katex.min.css';
+	import '$styles/katex-custom.scss';
 
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
+	import CodePreviewDialog from './CodePreviewDialog.svelte';
 
 	interface Props {
 		content: string;
@@ -25,6 +27,9 @@
 
 	let containerRef = $state<HTMLDivElement>();
 	let processedHtml = $state('');
+	let previewDialogOpen = $state(false);
+	let previewCode = $state('');
+	let previewLanguage = $state('text');
 
 	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
@@ -117,7 +122,6 @@
 
 			const rawCode = codeElement.textContent || '';
 			const codeId = `code-${Date.now()}-${index}`;
-
 			codeElement.setAttribute('data-code-id', codeId);
 			codeElement.setAttribute('data-raw-code', rawCode);
 
@@ -138,11 +142,30 @@
 			copyButton.setAttribute('type', 'button');
 
 			copyButton.innerHTML = `
-				<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-			`;
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                        `;
+
+			const actions = document.createElement('div');
+			actions.className = 'code-block-actions';
+
+			actions.appendChild(copyButton);
+
+			if (language.toLowerCase() === 'html') {
+				const previewButton = document.createElement('button');
+				previewButton.className = 'preview-code-btn';
+				previewButton.setAttribute('data-code-id', codeId);
+				previewButton.setAttribute('title', 'Preview code');
+				previewButton.setAttribute('type', 'button');
+
+				previewButton.innerHTML = `
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye lucide-eye-icon"><path d="M2.062 12.345a1 1 0 0 1 0-.69C3.5 7.73 7.36 5 12 5s8.5 2.73 9.938 6.655a1 1 0 0 1 0 .69C20.5 16.27 16.64 19 12 19s-8.5-2.73-9.938-6.655"/><circle cx="12" cy="12" r="3"/></svg>
+                                `;
+
+				actions.appendChild(previewButton);
+			}
 
 			header.appendChild(languageLabel);
-			header.appendChild(copyButton);
+			header.appendChild(actions);
 			wrapper.appendChild(header);
 
 			const clonedPre = pre.cloneNode(true) as HTMLElement;
@@ -154,19 +177,9 @@
 		return mutated ? tempDiv.innerHTML : html;
 	}
 
-	function normalizeMathDelimiters(text: string): string {
-		return text
-			.replace(/(^|[^\\])\\\[((?:\\.|[\s\S])*?)\\\]/g, (_, prefix: string, content: string) => {
-				return `${prefix}$$${content}$$`;
-			})
-			.replace(/(^|[^\\])\\\(((?:\\.|[\s\S])*?)\\\)/g, (_, prefix: string, content: string) => {
-				return `${prefix}$${content}$`;
-			});
-	}
-
 	async function processMarkdown(text: string): Promise<string> {
 		try {
-			const normalized = normalizeMathDelimiters(text);
+			let normalized = preprocessLaTeX(text);
 			const result = await processor().process(normalized);
 			const html = String(result);
 			const enhancedLinks = enhanceLinks(html);
@@ -180,49 +193,105 @@
 		}
 	}
 
-	function setupCopyButtons() {
+	function getCodeInfoFromTarget(target: HTMLElement) {
+		const wrapper = target.closest('.code-block-wrapper');
+
+		if (!wrapper) {
+			console.error('No wrapper found');
+			return null;
+		}
+
+		const codeElement = wrapper.querySelector<HTMLElement>('code[data-code-id]');
+
+		if (!codeElement) {
+			console.error('No code element found in wrapper');
+			return null;
+		}
+
+		const rawCode = codeElement.getAttribute('data-raw-code');
+
+		if (rawCode === null) {
+			console.error('No raw code found');
+			return null;
+		}
+
+		const languageLabel = wrapper.querySelector<HTMLElement>('.code-language');
+		const language = languageLabel?.textContent?.trim() || 'text';
+
+		return { rawCode, language };
+	}
+
+	async function handleCopyClick(event: Event) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const target = event.currentTarget as HTMLButtonElement | null;
+
+		if (!target) {
+			return;
+		}
+
+		const info = getCodeInfoFromTarget(target);
+
+		if (!info) {
+			return;
+		}
+
+		try {
+			await copyCodeToClipboard(info.rawCode);
+		} catch (error) {
+			console.error('Failed to copy code:', error);
+		}
+	}
+
+	function handlePreviewClick(event: Event) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const target = event.currentTarget as HTMLButtonElement | null;
+
+		if (!target) {
+			return;
+		}
+
+		const info = getCodeInfoFromTarget(target);
+
+		if (!info) {
+			return;
+		}
+
+		previewCode = info.rawCode;
+		previewLanguage = info.language;
+		previewDialogOpen = true;
+	}
+
+	function setupCodeBlockActions() {
 		if (!containerRef) return;
 
-		const copyButtons = containerRef.querySelectorAll('.copy-code-btn');
+		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
 
-		for (const button of copyButtons) {
-			button.addEventListener('click', async (e) => {
-				e.preventDefault();
-				e.stopPropagation();
+		for (const wrapper of wrappers) {
+			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
+			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
 
-				const target = e.currentTarget as HTMLButtonElement;
-				const codeId = target.getAttribute('data-code-id');
+			if (copyButton && copyButton.dataset.listenerBound !== 'true') {
+				copyButton.dataset.listenerBound = 'true';
+				copyButton.addEventListener('click', handleCopyClick);
+			}
 
-				if (!codeId) {
-					console.error('No code ID found on button');
-					return;
-				}
+			if (previewButton && previewButton.dataset.listenerBound !== 'true') {
+				previewButton.dataset.listenerBound = 'true';
+				previewButton.addEventListener('click', handlePreviewClick);
+			}
+		}
+	}
 
-				// Find the code element within the same wrapper
-				const wrapper = target.closest('.code-block-wrapper');
-				if (!wrapper) {
-					console.error('No wrapper found');
-					return;
-				}
+	function handlePreviewDialogOpenChange(open: boolean) {
+		previewDialogOpen = open;
 
-				const codeElement = wrapper.querySelector('code[data-code-id]');
-				if (!codeElement) {
-					console.error('No code element found in wrapper');
-					return;
-				}
-
-				const rawCode = codeElement.getAttribute('data-raw-code');
-				if (!rawCode) {
-					console.error('No raw code found');
-					return;
-				}
-
-				try {
-					await copyCodeToClipboard(rawCode);
-				} catch (error) {
-					console.error('Failed to copy code:', error);
-				}
-			});
+		if (!open) {
+			previewCode = '';
+			previewLanguage = 'text';
 		}
 	}
 
@@ -243,7 +312,7 @@
 
 	$effect(() => {
 		if (containerRef && processedHtml) {
-			setupCopyButtons();
+			setupCodeBlockActions();
 		}
 	});
 </script>
@@ -252,6 +321,13 @@
 	<!-- eslint-disable-next-line no-at-html-tags -->
 	{@html processedHtml}
 </div>
+
+<CodePreviewDialog
+	open={previewDialogOpen}
+	code={previewCode}
+	language={previewLanguage}
+	onOpenChange={handlePreviewDialogOpenChange}
+/>
 
 <style>
 	/* Base typography styles */
@@ -472,7 +548,14 @@
 		letter-spacing: 0.05em;
 	}
 
-	div :global(.copy-code-btn) {
+	div :global(.code-block-actions) {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	div :global(.copy-code-btn),
+	div :global(.preview-code-btn) {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -483,11 +566,13 @@
 		transition: all 0.2s ease;
 	}
 
-	div :global(.copy-code-btn:hover) {
+	div :global(.copy-code-btn:hover),
+	div :global(.preview-code-btn:hover) {
 		transform: scale(1.05);
 	}
 
-	div :global(.copy-code-btn:active) {
+	div :global(.copy-code-btn:active),
+	div :global(.preview-code-btn:active) {
 		transform: scale(0.95);
 	}
 
