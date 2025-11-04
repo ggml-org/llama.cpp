@@ -8918,7 +8918,8 @@ void ggml_compute_forward_flash_attn_back(
 
 // ggml_compute_forward_ssm_conv
 
-static void ggml_compute_forward_ssm_conv_f32(
+template<typename src_t, typename conv_t>
+static void ggml_compute_forward_ssm_conv_impl(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0]; // conv_x
@@ -8934,9 +8935,10 @@ static void ggml_compute_forward_ssm_conv_f32(
     const int n_s =  dst->ne[2]; // number of sequences in the batch
 
     GGML_ASSERT( dst->ne[0] == nr);
-    GGML_ASSERT(src0->nb[0] == sizeof(float));
-    GGML_ASSERT(src1->nb[0] == sizeof(float));
-    GGML_ASSERT(src0->nb[1] == src0->ne[0]*sizeof(float));
+    GGML_ASSERT(src0->nb[0] == sizeof(src_t));
+    GGML_ASSERT(src1->nb[0] == sizeof(conv_t));
+    GGML_ASSERT(src0->nb[1] == src0->ne[0]*sizeof(src_t));
+    GGML_ASSERT(dst->type == src0->type);
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -8950,9 +8952,9 @@ static void ggml_compute_forward_ssm_conv_f32(
         for (int i2 = 0; i2 < n_t; ++i2) {
             // {d_conv - 1 + n_t, d_inner, n_seqs}
             // sliding window
-            const float * s = (const float *) ((const char *) src0->data + ir0*(src0->nb[1]) + i2*(src0->nb[0]) + i3*(src0->nb[2])); // {d_conv, d_inner, n_s}
-            const float * c = (const float *) ((const char *) src1->data + ir0*(src1->nb[1])); // {d_conv, d_inner}
-            float * x = (float *) ((char *) dst->data + ir0*(dst->nb[0]) + i2*(dst->nb[1]) + i3*(dst->nb[2])); // {d_inner, n_t, n_s}
+            const src_t  * s = (const src_t  *) ((const char *) src0->data + ir0*(src0->nb[1]) + i2*(src0->nb[0]) + i3*(src0->nb[2])); // {d_conv, d_inner, n_s}
+            const conv_t * c = (const conv_t *) ((const char *) src1->data + ir0*(src1->nb[1])); // {d_conv, d_inner}
+                  src_t  * x = (      src_t  *) ((      char *) dst->data + ir0*(dst->nb[0]) + i2*(dst->nb[1]) + i3*(dst->nb[2])); // {d_inner, n_t, n_s}
 
             // TODO: transpose the output for smaller strides for big batches?
             // d_inner
@@ -8963,13 +8965,80 @@ static void ggml_compute_forward_ssm_conv_f32(
 
                 // d_conv
                 for (int i0 = 0; i0 < nc; ++i0) {
-                    sumf += s[i0 + i1*ncs] * c[i0 + i1*nc];
+                    sumf += type_conversion_table<src_t>::to_f32(s[i0 + i1*ncs]) * type_conversion_table<conv_t>::to_f32(c[i0 + i1*nc]);
                 }
-                x[i1] = sumf;
+                x[i1] = type_conversion_table<src_t>::from_f32(sumf);
             }
         }
     }
 }
+
+// static void ggml_compute_forward_ssm_conv_q_f32(
+//         const ggml_compute_params * params,
+//         ggml_tensor * dst) {
+//     const ggml_tensor * src0 = dst->src[0]; // conv_x
+//     const ggml_tensor * src1 = dst->src[1]; // conv1d.weight
+
+//     const int ith = params->ith;
+//     const int nth = params->nth;
+
+//     const int nc  = src1->ne[0]; // d_conv
+//     const int ncs = src0->ne[0]; // d_conv - 1 + n_t
+//     const int nr  = src0->ne[1]; // d_inner
+//     const int n_t =  dst->ne[1]; // tokens per sequence
+//     const int n_s =  dst->ne[2]; // number of sequences in the batch
+
+//     const ggml_type type0 = src0->type;
+//     const size_t type0_size = ggml_type_size(type0);
+//     ggml_to_float_t const dequantize_row0_q = ggml_get_type_traits(type0)->to_float;
+//     ggml_from_float_t const quantize_row0_q = ggml_get_type_traits_cpu(type0)->from_float;
+
+//     const ggml_type type1 = src1->type;
+//     const size_t type1_size = ggml_type_size(type1);
+//     ggml_to_float_t const dequantize_row1_q = ggml_get_type_traits(type1)->to_float;
+//     ggml_from_float_t const quantize_row1_q = ggml_get_type_traits_cpu(type1)->from_float;
+
+//     GGML_ASSERT( dst->ne[0] == nr);
+//     GGML_ASSERT(src0->nb[0] == type0_size);
+//     GGML_ASSERT(src1->nb[0] == type1_size);
+//     GGML_ASSERT(src0->nb[1] == src0->ne[0]*type0_size);
+//     GGML_ASSERT(dst->type == src0->type);
+
+//     // rows per thread
+//     const int dr = (nr + nth - 1)/nth;
+
+//     // row range for this thread
+//     const int ir0 = dr*ith;
+//     const int ir1 = MIN(ir0 + dr, nr);
+//     const int ir  = ir1 - ir0;
+
+//     // temporary storage for dequantized lines
+//     float * wdata = (float *) params->wdata + (src0->ne[0] + CACHE_LINE_SIZE_F32) * ith;
+
+//     for (int i3 = 0; i3 < n_s; ++i3) {
+//         for (int i2 = 0; i2 < n_t; ++i2) {
+//             // {d_conv - 1 + n_t, d_inner, n_seqs}
+//             // sliding window
+//             const void * s = (const void *) ((const char *) src0->data + ir0*(src0->nb[1]) + i2*(src0->nb[0]) + i3*(src0->nb[2])); // {d_conv, d_inner, n_s}
+//             const void * c = (const void *) ((const char *) src1->data + ir0*(src1->nb[1])); // {d_conv, d_inner}
+//                   void * x = (      void *) ((      char *) dst->data + ir0*(dst->nb[0]) + i2*(dst->nb[1]) + i3*(dst->nb[2])); // {d_inner, n_t, n_s}
+
+//             // TODO: transpose the output for smaller strides for big batches?
+//             // d_inner
+//             for (int i1 = 0; i1 < ir; ++i1) {
+//                 // rowwise dot product
+//                 // NOTE: not using ggml_vec_dot_f32, because its sum is in double precision
+//                 float sumf = 0.0f;
+
+//                 // d_conv
+//                 for (int i0 = 0; i0 < nc; ++i0) {
+//                     sumf += type_conversion_table<T>::to_f32(s[i0 + i1*ncs]) * type_conversion_table<T>::to_f32(c[i0 + i1*nc]);
+//                 }
+//                 x[i1] = type_conversion_table<T>::from_f32(sumf);
+//             }
+//         }
+//     }
+// }
 
 void ggml_compute_forward_ssm_conv(
         const ggml_compute_params * params,
@@ -8977,8 +9046,68 @@ void ggml_compute_forward_ssm_conv(
     switch (dst->src[0]->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_ssm_conv_f32(params, dst);
+                switch (dst->src[1]->type) {
+                    case GGML_TYPE_F32:
+                        {
+                            ggml_compute_forward_ssm_conv_impl<float, float>(params, dst);
+                        } break;
+                    case GGML_TYPE_F16:
+                        {
+                            ggml_compute_forward_ssm_conv_impl<float, ggml_fp16_t>(params, dst);
+                        } break;
+                    case GGML_TYPE_BF16:
+                        {
+                            ggml_compute_forward_ssm_conv_impl<float, ggml_bf16_t>(params, dst);
+                        } break;
+                    default:
+                        {
+                            GGML_ABORT("fatal error");
+                        }
+                }
             } break;
+        case GGML_TYPE_F16:
+            {
+                switch (dst->src[1]->type) {
+                    case GGML_TYPE_F32:
+                        {
+                            ggml_compute_forward_ssm_conv_impl<ggml_fp16_t, float>(params, dst);
+                        } break;
+                    case GGML_TYPE_F16:
+                        {
+                            ggml_compute_forward_ssm_conv_impl<ggml_fp16_t, ggml_fp16_t>(params, dst);
+                        } break;
+                    case GGML_TYPE_BF16:
+                        {
+                            ggml_compute_forward_ssm_conv_impl<ggml_fp16_t, ggml_bf16_t>(params, dst);
+                        } break;
+                    default:
+                        {
+                            GGML_ABORT("fatal error");
+                        }
+                }
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                switch (dst->src[1]->type) {
+                    case GGML_TYPE_F32:
+                        {
+                            ggml_compute_forward_ssm_conv_impl<ggml_bf16_t, float>(params, dst);
+                        } break;
+                    case GGML_TYPE_F16:
+                        {
+                            ggml_compute_forward_ssm_conv_impl<ggml_bf16_t, ggml_fp16_t>(params, dst);
+                        } break;
+                    case GGML_TYPE_BF16:
+                        {
+                            ggml_compute_forward_ssm_conv_impl<ggml_bf16_t, ggml_bf16_t>(params, dst);
+                        } break;
+                    default:
+                        {
+                            GGML_ABORT("fatal error");
+                        }
+                }
+            } break;
+        // TODO: Support quantized types
         default:
             {
                 GGML_ABORT("fatal error");
