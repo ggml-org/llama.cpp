@@ -40,7 +40,7 @@ void ggml_sycl_op_flash_attn(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
     float scale;
     float max_bias;
     float logit_softcap;
-    
+
     std::memcpy(&scale, (const float *) dst->op_params + 0, sizeof(float));
     std::memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
     std::memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
