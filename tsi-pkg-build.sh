@@ -86,18 +86,18 @@ export CMAKE_FIND_ROOT_PATH=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarc
 export TSAVORITE_SYSROOT_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include/
 if [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "release" ];
 then
-  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE" -DCURL_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include  -DCURL_LIBRARY=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/lib/libcurl.so
+  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE -DGGML_TSAVORITE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE -DGGML_TSAVORITE" -DCURL_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include  -DCURL_LIBRARY=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/lib/libcurl.so
 elif [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "debug" ]; then
-  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL" -DCURL_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include  -DCURL_LIBRARY=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/lib/libcurl.so
+  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL -DGGML_TSAVORITE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL -DGGML_TSAVORITE" -DCURL_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include  -DCURL_LIBRARY=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/lib/libcurl.so
 else
-  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF" -DCURL_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include  -DCURL_LIBRARY=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/lib/libcurl.so
+  cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF -DGGML_TSAVORITE"   -DCMAKE_CXX_FLAGS="-DGGML_PERF -DGGML_TSAVORITE" -DCURL_INCLUDE_DIR=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/include  -DCURL_LIBRARY=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/lib/libcurl.so
 fi
 
 cmake --build build-fpga --config Release
 
 
 echo 'creating tar bundle for fpga'
-TSI_GGML_VERSION=0.2.0
+TSI_GGML_VERSION=0.2.1
 TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
 GGML_TSI_INSTALL_DIR=ggml-tsi-kernel
 TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml
