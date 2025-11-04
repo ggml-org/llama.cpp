@@ -13,7 +13,7 @@ set -e
 echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
-#module load gcc/13.3.0
+module load gcc/13.3.0
 export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.0
 echo 'creating python virtual env'
 /proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
