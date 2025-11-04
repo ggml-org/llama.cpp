@@ -107,7 +107,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_APERTUS,          "apertus"          },
     { LLM_ARCH_MINIMAX_M2,       "minimax-m2"       },
     { LLM_ARCH_COGVLM,           "cogvlm"           },
-    { LLM_ARCH_PANGU_EMBED,      "pangu_embedded"   },
+    { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 

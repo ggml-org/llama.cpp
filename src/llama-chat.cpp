@@ -73,7 +73,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "kimi-k2",           LLM_CHAT_TEMPLATE_KIMI_K2           },
     { "seed_oss",          LLM_CHAT_TEMPLATE_SEED_OSS          },
     { "grok-2",            LLM_CHAT_TEMPLATE_GROK_2            },
-    { "pangu_embedded",    LLM_CHAT_TEMPLATE_PANGU_EMBED       },
+    { "pangu-embedded",    LLM_CHAT_TEMPLATE_PANGU_EMBED       },
 };
 
 llm_chat_template llm_chat_template_from_str(const std::string & name) {
@@ -214,7 +214,7 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_SEED_OSS;
     } else if (tmpl_contains("'Assistant: '  + message['content'] + '<|separator|>")) {
         return LLM_CHAT_TEMPLATE_GROK_2;
-    } else if (tmpl_contains("[unused9]") && tmpl_contains("message['content'] + '[unused10]'")) {
+    } else if (tmpl_contains(LU8("[unused9]系统：[unused10]")) && tmpl_contains("message['content'] + '[unused10]'")) {
         return LLM_CHAT_TEMPLATE_PANGU_EMBED;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;

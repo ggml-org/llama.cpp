@@ -794,7 +794,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.APERTUS:          "apertus",
     MODEL_ARCH.MINIMAXM2:        "minimax-m2",
     MODEL_ARCH.COGVLM:           "cogvlm",
-    MODEL_ARCH.PANGU_EMBED:      "pangu_embedded",
+    MODEL_ARCH.PANGU_EMBED:      "pangu-embedded",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
