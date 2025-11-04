@@ -657,7 +657,7 @@ static json oaicompat_chat_params_parse(
                     raw_buffer buf;
                     FILE * f = fopen(fname.c_str(), "rb");
                     if (!f) {
-                        LOG_ERR("Unable to open file %s: %s\n", fname.c_str(), strerror(errno));
+                        SVR_ERR("Unable to open file %s: %s\n", fname.c_str(), strerror(errno));
                         throw std::runtime_error("Unable to open image file");
                     }
                     fseek(f, 0, SEEK_END);
@@ -671,7 +671,7 @@ static json oaicompat_chat_params_parse(
                     size_t n_read = fread(buf.data(), 1, file_size, f);
                     fclose(f);
                     if (n_read != (size_t)file_size) {
-                        LOG_ERR("Failed to read entire file %s", fname.c_str());
+                        SVR_ERR("Failed to read entire file %s", fname.c_str());
                         throw std::runtime_error("Failed to read entire image file");
                     }
                     out_files.push_back(buf);
