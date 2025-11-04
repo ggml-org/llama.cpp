@@ -2339,29 +2339,25 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
                 "( \"```\\n\" | \"```json\\n\" | \"```xml\\n\" ) space " + wrappable_tool_call + " space \"```\" space ");
             auto tool_call = builder.add_rule("tool_call", string_join(tool_call_alts, " | "));
 
-            builder.add_rule("thinking-start", "\"<think>\"");
-            builder.add_rule("thinking-content", "( [^<] | \"<\" [^/] | \"</\" [^t] | \"</t\" [^h] | \"</th\" [^i] | \"</thi\" [^n] | \"</thin\" [^k] | \"</think\" [^>] )*");
-            builder.add_rule("thinking-end", "\"</think>\" space");
-
-            //thinking grammar logic depending on if thinking_forced_open was to true (so already opened (and maybe closed)) and if thinking is even allowed
-            std::string thinking_grammar_logic = ""; // thinking tag was closed or not supported/wanted
+            // thinking grammar logic depending on if thinking_forced_open was to true (so already opened (and maybe closed)) and if thinking is even allowed
             if (extra_context["enable_thinking"]) {
                 data.grammar_triggers.push_back({
                     COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
                     data.thinking_forced_open ? "</think>" : "<think>"
                 });
-                if (data.thinking_forced_open) {
-                    //thinking tag was already opened by used so we don't need to add it again
-                    thinking_grammar_logic = "(thinking-content thinking-end) ";
+                std::string prelude = "";
+                if (!data.thinking_forced_open) {
+                    prelude = builder.add_rule("think-start", "\"<think>\"");
                 }
-                else
-                {
-                    thinking_grammar_logic = "(thinking-start thinking-content thinking-end) ";
-                }
+                prelude += " ";
+                prelude += builder.add_rule("think-content", "( [^<] | \"<\" [^/] | \"</\" [^t] | \"</t\" [^h] | \"</th\" [^i] | \"</thi\" [^n] | \"</thin\" [^k] | \"</think\" [^>] )*");
+                prelude += " ";
+                prelude += builder.add_rule("think-end", "\"</think>\" space");
+                prelude += " ";
+                builder.add_rule("root", prelude + "(" + tool_call + ")" + (inputs.parallel_tool_calls ? "*" : "?"));
+            } else {
+                builder.add_rule("root", inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call);
             }
-
-
-            builder.add_rule("root", thinking_grammar_logic + (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
 
             // Trigger on some common known "good bad" outputs (only from the start and with a json that's about a specific argument name to avoid false positives)
             data.grammar_triggers.push_back({
