@@ -2,7 +2,6 @@
 # by Humans for All
 
 import urllib.parse
-import urllib.request
 import urlvalidator as uv
 from dataclasses import dataclass
 import html.parser
