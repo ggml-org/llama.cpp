@@ -649,7 +649,7 @@ static json oaicompat_chat_params_parse(
                             throw std::runtime_error("Invalid filename piece '" + piece + "': " + fname);
                         }
                     }
-                    // Check allowed local media path - fs_validate_filename already validated that there is no ".." or "."
+                    // Check allowed local media path
                     if (opt.allowed_local_media_path == "" || !string_starts_with(fname, opt.allowed_local_media_path)) {
                         throw std::runtime_error("File path not allowed");
                     }
