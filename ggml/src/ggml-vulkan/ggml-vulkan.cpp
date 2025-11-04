@@ -74,6 +74,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #define VK_KHR_SHADER_BFLOAT16_EXTENSION_NAME                        "VK_KHR_shader_bfloat16"
 #define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR ((VkStructureType)1000141000)
 #define VK_COMPONENT_TYPE_BFLOAT16_KHR                               ((VkComponentTypeKHR)1000141000)
+#define VK_LUID_SIZE_KHR                  VK_LUID_SIZE
 
 typedef struct VkPhysicalDeviceShaderBfloat16FeaturesKHR {
     VkStructureType                       sType;
@@ -14787,6 +14788,19 @@ static const char * ggml_backend_vk_device_get_description(ggml_backend_dev_t de
 
 static void ggml_backend_vk_device_get_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)device->context;
+
+    // Check VRAM reporting for Windows IGPU/DGPU using DXGI + PDH (vendor agnostic)
+    if (ggml_dxgi_pdh_init() == 0) {
+        GGML_LOG_DEBUG("DXGI + PDH Initialized. Getting GPU free memory info\n");
+        int status = ggml_dxgi_pdh_get_device_memory(ctx->luid.c_str(), free, total, ctx->is_integrated_gpu);
+        if (status == 0) {
+            GGML_LOG_DEBUG("%s utilizing DXGI + PDH memory reporting free: %zu total: %zu\n", __func__, *free, *total);
+            ggml_dxgi_pdh_release();
+            return;
+        }
+        ggml_dxgi_pdh_release();
+    }
+
     ggml_backend_vk_get_device_memory(ctx->device, free, total);
 }
 

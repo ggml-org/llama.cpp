@@ -680,6 +680,11 @@ static inline bool ggml_can_fuse_subgraph(const struct ggml_cgraph * cgraph,
     return ggml_can_fuse_subgraph_ext(cgraph, idxs, count, ops, outputs, num_outputs);
 }
 
+// Management libraries for fetching more accurate free VRAM data
+GGML_API int ggml_dxgi_pdh_init();
+GGML_API int ggml_dxgi_pdh_get_device_memory(const char* luid, size_t *free, size_t *total, bool is_integrated_gpu);
+GGML_API void ggml_dxgi_pdh_release();
+
 #ifdef __cplusplus
 }
 #endif
