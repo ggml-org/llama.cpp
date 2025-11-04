@@ -90,18 +90,18 @@ static const char * const LLM_KV_IMATRIX_CHUNK_SIZE  = "imatrix.chunk_size";
 // Returns true if they are the same file (including via hardlinks or symlinks)
 static bool same_file(const std::string & path_a, const std::string & path_b) {
     std::error_code ec_a, ec_b;
-    
+
     // First try using std::filesystem to resolve canonical paths
     auto canonical_a = std::filesystem::weakly_canonical(path_a, ec_a);
     auto canonical_b = std::filesystem::weakly_canonical(path_b, ec_b);
-    
+
     if (!ec_a && !ec_b) {
         // If both paths were successfully canonicalized, compare them
         if (canonical_a == canonical_b) {
             return true;
         }
     }
-    
+
 #ifndef _WIN32
     // On Unix-like systems, also check using stat() to handle hardlinks
     struct stat stat_a, stat_b;
@@ -112,7 +112,7 @@ static bool same_file(const std::string & path_a, const std::string & path_b) {
         }
     }
 #endif
-    
+
     return false;
 }
 
@@ -728,7 +728,7 @@ int main(int argc, char ** argv) {
     std::string fname_out_actual = fname_out;
     std::string fname_out_temp;
     bool use_temp_file = allow_inplace && same_file(fname_inp, fname_out);
-    
+
     if (use_temp_file || allow_overwrite) {
         // Create temp file in the same directory as output for atomic rename
         std::filesystem::path out_path(fname_out);
@@ -736,16 +736,16 @@ int main(int argc, char ** argv) {
         if (out_dir.empty()) {
             out_dir = ".";
         }
-        
+
         // Generate temp filename
         fname_out_temp = (out_dir / ("." + out_path.filename().string() + ".tmp.XXXXXX")).string();
-        
+
         // Create the temp file safely
         // Note: mkstemp would be safer but requires char* and creates the file
         // For simplicity, we'll use a simpler approach with PID
         fname_out_temp = (out_dir / ("." + out_path.filename().string() + ".tmp." + std::to_string(getpid()))).string();
         fname_out_actual = fname_out_temp;
-        
+
         fprintf(stderr, "%s: using temporary file: '%s'\n", __func__, fname_out_actual.c_str());
     }
 
@@ -765,35 +765,35 @@ int main(int argc, char ** argv) {
 
         if (llama_model_quantize(fname_inp.c_str(), fname_out_actual.c_str(), &params)) {
             fprintf(stderr, "%s: failed to quantize model from '%s'\n", __func__, fname_inp.c_str());
-            
+
             // Clean up temp file on failure
             if (!fname_out_temp.empty()) {
                 std::error_code ec;
                 std::filesystem::remove(fname_out_temp, ec);
             }
-            
+
             llama_backend_free();
             return 1;
         }
 
         t_quantize_us = llama_time_us() - t_start_us;
     }
-    
+
     // If we used a temp file, atomically rename it to the final output
     if (!fname_out_temp.empty()) {
         fprintf(stderr, "%s: atomically moving temp file to final output\n", __func__);
         std::error_code ec;
-        
+
         // On POSIX systems, rename() is atomic when both paths are on the same filesystem
         std::filesystem::rename(fname_out_temp, fname_out, ec);
-        
+
         if (ec) {
-            fprintf(stderr, "%s: failed to rename temp file '%s' to '%s': %s\n", 
+            fprintf(stderr, "%s: failed to rename temp file '%s' to '%s': %s\n",
                     __func__, fname_out_temp.c_str(), fname_out.c_str(), ec.message().c_str());
-            
+
             // Try to clean up temp file
             std::filesystem::remove(fname_out_temp, ec);
-            
+
             llama_backend_free();
             return 1;
         }
