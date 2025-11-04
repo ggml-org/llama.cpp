@@ -99,6 +99,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, int kw = 3, 
             fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
         }
     }
+#else
+    GGML_UNUSED(use_gpu);
 #endif
 
 #ifdef GGML_USE_METAL
@@ -109,6 +111,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, int kw = 3, 
             fprintf(stderr, "%s: ggml_backend_metal_init() failed\n", __func__);
         }
     }
+#else
+    GGML_UNUSED(use_gpu);
 #endif
 
     if(!model.backend) {
