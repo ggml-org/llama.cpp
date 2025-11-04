@@ -70,7 +70,6 @@ void ggml_sycl_op_flash_attn(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
         });
     }
 
-    stream->wait();
 
     sycl::free(l_d, *stream);
     sycl::free(m_d, *stream);
