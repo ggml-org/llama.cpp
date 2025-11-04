@@ -381,6 +381,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",        # ernie4.5-moe
             "model.layers.{bid}.mlp.gate.expert_bias",                      # bailingmoe2
             "model.layers.{bid}.feed_forward.expert_bias",                  # lfm2moe
+            "model.layers.{bid}.block_sparse_moe.e_score_correction",       # minimax-m2
         ),
 
         # Feed-forward up
@@ -1182,6 +1183,7 @@ class TensorNameMap:
             "model.mm_projector.mlp.mlp.{bid}",
             "vision_model.vision_adapter.mlp.fc{bid}", # llama 4
             "mlp1.{bid}", # InternVL
+            "model.aligner.fc1.hidden_layers.{bid}", # Janus Pro
         ),
 
         MODEL_TENSOR.V_MMPROJ_PEG: (
@@ -1290,6 +1292,7 @@ class TensorNameMap:
             "model.vision_tower.encoder.layer.{bid}.attention.projection_layer", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
+            "model.vision_model.encoder.layers.{bid}.self_attn.projection_layer", # Janus Pro
             "vision_model.model.layers.{bid}.self_attn.o_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.attention.wo", # pixtral

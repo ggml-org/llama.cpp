@@ -369,6 +369,37 @@ def test_completion_parallel_slots(n_slots: int, n_requests: int):
 
 
 @pytest.mark.parametrize(
+    "n_ctx,n_slots,n_predict_vals,expected_success",
+    [
+        (256, 4, [80, 40, 80, 80], [True,  True,  True,  True]),
+        (256, 4, [70, 70, 70, 70], [False, False, False, False]),
+        (256, 4, [90, 90, 40, 90], [False, False, True,  False]),
+        (256, 4, [90, 90, 40, 75], [True,  True,  True,  True]),
+    ],
+)
+def test_completion_unified(n_ctx, n_slots, n_predict_vals, expected_success):
+    global server
+    server.n_slots = n_slots
+    server.kv_unified = True
+    server.n_ctx = n_ctx
+    server.start()
+    prompt = "A"
+    tasks = []
+    for n_predict in n_predict_vals:
+        tasks.append((server.make_request, ("POST", "/completion", {"prompt": prompt, "n_predict": n_predict})))
+    results = parallel_function_calls(tasks)
+    for res, n_predict, expect_ok in zip(results, n_predict_vals, expected_success):
+        if expect_ok:
+            assert res.status_code == 200
+            assert "content" in res.body
+            if "timings" in res.body:
+                assert res.body["timings"]["predicted_n"] == n_predict
+        else:
+            assert res.status_code == 500
+            assert "content" not in res.body
+
+
+@pytest.mark.parametrize(
     "prompt,n_predict,response_fields",
     [
         ("I believe the meaning of life is", 8, []),

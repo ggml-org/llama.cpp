@@ -13,6 +13,8 @@
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
 // increase backlog size to avoid connection resets for >> 1 slots
 #define CPPHTTPLIB_LISTEN_BACKLOG 512
+// increase max URI length to handle longer prompts in query string
+#define CPPHTTPLIB_REQUEST_URI_MAX_LENGTH 32768
 // disable Nagle's algorithm
 #define CPPHTTPLIB_TCP_NODELAY true
 #include <cpp-httplib/httplib.h>
@@ -1248,7 +1250,7 @@ public:
             for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); ) {
                 auto * chunk = tokens.map_idx_to_media[it->first].get();
                 mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
-                map_idx_to_media[start_idx+it->first] = std::move(new_chunk);
+                map_idx_to_media[start_idx + it->first] = std::move(new_chunk);
             }
         }
     }
@@ -1280,6 +1282,7 @@ public:
     }
 
     void clear() {
+        map_idx_to_media.clear();
         tokens.clear();
     }
 
