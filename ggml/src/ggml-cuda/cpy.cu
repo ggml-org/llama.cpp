@@ -69,7 +69,7 @@ static __global__ void cpy_flt_transpose(const char * cx, char * cdst, const int
         for (int j = 0; j < CUDA_CPY_TILE_DIM_2D; j += CUDA_CPY_BLOCK_ROWS) {
             if(x < ne01 && y + j < ne00){
                 const int row = threadIdx.y+j;
-                const int col = (threadIdx.x*sizeof(float)/sizeof(T)) ^ row;  //swizzling to avoid bank conflicts
+                const int col = (threadIdx.x ^ row)*sizeof(float)/sizeof(T);  //swizzling to avoid bank conflicts
                 T *tile2 = reinterpret_cast<T*>(tile[row]);
                 tile2[col] = src[imat*n + (y+j)*ne01 + x];
             }
@@ -80,7 +80,7 @@ static __global__ void cpy_flt_transpose(const char * cx, char * cdst, const int
 #pragma unroll
         for (int j = 0; j < CUDA_CPY_TILE_DIM_2D; j += CUDA_CPY_BLOCK_ROWS) {
             if (ty + j < ne01 && tx < ne00) {
-                const int col = ((threadIdx.y+j)*sizeof(float)/sizeof(T)) ^ threadIdx.x; //swizzling to avoid bank conflicts
+                const int col = ((threadIdx.y+j) ^ threadIdx.x)*sizeof(float)/sizeof(T); //swizzling to avoid bank conflicts
                 const T *tile2 = reinterpret_cast<const T*>(tile[threadIdx.x]);
                 dst[imat*n + (ty+j)*ne00 + tx] = tile2[col];
             }
