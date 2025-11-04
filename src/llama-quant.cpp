@@ -421,6 +421,18 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
         ++qs.i_ffn_up;
     }
+    else if (name.find("ssm_conv1d") != std::string::npos) {
+        // go as low as F16 for now
+        switch (ftype) {
+            case LLAMA_FTYPE_ALL_F32:
+            case LLAMA_FTYPE_MOSTLY_BF16:
+                break;
+            default:
+                {
+                    new_type = GGML_TYPE_F16;
+                }
+        }
+    }
 
     //    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
     //}
@@ -859,9 +871,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");
         quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
 
-        // do not quantize Mamba's small yet 2D weights
+        // do not quantize shortconv 2D weights
         // NOTE: can't use LLM_TN here because the layer number is not known
-        quantize &= name.find("ssm_conv1d.weight") == std::string::npos;
         quantize &= name.find("shortconv.conv.weight") == std::string::npos;
 
         // do not quantize RWKV's small yet 2D weights
