@@ -1235,6 +1235,14 @@ kernel void kernel_scale_f32(
     dst[tpig] = src0[tpig] * args.scale + args.bias;
 }
 
+kernel void kernel_scale_f16(
+        constant ggml_metal_kargs_scale & args,
+        device const half * src0,
+        device       half * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = src0[tpig] * args.scale + args.bias;
+}
+
 kernel void kernel_scale_f32_4(
         constant ggml_metal_kargs_scale & args,
         device const float4 * src0,
@@ -2207,8 +2215,9 @@ template [[host_name("kernel_soft_max_f32")]]   kernel kernel_soft_max_t   kerne
 template [[host_name("kernel_soft_max_f16_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<half4>;
 template [[host_name("kernel_soft_max_f32_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<float4>;
 
-// ref: ggml.c:ggml_compute_forward_ssm_conv_f32
-kernel void kernel_ssm_conv_f32_f32(
+// ref: ggml.c:ggml_compute_forward_ssm_conv_impl
+template<typename src_t, typename conv_t>
+kernel void kernel_ssm_conv_impl(
         constant ggml_metal_kargs_ssm_conv & args,
         device const  void * src0,
         device const  void * src1,
@@ -2226,14 +2235,14 @@ kernel void kernel_ssm_conv_f32_f32(
   //const int64_t n_t = args.ne1;
   //const int64_t n_s = args.ne2;
 
-    device const float * s = (device const float *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
-    device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
-    device       float * x = (device       float *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
+    device const src_t  * s = (device const src_t  *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
+    device const conv_t * c = (device const conv_t *) ((device const char *) src1 + ir*args.nb11);
+    device       float  * x = (device       float  *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
 
     float sumf = 0.0f;
 
     for (int64_t i0 = 0; i0 < nc; ++i0) {
-        sumf += s[i0] * c[i0];
+        sumf += static_cast<float>(s[i0]) * static_cast<float>(c[i0]);
     }
 
     x[0] = sumf;
@@ -2269,6 +2278,13 @@ kernel void kernel_ssm_conv_f32_f32_4(
 
     x[0] = sumf;
 }
+
+typedef decltype(kernel_ssm_conv_impl<float, float>)      kernel_ssm_conv_t;
+template [[host_name("kernel_ssm_conv_f32_f32")]]  kernel kernel_ssm_conv_t kernel_ssm_conv_impl<float,  float>;
+template [[host_name("kernel_ssm_conv_f32_f16")]]  kernel kernel_ssm_conv_t kernel_ssm_conv_impl<float,  half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_ssm_conv_f32_bf16")]] kernel kernel_ssm_conv_t kernel_ssm_conv_impl<float, bfloat>;
+#endif
 
 // ref: ggml.c:ggml_compute_forward_ssm_scan_f32, Mamba-2 part
 kernel void kernel_ssm_scan_f32(
