@@ -7084,7 +7084,11 @@ static void ggml_compute_forward_conv_2d_dw_cwhn(
     const int64_t row_end = MIN(row_start + rows_per_thread, rows_total);
 
 #ifdef GGML_SIMD
-    const int64_t pkg_size = GGML_F32_EPR;
+    #if defined(__ARM_FEATURE_SVE)
+        const int64_t pkg_size = svcntw();
+    #else
+        const int64_t pkg_size = GGML_F32_EPR;
+    #endif
     const int64_t pkg_count = c / pkg_size;
     const int64_t c_pkg_end = pkg_count * pkg_size;
 #else
