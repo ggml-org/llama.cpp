@@ -76,6 +76,10 @@ ggml:
     - changed-files:
         - any-glob-to-any-file:
             - ggml/**
+model:
+    - changed-files:
+        - any-glob-to-any-file:
+            - src/models/**
 nix:
     - changed-files:
         - any-glob-to-any-file:
