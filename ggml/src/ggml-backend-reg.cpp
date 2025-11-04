@@ -538,6 +538,28 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
     int best_score = 0;
     fs::path best_path;
 
+    auto tryEntryWithScore = [&best_score, &best_path, silent, _func = __func__](const fs::path & entryPath,
+                                                                                 int              scoreOffset = 1) {
+        dl_handle_ptr handle{ dl_load_library(entryPath) };
+        if (!handle && !silent) {
+            GGML_LOG_ERROR("%s: failed to load %s: %s\n", _func, path_str(entryPath).c_str(), dl_error());
+        }
+        if (handle) {
+            auto score_fn = (ggml_backend_score_t) dl_get_sym(handle.get(), "ggml_backend_score");
+            int  s        = 1;
+            if (score_fn) {
+                s = score_fn() + scoreOffset;
+            }
+#ifdef NDEBUG
+            GGML_LOG_DEBUG("%s: %s score: %d\n", _func, path_str(entryPath).c_str(), s);
+#endif
+            if (s > best_score) {
+                best_score = s;
+                best_path  = entryPath;
+            }
+        }
+    };
+
     for (const auto & search_path : search_paths) {
         if (!fs::exists(search_path)) {
             GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
@@ -550,24 +572,7 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
                 auto filename = entry.path().filename();
                 auto ext = entry.path().extension();
                 if (filename.native().find(file_prefix) == 0 && ext == file_extension) {
-                    dl_handle_ptr handle { dl_load_library(entry) };
-                    if (!handle && !silent) {
-                        GGML_LOG_ERROR("%s: failed to load %s: %s\n", __func__, path_str(entry.path()).c_str(), dl_error());
-                    }
-                    if (handle) {
-                        auto score_fn = (ggml_backend_score_t) dl_get_sym(handle.get(), "ggml_backend_score");
-                        int s = 1;
-                        if (score_fn) {
-                            s = score_fn();
-                        }
-#ifdef NDEBUG
-                        GGML_LOG_DEBUG("%s: %s score: %d\n", __func__, path_str(entry.path()).c_str(), s);
-#endif
-                        if (s > best_score) {
-                            best_score = s;
-                            best_path = entry.path();
-                        }
-                    }
+                    tryEntryWithScore(entry.path());
                 }
             }
         }
@@ -585,11 +590,24 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
     }
 
     // In the case of Android, we can load with just the library filename, without pre-pending any path
-    if(best_path.empty()) {
-        // Try loading backend with just the library name, leave to dlopen path resolution.
-        fs::path filename = backend_filename_prefix().native() + name_path.native() + backend_filename_extension().native();
-        best_path = filename;
-        GGML_LOG_INFO("%s: trying to load %s\n", __func__, path_str(best_path).c_str());
+    if (best_path.empty()) {
+        // From worst to best
+        std::vector<fs::path> names = { name_path };
+#ifdef __ANDROID__
+        if (strcmp(name, "cpu") == 0) {
+            names.emplace_back("cpu-android_armv8.0_1");
+            names.emplace_back("cpu-android_armv8.2_1");
+            names.emplace_back("cpu-android_armv8.2_2");
+            names.emplace_back("cpu-android_armv8.6_1");
+        }
+#endif
+        for (size_t scoreOffset = 0; scoreOffset < names.size(); ++scoreOffset) {
+            const auto & loopNamePath = names[scoreOffset];
+            // Try loading backend with just the library name, leave to dlopen path resolution.
+            fs::path     filename     = backend_filename_prefix().native() + loopNamePath.native() +
+                                backend_filename_extension().native();
+            tryEntryWithScore(filename, 1+scoreOffset);
+        }
     }
 
     return get_reg().load_backend(best_path, silent);
