@@ -247,11 +247,21 @@ function(ggml_add_backend_library backend)
         # write the shared library to the output directory
         set_target_properties(${backend} PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         target_compile_definitions(${backend} PRIVATE GGML_BACKEND_DL)
-        add_dependencies(ggml ${backend})
+        # Do not add dependency, the User will have to explicitely build and install
+        # the available `ggml::ggml-*` backend targets. This is for better integration
+        # with cmake-bare
+        # add_dependencies(ggml ${backend})
+
         if (GGML_BACKEND_DIR)
-            install(TARGETS ${backend} LIBRARY DESTINATION ${GGML_BACKEND_DIR})
+            install(TARGETS ${backend}
+                    EXPORT ggml-targets
+                    LIBRARY DESTINATION ${GGML_BACKEND_DIR}
+                    RUNTIME DESTINATION ${GGML_BACKEND_DIR})
         else()
-            install(TARGETS ${backend} LIBRARY DESTINATION ${CMAKE_INSTALL_BINDIR})
+            install(TARGETS ${backend}
+                    EXPORT ggml-targets
+                    LIBRARY DESTINATION ${CMAKE_BINARY_DIR}
+                    RUNTIME DESTINATION ${CMAKE_BINARY_DIR})
         endif()
     else()
         add_library(${backend} ${ARGN})
