@@ -7186,11 +7186,12 @@ class MiniMaxM2Model(TextModel):
 
         return super().modify_tensors(data_torch, name, bid)
 
+
 @ModelBase.register("PanguEmbeddedForCausalLM")
 class PanguEmbeddedModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PANGU_EMBED
-    
-    def set_vocab(self):  
+
+    def set_vocab(self):
         self._set_vocab_sentencepiece()
 
         tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
