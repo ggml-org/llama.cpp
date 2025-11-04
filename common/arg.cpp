@@ -3304,7 +3304,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ALLOWED_LOCAL_MEDIA_PATH"));
     add_opt(common_arg(
         {"--local-media-max-size-mb"}, "N",
-        string_format("max size in mb for local media files (default: %d)", 15), // 15MB
+        string_format("max size in mb for local media files (default: %d)", params.local_media_max_size_mb),
         [](common_params & params, int value) {
             params.local_media_max_size_mb = value;
         }
