@@ -17,23 +17,27 @@
 {%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
 {%- for message in messages[::-1] %}
     {%- set index = (messages|length - 1) - loop.index0 %}
-    {%- if ns.multi_step_tool and message.role == "user" and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
+    {%- if ns.multi_step_tool and message.role == "user" and message.content is string and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
         {%- set ns.multi_step_tool = false %}
         {%- set ns.last_query_index = index %}
     {%- endif %}
 {%- endfor %}
 {%- for message in messages %}
-    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
-        {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
-    {%- elif message.role == "assistant" %}
+    {%- if message.content is string %}
         {%- set content = message.content %}
+    {%- else %}
+        {%- set content = '' %}
+    {%- endif %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
         {%- set reasoning_content = '' %}
-        {%- if message.reasoning_content is defined and message.reasoning_content is not none %}
+        {%- if message.reasoning_content is string %}
             {%- set reasoning_content = message.reasoning_content %}
         {%- else %}
-            {%- if '</think>' in message.content %}
-                {%- set content = message.content.split('</think>')[-1].lstrip('\n') %}
-                {%- set reasoning_content = message.content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+            {%- if '</think>' in content %}
+                {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+                {%- set content = content.split('</think>')[-1].lstrip('\n') %}
             {%- endif %}
         {%- endif %}
         {%- if loop.index0 > ns.last_query_index %}
@@ -70,7 +74,7 @@
             {{- '<|im_start|>user' }}
         {%- endif %}
         {{- '\n<tool_response>\n' }}
-        {{- message.content }}
+        {{- content }}
         {{- '\n</tool_response>' }}
         {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
             {{- '<|im_end|>\n' }}
