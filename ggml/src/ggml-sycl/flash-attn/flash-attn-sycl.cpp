@@ -59,7 +59,6 @@ void ggml_sycl_op_flash_attn(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
     stream->fill(l_d, 0.0f, N);
     stream->fill(m_d, -std::numeric_limits<float>::infinity(), N);
     stream->fill(dst_d, 0.0f, N * d);
-    stream->wait();
 
     for (int j = 0; j < Tc; ++j) {
         stream->submit([&](sycl::handler & cgh) {
