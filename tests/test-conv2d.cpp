@@ -36,7 +36,9 @@ struct test_model {
     struct ggml_context * ctx;
 };
 
-
+void load_model(test_model &, int,  int, int, int, int, int, bool);
+struct ggml_cgraph * build_graph_0(const test_model&);
+struct ggml_cgraph * build_graph_1(const test_model&);
 
 void load_model(test_model & model, int ic, int oc, int iw, int ih, int kw = 3, int kh = 3, bool use_gpu = false ) {
     // create data
@@ -102,7 +104,6 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, int kw = 3, 
 #ifdef GGML_USE_METAL
     if (use_gpu) {
         fprintf(stderr, "%s: using Metal backend\n", __func__);
-        ggml_backend_metal_log_set_callback(ggml_log_callback_default, nullptr);
         model.backend = ggml_backend_metal_init();
         if (!model.backend) {
             fprintf(stderr, "%s: ggml_backend_metal_init() failed\n", __func__);
@@ -178,8 +179,6 @@ struct ggml_cgraph * build_graph_0(const test_model& model) {
     int d0 = 1;
     int d1 = 1;
 
-       
-
     // recalculate for avoid fragmentation
     struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
     ggml_set_name(conv2d_res, "conv2d_res");
@@ -219,8 +218,6 @@ struct ggml_cgraph * build_graph_1(const test_model& model) {
     int d0 = 1;
     int d1 = 1;
 
-       
-
     // recalculate for avoid fragmentation
     // struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
     // ggml_set_name(conv2d_res, "conv2d_res");
@@ -239,7 +236,8 @@ struct ggml_cgraph * build_graph_1(const test_model& model) {
     return gf;
 }
 
-
+std::vector<float> compute_graph(const test_model &, ggml_gallocr_t,
+            build_graph_t, int, double *);
 
 
 std::vector<float> compute_graph(const test_model & model, ggml_gallocr_t allocr,
@@ -255,14 +253,6 @@ std::vector<float> compute_graph(const test_model & model, ggml_gallocr_t allocr
         ggml_backend_cpu_set_n_threads(model.backend, n_threads);
     }
 
-#ifdef GGML_USE_METAL
-    if (ggml_backend_is_metal(model.backend)) {
-        ggml_backend_metal_set_n_cb(model.backend, n_threads);
-    }
-#endif
-
-   
-
     ggml_backend_graph_compute(model.backend, gf);
 
     ggml_backend_synchronize(model.backend);
@@ -274,13 +264,11 @@ std::vector<float> compute_graph(const test_model & model, ggml_gallocr_t allocr
         ggml_backend_synchronize(model.backend);
     }
 
-    // ggml_backend_synchronize(model.backend);
     int64_t end_time = ggml_time_us();
     double time_us = end_time - start_time;
 
     time_us = time_us/iters;
-    // printf(" Taking %f ms\n ", time_us/1000);
-   
+
     //ggml_graph_print(gf);
 
     struct ggml_tensor *res = NULL;
@@ -334,7 +322,7 @@ int main(void)
 
     for (auto c : configs){
         test_model model;
-        load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c), 
+        load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c),
             std::get<3>(c), std::get<4>(c), std::get<5>(c), true);
 
         ggml_gallocr_t allocr = NULL;
@@ -349,7 +337,6 @@ int main(void)
         // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
 
 
-        struct ggml_cgraph * gf_res_0 = NULL;    
         int iterations = 20;
 
         double run_time0;
@@ -368,15 +355,14 @@ int main(void)
         ggml_gallocr_reserve(allocr, gf);
         size_t mem_size1 = ggml_gallocr_get_buffer_size(allocr, 0);
             // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
-        
 
-        struct ggml_cgraph * gf_res_1 = NULL;    
+
 
         double run_time1;
         // std::vector<float> wino_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
         std::vector<float> conv2d_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
 
-        if(k==0) { 
+        if(k==0) {
             k = 1;
             fprintf(stderr, "| (IC, OC, IW, IH, KW, KH) | im2col+GEMM TIME | im2col+GEMM VRAM | implicit GEMM TIME | implicit GEMM VRAM \n");
             fprintf(stderr, "| --- | --- | --- | --- | --- \n");
@@ -409,6 +395,6 @@ int main(void)
 
     }
 
-    // printf("\nPerforming test:\n");    
+    // printf("\nPerforming test:\n");
     return 0;
 }
