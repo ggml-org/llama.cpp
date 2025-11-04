@@ -81,7 +81,7 @@ static __global__ void cpy_flt_transpose(const char * cx, char * cdst, const int
         for (int j = 0; j < CUDA_CPY_TILE_DIM_2D; j += CUDA_CPY_BLOCK_ROWS) {
             if (ty + j < ne01 && tx < ne00) {
                 const int col = ((threadIdx.y+j)*sizeof(float)/sizeof(T)) ^ threadIdx.x; //swizzling to avoid bank conflicts
-                T *tile2 = reinterpret_cast<T*>(tile[threadIdx.x]);
+                const T *tile2 = reinterpret_cast<const T*>(tile[threadIdx.x]);
                 dst[imat*n + (ty+j)*ne00 + tx] = tile2[col];
             }
         }
