@@ -103,9 +103,8 @@ template <typename layout,
           const uint32_t NUM_WARPS_NOHOW,
           const uint32_t NUM_WARPS,
           const uint32_t WG_SIZE>
-__global__ void __launch_bounds__(NUM_WARPS * WARP_SIZE) conv2d_tensor_cores_kernel(const float * __restrict__ IN,
-                                                                                    const half * __restrict__ IK,
-                                                                                    float * __restrict__ Out) {
+__global__ void __launch_bounds__(NUM_WARPS * WARP_SIZE)
+    conv2d_tensor_cores_kernel(const float * __restrict__ IN, const half * __restrict__ IK, float * __restrict__ Out) {
     const uint32_t warpId    = threadIdx.y;
     const uint32_t block_tid = threadIdx.y * blockDim.x + threadIdx.x;
 
