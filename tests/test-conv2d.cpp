@@ -368,7 +368,7 @@ int main(void)
             fprintf(stderr, "| --- | --- | --- | --- | --- \n");
         }
 
-        fprintf(stderr, " | (%d, %d, %d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n", 
+        fprintf(stderr, " | (%d, %d, %d, %d, %d, %d) | %.2f ms | %.2f MB | %.2f ms | %.2f MB\n",
                 std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c), std::get<4>(c), std::get<5>(c),
                 run_time0, mem_size0/1024.0f/1024.0f,
                 run_time1, mem_size1/1024.0f/1024.0f);
