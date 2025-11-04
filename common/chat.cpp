@@ -791,6 +791,22 @@ static void foreach_function(const json & tools, const std::function<void(const 
     }
 }
 
+static std::set<std::string> get_required_parameters(const json & params) {
+    std::set<std::string> retval;
+    if (!params.empty()) {
+        for (const auto& element : params.array()) {
+            if (element.is_string()) {
+               retval.emplace(element.get<std::string>());
+            }
+        }
+    }
+    return retval;
+}
+
+static std::string gr_optional(std::string rule) {
+    return "( " + rule + " )?";
+}
+
 static std::string apply(
     const common_chat_template & tmpl,
     const struct templates_params & inputs,
@@ -2821,14 +2837,19 @@ static common_chat_params common_chat_params_init_minimax_m2(
                 // Create rule for Seed-OSS function call format
                 std::string param_rules;
                 if (parameters.contains("properties")) {
+                    std::set<std::string> requiredParameters;
+                    if (parameters.contains("required")) {
+                        requiredParameters = get_required_parameters(parameters.at("required"));
+                    }
                     for (const auto & [key, value] : parameters.at("properties").items()) {
-                        param_rules += "\"<parameter name=\\\"" + key + "\\\">\" " + builder.add_schema(name + "-arg-" + key, value) + " \"</parameter>\" space ";
+                        bool required = requiredParameters.count(key) > 0;
+                        std::string specific_param_rules = "\"<parameter name=\\\"" + key + "\\\">\" " + builder.add_schema(name + "-arg-" + key, value) + " \"</parameter>\" space ";
+                        param_rules += required ? specific_param_rules : gr_optional(specific_param_rules);
                     }
                 }
                 tool_rules.push_back(builder.add_rule(name + "-call",
-                                                      "\"<minimax:tool_call>\" space \"<invoke name=\\\"" + name + "\\\">\" space " +
-                                                          param_rules +
-                                                          " \"</invoke>\" space \"</minimax:tool_call>\""));
+                                                        "\"<minimax:tool_call>\" space \"<invoke name=\\\"" + name + "\\\">\" space " +
+                                                            param_rules + " \"</invoke>\" space \"</minimax:tool_call>\""));
             });
 
             data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<minimax:tool_call>" });

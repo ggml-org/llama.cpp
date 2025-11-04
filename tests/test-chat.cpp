@@ -198,6 +198,24 @@ common_chat_tool special_function_tool {
         "required": ["arg1"]
     })",
 };
+common_chat_tool special_function_tool_with_optional_param {
+    /* .name = */ "special_function_with_opt",
+    /* .description = */ "I'm special but have optional stuff",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "arg1": {
+                "type": "integer",
+                "description": "The arg."
+            },
+            "arg2": {
+                "type": "integer",
+                "description": "The optional arg."
+            }
+        },
+        "required": ["arg1"]
+    })",
+};
 common_chat_tool python_tool {
     /* .name = */ "python",
     /* .description = */ "an ipython interpreter",
@@ -226,7 +244,7 @@ common_chat_tool code_interpreter_tool {
         "required": ["code"]
     })",
 };
-std::vector<common_chat_tool> tools           { special_function_tool, python_tool };
+std::vector<common_chat_tool> tools           { special_function_tool, special_function_tool_with_optional_param, python_tool };
 std::vector<common_chat_tool> llama_3_1_tools { special_function_tool, code_interpreter_tool };
 
 struct delta_data {
@@ -437,6 +455,8 @@ const common_chat_msg message_assist_thoughts                    = simple_assist
 const common_chat_msg message_assist_thoughts_unopened_unparsed  = simple_assist_msg("I'm\nthinking</think>Hello, world!\nWhat's up?");
 const common_chat_msg message_assist_thoughts_no_content         = simple_assist_msg("", "I'm\nthinking");
 const common_chat_msg message_assist_call                        = simple_assist_msg("", "", "special_function", "{\"arg1\": 1}");
+const common_chat_msg message_assist_call_noopt                  = simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1}");
+const common_chat_msg message_assist_call_withopt                = simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1, \"arg2\": 2}");
 const common_chat_msg message_assist_call_content                = simple_assist_msg("Hello, world!\nWhat's up?", "", "special_function", "{\"arg1\":1}");
 const common_chat_msg message_assist_call_empty_args             = simple_assist_msg("", "", "special_function");
 const common_chat_msg message_assist_call_cutoff_args            = simple_assist_msg("", "", "special_function", "{\"arg");
@@ -2381,6 +2401,21 @@ Hey there!<|im_end|>
                       /* ignore_whitespace_differences= */ true
         );
 
+        // Test template generation for tools with optional parameters
+        test_templates(tmpls.get(), end_tokens, message_assist_call_noopt, tools,
+                      "<minimax:tool_call>\n<invoke name=\"special_function_with_opt\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
+                      /* ignore_whitespace_differences= */ true
+        );
+        test_templates(tmpls.get(), end_tokens, message_assist_call_withopt, tools,
+                      "<minimax:tool_call>\n<invoke name=\"special_function_with_opt\">\n<parameter name=\"arg1\">1</parameter>\n<parameter name=\"arg2\">2</parameter>\n</invoke>\n</minimax:tool_call>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
+                      /* ignore_whitespace_differences= */ true
+        );
     }
 
 }
