@@ -228,6 +228,7 @@ def process_args(args: list[str]):
     retained for literal_eval
     """
     import ast
+    import json
     global gMe
     iArg = 1
     while iArg < len(args):
@@ -252,7 +253,7 @@ def process_args(args: list[str]):
         except KeyError:
             print(f"ERRR:ProcessArgs:{iArg}:{cArg}:UnknownCommand")
             exit(103)
-    print(gMe)
+    print(json.dumps(gMe, indent=4))
     for k in gConfigNeeded:
         if gMe.get(k) == None:
             print(f"ERRR:ProcessArgs:{k}:missing, did you forget to pass the config file...")
