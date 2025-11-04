@@ -214,7 +214,7 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_SEED_OSS;
     } else if (tmpl_contains("'Assistant: '  + message['content'] + '<|separator|>")) {
         return LLM_CHAT_TEMPLATE_GROK_2;
-    } else if (tmpl_contains(LU8("[unused9]系统：[unused10]")) && tmpl_contains("message['content'] + '[unused10]'")) {
+    } else if (tmpl_contains(LU8("[unused9]系统：[unused10]"))) {
         return LLM_CHAT_TEMPLATE_PANGU_EMBED;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
