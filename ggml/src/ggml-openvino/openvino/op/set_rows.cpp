@@ -33,10 +33,6 @@ OutputVector translate_set_rows(const NodeContext & context) {
     auto dst_shape = context.get_output_shape(0).to_shape();
     FRONT_END_OP_CONVERSION_CHECK(dst_shape[0] == 1, "Unsupported shape in SET_ROWS");
 
-    if (context.is_static() && context.is_first_token()) {
-        return rename_outputs_with_suffix({data}, context.get_name());
-    }
-
     auto indices = context.get_input(1);
     auto dst = context.get_input(context.get_output_name());
 
@@ -54,13 +50,11 @@ OutputVector translate_set_rows(const NodeContext & context) {
         auto updated = std::make_shared<ov::op::v3::ScatterUpdate>(dst_reshaped, indices_reshaped, data_reshaped, zero);
         res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(dst), false);
     } else {
-        assert(dst.get_partial_shape().rank() == 4 && dst.get_partial_shape()[2].is_static() &&
-               dst.get_partial_shape()[3].is_static());
+        int64_t dim1 = dst.get_partial_shape()[1].get_length();
         int64_t dim2 = dst.get_partial_shape()[2].get_length();
-        int64_t dim3 = dst.get_partial_shape()[3].get_length();
         data = std::make_shared<ov::op::v1::Reshape>(
-            data, ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 1, (int64_t) -1, dim2, dim3}), false);
-        res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, 1);
+            data, ov::op::v0::Constant::create(ov::element::i64, {3}, {(int64_t) -1, dim1, dim2}), false);
+        res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, 0);
     }
     return rename_outputs_with_suffix({res}, context.get_name());
 }

@@ -84,10 +84,6 @@ OutputVector translate_rope(const NodeContext & context) {
                                                               ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
         auto stack = std::make_shared<ov::op::v0::Concat>(OutputVector{first_half, second_half}, 3);
         res = std::make_shared<ov::op::v1::Reshape>(stack, std::make_shared<ov::op::v0::ShapeOf>(data_node), false);
-        if (!(context.is_static())) {
-            res =
-                std::make_shared<ov::op::v0::Unsqueeze>(res, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
-        }
     } else if (mode == ROPE_TYPE_NEOX) {
         auto data_split = std::make_shared<ov::op::v1::Split>(
             data_node, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {2}), 2);

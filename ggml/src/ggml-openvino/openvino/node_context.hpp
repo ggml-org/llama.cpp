@@ -97,12 +97,7 @@ public:
     int get_op_case() const {
         return m_decoder->get_op_case();
     }
-    bool is_static() const {
-        return m_decoder->is_static();
-    }
-    bool is_first_token() const {
-        return m_decoder->is_first_token();
-    }
+    bool is_static() const { return m_decoder->is_static(); }
 
 private:
     std::shared_ptr<GgmlDecoder> m_decoder;

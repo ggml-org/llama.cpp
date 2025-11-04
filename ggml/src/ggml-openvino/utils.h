@@ -7,19 +7,11 @@
 
 enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph);
 
-std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph * cgraph, bool is_static, bool is_first_token);
-
-ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & name);
-
-std::map<std::string, void *> get_ggml_graph_output_dst(std::shared_ptr<GgmlOvDecoder> ggml_decoder);
-
 size_t checksum(const void * data, size_t size);
 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor);
 
-void print_output_tensor_info(const std::string & name,
-                              const ov::Tensor & tensor,
-                              std::map<std::string, void *> & output_dst);
+void print_output_tensor_info(const std::string & name, const ov::Tensor & tensor, void * output_dst);
 
 template <typename T>
 std::vector<T> pad_input(const ggml_tensor * tensor, size_t padded_rows, size_t padded_cols, T pad_value) {
@@ -38,14 +30,17 @@ std::vector<T> pad_input(const ggml_tensor * tensor, size_t padded_rows, size_t 
 
 void set_zero_diagonal(std::vector<float> & matrix, size_t dim);
 
-bool is_prefill(struct ggml_cgraph * cgraph);
+const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 
-ov::AnyMap get_npu_prefill_config();
-ov::AnyMap get_npu_generate_config();
+bool get_is_first_token(const ggml_tensor * inp_pos);
+
+ov::AnyMap get_ov_compile_config(const std::string & device);
 
 std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & device);
 
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & param_name);
+
+ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & result_name);
 
 bool is_naive(struct ggml_cgraph * cgraph);
 

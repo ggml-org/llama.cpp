@@ -65,7 +65,6 @@ public:
     virtual std::map<std::string, std::string> get_kv_param_res_names() const = 0;
 
     virtual bool is_static() const = 0;
-    virtual bool is_first_token() const = 0;
     virtual int get_context_size() const = 0;
     virtual int get_context_size_swa() const = 0;
     virtual int is_swa_layer(int layer) const = 0;
