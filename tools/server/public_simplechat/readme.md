@@ -182,11 +182,14 @@ Once inside
     not get/see a tool call, in such situations, dont forget to cross check that tool calling is
     enabled in the settings.
 
-* just refresh the page, to reset wrt the chat history and or system prompt and start afresh.
-  This also helps if you had forgotten to start the bundled simpleproxy.py server before hand.
-  Start the simpleproxy.py server and refresh the client ui page, to get access to web access
-  related tool calls.
-  * if you refreshed unknowingly, you can use the Restore feature to try load the previous chat
+* ClearChat/Refresh
+  * use the clearchat button to clear the currently active chat session.
+  * just refresh the page, to reset wrt the chat history and system prompts across chat sessions
+    and start afresh.
+    * This also helps if you had forgotten to start the bundled simpleproxy.py server before hand.
+      Start the simpleproxy.py server and refresh the client ui page, to get access to web access
+      related tool calls.
+  * if you refreshed/cleared unknowingly, you can use the Restore feature to try load previous chat
     session and resume that session. This uses a basic local auto save logic that is in there.
 
 * Using NewChat one can start independent chat sessions.
@@ -434,7 +437,8 @@ The following tools/functions are currently provided by default
 
 * simple_calculator - which can solve simple arithmatic expressions
 
-* run_javascript_function_code - which can be used to run ai generated or otherwise javascript code using browser's js capabilities.
+* run_javascript_function_code - which can be used to run ai generated or otherwise javascript code
+  using browser's js capabilities.
 
 * data_store_get/set/delete/list - allows for a basic data store to be used.
 
@@ -619,6 +623,8 @@ channel of the handshake.
 * Enable CachePrompt api option given that tool calling based interactions could involve chat sessions
 having ai responses built over multiple steps of tool callings etal. So independent of our client side
 sliding window based drop off or even before they kick in, this can help in many cases.
+
+* UI - add ClearChat button and logic. Also add unicode icons for same as well as for Settings.
 
 
 #### ToDo
