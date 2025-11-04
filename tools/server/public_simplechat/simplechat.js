@@ -326,6 +326,7 @@ class SimpleChat {
     clear() {
         this.xchat = [];
         this.iLastSys = -1;
+        this.latestResponse = new ChatMessageEx();
     }
 
     ods_key() {
@@ -797,6 +798,7 @@ class MultiChatUI {
         this.elDivHeading = /** @type{HTMLSelectElement} */(document.getElementById("heading"));
         this.elDivSessions = /** @type{HTMLDivElement} */(document.getElementById("sessions-div"));
         this.elBtnSettings = /** @type{HTMLButtonElement} */(document.getElementById("settings"));
+        this.elBtnClearChat = /** @type{HTMLButtonElement} */(document.getElementById("clearchat"));
         this.elDivTool = /** @type{HTMLDivElement} */(document.getElementById("tool-div"));
         this.elBtnTool = /** @type{HTMLButtonElement} */(document.getElementById("tool-btn"));
         this.elInToolName = /** @type{HTMLInputElement} */(document.getElementById("toolname-in"));
@@ -1029,6 +1031,10 @@ class MultiChatUI {
         this.elBtnSettings.addEventListener("click", (ev)=>{
             this.elDivChat.replaceChildren();
             gMe.show_settings(this.elDivChat);
+        });
+        this.elBtnClearChat.addEventListener("click", (ev)=>{
+            this.simpleChats[this.curChatId].clear()
+            this.chat_show(this.curChatId)
         });
 
         this.elBtnUser.addEventListener("click", (ev)=>{
