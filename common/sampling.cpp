@@ -287,6 +287,33 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     return result;
 }
 
+struct llama_sampler * common_sampler_gpu_init(const struct llama_model * model, const struct common_params_sampling & params) {
+    GGML_UNUSED(model);
+
+    llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
+    chain_params.no_perf = params.no_perf;
+
+    struct llama_sampler * chain = llama_sampler_chain_init(chain_params);
+
+    if (!params.gpu_sampling) {
+        return chain; // return empty chain
+    }
+
+    if (params.gpu_temp > 0.0f) {
+        llama_sampler_chain_add(chain, llama_sampler_gpu_init_temp(params.gpu_temp));
+    }
+
+    if (params.gpu_top_k > 0) {
+        llama_sampler_chain_add(chain, llama_sampler_gpu_init_top_k(params.gpu_top_k));
+    }
+
+    if (params.gpu_dist) {
+        llama_sampler_chain_add(chain, llama_sampler_gpu_init_dist(params.seed));
+    }
+
+    return chain;
+}
+
 void common_sampler_free(struct common_sampler * gsmpl) {
     if (gsmpl) {
         llama_sampler_free(gsmpl->grmr);
