@@ -35,6 +35,7 @@ add_library(llama
             unicode-data.cpp
             unicode.cpp
             unicode.h
+            models/afmoe.cpp
             models/apertus.cpp
             models/arcee.cpp
             models/arctic.cpp
