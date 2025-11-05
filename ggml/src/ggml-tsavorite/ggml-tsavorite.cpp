@@ -819,10 +819,16 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   case GGML_OP_SQRT:
   case GGML_OP_SQR:
   case GGML_OP_SIN:
+  case GGML_OP_RESHAPE:
+  case GGML_OP_VIEW:
+  case GGML_OP_PERMUTE:
+  case GGML_OP_TRANSPOSE:
+
   case GGML_OP_RMS_NORM:
-  #ifdef GGML_TARGET_POSIX
-      case GGML_OP_SOFT_MAX:
-  #endif /* GGML_TARGET_POSIX */
+
+#ifdef GGML_TARGET_POSIX_DEBUG
+  case GGML_OP_SOFT_MAX:
+#endif /* GGML_TARGET_POSIX_DEBUG */
     break;
   case GGML_OP_GLU:
     {
@@ -1063,6 +1069,20 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
       }
       num_of_input_tensors = TSAVORITE_TWO_INPUT_TENSORS;
       break;
+    case GGML_OP_RESHAPE:
+        kernel_type = GGML_TSAVORITE_KERNEL_TYPE_RESHAPE;
+        num_of_input_tensors = TSAVORITE_IGNORE_TENSORS;
+	break;
+    case GGML_OP_VIEW:
+        kernel_type = GGML_TSAVORITE_KERNEL_TYPE_VIEW;
+        num_of_input_tensors = TSAVORITE_IGNORE_TENSORS;
+      break;
+  case GGML_OP_PERMUTE:
+        num_of_input_tensors = TSAVORITE_IGNORE_TENSORS;
+        break;
+  case GGML_OP_TRANSPOSE:
+        num_of_input_tensors = TSAVORITE_IGNORE_TENSORS;
+        break;
     case GGML_OP_UNARY:
       switch (ggml_get_unary_op(node)) {
       case GGML_UNARY_OP_NEG:
@@ -1093,10 +1113,10 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
       return GGML_STATUS_ABORTED;
     }
 
-    if (!ctx->kernels[kernel_type].pipeline ||
+    if ((num_of_input_tensors != TSAVORITE_IGNORE_TENSORS) && (!ctx->kernels[kernel_type].pipeline ||
         (!ctx->kernels[kernel_type].pipeline->_mlir_fptr_3_input[kernel_sub_type] &&
          !ctx->kernels[kernel_type].pipeline->_mlir_fptr_2_input[kernel_sub_type] &&
-         !ctx->kernels[kernel_type].pipeline->_mlir_fptr_1_input[kernel_sub_type])) {
+         !ctx->kernels[kernel_type].pipeline->_mlir_fptr_1_input[kernel_sub_type]))) {
       GGML_TSAVORITE_LOG_ERROR("Kernel Type %d, not supported \n", kernel_type);
       return GGML_STATUS_ABORTED;
     }
@@ -2128,10 +2148,16 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
   case GGML_OP_SQRT:
   case GGML_OP_SQR:
   case GGML_OP_SIN:
+  case GGML_OP_RESHAPE:
+  case GGML_OP_VIEW:
+  case GGML_OP_PERMUTE:
+  case GGML_OP_TRANSPOSE:
   case GGML_OP_RMS_NORM:
-  #ifdef GGML_TARGET_POSIX
-      case GGML_OP_SOFT_MAX:
-  #endif /* GGML_TARGET_POSIX */
+
+#ifdef GGML_TARGET_POSIX_DEBUG
+  case GGML_OP_SOFT_MAX:
+#endif /* GGML_TARGET_POSIX_DEBUG */
+
     break;
   case GGML_OP_GLU:
     {
