@@ -549,7 +549,44 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                 dev->props.has_tensor = false;
             }
 
-            // try to compile a dummy tensor kernel to determine if the tensor API is supported for bfloat
+            // double-check that the tensor API compiles
+            if (dev->props.has_tensor) {
+                const char * src_tensor_f16 = "\n"
+                    "#include <metal_stdlib> \n"
+                    "#include <metal_tensor> \n"
+                    "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
+                    " \n"
+                    "using namespace metal; \n"
+                    "using namespace mpp::tensor_ops; \n"
+                    " \n"
+                    "kernel void dummy_kernel( \n"
+                    "    tensor<device half, dextents<int32_t, 2>> A [[buffer(0)]], \n"
+                    "    tensor<device half, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                    "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
+                    "{ \n"
+                    "    auto tA = A.slice(0, (int)tgid.y); \n"
+                    "    auto tB = B.slice((int)tgid.x, 0); \n"
+                    " \n"
+                    "    matmul2d< \n"
+                    "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
+                    "        execution_thread> mm; \n"
+                    " \n"
+                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), half>(); \n"
+                    " \n"
+                    "    (void)cT; \n"
+                    "}";
+
+                GGML_LOG_INFO("%s: testing tensor API for f16 support\n", __func__);
+                ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_f16, false);
+                if (lib == NULL) {
+                    GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
+                    dev->props.has_tensor = false;
+                } else {
+                    ggml_metal_library_free(lib);
+                }
+            }
+
+            // try to compile a dummy kernel to determine if the tensor API is supported for bfloat
             if (dev->props.has_tensor && dev->props.has_bfloat) {
                 const char * src_tensor_bf16 = "\n"
                     "#include <metal_stdlib> \n"
@@ -559,24 +596,20 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                     "using namespace metal; \n"
                     "using namespace mpp::tensor_ops; \n"
                     " \n"
-                    "kernel void bfloat_dummy_kernel( \n"
+                    "kernel void dummy_kernel( \n"
                     "    tensor<device bfloat, dextents<int32_t, 2>> A [[buffer(0)]], \n"
                     "    tensor<device bfloat, dextents<int32_t, 2>> B [[buffer(1)]], \n"
                     "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
                     "{ \n"
-                    "    // Create slices for this threadgroup (no real computation performed). \n"
                     "    auto tA = A.slice(0, (int)tgid.y); \n"
                     "    auto tB = B.slice((int)tgid.x, 0); \n"
                     " \n"
-                    "    // Minimal matmul descriptor: 8×8 tile with dynamic K dimension. \n"
                     "    matmul2d< \n"
                     "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
                     "        execution_thread> mm; \n"
                     " \n"
-                    "    // Obtain a cooperative destination tensor of bfloat type. \n"
                     "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), bfloat>(); \n"
                     " \n"
-                    "    // Silence “unused variable” warnings. \n"
                     "    (void)cT; \n"
                     "}";
 
