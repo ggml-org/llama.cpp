@@ -2,27 +2,17 @@
 // ALERT - Simple Stupid flow - Using from a discardable VM is better
 // Helpers to handle tools/functions calling related to web access, pdf, etal
 // which work in sync with the bundled simpleproxy.py server logic.
+// Uses the js specific web worker path.
 // by Humans for All
 //
 
 import * as mChatMagic from './simplechat.js'
 
 
-let gToolsWorker = /** @type{Worker} */(/** @type {unknown} */(null));
 /**
  * @type {mChatMagic.Me}
  */
 let gMe = /** @type{mChatMagic.Me} */(/** @type {unknown} */(null));
-
-
-/**
- * Send a message to Tools WebWorker's monitor in main thread directly
- * @param {MessageEvent<any>} mev
- */
-function message_toolsworker(mev) {
-    // @ts-ignore
-    gToolsWorker.onmessage(mev)
-}
 
 
 /**
@@ -51,7 +41,7 @@ async function bearer_transform() {
  * @param {any} objHeaders
  */
 async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchParams, path, objHeaders={}) {
-    if (gToolsWorker.onmessage != null) {
+    if (gMe.workers.js.onmessage != null) {
         let params = new URLSearchParams(objSearchParams)
         let newUrl = `${gMe.tools.proxyUrl}/${path}?${params}`
         let headers = new Headers(objHeaders)
@@ -63,9 +53,9 @@ async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchPa
             }
             return resp.text()
         }).then(data => {
-            message_toolsworker(new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: data}}))
+            gMe.workers_postmessage_for_main(gMe.workers.js, chatid, toolcallid, toolname, data);
         }).catch((err)=>{
-            message_toolsworker(new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: `Error:${err}`}}))
+            gMe.workers_postmessage_for_main(gMe.workers.js, chatid, toolcallid, toolname, `Error:${err}`);
         })
     }
 }
@@ -343,15 +333,13 @@ async function fetchpdftext_setup(tcs) {
 /**
  * Used to get hold of the web worker to use for running tool/function call related code
  * Also to setup tool calls, which need to cross check things at runtime
- * @param {Worker} toolsWorker
  * @param {mChatMagic.Me} me
  */
-export async function init(toolsWorker, me) {
+export async function init(me) {
     /**
      * @type {Object<string, Object<string, any>>} tcs
      */
     let tc_switch = {}
-    gToolsWorker = toolsWorker
     gMe = me
     await fetchweburlraw_setup(tc_switch)
     await fetchweburltext_setup(tc_switch)

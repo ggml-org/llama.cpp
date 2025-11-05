@@ -11,8 +11,6 @@ import * as tdb from './tooldb.mjs'
 import * as mChatMagic from './simplechat.js'
 
 
-let gToolsWorker = new Worker('./toolsworker.mjs', { type: 'module' });
-let gToolsDBWorker = new Worker('./toolsdbworker.mjs', { type: 'module' });
 /**
  * Maintain currently available tool/function calls
  * @type {Object<string,Object<string,any>>}
@@ -23,24 +21,34 @@ export let tc_switch = {}
 /**
  * @param {mChatMagic.Me} me
  */
+function setup_workers(me) {
+    me.workers.js =  new Worker('./toolsworker.mjs', { type: 'module' });
+    me.workers.db = new Worker('./toolsdbworker.mjs', { type: 'module' });
+}
+
+
+/**
+ * @param {mChatMagic.Me} me
+ */
 export async function init(me) {
+    setup_workers(me);
     /**
      * @type {string[]}
      */
     let toolNames = []
-    await tjs.init(gToolsWorker).then(()=>{
+    await tjs.init(me).then(()=>{
         for (const key in tjs.tc_switch) {
             tc_switch[key] = tjs.tc_switch[key]
             toolNames.push(key)
         }
     })
-    await tdb.init(gToolsDBWorker).then(()=>{
+    await tdb.init(me).then(()=>{
         for (const key in tdb.tc_switch) {
             tc_switch[key] = tdb.tc_switch[key]
             toolNames.push(key)
         }
     })
-    let tNs = await tweb.init(gToolsWorker, me)
+    let tNs = await tweb.init(me)
     for (const key in tNs) {
         tc_switch[key] = tNs[key]
         toolNames.push(key)
@@ -55,23 +63,6 @@ export function meta() {
         tools.push(tc_switch[key]["meta"])
     }
     return tools
-}
-
-
-/**
- * Setup the callback that will be called when ever message
- * is recieved from the Tools Web Worker.
- * @param {(chatId: string, toolCallId: string, name: string, data: string) => void} cb
- */
-export function setup(cb) {
-    gToolsWorker.onmessage = function (ev) {
-        cb(ev.data.cid, ev.data.tcid, ev.data.name, ev.data.data)
-    }
-    gToolsDBWorker.onmessage = function (ev) {
-        cb(ev.data.cid, ev.data.tcid, ev.data.name, JSON.stringify(ev.data.data, (k,v)=>{
-            return (v === undefined) ? '__UNDEFINED__' : v;
-        }));
-    }
 }
 
 
