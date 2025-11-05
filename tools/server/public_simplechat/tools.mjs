@@ -8,6 +8,7 @@
 import * as tjs from './tooljs.mjs'
 import * as tweb from './toolweb.mjs'
 import * as tdb from './tooldb.mjs'
+import * as mChatMagic from './simplechat.js'
 
 
 let gToolsWorker = new Worker('./toolsworker.mjs', { type: 'module' });
@@ -19,7 +20,10 @@ let gToolsDBWorker = new Worker('./toolsdbworker.mjs', { type: 'module' });
 export let tc_switch = {}
 
 
-export async function init() {
+/**
+ * @param {mChatMagic.Me} me
+ */
+export async function init(me) {
     /**
      * @type {string[]}
      */
@@ -36,7 +40,7 @@ export async function init() {
             toolNames.push(key)
         }
     })
-    let tNs = await tweb.init(gToolsWorker)
+    let tNs = await tweb.init(gToolsWorker, me)
     for (const key in tNs) {
         tc_switch[key] = tNs[key]
         toolNames.push(key)

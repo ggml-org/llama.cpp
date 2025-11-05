@@ -632,6 +632,10 @@ sliding window based drop off or even before they kick in, this can help in many
 
 * sys_date_time tool call has been added.
 
+* SimpleChat - Move the main chat related classes into its own js module file, independent of the
+main runtime entry point. This allows these classes to be referenced from other modules like tools
+related modules with full access to their details for developers and static check tools.
+
 
 #### ToDo
 
