@@ -244,8 +244,9 @@ static void ggml_print_tensor(ggml_tensor * t, int64_t n = 3) {
     GGML_ASSERT(t != nullptr);
     GGML_ASSERT(n > 0);
 
-    std::stringstream src_ss;
-    src_ss << std::string("(");
+    printf("%s: %24s = (%s) %10s(", __func__,
+       t->name, ggml_type_name(t->type), ggml_op_desc(t));
+
     size_t last_src = 0;
     for (size_t i = 0; i < GGML_MAX_SRC; ++i) {
         if (t->src[i] != nullptr) {
@@ -254,18 +255,13 @@ static void ggml_print_tensor(ggml_tensor * t, int64_t n = 3) {
     }
     for (size_t i = 0; i < GGML_MAX_SRC; ++i) {
         if (t->src[i] != nullptr) {
-            src_ss << t->src[i]->name << std::string("{") << ggml_ne_string(t->src[i]) << std::string("}");
+            printf("%s{%s}", t->src[i]->name, ggml_ne_string(t->src[i]).c_str());
         }
-        if (i <= last_src) {
-            src_ss << std::string(", ");
+        if (i < last_src) {
+            printf(", ");
         }
     }
-    src_ss << std::string(")");
-
-    printf("%s: %24s = (%s) %10s%s = {%s}\n", __func__,
-         t->name, ggml_type_name(t->type), ggml_op_desc(t),
-         src_ss.str().c_str(),
-         ggml_ne_string(t).c_str());
+    printf(") = {%s}\n", ggml_ne_string(t).c_str());
 
     std::vector<float> tv;
     tv.reserve(ggml_nelements(t));
