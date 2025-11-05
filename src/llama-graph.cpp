@@ -824,7 +824,7 @@ ggml_tensor * llm_graph_context::build_ffn(
             arch == LLM_ARCH_GLM4 ||
             arch == LLM_ARCH_GLM4_MOE ||
             arch == LLM_ARCH_GLM4V ||
-            arch == LLM_ARCH_GLM4V
+            arch == LLM_ARCH_GLM4V_MOE
         ) {
             // GLM4 models seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
@@ -1627,7 +1627,7 @@ ggml_tensor * llm_graph_context::build_attn(
             arch == LLM_ARCH_GLM4 ||
             arch == LLM_ARCH_GLM4_MOE ||
             arch == LLM_ARCH_GLM4V ||
-            arch == LLM_ARCH_GLM4V
+            arch == LLM_ARCH_GLM4V_MOE
         ) {
             // GLM4 models seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
