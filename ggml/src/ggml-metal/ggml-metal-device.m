@@ -557,6 +557,18 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                 dev->props.has_tensor = false;
             }
 
+            // note: disable the tensor API by default for old chips because with the current implementation it is not useful
+            // - M2 Ultra:   ~5% slower
+            // - M4, M4 Max: no significant difference
+            //
+            // TODO: try to update the tensor API kernels to at least match the simdgroup performance
+            if (getenv("GGML_METAL_TENSOR_ENABLE") == NULL &&
+                ![[dev->mtl_device name] containsString:@"M5"] &&
+                ![[dev->mtl_device name] containsString:@"M6"]) {
+                GGML_LOG_WARN("%s: tensor API disabled for pre-M5 device\n", __func__);
+                dev->props.has_tensor = false;
+            }
+
             // double-check that the tensor API compiles
             if (dev->props.has_tensor) {
                 const char * src_tensor_f16 = "\n"
