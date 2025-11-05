@@ -96,7 +96,12 @@ static void launch_moe_expert_reduce(ggml_backend_cuda_context & ctx,
 }
 
 bool ggml_cuda_should_use_moe_expert_reduce(const ggml_cgraph * cgraph, int start_index, int end_index) {
-    const ggml_tensor * mul = cgraph->nodes[start_index];
+    const ggml_tensor * mul     = cgraph->nodes[start_index];
+    const ggml_tensor * experts = mul->src[0];
+
+    if (experts->ne[2] != 1) {
+        return false;
+    }
 
     if (mul->op != GGML_OP_MUL || !ggml_is_contiguous(mul->src[0]) || !ggml_is_contiguous(mul->src[1])) {
         return false;
