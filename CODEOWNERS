@@ -65,7 +65,7 @@
 /ggml/src/ggml-impl.h                   @ggerganov @slaren
 /ggml/src/ggml-metal/                   @ggerganov
 /ggml/src/ggml-opencl/                  @lhez @max-krasnyansky
-/ggml/src/ggml-hexagon/                 @max-krasnyansky
+/ggml/src/ggml-hexagon/                 @max-krasnyansky @lhez
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
 /ggml/src/ggml-rpc/                     @rgerganov
@@ -89,6 +89,7 @@
 /src/llama-model-loader.*               @slaren
 /src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
+/src/models/                            @CISC
 /tests/                                 @ggerganov
 /tests/test-backend-ops.cpp             @slaren
 /tests/test-thread-safety.cpp           @slaren

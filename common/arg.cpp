@@ -2030,7 +2030,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.system_prompt.pop_back();
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_DIFFUSION}));
     add_opt(common_arg(
         {"--in-file"}, "FNAME",
         "an input file (repeat to specify multiple files)",
@@ -2768,6 +2768,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.image.emplace_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_MTMD}));
+    add_opt(common_arg(
+        {"--image-min-tokens"}, "N",
+        "minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)",
+        [](common_params & params, int value) {
+            params.image_min_tokens = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MIN_TOKENS"));
+    add_opt(common_arg(
+        {"--image-max-tokens"}, "N",
+        "maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)",
+        [](common_params & params, int value) {
+            params.image_max_tokens = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MAX_TOKENS"));
     if (llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",
@@ -3203,7 +3217,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
         {"--parse-special"},
-        string_format("prase special tokens (chat, tool, etc) (default: %s)", params.parse_special ? "true" : "false"),
+        string_format("parse special tokens (chat, tool, etc) (default: %s)", params.parse_special ? "true" : "false"),
         [](common_params & params) {
             params.parse_special = true;
         }
@@ -3248,7 +3262,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
         {"--embd-output-format"}, "FORMAT",
-        "empty = default, \"array\" = [[],[]...], \"json\" = openai style, \"json+\" = same \"json\" + cosine similarity matrix",
+        "empty = default, \"array\" = [[],[]...], \"json\" = openai style, \"json+\" = same \"json\" + cosine similarity matrix, \"raw\" = plain whitespace-delimited output (one embedding per line)",
         [](common_params & params, const std::string & value) {
             params.embd_out = value;
         }
