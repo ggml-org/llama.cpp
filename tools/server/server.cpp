@@ -2476,7 +2476,7 @@ struct server_context {
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
 
-            if (!params_base.has_speculative()) {
+            if (params_base.has_speculative()) {
                 SRV_ERR("%s\n", "err: speculative decode is not supported by multimodal");
                 return false;
             }
