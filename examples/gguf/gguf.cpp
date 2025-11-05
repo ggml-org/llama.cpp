@@ -181,12 +181,12 @@ static bool gguf_ex_read_1(const std::string & fname, bool check_data) {
         printf("%s: n_tensors: %d\n", __func__, n_tensors);
 
         for (int i = 0; i < n_tensors; ++i) {
-            const char * name   = gguf_get_tensor_name  (ctx, i);
-            const size_t size   = gguf_get_tensor_size  (ctx, i);
-            const size_t offset = gguf_get_tensor_offset(ctx, i);
-            const auto type = gguf_get_tensor_type(ctx, i);
-            const char * type_name   = ggml_type_name(type);
-            const size_t type_size = ggml_type_size(type);
+            const char * name       = gguf_get_tensor_name  (ctx, i);
+            const size_t size       = gguf_get_tensor_size  (ctx, i);
+            const size_t offset     = gguf_get_tensor_offset(ctx, i);
+            const auto   type       = gguf_get_tensor_type  (ctx, i);
+            const char * type_name  = ggml_type_name(type);
+            const size_t type_size  = ggml_type_size(type);
             const size_t n_elements = size / type_size;
 
             printf("%s: tensor[%d]: name = %s, size = %zu, offset = %zu, type = %s, n_elts = %zu\n", __func__, i, name, size, offset, type_name, n_elements);
