@@ -1026,27 +1026,41 @@ inline void build_grammar_xml_tool_call(common_chat_params & data, const struct 
 
                 std::string param_rules;
                 if (parameters.contains("properties")) {
+                    std::vector<std::string> requiredParameters;
+                    if (parameters.contains("required")) {
+                        auto required_arr = parameters.at("required");
+                        if (!required_arr.empty()) {
+                            for (const auto& element : required_arr.array()) {
+                                if (element.is_string()) {
+                                    requiredParameters.emplace_back(element.get<std::string>());
+                                }
+                            }
+                        }
+                    }
+                    std::sort(requiredParameters.begin(), requiredParameters.end());
+                    requiredParameters.erase(std::unique(requiredParameters.begin(), requiredParameters.end()), requiredParameters.end());
                     for (const auto & [key, value] : parameters.at("properties").items()) {
                         std::string quoted_key = key;
+                        bool required = std::binary_search(requiredParameters.begin(), requiredParameters.end(), key);
                         if (form.key_start.back() == '"' && key_val_sep[0] == '"') {
                             quoted_key = gbnf_format_literal(key);
                             quoted_key = quoted_key.substr(1, quoted_key.size() - 2);
                         }
+                        if (!required) param_rules += "( ";
+                        param_rules +=
+                                gbnf_format_literal(form.key_start) + " " +
+                                gbnf_format_literal(quoted_key) + " " +
+                                gbnf_format_literal(key_val_sep) + " ";
                         if (value.contains("type") && value["type"].is_string() && value["type"] == "string") {
                             param_rules +=
-                                    gbnf_format_literal(form.key_start) + " " +
-                                    gbnf_format_literal(quoted_key) + " " +
-                                    gbnf_format_literal(key_val_sep) + " ( string-arg-val | " +
-                                    builder.add_schema(name_safe + "-arg-" + encode_to_safe(key), value) + " ) " +
-                                    gbnf_format_literal(form.val_end) + " ";
+                                    "( string-arg-val | " +
+                                    builder.add_schema(name_safe + "-arg-" + encode_to_safe(key), value) + " ) ";
                         } else {
                             param_rules +=
-                                    gbnf_format_literal(form.key_start) + " " +
-                                    gbnf_format_literal(quoted_key) + " " +
-                                    gbnf_format_literal(key_val_sep) + " " +
-                                    builder.add_schema(name_safe + "-arg-" + encode_to_safe(key), value) + " " +
-                                    gbnf_format_literal(form.val_end) + " ";
+                                    builder.add_schema(name_safe + "-arg-" + encode_to_safe(key), value) + " ";
                         }
+                        param_rules += gbnf_format_literal(form.val_end) + " ";
+                        if (!required) param_rules += ")? ";
                     }
                 }
 
