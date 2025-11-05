@@ -328,8 +328,10 @@ llama_tokens common_speculative_gen_draft(
     // read in from an environment variable for now (default = 0)
     const size_t max_look_ahead = std::getenv("GGML_MAX_LOOK_AHEAD") ? atoi(getenv("GGML_MAX_LOOK_AHEAD")) : 0;
 
+    // the current sequence probability, as predicted by the draft
     float sequence_p = 1.0;
 
+    // the longest draft size we have seen that is +EV
     size_t best_size = 0;
 
     // sample n_draft tokens from the draft model
@@ -351,12 +353,13 @@ llama_tokens common_speculative_gen_draft(
         common_sampler_accept(smpl, id, true);
 
         result.push_back(id);
+
         if (params.n_draft <= (int) result.size()) {
             break;
         }
 
+        // only collect +EV draft tokens
         sequence_p *= cur_p->data[0].p;
-
         if (sequence_p > batch_costs[std::min(result.size(), batch_costs.size() - 1)]) {
             best_size = result.size();
         } else if (sequence_p <= batch_costs[std::min(result.size() + max_look_ahead, batch_costs.size() - 1)]) {
@@ -371,6 +374,7 @@ llama_tokens common_speculative_gen_draft(
         prompt_dft.push_back(id);
     }
 
+    // truncate to the best we saw that was +EV
     result.resize(best_size);
 
     if (!spec->vocab_dft_compatible) {
