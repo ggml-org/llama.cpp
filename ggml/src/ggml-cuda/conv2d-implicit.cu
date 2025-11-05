@@ -13,18 +13,19 @@ constexpr uint WARPSIZE = 32;
 
 
 //currently not use; in future for split-k kernels
-// static __global__ void reduce_f32(const float * __restrict__ x, float * __restrict__ dst, const int ncols, const int nrows) {
-//     const int row = blockIdx.x;
-//     const int col = threadIdx.x;
+template <typename src_T, typename dst_T>
+static __global__ void reduce_f32(const src_T * __restrict__ x, dst_T * __restrict__ dst, const int ncols, const int nrows) {
+    const int row = blockIdx.x;
+    const int col = threadIdx.x;
 
-//     float     sum        = 0.0f;
-//     if (row * blockDim.x + col < ncols) {
-//         for (int i = 0; i < nrows; ++i){
-//             sum += x[i * ncols + row * blockDim.x + col];
-//         }
-//         dst[row * blockDim.x + col] = sum;
-//     }
-// }
+    float     sum        = 0.0f;
+    if (row * blockDim.x + col < ncols) {
+        for (int i = 0; i < nrows; ++i){
+            sum += ggml_cuda_cast<float>(x[i * ncols + row * blockDim.x + col]);
+        }
+        dst[row * blockDim.x + col] = ggml_cuda_cast<dst_T>(sum);
+    }
+}
 
 template <typename src_T, typename dst_T>
 static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, const int ne00, const int ne01){
@@ -705,26 +706,32 @@ __device__ __forceinline__ void ldmatrix_b(
 }
 
 template<const int BM, const int BN, const int BK, const int WM, const int WN,
-        const int WK,  const int NUM_THREADS>
+        const int WK,  const int ksplit, const int NUM_THREADS>
 static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                                               const half * __restrict__ kernel,
                                               half * __restrict__ output,
                                               const param_t param) {
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 
-constexpr unsigned int MMA_M = 16;
-constexpr unsigned int MMA_N = 8;
-
+  constexpr unsigned int MMA_M = 16;
+  constexpr unsigned int MMA_N = 8;
 
   const unsigned int K = param.c * param.r * param.s;
   const uint inChannelOffset = param.c * param.w;
-  const uint weightKOffset = param.c * param.r * param.s;
+  const uint weightKOffset = K;
 
   // loop bounds, constexpr where possible allows for loop unrolling
   constexpr unsigned int mma_tiles_per_warp_k = 4;
   constexpr unsigned int mma_tiles_per_warp_m = WM / MMA_M;
   constexpr unsigned int mma_tiles_per_warp_n = WN / MMA_N;
-  const unsigned int num_block_tiles_k = (K + (BK-1)) / BK;
+  const unsigned int z = blockIdx.z;
+
+  const unsigned int ks =  (ksplit > 0) ? (weightKOffset + ksplit - 1) / ksplit : weightKOffset;
+  const unsigned int start_k = (ksplit > 0) ? z * ks : 0;
+  const unsigned int end_k = min(start_k + ks, weightKOffset);
+  const unsigned int num_block_tiles_k = (ks + (BK-1)) / BK;
+
+
 
   // calculate block/warp indices
   const unsigned int block_m = blockIdx.y;
@@ -770,8 +777,8 @@ constexpr unsigned int MMA_N = 8;
 
   const half* A_block_gmem = input;
   const half* B_block_gmem = kernel + block_n * BN * weightKOffset;
-  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, inChannelOffset, param);
-  tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, weightKOffset, param);
+  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, start_k, end_k, inChannelOffset, param);
+  tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, start_k, end_k, weightKOffset, param);
 
   int offset_direction = 1;
 
@@ -781,8 +788,8 @@ constexpr unsigned int MMA_N = 8;
     if (block_k != num_block_tiles_k){
       const half* A_block_gmem = input;
       const half* B_block_gmem = kernel + (block_n * BN * weightKOffset);
-      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, block_k * BK, inChannelOffset, param);
-      tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, block_k * BK, weightKOffset, param);
+      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, block_k * BK, start_k, end_k, inChannelOffset, param);
+      tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, block_k * BK, start_k, end_k, weightKOffset, param);
     }
     half* A_warp_tile = A_block_smem + (warp_m * WM * BK);
     half* B_warp_tile = B_block_smem + (warp_n * WN * BK);
@@ -811,6 +818,8 @@ constexpr unsigned int MMA_N = 8;
         }
       }
     }
+
+
 
 
     if (block_k != num_block_tiles_k)
@@ -863,11 +872,18 @@ constexpr unsigned int MMA_N = 8;
                 const uint gemm_i =  n_idx + j*32;
                 const int n = fastdiv(gemm_i, param.OHOW_fastdiv);
                 const int col = fastmodulo(gemm_i, param.OHOW_fastdiv);
-                if(n < param.n && row < param.k && col < param.Oh * param.Ow){
-                    const uint outOffset = n * param.k * param.Oh * param.Ow + row * param.Oh * param.Ow + col;
+                if (n < param.n && row < param.k && col < param.Oh * param.Ow) {
                     uint idx = output_lds_addr + subk + j*32*BN/2;
                     idx = idx ^ ((idx & 0b1110000000) >> 4);
-                    output[outOffset] = smemoutput[idx];
+                    if constexpr (ksplit > 0) {
+                        const uint outOffset = z * param.n * param.k * param.Oh * param.Ow +
+                                               n * param.k * param.Oh * param.Ow +
+                                               row * param.Oh * param.Ow + col;
+                        output[outOffset] = smemoutput[idx];
+                    } else {
+                        const uint outOffset = n * param.k * param.Oh * param.Ow + row * param.Oh * param.Ow + col;
+                        output[outOffset] = smemoutput[idx];
+                    }
                 }
             }
         }
@@ -952,7 +968,6 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
 
         const half *X_H = input_f16.get();
         const half *K_H = kernel_f16.get();
-        ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), P.k * P.Oh * P.Ow * P.n);
 
         constexpr unsigned int BM_dim = 256;
         constexpr unsigned int BN_dim = 256;
@@ -972,16 +987,41 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         constexpr unsigned int NumThreads = ThreadsM * ThreadsN;
         const unsigned int shmem_bytes = (BM_dim * BK_dim + BK_dim * BN_dim) * 2 * sizeof(half);
 
-        cudaFuncSetAttribute(conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, NumThreads>,
-               cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
-        dim3 gridDim(BlocksN, BlocksM);
-        dim3 blockDim(ThreadsN, ThreadsM);
+        const unsigned int K2MN = 8;
 
-        conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim,
-            WM_dim, WN_dim, WK_dim, NumThreads>
-            <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_H.get(), P);
-        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
-        to_fp32_cuda(Y_H.get(), Y_D, P.k * P.Oh * P.Ow * P.n, st);
+        if (P.c * P.r * P.s > K2MN * P.n * P.Oh * P.Ow || P.c * P.r * P.s > K2MN * P.k) {
+            const unsigned int ksplit = 8;
+            ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), ksplit * P.k * P.Oh * P.Ow * P.n);
+
+            cudaFuncSetAttribute(conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, ksplit, NumThreads>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
+            dim3 gridDim(BlocksN, BlocksM, ksplit);
+            dim3 blockDim(ThreadsN, ThreadsM);
+
+            conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim,
+                WM_dim, WN_dim, WK_dim, ksplit, NumThreads>
+                <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_H.get(), P);
+
+            const unsigned int nrows = P.n * P.k * P.Oh * P.Ow;
+            const unsigned int blockx = (nrows + 511) / 512;
+            const dim3 block_nums(blockx, 1, 1);
+            const dim3 block_dims(512, 1, 1);
+            reduce_f32<half, float><<<block_nums, block_dims, 0, st>>>(Y_H.get(), Y_D, nrows, ksplit);
+
+        } else {
+            ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), P.k * P.Oh * P.Ow * P.n);
+
+            cudaFuncSetAttribute(conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 0, NumThreads>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
+            dim3 gridDim(BlocksN, BlocksM);
+            dim3 blockDim(ThreadsN, ThreadsM);
+
+            conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim,
+                WM_dim, WN_dim, WK_dim, 0, NumThreads>
+                <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_H.get(), P);
+            const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
+            to_fp32_cuda(Y_H.get(), Y_D, P.k * P.Oh * P.Ow * P.n, st);
+        }
     } else{
        conv2d_implicit_cuda<half, 1>(X_D, K_D, Y_D, P, st);
     }

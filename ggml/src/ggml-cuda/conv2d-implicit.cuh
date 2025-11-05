@@ -32,6 +32,8 @@ unsigned int NUM_THREADS>
 __device__ __forceinline__ void tileMemcpySwizzleB(
     const half* src,
     half* dst,
+    const unsigned int start_k,
+    const unsigned int end_k,
     const unsigned int src_stride,
     param_t param
 ){
@@ -57,9 +59,9 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
     unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
     const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
-    const unsigned int curR = fastdiv(thread_col*8,                                 param.SC_fastdiv); // channel offset
-    const unsigned int curS = fastdiv(fastmodulo(thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    const unsigned int curC = fastmodulo(fastmodulo(thread_col*8, param.SC_fastdiv), param.C_fastdiv); //
+    const unsigned int curR = fastdiv(start_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
+    const unsigned int curS = fastdiv(fastmodulo(start_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+    const unsigned int curC = fastmodulo(fastmodulo(start_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); //
 
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
@@ -68,7 +70,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-        if (thread_row < param.k && curR < param.r && curS < param.s && curC < param.c){
+        if (thread_row < param.k && curR < param.r && curS < param.s && curC < param.c && start_k+thread_col*8 < end_k){
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
             dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
@@ -91,7 +93,8 @@ unsigned int NUM_THREADS>
 __device__ __forceinline__ void tileMemcpySwizzleA(
     const half* src,
     half* dst,
-    // const unsigned int src_stride,
+    const unsigned int start_k,
+    const unsigned int end_k,
     const unsigned int inChannelOffset,
     param_t param
 )
@@ -128,9 +131,9 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
         int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
         int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
         unsigned int inOffset = n * param.c * param.h * param.w;
-        const unsigned int curR = fastdiv(thread_col*8,                                 param.SC_fastdiv); // channel offset
-        const unsigned int curS = fastdiv(fastmodulo(thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-        const unsigned int curC = fastmodulo(fastmodulo(thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+        const unsigned int curR = fastdiv(start_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
+        const unsigned int curS = fastdiv(fastmodulo(start_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+        const unsigned int curC = fastmodulo(fastmodulo(start_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
         int curH = posh_ori + curR * param.d_h; // input h
         int curW = posw_ori + curS * param.d_w; // input w
         // apply swizzle to the dst index
@@ -138,7 +141,7 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
         if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
-            curR < param.r && curS < param.s && curC < param.c){
+            curR < param.r && curS < param.s && curC < param.c && start_k+thread_col*8 < end_k){
             const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[inOffset + inOffsetTmp])[0];
         } else{
@@ -164,6 +167,8 @@ __device__ __forceinline__ void tileMemcpyLoadA(
     float4 (&dst_reg)[ELEMENTS_PER_THREAD],
     // const unsigned int src_stride,
     const unsigned int block_k,
+    const unsigned int start_k,
+    const unsigned int end_k,
     const unsigned int inChannelOffset,
     param_t param
 ){
@@ -194,13 +199,13 @@ __device__ __forceinline__ void tileMemcpyLoadA(
         int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
         int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
         unsigned int inOffset = n * param.c * param.h * param.w;
-        const unsigned int curR = fastdiv(block_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
-        const unsigned int curS = fastdiv(fastmodulo(block_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-        const unsigned int curC = fastmodulo(fastmodulo(block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+        const unsigned int curR = fastdiv(start_k+block_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
+        const unsigned int curS = fastdiv(fastmodulo(start_k+block_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+        const unsigned int curC = fastmodulo(fastmodulo(start_k+block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
         int curH = posh_ori + curR * param.d_h; // input h
         int curW = posw_ori + curS * param.d_w; // input w
         if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
-            curR < param.r && curS < param.s && curC < param.c){
+            curR < param.r && curS < param.s && curC < param.c && start_k+block_k+thread_col*8 < end_k){
             const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[inOffset + inOffsetTmp])[0];
         } else{
@@ -227,6 +232,8 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     const half* src,
     float4 (&dst_reg)[ELEMENTS_PER_THREAD],
     const unsigned int block_k,
+    const unsigned int start_k,
+    const unsigned int end_k,
     const unsigned int src_stride,
     param_t param
 ){
@@ -249,14 +256,14 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
 
-    const unsigned int curR = fastdiv(block_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
-    const unsigned int curS = fastdiv(fastmodulo(block_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    const unsigned int curC = fastmodulo(fastmodulo(block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); //
+    const unsigned int curR = fastdiv(start_k+block_k+thread_col*8,                                 param.SC_fastdiv); // channel offset
+    const unsigned int curS = fastdiv(fastmodulo(start_k+block_k+thread_col*8,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
+    const unsigned int curC = fastmodulo(fastmodulo(start_k+block_k+thread_col*8, param.SC_fastdiv), param.C_fastdiv); //
 
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
         const unsigned int src_index = thread_row * src_stride + block_k + thread_col * 8;
-        if (thread_row < param.k && curR < param.r && curS < param.s && curC < param.c){
+        if (thread_row < param.k && curR < param.r && curS < param.s && curC < param.c && start_k+block_k+thread_col*8 < end_k){
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
             dst_reg[i] = make_float4(0.f, 0.f, 0.f, 0.f);
