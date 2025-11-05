@@ -416,9 +416,9 @@ ggml_metal_pipeline_t ggml_metal_library_compile_pipeline(ggml_metal_library_t l
         if (!mtl_function) {
             ggml_critical_section_end();
 
-            GGML_LOG_ERROR("%s: error: failed to compile pipeline: base = '%s', name = '%s'\n", __func__, base, name);
+            GGML_LOG_ERROR("%s: failed to compile pipeline: base = '%s', name = '%s'\n", __func__, base, name);
             if (error) {
-                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+                GGML_LOG_ERROR("%s: %s\n", __func__, [[error description] UTF8String]);
             }
 
             return nil;
@@ -426,13 +426,21 @@ ggml_metal_pipeline_t ggml_metal_library_compile_pipeline(ggml_metal_library_t l
 
         res->obj = [lib->device newComputePipelineStateWithFunction:mtl_function error:&error];
 
-        ggml_metal_pipelines_add(lib->pipelines, name, res);
-
         [mtl_function release];
 
         GGML_LOG_DEBUG("%s: loaded %-40s %16p | th_max = %4d | th_width = %4d\n", __func__, name, (void *) res->obj,
                 (int) res->obj.maxTotalThreadsPerThreadgroup,
                 (int) res->obj.threadExecutionWidth);
+
+        if (res->obj.maxTotalThreadsPerThreadgroup == 0 || res->obj.threadExecutionWidth == 0) {
+            ggml_critical_section_end();
+
+            GGML_LOG_ERROR("%s: incompatible pipeline %s\n", __func__, name);
+
+            return nil;
+        }
+
+        ggml_metal_pipelines_add(lib->pipelines, name, res);
     }
 
     ggml_critical_section_end();
@@ -560,8 +568,9 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                     "using namespace mpp::tensor_ops; \n"
                     " \n"
                     "kernel void dummy_kernel( \n"
-                    "    tensor<device half, dextents<int32_t, 2>> A [[buffer(0)]], \n"
-                    "    tensor<device half, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                    "    tensor<device  half, dextents<int32_t, 2>> A [[buffer(0)]], \n"
+                    "    tensor<device  half, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                    "    device float * C [[buffer(2)]], \n"
                     "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
                     "{ \n"
                     "    auto tA = A.slice(0, (int)tgid.y); \n"
@@ -569,11 +578,17 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                     " \n"
                     "    matmul2d< \n"
                     "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
-                    "        execution_thread> mm; \n"
+                    "        execution_simdgroups<4>> mm; \n"
                     " \n"
-                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), half>(); \n"
+                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
                     " \n"
-                    "    (void)cT; \n"
+                    "    auto sA = tA.slice(0, 0); \n"
+                    "    auto sB = tB.slice(0, 0); \n"
+                    "    mm.run(sB, sA, cT); \n"
+                    " \n"
+                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(4, 4)); \n"
+                    " \n"
+                    "    cT.store(tC); \n"
                     "}";
 
                 GGML_LOG_INFO("%s: testing tensor API for f16 support\n", __func__);
@@ -582,6 +597,12 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                     GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
                     dev->props.has_tensor = false;
                 } else {
+                    ggml_metal_pipeline_t ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
+                    if (!ppl) {
+                        GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
+                        dev->props.has_tensor = false;
+                    }
+
                     ggml_metal_library_free(lib);
                 }
             }
@@ -599,6 +620,7 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                     "kernel void dummy_kernel( \n"
                     "    tensor<device bfloat, dextents<int32_t, 2>> A [[buffer(0)]], \n"
                     "    tensor<device bfloat, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                    "    device float * C [[buffer(2)]], \n"
                     "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
                     "{ \n"
                     "    auto tA = A.slice(0, (int)tgid.y); \n"
@@ -606,11 +628,17 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                     " \n"
                     "    matmul2d< \n"
                     "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
-                    "        execution_thread> mm; \n"
+                    "        execution_simdgroups<4>> mm; \n"
                     " \n"
-                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), bfloat>(); \n"
+                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
                     " \n"
-                    "    (void)cT; \n"
+                    "    auto sA = tA.slice(0, 0); \n"
+                    "    auto sB = tB.slice(0, 0); \n"
+                    "    mm.run(sB, sA, cT); \n"
+                    " \n"
+                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(4, 4)); \n"
+                    " \n"
+                    "    cT.store(tC); \n"
                     "}";
 
                 GGML_LOG_INFO("%s: testing tensor API for bfloat support\n", __func__);
@@ -619,6 +647,12 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                     GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
                     dev->props.has_bfloat = false;
                 } else {
+                    ggml_metal_pipeline_t ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
+                    if (!ppl) {
+                        GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
+                        dev->props.has_bfloat = false;
+                    }
+
                     ggml_metal_library_free(lib);
                 }
             }
