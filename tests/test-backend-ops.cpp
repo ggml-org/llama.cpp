@@ -175,6 +175,33 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
 }
 
+static std::vector<float> ggml_get_float_value(uint8_t * buf, ggml_type type, size_t i, size_t bs,
+                                               bool quantized, std::vector<float> & vq) {
+    const auto * tt = ggml_get_type_traits(type);
+    std::vector<float> tv;
+    if (type == GGML_TYPE_F16) {
+        tv.push_back(ggml_fp16_to_fp32(*(ggml_fp16_t*)&buf[i]));
+    } else if (type == GGML_TYPE_BF16) {
+        tv.push_back(ggml_bf16_to_fp32(*(ggml_bf16_t*)&buf[i]));
+    } else if (type == GGML_TYPE_F32) {
+        tv.push_back(*(float *) &buf[i]);
+    } else if (type == GGML_TYPE_I64) {
+        tv.push_back((float)*(int64_t *) &buf[i]);
+    } else if (type == GGML_TYPE_I32) {
+        tv.push_back((float)*(int32_t *) &buf[i]);
+    } else if (type == GGML_TYPE_I16) {
+        tv.push_back((float)*(int16_t *) &buf[i]);
+    } else if (type == GGML_TYPE_I8) {
+        tv.push_back((float)*(int8_t *) &buf[i]);
+    } else if (quantized) {
+        tt->to_float(&buf[i], vq.data(), bs);
+        tv.insert(tv.end(), vq.begin(), vq.end());
+    } else {
+        GGML_ABORT("fatal error");
+    }
+    return tv;
+}
+
 static std::vector<float> tensor_to_float(const ggml_tensor * t) {
     std::vector<float> tv;
     tv.reserve(ggml_nelements(t));
@@ -182,7 +209,6 @@ static std::vector<float> tensor_to_float(const ggml_tensor * t) {
     std::vector<uint8_t> buf(ggml_nbytes(t));
     ggml_backend_tensor_get(t, buf.data(), 0, ggml_nbytes(t));
 
-    const auto * tt = ggml_get_type_traits(t->type);
     size_t bs = ggml_blck_size(t->type);
     std::vector<float> vq(ggml_blck_size(t->type));
     bool quantized = ggml_is_quantized(t->type);
@@ -193,32 +219,115 @@ static std::vector<float> tensor_to_float(const ggml_tensor * t) {
             for (int64_t i1 = 0; i1 < t->ne[1]; i1++) {
                 for (int64_t i0 = 0; i0 < t->ne[0]; i0 += bs) {
                     size_t i = i3*t->nb[3] + i2*t->nb[2] + i1*t->nb[1] + i0/bs*t->nb[0];
-                    if (t->type == GGML_TYPE_F16) {
-                        tv.push_back(ggml_fp16_to_fp32(*(ggml_fp16_t*)&buf[i]));
-                    } else if (t->type == GGML_TYPE_BF16) {
-                        tv.push_back(ggml_bf16_to_fp32(*(ggml_bf16_t*)&buf[i]));
-                    } else if (t->type == GGML_TYPE_F32) {
-                        tv.push_back(*(float *) &buf[i]);
-                    } else if (t->type == GGML_TYPE_I64) {
-                        tv.push_back((float)*(int64_t *) &buf[i]);
-                    } else if (t->type == GGML_TYPE_I32) {
-                        tv.push_back((float)*(int32_t *) &buf[i]);
-                    } else if (t->type == GGML_TYPE_I16) {
-                        tv.push_back((float)*(int16_t *) &buf[i]);
-                    } else if (t->type == GGML_TYPE_I8) {
-                        tv.push_back((float)*(int8_t *) &buf[i]);
-                    } else if (quantized) {
-                        tt->to_float(&buf[i], vq.data(), bs);
-                        tv.insert(tv.end(), vq.begin(), vq.end());
-                    } else {
-                        GGML_ABORT("fatal error");
-                    }
+                    const auto fvs = ggml_get_float_value(buf.data(), t->type, i, bs, quantized, vq);
+                    tv.insert(tv.end(), fvs.begin(), fvs.end());
                 }
             }
         }
     }
 
     return tv;
+}
+
+static std::string ggml_ne_string(const ggml_tensor * t) {
+    std::string str;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        str += std::to_string(t->ne[i]);
+        if (i + 1 < GGML_MAX_DIMS) {
+            str += ", ";
+        }
+    }
+    return str;
+}
+
+static void ggml_print_tensor(ggml_tensor * t, int64_t n = 3) {
+    GGML_ASSERT(t != nullptr);
+    GGML_ASSERT(n > 0);
+
+    std::stringstream src_ss;
+    src_ss << "(";
+    size_t last_src = 0;
+    for (size_t i = 0; i < GGML_MAX_SRC; ++i) {
+        if (t->src[i] != nullptr) {
+            last_src = i;
+        }
+    }
+    for (size_t i = 0; i < GGML_MAX_SRC; ++i) {
+        if (t->src[i] != nullptr) {
+            src_ss << t->src[i]->name << "{" << ggml_ne_string(t->src[i]) <<"}";
+        }
+        if (i <= last_src) {
+            src_ss << ", ";
+        }
+    }
+    src_ss << ")";
+
+    printf("%s: %24s = (%s) %10s%s = {%s}\n", __func__,
+         t->name, ggml_type_name(t->type), ggml_op_desc(t),
+         src_ss.str().c_str(),
+         ggml_ne_string(t).c_str());
+
+    std::vector<float> tv;
+    tv.reserve(ggml_nelements(t));
+
+    std::vector<uint8_t> buf(ggml_nbytes(t));
+    ggml_backend_tensor_get(t, buf.data(), 0, ggml_nbytes(t));
+
+    size_t bs = ggml_blck_size(t->type);
+    std::vector<float> vq(ggml_blck_size(t->type));
+    bool quantized = ggml_is_quantized(t->type);
+
+    float sum = 0;
+    for (int64_t i3 = 0; i3 < t->ne[3]; i3++) {
+        for (int64_t i2 = 0; i2 < t->ne[2]; i2++) {
+            for (int64_t i1 = 0; i1 < t->ne[1]; i1++) {
+                for (int64_t i0 = 0; i0 < t->ne[0]; i0 += bs) {
+                    size_t i = i3*t->nb[3] + i2*t->nb[2] + i1*t->nb[1] + i0/bs*t->nb[0];
+                    for (const auto & val : ggml_get_float_value(buf.data(), t->type, i, bs, quantized, vq)) {
+                        sum += val;
+                    }
+                }
+            }
+        }
+    }
+    for (int64_t i3 = 0; i3 < t->ne[3]; i3++) {
+        printf("                                     [\n");
+        for (int64_t i2 = 0; i2 < t->ne[2]; i2++) {
+            if (i2 == n && t->ne[2] > 2*n) {
+                printf("                                      ..., \n");
+                i2 = t->ne[2] - n;
+            }
+            printf("                                      [\n");
+            for (int64_t i1 = 0; i1 < t->ne[1]; i1++) {
+                if (i1 == n && t->ne[1] > 2*n) {
+                    printf("                                       ..., \n");
+                    i1 = t->ne[1] - n;
+                }
+                printf("                                       [");
+                for (int64_t i0 = 0; i0 < t->ne[0]; i0++) {
+                    size_t i = i3*t->nb[3] + i2*t->nb[2] + i1*t->nb[1] + i0/bs*t->nb[0];
+                    if (i0 == n && t->ne[0] > 2*n) {
+                        printf("..., ");
+                        i0 = t->ne[0] - n;
+                    }
+                    for (const auto & v : ggml_get_float_value(buf.data(), t->type, i, bs, quantized, vq)) {
+                        printf("%12.4f", v);
+                    }
+                    if (i0 < t->ne[0] - 1) printf(", ");
+                }
+                printf("],\n");
+            }
+            printf("                                      ],\n");
+        }
+        printf("                                     ]\n");
+        printf("                                     sum = %f\n", sum);
+    }
+
+    // TODO: make this abort configurable/optional?
+    if (std::isnan(sum)) {
+        printf("encountered NaN - aborting\n");
+        exit(0);
+    }
 }
 
 // normalized mean squared error = mse(a, b) / mse(a, 0)
@@ -993,6 +1102,8 @@ static std::unique_ptr<printer> create_printer(output_formats format) {
     GGML_ABORT("invalid output format");
 }
 
+// test case definition
+
 struct test_case {
     virtual ~test_case() {}
 
@@ -1070,6 +1181,9 @@ struct test_case {
     std::vector<ggml_tensor *> sentinels;
 
     std::string current_op_name;
+
+    // set to true to print tensors
+    bool verbose = false;
 
     void add_sentinel(ggml_context * ctx) {
         if (mode == MODE_PERF || mode == MODE_GRAD || mode == MODE_SUPPORT) {
@@ -1220,6 +1334,7 @@ struct test_case {
         // compare
         struct callback_userdata {
             bool   ok;
+            bool   verbose;
             double max_err;
             ggml_backend_t backend1;
             ggml_backend_t backend2;
@@ -1227,6 +1342,7 @@ struct test_case {
 
         callback_userdata ud {
             true,
+            verbose,
             max_nmse_err(),
             backend1,
             backend2
@@ -1249,6 +1365,11 @@ struct test_case {
                     ud->ok = false;
                     return true;
                 }
+            }
+
+            if (ud->verbose) {
+                ggml_print_tensor(t1);
+                ggml_print_tensor(t2);
             }
 
             std::vector<float> f1 = tensor_to_float(t1);
@@ -6193,7 +6314,7 @@ static const ggml_type other_types[] = {
 };
 
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
-static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+static std::vector<std::unique_ptr<test_case>> make_test_cases_eval(bool verbose = false) {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
 
@@ -7329,6 +7450,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_falcon(2));
 #endif
 
+    // set verbose on all test cases
+    for (auto & tc : test_cases) {
+        tc->verbose = verbose;
+    }
+
     return test_cases;
 }
 
@@ -7493,7 +7619,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 }
 
 static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op_names_filter, const char * params_filter,
-                         printer * output_printer) {
+                         printer * output_printer, bool verbose) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
         if (params_filter == nullptr) {
             return;
@@ -7512,7 +7638,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     };
 
     if (mode == MODE_TEST) {
-        auto test_cases = make_test_cases_eval();
+        auto test_cases = make_test_cases_eval(verbose);
         filter_test_cases(test_cases, params_filter);
         ggml_backend_t backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
         if (backend_cpu == NULL) {
@@ -7701,6 +7827,7 @@ static void usage(char ** argv) {
     printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
     printf("    --list-ops lists all available GGML operations\n");
     printf("    --show-coverage shows test coverage\n");
+    printf("    --verbose | -v print tensors during ops\n");
 }
 
 int main(int argc, char ** argv) {
@@ -7709,6 +7836,7 @@ int main(int argc, char ** argv) {
     const char * op_names_filter = nullptr;
     const char * backend_filter = nullptr;
     const char * params_filter = nullptr;
+    bool verbose = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -7756,6 +7884,8 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[i], "--show-coverage") == 0) {
             show_test_coverage();
             return 0;
+        } else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
+            verbose = true;
         } else {
             usage(argv);
             return 1;
@@ -7808,7 +7938,7 @@ int main(int argc, char ** argv) {
                                                              false, "", ggml_backend_dev_description(dev),
                                                              total / 1024 / 1024, free / 1024 / 1024, true));
 
-        bool ok = test_backend(backend, mode, op_names_filter, params_filter, output_printer.get());
+        bool ok = test_backend(backend, mode, op_names_filter, params_filter, output_printer.get(), verbose);
 
         if (ok) {
             n_ok++;
