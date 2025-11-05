@@ -13,7 +13,7 @@ set -e
 echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
-module load gcc/13.3.0
+#module load gcc/13.3.0
 export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.0
 echo 'creating python virtual env'
 /proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
@@ -97,7 +97,7 @@ cmake --build build-fpga --config Release
 
 
 echo 'creating tar bundle for fpga'
-TSI_GGML_VERSION=0.2.1
+TSI_GGML_VERSION=0.2.2
 TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
 GGML_TSI_INSTALL_DIR=ggml-tsi-kernel
 TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml
