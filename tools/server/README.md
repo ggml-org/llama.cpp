@@ -277,7 +277,7 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 
 ## Web UI
 
-The project includes a web-based user interface that enables interaction with the model through the `/chat/completions` endpoint.
+The project includes a web-based user interface that enables interaction with the model through the `/v1/chat/completions` endpoint.
 
 The web UI is developed using:
 - `react` framework for frontend development

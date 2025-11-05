@@ -507,6 +507,10 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
+
+    bool has_speculative() const {
+        return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
+    }
 };
 
 // call once at the start of a program if it uses libcommon
