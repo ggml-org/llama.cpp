@@ -1007,6 +1007,10 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_cumsum(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
     // sums along rows, with input shape [a,b,c,d] return shape [1,b,c,d]
     GGML_API struct ggml_tensor * ggml_sum_rows(
             struct ggml_context * ctx,
