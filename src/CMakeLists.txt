@@ -99,6 +99,7 @@ add_library(llama
             models/openai-moe-iswa.cpp
             models/openelm.cpp
             models/orion.cpp
+            models/pangu-embedded.cpp
             models/phi2.cpp
             models/phi3.cpp
             models/plamo.cpp
