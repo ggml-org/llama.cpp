@@ -1082,6 +1082,10 @@ struct clip_graph {
         return gf;
     }
 
+    ggml_cgraph * build_glm4v() {
+        /* TODO */
+    }
+
     ggml_cgraph * build_minicpmv() {
         const int batch_size = 1;
 
