@@ -297,12 +297,7 @@ void GgmlOvDecoder::set_llm_params() {
     }
 }
 
-void GgmlOvDecoder::validate_cgraph() const {
-    if (m_is_static && m_input_len != 1) {
-        throw std::runtime_error("Static graph (NPU) must have input_len == 1, but got " + std::to_string(m_input_len) +
-                                 ", try set -ub 1");
-    }
-}
+void GgmlOvDecoder::validate_cgraph() const {}
 
 ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * src) const {
     auto name = std::string(src->name);

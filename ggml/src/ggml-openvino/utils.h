@@ -39,6 +39,10 @@ ov::AnyMap get_ov_compile_config(const std::string & device);
 std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & device);
 
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & param_name);
+ov::Tensor get_ov_input_tensor_static(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
+                                      const std::string & param_name,
+                                      int j,
+                                      int input_len);
 
 ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & result_name);
 
