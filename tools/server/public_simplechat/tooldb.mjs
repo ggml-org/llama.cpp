@@ -95,7 +95,7 @@ let dslist_meta = {
  * @param {any} obj
  */
 function dsops_run(chatid, toolcallid, toolname, obj) {
-    gMe.workers.db.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
+    gMe.toolsMgr.workers.db.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
 }
 
 

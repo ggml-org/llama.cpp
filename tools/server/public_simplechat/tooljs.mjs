@@ -77,7 +77,7 @@ function sysdatetime_run(chatid, toolcallid, toolname, obj) {
                 break;
         }
     }
-    gMe.workers_postmessage_for_main(gMe.workers.js, chatid, toolcallid, toolname, sDT);
+    gMe.toolsMgr.workers_postmessage_for_main(gMe.toolsMgr.workers.js, chatid, toolcallid, toolname, sDT);
 }
 
 
@@ -109,7 +109,7 @@ let js_meta = {
  * @param {any} obj
  */
 function js_run(chatid, toolcallid, toolname, obj) {
-    gMe.workers.js.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: obj["code"]})
+    gMe.toolsMgr.workers.js.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: obj["code"]})
 }
 
 
@@ -141,7 +141,7 @@ let calc_meta = {
  * @param {any} obj
  */
 function calc_run(chatid, toolcallid, toolname, obj) {
-    gMe.workers.js.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: `console.log(${obj["arithexpr"]})`})
+    gMe.toolsMgr.workers.js.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: `console.log(${obj["arithexpr"]})`})
 }
 
 

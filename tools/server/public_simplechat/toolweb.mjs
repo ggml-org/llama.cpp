@@ -41,7 +41,7 @@ async function bearer_transform() {
  * @param {any} objHeaders
  */
 async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchParams, path, objHeaders={}) {
-    if (gMe.workers.js.onmessage != null) {
+    if (gMe.toolsMgr.workers.js.onmessage != null) {
         let params = new URLSearchParams(objSearchParams)
         let newUrl = `${gMe.tools.proxyUrl}/${path}?${params}`
         let headers = new Headers(objHeaders)
@@ -53,9 +53,9 @@ async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchPa
             }
             return resp.text()
         }).then(data => {
-            gMe.workers_postmessage_for_main(gMe.workers.js, chatid, toolcallid, toolname, data);
+            gMe.toolsMgr.workers_postmessage_for_main(gMe.toolsMgr.workers.js, chatid, toolcallid, toolname, data);
         }).catch((err)=>{
-            gMe.workers_postmessage_for_main(gMe.workers.js, chatid, toolcallid, toolname, `Error:${err}`);
+            gMe.toolsMgr.workers_postmessage_for_main(gMe.toolsMgr.workers.js, chatid, toolcallid, toolname, `Error:${err}`);
         })
     }
 }

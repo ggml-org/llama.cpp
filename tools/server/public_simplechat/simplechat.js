@@ -5,7 +5,7 @@
 
 import * as du from "./datautils.mjs";
 import * as ui from "./ui.mjs"
-import * as tools from "./tools.mjs"
+import * as mTools from "./tools.mjs"
 
 
 class Roles {
@@ -522,7 +522,7 @@ class SimpleChat {
             obj["stream"] = true;
         }
         if (this.me.tools.enabled) {
-            obj["tools"] = tools.meta();
+            obj["tools"] = this.me.toolsMgr.meta();
         }
         return JSON.stringify(obj);
     }
@@ -751,7 +751,7 @@ class SimpleChat {
             return "Tool/Function call name not specified"
         }
         try {
-            return await tools.tool_call(this.chatId, toolcallid, toolname, toolargs)
+            return await this.me.toolsMgr.tool_call(this.chatId, toolcallid, toolname, toolargs)
         } catch (/** @type {any} */error) {
             return `Tool/Function call raised an exception:${error.name}:${error.message}`
         }
@@ -1070,7 +1070,7 @@ class MultiChatUI {
         })
 
         // Handle messages from tools web workers
-        this.me.workers_cb((cid, tcid, name, data)=>{
+        this.me.toolsMgr.workers_cb((cid, tcid, name, data)=>{
             clearTimeout(this.timers.toolcallResponseTimeout)
             this.timers.toolcallResponseTimeout = undefined
             let chat = this.simpleChats[cid];
@@ -1386,10 +1386,7 @@ export class Me {
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
-        this.workers = {
-            js: /** @type {Worker} */(/** @type {unknown} */(undefined)),
-            db: /** @type {Worker} */(/** @type {unknown} */(undefined)),
-        }
+        this.toolsMgr = new mTools.ToolsManager()
     }
 
     /**
@@ -1471,37 +1468,6 @@ export class Me {
                 elParent.appendChild(sel.div);
             }
         })
-    }
-
-    /**
-     * Setup the callback that will be called when ever message
-     * is recieved from the Tools Web Workers.
-     * @param {(chatId: string, toolCallId: string, name: string, data: string) => void} cb
-     */
-    workers_cb(cb) {
-        this.workers.js.onmessage = function (ev) {
-            cb(ev.data.cid, ev.data.tcid, ev.data.name, ev.data.data)
-        }
-        this.workers.db.onmessage = function (ev) {
-            cb(ev.data.cid, ev.data.tcid, ev.data.name, JSON.stringify(ev.data.data, (k,v)=>{
-                return (v === undefined) ? '__UNDEFINED__' : v;
-            }));
-        }
-    }
-
-    /**
-     * Send a message to specified tools web worker's monitor in main thread directly
-     * @param {Worker} worker
-     * @param {string} chatid
-     * @param {string} toolcallid
-     * @param {string} toolname
-     * @param {string} data
-     */
-    workers_postmessage_for_main(worker, chatid, toolcallid, toolname, data) {
-        let mev = new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: data}});
-        if (worker.onmessage != null) {
-            worker.onmessage(mev)
-        }
     }
 
 }

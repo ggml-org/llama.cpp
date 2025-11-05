@@ -12,7 +12,7 @@ import * as mChatMagic from './simplechat.js'
 
 
 
-class Tools {
+export class ToolsManager {
 
     constructor() {
         /**
@@ -34,6 +34,8 @@ class Tools {
     }
 
     /**
+     * Initialise the ToolsManager,
+     * including all the different tools groups.
      * @param {mChatMagic.Me} me
      */
     async init(me) {
@@ -62,6 +64,9 @@ class Tools {
         return toolNames
     }
 
+    /**
+     * Prepare the tools meta data that can be passed to the ai server.
+     */
     meta() {
         let tools = []
         for (const key in this.tc_switch) {
@@ -93,6 +98,35 @@ class Tools {
         return `Unknown Tool/Function Call:${toolname}`
     }
 
+    /**
+     * Setup the callback that will be called when ever message
+     * is recieved from the Tools Web Workers.
+     * @param {(chatId: string, toolCallId: string, name: string, data: string) => void} cb
+     */
+    workers_cb(cb) {
+        this.workers.js.onmessage = function (ev) {
+            cb(ev.data.cid, ev.data.tcid, ev.data.name, ev.data.data)
+        }
+        this.workers.db.onmessage = function (ev) {
+            cb(ev.data.cid, ev.data.tcid, ev.data.name, JSON.stringify(ev.data.data, (k,v)=>{
+                return (v === undefined) ? '__UNDEFINED__' : v;
+            }));
+        }
+    }
 
+    /**
+     * Send a message to specified tools web worker's monitor in main thread directly
+     * @param {Worker} worker
+     * @param {string} chatid
+     * @param {string} toolcallid
+     * @param {string} toolname
+     * @param {string} data
+     */
+    workers_postmessage_for_main(worker, chatid, toolcallid, toolname, data) {
+        let mev = new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: data}});
+        if (worker.onmessage != null) {
+            worker.onmessage(mev)
+        }
+    }
 
 }
