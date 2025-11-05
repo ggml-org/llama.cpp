@@ -8,7 +8,9 @@ on:
     paths: [
       '.github/workflows/build.yml',
       '.github/workflows/build-linux-cross.yml',
-      '.github/workflows/build-cmake-pkg.yml',
+      # Disable. There are some modifications in the fork
+      # so that ggml dynamic builds work with vcpkg.
+      # '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -28,7 +30,9 @@ on:
     paths: [
       '.github/workflows/build.yml',
       '.github/workflows/build-linux-cross.yml',
-      '.github/workflows/build-cmake-pkg.yml',
+      # Disable. There are some modifications in the fork
+      # so that ggml dynamic builds work with vcpkg.
+      # '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -706,8 +710,10 @@ jobs:
   build-linux-cross:
     uses: ./.github/workflows/build-linux-cross.yml
 
-  build-cmake-pkg:
-    uses: ./.github/workflows/build-cmake-pkg.yml
+  # Disable. There are some modifications in the fork
+  # so that ggml dynamic builds work with vcpkg.
+  # build-cmake-pkg:
+  #   uses: ./.github/workflows/build-cmake-pkg.yml
 
   macOS-latest-cmake-ios:
     runs-on: macos-latest
