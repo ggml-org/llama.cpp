@@ -1183,7 +1183,7 @@ struct test_case {
     std::string current_op_name;
 
     // set to true to print tensors
-    bool verbose = false;
+    bool verbose = 0;
 
     void add_sentinel(ggml_context * ctx) {
         if (mode == MODE_PERF || mode == MODE_GRAD || mode == MODE_SUPPORT) {
@@ -1334,7 +1334,7 @@ struct test_case {
         // compare
         struct callback_userdata {
             bool   ok;
-            bool   verbose;
+            int    verbose;
             double max_err;
             ggml_backend_t backend1;
             ggml_backend_t backend2;
@@ -1368,8 +1368,8 @@ struct test_case {
             }
 
             if (ud->verbose) {
-                ggml_print_tensor(t1);
-                ggml_print_tensor(t2);
+                ggml_print_tensor(t1, ud->verbose >= 2 ? 1e10 : 3);
+                ggml_print_tensor(t2, ud->verbose >= 2 ? 1e10 : 3);
             }
 
             std::vector<float> f1 = tensor_to_float(t1);
@@ -6314,7 +6314,7 @@ static const ggml_type other_types[] = {
 };
 
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
-static std::vector<std::unique_ptr<test_case>> make_test_cases_eval(bool verbose = false) {
+static std::vector<std::unique_ptr<test_case>> make_test_cases_eval(int verbose = 0) {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
 
@@ -7619,7 +7619,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 }
 
 static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op_names_filter, const char * params_filter,
-                         printer * output_printer, bool verbose) {
+                         printer * output_printer, int verbose) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
         if (params_filter == nullptr) {
             return;
@@ -7827,7 +7827,7 @@ static void usage(char ** argv) {
     printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
     printf("    --list-ops lists all available GGML operations\n");
     printf("    --show-coverage shows test coverage\n");
-    printf("    --verbose | -v print tensors during ops\n");
+    printf("    --verbose | -v print tensors during ops (can specify multiple times)\n");
 }
 
 int main(int argc, char ** argv) {
@@ -7836,7 +7836,7 @@ int main(int argc, char ** argv) {
     const char * op_names_filter = nullptr;
     const char * backend_filter = nullptr;
     const char * params_filter = nullptr;
-    bool verbose = false;
+    int verbose = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -7885,7 +7885,7 @@ int main(int argc, char ** argv) {
             show_test_coverage();
             return 0;
         } else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
-            verbose = true;
+            ++verbose;
         } else {
             usage(argv);
             return 1;
