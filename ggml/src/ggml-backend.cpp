@@ -979,10 +979,15 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         int cur_backend_id = -1;
         for (int i = 0; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
+            int * node_backend_id = &tensor_backend_id(node);
             if (ggml_is_view_op(node->op)) {
+		if(node->src[0] && (sched->n_backends >= 1)) {
+	            *node_backend_id = sched->n_backends -1;
+		    node_backend_id  = &tensor_backend_id(node->src[0]); 
+	            *node_backend_id = sched->n_backends -1;
+		}
                 continue;
             }
-            int * node_backend_id = &tensor_backend_id(node);
             if (*node_backend_id != -1) {
                 if (*node_backend_id == sched->n_backends - 1) {
                     // skip cpu (lowest prio backend)
