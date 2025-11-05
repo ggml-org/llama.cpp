@@ -43,25 +43,24 @@ export class ToolsManager {
         /**
          * @type {string[]}
          */
-        let toolNames = []
+        me.tools.toolNames = []
         await tjs.init(me).then(()=>{
             for (const key in tjs.tc_switch) {
                 this.tc_switch[key] = tjs.tc_switch[key]
-                toolNames.push(key)
+                me.tools.toolNames.push(key)
             }
         })
         await tdb.init(me).then(()=>{
             for (const key in tdb.tc_switch) {
                 this.tc_switch[key] = tdb.tc_switch[key]
-                toolNames.push(key)
+                me.tools.toolNames.push(key)
             }
         })
         let tNs = await tweb.init(me)
         for (const key in tNs) {
             this.tc_switch[key] = tNs[key]
-            toolNames.push(key)
+            me.tools.toolNames.push(key)
         }
-        return toolNames
     }
 
     /**
@@ -115,7 +114,18 @@ export class ToolsManager {
     }
 
     /**
-     * Send a message to specified tools web worker's monitor in main thread directly
+     * Send message to specified Tools-WebWorker's monitor/onmessage handler of main thread
+     * by calling it  directly.
+     *
+     * The specified web worker's main thread monitor/callback logic is triggerd in a delayed
+     * manner by cycling the call through the events loop by using a setTimeout 0, so that the
+     * callback gets executed only after the caller's code following the call to this helper
+     * is done.
+     *
+     * NOTE: This is needed to ensure that any tool call handler that returns the tool call
+     * result immidiately without using any asynhronous mechanism, doesnt get-messed-by /
+     * mess-with the delayed response identifier and rescuer timeout logic.
+     *
      * @param {Worker} worker
      * @param {string} chatid
      * @param {string} toolcallid
@@ -124,9 +134,11 @@ export class ToolsManager {
      */
     workers_postmessage_for_main(worker, chatid, toolcallid, toolname, data) {
         let mev = new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: data}});
-        if (worker.onmessage != null) {
-            worker.onmessage(mev)
-        }
+        setTimeout(function() {
+            if (worker.onmessage != null) {
+                worker.onmessage(mev)
+            }
+        }, 0);
     }
 
 }
