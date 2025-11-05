@@ -981,7 +981,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             struct ggml_tensor * node = graph->nodes[i];
             int * node_backend_id = &tensor_backend_id(node);
             if (ggml_is_view_op(node->op)) {
-		if(node->src[0]) {
+		if(node->src[0] && (sched->n_backends >= 1)) {
 	            *node_backend_id = sched->n_backends -1;
 		    node_backend_id  = &tensor_backend_id(node->src[0]); 
 	            *node_backend_id = sched->n_backends -1;
