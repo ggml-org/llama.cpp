@@ -1028,14 +1028,8 @@ inline void build_grammar_xml_tool_call(common_chat_params & data, const struct 
                 if (parameters.contains("properties")) {
                     std::vector<std::string> requiredParameters;
                     if (parameters.contains("required")) {
-                        auto required_arr = parameters.at("required");
-                        if (!required_arr.empty()) {
-                            for (const auto& element : required_arr.array()) {
-                                if (element.is_string()) {
-                                    requiredParameters.emplace_back(element.get<std::string>());
-                                }
-                            }
-                        }
+                        try { parameters.at("required").get_to(requiredParameters); }
+                        catch (const std::runtime_error&) {}
                     }
                     std::sort(requiredParameters.begin(), requiredParameters.end());
                     requiredParameters.erase(std::unique(requiredParameters.begin(), requiredParameters.end()), requiredParameters.end());
