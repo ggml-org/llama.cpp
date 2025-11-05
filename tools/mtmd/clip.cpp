@@ -2761,6 +2761,7 @@ struct clip_model_loader {
                     {
                         // ref: https://huggingface.co/mistral-community/pixtral-12b/blob/main/preprocessor_config.json
                         // TODO: verify the image_min_tokens
+                        hparams.n_merge = 1; // the original pixtral does not use patch merging
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.set_limit_image_tokens(8, 1024);
