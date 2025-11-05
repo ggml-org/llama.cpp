@@ -7118,11 +7118,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_GLM4V:
             {
-                llm = std::make_unique<llm_build_glm4_moe>(*this, params);
+                llm = std::make_unique<llm_build_glm4v>(*this, params);
             } break;
         case LLM_ARCH_GLM4V_MOE:
             {
-                llm = std::make_unique<llm_build_glm4_moe>(*this, params);
+                llm = std::make_unique<llm_build_glm4v_moe>(*this, params);
             } break;
         case LLM_ARCH_BITNET:
             {
