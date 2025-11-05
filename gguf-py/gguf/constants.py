@@ -406,6 +406,7 @@ class MODEL_ARCH(IntEnum):
     CHATGLM          = auto()
     GLM4             = auto()
     GLM4_MOE         = auto()
+    GLM4V            = auto()
     GLM4V_MOE        = auto()
     BITNET           = auto()
     T5               = auto()
@@ -3226,7 +3227,7 @@ class VisionProjectorType:
     VOXTRAL = "voxtral"
     LFM2 = "lfm2"
     KIMIVL = "kimivl"
-    GLM4V = "glm4v_moe"
+    GLM4V = "glm4v"
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"

@@ -9776,7 +9776,7 @@ class GLM4VModel(Glm4Model):
     """Text model from [zai-org/GLM-4.1V-9B-Thinking](https://huggingface.co/zai-org/GLM-4.1V-9B-Thinking)
 
     ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
-    model_arch = gguf.MODEL_ARCH.GLM4_MOE
+    model_arch = gguf.MODEL_ARCH.GLM4V
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -9802,7 +9802,7 @@ class GLM4VMoEModel(Glm4MoeModel):
     """Text model from [zai-org/GLM-4.5V](https://huggingface.co/zai-org/GLM-4.5V)
 
     ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
-    model_arch = gguf.MODEL_ARCH.GLM4_MOE
+    model_arch = gguf.MODEL_ARCH.GLM4V_MOE
 
     def set_gguf_parameters(self):
         # parameters specific to GLM-4.5V like rope_theta=10000 and context_length=65536

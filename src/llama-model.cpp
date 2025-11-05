@@ -1665,6 +1665,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_GLM4V:
+            {
+                // TODO
+            } break;
         case LLM_ARCH_GLM4V_MOE:
             {
                 // TODO
@@ -5011,6 +5015,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
                 }
                 break;
+            case LLM_ARCH_GLM4V:
+                {
+                    // TODO
+                }
+                break;
             case LLM_ARCH_GLM4V_MOE:
                 {
                     // TODO
@@ -7107,6 +7116,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_glm4_moe>(*this, params);
             } break;
+        case LLM_ARCH_GLM4V:
+            {
+                llm = std::make_unique<llm_build_glm4_moe>(*this, params);
+            } break;
         case LLM_ARCH_GLM4V_MOE:
             {
                 llm = std::make_unique<llm_build_glm4_moe>(*this, params);
@@ -7495,6 +7508,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
+        case LLM_ARCH_GLM4V:
         case LLM_ARCH_GLM4V_MOE:
             return LLAMA_ROPE_TYPE_MROPE;
         case LLM_ARCH_QWEN3VL:
