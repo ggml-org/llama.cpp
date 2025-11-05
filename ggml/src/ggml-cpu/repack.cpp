@@ -11,7 +11,6 @@
 
 #include "arch-fallback.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cassert>
@@ -1709,7 +1708,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         int     nth_scaled  = nth * 4;
         int64_t chunk_size0 = (nr0 + nth_scaled - 1) / nth_scaled;
         // avoid too small chunks for narrow src1
-        int64_t chunk_size1 = std::max<int64_t>(16, (nr1 + nth - 1) / nth);
+        int64_t chunk_size1 = MAX(16, (nr1 + nth - 1) / nth);
         int64_t nchunk0     = (nr0 + chunk_size0 - 1) / chunk_size0;
         int64_t nchunk1     = (nr1 + chunk_size1 - 1) / chunk_size1;
 
@@ -1732,7 +1731,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         // Ensure nchunk doesn't exceed the number of rows divided by minimum chunk size
         // This prevents creating too many tiny chunks that could overlap after alignment
         const int64_t max_nchunk = (nr0 + min_chunk_size - 1) / min_chunk_size;
-        nchunk0 = std::min(nchunk0, max_nchunk);
+        nchunk0 = MIN(nchunk0, max_nchunk);
 
         if (ith == 0) {
             // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
@@ -1758,13 +1757,10 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             // The chunk size limiting above ensures chunks are large enough to prevent overlaps
             src0_start = (src0_start % NB_COLS) ? src0_start + NB_COLS - (src0_start % NB_COLS) : src0_start;
             src0_end   = (src0_end   % NB_COLS) ? src0_end   + NB_COLS - (src0_end   % NB_COLS) : src0_end;
-            src0_end   = std::min(src0_end, ne01);
+            src0_end   = MIN(src0_end, ne01);
 
             // Make sure current plane is the last one before exiting
             if (src0_start >= src0_end) {
-                if (nth >= nchunk0 * nchunk1) {
-                    break;
-                }
                 current_chunk = ggml_threadpool_chunk_add(params->threadpool, 1);
                 continue;
             }
