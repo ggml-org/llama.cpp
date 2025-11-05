@@ -11,6 +11,76 @@
 let gToolsWorker = /** @type{Worker} */(/** @type {unknown} */(null));
 
 
+let sysdatetime_meta = {
+        "type": "function",
+        "function": {
+            "name": "sys_date_time",
+            "description": "Returns the current system date and time. One can optionally pass template to control what and all parts of date and time are returned",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                     "template": {
+                        "type": "string",
+                        "description": `Optional template can be any combination of Y,M,D,h,m,s.
+                            Y - FullYear 4 digits, M - Month 2 digits, D - Day 2 digits,
+                            h - hour 2 digits, m - minutes 2 digits, s - seconds 2 digits,
+                            any other char will be returned as is
+
+                            If no template is given, it defaults to YMDThm
+                            `
+                    }
+               },
+                "required": ["template"]
+            }
+        }
+    }
+
+
+/**
+ * Implementation of the system date and time.
+ * @param {string} chatid
+ * @param {string} toolcallid
+ * @param {string} toolname
+ * @param {any} obj
+ */
+function sysdatetime_run(chatid, toolcallid, toolname, obj) {
+    let dt = new Date()
+    let tmpl = obj['template'];
+    if ((tmpl == undefined) || (tmpl == "")) {
+        tmpl = 'YMDThm';
+    }
+    let sDT = ""
+    for (const c of tmpl) {
+        switch (c) {
+            case 'Y':
+                sDT += dt.getFullYear().toString().padStart(4, '0')
+                break;
+            case 'M':
+                sDT += (dt.getMonth()+1).toString().padStart(2, '0')
+                break;
+            case 'D':
+                sDT += dt.getDate().toString().padStart(2, '0')
+                break;
+            case 'h':
+                sDT += dt.getHours().toString().padStart(2, '0')
+                break;
+            case 'm':
+                sDT += dt.getMinutes().toString().padStart(2, '0')
+                break;
+            case 's':
+                sDT += dt.getSeconds().toString().padStart(2, '0')
+                break;
+            default:
+                sDT += c;
+                break;
+        }
+    }
+    if (gToolsWorker.onmessage != null) {
+        gToolsWorker.onmessage(new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: sDT}}))
+    }
+}
+
+
 let js_meta = {
         "type": "function",
         "function": {
@@ -79,6 +149,11 @@ function calc_run(chatid, toolcallid, toolname, obj) {
  * @type {Object<string, Object<string, any>>}
  */
 export let tc_switch = {
+    "sys_date_time": {
+        "handler": sysdatetime_run,
+        "meta": sysdatetime_meta,
+        "result": ""
+    },
     "run_javascript_function_code": {
         "handler": js_run,
         "meta": js_meta,

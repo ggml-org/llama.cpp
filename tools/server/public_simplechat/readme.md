@@ -107,8 +107,8 @@ remember to
       * review and update this to match your needs.
     * the shared bearer token between server and client ui
 
-* other builtin tool / function calls like calculator, javascript runner, DataStore dont require the
-  simpleproxy.py helper.
+* other builtin tool / function calls like datetime, calculator, javascript runner, DataStore
+  dont require the simpleproxy.py helper.
 
 
 
@@ -435,6 +435,8 @@ The following tools/functions are currently provided by default
 
 ##### directly in browser
 
+* sys_date_time - provides the current date and time
+
 * simple_calculator - which can solve simple arithmatic expressions
 
 * run_javascript_function_code - which can be used to run ai generated or otherwise javascript code
@@ -627,6 +629,8 @@ sliding window based drop off or even before they kick in, this can help in many
 * UI - add ClearChat button and logic. Also add unicode icons for same as well as for Settings.
 
 * renamed pdf_to_text to fetch_pdf_as_text so that ai model can understand the semantic better.
+
+* sys_date_time tool call has been added.
 
 
 #### ToDo
