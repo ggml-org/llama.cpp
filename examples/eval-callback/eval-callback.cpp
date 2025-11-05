@@ -166,7 +166,10 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
     }
 
     if (!ggml_is_quantized(t->type)) {
-        const int print_width = verbosity > 1 ? std::numeric_limits<int>::max() : 3;
+        // The `--verbose` flag will set verbosity to INT_MAX. We want that to
+        // be the equivalent of `-lv 1` since it will be the most common command
+        // used and full-width printing is extremely verbose.
+        const int print_width = (verbosity > 1 && verbosity < std::numeric_limits<int>::max()) ? std::numeric_limits<int>::max() : 3;
         uint8_t * data = is_host ? (uint8_t *) t->data : cb_data->data.data();
         ggml_print_tensor(data, t->type, t->ne, t->nb, print_width);
     }
