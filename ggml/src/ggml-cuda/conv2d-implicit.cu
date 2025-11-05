@@ -819,9 +819,6 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
       }
     }
 
-
-
-
     if (block_k != num_block_tiles_k)
     {
       // switch smem buffers each iteration

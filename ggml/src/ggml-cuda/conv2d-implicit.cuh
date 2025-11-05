@@ -66,7 +66,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
         // apply swizzle to the dst index
-        const unsigned int src_index = thread_row * src_stride + thread_col * 8;
+        const unsigned int src_index = thread_row * src_stride + start_k + thread_col * 8;
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
@@ -262,7 +262,7 @@ __device__ __forceinline__ void tileMemcpyLoadB(
 
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
-        const unsigned int src_index = thread_row * src_stride + block_k + thread_col * 8;
+        const unsigned int src_index = thread_row * src_stride + start_k + block_k + thread_col * 8;
         if (thread_row < param.k && curR < param.r && curS < param.s && curC < param.c && start_k+block_k+thread_col*8 < end_k){
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
