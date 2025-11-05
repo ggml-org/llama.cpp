@@ -2170,6 +2170,11 @@ int main(int argc, char ** argv) {
                     cstate.depth = t.n_depth;
                     cstate.buf.resize(llama_state_seq_get_size(ctx, 0));
                     llama_state_seq_get_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
+                } else {
+                    if (params.progress) {
+                        fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d (cached)\n", params_idx, params_count,
+                                i + 1, params.reps);
+                    }
                 }
             }
 
