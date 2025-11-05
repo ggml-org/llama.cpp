@@ -1,5 +1,6 @@
 // @ts-check
-// A simple completions and chat/completions test related web front end logic
+// Core classes which provide a simple implementation of handshake with ai server's completions and chat/completions endpoints
+// as well as related web front end logic for basic usage and testing.
 // by Humans for All
 
 import * as du from "./datautils.mjs";
@@ -277,7 +278,10 @@ class ChatMessageEx {
 }
 
 
-function usage_note() {
+/**
+ * @param {number} iRecentUserMsgCnt
+ */
+function usage_note(iRecentUserMsgCnt) {
     let sUsageNote = `
     <details>
     <summary id="UsageNote" class="role-system">Usage Note</summary>
@@ -293,7 +297,7 @@ function usage_note() {
         <li> If ai assistant requests a tool call, verify same before triggering.</li>
         <li> submit tool response placed into user query/response text area</li>
         </ul>
-    <li> ContextWindow = [System, Last[${gMe.chatProps.iRecentUserMsgCnt-1}] User Query/Resp, Cur Query].</li>
+    <li> ContextWindow = [System, Last[${iRecentUserMsgCnt}] User Query/Resp, Cur Query].</li>
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
         </ul>
@@ -311,8 +315,9 @@ class SimpleChat {
 
     /**
      * @param {string} chatId
+     * @param {Me} me
      */
-    constructor(chatId) {
+    constructor(chatId, me) {
         this.chatId = chatId;
         /**
          * Maintain in a form suitable for common LLM web service chat/completions' messages entry
@@ -321,6 +326,7 @@ class SimpleChat {
         this.xchat = [];
         this.iLastSys = -1;
         this.latestResponse = new ChatMessageEx();
+        this.me = me;
     }
 
     clear() {
@@ -485,14 +491,14 @@ class SimpleChat {
 
     /**
      * Setup the fetch headers.
-     * It picks the headers from gMe.headers.
+     * It picks the headers from this.me.headers.
      * It inserts Authorization only if its non-empty.
      * @param {string} apiEP
      */
     fetch_headers(apiEP) {
         let headers = new Headers();
-        for(let k in gMe.headers) {
-            let v = gMe.headers[k];
+        for(let k in this.me.headers) {
+            let v = this.me.headers[k];
             if ((k == "Authorization") && (v.trim() == "")) {
                 continue;
             }
@@ -509,13 +515,13 @@ class SimpleChat {
      * @param {Object<string, any>} obj
      */
     request_jsonstr_extend(obj) {
-        for(let k in gMe.apiRequestOptions) {
-            obj[k] = gMe.apiRequestOptions[k];
+        for(let k in this.me.apiRequestOptions) {
+            obj[k] = this.me.apiRequestOptions[k];
         }
-        if (gMe.chatProps.stream) {
+        if (this.me.chatProps.stream) {
             obj["stream"] = true;
         }
-        if (gMe.tools.enabled) {
+        if (this.me.tools.enabled) {
             obj["tools"] = tools.meta();
         }
         return JSON.stringify(obj);
@@ -526,7 +532,7 @@ class SimpleChat {
      */
     request_messages_jsonstr() {
         let req = {
-            messages: this.recent_chat_ns(gMe.chatProps.iRecentUserMsgCnt),
+            messages: this.recent_chat_ns(this.me.chatProps.iRecentUserMsgCnt),
         }
         return this.request_jsonstr_extend(req);
     }
@@ -538,7 +544,7 @@ class SimpleChat {
     request_prompt_jsonstr(bInsertStandardRolePrefix) {
         let prompt = "";
         let iCnt = 0;
-        for(const msg of this.recent_chat(gMe.chatProps.iRecentUserMsgCnt)) {
+        for(const msg of this.recent_chat(this.me.chatProps.iRecentUserMsgCnt)) {
             iCnt += 1;
             if (iCnt > 1) {
                 prompt += "\n";
@@ -562,7 +568,7 @@ class SimpleChat {
         if (apiEP == ApiEP.Type.Chat) {
             return this.request_messages_jsonstr();
         } else {
-            return this.request_prompt_jsonstr(gMe.chatProps.bCompletionInsertStandardRolePrefix);
+            return this.request_prompt_jsonstr(this.me.chatProps.bCompletionInsertStandardRolePrefix);
         }
     }
 
@@ -676,7 +682,7 @@ class SimpleChat {
      */
     async handle_response(resp, apiEP, elDiv) {
         let theResp = null;
-        if (gMe.chatProps.stream) {
+        if (this.me.chatProps.stream) {
             try {
                 theResp = await this.handle_response_multipart(resp, apiEP, elDiv);
                 this.latestResponse.clear();
@@ -690,7 +696,7 @@ class SimpleChat {
         } else {
             theResp = await this.handle_response_oneshot(resp, apiEP);
         }
-        if (gMe.chatProps.bTrimGarbage) {
+        if (this.me.chatProps.bTrimGarbage) {
             let origMsg = theResp.ns.content;
             theResp.ns.content = du.trim_garbage_at_end(origMsg);
             theResp.trimmedContent = origMsg.substring(theResp.ns.content.length);
@@ -756,7 +762,11 @@ class SimpleChat {
 
 class MultiChatUI {
 
-    constructor() {
+    /**
+     * @param {Me} me
+     */
+    constructor(me) {
+        this.me = me
         /** @type {Object<string, SimpleChat>} */
         this.simpleChats = {};
         /** @type {string} */
@@ -842,10 +852,10 @@ class MultiChatUI {
             this.elInToolName.dataset.tool_call_id = ar.ns.tool_calls[0].id
             this.elInToolArgs.value = ar.ns.tool_calls[0].function.arguments
             this.elBtnTool.disabled = false
-            if ((gMe.tools.autoSecs > 0) && (bAuto)) {
+            if ((this.me.tools.autoSecs > 0) && (bAuto)) {
                 this.timers.toolcallTriggerClick = setTimeout(()=>{
                     this.elBtnTool.click()
-                }, gMe.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
+                }, this.me.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
             }
         } else {
             this.elDivTool.hidden = true
@@ -992,7 +1002,7 @@ class MultiChatUI {
             this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         }
         this.elLastChatMessage = null
-        let chatToShow = chat.recent_chat(gMe.chatProps.iRecentUserMsgCnt);
+        let chatToShow = chat.recent_chat(this.me.chatProps.iRecentUserMsgCnt);
         for(const [i, x] of chatToShow.entries()) {
             let iFromLast = (chatToShow.length - 1)-i
             let nextMsg = undefined
@@ -1005,9 +1015,9 @@ class MultiChatUI {
             /** @type{HTMLElement} */(this.elLastChatMessage).scrollIntoView(false); // Stupid ts-check js-doc intersection ???
         } else {
             if (bClear) {
-                this.elDivChat.innerHTML = usage_note();
-                gMe.setup_load(this.elDivChat, chat);
-                gMe.show_info(this.elDivChat, bShowInfoAll);
+                this.elDivChat.innerHTML = usage_note(this.me.chatProps.iRecentUserMsgCnt-1);
+                this.me.setup_load(this.elDivChat, chat);
+                this.me.show_info(this.elDivChat, bShowInfoAll);
             }
         }
         return true
@@ -1030,7 +1040,7 @@ class MultiChatUI {
 
         this.elBtnSettings.addEventListener("click", (ev)=>{
             this.elDivChat.replaceChildren();
-            gMe.show_settings(this.elDivChat);
+            this.me.show_settings(this.elDivChat);
         });
         this.elBtnClearChat.addEventListener("click", (ev)=>{
             this.simpleChats[this.curChatId].clear()
@@ -1043,7 +1053,7 @@ class MultiChatUI {
             if (this.elInUser.disabled) {
                 return;
             }
-            this.handle_user_submit(this.curChatId, gMe.chatProps.apiEP).catch((/** @type{Error} */reason)=>{
+            this.handle_user_submit(this.curChatId, this.me.chatProps.apiEP).catch((/** @type{Error} */reason)=>{
                 let msg = `ERRR:SimpleChat\nMCUI:HandleUserSubmit:${this.curChatId}\n${reason.name}:${reason.message}`;
                 console.error(msg.replace("\n", ":"));
                 alert(msg);
@@ -1065,17 +1075,17 @@ class MultiChatUI {
             this.timers.toolcallResponseTimeout = undefined
             let chat = this.simpleChats[cid];
             let limitedData = data
-            if (gMe.tools.iResultMaxDataLength > 0) {
-                if (data.length > gMe.tools.iResultMaxDataLength) {
-                    limitedData = data.slice(0, gMe.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
+            if (this.me.tools.iResultMaxDataLength > 0) {
+                if (data.length > this.me.tools.iResultMaxDataLength) {
+                    limitedData = data.slice(0, this.me.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
                 }
             }
             chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(tcid, name, limitedData)))
             if (this.chat_show(cid)) {
-                if (gMe.tools.autoSecs > 0) {
+                if (this.me.tools.autoSecs > 0) {
                     this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
                         this.elBtnUser.click()
-                    }, gMe.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
+                    }, this.me.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
                 }
             }
             this.ui_reset_userinput(false)
@@ -1113,7 +1123,7 @@ class MultiChatUI {
      * @param {boolean} bSwitchSession
      */
     new_chat_session(chatId, bSwitchSession=false) {
-        this.simpleChats[chatId] = new SimpleChat(chatId);
+        this.simpleChats[chatId] = new SimpleChat(chatId, this.me);
         if (bSwitchSession) {
             this.handle_session_switch(chatId);
         }
@@ -1143,7 +1153,7 @@ class MultiChatUI {
         // So if user wants to simulate a multi-chat based completion query,
         // they will have to enter the full thing, as a suitable multiline
         // user input/query.
-        if ((apiEP == ApiEP.Type.Completion) && (gMe.chatProps.bCompletionFreshChatAlways)) {
+        if ((apiEP == ApiEP.Type.Completion) && (this.me.chatProps.bCompletionFreshChatAlways)) {
             chat.clear();
         }
 
@@ -1167,7 +1177,7 @@ class MultiChatUI {
         this.elInUser.disabled = true;
 
         try {
-            let theResp = await chat.handle_chat_hs(gMe.baseURL, apiEP, this.elDivChat)
+            let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, this.elDivChat)
             if (chatId == this.curChatId) {
                 this.chat_show(chatId);
                 if (theResp.trimmedContent.length > 0) {
@@ -1206,7 +1216,7 @@ class MultiChatUI {
                 chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
                 this.chat_show(chat.chatId)
                 this.ui_reset_userinput(false)
-            }, gMe.tools.toolCallResponseTimeoutMS)
+            }, this.me.tools.toolCallResponseTimeoutMS)
         }
     }
 
@@ -1312,12 +1322,12 @@ const SearchURLS = {
 }
 
 
-class Me {
+export class Me {
 
     constructor() {
         this.baseURL = "http://127.0.0.1:8080";
         this.defaultChatIds = [ "Default", "Other" ];
-        this.multiChat = new MultiChatUI();
+        this.multiChat = new MultiChatUI(this);
         this.tools = {
             enabled: true,
             proxyUrl: "http://127.0.0.1:3128",
@@ -1462,25 +1472,3 @@ class Me {
 }
 
 
-/** @type {Me} */
-let gMe;
-
-function startme() {
-    console.log("INFO:SimpleChat:StartMe:Starting...");
-    gMe = new Me();
-    gMe.debug_disable();
-    // @ts-ignore
-    document["gMe"] = gMe;
-    // @ts-ignore
-    document["du"] = du;
-    // @ts-ignore
-    document["tools"] = tools;
-    tools.init().then((toolNames)=>gMe.tools.toolNames=toolNames).then(()=>gMe.multiChat.chat_show(gMe.multiChat.curChatId))
-    for (let cid of gMe.defaultChatIds) {
-        gMe.multiChat.new_chat_session(cid);
-    }
-    gMe.multiChat.setup_ui(gMe.defaultChatIds[0], true);
-    gMe.multiChat.show_sessions();
-}
-
-document.addEventListener("DOMContentLoaded", startme);
