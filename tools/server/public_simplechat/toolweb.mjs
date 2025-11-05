@@ -5,8 +5,14 @@
 // by Humans for All
 //
 
+import * as mChatMagic from './simplechat.js'
+
 
 let gToolsWorker = /** @type{Worker} */(/** @type {unknown} */(null));
+/**
+ * @type {mChatMagic.Me}
+ */
+let gMe = /** @type{mChatMagic.Me} */(/** @type {unknown} */(null));
 
 
 /**
@@ -20,21 +26,12 @@ function message_toolsworker(mev) {
 
 
 /**
- * Retrieve the global Me instance
- */
-function get_gme() {
-    return (/** @type {Object<string, Object<string, any>>} */(/** @type {unknown} */(document)))['gMe']
-}
-
-
-/**
  * For now hash the shared secret with the year.
  */
-function bearer_transform() {
-    let data = `${new Date().getUTCFullYear()}${get_gme().tools.proxyAuthInsecure}`
-    return crypto.subtle.digest('sha-256', new TextEncoder().encode(data)).then(ab=>{
-        return Array.from(new Uint8Array(ab)).map(b=>b.toString(16).padStart(2,'0')).join('')
-    })
+async function bearer_transform() {
+    let data = `${new Date().getUTCFullYear()}${gMe.tools.proxyAuthInsecure}`
+    const ab = await crypto.subtle.digest('sha-256', new TextEncoder().encode(data));
+    return Array.from(new Uint8Array(ab)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**
@@ -56,7 +53,7 @@ function bearer_transform() {
 async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchParams, path, objHeaders={}) {
     if (gToolsWorker.onmessage != null) {
         let params = new URLSearchParams(objSearchParams)
-        let newUrl = `${get_gme().tools.proxyUrl}/${path}?${params}`
+        let newUrl = `${gMe.tools.proxyUrl}/${path}?${params}`
         let headers = new Headers(objHeaders)
         let btoken = await bearer_transform()
         headers.append('Authorization', `Bearer ${btoken}`)
@@ -84,7 +81,7 @@ async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchPa
  * @param {Object<string, Object<string, any>>} tcs
  */
 async function proxyserver_tc_setup(tag, tcPath, tcName, tcsData, tcs) {
-    await fetch(`${get_gme().tools.proxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
+    await fetch(`${gMe.tools.proxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
         if (resp.statusText != 'bharatavarshe') {
             console.log(`WARN:ToolWeb:${tag}:Dont forget to run the bundled local.tools/simpleproxy.py to enable me`)
             return
@@ -253,15 +250,13 @@ let searchwebtext_meta = {
  * @param {any} obj
  */
 function searchwebtext_run(chatid, toolcallid, toolname, obj) {
-    if (gToolsWorker.onmessage != null) {
-        /** @type {string} */
-        let searchUrl = get_gme().tools.searchUrl;
-        searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words));
-        delete(obj.words)
-        obj['url'] = searchUrl
-        let headers = { 'urltext-tag-drops': JSON.stringify(get_gme().tools.searchDrops) }
-        return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urltext', headers);
-    }
+    /** @type {string} */
+    let searchUrl = gMe.tools.searchUrl;
+    searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words));
+    delete(obj.words)
+    obj['url'] = searchUrl
+    let headers = { 'urltext-tag-drops': JSON.stringify(gMe.tools.searchDrops) }
+    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urltext', headers);
 }
 
 
@@ -349,13 +344,15 @@ async function fetchpdftext_setup(tcs) {
  * Used to get hold of the web worker to use for running tool/function call related code
  * Also to setup tool calls, which need to cross check things at runtime
  * @param {Worker} toolsWorker
+ * @param {mChatMagic.Me} me
  */
-export async function init(toolsWorker) {
+export async function init(toolsWorker, me) {
     /**
      * @type {Object<string, Object<string, any>>} tcs
      */
     let tc_switch = {}
     gToolsWorker = toolsWorker
+    gMe = me
     await fetchweburlraw_setup(tc_switch)
     await fetchweburltext_setup(tc_switch)
     await searchwebtext_setup(tc_switch)

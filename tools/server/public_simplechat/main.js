@@ -22,7 +22,7 @@ function startme() {
     document["du"] = du;
     // @ts-ignore
     document["tools"] = tools;
-    tools.init().then((toolNames)=>gMe.tools.toolNames=toolNames).then(()=>gMe.multiChat.chat_show(gMe.multiChat.curChatId))
+    tools.init(gMe).then((toolNames)=>gMe.tools.toolNames=toolNames).then(()=>gMe.multiChat.chat_show(gMe.multiChat.curChatId))
     for (let cid of gMe.defaultChatIds) {
         gMe.multiChat.new_chat_session(cid);
     }
