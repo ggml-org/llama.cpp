@@ -280,21 +280,21 @@ async function searchwebtext_setup(tcs) {
 
 
 //
-// PdfText
+// FetchPdfText
 //
 
 
-let pdftext_meta = {
+let fetchpdftext_meta = {
         "type": "function",
         "function": {
-            "name": "pdf_to_text",
-            "description": "Read pdf from requested local file path / web url through a proxy server and return its text content after converting pdf to text, in few seconds. One is allowed to get a part of the pdf by specifying the starting and ending page numbers",
+            "name": "fetch_pdf_as_text",
+            "description": "Fetch pdf from requested local file path / web url through a proxy server and return its text content after converting pdf to text, in few seconds. One is allowed to get a part of the pdf by specifying the starting and ending page numbers",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url":{
                         "type":"string",
-                        "description":"local file path (file://) / web (http/https) based url of the pdf that will be got and inturn converted to text to an extent"
+                        "description":"local file path (file://) / web (http/https) based url of the pdf that will be got and inturn converted to text"
                     },
                     "startPageNumber":{
                         "type":"integer",
@@ -312,7 +312,7 @@ let pdftext_meta = {
 
 
 /**
- * Implementation of the pdf to text logic.
+ * Implementation of the fetch pdf as text logic.
  * Expects a simple minded proxy server to be running locally
  * * listening on a configured port
  * * expecting http requests
@@ -325,20 +325,20 @@ let pdftext_meta = {
  * @param {string} toolname
  * @param {any} obj
  */
-function pdftext_run(chatid, toolcallid, toolname, obj) {
+function fetchpdftext_run(chatid, toolcallid, toolname, obj) {
     return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'pdftext');
 }
 
 
 /**
- * Setup pdftext for tool calling
+ * Setup fetchpdftext for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
  * @param {Object<string, Object<string, any>>} tcs
  */
-async function pdftext_setup(tcs) {
-    return proxyserver_tc_setup('PdfText', 'pdftext', 'pdf_to_text', {
-        "handler": pdftext_run,
-        "meta": pdftext_meta,
+async function fetchpdftext_setup(tcs) {
+    return proxyserver_tc_setup('FetchPdfAsText', 'pdftext', 'fetch_pdf_as_text', {
+        "handler": fetchpdftext_run,
+        "meta": fetchpdftext_meta,
         "result": ""
     }, tcs);
 }
@@ -359,6 +359,6 @@ export async function init(toolsWorker) {
     await fetchweburlraw_setup(tc_switch)
     await fetchweburltext_setup(tc_switch)
     await searchwebtext_setup(tc_switch)
-    await pdftext_setup(tc_switch)
+    await fetchpdftext_setup(tc_switch)
     return tc_switch
 }
