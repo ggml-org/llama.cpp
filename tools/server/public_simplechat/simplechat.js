@@ -1069,8 +1069,8 @@ class MultiChatUI {
             this.handle_tool_run(this.curChatId);
         })
 
-        // Handle messages from Tools web worker
-        tools.setup((cid, tcid, name, data)=>{
+        // Handle messages from tools web workers
+        this.me.workers_cb((cid, tcid, name, data)=>{
             clearTimeout(this.timers.toolcallResponseTimeout)
             this.timers.toolcallResponseTimeout = undefined
             let chat = this.simpleChats[cid];
@@ -1386,6 +1386,10 @@ export class Me {
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
+        this.workers = {
+            js: /** @type {Worker} */(/** @type {unknown} */(undefined)),
+            db: /** @type {Worker} */(/** @type {unknown} */(undefined)),
+        }
     }
 
     /**
@@ -1469,6 +1473,35 @@ export class Me {
         })
     }
 
+    /**
+     * Setup the callback that will be called when ever message
+     * is recieved from the Tools Web Workers.
+     * @param {(chatId: string, toolCallId: string, name: string, data: string) => void} cb
+     */
+    workers_cb(cb) {
+        this.workers.js.onmessage = function (ev) {
+            cb(ev.data.cid, ev.data.tcid, ev.data.name, ev.data.data)
+        }
+        this.workers.db.onmessage = function (ev) {
+            cb(ev.data.cid, ev.data.tcid, ev.data.name, JSON.stringify(ev.data.data, (k,v)=>{
+                return (v === undefined) ? '__UNDEFINED__' : v;
+            }));
+        }
+    }
+
+    /**
+     * Send a message to specified tools web worker's monitor in main thread directly
+     * @param {Worker} worker
+     * @param {string} chatid
+     * @param {string} toolcallid
+     * @param {string} toolname
+     * @param {string} data
+     */
+    workers_postmessage_for_main(worker, chatid, toolcallid, toolname, data) {
+        let mev = new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: data}});
+        if (worker.onmessage != null) {
+            worker.onmessage(mev)
+        }
+    }
+
 }
-
-
