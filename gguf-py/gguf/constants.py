@@ -280,21 +280,6 @@ class Keys:
         N_WA_PATTERN        = "clip.vision.n_wa_pattern" # used by qwen2.5vl
         IS_DEEPSTACK_LAYERS = "clip.vision.is_deepstack_layers"
 
-        class Rope:
-            DIMENSION_COUNT          = "clip.vision.rope.dimension_count"
-            DIMENSION_SECTIONS       = "clip.vision.rope.dimension_sections"
-            FREQ_BASE                = "clip.vision.rope.freq_base"
-            SCALING_TYPE             = "clip.vision.rope.scaling.type"
-            SCALING_FACTOR           = "clip.vision.rope.scaling.factor"
-            SCALING_ATTN_FACTOR      = "clip.vision.rope.scaling.attn_factor"
-            SCALING_ORIG_CTX_LEN     = "clip.vision.rope.scaling.original_context_length"
-            SCALING_FINETUNED        = "clip.vision.rope.scaling.finetuned"
-            SCALING_YARN_LOG_MUL     = "clip.vision.rope.scaling.yarn_log_multiplier"
-            SCALING_YARN_EXT_FACTOR  = "clip.vision.rope.scaling.yarn_ext_factor"
-            SCALING_YARN_ATTN_FACTOR = "clip.vision.rope.scaling.yarn_attn_factor"
-            SCALING_YARN_BETA_FAST   = "clip.vision.rope.scaling.yarn_beta_fast"
-            SCALING_YARN_BETA_SLOW   = "clip.vision.rope.scaling.yarn_beta_slow"
-
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
             LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
@@ -775,7 +760,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DEEPSEEK2:        "deepseek2",
     MODEL_ARCH.CHATGLM:          "chatglm",
     MODEL_ARCH.GLM4:             "glm4",
-    MODEL_ARCH.GLM4_MOE:         "glm4moe",
+    MODEL_ARCH.GLM4_MOE:         "glm4_moe",
+    MODEL_ARCH.GLM4V:            "glm4v",
     MODEL_ARCH.GLM4V_MOE:        "glm4v_moe",
     MODEL_ARCH.BITNET:           "bitnet",
     MODEL_ARCH.T5:               "t5",
@@ -824,6 +810,7 @@ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
     VISION_PROJECTOR_TYPE.GLM_EDGE:  "adapter",
     VISION_PROJECTOR_TYPE.MERGER:    "qwen2vl_merger",
     VISION_PROJECTOR_TYPE.GEMMA3:    "gemma3",
+    VISION_PROJECTOR_TYPE.GLM4V:     "glm4v",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -2383,6 +2370,22 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.GLM4V : [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
     ],
     MODEL_ARCH.GLM4V_MOE: [ # same as GLM4_MOE without MTP tensors
         MODEL_TENSOR.TOKEN_EMBD,
