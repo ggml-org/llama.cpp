@@ -3,12 +3,14 @@
 // Helpers to handle tools/functions calling wrt
 // * javascript interpreter
 // * simple arithmatic calculator
-// using a web worker.
+// using the js specific web worker.
 // by Humans for All
 //
 
+import * as mChatMagic from './simplechat.js'
 
-let gToolsWorker = /** @type{Worker} */(/** @type {unknown} */(null));
+
+let gMe = /** @type{mChatMagic.Me} */(/** @type {unknown} */(null));
 
 
 let sysdatetime_meta = {
@@ -75,9 +77,7 @@ function sysdatetime_run(chatid, toolcallid, toolname, obj) {
                 break;
         }
     }
-    if (gToolsWorker.onmessage != null) {
-        gToolsWorker.onmessage(new MessageEvent('message', {data: {cid: chatid, tcid: toolcallid, name: toolname, data: sDT}}))
-    }
+    gMe.workers_postmessage_for_main(gMe.workers.js, chatid, toolcallid, toolname, sDT);
 }
 
 
@@ -109,7 +109,7 @@ let js_meta = {
  * @param {any} obj
  */
 function js_run(chatid, toolcallid, toolname, obj) {
-    gToolsWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: obj["code"]})
+    gMe.workers.js.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: obj["code"]})
 }
 
 
@@ -141,7 +141,7 @@ let calc_meta = {
  * @param {any} obj
  */
 function calc_run(chatid, toolcallid, toolname, obj) {
-    gToolsWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: `console.log(${obj["arithexpr"]})`})
+    gMe.workers.js.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, code: `console.log(${obj["arithexpr"]})`})
 }
 
 
@@ -170,8 +170,8 @@ export let tc_switch = {
 /**
  * Used to get hold of the web worker to use for running tool/function call related code
  * Also to setup tool calls, which need to cross check things at runtime
- * @param {Worker} toolsWorker
+ * @param {mChatMagic.Me} me
  */
-export async function init(toolsWorker) {
-    gToolsWorker = toolsWorker
+export async function init(me) {
+    gMe = me
 }

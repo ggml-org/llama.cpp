@@ -1,12 +1,14 @@
 //@ts-check
 // ALERT - Simple Stupid flow - Using from a discardable VM is better
 // Helpers to handle tools/functions calling wrt data store
-// using a web worker.
+// using a db specific web worker.
 // by Humans for All
 //
 
+import * as mChatMagic from './simplechat.js'
 
-let gToolsDBWorker = /** @type{Worker} */(/** @type {unknown} */(null));
+
+let gMe = /** @type{mChatMagic.Me} */(/** @type {unknown} */(null));
 
 
 let dsget_meta = {
@@ -93,7 +95,7 @@ let dslist_meta = {
  * @param {any} obj
  */
 function dsops_run(chatid, toolcallid, toolname, obj) {
-    gToolsDBWorker.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
+    gMe.workers.db.postMessage({ cid: chatid, tcid: toolcallid, name: toolname, args: obj})
 }
 
 
@@ -128,8 +130,8 @@ export let tc_switch = {
 /**
  * Used to get hold of the web worker to use for running tool/function call related code
  * Also to setup tool calls, which need to cross check things at runtime
- * @param {Worker} toolsWorker
+ * @param {mChatMagic.Me} me
  */
-export async function init(toolsWorker) {
-    gToolsDBWorker = toolsWorker
+export async function init(me) {
+    gMe = me
 }
