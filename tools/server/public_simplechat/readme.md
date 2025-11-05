@@ -632,9 +632,17 @@ sliding window based drop off or even before they kick in, this can help in many
 
 * sys_date_time tool call has been added.
 
-* SimpleChat - Move the main chat related classes into its own js module file, independent of the
-main runtime entry point. This allows these classes to be referenced from other modules like tools
-related modules with full access to their details for developers and static check tools.
+* Refactor code and flow a bit wrt the client web ui
+  * Move the main chat related classes into its own js module file, independent of the main
+    runtime entry point (rather move out the runtime entry point into its own file). This allows
+    these classes to be referenced from other modules like tools related modules with full access
+    to these classes's details for developers and static check tools.
+  * building on same make the Tools management code into a ToolsManager class which is inturn
+    instantiated and the handle stored in top level Me class. This class also maintains and
+    manages the web workers as well as routing of the tool calling among others.
+  * add a common helper for posting results directly to the main thread side web worker callback
+    handlers. Inturn run the calling through a setTimeout0, so that delayed/missing response
+    situation rescuer timeout logic etal flow doesnt get messed for now.
 
 
 #### ToDo
