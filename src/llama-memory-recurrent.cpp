@@ -162,7 +162,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         if (tail_id >= 0) {
             const auto & cell = cells[tail_id];
             // partial intersection is invalid if it includes the final pos
-            if ((0 < p0 && p0 <= cell.pos && p1 > cell.pos)) {
+            if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
                 //printf("[DEBUG] inside `llama_memory_recurrent::seq_rm`: partial intersection is invalid, so returning false\n");
                 return false;
             }
