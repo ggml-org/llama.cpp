@@ -458,7 +458,7 @@ Either way always remember to cross check the tool requests and generated respon
 * search_web_text - search for the specified words using the configured search engine and return the
 plain textual content from the search result page.
 
-* pdf_to_text - fetch/read specified pdf file and extract its textual content
+* fetch_pdf_as_text - fetch/read specified pdf file and extract its textual content
   * this depends on the pypdf python based open source library
 
 the above set of web related tool calls work by handshaking with a bundled simple local web proxy
@@ -625,6 +625,8 @@ having ai responses built over multiple steps of tool callings etal. So independ
 sliding window based drop off or even before they kick in, this can help in many cases.
 
 * UI - add ClearChat button and logic. Also add unicode icons for same as well as for Settings.
+
+* renamed pdf_to_text to fetch_pdf_as_text so that ai model can understand the semantic better.
 
 
 #### ToDo
