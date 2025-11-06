@@ -169,8 +169,8 @@ struct clip_hparams {
     int32_t n_layer;
     // idefics3
     int32_t image_longest_edge = 0;
-    int32_t image_min_pixels = 0;
-    int32_t image_max_pixels = 0;
+    int32_t image_min_pixels = -1;
+    int32_t image_max_pixels = -1;
     int32_t n_merge = 0; // number of patch merges **per-side**
 
     float image_mean[3];
@@ -203,11 +203,15 @@ struct clip_hparams {
     int minicpmv_version = 0;
     int32_t minicpmv_query_num = 0;         // MiniCPM-V query number
 
+    // custom value provided by user, can be undefined if not set
+    int32_t custom_image_min_tokens = -1;
+    int32_t custom_image_max_tokens = -1;
+
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
         const int cur_merge = n_merge == 0 ? 1 : n_merge;
         const int patch_area = patch_size * patch_size * cur_merge * cur_merge;
-        image_min_pixels = n_tokens_min * patch_area;
-        image_max_pixels = n_tokens_max * patch_area;
+        image_min_pixels = (custom_image_min_tokens > 0 ? custom_image_min_tokens : n_tokens_min) * patch_area;
+        image_max_pixels = (custom_image_max_tokens > 0 ? custom_image_max_tokens : n_tokens_max) * patch_area;
         warmup_image_size = static_cast<int>(std::sqrt(image_max_pixels));
     }
 
@@ -216,6 +220,7 @@ struct clip_hparams {
         GGML_ASSERT(n_tok_per_side * n_tok_per_side == n_tokens && "n_tokens must be n*n");
         const int cur_merge = n_merge == 0 ? 1 : n_merge;
         warmup_image_size = n_tok_per_side * patch_size * cur_merge;
+        // TODO: support warmup size for custom token numbers
     }
 };
 
@@ -457,6 +462,13 @@ struct clip_ctx {
         } else {
             backend = backend_cpu;
             LOG_INF("%s: CLIP using CPU backend\n", __func__);
+        }
+
+        if (ctx_params.image_min_tokens > 0) {
+            model.hparams.custom_image_min_tokens = ctx_params.image_min_tokens;
+        }
+        if (ctx_params.image_max_tokens > 0) {
+            model.hparams.custom_image_max_tokens = ctx_params.image_max_tokens;
         }
 
         backend_ptrs.push_back(backend_cpu);
@@ -761,6 +773,15 @@ struct clip_graph {
             ggml_set_name(window_mask, "window_mask");
             ggml_set_input(window_mask);
 
+            // if flash attn is used, we need to pad the mask and cast to f16
+            if (ctx->flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+                int n_pad = GGML_PAD(window_mask->ne[1], GGML_KQ_MASK_PAD) - window_mask->ne[1];
+                if (n_pad > 0) {
+                    window_mask = ggml_pad(ctx0, window_mask, 0, n_pad, 0, 0);
+                }
+                window_mask = ggml_cast(ctx0, window_mask, GGML_TYPE_F16);
+            }
+
             // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
             GGML_ASSERT(batch_size == 1);
             inpL = ggml_reshape_2d(ctx0, inpL, n_embd * 4, n_patches_x * n_patches_y * batch_size / 4);
@@ -1062,16 +1083,24 @@ struct clip_graph {
     }
 
     ggml_cgraph * build_minicpmv() {
-        const int batch_size = 1;
-
         GGML_ASSERT(model.class_embedding == nullptr);
-        const int n_pos = n_patches;
+        const int n_pos       = n_patches;
+        const int n_embd_proj = clip_n_mmproj_embd(ctx);
 
         // position embeddings for the projector (not for ViT)
-        int n_output_dim = clip_n_mmproj_embd(ctx);
-        ggml_tensor * pos_embed = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_output_dim, n_pos, batch_size);
-        ggml_set_name(pos_embed, "pos_embed");
-        ggml_set_input(pos_embed);
+        // see: https://huggingface.co/openbmb/MiniCPM-o-2_6/blob/main/resampler.py#L70
+        // base frequency omega
+        ggml_tensor * omega = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_embd_proj / 4);
+        ggml_set_name(omega, "omega");
+        ggml_set_input(omega);
+
+        // 2D input positions (using float for sinusoidal embeddings)
+        ggml_tensor * pos_h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_pos);
+        ggml_set_name(pos_h, "pos_h");
+        ggml_set_input(pos_h);
+        ggml_tensor * pos_w = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_pos);
+        ggml_set_name(pos_w, "pos_w");
+        ggml_set_input(pos_w);
 
         // for selecting learned pos embd, used by ViT
         struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
@@ -1082,7 +1111,7 @@ struct clip_graph {
 
         ggml_tensor * inp = build_inp();
         ggml_tensor * embeddings = build_vit(
-                                inp, n_patches,
+                                inp, n_pos,
                                 NORM_TYPE_NORMAL,
                                 hparams.ffn_op,
                                 learned_pos_embd,
@@ -1094,17 +1123,39 @@ struct clip_graph {
         ggml_tensor * v = ggml_mul_mat(ctx0, model.mm_model_kv_proj, embeddings);
 
         // norm
-        q = build_norm(q, model.mm_model_ln_q_w, model.mm_model_ln_q_b, NORM_TYPE_NORMAL, eps, -1);
+        q = build_norm(q, model.mm_model_ln_q_w,  model.mm_model_ln_q_b,  NORM_TYPE_NORMAL, eps, -1);
         v = build_norm(v, model.mm_model_ln_kv_w, model.mm_model_ln_kv_b, NORM_TYPE_NORMAL, eps, -1);
+
+        // calculate sinusoidal pos embd
+        ggml_tensor * pos_embed = nullptr;
+        {
+            // outer product
+            ggml_tensor * omega_b = ggml_repeat_4d(ctx0, omega, omega->ne[0], n_pos, 1, 1); // n_pos rows
+            ggml_tensor * theta_x = ggml_mul(ctx0, omega_b, pos_w);
+            ggml_tensor * theta_y = ggml_mul(ctx0, omega_b, pos_h);
+            // sin and cos
+            ggml_tensor * pos_embd_x = ggml_concat(
+                ctx0,
+                ggml_sin(ctx0, theta_x),
+                ggml_cos(ctx0, theta_x),
+                0 // concat on first dim
+            );
+            ggml_tensor * pos_embd_y = ggml_concat(
+                ctx0,
+                ggml_sin(ctx0, theta_y),
+                ggml_cos(ctx0, theta_y),
+                0 // concat on first dim
+            );
+            pos_embed = ggml_concat(ctx0, pos_embd_x, pos_embd_y, 0);
+        }
 
         // k = v + pos_embed
         ggml_tensor * k = ggml_add(ctx0, v, pos_embed);
 
         // attention
         {
-            int n_embd = clip_n_mmproj_embd(ctx);
             const int d_head = 128;
-            int n_head = n_embd/d_head;
+            int n_head = n_embd_proj/d_head;
             // Use actual config value if available, otherwise fall back to hardcoded values
             int num_query = ctx->model.hparams.minicpmv_query_num;
             ggml_tensor * Q = ggml_add(ctx0,
@@ -2740,6 +2791,7 @@ struct clip_model_loader {
                     {
                         // ref: https://huggingface.co/mistral-community/pixtral-12b/blob/main/preprocessor_config.json
                         // TODO: verify the image_min_tokens
+                        hparams.n_merge = 1; // the original pixtral does not use patch merging
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.set_limit_image_tokens(8, 1024);
@@ -2769,14 +2821,14 @@ struct clip_model_loader {
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
-                        // the actual max limit is 12845056/14/14/2/2/4 = 4096 tokens
-                        // but we set a lower value to avoid OOM
-                        // TODO: make it configurable by user
-                        // TODO (2): bbox coordinates become inaccurate with small number of tokens,
-                        //           therefore we need to increase the min_tokens
-                        //           see: https://github.com/ggml-org/llama.cpp/issues/16842#issuecomment-3475144858
-                        hparams.set_limit_image_tokens(8, 2048);
-                        hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
+                        hparams.set_limit_image_tokens(8, 4096);
+                        hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
+                        const int warn_min_pixels = 1024 * hparams.n_merge * hparams.n_merge * hparams.patch_size * hparams.patch_size;
+                        if (hparams.image_min_pixels < warn_min_pixels) {
+                            LOG_WRN("%s: Qwen-VL models require at minimum 1024 image tokens to function correctly on grounding tasks\n", __func__);
+                            LOG_WRN("%s: if you encounter problems with accuracy, try adding --image-min-tokens 1024\n", __func__);
+                            LOG_WRN("%s: more info: https://github.com/ggml-org/llama.cpp/issues/16842\n\n", __func__);
+                        }
                     } break;
                 case PROJECTOR_TYPE_LLAMA4:
                     {
@@ -2801,6 +2853,13 @@ struct clip_model_loader {
                     break;
             }
 
+            // sanity check
+            {
+                if (hparams.image_max_pixels < hparams.image_min_pixels) {
+                    throw std::runtime_error(string_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
+                }
+            }
+
             LOG_INF("%s: projector:          %s\n", __func__, proj_type.c_str());
             LOG_INF("%s: n_embd:             %d\n", __func__, hparams.n_embd);
             LOG_INF("%s: n_head:             %d\n", __func__, hparams.n_head);
@@ -2817,10 +2876,10 @@ struct clip_model_loader {
                 LOG_INF("%s: n_merge:            %d\n", __func__, hparams.n_merge);
                 LOG_INF("%s: n_wa_pattern:       %d\n", __func__, hparams.n_wa_pattern);
                 if (hparams.image_min_pixels > 0) {
-                    LOG_INF("%s: image_min_pixels:   %d\n", __func__, hparams.image_min_pixels);
+                    LOG_INF("%s: image_min_pixels:   %d%s\n", __func__, hparams.image_min_pixels, hparams.custom_image_min_tokens > 0 ? " (custom value)" : "");
                 }
                 if (hparams.image_max_pixels > 0) {
-                    LOG_INF("%s: image_max_pixels:   %d\n", __func__, hparams.image_max_pixels);
+                    LOG_INF("%s: image_max_pixels:   %d%s\n", __func__, hparams.image_max_pixels, hparams.custom_image_max_tokens > 0 ? " (custom value)" : "");
                 }
             } else if (is_audio) {
                 LOG_INF("\n--- audio hparams ---\n");
@@ -4160,7 +4219,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
             {
-                // step 1: make a blank canvas which aligns to the grid
+                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized;
                 const clip_image_size new_size = img_tool::calc_size_preserved_ratio(
                     original_size,
@@ -4253,7 +4312,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
-                GGML_ASSERT(params.image_min_pixels && params.image_max_pixels);
+                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized_image;
                 // the original pixtral model doesn't have n_merge
                 const int cur_merge = params.n_merge == 0 ? 1 : params.n_merge;
@@ -4287,7 +4346,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
             {
-                GGML_ASSERT(params.image_min_pixels && params.image_max_pixels);
+                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
                     original_size,
                     params.patch_size * params.n_merge,
@@ -4535,92 +4594,6 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
     return n_patches;
 }
 
-static std::vector<std::vector<std::vector<float>>> get_1d_sincos_pos_embed_from_grid_new(int embed_dim, const std::vector<std::vector<float>> & pos) {
-    assert(embed_dim % 2 == 0);
-    int H = pos.size();
-    int W = pos[0].size();
-
-    std::vector<float> omega(embed_dim / 2);
-    for (int i = 0; i < embed_dim / 2; ++i) {
-        omega[i] = 1.0 / pow(10000.0, static_cast<float>(i) / (embed_dim / 2));
-    }
-
-    std::vector<std::vector<std::vector<float>>> emb(H, std::vector<std::vector<float>>(W, std::vector<float>(embed_dim)));
-    for (int h = 0; h < H; ++h) {
-        for (int w = 0; w < W; ++w) {
-            for (int d = 0; d < embed_dim / 2; ++d) {
-                float out_value = pos[h][w] * omega[d];
-                emb[h][w][d] = sin(out_value);
-                emb[h][w][d + embed_dim / 2] = cos(out_value);
-            }
-        }
-    }
-
-    return emb;
-}
-
-static std::vector<std::vector<std::vector<float>>> get_2d_sincos_pos_embed_from_grid(int embed_dim, const std::vector<std::vector<std::vector<float>>> & grid) {
-    assert(embed_dim % 2 == 0);
-    std::vector<std::vector<std::vector<float>>> emb_h = get_1d_sincos_pos_embed_from_grid_new(embed_dim / 2, grid[0]); // (H, W, D/2)
-    std::vector<std::vector<std::vector<float>>> emb_w = get_1d_sincos_pos_embed_from_grid_new(embed_dim / 2, grid[1]); // (H, W, D/2)
-
-    int H = emb_h.size();
-    int W = emb_h[0].size();
-    std::vector<std::vector<std::vector<float>>> emb(H, std::vector<std::vector<float>>(W, std::vector<float>(embed_dim)));
-
-    for (int h = 0; h < H; ++h) {
-        for (int w = 0; w < W; ++w) {
-            for (int d = 0; d < embed_dim / 2; ++d) {
-                emb[h][w][d] = emb_h[h][w][d];
-                emb[h][w][d + embed_dim / 2] = emb_w[h][w][d];
-            }
-        }
-    }
-    return emb;
-}
-
-static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, const std::pair<int, int> image_size) {
-    int grid_h_size = image_size.first;
-    int grid_w_size = image_size.second;
-
-    std::vector<float> grid_h(grid_h_size);
-    std::vector<float> grid_w(grid_w_size);
-
-    for (int i = 0; i < grid_h_size; ++i) {
-        grid_h[i] = static_cast<float>(i);
-    }
-    for (int i = 0; i < grid_w_size; ++i) {
-        grid_w[i] = static_cast<float>(i);
-    }
-
-    std::vector<std::vector<float>> grid(grid_h_size, std::vector<float>(grid_w_size));
-    for (int h = 0; h < grid_h_size; ++h) {
-        for (int w = 0; w < grid_w_size; ++w) {
-            grid[h][w] = grid_w[w];
-        }
-    }
-    std::vector<std::vector<std::vector<float>>> grid_2d = {grid, grid};
-    for (int h = 0; h < grid_h_size; ++h) {
-        for (int w = 0; w < grid_w_size; ++w) {
-            grid_2d[0][h][w] = grid_h[h];
-            grid_2d[1][h][w] = grid_w[w];
-        }
-    }
-
-    std::vector<std::vector<std::vector<float>>> pos_embed_3d = get_2d_sincos_pos_embed_from_grid(embed_dim, grid_2d);
-
-    int H = image_size.first;
-    int W = image_size.second;
-    std::vector<std::vector<float>> pos_embed_2d(H * W, std::vector<float>(embed_dim));
-    for (int h = 0; h < H; ++h) {
-        for (int w = 0; w < W; ++w) {
-            pos_embed_2d[w * H + h] = pos_embed_3d[h][w];
-        }
-    }
-
-    return pos_embed_2d;
-}
-
 bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f32 * img, float * vec) {
     clip_image_f32_batch imgs;
     clip_image_f32_ptr img_copy(clip_image_f32_init());
@@ -4759,27 +4732,33 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_i32("positions", positions);
 
-                // inspired from resampler of Qwen-VL:
-                //    -> https://huggingface.co/Qwen/Qwen-VL/tree/main
-                //    -> https://huggingface.co/Qwen/Qwen-VL/blob/0547ed36a86561e2e42fecec8fd0c4f6953e33c4/visual.py#L23
-                int embed_dim = clip_n_mmproj_embd(ctx);
-
-                // TODO @ngxson : this is very inefficient, can we do this using ggml_sin and ggml_cos?
-                auto pos_embed_t = get_2d_sincos_pos_embed(embed_dim, std::make_pair(pos_w, pos_h));
-
-                std::vector<float> pos_embed(embed_dim * pos_w * pos_h);
-                for(int i = 0; i < pos_w * pos_h; ++i){
-                    for(int j = 0; j < embed_dim; ++j){
-                        pos_embed[i * embed_dim + j] = pos_embed_t[i][j];
-                    }
+                // inputs for resampler projector
+                // set the 2D positions (using float for sinusoidal embedding)
+                int n_patches_per_col = image_size_width / patch_size;
+                std::vector<float> pos_data(n_pos);
+                // dimension H
+                for (int i = 0; i < n_pos; i++) {
+                    pos_data[i] = static_cast<float>(i / n_patches_per_col);
                 }
-
-                set_input_f32("pos_embed", pos_embed);
+                set_input_f32("pos_h", pos_data);
+                // dimension W
+                for (int i = 0; i < n_pos; i++) {
+                    pos_data[i] = static_cast<float>(i % n_patches_per_col);
+                }
+                set_input_f32("pos_w", pos_data);
+                // base frequency omega
+                const float base_freq   = 10000.0f;
+                const int   n_embd_proj = clip_n_mmproj_embd(ctx);
+                std::vector<float> omega(n_embd_proj / 4);
+                for (int i = 0; i < n_embd_proj / 4; ++i) {
+                    omega[i] = 1.0f / std::pow(base_freq, static_cast<float>(i) / (n_embd_proj / 4));
+                }
+                set_input_f32("omega", omega);
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
             {
-                const int merge_ratio = 2;
+                const int merge_ratio = hparams.n_merge;
                 const int pw = image_size_width  / patch_size;
                 const int ph = image_size_height / patch_size;
                 std::vector<int> positions(n_pos * 4);

@@ -99,6 +99,9 @@ class ServerStore {
 	}
 
 	get modelName(): string | null {
+		if (this._serverProps?.model_alias) {
+			return this._serverProps.model_alias;
+		}
 		if (!this._serverProps?.model_path) return null;
 		return this._serverProps.model_path.split(/(\\|\/)/).pop() || null;
 	}
