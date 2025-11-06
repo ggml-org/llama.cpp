@@ -356,6 +356,7 @@ int main(int argc, char ** argv) {
         // remove any "future" tokens that we might have inherited from the previous session
         if (!llama_memory_seq_rm(mem, -1, n_matching_session_tokens, -1)) {
             LOG_INF("%s: unable to resuse common prefix\n", __func__);
+            n_matching_session_tokens = 0;
             llama_memory_seq_rm(mem, -1, -1, -1);
         }
     }
