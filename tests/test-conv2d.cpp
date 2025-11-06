@@ -324,6 +324,7 @@ int main(void)
         std::make_tuple(256,128,832,1216,3,3),
         std::make_tuple(256,256,832,1216,3,3),
         // std::make_tuple(320,256,1024,1920)
+        // std::make_tuple(32,64,58,58,3,3)
     };
 
     int k = 0;
