@@ -3832,7 +3832,9 @@ struct server_context {
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, n_past - n_swa);
 
-                            if (n_past > 0 && n_past < slot.prompt.n_tokens()) {
+                            // note: disallow with mtmd contexts for now
+                            //       https://github.com/ggml-org/llama.cpp/issues/17043
+                            if (!mctx && n_past > 0 && n_past < slot.prompt.n_tokens()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                                 if (pos_min == -1) {
                                     SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);
