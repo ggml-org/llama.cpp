@@ -31,6 +31,34 @@ static inline uint32_t htp_round_up(uint32_t n, uint32_t m) {
     return m * ((n + m - 1) / m);
 }
 
+// See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
+// Precompute mp (m' in the paper) and L such that division
+// can be computed using a multiply (high 32b of 64b result)
+// and a shift:
+//
+// n/d = (mulhi(n, mp) + n) >> L;
+static inline void init_fastdiv_values(uint32_t d, uint32_t * p_mp, uint32_t * p_l) {
+    // compute L = ceil(log2(d));
+    uint32_t L = 0;
+    while (L < 32 && ((uint32_t) 1 << L) < d) {
+        L++;
+    }
+
+    *p_mp = (uint32_t) (((uint64_t) 1 << 32) * (((uint64_t) 1 << L) - d) / d + 1);
+    *p_l  = L;
+}
+
+static inline uint32_t fastdiv(uint32_t n, const uint32_t mp, const uint32_t l) {
+    // Compute high 32 bits of n * mp
+    const uint32_t hi = (uint32_t) (((uint64_t) n * mp) >> 32);  // mulhi(n, mp)
+    // add n, apply bit shift
+    return (hi + n) >> l;
+}
+
+static inline uint32_t fastmodulo(uint32_t n, uint32_t d, const uint32_t mp, const uint32_t l) {
+    return n - fastdiv(n, mp, l) * d;
+}
+
 static inline void htp_l2fetch(const void * p, uint32_t height, uint32_t width, uint32_t stride) {
     const uint64_t control = Q6_P_combine_RR(stride, Q6_R_combine_RlRl(width, height));
     asm volatile(" l2fetch(%0,%1) " : : "r"(p), "r"(control));
