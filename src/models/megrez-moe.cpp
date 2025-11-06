@@ -163,14 +163,27 @@ llm_build_megrez_moe::llm_build_megrez_moe(const llama_model & model, const llm_
             cb(cur, "ffn_out", il);
         } else {
             // MoE branch
-            ggml_tensor * moe_out = build_mergez_moe_ffn(cur,
-                        pre_gate_hidden,
-                        model.layers[il].ffn_gate_inp, model.layers[il].ffn_exp_probs_b,
+            // Note: Megrez-MoE uses pre_gate_hidden (from previous layer's FFN norm) for gating
+            // This is different from standard MoE which uses current layer's input
+            // Compute gate logits from pre_gate_hidden instead of cur
+            ggml_tensor * gate_logits = build_lora_mm(model.layers[il].ffn_gate_inp, pre_gate_hidden);
+            cb(gate_logits, "ffn_moe_logits", il);
+            
+            // Use standard build_moe_ffn but with pre-computed gate logits
+            ggml_tensor * moe_out = build_moe_ffn(cur,
+                        model.layers[il].ffn_gate_inp,
                         model.layers[((il - 1) / (3) * (3)) + 1].ffn_up_exps,
                         model.layers[((il - 1) / (3) * (3)) + 1].ffn_gate_exps,
                         model.layers[((il - 1) / (3) * (3)) + 1].ffn_down_exps,
+                        model.layers[il].ffn_exp_probs_b,
                         n_expert, n_expert_used,
-                        il);
+                        LLM_FFN_SILU,
+                        true,  // norm_w
+                        false, // scale_w
+                        1.0f,  // w_scale
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID,
+                        il,
+                        gate_logits); // Use pre-computed logits from pre_gate_hidden
             cb(moe_out, "ffn_moe_out", il);
 
             pre_gate_hidden = cur;
