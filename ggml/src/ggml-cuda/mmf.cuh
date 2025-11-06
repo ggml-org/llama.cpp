@@ -214,21 +214,30 @@ static __global__ void mul_mat_f(
             return;
         }
 
-        float sum = 0.0f;
-        static_assert(rows_per_block == warp_size, "need loop/check");
+        float sum[rows_per_block/warp_size] = {0.0f};
+        static_assert((rows_per_block % warp_size) == 0, "rows_per_block must be a multiple of warp_size.");
 #pragma unroll
         for (int i0 = 0; i0 < nwarps*rows_per_block; i0 += rows_per_block) {
-            const int i = i0 + threadIdx.x;
+#pragma unroll
+            for (int i1 = 0; i1 < sizeof(sum)/sizeof(sum[0]); ++i1) {
+                const int i = i0 + i1*warp_size + threadIdx.x;
 
-            sum += buf_iw[j*kiw + i];
+                sum[i1] += buf_iw[j*kiw + i];
+            }
         }
 
         if constexpr (!has_ids) {
-            dst[j*stride_col_dst + row0 + threadIdx.x] = sum;
+#pragma unroll
+            for (int i0 = 0; i0 < sizeof(sum)/sizeof(sum[0]); ++i0) {
+                dst[j*stride_col_dst + row0 + i0*warp_size + threadIdx.x] = sum[i0];
+            }
         } else {
             const int slot = (j < cols_per_block) ? slot_map[j] : -1;
             if (slot >= 0 && (col_base + j) < ncols_dst_total) {
-                dst[slot*stride_channel_dst + j*stride_col_dst + row0 + threadIdx.x] = sum;
+#pragma unroll
+                for (int i0 = 0; i0 < sizeof(sum)/sizeof(sum[0]); ++i0) {
+                    dst[slot*stride_channel_dst + j*stride_col_dst + row0 + i0*warp_size + threadIdx.x] = sum[i0];
+                }
             }
         }
     }
@@ -466,13 +475,16 @@ static __global__ void mul_mat_f_ids(
             return;
         }
 
-        float sum = 0.0f;
-        static_assert(rows_per_block == warp_size, "need loop/check");
+        float sum[rows_per_block/warp_size] = {0.0f};
+        static_assert((rows_per_block % warp_size) == 0, "rows_per_block must be a multiple of warp_size.");
 #pragma unroll
         for (int i0 = 0; i0 < nwarps*rows_per_block; i0 += rows_per_block) {
-            const int i = i0 + threadIdx.x;
+#pragma unroll
+            for (int i1 = 0; i1 < sizeof(sum)/sizeof(sum[0]); ++i1) {
+                const int i = i0 + i1*warp_size + threadIdx.x;
 
-            sum += buf_iw[j*kiw + i];
+                sum[i1] += buf_iw[j * kiw + i];
+            }
         }
 
         const int global_j = col_base + j;
@@ -482,7 +494,10 @@ static __global__ void mul_mat_f_ids(
             const int token = (int) qrm.x;
             if (token < ncols_dst_total) {
                 const int slot = (int) qrm.y;
-                dst[slot*stride_channel_dst + token*stride_col_dst + row0 + threadIdx.x] = sum;
+#pragma unroll
+                for (int i0 = 0; i0 < sizeof(sum)/sizeof(sum[0]); ++i0) {
+                    dst[slot * stride_channel_dst + token * stride_col_dst + row0 + i0*warp_size + threadIdx.x] = sum[i0];
+                }
             }
         }
     }
