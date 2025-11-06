@@ -1637,7 +1637,7 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
                 trigger_pattern += std::regex_replace(trigger_words[i], special_chars, "\\$0");
             }
             trigger_pattern += ")[\\s\\S]*";
-            const auto * trigger_pattern_c = trigger_pattern.c_str();
+            static const auto * trigger_pattern_c = trigger_pattern.c_str();
             trigger_patterns = &trigger_pattern_c;
             num_trigger_patterns = 1;
         }
