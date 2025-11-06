@@ -334,11 +334,13 @@ async function fetchpdftext_setup(tcs) {
 //
 
 
+let gRSSTagDropsDefault = [ "guid", "link", "description", "image", "enclosure" ]
+
 let fetchxmltext_meta = {
         "type": "function",
         "function": {
             "name": "fetch_xml_as_text",
-            "description": "Fetch the requested xml url through a proxy server and return its text content after stripping away the xml tags, in few seconds",
+            "description": "Fetch requested xml url through a proxy server and return its cleaned up text contents. Each content is prefixed with the xml tag heirarchy that it belongs to. Will take few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -348,7 +350,7 @@ let fetchxmltext_meta = {
                     },
                     "tagDrops":{
                         "type":"string",
-                        "description":"specify a json stringified form of list of xml tags to drop"
+                        "description":`Optionally specify a json stringified list of xml tags to drop. For example for rss feeds one could use ${JSON.stringify(gRSSTagDropsDefault)} and so...`
                     }
                 },
                 "required": ["url"]
@@ -367,7 +369,11 @@ let fetchxmltext_meta = {
  * @param {any} obj
  */
 function fetchxmltext_run(chatid, toolcallid, toolname, obj) {
-    let headers = { 'xmltext-tag-drops': obj.tagDrops }
+    let tagDrops = obj.tagDrops
+    if (tagDrops == undefined) {
+        tagDrops = JSON.stringify([]) // JSON.stringify(gRSSTagDropsDefault)
+    }
+    let headers = { 'xmltext-tag-drops': tagDrops }
     return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'xmltext', headers);
 }
 
