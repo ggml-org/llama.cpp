@@ -384,8 +384,7 @@ int main(void)
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
         // for(int i = 0; i < 26*38; i++) {
-        // for(int i = 26*38; i < 2*26*38; i++) {
-        // for(int i = 0; i < conv2d_data.size(); i++) {
+        // // for(int i = 0; i < conv2d_data.size(); i++) {
         //     float diff = fabs(im2col_data[i] - conv2d_data[i]);
         //     // if(diff > 0.5) {
         //           printf("(%7.3f, %7.3f, %.2f, %d) \n",

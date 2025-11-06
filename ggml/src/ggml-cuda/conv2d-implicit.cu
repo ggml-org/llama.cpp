@@ -720,6 +720,10 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   const uint inChannelOffset = param.c * param.w;
   const uint weightKOffset = K;
 
+  const unsigned int PQ   = param.Ow * param.Oh;
+  const unsigned int KPQ  = param.k * PQ;
+  const unsigned int NKPQ = param.n * KPQ;
+
   // loop bounds, constexpr where possible allows for loop unrolling
   constexpr unsigned int mma_tiles_per_warp_k = 4;
   constexpr unsigned int mma_tiles_per_warp_m = WM / MMA_M;
@@ -845,14 +849,15 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     for (int i = 0; i < 2; ++i)
     {
         __syncthreads();
-
+#pragma unroll
         for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++)
         {
+            const int output_sts_offset = output_sts_addr + mma_m * MMA_M * BN / 2 - i * mma_tiles_per_warp_n/2 * MMA_N;
             for (unsigned int mma_n = i * mma_tiles_per_warp_n/2; mma_n < (i+1)*mma_tiles_per_warp_n/2; mma_n++)
             {
                 uint32_t (&reg_)[2] = reinterpret_cast<uint32_t(&)[2]>(acc_register_[mma_m][mma_n]);
-                uint idx = output_sts_addr +
-                            mma_m * MMA_M * BN / 2 + (mma_n - i * mma_tiles_per_warp_n/2) * MMA_N;
+                uint idx = output_sts_offset + mma_n * MMA_N;
+                            // mma_m * MMA_M * BN / 2 + (mma_n - i * mma_tiles_per_warp_n/2) * MMA_N;
                 idx = idx ^ ((idx & 0b1110000000) >> 4);
                 uint32_t* dst_ptr = reinterpret_cast<uint32_t*>(&smemoutput[idx]);
                 dst_ptr[0] = reg_[0];
@@ -861,24 +866,25 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
             }
         }
         __syncthreads();
-
+        const unsigned int  m_i_wn = m_idx + i * WN / 2;
 #pragma unroll
         for (int subk = 0; subk < WN / 2; ++subk){
+            const uint row =  m_i_wn + subk;
+#pragma unroll
             for (int j = 0; j < 4; ++j){
-                const uint row =  m_idx + subk + i * WN / 2;
                 const uint gemm_i =  n_idx + j*32;
                 const int n = fastdiv(gemm_i, param.OHOW_fastdiv);
                 const int col = fastmodulo(gemm_i, param.OHOW_fastdiv);
-                if (n < param.n && row < param.k && col < param.Oh * param.Ow) {
+                if (n < param.n && row < param.k && col < PQ) {
                     uint idx = output_lds_addr + subk + j*32*BN/2;
                     idx = idx ^ ((idx & 0b1110000000) >> 4);
                     if constexpr (ksplit > 0) {
-                        const uint outOffset = z * param.n * param.k * param.Oh * param.Ow +
-                                               n * param.k * param.Oh * param.Ow +
-                                               row * param.Oh * param.Ow + col;
+                        const uint outOffset = z * NKPQ +
+                                               n * KPQ +
+                                               row * PQ + col;
                         output[outOffset] = smemoutput[idx];
                     } else {
-                        const uint outOffset = n * param.k * param.Oh * param.Ow + row * param.Oh * param.Ow + col;
+                        const uint outOffset = n * KPQ + row * PQ + col;
                         output[outOffset] = smemoutput[idx];
                     }
                 }
