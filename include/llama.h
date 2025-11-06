@@ -206,6 +206,7 @@ extern "C" {
         // NOTE: this pointer can be modified by the samplers
         llama_token_data * data;
         size_t size;
+        bool normalized;  // true if the probabilities (llama_token_data.p) have been computed
         int64_t selected; // this is the index in the data array (i.e. not the token id)
         bool sorted;      // note: do not assume the data is sorted - always check this flag
     } llama_token_data_array;
