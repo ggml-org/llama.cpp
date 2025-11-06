@@ -232,7 +232,7 @@ class TextXMLParser(html.parser.HTMLParser):
 
     def __init__(self, tagDrops: list[str]):
         super().__init__()
-        self.tagDrops = tagDrops
+        self.tagDrops = list(map(str.lower, tagDrops))
         print(f"DBUG:TextXMLParser:{self.tagDrops}")
         self.insideTagDrops = {
         }
@@ -240,7 +240,7 @@ class TextXMLParser(html.parser.HTMLParser):
             self.insideTagDrops[tag] = False
         self.bCapture = False
         self.text = ""
-        self.prefix = ""
+        self.prefix = []
 
     def do_capture(self):
         """
@@ -252,18 +252,18 @@ class TextXMLParser(html.parser.HTMLParser):
         return True
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
-        self.prefix += " "
+        self.prefix.append(tag)
         if tag in self.tagDrops:
             self.insideTagDrops[tag] = True
 
     def handle_endtag(self, tag: str):
-        self.prefix = self.prefix[:-1]
+        self.prefix.pop()
         if tag in self.tagDrops:
             self.insideTagDrops[tag] = False
 
     def handle_data(self, data: str):
         if self.do_capture():
-            self.text += f"{self.prefix}{data}\n"
+            self.text += f"{':'.join(self.prefix)}:{data}\n"
 
 
 def handle_xmltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
