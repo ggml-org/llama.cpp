@@ -4536,6 +4536,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -13786,17 +13787,13 @@ struct llm_build_ifairy : public llm_graph_context {
 
             cur = build_lora_mm(model.layers[il].wo, cur);
             cb(cur, "attn_proj", il);
-            if (model.layers[il].bo) {
-                cur = ggml_add(ctx0, cur, model.layers[il].bo);
-                cb(cur, "attn_proj_b", il);
-            }
 
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
 
-            cur = ggml_add(ctx0, cur, inpSA);
+            cur = ggml_ifairy_add(ctx0, cur, inpSA);
             cb(cur, "attn_res", il);
 
             ggml_tensor * ffn_inp = cur;
@@ -13814,11 +13811,11 @@ struct llm_build_ifairy : public llm_graph_context {
                     il);
             cb(cur, "ffn_out", il);
 
-            cur = ggml_add(ctx0, cur, ffn_inp);
+            cur = ggml_ifairy_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_res", il);
 
-            cur = build_cvec(cur, il);
-            cb(cur, "l_out", il);
+            // cur = build_cvec(cur, il);
+            // cb(cur, "l_out", il);
 
             inpL = cur;
         }
