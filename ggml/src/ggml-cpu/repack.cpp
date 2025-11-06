@@ -1600,7 +1600,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         return false;
     }
 
-    void forward_mul_mat_one_chunk(ggml_compute_params * params, ggml_tensor * op, int64_t src0_start, int64_t src0_end, int64_t src1_start, int64_t src1_end) {
+    void forward_mul_mat_one_chunk(ggml_compute_params * params,
+                                   ggml_tensor *         op,
+                                   int64_t               src0_start,
+                                   int64_t               src0_end,
+                                   int64_t               src1_start,
+                                   int64_t               src1_end) {
         const ggml_tensor * src0 = op->src[0];
         const ggml_tensor * src1 = op->src[1];
         ggml_tensor *       dst  = op;
@@ -1622,26 +1627,23 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         const int64_t i1 = i11;
         const int64_t i2 = i12;
 
-        const char *src0_ptr = (const char*)src0->data + i02 * nb02;
-        const char *src1_ptr = (const char*)params->wdata + (i11 + i12 * ne11) * src1_col_stride;
-        float      *dst_ptr  = (float*)((char*)dst->data + (i1 * nb1 + i2 * nb2));
+        const char * src0_ptr = (const char *) src0->data + i02 * nb02;
+        const char * src1_ptr = (const char *) params->wdata + (i11 + i12 * ne11) * src1_col_stride;
+        char *       dst_ptr  = ((char *) dst->data + (i1 * nb1 + i2 * nb2));
 
         const int64_t nrows = src1_end - src1_start;
         const int64_t ncols = src0_end - src0_start;
 
         // If there are more than three rows in src1, use gemm; otherwise, use gemv.
         if (nrows > 3) {
-            gemm<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00,
-                    dst_ptr + src0_start, nb1 / nb0,
-                    src0_ptr + src0_start * nb01,
-                    src1_ptr, nrows - (nrows % 4), ncols);
+            gemm<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr) + src0_start, nb1 / nb0,
+                                                             src0_ptr + src0_start * nb01, src1_ptr,
+                                                             nrows - (nrows % 4), ncols);
         }
         for (int iter = nrows - (nrows % 4); iter < nrows; iter++) {
-            gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00,
-                    dst_ptr + (iter * nb1) + src0_start, ne01,
-                    src0_ptr + src0_start * nb01,
-                    src1_ptr + (src1_col_stride * iter), 1 /* nrows */,
-                    ncols);
+            gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr + (iter * nb1)) + src0_start,
+                                                             ne01, src0_ptr + src0_start * nb01,
+                                                             src1_ptr + (src1_col_stride * iter), 1 /* nrows */, ncols);
         }
     }
 
@@ -1668,7 +1670,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         // TODO: General batched mul mat for 4D tensors
         // Currently only supports 3D tensors
+        GGML_ASSERT(ne03 == 1);
         GGML_ASSERT(ne13 == 1);
+        GGML_ASSERT(ne3 == 1);
 
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
@@ -1676,16 +1680,16 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         // GGML_ASSERT(ggml_n_dims(op->src[1]) == 2);
 
         char *       wdata = static_cast<char *>(params->wdata);
-        const size_t nbw1 = ggml_row_size(PARAM_TYPE, ne10);
-        const size_t nbw2 = nbw1 * ne11;
+        const size_t nbw1  = ggml_row_size(PARAM_TYPE, ne10);
+        const size_t nbw2  = nbw1 * ne11;
 
         assert(params->wsize >= nbw2 * ne12);
 
         const ggml_from_float_t from_float = ggml_get_type_traits_cpu(PARAM_TYPE)->from_float;
 
         for (int64_t i12 = 0; i12 < ne12; i12++) {
-            char *  data_ptr      = (char *) src1->data + i12 * nb12;
-            char *  wdata_ptr     = wdata + i12 * nbw2;
+            char * data_ptr  = (char *) src1->data + i12 * nb12;
+            char * wdata_ptr = wdata + i12 * nbw2;
 
             for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
                 ggml_quantize_mat_t<INTER_SIZE, PARAM_TYPE>((float *) (data_ptr + i11 * nb11),
@@ -1719,10 +1723,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             nchunk0 = (nr0 + min_chunk_size - 1) / min_chunk_size;
         }
 
-
         if (nth == 1 || nchunk0 * nchunk1 < nth || disable_chunking) {
             nchunk0 = nr0 > nr1 ? nth : 1;
-            nchunk1 = nr0 > nr1 ? 1   : nth;
+            nchunk1 = nr0 > nr1 ? 1 : nth;
         }
 
         const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
@@ -1731,7 +1734,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         // Ensure nchunk doesn't exceed the number of rows divided by minimum chunk size
         // This prevents creating too many tiny chunks that could overlap after alignment
         const int64_t max_nchunk = (nr0 + min_chunk_size - 1) / min_chunk_size;
-        nchunk0 = MIN(nchunk0, max_nchunk);
+        nchunk0                  = MIN(nchunk0, max_nchunk);
 
         if (ith == 0) {
             // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
@@ -1744,8 +1747,8 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         int current_chunk = ith;
 
         while (current_chunk < nchunk0 * nchunk1) {
-            const int64_t ith0 = current_chunk % nchunk0; // rows chunk
-            const int64_t ith1 = current_chunk / nchunk0; // (N * batch) chunk
+            const int64_t ith0 = current_chunk % nchunk0;
+            const int64_t ith1 = current_chunk / nchunk0;
 
             int64_t src0_start = dr0 * ith0;
             int64_t src0_end   = MIN(src0_start + dr0, nr0);
@@ -1756,7 +1759,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             // Align boundaries to NB_COLS - round up to ensure all data is included
             // The chunk size limiting above ensures chunks are large enough to prevent overlaps
             src0_start = (src0_start % NB_COLS) ? src0_start + NB_COLS - (src0_start % NB_COLS) : src0_start;
-            src0_end   = (src0_end   % NB_COLS) ? src0_end   + NB_COLS - (src0_end   % NB_COLS) : src0_end;
+            src0_end   = (src0_end % NB_COLS) ? src0_end + NB_COLS - (src0_end % NB_COLS) : src0_end;
             src0_end   = MIN(src0_end, ne01);
 
             // Make sure current plane is the last one before exiting
