@@ -26,6 +26,12 @@ export class ToolsManager {
             db: /** @type {Worker} */(/** @type {unknown} */(undefined)),
         }
 
+        /**
+         * Maintain the latest pending tool call id for each unique chat session id
+         * @type {Object<string,string>}
+         */
+        this.pending = {}
+
     }
 
     setup_workers() {
@@ -75,6 +81,43 @@ export class ToolsManager {
     }
 
     /**
+     * Add specified toolcallid to pending list for specified chat session id.
+     * @param {string} chatid
+     * @param {string} toolcallid
+     */
+    toolcallpending_add(chatid, toolcallid) {
+        console.debug(`DBUG:ToolsManager:ToolCallPendingAdd:${chatid}:${toolcallid}`)
+        this.pending[chatid] = toolcallid;
+    }
+
+    /**
+     * Clear pending list for specified chat session id.
+     * @param {string} chatid
+     * @param {string} tag
+     */
+    toolcallpending_clear(chatid, tag) {
+        let curtcid = this.pending[chatid];
+        console.debug(`DBUG:ToolsManager:ToolCallPendingClear:${tag}:${chatid}:${curtcid}`)
+        delete(this.pending[chatid]);
+    }
+
+    /**
+     * Check if there is a pending tool call awaiting tool call result for given chat session id.
+     * Clears from pending list, if found.
+     * @param {string} chatid
+     * @param {string} toolcallid
+     * @param {string} tag
+     */
+    toolcallpending_found_cleared(chatid, toolcallid, tag) {
+        if (this.pending[chatid] !== toolcallid) {
+            console.log(`WARN:ToolsManager:ToolCallPendingFoundCleared:${tag}:${chatid}:${toolcallid} not found, skipping...`)
+            return false
+        }
+        this.toolcallpending_clear(chatid, tag)
+        return true
+    }
+
+    /**
      * Try call the specified tool/function call.
      * Returns undefined, if the call was placed successfully
      * Else some appropriate error message will be returned.
@@ -87,6 +130,7 @@ export class ToolsManager {
         for (const fn in this.tc_switch) {
             if (fn == toolname) {
                 try {
+                    this.toolcallpending_add(chatid, toolcallid);
                     this.tc_switch[fn]["handler"](chatid, toolcallid, fn, JSON.parse(toolargs))
                     return undefined
                 } catch (/** @type {any} */error) {
@@ -103,10 +147,16 @@ export class ToolsManager {
      * @param {(chatId: string, toolCallId: string, name: string, data: string) => void} cb
      */
     workers_cb(cb) {
-        this.workers.js.onmessage = function (ev) {
+        this.workers.js.onmessage = (ev) => {
+            if (!this.toolcallpending_found_cleared(ev.data.cid, ev.data.tcid, 'js')) {
+                return
+            }
             cb(ev.data.cid, ev.data.tcid, ev.data.name, ev.data.data)
         }
-        this.workers.db.onmessage = function (ev) {
+        this.workers.db.onmessage = (ev) => {
+            if (!this.toolcallpending_found_cleared(ev.data.cid, ev.data.tcid, 'db')) {
+                return
+            }
             cb(ev.data.cid, ev.data.tcid, ev.data.name, JSON.stringify(ev.data.data, (k,v)=>{
                 return (v === undefined) ? '__UNDEFINED__' : v;
             }));
