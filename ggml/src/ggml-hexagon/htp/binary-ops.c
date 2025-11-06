@@ -113,10 +113,17 @@ static void binary_job_f32_per_thread(const struct htp_tensor * src0,
     uint8_t * restrict dst_ptr        = (uint8_t *) dst->data + (src0_start_row * dst_row_size);
 
     const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
-    const uint8_t * restrict src1_ptr  = NULL;
 
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
-        src1_ptr = data_src1 + (ir % src1_nrows) * src1_row_size;
+        const uint32_t i03 = ir / (ne02 * ne01);
+        const uint32_t i02 = (ir - i03 * ne02 * ne01) / ne01;
+        const uint32_t i01 = (ir - i03 * ne02 * ne01 - i02 * ne01);
+
+        const uint32_t i13 = i03 % ne13;
+        const uint32_t i12 = i02 % ne12;
+        const uint32_t i11 = i01 % ne11;
+
+        const uint8_t * restrict src1_ptr = data_src1 + i13 * nb13 + i12 * nb12 + i11 * src1_row_size;
 
         if (ir + 1 < src0_end_row) {
             htp_l2fetch(src0_ptr + ne00, 1, src0_row_size, src0_row_size);
