@@ -1,11 +1,10 @@
-{# Unsloth & community template fixes #}
 {# ----------‑‑‑ special token variables ‑‑‑---------- #}
 {%- set toolcall_begin_token   = '<minimax:tool_call>'         -%}
 {%- set toolcall_end_token     = '</minimax:tool_call>'        -%}
 {#- Tool Rendering Functions ============================================== -#}
 {%- macro render_tool_namespace(namespace_name, tool_list) -%}
 {%- for tool in tool_list -%}
-<tool>{{ tool.function | tojson | string }}</tool>
+<tool>{{ tool.function | tojson(ensure_ascii=False) }}</tool>
 {% endfor -%}
 {%- endmacro -%}
 {%- macro visible_text(content) -%}
@@ -91,17 +90,8 @@
             {%- set reasoning_content = message.reasoning_content %}
         {%- else %}
             {%- if '</think>' in content %}
-                {# Unsloth template fixes - must change to for loop since llama.cpp will error out if not #}
-                {%- set parts = content.split('</think>') %}
-                {%- for part in parts %}
-                    {%- if loop.index0 == 0 -%}
-                        {%- set reasoning_content = part.strip('\n') %}
-                        {%- set reasoning_content = (reasoning_content.split('<think>')|last) %}
-                        {%- set reasoning_content = reasoning_content.strip('\n') -%}
-                    {%- else -%}
-                        {%- set content = part.strip('\n') %}
-                    {%- endif %}
-                {%- endfor %}
+                {%- set reasoning_content = content.split('</think>')[0].strip('\n').split('<think>')[-1].strip('\n') %}
+                {%- set content = content.split('</think>')[-1].strip('\n') %}
             {%- endif %}
         {%- endif %}
         {%- if reasoning_content and loop.index0 > ns.last_user_index -%}
@@ -117,19 +107,17 @@
                 {%- if tool_call.function %}
                     {%- set tool_call = tool_call.function %}
                 {%- endif %}
-                {{- '<invoke name="' + tool_call.name + '">\n' }}
-                {%- if tool_call.arguments is defined and tool_call.arguments is mapping -%}
+                {{- '<invoke name="' + tool_call.name + '">' }}
                 {% set _args = tool_call.arguments %}
-                {%- for k, v in _args|items %}
+                {%- for k, v in _args.items() %}
                 {{- '<parameter name="' + k + '">' }}
-                {{- v | tojson | string if v is not string else v }}
+                {{- v | tojson(ensure_ascii=False) if v is not string else v }}
                 {{- '</parameter>' }}
-                {% endfor %}{%- endif -%}
+                {% endfor %}
                 {{- '</invoke>' ~ '\n' }}
             {%- endfor -%}
             
             {{- toolcall_end_token}}
-            {# Fix by ochafik - https://github.com/ochafik/minja/pull/7#issuecomment-3478459580 #}
             {%- set last_tool_call.name = message.tool_calls[-1].function.name -%}
         {%- else -%}
             {%- set last_tool_call.name = none -%}
@@ -169,4 +157,3 @@
 {%- if add_generation_prompt -%}
 {{- ']~b]ai' ~ '\n' ~ '<think>' ~ '\n' }}
 {%- endif -%}
-{# Copyright 2025-present Unsloth. Apache 2.0 License. #}

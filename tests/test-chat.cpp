@@ -2329,7 +2329,7 @@ Hey there!<|im_end|>
     }
 
     {
-        auto tmpls = read_templates("models/templates/unsloth-MiniMax-M2.jinja");
+        auto tmpls = read_templates("models/templates/MiniMax-M2.jinja");
         std::vector<std::string> end_tokens{ "[e~[" };
 
         assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
