@@ -4,6 +4,7 @@ on:
   workflow_call:
 
 jobs:
+  # Disabled. Fails to install some dependencies from arch-specific repositories.
   # ubuntu-24-riscv64-cpu-cross:
   #   runs-on: ubuntu-24.04
 
