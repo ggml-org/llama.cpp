@@ -1013,6 +1013,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case 48: type = LLM_TYPE_30B_A3B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
+                // Set non-causal attention for diffusion models
+                hparams.causal_attn = false;
             } break;
         case LLM_ARCH_QWEN2MOE:
             {
