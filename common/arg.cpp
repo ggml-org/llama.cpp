@@ -3299,7 +3299,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--allowed-local-media-path"}, "PATH",
         string_format("path from which local media files are allowed to be read from (default: none)"),
         [](common_params & params, const std::string & value) {
-            params.allowed_local_media_path = value;
+            try {
+                params.allowed_local_media_path = std::filesystem::canonical(std::filesystem::path(value));
+                if (!std::filesystem::is_directory(params.allowed_local_media_path)) {
+                    throw std::invalid_argument(string_format("allowed local media path must be a dir: %s", params.allowed_local_media_path.c_str()));
+                }
+            } catch (std::filesystem::filesystem_error &err) {
+                throw std::invalid_argument(string_format("invalid allowed local media path: %s", err.what()));
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ALLOWED_LOCAL_MEDIA_PATH"));
     add_opt(common_arg(

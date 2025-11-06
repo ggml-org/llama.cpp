@@ -533,7 +533,7 @@ struct oaicompat_parser_options {
     bool allow_audio;
     bool enable_thinking = true;
     size_t local_media_max_size_mb;
-    std::string allowed_local_media_path;
+    std::filesystem::path allowed_local_media_path;
 };
 
 // used by /chat/completions endpoint
@@ -643,18 +643,14 @@ static json oaicompat_chat_params_parse(
                     }
 
                 } else if (string_starts_with(url, "file://")) {
-                    // Strip off the leading "file://"
-                    const std::string fname = url.substr(7);
-                    if (opt.allowed_local_media_path == "") {
+                    if (opt.allowed_local_media_path.empty()) {
                         throw std::runtime_error("Local media paths are not enabled");
                     }
-                    const std::filesystem::path allowed_local_media_path = std::filesystem::canonical(std::filesystem::path(opt.allowed_local_media_path));
+                    // Strip off the leading "file://"
+                    const std::string fname = url.substr(7);
                     const std::filesystem::path input_path = std::filesystem::canonical(std::filesystem::path(fname));
-                    if (!std::filesystem::is_directory(allowed_local_media_path)) {
-                        throw std::runtime_error("Invalid local media path: " + opt.allowed_local_media_path);
-                    }
-                    auto [allowed_end, nothing] = std::mismatch(allowed_local_media_path.begin(), allowed_local_media_path.end(), input_path.begin());
-                    if (allowed_end != allowed_local_media_path.end()) {
+                    auto [allowed_end, nothing] = std::mismatch(opt.allowed_local_media_path.begin(), opt.allowed_local_media_path.end(), input_path.begin());
+                    if (allowed_end != opt.allowed_local_media_path.end()) {
                         throw std::runtime_error("Local media file path not allowed: " + fname);
                     }
                     if (!std::filesystem::is_regular_file(input_path)) {
