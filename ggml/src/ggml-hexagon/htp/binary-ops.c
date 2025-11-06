@@ -129,8 +129,8 @@ static void binary_job_f32_per_thread(const struct htp_tensor * src0,
 
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
         const uint32_t i03 = fastdiv(ir, div03[0], div03[1]);
-        const uint32_t i02 = fastdiv(ir - i03 * ne02 * ne01, div02[0], div02[1]);
-        const uint32_t i01 = (ir - i03 * ne02 * ne01 - i02 * ne01);
+        const uint32_t i02 = fastdiv(ir - i03 * ne0201, div02[0], div02[1]);
+        const uint32_t i01 = (ir - i03 * ne0201 - i02 * ne01);
 
         const uint32_t i13 = fastmodulo(i03, ne13, mod13[0], mod13[1]);
         const uint32_t i12 = fastmodulo(i02, ne12, mod12[0], mod12[1]);
