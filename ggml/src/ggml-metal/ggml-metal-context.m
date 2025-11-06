@@ -35,7 +35,6 @@ struct ggml_metal {
     // additional, inference-time compiled pipelines
     ggml_metal_pipelines_t pipelines_ext;
 
-    bool use_bfloat;
     bool use_fusion;
     bool use_concurrency;
     bool use_graph_optimize;
@@ -121,11 +120,10 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
         }
     }
 
-    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
+    //const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
 
     res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
-    res->use_bfloat      = props_dev->has_bfloat;
     res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
     res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
@@ -147,7 +145,6 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
     memset(res->fuse_cnt, 0, sizeof(res->fuse_cnt));
 
-    GGML_LOG_INFO("%s: use bfloat         = %s\n", __func__, res->use_bfloat         ? "true" : "false");
     GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, res->use_fusion         ? "true" : "false");
     GGML_LOG_INFO("%s: use concurrency    = %s\n", __func__, res->use_concurrency    ? "true" : "false");
     GGML_LOG_INFO("%s: use graph optimize = %s\n", __func__, res->use_graph_optimize ? "true" : "false");
