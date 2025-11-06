@@ -168,7 +168,7 @@ llm_build_megrez_moe::llm_build_megrez_moe(const llama_model & model, const llm_
             // Compute gate logits from pre_gate_hidden instead of cur
             ggml_tensor * gate_logits = build_lora_mm(model.layers[il].ffn_gate_inp, pre_gate_hidden);
             cb(gate_logits, "ffn_moe_logits", il);
-            
+
             // Use standard build_moe_ffn but with pre-computed gate logits
             ggml_tensor * moe_out = build_moe_ffn(cur,
                         model.layers[il].ffn_gate_inp,
