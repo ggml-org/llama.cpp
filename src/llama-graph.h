@@ -672,6 +672,19 @@ struct llm_graph_context {
                      int   il,
              ggml_tensor * probs_in = nullptr) const;
 
+    // build Megrez MoE FFN (special gating with sigmoid + bias)
+    ggml_tensor * build_mergez_moe_ffn(
+             ggml_tensor * cur,
+             ggml_tensor * hidden_state,
+             ggml_tensor * gate_inp,
+             ggml_tensor * exp_probs_b,
+             ggml_tensor * up_exps,
+             ggml_tensor * gate_exps,
+             ggml_tensor * down_exps,
+                 int64_t   n_expert,
+                 int64_t   n_expert_used,
+                     int   il) const;
+
     //
     // inputs
     //
