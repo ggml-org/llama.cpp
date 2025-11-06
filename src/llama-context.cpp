@@ -1387,7 +1387,7 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes() const {
     uint32_t base_nodes = std::max<uint32_t>(1024u, 8u*model.n_tensors());
-    
+
     // Megrez-MoE creates many intermediate tensors in build_mergez_moe_ffn for each layer:
     // - sigmoid, add (bias), reshape (3x), get_rows, sum_rows, div, view_2d, mul_mat (per expert)
     // - ggml_top_k internally calls ggml_argsort + ggml_view_4d (2 more tensors per layer)
@@ -1399,7 +1399,8 @@ uint32_t llama_context::graph_max_nodes() const {
         // Double it to 4096 for safety margin during warmup's triple graph construction
         base_nodes += 4096;
     }
-    
+
+
     return base_nodes;
 }
 
