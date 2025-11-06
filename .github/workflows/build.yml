@@ -221,9 +221,21 @@ jobs:
 
       - name: Python Dependencies
         id: python_depends
+        if: ${{ matrix.build != 's390x' }}
         run: |
           python3 -m pip install --upgrade pip
           pip3 install ./gguf-py
+
+      - name: Python Dependencies s390x
+        id: python_depends_s390x
+        if: ${{ matrix.build == 's390x' }}
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            file
+          file /usr/local/bin/ninja
+          file /usr/local/bin/*
+          python3 -m pip install --upgrade pip
+          pip3 -vvv install ./gguf-py
 
       - name: Swap Endianness
         id: endianness
