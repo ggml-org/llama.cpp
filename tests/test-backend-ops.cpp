@@ -175,6 +175,39 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
 }
 
+// generate a causal (lower diagonal) matrix
+static void init_tensor_causal(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+    GGML_ASSERT(tensor->ne[0] == tensor->ne[1]);
+
+    GGML_TENSOR_LOCALS(int32_t, ne, tensor, ne);
+
+    std::vector<float>       data_f32(ne0*ne1*ne2*ne3);
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(min, max);
+
+    for (int64_t i0 = 0; i0 < tensor->ne[0]; i0++) {
+        for (int64_t i1 = 0; i1 < tensor->ne[1]; i1++) {
+            for (int64_t i2 = 0; i2 < tensor->ne[2]; i2++) {
+                for (int64_t i3 = 0; i3 < tensor->ne[3]; i3++) {
+                    int64_t idx = i0 * tensor->nb[0] / sizeof(float) + i1 * tensor->nb[1] / sizeof(float) +
+                        i2 * tensor->nb[2] / sizeof(float) + i3 * tensor->nb[3] / sizeof(float);
+                    if (i0 <= i1) {
+                        data_f32[idx] = dis(gen);
+                    } else {
+                        data_f32[idx] = 0.0f;
+                    }
+                }
+            }
+        }
+    }
+
+    ggml_backend_tensor_set(tensor, data_f32.data(), 0, ggml_nbytes(tensor));
+}
+
+
 static std::vector<float> tensor_to_float(const ggml_tensor * t) {
     std::vector<float> tv;
     tv.reserve(ggml_nelements(t));
@@ -4900,6 +4933,7 @@ struct test_argsort : public test_case {
     }
 };
 
+// GGML_OP_TOPK_MOE
 struct test_topk_moe: public test_case {
     const std::array<int64_t, 4> ne;
     const int n_expert_used;
@@ -5395,6 +5429,7 @@ struct test_pad : public test_case {
     }
 };
 
+// GGML_OP_EXT
 struct test_pad_ext : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
@@ -5802,6 +5837,7 @@ struct test_opt_step_adamw : public test_case {
     }
 };
 
+// OP_OPT_STEP_SGD
 struct test_opt_step_sgd : public test_case {
     const ggml_type              type;
     const std::array<int64_t, 4> ne;
@@ -5838,6 +5874,202 @@ struct test_opt_step_sgd : public test_case {
 
     bool grad_precise() override {
         return true;
+    }
+};
+
+// GGML_OP_ADD
+// GGML_OP_SUB
+// GGML_OP_DIV
+// GGML_OP_MUL
+struct test_op_arith : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+    const ggml_op                op;
+
+    std::string vars() override { return VARS_TO_STR3(type, ne, op); }
+
+    test_op_arith(ggml_op op, ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 5, 4, 3 })
+        : type(type), ne(ne), op(op) {
+        GGML_ASSERT(op == GGML_OP_ADD || op == GGML_OP_SUB || op == GGML_OP_DIV || op == GGML_OP_MUL);
+    }
+
+        ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * b = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_name(b, "b");
+
+        ggml_tensor * out;
+
+        switch (op) {
+            case GGML_OP_ADD:
+                out = ggml_add(ctx, a, b);
+                break;
+            case GGML_OP_SUB:
+                out = ggml_sub(ctx, a, b);
+                break;
+            case GGML_OP_DIV:
+                out = ggml_div(ctx, a, b);
+                break;
+            case GGML_OP_MUL:
+                out = ggml_mul(ctx, a, b);
+                break;
+            default:
+                GGML_ABORT("This test only supports ADD, SUB, DIV and MUL");
+        }
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, 0.1f, 1.0f);  // no zeroes because div might complain
+        }
+    }
+
+};
+
+// GGML_OP_CUMSUM
+struct test_cumsum : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override { return VARS_TO_STR2(type, ne); }
+
+    test_cumsum(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 5, 4, 3 })
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_cumsum(ctx, a);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -1.0f, 1.0f);
+        }
+    }
+};
+
+// GGML_OP_XIELU
+struct test_xielu : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override { return VARS_TO_STR2(type, ne); }
+
+    test_xielu(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 5, 4, 3 })
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        float alpha_n = 4.0f;
+        float alpha_p = 20.0f;
+        float beta = 0.5f;
+        float eps = 0.0000001f;
+
+        ggml_tensor * out = ggml_xielu(ctx, a, alpha_n, alpha_p, beta, eps);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -1.0f, 1.0f);
+        }
+    }
+};
+
+// GGML_OP_TRI
+struct test_tri : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+    const ggml_tri_type          tri_type;
+    const bool                   keep;
+
+    std::string vars() override { return VARS_TO_STR4(type, ne, tri_type, keep); }
+
+    test_tri(ggml_tri_type tri_type, bool keep, ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 10, 4, 3 })
+        : type(type), ne(ne), tri_type(tri_type), keep(keep) {
+            GGML_ASSERT(ne[0] == ne[1]);
+        }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = keep ? ggml_tri_keep(ctx, a, tri_type) : ggml_tri(ctx, a, 1.0f, tri_type);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -1.0f, 1.0f);
+        }
+    }
+};
+
+// GGML_OP_SOLVE_TRI
+struct test_solve_tri : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+    const std::array<int64_t, 4> ne2;
+
+    std::string vars() override { return VARS_TO_STR3(type, ne, ne2); }
+
+    test_solve_tri(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 10, 4, 3 },
+            std::array<int64_t, 4> ne2 = { 3, 10, 4, 3 }
+        )
+        : type(type), ne(ne), ne2(ne2) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * b = ggml_new_tensor_4d(ctx, type, ne2[0], ne2[1], ne2[2], ne2[3]);
+        ggml_set_param(b);
+        ggml_set_name(b, "b");
+
+        ggml_tensor * out = ggml_solve_tri(ctx, a, b);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "a") == 0) {
+                init_tensor_causal(t, 0.1, 1.0f);
+            } else {
+                init_tensor_uniform(t, 0.1, 1.0f);
+            }
+        }
     }
 };
 
@@ -7145,6 +7377,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_trunc     (type, {7, 1, 5, 3}));
     }
 
+    // basic arithmetic, have to do them manually now that fusion is not supported
+    test_cases.emplace_back(new test_op_arith(GGML_OP_ADD, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_op_arith(GGML_OP_SUB, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_op_arith(GGML_OP_DIV, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_op_arith(GGML_OP_MUL, GGML_TYPE_F32));
+
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 1, 1}, 5));
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 3, 1}, 5));
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 3, 2}, 5));
@@ -7339,6 +7577,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_timestep_embedding());
     test_cases.emplace_back(new test_leaky_relu());
+    test_cases.emplace_back(new test_cumsum());
+
+    test_cases.emplace_back(new test_xielu());
+
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER, true));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG, true));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER, true));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG, true));
+
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER, false));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG, false));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER, false));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG, false));
+
+    test_cases.emplace_back(new test_solve_tri());
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 11, 11, 1, 1 }, { 5, 11, 1, 1 }));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 17, 17, 2, 4 }, { 9, 17, 2, 4 }));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 30, 30, 7, 1 }, { 8, 30, 7, 1 }));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 42, 42, 5, 2 }, { 10, 42, 5, 2 }));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 2, 2 }, { 10, 64, 2, 2 }));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 100, 100, 4, 4 }, { 41, 100, 4, 4 }));
 
     for (bool v : {false, true}) {
         test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 1, 0, 1, 0, 0, 0, 0, v));

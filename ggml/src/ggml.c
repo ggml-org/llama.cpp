@@ -935,6 +935,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "COS",
     "SUM",
     "SUM_ROWS",
+    "CUMSUM",
     "MEAN",
     "ARGMAX",
     "COUNT_EQUAL",
@@ -990,6 +991,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "TIMESTEP_EMBEDDING",
     "ARGSORT",
     "LEAKY_RELU",
+    "TRI",
 
     "FLASH_ATTN_EXT",
     "FLASH_ATTN_BACK",
@@ -1002,6 +1004,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "RWKV_WKV6",
     "GATED_LINEAR_ATTN",
     "RWKV_WKV7",
+    "SOLVE_TRI",
 
     "UNARY",
 
@@ -1019,7 +1022,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 93, "GGML_OP_COUNT != 93");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1039,6 +1042,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cos(x)",
     "Σx",
     "Σx_k",
+    "cumsum(x)",
     "Σx/n",
     "argmax(x)",
     "count_equal(x)",
@@ -1094,6 +1098,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "timestep_embedding(timesteps, dim, max_period)",
     "argsort(x)",
     "leaky_relu(x)",
+    "tri(x)",
 
     "flash_attn_ext(x)",
     "flash_attn_back(x)",
@@ -1106,6 +1111,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "rwkv_wkv6(k, v, r, tf, td, s)",
     "gated_linear_attn(k, v, q, gate, s)",
     "rwkv_wkv7(r, w, k, v, a, b, s)",
+    "A X = B, A triangular, solve X",
 
     "unary(x)",
 
@@ -1123,7 +1129,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 90, "GGML_OP_COUNT != 90");
+static_assert(GGML_OP_COUNT == 93, "GGML_OP_COUNT != 93");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -1142,6 +1148,8 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "HARDSWISH",
     "HARDSIGMOID",
     "EXP",
+    "EXPM1",
+    "SOFTPLUS",
     "GELU_ERF",
     "XIELU",
     "FLOOR",
@@ -1150,7 +1158,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "TRUNC",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 20, "GGML_UNARY_OP_COUNT != 20");
+static_assert(GGML_UNARY_OP_COUNT == 22, "GGML_UNARY_OP_COUNT != 22");
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
@@ -2258,6 +2266,30 @@ struct ggml_tensor * ggml_log_inplace(
     return ggml_log_impl(ctx, a, true);
 }
 
+struct ggml_tensor * ggml_expm1(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_EXPM1);
+}
+
+struct ggml_tensor * ggml_expm1_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_EXPM1);
+}
+
+struct ggml_tensor * ggml_softplus(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_SOFTPLUS);
+}
+
+struct ggml_tensor * ggml_softplus_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SOFTPLUS);
+}
+
 // ggml_sin
 
 static struct ggml_tensor * ggml_sin_impl(
@@ -2336,6 +2368,20 @@ struct ggml_tensor * ggml_sum_rows(
     struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, ne);
 
     result->op     = GGML_OP_SUM_ROWS;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_cumsum
+
+struct ggml_tensor * ggml_cumsum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, a->ne);
+
+    result->op     = GGML_OP_CUMSUM;
     result->src[0] = a;
 
     return result;
@@ -2668,8 +2714,8 @@ struct ggml_tensor * ggml_xielu(
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params_i32(result, 0, (int32_t) GGML_UNARY_OP_XIELU);
-    ggml_set_op_params_f32(result, 1, beta + ggml_softplus(alpha_n));
-    ggml_set_op_params_f32(result, 2, ggml_softplus(alpha_p));
+    ggml_set_op_params_f32(result, 1, beta + ggml_compute_softplus_f32(alpha_n));
+    ggml_set_op_params_f32(result, 2, ggml_compute_softplus_f32(alpha_p));
     ggml_set_op_params_f32(result, 3, beta);
     ggml_set_op_params_f32(result, 4, eps);
 
@@ -5028,6 +5074,33 @@ struct ggml_tensor * ggml_timestep_embedding(
     return result;
 }
 
+// ggml_tri
+
+struct ggml_tensor * ggml_tri(
+    struct ggml_context * ctx,
+    struct ggml_tensor * a,
+    float constant,
+    enum ggml_tri_type tritype) {
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, tritype);
+    ggml_set_op_params_f32(result, 1, constant);
+
+    result->op = GGML_OP_TRI;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_tri_keep(
+    struct ggml_context * ctx,
+    struct ggml_tensor * a,
+    enum ggml_tri_type tritype) {
+
+    return ggml_tri(ctx, a, nan(""), tritype);
+}
+
 // ggml_argsort
 
 struct ggml_tensor * ggml_argsort(
@@ -5882,6 +5955,33 @@ struct ggml_tensor * ggml_opt_step_sgd(
     return result;
 }
 
+// solve_tri
+struct ggml_tensor * ggml_solve_tri(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+
+    // A must be square and lower diagonal
+    GGML_ASSERT(a->ne[0] == a->ne[1]);
+    // B must have same outer dimension as A
+    GGML_ASSERT(a->ne[1] == b->ne[1]);
+
+    // B must be broadcastable to A
+    GGML_ASSERT(a->ne[2] % b->ne[2] == 0);
+    GGML_ASSERT(a->ne[3] % b->ne[3] == 0);
+
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(ggml_is_contiguous(b));
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, b->ne[0], b->ne[1], b->ne[2], b->ne[3]);
+
+    result->op      = GGML_OP_SOLVE_TRI;
+    result->src[0]  = a;
+    result->src[1]  = b;
+
+    return result;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 struct ggml_hash_set ggml_hash_set_new(size_t size) {
@@ -6452,6 +6552,24 @@ static void ggml_compute_backward(
                 case GGML_UNARY_OP_EXP: {
                     if (src0_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, tensor, grad));
+                    }
+                } break;
+                case GGML_UNARY_OP_EXPM1: {
+                    if (src0_needs_grads) {
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_exp(ctx, src0)));
+                    }
+                } break;
+                case GGML_UNARY_OP_SOFTPLUS: {
+                    if (src0_needs_grads) {
+                        // gradient of softplus: sigmoid(x) = 1 / (1 + exp(-x))
+                        struct ggml_tensor * neg_src0 = ggml_neg(ctx, src0);
+                        struct ggml_tensor * exp_neg  = ggml_exp(ctx, neg_src0);
+                        struct ggml_tensor * ones =
+                            ggml_exp(ctx, ggml_new_tensor_4d(ctx, src0->type, src0->ne[0], src0->ne[1], src0->ne[2],
+                                                             src0->ne[3]));
+                        struct ggml_tensor * one_plus_exp = ggml_add(ctx, ones, exp_neg);
+                        struct ggml_tensor * sigmoid      = ggml_div(ctx, ones, one_plus_exp);
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, sigmoid));
                     }
                 } break;
                 default: {
