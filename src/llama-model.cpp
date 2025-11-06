@@ -2174,9 +2174,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_PANGU_EMBED:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
                 switch (hparams.n_layer) {
                     case 26: type = LLM_TYPE_1B; break; // openPangu-Embedded-1B-V1.1
                     case 34: type = LLM_TYPE_7B; break; // openPangu-Embedded-7B-V1.1
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_MEGREZ_MOE:
             {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
