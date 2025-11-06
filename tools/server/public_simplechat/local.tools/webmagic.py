@@ -216,3 +216,78 @@ def handle_urltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
         debug.dump({ 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textHtml.text, 'StrippedText': textHtml.get_stripped_text() })
     except Exception as exc:
         ph.send_error(502, f"WARN:UrlTextFailed:{exc}")
+
+
+class TextXMLParser(html.parser.HTMLParser):
+    """
+    A simple minded logic used to strip xml content of
+    * all the xml tags as well as
+    * all the contents belonging to below predefined tags like guid, enclosure, ...
+
+    * this works properly only if the xml being processed has proper opening and ending tags
+    around the area of interest.
+
+    This helps return a relatively clean textual representation of the xml file/content being parsed.
+    """
+
+    def __init__(self, tagDrops: list[str]):
+        super().__init__()
+        self.tagDrops = tagDrops
+        print(f"DBUG:TextXMLParser:{self.tagDrops}")
+        self.insideTagDrops = {
+        }
+        for tag in tagDrops:
+            self.insideTagDrops[tag] = False
+        self.bCapture = False
+        self.text = ""
+        self.prefix = ""
+
+    def do_capture(self):
+        """
+        Helps decide whether to capture contents or discard them.
+        """
+        for tag in self.tagDrops:
+            if self.insideTagDrops[tag]:
+                return False
+        return True
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        self.prefix += " "
+        if tag in self.tagDrops:
+            self.insideTagDrops[tag] = True
+
+    def handle_endtag(self, tag: str):
+        self.prefix = self.prefix[:-1]
+        if tag in self.tagDrops:
+            self.insideTagDrops[tag] = False
+
+    def handle_data(self, data: str):
+        if self.do_capture():
+            self.text += f"{self.prefix}{data}\n"
+
+
+def handle_xmltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
+    try:
+        # Get requested url
+        got = handle_urlreq(ph, pr, "HandleXMLText")
+        if not got.callOk:
+            ph.send_error(got.httpStatus, got.httpStatusMsg)
+            return
+        # Extract Text
+        tagDrops = ph.headers.get('xmltext-tag-drops')
+        if not tagDrops:
+            tagDrops = []
+        else:
+            tagDrops = cast(list[str], json.loads(tagDrops))
+        textXML = TextXMLParser(tagDrops)
+        textXML.feed(got.contentData)
+        # Send back to client
+        ph.send_response(got.httpStatus)
+        ph.send_header('Content-Type', got.contentType)
+        # Add CORS for browser fetch, just in case
+        ph.send_header('Access-Control-Allow-Origin', '*')
+        ph.end_headers()
+        ph.wfile.write(textXML.text.encode('utf-8'))
+        debug.dump({ 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textXML.text })
+    except Exception as exc:
+        ph.send_error(502, f"WARN:XMLTextFailed:{exc}")
