@@ -134,6 +134,7 @@ export class ToolsManager {
                     this.tc_switch[fn]["handler"](chatid, toolcallid, fn, JSON.parse(toolargs))
                     return undefined
                 } catch (/** @type {any} */error) {
+                    this.toolcallpending_found_cleared(chatid, toolcallid, 'ToolsManager:ToolCall:Exc')
                     return `Tool/Function call raised an exception:${error.name}:${error.message}`
                 }
             }

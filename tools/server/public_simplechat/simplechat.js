@@ -753,6 +753,7 @@ class SimpleChat {
         try {
             return await this.me.toolsMgr.tool_call(this.chatId, toolcallid, toolname, toolargs)
         } catch (/** @type {any} */error) {
+            this.me.toolsMgr.toolcallpending_found_cleared(this.chatId, toolcallid, 'SC:HandleToolCall:Exc')
             return `Tool/Function call raised an exception:${error.name}:${error.message}`
         }
     }
@@ -1213,6 +1214,7 @@ class MultiChatUI {
             this.ui_reset_userinput(false)
         } else {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
+                this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
                 chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
                 this.chat_show(chat.chatId)
                 this.ui_reset_userinput(false)
