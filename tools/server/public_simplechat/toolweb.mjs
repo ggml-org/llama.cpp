@@ -329,6 +329,67 @@ async function fetchpdftext_setup(tcs) {
 }
 
 
+//
+// Fetch XML Text
+//
+
+
+let fetchxmltext_meta = {
+        "type": "function",
+        "function": {
+            "name": "fetch_xml_as_text",
+            "description": "Fetch the requested xml url through a proxy server and return its text content after stripping away the xml tags, in few seconds",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url":{
+                        "type":"string",
+                        "description":"url of the xml file that will be fetched"
+                    },
+                    "tagDrops":{
+                        "type":"string",
+                        "description":"specify a json stringified form of list of xml tags to drop"
+                    }
+                },
+                "required": ["url"]
+            }
+        }
+    }
+
+
+/**
+ * Implementation of the fetch xml as text logic.
+ * Expects simpleproxy to be running at specified url and providing xmltext service
+ * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
+ * @param {string} chatid
+ * @param {string} toolcallid
+ * @param {string} toolname
+ * @param {any} obj
+ */
+function fetchxmltext_run(chatid, toolcallid, toolname, obj) {
+    let headers = { 'xmltext-tag-drops': obj.tagDrops }
+    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'xmltext', headers);
+}
+
+
+/**
+ * Setup fetch_xml_as_text for tool calling
+ * NOTE: Currently the logic is setup for the bundled simpleproxy.py
+ * @param {Object<string, Object<string, any>>} tcs
+ */
+async function fetchxmltext_setup(tcs) {
+    return proxyserver_tc_setup('FetchXmlAsText', 'xmltext', 'fetch_xml_as_text', {
+        "handler": fetchxmltext_run,
+        "meta": fetchxmltext_meta,
+        "result": ""
+    }, tcs);
+}
+
+
+//
+// Entry point
+//
+
 
 /**
  * Used to get hold of the web worker to use for running tool/function call related code
@@ -345,5 +406,6 @@ export async function init(me) {
     await fetchweburltext_setup(tc_switch)
     await searchwebtext_setup(tc_switch)
     await fetchpdftext_setup(tc_switch)
+    await fetchxmltext_setup(tc_switch)
     return tc_switch
 }
