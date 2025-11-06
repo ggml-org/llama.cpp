@@ -3583,9 +3583,11 @@ class Qwen2VLVisionModel(MmprojModel):
         super().__init__(*args, **kwargs)
         assert self.hparams_vision is not None
         self.hparams_vision["image_size"] = self.hparams_vision.get("image_size", 560)
-        # rename config.json values
-        self.hparams_vision["num_attention_heads"] = self.hparams_vision.get("num_heads")
-        self.hparams_vision["num_hidden_layers"] = self.hparams_vision.get("depth")
+        # rename config.json values for Qwen models
+        if self.hparams_vision.get("num_heads") is not None:
+            self.hparams_vision["num_attention_heads"] = self.hparams_vision.get("num_heads")
+        if self.hparams_vision.get("depth") is not None:
+            self.hparams_vision["num_hidden_layers"] = self.hparams_vision.get("depth")
         if "embed_dim" in self.hparams_vision: # qwen2vl
             self.hparams_vision["intermediate_size"] = self.hparams_vision.get("hidden_size")
             self.hparams_vision["hidden_size"] = self.hparams_vision.get("embed_dim")
@@ -3613,8 +3615,43 @@ class Qwen2VLVisionModel(MmprojModel):
                     raise ValueError(f"Invalid fullatt_block_indexes: {fullatt_block_indexes}")
             self.gguf_writer.add_vision_n_wa_pattern(n_wa_pattern)
         elif model_type in ['eagle_2_5_vl', 'eagle2_vl', 'eagle2_5_vl']:
-            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN25VL)
-            self.gguf_writer.add_vision_use_silu(True)
+            # Eagle2-VL uses MLP projector with 2x2 patch merge
+            # Structure: Vision encoder → 2x2 patch merge → LayerNorm → Linear → GELU → Linear
+            self.gguf_writer.add_clip_projector_type("mlp")
+            
+            # Add spatial_merge_size for patch merge (stored as n_merge in hparams)
+            self.gguf_writer.add_vision_spatial_merge_size(2)
+            
+            # Add grid dimensions for runtime to calculate merge
+            image_size = self.find_vparam(["image_size"])
+            patch_size = self.find_vparam(["patch_size"])
+            grid_h = grid_w = image_size // patch_size
+            self.gguf_writer.add_key_value("clip.vision.grid_h", grid_h, gguf.GGUFValueType.INT32)
+            self.gguf_writer.add_key_value("clip.vision.grid_w", grid_w, gguf.GGUFValueType.INT32)
+            
+            # Eagle2-VL uses window attention similar to Qwen2.5-VL but doesn't have fullatt_block_indexes
+            # Set a reasonable default window attention pattern (every 4th layer uses full attention)
+            n_wa_pattern = 4  # Default value for Eagle2-VL based on similar models
+            self.gguf_writer.add_vision_n_wa_pattern(n_wa_pattern)
+            
+            # --- BEGIN: Eagle2 fallback for required vision metadata ---
+            assert self.hparams_vision is not None
+            hv = self.hparams_vision
+            # block_count (num of vision layers) fallback - check original vision_config first
+            blk = hv.get('num_hidden_layers') or hv.get('num_layers') or hv.get('n_layers')
+            if blk is None:
+                # Try to get from original vision_config before any transformations
+                original_vision_config = self.global_config.get('vision_config', {})
+                blk = original_vision_config.get('num_hidden_layers') or original_vision_config.get('num_layers') or original_vision_config.get('n_layers')
+            if blk is None:
+                # As a last resort, try to infer from config layout if present
+                # (keep it simple: raise with a clear message if still missing)
+                raise ValueError("Eagle2: missing vision block count (num_hidden_layers/num_layers/n_layers) in vision_config")
+            self.gguf_writer.add_vision_block_count(int(blk))
+            # (Optional) You can add other explicit fallbacks here only if they also turn out None later:
+            # head_count = hv.get('num_attention_heads', hv.get('num_heads'))
+            # if head_count is not None: self.gguf_writer.add_vision_head_count(int(head_count))
+            # --- END: Eagle2 fallback ---
         else:
             raise ValueError(f"Unknown QwenVL model type: {self.global_config['model_type']}")
         # default values below are taken from HF tranformers code
@@ -3627,8 +3664,47 @@ class Qwen2VLVisionModel(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-        if name.startswith("visual."):
+        if name.startswith("visual.") or name.startswith("vision_model.") or name.startswith("mlp1."):
+            # Skip all vision model head layers - not needed for mmproj
+            if ".head." in name:
+                return []
+                
+            # Handle projector tensors (Eagle2-VL uses mlp1.N.weight/bias pattern)
+            if name.startswith("mlp1."):
+                # Eagle2-VL has: LayerNorm(0) → Linear(1) → GELU(2) → Linear(3)
+                # QWEN2VL projector expects: Linear(0) → GELU → Linear(2)
+                # So we need to remap: mlp1.1 → mm.0, mlp1.3 → mm.2
+                # Skip mlp1.0 (LayerNorm) as it's not used by QWEN2VL projector type
+                if ".0." in name:
+                    # Skip LayerNorm layer
+                    return []
+                elif ".1." in name:
+                    # Map first Linear layer (mlp1.1) to mm.0
+                    # Original: [896, 4608] -> Need to transpose for GGML: [4608, 896]
+                    if ".weight" in name:
+                        new_name = name.replace("mlp1.1.", "mm.0.")
+                        return [(new_name, data_torch.T)]  # Transpose the weight
+                    else:
+                        new_name = name.replace("mlp1.1.", "mm.0.")
+                        return [(new_name, data_torch)]
+                elif ".3." in name:
+                    # Map second Linear layer (mlp1.3) to mm.2
+                    # Original: [896, 896] -> Need to transpose for GGML: [896, 896] (square matrix)
+                    if ".weight" in name:
+                        new_name = name.replace("mlp1.3.", "mm.2.")
+                        return [(new_name, data_torch.T)]  # Transpose the weight
+                    else:
+                        new_name = name.replace("mlp1.3.", "mm.2.")
+                        return [(new_name, data_torch)]
+                else:
+                    # Unknown mlp1 layer
+                    return []
+                
             # process visual tensors
+            # Handle Eagle2-VL specific naming: vision_model.vision_model.* -> model.vision_model.*
+            if name.startswith("vision_model.vision_model."):
+                name = name.replace("vision_model.vision_model.", "model.vision_model.")
+            
             # split QKV tensors if needed
             if ".qkv." in name:
                 if data_torch.ndim == 2: # weight
@@ -3656,6 +3732,13 @@ class Qwen2VLVisionModel(MmprojModel):
                 ]
             else:
                 return [(self.map_tensor_name(name), data_torch)]
+        elif name.startswith("multi_modal_projector."):
+            # Handle projector tensors (for other Qwen2.5-VL models that use multi_modal_projector prefix)
+            # Convert mm.model.mlp.N.weight/bias to mm.N.weight/bias pattern  
+            new_name = name.replace("multi_modal_projector.", "")
+            if "mm.model.mlp." in new_name:
+                new_name = new_name.replace("mm.model.mlp.", "mm.")
+            return [(new_name, data_torch)]
         return [] # skip other tensors
 
 
