@@ -101,6 +101,36 @@ static bool expect_context_not_null(const enum handcrafted_file_type hft) {
 
 typedef std::pair<enum ggml_type, std::array<int64_t, GGML_MAX_DIMS>> tensor_config_t;
 
+// Helper function to safely cast to gguf_type, suppressing sanitizer warnings for intentional invalid values
+// Portable implementation for disabling sanitizer attributes, depending on compiler
+#if defined(__clang__) || defined(__GNUC__)
+static inline enum gguf_type __attribute__((no_sanitize("undefined")))
+safe_cast_to_gguf_type(int value) {
+    return static_cast<enum gguf_type>(value);
+}
+
+// Helper to safely assign invalid enum values, suppressing sanitizer warnings at assignment point
+static inline enum gguf_type __attribute__((no_sanitize("undefined")))
+safe_assign_gguf_type(enum gguf_type value) {
+    return value;
+}
+#elif defined(_MSC_VER)
+// MSVC does not support __attribute__; just define without it
+static inline enum gguf_type safe_cast_to_gguf_type(int value) {
+    return static_cast<enum gguf_type>(value);
+}
+static inline enum gguf_type safe_assign_gguf_type(enum gguf_type value) {
+    return value;
+}
+#else
+static inline enum gguf_type safe_cast_to_gguf_type(int value) {
+    return static_cast<enum gguf_type>(value);
+}
+static inline enum gguf_type safe_assign_gguf_type(enum gguf_type value) {
+    return value;
+}
+#endif
+
 static std::vector<tensor_config_t> get_tensor_configs(std::mt19937 & rng) {
     std::vector<tensor_config_t> tensor_configs;
     tensor_configs.reserve(100);
@@ -124,15 +154,17 @@ static std::vector<tensor_config_t> get_tensor_configs(std::mt19937 & rng) {
     return tensor_configs;
 }
 
-static std::vector<std::pair<enum gguf_type, enum gguf_type>> get_kv_types(std::mt19937 rng) {
-    std::vector<std::pair<enum gguf_type, enum gguf_type>> kv_types;
+// Store as int to avoid UBSAN errors in std::shuffle/std::swap operations
+// Cast to enum only when needed
+static std::vector<std::pair<int, int>> get_kv_types(std::mt19937 rng) {
+    std::vector<std::pair<int, int>> kv_types;
     kv_types.reserve(100);
 
     for (int i = 0; i < 100; ++i) {
-        const gguf_type type = gguf_type(rng() % GGUF_TYPE_COUNT);
+        const int type = rng() % GGUF_TYPE_COUNT;
 
         if (type == GGUF_TYPE_ARRAY) {
-            const gguf_type type_arr = gguf_type(rng() % GGUF_TYPE_COUNT);
+            const int type_arr = rng() % GGUF_TYPE_COUNT;
             if (type_arr == GGUF_TYPE_ARRAY) {
                 continue;
             }
@@ -140,7 +172,9 @@ static std::vector<std::pair<enum gguf_type, enum gguf_type>> get_kv_types(std::
             continue;
         }
 
-        kv_types.push_back(std::make_pair(type, gguf_type(-1)));
+        // Intentionally create invalid enum value (-1) for testing error handling
+        // Stored as int to avoid UBSAN errors during std::shuffle
+        kv_types.push_back(std::make_pair(type, -1));
     }
     std::shuffle(kv_types.begin(), kv_types.end(), rng);
 
@@ -156,7 +190,12 @@ static void helper_write(FILE * file, const void * data, const size_t nbytes) {
     GGML_ASSERT(fwrite(data, 1, nbytes, file) == nbytes);
 }
 
-static FILE * get_handcrafted_file(const unsigned int seed, const enum handcrafted_file_type hft, const int extra_bytes = 0) {
+#if defined(__clang__) || defined(__GNUC__)
+static FILE * __attribute__((no_sanitize("undefined")))
+#else
+static FILE *
+#endif
+get_handcrafted_file(const unsigned int seed, const enum handcrafted_file_type hft, const int extra_bytes = 0) {
     FILE * file = tmpfile();
 
     if (!file) {
@@ -200,7 +239,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         helper_write(file, n_tensors);
     }
 
-    std::vector<std::pair<enum gguf_type, enum gguf_type>> kv_types;
+    std::vector<std::pair<int, int>> kv_types;
     if (hft >= offset_has_kv) {
         kv_types = get_kv_types(rng);
     }
@@ -232,8 +271,10 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
     }
 
     for (int i = 0; i < int(kv_types.size()); ++i) {
-        const enum gguf_type type     = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].first);
-        const enum gguf_type type_arr = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].second);
+        // Intentionally create invalid enum values for testing error handling
+        // Cast from int to enum only when needed, suppressing sanitizer warnings
+        const enum gguf_type type     = safe_assign_gguf_type(safe_cast_to_gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].first));
+        const enum gguf_type type_arr = safe_assign_gguf_type(safe_cast_to_gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].second));
 
         const std::string key = "my_key_" + std::to_string((hft == HANDCRAFTED_KV_DUPLICATE_KEY ? i/2 : i));
 
@@ -426,7 +467,7 @@ static bool handcrafted_check_header(const gguf_context * gguf_ctx, const unsign
     if (has_tensors) {
         tensor_configs = get_tensor_configs(rng);
     }
-    std::vector<std::pair<enum gguf_type, enum gguf_type>> kv_types;
+    std::vector<std::pair<int, int>> kv_types;
     if (has_kv) {
         kv_types = get_kv_types(rng);
     }
@@ -446,7 +487,12 @@ static bool handcrafted_check_header(const gguf_context * gguf_ctx, const unsign
     return ok;
 }
 
-static bool handcrafted_check_kv(const gguf_context * gguf_ctx, const unsigned int seed, const bool has_tensors, const bool alignment_defined) {
+#if defined(__clang__) || defined(__GNUC__)
+static bool __attribute__((no_sanitize("undefined")))
+#else
+static bool
+#endif
+handcrafted_check_kv(const gguf_context * gguf_ctx, const unsigned int seed, const bool has_tensors, const bool alignment_defined) {
     if (!gguf_ctx) {
         return false;
     }
@@ -458,13 +504,14 @@ static bool handcrafted_check_kv(const gguf_context * gguf_ctx, const unsigned i
         tensor_configs = get_tensor_configs(rng);
     }
 
-    std::vector<std::pair<enum gguf_type, enum gguf_type>> kv_types = get_kv_types(rng);
+    std::vector<std::pair<int, int>> kv_types = get_kv_types(rng);
 
     bool ok = true;
 
     for (int i = 0; i < int(kv_types.size()); ++i) {
-        const enum gguf_type type     = gguf_type(kv_types[i].first);
-        const enum gguf_type type_arr = gguf_type(kv_types[i].second);
+        // Cast from int to enum, suppressing sanitizer warning for intentional invalid enum values in test data
+        const enum gguf_type type     = safe_assign_gguf_type(safe_cast_to_gguf_type(kv_types[i].first));
+        const enum gguf_type type_arr = safe_assign_gguf_type(safe_cast_to_gguf_type(kv_types[i].second));
 
         const std::string key = "my_key_" + std::to_string(i);
 

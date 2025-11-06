@@ -289,11 +289,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
-          evict-old-files: 1d
+      # ccache disabled for sanitizer builds to ensure clean builds with correct sanitizer flags
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
+      #     evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -324,6 +325,16 @@ jobs:
 
       - name: Test
         id: cmake_test
+        env:
+          # AddressSanitizer options
+          ASAN_OPTIONS: "verbosity=1:abort_on_error=1:print_stats=1:check_initialization_order=1:strict_init_order=1:detect_stack_use_after_return=1:print_summary=1:print_scariness=1:print_legend=1"
+          # ThreadSanitizer options
+          TSAN_OPTIONS: "verbosity=1:abort_on_error=1:print_stats=1:print_summary=1:print_legend=1"
+          # UndefinedBehaviorSanitizer options
+          # Note: abort_on_error=0 allows UBSAN to print full diagnostics before aborting
+          UBSAN_OPTIONS: "verbosity=2:abort_on_error=1:print_stacktrace=1:print_summary=1:halt_on_error=1:report_error_type=1:silence_unsigned_overflow=0"
+          # Common options for all sanitizers
+          MSAN_OPTIONS: "verbosity=1:abort_on_error=1:print_stats=1"
         run: |
           cd build
           ctest -L main --verbose --timeout 900
