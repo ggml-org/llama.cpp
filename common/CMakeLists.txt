@@ -90,7 +90,56 @@ if (LLAMA_CURL)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
 endif()
 
-if (LLAMA_OPENSSL)
+set(LLAMA_BORINGSSL_VERSION "0.20251002.0" CACHE STRING "llama: BoringSSL version")
+
+if (LLAMA_BUILD_BORINGSSL)
+    include(FetchContent)
+    message("Building BoringSSL version ${LLAMA_BORINGSSL_VERSION}")
+
+    FetchContent_Declare(
+        boringssl
+        GIT_REPOSITORY   https://boringssl.googlesource.com/boringssl
+        GIT_TAG          ${LLAMA_BORINGSSL_VERSION}
+    )
+
+    # TODO: fix FetchContent_MakeAvailable with EXCLUDE_FROM_ALL
+    if(POLICY CMP0169)
+        cmake_policy(SET CMP0169 OLD)
+    endif()
+
+    if(NOT boringssl_POPULATED)
+        # force BUILD_SHARED_LIBS=OFF, avoid installing SSL libs
+        set(SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+        FetchContent_Populate(boringssl)
+        add_subdirectory(${boringssl_SOURCE_DIR} ${boringssl_BINARY_DIR} EXCLUDE_FROM_ALL)
+
+        set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
+    endif()
+
+    set(BORINGSSL_FLAGS
+        -Wno-error
+        -Wno-unused-parameter
+        -Wno-missing-noreturn
+    )
+
+    if(TARGET fipsmodule)
+        target_compile_options(fipsmodule PRIVATE ${BORINGSSL_FLAGS})
+    endif()
+
+    if(TARGET ssl)
+        target_compile_options(ssl PRIVATE ${BORINGSSL_FLAGS})
+    endif()
+
+    if(TARGET crypto)
+        target_compile_options(crypto PRIVATE ${BORINGSSL_FLAGS})
+    endif()
+
+    set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
+    target_link_libraries(${TARGET} PUBLIC ssl crypto)
+
+elseif (LLAMA_OPENSSL)
     find_package(OpenSSL)
     if (OpenSSL_FOUND)
         include(CheckCSourceCompiles)
@@ -112,17 +161,21 @@ if (LLAMA_OPENSSL)
         set(CMAKE_REQUIRED_INCLUDES ${SAVED_CMAKE_REQUIRED_INCLUDES})
         if (OPENSSL_VERSION_SUPPORTED)
             message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
-            target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT)
+            set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
             target_link_libraries(${TARGET} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
-            if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-                target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
-                find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-                find_library(SECURITY_FRAMEWORK Security REQUIRED)
-                target_link_libraries(${TARGET} PUBLIC ${CORE_FOUNDATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
-            endif()
         endif()
     else()
         message(STATUS "OpenSSL not found, SSL support disabled")
+    endif()
+endif()
+
+if (CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT)
+    if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+        find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+        find_library(SECURITY_FRAMEWORK Security REQUIRED)
+        target_link_libraries(${TARGET} PUBLIC ${CORE_FOUNDATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
     endif()
 endif()
 
