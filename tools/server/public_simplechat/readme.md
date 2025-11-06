@@ -644,6 +644,12 @@ sliding window based drop off or even before they kick in, this can help in many
     handlers. Inturn run the calling through a setTimeout0, so that delayed/missing response
     situation rescuer timeout logic etal flow doesnt get messed for now.
 
+* track tool calling and inturn maintain pending tool calls so that only still valid tool call responses
+  will be accepted when the asynchronous tool call response is recieved. Also take care of clearing
+  pending tool call tracking in unhappy paths like when exception noticied as part of tool call execution,
+  or if there is no response within the configured timeout period.
+  NOTE: Currently the logic supports only 1 pending tool call per chat session.
+
 
 #### ToDo
 
