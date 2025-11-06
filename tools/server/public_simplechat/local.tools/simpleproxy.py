@@ -49,6 +49,7 @@ gConfigType = {
 gConfigNeeded = [ '--allowed.schemes', '--allowed.domains', '--bearer.insecure' ]
 
 gAllowedCalls = {
+    "xmltext": [],
     "urltext": [],
     "urlraw": [],
     "pdftext": [ "pypdf" ]
@@ -139,6 +140,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.auth_and_run(pr, mWeb.handle_urlraw)
             case '/urltext':
                 self.auth_and_run(pr, mWeb.handle_urltext)
+            case '/xmltext':
+                self.auth_and_run(pr, mWeb.handle_xmltext)
             case '/pdftext':
                 self.auth_and_run(pr, mPdf.handle_pdftext)
             case '/aum':
