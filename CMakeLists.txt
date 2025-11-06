@@ -89,6 +89,7 @@ option(LLAMA_BUILD_TOOLS    "llama: build tools"          ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 option(LLAMA_TOOLS_INSTALL  "llama: install tools"        ${LLAMA_TOOLS_INSTALL_DEFAULT})
+option(LLAMA_MOE_ENABLE     "llama: enable experimental MoE runtime" OFF)
 
 # 3rd party libs
 option(LLAMA_CURL       "llama: use libcurl to download model from an URL" ON)
@@ -110,6 +111,10 @@ set(LLAMA_INSTALL_VERSION 0.0.${LLAMA_BUILD_NUMBER})
 # override ggml options
 set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
 set(GGML_FATAL_WARNINGS ${LLAMA_FATAL_WARNINGS})
+
+if (LLAMA_MOE_ENABLE)
+    add_compile_definitions(LLAMA_MOE_ENABLE)
+endif()
 
 # change the default for these ggml options
 if (NOT DEFINED GGML_LLAMAFILE)
@@ -176,6 +181,9 @@ if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     set(GGML_BUILD_COMMIT ${LLAMA_BUILD_COMMIT})
     add_subdirectory(ggml)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
+    if (GGML_CUDA)
+        enable_language(CUDA)
+    endif()
 endif()
 
 if (MINGW)

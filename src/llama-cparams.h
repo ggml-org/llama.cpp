@@ -34,6 +34,12 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
     bool kv_unified;
+#ifdef LLAMA_MOE_ENABLE
+    bool moe_enable;
+    uint32_t moe_cache_size;
+    bool moe_prefetch;
+    uint32_t moe_prefetch_lookahead;
+#endif
 
     enum llama_pooling_type pooling_type;
 

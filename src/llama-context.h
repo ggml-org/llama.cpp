@@ -4,6 +4,9 @@
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
+#ifdef LLAMA_MOE_ENABLE
+#include "llama-moe.h"
+#endif
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -61,6 +64,12 @@ struct llama_context {
 
     float * get_logits();
     float * get_logits_ith(int32_t i);
+
+#ifdef LLAMA_MOE_ENABLE
+    ExpertCache * get_expert_cache() const;
+    llama_moe_cache_stats get_moe_cache_stats() const;
+    llama_moe_prefetch_stats get_moe_prefetch_stats() const;
+#endif
 
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
@@ -217,6 +226,12 @@ private:
 
     llm_graph_cb graph_get_cb() const;
 
+#ifdef LLAMA_MOE_ENABLE
+    void moe_initialize();
+    void moe_prefetch_for_batch(const llama_ubatch & ubatch);
+    void moe_update_prefetch_state(const llm_graph_result * res, const llama_ubatch & ubatch);
+#endif
+
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
     size_t state_read_data (llama_io_read_i  & io);
@@ -237,6 +252,17 @@ private:
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
     std::unique_ptr<llama_memory_i> memory;
+#ifdef LLAMA_MOE_ENABLE
+    std::unique_ptr<ExpertCache> expert_cache;
+    struct moe_prefetch_state {
+        bool initialized = false;
+        float decay = 0.8f;
+        uint32_t width = 0;
+        std::vector<std::vector<float>> score;
+        std::vector<std::vector<int32_t>> top_experts;
+        llama_moe_prefetch_stats stats;
+    } moe_prefetch_;
+#endif
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     size_t  logits_size = 0; // capacity (of floats) for logits

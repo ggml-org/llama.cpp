@@ -24,6 +24,10 @@ class llama_kv_cache_iswa_context;
 class llama_memory_recurrent_context;
 class llama_memory_hybrid_context;
 
+#ifdef LLAMA_MOE_ENABLE
+class ExpertCache;
+#endif
+
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
     LLM_GRAPH_TYPE_DEFAULT,
@@ -421,6 +425,9 @@ struct llm_graph_params {
     llm_graph_cb cb;
 
     llm_graph_result * res;
+#ifdef LLAMA_MOE_ENABLE
+    ExpertCache * expert_cache = nullptr;
+#endif
 
     // return true if the "other" params would result in a graph with the same topology as with the current params
     //   having the same topology allows us to reuse the graph in some cases
@@ -471,12 +478,22 @@ class llm_graph_result {
 public:
     llm_graph_result(int64_t max_nodes);
 
-    virtual ~llm_graph_result() = default;
+    virtual ~llm_graph_result();
 
     ggml_tensor * get_tokens()      const { return t_tokens; }
     ggml_tensor * get_logits()      const { return t_logits; }
     ggml_tensor * get_embd()        const { return t_embd; }
     ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
+
+    struct moe_state_view {
+        ggml_tensor * selected = nullptr;  // i32 [n_expert_used, n_tokens]
+        ggml_tensor * weights  = nullptr;  // f32 [1, n_expert_used, n_tokens]
+        ggml_tensor * probs    = nullptr;  // optional probabilities tensor
+    };
+
+    const std::vector<moe_state_view> & get_moe_states() const { return moe_states; }
+    void set_moe_state(size_t layer, moe_state_view state);
+    void clear_moe_states();
 
     ggml_cgraph  * get_gf()  const { return gf; }
     ggml_context * get_ctx() const { return ctx_compute.get(); }
@@ -498,6 +515,10 @@ public:
 
     void set_params(const llm_graph_params & params);
 
+#ifdef LLAMA_MOE_ENABLE
+    void add_cleanup(std::function<void()> fn);
+#endif
+
     // important graph nodes
     ggml_tensor * t_tokens      = nullptr;
     ggml_tensor * t_logits      = nullptr;
@@ -511,9 +532,15 @@ public:
     // memory buffers used to evaluate the model
     std::vector<uint8_t> buf_compute_meta;
 
+#ifdef LLAMA_MOE_ENABLE
+    std::vector<std::function<void()>> cleanups;
+#endif
+
     ggml_cgraph * gf;
 
     int64_t max_nodes;
+
+    std::vector<moe_state_view> moe_states;
 
 private:
     // keep a copy of the previous graph parameters
@@ -585,6 +612,9 @@ struct llm_graph_context {
 
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;
+#ifdef LLAMA_MOE_ENABLE
+    ExpertCache * expert_cache = nullptr;
+#endif
 
     llm_graph_context(const llm_graph_params & params);
     virtual ~llm_graph_context() = default;

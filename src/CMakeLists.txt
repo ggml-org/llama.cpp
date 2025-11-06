@@ -26,6 +26,7 @@ add_library(llama
             llama-memory-hybrid.cpp
             llama-memory-recurrent.cpp
             llama-mmap.cpp
+            llama-moe.cpp
             llama-model-loader.cpp
             llama-model-saver.cpp
             llama-model.cpp
@@ -132,11 +133,28 @@ add_library(llama
             models/graph-context-mamba.cpp
             )
 
-target_include_directories(llama PRIVATE .)
+target_include_directories(llama PRIVATE . ../ggml/src ../ggml/include)
 target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
+
+if (GGML_CUDA AND LLAMA_MOE_ENABLE)
+    target_sources(llama PRIVATE llama-moe-cuda.cu)
+    if (DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set_property(TARGET llama PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
+    endif()
+    set_property(TARGET llama PROPERTY CUDA_SEPARABLE_COMPILATION ON)
+endif()
+
+if (GGML_CUDA)
+    if (CUDAToolkit_INCLUDE_DIRS)
+        target_include_directories(llama PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    elseif (CUDAToolkit_BIN_DIR)
+        get_filename_component(_cuda_root "${CUDAToolkit_BIN_DIR}/.." ABSOLUTE)
+        target_include_directories(llama PRIVATE "${_cuda_root}/include")
+    endif()
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)

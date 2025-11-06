@@ -117,6 +117,22 @@ Note: to debug the inference graph: you can use [llama-eval-callback](/examples/
 
 https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 
+### GGUF_MOE (provisional)
+
+The `GGUF_MOE` extension introduces explicit router tensors and per-expert tensor groups that can be dynamically paged in at runtime. When exporting a model with mixture-of-experts layers, populate the following metadata keys and tensor groups:
+
+- Metadata keys (per MoE layer):
+  - `moe.layer.{i}.num_experts` – total number of experts in the layer.
+  - `moe.layer.{i}.top_k` – active experts per token.
+  - `moe.layer.{i}.router_type` – optional string describing router activation (e.g. `softmax`).
+- Router tensors:
+  - `blk.{i}.router.w1`, `blk.{i}.router.w2` (plus bias variants when present).
+- Expert tensor groups:
+  - `blk.{i}.expert.{e}.w1`, `blk.{i}.expert.{e}.w2`, `blk.{i}.expert.{e}.w3`, etc., matching the FFN projections for each expert `e`.
+  - Shared expert tensors continue to use the existing `ffn_*_shexp` names.
+
+All expert tensors must be stored as standalone GGUF entries (not packed in the last dimension). This allows llama.cpp to mmap each expert independently and back the CUDA ExpertCache with fine-grained handles.
+
 ## Resources
 
 - YaRN RoPE scaling https://github.com/ggml-org/llama.cpp/pull/2268
