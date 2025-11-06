@@ -1625,10 +1625,12 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
     auto * ctx = new llama_sampler_grammar;
 
     if (grammar_str != nullptr && grammar_str[0] != '\0') {
+        std::string trigger_pattern;
+        const char * trigger_pattern_c = nullptr;
         // TODO: remove trigger_words support.
         if (trigger_words != nullptr && num_trigger_words > 0) {
             GGML_ASSERT(trigger_patterns == nullptr && num_trigger_patterns == 0);
-            std::string trigger_pattern("[\\s\\S]*?(");
+            trigger_pattern = "[\\s\\S]*?(";
             for (size_t i = 0; i < num_trigger_words; ++i) {
                 static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
                 if (i > 0) {
@@ -1637,7 +1639,7 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
                 trigger_pattern += std::regex_replace(trigger_words[i], special_chars, "\\$0");
             }
             trigger_pattern += ")[\\s\\S]*";
-            static const auto * trigger_pattern_c = trigger_pattern.c_str();
+            trigger_pattern_c = trigger_pattern.c_str();
             trigger_patterns = &trigger_pattern_c;
             num_trigger_patterns = 1;
         }
