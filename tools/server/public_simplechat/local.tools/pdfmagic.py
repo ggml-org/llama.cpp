@@ -10,21 +10,24 @@ if TYPE_CHECKING:
     from simpleproxy import ProxyHandler
 
 
-def extract_pdfoutline(ol: Any, prefix: str):
+PDFOUTLINE_MAXDEPTH=4
+
+
+def extract_pdfoutline(ol: Any, prefix: list[int]):
     """
-    Extract the pdf outline recursively.
-    1st tuple entry returned indicates whether to increase outline entry numbering
-    2nd tuple entry returns the outline string that provides the extracted outline.
+    Helps extract the pdf outline recursively, along with its numbering.
     """
+    if (len(prefix) > PDFOUTLINE_MAXDEPTH):
+        return ""
     if type(ol).__name__ != type([]).__name__:
-        return (1, f"{prefix}:{ol['/Title']}\n")
+        prefix[-1] += 1
+        return f"{".".join(map(str,prefix))}:{ol['/Title']}\n"
     olText = ""
-    olNum = 1
+    prefix.append(0)
     for (i,iol) in enumerate(ol):
-        got = extract_pdfoutline(iol, f"{prefix}.{olNum}")
-        olNum += got[0]
-        olText += got[1]
-    return (0, olText)
+        olText += extract_pdfoutline(iol, prefix)
+    prefix.pop()
+    return olText
 
 
 def process_pdftext(url: str, startPN: int, endPN: int):
@@ -53,8 +56,11 @@ def process_pdftext(url: str, startPN: int, endPN: int):
         startPN = 1
     if (endPN <= 0) or (endPN > len(oPdf.pages)):
         endPN = len(oPdf.pages)
-    outlineGot = extract_pdfoutline(oPdf.outline, "")
-    tPdf += outlineGot[1]
+    # Add the pdf outline, if available
+    outlineGot = extract_pdfoutline(oPdf.outline, [])
+    if outlineGot:
+        tPdf += f"\n\nOutline Start\n\n{outlineGot}\n\nOutline End\n\n"
+    # Add the pdf page contents
     for i in range(startPN, endPN+1):
         pd = oPdf.pages[i-1]
         tPdf = tPdf + pd.extract_text()

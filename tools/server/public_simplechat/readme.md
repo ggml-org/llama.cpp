@@ -462,6 +462,7 @@ plain textual content from the search result page.
 
 * fetch_pdf_as_text - fetch/read specified pdf file and extract its textual content
   * this depends on the pypdf python based open source library
+  * create a outline of titles along with numbering if the pdf contains a outline/toc
 
 * fetch_xml_filtered - fetch/read specified xml file and optionally filter out any specified tags
   * allows one to specify a list of tags related REs,
@@ -675,6 +676,9 @@ sliding window based drop off or even before they kick in, this can help in many
   and unwanted blocks before returning.
 
 * capture the body of ai server not ok responses, to help debug as well as to show same to user.
+
+* extract and include the outline of titles (along with calculated numbering) in the text output of pdftext
+  * ensure that one doesnt recurse beyond a predefined limit.
 
 
 #### ToDo
