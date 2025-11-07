@@ -14,7 +14,7 @@ class xml_toolcall_syntax_exception : public std::runtime_error {
 };
 
 template<typename T>
-inline void sort_uniq(T &vec) {
+inline void sort_uniq(std::vector<T> &vec) {
     std::sort(vec.begin(), vec.end());
     vec.erase(std::unique(vec.begin(), vec.end()), vec.end());
 }
@@ -505,7 +505,10 @@ bool common_chat_msg_parser::try_consume_xml_tool_calls(const struct xml_tool_ca
     return false;
 }
 
-// Parse content uses reasoning and XML-Style tool call
+/**
+ * Parse content uses reasoning and XML-Style tool call
+ * TODO: Note that form.allow_toolcall_in_think is not tested yet. If anyone confirms it works, this comment can be removed.
+ */
 inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, const struct xml_tool_call_format & form, const std::string & start_think = "<think>", const std::string & end_think = "</think>") {
     constexpr auto rstrip = [](std::string &s) {
         s.resize(std::distance(s.begin(), std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base()));
@@ -600,7 +603,16 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         // Handle unclosed think block
         if (reasoning_unclosed) {
             if (auto pos = content.find(end_think); pos == std::string::npos && builder.pos() != builder.input().size()) {
-                unclosed_reasoning_content += content + tool_call_start;
+                unclosed_reasoning_content += content;
+                if (form.allow_toolcall_in_think) {
+                    builder.move_to(tc->groups[0].begin);
+                    if (!builder.try_consume_xml_tool_calls(form)) {
+                        unclosed_reasoning_content += tool_call_start;
+                        builder.move_to(tc->groups[0].end);
+                    }
+                } else {
+                    unclosed_reasoning_content += tool_call_start;
+                }
                 continue;
             } else {
                 std::string reasoning_content;
@@ -645,6 +657,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
                 content.resize(think_start);
                 toolcall_in_think = true;
             }
+            if (think_start == 0) break;
         }
         rstrip(content);
 
@@ -666,7 +679,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         }
 
         // This <tool_call> start is in thinking block, skip this tool call
-        if (toolcall_in_think) {
+        if (toolcall_in_think && !form.allow_toolcall_in_think) {
             continue;
         }
 
@@ -688,7 +701,10 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
     }
 }
 
-// Parse content uses reasoning and XML-Style tool call
+/**
+ * Parse content uses reasoning and XML-Style tool call
+ * TODO: Note that form.allow_toolcall_in_think is not tested yet. If anyone confirms it works, this comment can be removed.
+ */
 void common_chat_msg_parser::consume_reasoning_with_xml_tool_calls(const struct xml_tool_call_format & form, const std::string & start_think, const std::string & end_think) {
     parse_msg_with_xml_tool_calls(*this, form, start_think, end_think);
 }

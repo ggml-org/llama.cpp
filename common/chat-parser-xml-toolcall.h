@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+
 // Sample config:
 // MiniMax-M2 (left): <minimax:tool_call>\n<invoke name="tool-name">\n<parameter name="key">value</parameter>\n...</invoke>\n...</minimax:tool_call>
 // GLM 4.5   (right): <tool_call>function_name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>
@@ -23,6 +24,7 @@ struct xml_tool_call_format {
     // Set this if there can be dynamic spaces inside key_val_sep.
     // e.g. key_val_sep=</arg_key> key_val_sep2=<arg_value> for GLM4.5
     std::optional<std::string> key_val_sep2 = std::nullopt;
+    bool allow_toolcall_in_think = false; // TODO: UNTESTED!!!
 };
 
 // make a GBNF that accept any strings except those containing any of the forbidden strings.

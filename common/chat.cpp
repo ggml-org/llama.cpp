@@ -1814,18 +1814,7 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
 static common_chat_params common_chat_params_init_minimax_m2(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
 
-    // Disable every Minja polyfill except object_arguments
-    minja::chat_template_options topts {};
-    topts.apply_polyfills = true;
-    topts.polyfill_tools = false;
-    topts.polyfill_tool_call_examples = false;
-    topts.polyfill_tool_calls = false;
-    topts.polyfill_tool_responses = false;
-    topts.polyfill_system_role = false;
-    topts.polyfill_object_arguments = true;
-    topts.polyfill_typed_content = false;
-
-    data.prompt = apply(tmpl, params, std::nullopt, std::nullopt, std::nullopt, topts);
+    data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_MINIMAX_M2;
 
     // Handle thinking tags based on prompt ending
@@ -2114,20 +2103,7 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 static common_chat_params common_chat_params_init_glm_4_5(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
 
-    // Disable every Minja polyfill except object_arguments
-    minja::chat_template_options topts {};
-    topts.apply_polyfills = true;
-    topts.polyfill_tools = false;
-    topts.polyfill_tool_call_examples = false;
-    topts.polyfill_tool_calls = false;
-    topts.polyfill_tool_responses = false;
-    topts.polyfill_system_role = false;
-    topts.polyfill_object_arguments = true;
-    topts.polyfill_typed_content = false;
-    topts.use_bos_token = true;
-    topts.use_eos_token = true;
-
-    std::string prompt = apply(tmpl, inputs, std::nullopt, std::nullopt, std::nullopt, topts);
+    std::string prompt = apply(tmpl, inputs);
 
     // match the existing trimming behavior
     if (inputs.add_bos && string_starts_with(prompt, tmpl.bos_token())) {
@@ -2880,16 +2856,6 @@ static void common_chat_parse_lfm2(common_chat_msg_parser & builder) {
 }
 
 static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
-    //static const xml_tool_call_format form {
-    //    /* form.scope_start = */ "<seed:tool_call>\n",
-    //    /* form.tool_start  = */ "<function=",
-    //    /* form.tool_sep    = */ ">\n",
-    //    /* form.key_start   = */ "<parameter=",
-    //    /* form.key_val_sep = */ ">",
-    //    /* form.val_end     = */ "</parameter>\n",
-    //    /* form.tool_end    = */ "</function>\n",
-    //    /* form.scope_end   = */ "</seed:tool_call>",
-    //};
     static const xml_tool_call_format form {
         /* form.scope_start = */ "<seed:tool_call>",
         /* form.tool_start  = */ "<function=",
