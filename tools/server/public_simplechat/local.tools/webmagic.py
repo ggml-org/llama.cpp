@@ -8,6 +8,7 @@ import html.parser
 import debug
 import filemagic as mFile
 import json
+import re
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -218,25 +219,30 @@ def handle_urltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
         ph.send_error(502, f"WARN:UrlTextFailed:{exc}")
 
 
-class TextXMLParser(html.parser.HTMLParser):
+class XMLFilterParser(html.parser.HTMLParser):
     """
     A simple minded logic used to strip xml content of
-    * unwanted tags and their contents.
-    * this works properly only if the xml being processed has proper opening and ending tags
-    around the area of interest.
+    * unwanted tags and their contents, using re
+    * this works properly only if the xml being processed has
+      proper opening and ending tags around the area of interest.
 
     This can help return a cleaned up xml file.
     """
 
-    def __init__(self, tagDrops: list[str]):
+    def __init__(self, tagDropREs: list[str]):
+        """
+        tagDropREs - allows one to specify a list of tags related REs,
+        to help drop the corresponding tags and their contents fully.
+
+        To drop a tag, specify regular expression
+        * that matches the corresponding heirarchy of tags involved
+            * where the tag names should be in lower case and suffixed with :
+        * if interested in dropping a tag independent of where it appears use
+          ".*:tagname:.*" re template
+        """
         super().__init__()
-        self.tagDrops = list(map(str.lower, tagDrops))
-        print(f"DBUG:TextXMLParser:{self.tagDrops}")
-        self.insideTagDrops = {
-        }
-        for tag in tagDrops:
-            self.insideTagDrops[tag] = False
-        self.bCapture = False
+        self.tagDropREs = list(map(str.lower, tagDropREs))
+        print(f"DBUG:XMLFilterParser:{self.tagDropREs}")
         self.text = ""
         self.prefixTags = []
         self.prefix = ""
@@ -246,8 +252,9 @@ class TextXMLParser(html.parser.HTMLParser):
         """
         Helps decide whether to capture contents or discard them.
         """
-        for tag in self.tagDrops:
-            if self.insideTagDrops[tag]:
+        curTagH = f'{":".join(self.prefixTags)}:'
+        for dropRE in self.tagDropREs:
+            if re.match(dropRE, curTagH):
                 return False
         return True
 
@@ -256,8 +263,6 @@ class TextXMLParser(html.parser.HTMLParser):
         self.prefixTags.append(tag)
         self.prefix += "\t"
         self.text += f"\n{self.prefix}<{tag}>"
-        if tag in self.tagDrops:
-            self.insideTagDrops[tag] = True
 
     def handle_endtag(self, tag: str):
         if (self.lastTrackedCB == "endtag"):
@@ -267,36 +272,34 @@ class TextXMLParser(html.parser.HTMLParser):
         self.lastTrackedCB = "endtag"
         self.prefixTags.pop()
         self.prefix = self.prefix[:-1]
-        if tag in self.tagDrops:
-            self.insideTagDrops[tag] = False
 
     def handle_data(self, data: str):
         if self.do_capture():
             self.text += f"{data}"
 
 
-def handle_xmltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
+def handle_xmlfiltered(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
     try:
         # Get requested url
-        got = handle_urlreq(ph, pr, "HandleXMLText")
+        got = handle_urlreq(ph, pr, "HandleXMLFiltered")
         if not got.callOk:
             ph.send_error(got.httpStatus, got.httpStatusMsg)
             return
         # Extract Text
-        tagDrops = ph.headers.get('xmltext-tag-drops')
-        if not tagDrops:
-            tagDrops = []
+        tagDropREs = ph.headers.get('xmlfiltered-tagdrop-res')
+        if not tagDropREs:
+            tagDropREs = []
         else:
-            tagDrops = cast(list[str], json.loads(tagDrops))
-        textXML = TextXMLParser(tagDrops)
-        textXML.feed(got.contentData)
+            tagDropREs = cast(list[str], json.loads(tagDropREs))
+        xmlFiltered = XMLFilterParser(tagDropREs)
+        xmlFiltered.feed(got.contentData)
         # Send back to client
         ph.send_response(got.httpStatus)
         ph.send_header('Content-Type', got.contentType)
         # Add CORS for browser fetch, just in case
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
-        ph.wfile.write(textXML.text.encode('utf-8'))
-        debug.dump({ 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textXML.text })
+        ph.wfile.write(xmlFiltered.text.encode('utf-8'))
+        debug.dump({ 'XMLFiltered': 'yes' }, { 'RawText': xmlFiltered.text })
     except Exception as exc:
-        ph.send_error(502, f"WARN:XMLTextFailed:{exc}")
+        ph.send_error(502, f"WARN:XMLFiltered:Failed:{exc}")
