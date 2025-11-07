@@ -182,7 +182,7 @@ static void init_tensor_causal(ggml_tensor * tensor, float min = -1.0f, float ma
 
     GGML_TENSOR_LOCALS(int32_t, ne, tensor, ne);
 
-    std::vector<float>       data_f32(ne0*ne1*ne2*ne3);
+    std::vector<float> data_f32(ne0*ne1*ne2*ne3);
 
     std::random_device rd;
     std::mt19937 gen(rd());
