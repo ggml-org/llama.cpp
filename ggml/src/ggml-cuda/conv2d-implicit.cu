@@ -672,12 +672,11 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 #pragma unroll
         for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++)
         {
-            const int output_sts_offset = output_sts_addr + mma_m * MMA_M * BN / 2 - i * mma_tiles_per_warp_n/2 * MMA_N;
             for (unsigned int mma_n = i * mma_tiles_per_warp_n/2; mma_n < (i+1)*mma_tiles_per_warp_n/2; mma_n++)
             {
                 uint32_t (&reg_)[2] = reinterpret_cast<uint32_t(&)[2]>(acc_register_[mma_m][mma_n]);
-                uint idx = output_sts_offset + mma_n * MMA_N;
-                            // mma_m * MMA_M * BN / 2 + (mma_n - i * mma_tiles_per_warp_n/2) * MMA_N;
+                uint idx = output_sts_addr +
+                            mma_m * MMA_M * BN / 2 + (mma_n - i * mma_tiles_per_warp_n/2) * MMA_N;
                 idx = idx ^ ((idx & 0b1110000000) >> 4);
                 uint32_t* dst_ptr = reinterpret_cast<uint32_t*>(&smemoutput[idx]);
                 dst_ptr[0] = reg_[0];
@@ -688,24 +687,40 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
         __syncthreads();
         const unsigned int  m_i_wn = m_idx + i * WN / 2;
 #pragma unroll
-        for (int subk = 0; subk < WN / 2; ++subk){
-            const uint row =  m_i_wn + subk;
+        for (int subk = 0; subk < WN / 4; ++subk){
+            const uint row =  m_i_wn + subk*2;
 #pragma unroll
             for (int j = 0; j < 4; ++j){
                 const uint gemm_i =  n_idx + j*32;
                 const int n = fastdiv(gemm_i, param.OHOW_fastdiv);
                 const int col = fastmodulo(gemm_i, param.OHOW_fastdiv);
+                uint idx = output_lds_addr + subk*2 + j*32*BN/2;
+                idx = idx ^ ((idx & 0b1110000000) >> 4);
+                uint32_t* dst_ptr = reinterpret_cast<uint32_t*>(&smemoutput[idx]);
                 if (n < param.n && row < param.k && col < PQ) {
-                    uint idx = output_lds_addr + subk + j*32*BN/2;
-                    idx = idx ^ ((idx & 0b1110000000) >> 4);
                     if constexpr (ksplit > 0) {
                         const uint outOffset = z * NKPQ +
                                                n * KPQ +
                                                row * PQ + col;
-                        output[outOffset] = smemoutput[idx];
+                        // output[outOffset] = smemoutput[idx];
+                        output[outOffset] = reinterpret_cast<half *>(dst_ptr)[0];
                     } else {
                         const uint outOffset = n * KPQ + row * PQ + col;
-                        output[outOffset] = smemoutput[idx];
+                        // output[outOffset] = smemoutput[idx];
+                        output[outOffset] = reinterpret_cast<half *>(dst_ptr)[0];
+                    }
+                }
+                if (n < param.n && row+1 < param.k && col < PQ) {
+                    if constexpr (ksplit > 0) {
+                        const uint outOffset = z * NKPQ +
+                                               n * KPQ +
+                                               (row+1) * PQ + col;
+                        // output[outOffset] = smemoutput[idx];
+                        output[outOffset] = reinterpret_cast<half *>(dst_ptr)[1];
+                    } else {
+                        const uint outOffset = n * KPQ + (row+1) * PQ + col;
+                        // output[outOffset] = smemoutput[idx];
+                        output[outOffset] = reinterpret_cast<half *>(dst_ptr)[1];
                     }
                 }
             }
@@ -803,6 +818,9 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         constexpr unsigned int WM_dim = BM_dim / WARPS_PER_BLOCK_M;
         constexpr unsigned int WN_dim = BN_dim / WARPS_PER_BLOCK_N;
         constexpr unsigned int WK_dim = BK_dim / WARPS_PER_BLOCK_K;
+
+        static_assert(WN_dim % 4 == 0,  "final output requires this to be bank conflicts free");
+
         const unsigned int BlocksM =  (P.n * P.Oh * P.Ow + BM_dim - 1) / BM_dim;
         const unsigned int BlocksN =  (P.k + BN_dim - 1) / BN_dim;
         constexpr unsigned int ThreadsM = WARPS_PER_BLOCK_M;
@@ -812,7 +830,7 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
 
         const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
         const unsigned int ksplit = 8;
-        if (BlocksM * BlocksN < nsm && P.c > 8 * ksplit) {
+        if (BlocksM * BlocksN < nsm && P.c >= 8 * ksplit && (P.c * P.r * P.s) % (8*ksplit) == 0) {
             ggml_cuda_pool_alloc<half> Y_H(ctx.pool(id), ksplit * P.k * P.Oh * P.Ow * P.n);
 
             cudaFuncSetAttribute(conv2d_implicit_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, ksplit, NumThreads>,
