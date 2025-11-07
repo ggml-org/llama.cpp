@@ -113,17 +113,51 @@ struct common_sampler {
     llama_token_data_array cur_p;
 
     void set_logits(struct llama_context * ctx, int idx) {
-        const auto * logits = llama_get_logits_ith(ctx, idx);
+        const float *       sampled_probs        = llama_get_sampled_probs_ith(ctx, idx);
+        const float *       sampled_logits       = llama_get_sampled_logits_ith(ctx, idx);
+        const llama_token * sampled_ids          = llama_get_sampled_token_ids_ith(ctx, idx);
 
         const llama_model * model = llama_get_model(ctx);
         const llama_vocab * vocab = llama_model_get_vocab(model);
 
         const int n_vocab = llama_vocab_n_tokens(vocab);
 
-        cur.resize(n_vocab);
+        // Use the member variable instead of allocating locally
+        cur.clear();
 
-        for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-            cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+        if (sampled_probs) {
+            const uint32_t sampled_probs_count = llama_get_sampled_probs_count_ith(ctx, idx);
+            cur.reserve(sampled_probs_count);
+            // The GPU sampler has filtered the probabilities so we need to use the sampled ids.
+            if (sampled_ids != nullptr) {
+                for (uint32_t i = 0; i < sampled_probs_count; ++i) {
+                    cur.emplace_back(llama_token_data{sampled_ids[i], 0.0f, sampled_probs[i]});
+                }
+            } else {
+                for (llama_token token_id = 0; token_id < (int) sampled_probs_count; token_id++) {
+                    cur.emplace_back(llama_token_data{token_id, 0.0f, sampled_probs[token_id]});
+                }
+            }
+        } else if (sampled_logits) {
+            const uint32_t sampled_logits_count = llama_get_sampled_logits_count_ith(ctx, idx);
+            cur.reserve(sampled_logits_count);
+            // The GPU sampler has filtered the logits so we need to use the sampled ids.
+            if (sampled_ids != nullptr) {
+                for (llama_token i = 0; i < (int)sampled_logits_count; i++) {
+                    cur.emplace_back(llama_token_data{sampled_ids[i], sampled_logits[i], 0.0f});
+                }
+            } else {
+                for (llama_token token_id = 0; token_id < (int)sampled_logits_count; token_id++) {
+                    cur.emplace_back(llama_token_data{token_id, sampled_logits[token_id], 0.0f});
+                }
+            }
+        } else {
+            const auto * logits = llama_get_logits_ith(ctx, idx);
+            GGML_ASSERT(logits != nullptr);
+            cur.reserve(n_vocab);
+            for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+                cur.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
+            }
         }
 
         cur_p = { cur.data(), cur.size(), -1, false };
@@ -364,6 +398,13 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
 }
 
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
+    // Check if a GPU sampler has already sampled a token in which case we
+    // return that token id directly.
+    const llama_token gpu_sampled_token  = llama_get_sampled_token_ith(ctx, idx);
+    if (gpu_sampled_token != LLAMA_TOKEN_NULL) {
+        return gpu_sampled_token;
+    }
+
     gsmpl->set_logits(ctx, idx);
 
     auto & grmr  = gsmpl->grmr;

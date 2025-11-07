@@ -8,6 +8,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include "sampling.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -960,6 +961,8 @@ struct common_init_result common_init_from_params(common_params & params) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     auto cparams = common_context_params_to_llama(params);
+    cparams.samplers = params.gpu_samplers;
+    cparams.n_samplers = params.n_gpu_samplers;
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {

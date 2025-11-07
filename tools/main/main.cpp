@@ -135,6 +135,13 @@ int main(int argc, char ** argv) {
 
     std::vector<common_chat_msg> chat_msgs;
 
+    // Configure GPU Sampler
+    std::vector<llama_sampler_seq_config> gpu_samplers = {
+        { 0, common_sampler_gpu_init(model, sparams) }
+    };
+    params.gpu_samplers   = gpu_samplers.data();
+    params.n_gpu_samplers = gpu_samplers.size();
+
     // load the model and apply lora adapter, if any
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
     common_init_result llama_init = common_init_from_params(params);
