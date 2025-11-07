@@ -140,7 +140,6 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
             return false;
         }
     }
-
     if (src0_ne[1] % MMF_ROWS_PER_BLOCK != 0) {
         return false;
     }
