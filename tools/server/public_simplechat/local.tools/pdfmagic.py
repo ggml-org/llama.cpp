@@ -4,10 +4,22 @@
 import urllib.parse
 import urlvalidator as uv
 import filemagic as mFile
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from simpleproxy import ProxyHandler
+
+
+def extract_pdfoutline(ol: Any, prefix: str):
+    """
+    Extract the pdf outline
+    """
+    if type(ol).__name__ != type([]).__name__:
+        return f"{prefix}{ol['/Title']}\n"
+    olText = ""
+    for iol in ol:
+        olText += extract_pdfoutline(iol, prefix+"\t")
+    return olText
 
 
 def process_pdftext(url: str, startPN: int, endPN: int):
@@ -36,6 +48,7 @@ def process_pdftext(url: str, startPN: int, endPN: int):
         startPN = 1
     if (endPN <= 0) or (endPN > len(oPdf.pages)):
         endPN = len(oPdf.pages)
+    tPdf += extract_pdfoutline(oPdf.outline, "")
     for i in range(startPN, endPN+1):
         pd = oPdf.pages[i-1]
         tPdf = tPdf + pd.extract_text()
