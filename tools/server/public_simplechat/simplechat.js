@@ -891,15 +891,20 @@ class MultiChatUI {
         let secTC = document.createElement('section')
         secTC.classList.add('chat-message-toolcall')
         elParent.append(secTC)
-        let entry = ui.el_create_append_p(`name: ${tc.function.name}`, secTC);
-        entry = ui.el_create_append_p(`id: ${tc.id}`, secTC);
-        let oArgs = JSON.parse(tc.function.arguments)
-        for (const k in oArgs) {
-            entry = ui.el_create_append_p(`arg: ${k}`, secTC);
-            let secArg = document.createElement('section')
-            secArg.classList.add('chat-message-toolcall-arg')
-            secTC.append(secArg)
-            secArg.innerText = oArgs[k]
+        ui.el_create_append_p(`name: ${tc.function.name}`, secTC);
+        let entry = ui.el_create_append_p(`id: ${tc.id}`, secTC);
+        try {
+            let oArgs = JSON.parse(tc.function.arguments)
+            for (const k in oArgs) {
+                entry = ui.el_create_append_p(`arg: ${k}`, secTC);
+                let secArg = document.createElement('section')
+                secArg.classList.add('chat-message-toolcall-arg')
+                secTC.append(secArg)
+                secArg.innerText = oArgs[k]
+            }
+        } catch(exc) {
+            ui.el_create_append_p(`WARN:ShowMsgTCARGS: ${exc}`, secTC);
+            ui.el_create_append_p(`args: ${tc.function.arguments}`, secTC);
         }
     }
 
