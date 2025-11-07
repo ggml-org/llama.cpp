@@ -259,19 +259,22 @@ class XMLFilterParser(html.parser.HTMLParser):
         return True
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
-        self.lastTrackedCB = "starttag"
         self.prefixTags.append(tag)
+        if not self.do_capture():
+            return
+        self.lastTrackedCB = "starttag"
         self.prefix += "\t"
         self.text += f"\n{self.prefix}<{tag}>"
 
     def handle_endtag(self, tag: str):
-        if (self.lastTrackedCB == "endtag"):
-            self.text += f"\n{self.prefix}</{tag}>"
-        else:
-            self.text += f"</{tag}>"
-        self.lastTrackedCB = "endtag"
+        if self.do_capture():
+            if (self.lastTrackedCB == "endtag"):
+                self.text += f"\n{self.prefix}</{tag}>"
+            else:
+                self.text += f"</{tag}>"
+            self.lastTrackedCB = "endtag"
+            self.prefix = self.prefix[:-1]
         self.prefixTags.pop()
-        self.prefix = self.prefix[:-1]
 
     def handle_data(self, data: str):
         if self.do_capture():
