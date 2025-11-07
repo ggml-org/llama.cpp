@@ -50,7 +50,7 @@ gConfigNeeded = [ '--allowed.schemes', '--allowed.domains', '--bearer.insecure' 
 
 gAllowedCalls = {
     "xmlfiltered": [],
-    "urltext": [],
+    "htmltext": [],
     "urlraw": [],
     "pdftext": [ "pypdf" ]
     }
@@ -138,8 +138,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         match pr.path:
             case '/urlraw':
                 self.auth_and_run(pr, mWeb.handle_urlraw)
-            case '/urltext':
-                self.auth_and_run(pr, mWeb.handle_urltext)
+            case '/htmltext':
+                self.auth_and_run(pr, mWeb.handle_htmltext)
             case '/xmlfiltered':
                 self.auth_and_run(pr, mWeb.handle_xmlfiltered)
             case '/pdftext':

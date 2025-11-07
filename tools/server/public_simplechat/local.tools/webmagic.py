@@ -192,15 +192,15 @@ class TextHtmlParser(html.parser.HTMLParser):
         return self.textStripped
 
 
-def handle_urltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
+def handle_htmltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
     try:
         # Get requested url
-        got = handle_urlreq(ph, pr, "HandleUrlText")
+        got = handle_urlreq(ph, pr, "HandleHtmlText")
         if not got.callOk:
             ph.send_error(got.httpStatus, got.httpStatusMsg)
             return
         # Extract Text
-        tagDrops = ph.headers.get('urltext-tag-drops')
+        tagDrops = ph.headers.get('htmltext-tag-drops')
         if not tagDrops:
             tagDrops = []
         else:
@@ -216,7 +216,7 @@ def handle_urltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
         ph.wfile.write(textHtml.get_stripped_text().encode('utf-8'))
         debug.dump({ 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textHtml.text, 'StrippedText': textHtml.get_stripped_text() })
     except Exception as exc:
-        ph.send_error(502, f"WARN:UrlTextFailed:{exc}")
+        ph.send_error(502, f"WARN:HtmlText:Failed:{exc}")
 
 
 class XMLFilterParser(html.parser.HTMLParser):
