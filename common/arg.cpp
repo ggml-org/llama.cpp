@@ -1984,7 +1984,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                                params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
                            } else {
                                throw std::runtime_error(
-                                   string_format("error: unkown value for --flash-attn: '%s'\n", value.c_str()));
+                                   string_format("error: unknown value for --flash-attn: '%s'\n", value.c_str()));
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
@@ -3597,7 +3597,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 common_log_set_colors(common_log_main(), LOG_COLORS_AUTO);
             } else {
                 throw std::invalid_argument(
-                    string_format("error: unkown value for --log-colors: '%s'\n", value.c_str()));
+                    string_format("error: unknown value for --log-colors: '%s'\n", value.c_str()));
             }
         }
     ).set_env("LLAMA_LOG_COLORS"));

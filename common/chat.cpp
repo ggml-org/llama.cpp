@@ -814,7 +814,7 @@ static std::string apply(
     // tmpl_inputs.now = std::chrono::system_clock::now();
 
     minja::chat_template_options tmpl_opts;
-    // To avoid double BOS / EOS tokens, we're manually removing begining / trailing tokens
+    // To avoid double BOS / EOS tokens, we're manually removing beginning / trailing tokens
     // instead of using `chat_template_options.use_bos_token = false`, since these tokens
     // may be needed inside the template / between messages too.
     auto result = tmpl.apply(tmpl_inputs, tmpl_opts);
