@@ -355,6 +355,9 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_Q8_K] = {
         .from_float               = quantize_row_q8_K,
     },
+    [GGML_TYPE_IFAIRY_Q16] = {
+        .from_float               = quantize_row_ifairy_q16,
+    },
     [GGML_TYPE_BF16] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_bf16,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_bf16,
@@ -377,12 +380,9 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
     },
     [GGML_TYPE_IFAIRY] = {
-        // todo_liweitao fix
-        // 目前用的是 激活量化成这里的vec_dot_type的量化方式，自定义一种量化为8bit的
-        // 同时修改对应的vec_dot 函数
         .from_float               = quantize_row_ifairy,
         .vec_dot                  = ggml_vec_dot_ifairy_q8_K,
-        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .vec_dot_type             = GGML_TYPE_IFAIRY_Q16, 
         .nrows                    = 1,
     },
 };
