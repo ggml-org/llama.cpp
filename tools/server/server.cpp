@@ -2327,6 +2327,10 @@ struct server_context {
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
 
+    // GPU samplers
+    std::vector<llama_sampler *> gpu_samplers;
+    std::vector<llama_sampler_seq_config> gpu_sampler_configs;
+
     // multimodal
     mtmd_context * mctx = nullptr;
 
@@ -2365,6 +2369,13 @@ struct server_context {
     ~server_context() {
         mtmd_free(mctx);
 
+        // Free GPU samplers
+        for (llama_sampler * sampler : gpu_samplers) {
+            llama_sampler_free(sampler);
+        }
+        gpu_samplers.clear();
+        gpu_sampler_configs.clear();
+
         // Clear any sampling context
         for (server_slot & slot : slots) {
             common_sampler_free(slot.smpl);
@@ -2386,6 +2397,47 @@ struct server_context {
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
         params_base = params;
+
+        if (params_base.sampling.gpu_sampling) {
+            SRV_INF("configuring GPU samplers for %d slots\n", params_base.n_parallel);
+
+            for (int i = 0; i < params_base.n_parallel; ++i) {
+                common_params_sampling slot_sampling;
+                auto it = params_base.sampling.gpu_slot_configs.find(i);
+                if (it != params_base.sampling.gpu_slot_configs.end()) {
+                    slot_sampling = it->second;
+
+                    if (!slot_sampling.gpu_sampling) {
+                        SRV_INF("  slot %d: GPU sampling disabled (using CPU sampling)\n", i);
+                        continue;
+                    }
+
+                    SRV_INF("  slot %d: using custom GPU config (top_k=%d, temp=%.2f, dist=%d)\n",
+                        i, slot_sampling.gpu_top_k, slot_sampling.gpu_temp, slot_sampling.gpu_dist);
+                } else {
+                    slot_sampling = params_base.sampling;
+                    SRV_INF("  slot %d: using default GPU config (top_k=%d, temp=%.2f, dist=%d)\n",
+                        i, slot_sampling.gpu_top_k, slot_sampling.gpu_temp, slot_sampling.gpu_dist);
+                }
+
+                llama_sampler * gpu_chain = common_sampler_gpu_init(nullptr, slot_sampling);
+                if (gpu_chain == nullptr) {
+                    SRV_ERR("failed to initialize GPU sampler for slot %d\n", i);
+                    for (llama_sampler * s : gpu_samplers) {
+                        llama_sampler_free(s);
+                    }
+                    gpu_samplers.clear();
+                    gpu_sampler_configs.clear();
+                    return false;
+                }
+
+                gpu_samplers.push_back(gpu_chain);
+                gpu_sampler_configs.push_back({ i, gpu_chain });
+            }
+
+            params_base.gpu_samplers   = gpu_sampler_configs.data();
+            params_base.n_gpu_samplers = gpu_sampler_configs.size();
+        }
 
         llama_init = common_init_from_params(params_base);
 
