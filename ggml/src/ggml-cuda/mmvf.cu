@@ -720,12 +720,19 @@ bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, const int64_t * src0
     if (src0_ne[0] % 2 != 0) {
         return false;
     }
+
     const size_t ts = ggml_type_size(type);
-    for (size_t i = 0; i < GGML_MAX_DIMS; ++i) {
+    if (src0_nb[0] != ts) {
+        return false;
+    }
+
+    // Pointers not aligned to the size of half2/nv_bfloat162/float2 would result in a crash:
+    for (size_t i = 1; i < GGML_MAX_DIMS; ++i) {
         if (src0_nb[i] % (2*ts) != 0) {
             return false;
         }
     }
+
     switch (type) {
         case GGML_TYPE_F32:
             if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
