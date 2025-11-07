@@ -15,10 +15,10 @@ def extract_pdfoutline(ol: Any, prefix: str):
     Extract the pdf outline
     """
     if type(ol).__name__ != type([]).__name__:
-        return f"{prefix}{ol['/Title']}\n"
+        return f"{prefix}:{ol['/Title']}\n"
     olText = ""
-    for iol in ol:
-        olText += extract_pdfoutline(iol, prefix+"\t")
+    for (i,iol) in enumerate(ol):
+        olText += extract_pdfoutline(iol, f"{prefix}.{i+1}")
     return olText
 
 
