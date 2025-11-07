@@ -463,9 +463,15 @@ plain textual content from the search result page.
 * fetch_pdf_as_text - fetch/read specified pdf file and extract its textual content
   * this depends on the pypdf python based open source library
 
-* fetch_xml_as_text - fetch/read specified xml file and extract its textual content
-  * prefixes the tag heirarchy with each leaf content
-  * allows one to specify a list of tags that are to be dropped fully.
+* fetch_xml_filtered - fetch/read specified xml file and optionally filter out any specified tags
+  * allows one to specify a list of tags related REs,
+    to help drop the corresponding tags and their contents fully.
+  * to drop a tag, specify regular expression
+    * that matches the corresponding heirarchy of tags involved
+      * where the tag names should be in lower case and suffixed with :
+    * if interested in dropping a tag independent of where it appears use
+      * .*:tagname:.*
+      * rather the tool call meta data passed to ai model explains the same and provides a sample.
 
 the above set of web related tool calls work by handshaking with a bundled simple local web proxy
 (/caching in future) server logic, this helps bypass the CORS restrictions applied if trying to
@@ -655,6 +661,10 @@ sliding window based drop off or even before they kick in, this can help in many
   NOTE: Currently the logic supports only 1 pending tool call per chat session.
 
 * add support for fetch_xml_as_text tool call, fix importmaps in index.html
+
+* renamed and updated logic wrt xml fetching to be fetch_xml_filtered. allow one to use re to identify
+  the tags to be filtered in a fine grained manner including filtering based on tag heirarchy
+
 
 #### ToDo
 
