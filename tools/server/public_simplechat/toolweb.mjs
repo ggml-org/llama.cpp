@@ -340,7 +340,7 @@ let fetchxmltext_meta = {
         "type": "function",
         "function": {
             "name": "fetch_xml_as_text",
-            "description": "Fetch requested xml url through a proxy server and return its cleaned up text contents. Each content is prefixed with the xml tag heirarchy that it belongs to. Will take few seconds",
+            "description": "Fetch requested xml url through a proxy server that can optionally filter out unwanted tags and their contents. Will take few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
