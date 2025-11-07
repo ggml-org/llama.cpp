@@ -108,14 +108,16 @@ if (LLAMA_BUILD_BORINGSSL)
     endif()
 
     if(NOT boringssl_POPULATED)
-        # force BUILD_SHARED_LIBS=OFF, avoid installing SSL libs
-        set(SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
-        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-
         FetchContent_Populate(boringssl)
         add_subdirectory(${boringssl_SOURCE_DIR} ${boringssl_BINARY_DIR} EXCLUDE_FROM_ALL)
 
-        set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
+        if(TARGET ssl)
+            set_target_properties(ssl PROPERTIES OUTPUT_NAME "llama-ssl")
+        endif()
+
+        if(TARGET crypto)
+            set_target_properties(crypto PROPERTIES OUTPUT_NAME "llama-crypto")
+        endif()
     endif()
 
     set(BORINGSSL_FLAGS
@@ -139,6 +141,14 @@ if (LLAMA_BUILD_BORINGSSL)
 
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
+
+    if(BUILD_SHARED_LIBS)
+        install(TARGETS ssl crypto
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+    endif()
 
 elseif (LLAMA_OPENSSL)
     find_package(OpenSSL)
