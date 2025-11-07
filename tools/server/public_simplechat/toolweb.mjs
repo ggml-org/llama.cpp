@@ -330,16 +330,22 @@ async function fetchpdftext_setup(tcs) {
 
 
 //
-// Fetch XML Text
+// Fetch XML Filtered
 //
 
 
-let gRSSTagDropsDefault = [ "guid", "link", "description", "image", "enclosure" ]
+let gRSSTagDropsDefault = [
+    "^rss:channel:item:guid:.*",
+    "^rss:channel:item:link:.*",
+    "^rss:channel:item:description:.*",
+    ".*:image:.*",
+    ".*:enclosure:.*"
+];
 
-let fetchxmltext_meta = {
+let fetchxmlfiltered_meta = {
         "type": "function",
         "function": {
-            "name": "fetch_xml_as_text",
+            "name": "fetch_xml_filtered",
             "description": "Fetch requested xml url through a proxy server that can optionally filter out unwanted tags and their contents. Will take few seconds",
             "parameters": {
                 "type": "object",
@@ -348,9 +354,12 @@ let fetchxmltext_meta = {
                         "type":"string",
                         "description":"url of the xml file that will be fetched"
                     },
-                    "tagDrops":{
+                    "tagDropREs":{
                         "type":"string",
-                        "description":`Optionally specify a json stringified list of xml tags to drop. For example for rss feeds one could use ${JSON.stringify(gRSSTagDropsDefault)} and so...`
+                        "description":`Optionally specify a json stringified list of xml tag heirarchies to drop.
+                        For each tag that needs to be dropped, one needs to specify regular expression of the heirarchy of tags involved,
+                        where the tag names are always mentioned in lower case along with a : as suffix.
+                        For example for rss feeds one could use ${JSON.stringify(gRSSTagDropsDefault)} and so...`
                     }
                 },
                 "required": ["url"]
@@ -360,7 +369,7 @@ let fetchxmltext_meta = {
 
 
 /**
- * Implementation of the fetch xml as text logic.
+ * Implementation of the fetch xml filtered logic.
  * Expects simpleproxy to be running at specified url and providing xmltext service
  * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
  * @param {string} chatid
@@ -368,25 +377,25 @@ let fetchxmltext_meta = {
  * @param {string} toolname
  * @param {any} obj
  */
-function fetchxmltext_run(chatid, toolcallid, toolname, obj) {
-    let tagDrops = obj.tagDrops
-    if (tagDrops == undefined) {
-        tagDrops = JSON.stringify([]) // JSON.stringify(gRSSTagDropsDefault)
+function fetchxmlfiltered_run(chatid, toolcallid, toolname, obj) {
+    let tagDropREs = obj.tagDropREs
+    if (tagDropREs == undefined) {
+        tagDropREs = JSON.stringify([]) // JSON.stringify(gRSSTagDropsDefault)
     }
-    let headers = { 'xmltext-tag-drops': tagDrops }
-    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'xmltext', headers);
+    let headers = { 'xmlfiltered-tagdrop-res': tagDropREs }
+    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'xmlfiltered', headers);
 }
 
 
 /**
- * Setup fetch_xml_as_text for tool calling
+ * Setup fetch_xml_filtered for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
  * @param {Object<string, Object<string, any>>} tcs
  */
-async function fetchxmltext_setup(tcs) {
-    return proxyserver_tc_setup('FetchXmlAsText', 'xmltext', 'fetch_xml_as_text', {
-        "handler": fetchxmltext_run,
-        "meta": fetchxmltext_meta,
+async function fetchxmlfiltered_setup(tcs) {
+    return proxyserver_tc_setup('FetchXmlFiltered', 'xmlfiltered', 'fetch_xml_filtered', {
+        "handler": fetchxmlfiltered_run,
+        "meta": fetchxmlfiltered_meta,
         "result": ""
     }, tcs);
 }
@@ -412,6 +421,6 @@ export async function init(me) {
     await fetchweburltext_setup(tc_switch)
     await searchwebtext_setup(tc_switch)
     await fetchpdftext_setup(tc_switch)
-    await fetchxmltext_setup(tc_switch)
+    await fetchxmlfiltered_setup(tc_switch)
     return tc_switch
 }
