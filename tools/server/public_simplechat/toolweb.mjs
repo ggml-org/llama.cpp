@@ -6,6 +6,16 @@
 // by Humans for All
 //
 
+//
+// The simpleproxy.py server is expected to provide the below services
+// urlraw - fetch the request url content as is
+// htmltext - fetch the requested html content and provide plain text version
+//     after stripping it of tag blocks like head, script, style, header, footer, nav, ...
+// pdftext - fetch the requested pdf and provide the plain text version
+// xmlfiltered - fetch the requested xml content and provide a optionally filtered version of same
+//
+
+
 import * as mChatMagic from './simplechat.js'
 
 
@@ -141,21 +151,21 @@ async function fetchweburlraw_setup(tcs) {
 
 
 //
-// Fetch Web Url Text
+// Fetch html Text
 //
 
 
-let fetchweburltext_meta = {
+let fetchhtmltext_meta = {
         "type": "function",
         "function": {
-            "name": "fetch_web_url_text",
-            "description": "Fetch the requested web url through a proxy server and return its text content after stripping away the html tags as well as head, script, style, header, footer, nav blocks, in few seconds",
+            "name": "fetch_html_text",
+            "description": "Fetch html content from given url through a proxy server and return its text content after stripping away the html tags as well as head, script, style, header, footer, nav blocks, in few seconds",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url":{
                         "type":"string",
-                        "description":"url of the page that will be fetched from the internet and inturn unwanted stuff stripped from its contents to some extent"
+                        "description":"url of the html page that needs to be fetched and inturn unwanted stuff stripped from its contents to some extent"
                     }
                 },
                 "required": ["url"]
@@ -165,35 +175,30 @@ let fetchweburltext_meta = {
 
 
 /**
- * Implementation of the fetch web url text logic.
- * Expects a simple minded proxy server to be running locally
- * * listening on a configured port
- * * expecting http requests
- *   * with a query token named url wrt urltext path,
- *     which gives the actual url to fetch
- * * strips out head as well as any script, style, header, footer, nav and so blocks in body
- *   before returning remaining body contents.
+ * Implementation of the fetch html text logic.
+ * Expects the simple minded simpleproxy server to be running locally,
+ * providing service for htmltext path.
  * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
  * @param {string} chatid
  * @param {string} toolcallid
  * @param {string} toolname
  * @param {any} obj
  */
-function fetchweburltext_run(chatid, toolcallid, toolname, obj) {
+function fetchhtmltext_run(chatid, toolcallid, toolname, obj) {
     // maybe filter out any key other than 'url' in obj
-    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urltext');
+    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'htmltext');
 }
 
 
 /**
- * Setup fetch_web_url_text for tool calling
+ * Setup fetch_html_text for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
  * @param {Object<string, Object<string, any>>} tcs
  */
-async function fetchweburltext_setup(tcs) {
-    return proxyserver_tc_setup('FetchWebUrlText', 'urltext', 'fetch_web_url_text', {
-        "handler": fetchweburltext_run,
-        "meta": fetchweburltext_meta,
+async function fetchhtmltext_setup(tcs) {
+    return proxyserver_tc_setup('FetchHtmlText', 'htmltext', 'fetch_html_text', {
+        "handler": fetchhtmltext_run,
+        "meta": fetchhtmltext_meta,
         "result": ""
     }, tcs);
 }
@@ -225,14 +230,7 @@ let searchwebtext_meta = {
 
 /**
  * Implementation of the search web text logic. Initial go.
- * Builds on urltext path of the bundled simpleproxy.py.
- * Expects simpleproxy.py server to be running locally
- * * listening on a configured port
- * * expecting http requests
- *   * with a query token named url wrt urltext path,
- *     which gives the actual url to fetch
- * * strips out head as well as any script, style, header, footer, nav and so blocks in body
- *   before returning remaining body contents.
+ * Builds on htmltext path service of the bundled simpleproxy.py.
  * ALERT: Accesses a seperate/external web proxy/caching server, be aware and careful
  * @param {string} chatid
  * @param {string} toolcallid
@@ -245,8 +243,8 @@ function searchwebtext_run(chatid, toolcallid, toolname, obj) {
     searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words));
     delete(obj.words)
     obj['url'] = searchUrl
-    let headers = { 'urltext-tag-drops': JSON.stringify(gMe.tools.searchDrops) }
-    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urltext', headers);
+    let headers = { 'htmltext-tag-drops': JSON.stringify(gMe.tools.searchDrops) }
+    return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'htmltext', headers);
 }
 
 
@@ -256,7 +254,7 @@ function searchwebtext_run(chatid, toolcallid, toolname, obj) {
  * @param {Object<string, Object<string, any>>} tcs
  */
 async function searchwebtext_setup(tcs) {
-    return proxyserver_tc_setup('SearchWebText', 'urltext', 'search_web_text', {
+    return proxyserver_tc_setup('SearchWebText', 'htmltext', 'search_web_text', {
         "handler": searchwebtext_run,
         "meta": searchwebtext_meta,
         "result": ""
@@ -418,7 +416,7 @@ export async function init(me) {
     let tc_switch = {}
     gMe = me
     await fetchweburlraw_setup(tc_switch)
-    await fetchweburltext_setup(tc_switch)
+    await fetchhtmltext_setup(tc_switch)
     await searchwebtext_setup(tc_switch)
     await fetchpdftext_setup(tc_switch)
     await fetchxmlfiltered_setup(tc_switch)
