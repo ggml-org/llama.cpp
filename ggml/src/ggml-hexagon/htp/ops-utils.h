@@ -37,26 +37,32 @@ static inline uint32_t htp_round_up(uint32_t n, uint32_t m) {
 // and a shift:
 //
 // n/d = (mulhi(n, mp) + n) >> L;
-static inline void init_fastdiv_values(uint32_t d, uint32_t * p_mp, uint32_t * p_l) {
+struct fastdiv_values {
+    uint32_t mp;
+    uint32_t l;
+    uint32_t d;
+};
+
+static inline struct fastdiv_values init_fastdiv_values(uint32_t d) {
+    struct fastdiv_values result = { 0, 0, d };
     // compute L = ceil(log2(d));
-    uint32_t L = 0;
-    while (L < 32 && ((uint32_t) 1 << L) < d) {
-        L++;
+    while (result.l < 32 && ((uint32_t) 1 << result.l) < d) {
+        ++(result.l);
     }
 
-    *p_mp = (uint32_t) (((uint64_t) 1 << 32) * (((uint64_t) 1 << L) - d) / d + 1);
-    *p_l  = L;
+    result.mp = (uint32_t) (((uint64_t) 1 << 32) * (((uint64_t) 1 << result.l) - d) / d + 1);
+    return result;
 }
 
-static inline uint32_t fastdiv(uint32_t n, const uint32_t mp, const uint32_t l) {
+static inline uint32_t fastdiv(uint32_t n, const struct fastdiv_values * vals) {
     // Compute high 32 bits of n * mp
-    const uint32_t hi = (uint32_t) (((uint64_t) n * mp) >> 32);  // mulhi(n, mp)
+    const uint32_t hi = (uint32_t) (((uint64_t) n * vals->mp) >> 32);  // mulhi(n, mp)
     // add n, apply bit shift
-    return (hi + n) >> l;
+    return (hi + n) >> vals->l;
 }
 
-static inline uint32_t fastmodulo(uint32_t n, uint32_t d, const uint32_t mp, const uint32_t l) {
-    return n - fastdiv(n, mp, l) * d;
+static inline uint32_t fastmodulo(uint32_t n, const struct fastdiv_values * vals) {
+    return n - fastdiv(n, vals) * vals->d;
 }
 
 static inline void htp_l2fetch(const void * p, uint32_t height, uint32_t width, uint32_t stride) {
