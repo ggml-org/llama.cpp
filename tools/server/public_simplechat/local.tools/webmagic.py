@@ -221,13 +221,11 @@ def handle_urltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
 class TextXMLParser(html.parser.HTMLParser):
     """
     A simple minded logic used to strip xml content of
-    * all the xml tags as well as
-    * all the contents belonging to below predefined tags like guid, enclosure, ...
-
+    * unwanted tags and their contents.
     * this works properly only if the xml being processed has proper opening and ending tags
     around the area of interest.
 
-    This helps return a relatively clean textual representation of the xml file/content being parsed.
+    This can help return a cleaned up xml file.
     """
 
     def __init__(self, tagDrops: list[str]):
@@ -240,7 +238,9 @@ class TextXMLParser(html.parser.HTMLParser):
             self.insideTagDrops[tag] = False
         self.bCapture = False
         self.text = ""
-        self.prefix = []
+        self.prefixTags = []
+        self.prefix = ""
+        self.lastTrackedCB = ""
 
     def do_capture(self):
         """
@@ -252,18 +252,27 @@ class TextXMLParser(html.parser.HTMLParser):
         return True
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
-        self.prefix.append(tag)
+        self.lastTrackedCB = "starttag"
+        self.prefixTags.append(tag)
+        self.prefix += "\t"
+        self.text += f"\n{self.prefix}<{tag}>"
         if tag in self.tagDrops:
             self.insideTagDrops[tag] = True
 
     def handle_endtag(self, tag: str):
-        self.prefix.pop()
+        if (self.lastTrackedCB == "endtag"):
+            self.text += f"\n{self.prefix}</{tag}>"
+        else:
+            self.text += f"</{tag}>"
+        self.lastTrackedCB = "endtag"
+        self.prefixTags.pop()
+        self.prefix = self.prefix[:-1]
         if tag in self.tagDrops:
             self.insideTagDrops[tag] = False
 
     def handle_data(self, data: str):
         if self.do_capture():
-            self.text += f"{':'.join(self.prefix)}:{data}\n"
+            self.text += f"{data}"
 
 
 def handle_xmltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
