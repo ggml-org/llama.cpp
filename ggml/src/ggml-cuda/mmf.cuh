@@ -651,7 +651,11 @@ void mul_mat_f_cuda(
         cudaStream_t stream, const mmf_ids_data * ids_data) {
     typedef tile<16, 8, T>     tile_A_16;
     typedef tile<32, 8, T>     tile_A_32;
+#if defined(AMD_WMMA_AVAILABLE)
+    typedef tile<16, 8, T>     tile_B;
+#else
     typedef tile< 8, 8, T>     tile_B;
+#endif // defined(AMD_WMMA_AVAILABLE)
 
     GGML_ASSERT(ncols_x      % 2 == 0);
     GGML_ASSERT(stride_row   % 2 == 0);
