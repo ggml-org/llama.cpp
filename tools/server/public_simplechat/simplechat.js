@@ -732,7 +732,8 @@ class SimpleChat {
         });
 
         if (resp.status >= 300) {
-            throw new ChatHSError(`HandleChatHS:GotResponse:NotOk:${resp.status}:${resp.statusText}`);
+            let respBody = await resp.text();
+            throw new ChatHSError(`HandleChatHS:GotResponse:NotOk:${resp.status}:${resp.statusText}:${respBody}`);
         }
 
         return this.handle_response(resp, apiEP, elDivChat);

@@ -674,6 +674,8 @@ sliding window based drop off or even before they kick in, this can help in many
   rss files, because it will return empty content, because there wont be any html content to strip the tags
   and unwanted blocks before returning.
 
+* capture the body of ai server not ok responses, to help debug as well as to show same to user.
+
 
 #### ToDo
 
