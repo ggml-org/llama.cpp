@@ -31,31 +31,31 @@ static inline float op_div(float a, float b) {
  * @return float 结果复数的位模式（以 float 返回）
  * 
  * 内存布局（假设小端序）：
- *   Bits 0-15:  imag (BF16)
- *   Bits 16-31: real (BF16)
+ *   Bits 0-15:  real (BF16)
+ *   Bits 16-31: imag (BF16)
  */
 static inline float op_ifairy_add(float a, float b) {
-    float r = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
-    float i = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
-    r = r + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
-    i = i + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
+    float r = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
+    float i = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
+    r = r + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
+    i = i + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
     float ret;
-    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(i);
-    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(r);
+    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(i);
+    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(r);
     return ret;
 }
 
 static inline float op_ifairy_mul(float a, float b) {
-    float ra = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
-    float ia = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
-    float rg = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
-    float ig = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
+    float ra = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
+    float ia = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
+    float rg = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
+    float ig = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
     // (ra - i ia) * (rg + i ig) = (ra*rg + ia*ig) + i(ra*ig - ia*rg)
     float r = ra*rg + ia*ig;
     float i = ra*ig - ia*rg;
     float ret;
-    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(r);
-    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(i);
+    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(r);
+    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(i);
     return ret;
 }
 

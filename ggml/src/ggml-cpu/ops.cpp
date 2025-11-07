@@ -6062,8 +6062,8 @@ static void ggml_compute_forward_rope_ifairy(
                     const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
                           float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                    const float x0 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t*)(src))[1]); //real
-                    const float x1 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t*)(src))[0]); //imag
+                    const float x0 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[0]); //real
+                    const float x1 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[1]); //imag
 
                     dst_data[0]      = x0*cos_theta - x1*sin_theta;
                     dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
@@ -6111,8 +6111,8 @@ static void ggml_compute_forward_ifairy_split_impl(
                     const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
                           float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                    const float x0 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t*)(src))[1]); //real
-                    const float x1 = GGML_CPU_FP16_TO_FP32(((ggml_fp16_t*)(src))[0]); //imag
+                    const float x0 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[0]); //real
+                    const float x1 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[1]); //imag
 
                     dst_data[0]      = x0;
                     dst_data[n_dims] = x1;
@@ -6168,11 +6168,11 @@ static void ggml_compute_forward_ifairy_merge_impl(
                     const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
                     float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                    const ggml_fp16_t x0 = GGML_CPU_FP32_TO_FP16(src[0]); //real
-                    const ggml_fp16_t x1 = GGML_CPU_FP32_TO_FP16(src[n_dims]); //imag
+                    const ggml_bf16_t x0 = GGML_FP32_TO_BF16(src[0]); //real
+                    const ggml_bf16_t x1 = GGML_FP32_TO_BF16(src[n_dims]); //imag
 
-                    ((ggml_fp16_t *)dst_data)[1]      = x0;
-                    ((ggml_fp16_t *)dst_data)[0]      = x1;
+                    ((ggml_bf16_t *)dst_data)[0]      = x0;
+                    ((ggml_bf16_t *)dst_data)[1]      = x1;
                 }
             }
         }
