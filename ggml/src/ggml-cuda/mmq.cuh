@@ -3024,13 +3024,9 @@ static __device__ __forceinline__ void mmq_write_back_mma(
     const int i0 = (threadIdx.y / ntx) * (ntx*tile_C::I);
 #if defined(TURING_MMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     static_assert(nwarps*tile_C::I == mmq_y, "nwarps*tile_C::I != mmq_y");
-<<<<<<< HEAD
 #else
     GGML_UNUSED(nwarps);
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
-=======
-#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
->>>>>>> 1912f816 (first commit naive test to enable mmq for RDNA4)
 
 #pragma unroll
     for (int j0 = 0; j0 < mmq_x; j0 += ntx*tile_C::J) {
