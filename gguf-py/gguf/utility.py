@@ -6,7 +6,10 @@ from typing import Literal
 
 import os
 import json
+import logging
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def fill_templated_filename(filename: str, output_type: str | None) -> str:
@@ -277,6 +280,7 @@ class SafetensorRemote:
 @dataclass
 class LocalTensorRange:
     filename: Path
+    block_size: int
     offset: int
     size: int
 
@@ -302,10 +306,13 @@ class SafetensorsLocal:
 
     tensors: dict[str, LocalTensor]
 
-    def __init__(self, filename: Path):
+    def __init__(self, filename: Path, *, reflink: bool = False):
+        stat = os.stat(filename)
+        # using the preferred block size to signal whether reflinks are desired when copying
+        block_size = stat.st_blksize if reflink else -1
         with open(filename, "rb") as f:
             metadata_length = int.from_bytes(f.read(8), byteorder='little')
-            file_size = os.stat(filename).st_size
+            file_size = stat.st_size
             if file_size < 8 + metadata_length:
                 raise ValueError(f"Could not read complete metadata. Need {8 + metadata_length} bytes, got {file_size}")
 
@@ -330,9 +337,10 @@ class SafetensorsLocal:
                     dtype=meta["dtype"],
                     shape=tuple(meta["shape"]),
                     data_range=LocalTensorRange(
-                        filename,
-                        data_start_offset + meta["data_offsets"][0],
-                        meta["data_offsets"][1] - meta["data_offsets"][0],
+                        filename=filename,
+                        block_size=block_size,
+                        offset=data_start_offset + meta["data_offsets"][0],
+                        size=meta["data_offsets"][1] - meta["data_offsets"][0],
                     ),
                 )
 

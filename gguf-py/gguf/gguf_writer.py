@@ -29,6 +29,7 @@ from .constants import (
     ExpertGatingFuncType,
 )
 
+from .lazy import best_extra_offset, count_reflinkable_size
 from .quants import quant_shape_from_byte_shape
 
 logger = logging.getLogger(__name__)
@@ -84,14 +85,16 @@ class GGUFWriter:
 
     def __init__(
         self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
-        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False
+        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
+        use_reflinks = False,  # opportunistically attempt to use copy-on-write
     ):
         self.fout = None
         self.path = Path(path) if path else None
         self.arch = arch
         self.endianess = endianess
         self.data_alignment = GGUF_DEFAULT_ALIGNMENT
-        self.use_temp_file = use_temp_file
+        self.use_reflinks = use_reflinks
+        self.use_temp_file = False if self.use_reflinks else use_temp_file
         self.temp_file = None
         self.tensors = [{}]
         self.kv_data = [{}]
@@ -178,13 +181,28 @@ class GGUFWriter:
             self.fout = [open(filename, "wb") for filename in filenames]
             self.state = WriterState.EMPTY
 
+            if self.use_reflinks:
+                # reflinks require alignment to the filesystem blocks
+                block_size = os.stat(self.path.parent).st_blksize
+                # necessary to get an appropriate data start offset when padding for reflinks;
+                # using the real alignment (8 bytes, from safetensors) would result in a unusable base data offset
+                self.data_alignment = block_size
+                # for all shards to allow reading them on their own
+                for i, kv in enumerate(self.kv_data):
+                    # insert at the start of the key-values
+                    if Keys.General.ALIGNMENT in kv:
+                        del kv[Keys.General.ALIGNMENT]
+                    self.kv_data[i] = {Keys.General.ALIGNMENT: GGUFValue(block_size, GGUFValueType.UINT32), **kv}
+
     def print_plan(self) -> list[Path]:
         logger.info("Writing the following files:")
         assert self.path is not None
         filenames = self.format_shard_names(self.path)
         assert len(filenames) == len(self.tensors)
         for name, tensors in zip(filenames, self.tensors):
-            logger.info(f"{name}: n_tensors = {len(tensors)}, total_size = {GGUFWriter.format_n_bytes_to_str(sum(ti.nbytes for ti in tensors.values()))}")
+            total_size = sum(ti.nbytes for ti in tensors.values())
+            reflinkable_size = count_reflinkable_size((name, ti.tensor) for name, ti in tensors.items()) if self.use_reflinks else 0
+            logger.info(f"{name}: n_tensors = {len(tensors)}, total_size = {GGUFWriter.format_n_bytes_to_str(total_size)}{', reflinked = ' + GGUFWriter.format_n_bytes_to_str(total_size - reflinkable_size) if self.use_reflinks else ''}")
 
         if self.dry_run:
             logger.info("Dry run, not writing files")
@@ -257,14 +275,18 @@ class GGUFWriter:
             offset_tensor = 0
 
             for name, ti in tensors.items():
+                extra_offset = 0
+                if self.use_reflinks:
+                    extra_offset = best_extra_offset(ti.tensor, offset_tensor)
+
                 ti_data += self._pack_val(name, GGUFValueType.STRING, add_vtype=False)
                 n_dims = len(ti.shape)
                 ti_data += self._pack("I", n_dims)
                 for j in range(n_dims):
                     ti_data += self._pack("Q", ti.shape[n_dims - 1 - j])
                 ti_data += self._pack("I", ti.dtype)
-                ti_data += self._pack("Q", offset_tensor)
-                offset_tensor += GGUFWriter.ggml_pad(ti.nbytes, self.data_alignment)
+                ti_data += self._pack("Q", offset_tensor + extra_offset)
+                offset_tensor += GGUFWriter.ggml_pad(ti.nbytes + extra_offset, self.data_alignment)
 
             fout.write(ti_data)
             fout.flush()
@@ -392,7 +414,7 @@ class GGUFWriter:
     def write_padding(self, fp: IO[bytes], n: int, align: int | None = None) -> None:
         pad = GGUFWriter.ggml_pad(n, align if align is not None else self.data_alignment) - n
         if pad != 0:
-            fp.write(bytes([0] * pad))
+            fp.write(b"\x00" * pad)
 
     def write_tensor_data(self, tensor: np.ndarray[Any, Any]) -> None:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
@@ -418,7 +440,7 @@ class GGUFWriter:
 
         self.write_padding(fout, fout.tell())
         tensor.tofile(fout)
-        self.write_padding(fout, tensor.nbytes)
+        self.write_padding(fout, fout.tell())
 
         self.state = WriterState.WEIGHTS
 
@@ -458,7 +480,7 @@ class GGUFWriter:
                         shard_bar.update(ti.nbytes)
                     if bar is not None:
                         bar.update(ti.nbytes)
-                    self.write_padding(fout, ti.nbytes)
+                    self.write_padding(fout, fout.tell())
                     ti.tensor = None
         else:
             self.temp_file.seek(0)
