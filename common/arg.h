@@ -59,8 +59,8 @@ struct common_arg {
     common_arg & set_sparam();
     bool in_example(enum llama_example ex);
     bool is_exclude(enum llama_example ex);
-    bool get_value_from_env(std::string & output);
-    bool has_value_from_env();
+    bool get_value_from_env(std::string & output) const;
+    bool has_value_from_env() const;
     std::string to_string();
 };
 
