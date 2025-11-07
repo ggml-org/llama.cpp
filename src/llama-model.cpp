@@ -6668,9 +6668,8 @@ ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
     return ::select_buft(
             *pimpl->dev_layer.at(il).buft_list,
             [&](ggml_context * ctx) {
-                const int n_embd_inp = hparams.n_embd_inp();
-                ggml_tensor * cur = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd_inp);
-                ggml_tensor * layer_dir = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd_inp);
+                ggml_tensor * cur = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd);
+                ggml_tensor * layer_dir = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd);
                 return ggml_add(ctx, cur, layer_dir);
             });
 }
