@@ -260,8 +260,8 @@ function(ggml_add_backend_library backend)
         else()
             install(TARGETS ${backend}
                     EXPORT ggml-targets
-                    LIBRARY DESTINATION ${CMAKE_BINARY_DIR}
-                    RUNTIME DESTINATION ${CMAKE_BINARY_DIR})
+                    LIBRARY DESTINATION ${CMAKE_INSTALL_BINDIR}
+                    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
         endif()
     else()
         add_library(${backend} ${ARGN})
