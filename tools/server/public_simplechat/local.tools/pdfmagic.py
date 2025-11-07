@@ -12,14 +12,19 @@ if TYPE_CHECKING:
 
 def extract_pdfoutline(ol: Any, prefix: str):
     """
-    Extract the pdf outline
+    Extract the pdf outline recursively.
+    1st tuple entry returned indicates whether to increase outline entry numbering
+    2nd tuple entry returns the outline string that provides the extracted outline.
     """
     if type(ol).__name__ != type([]).__name__:
-        return f"{prefix}:{ol['/Title']}\n"
+        return (1, f"{prefix}:{ol['/Title']}\n")
     olText = ""
+    olNum = 1
     for (i,iol) in enumerate(ol):
-        olText += extract_pdfoutline(iol, f"{prefix}.{i+1}")
-    return olText
+        got = extract_pdfoutline(iol, f"{prefix}.{olNum}")
+        olNum += got[0]
+        olText += got[1]
+    return (0, olText)
 
 
 def process_pdftext(url: str, startPN: int, endPN: int):
@@ -48,7 +53,8 @@ def process_pdftext(url: str, startPN: int, endPN: int):
         startPN = 1
     if (endPN <= 0) or (endPN > len(oPdf.pages)):
         endPN = len(oPdf.pages)
-    tPdf += extract_pdfoutline(oPdf.outline, "")
+    outlineGot = extract_pdfoutline(oPdf.outline, "")
+    tPdf += outlineGot[1]
     for i in range(startPN, endPN+1):
         pd = oPdf.pages[i-1]
         tPdf = tPdf + pd.extract_text()
