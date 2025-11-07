@@ -1690,6 +1690,9 @@ struct server_slot {
         bool res = prompt_cache.load(prompt, tokens, ctx, id);
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
+
+            llama_memory_seq_rm(llama_get_memory(ctx), id, -1, -1);
+            prompt.tokens.clear();
         }
     }
 
