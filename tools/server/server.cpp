@@ -2823,6 +2823,8 @@ struct server_context {
                 send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
+
+            SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl).c_str());
         }
 
         // initialize draft batch
