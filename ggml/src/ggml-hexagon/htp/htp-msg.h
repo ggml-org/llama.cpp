@@ -111,6 +111,28 @@ static const char * htp_type_name(uint32_t t) {
     return 0;
 }
 
+// See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
+// Precompute mp (m' in the paper) and L such that division
+// can be computed using a multiply (high 32b of 64b result)
+// and a shift:
+//
+// n/d = (mulhi(n, mp) + n) >> L;
+struct fastdiv_values {
+    uint32_t mp;
+    uint32_t l;
+};
+
+static inline struct fastdiv_values init_fastdiv_values(uint32_t d) {
+    struct fastdiv_values result = { 0, 0 };
+    // compute L = ceil(log2(d));
+    while (result.l < 32 && ((uint32_t) 1 << result.l) < d) {
+        ++(result.l);
+    }
+
+    result.mp = (uint32_t) (((uint64_t) 1 << 32) * (((uint64_t) 1 << result.l) - d) / d + 1);
+    return result;
+}
+
 // Internal types
 #define QK_Q4_0x4x2  256  // 4x Q4_0 blocks packed with next 4x Q4_0 blocks (size in bytes 128)
 #define QK_Q8_0x4x2  256  // 4x Q8_0 blocks concat with next 4x Q8_0 blocks
@@ -119,10 +141,15 @@ static const char * htp_type_name(uint32_t t) {
 #define HTP_MAX_DIMS 4
 
 struct htp_tensor {
-    uint32_t data;              // Buffer offset in the messages, and data pointer on the NSP
-    uint32_t type;              // Data type
-    uint32_t ne[HTP_MAX_DIMS];  // Number of elements
-    uint32_t nb[HTP_MAX_DIMS];  // Stride in bytes (see ggml.h ggml_tensor)
+    uint32_t data;                // Buffer offset in the messages, and data pointer on the NSP
+    uint32_t type;                // Data type
+    uint32_t ne[HTP_MAX_DIMS];    // Number of elements
+    uint32_t nb[HTP_MAX_DIMS];    // Stride in bytes (see ggml.h ggml_tensor)
+
+    struct fastdiv_values div21;  // fastdiv values for ne2 * ne1
+    struct fastdiv_values div3;   // fastdiv values for ne3
+    struct fastdiv_values div2;   // fastdiv values for ne2
+    struct fastdiv_values div1;   // fastdiv values for ne1
 };
 
 #define HTP_MAX_OP_PARAMS 64

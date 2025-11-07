@@ -115,21 +115,14 @@ static void binary_job_f32_per_thread(const struct htp_tensor * src0,
     const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
 
     const uint32_t ne0201 = ne02 * ne01;
-
-    const struct fastdiv_values div0201 = init_fastdiv_values(ne0201);
-    const struct fastdiv_values div01   = init_fastdiv_values(ne01);
-    const struct fastdiv_values div13   = init_fastdiv_values(ne13);
-    const struct fastdiv_values div12   = init_fastdiv_values(ne12);
-    const struct fastdiv_values div11   = init_fastdiv_values(ne11);
-
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
-        const uint32_t i03 = fastdiv(ir, &div0201);
-        const uint32_t i02 = fastdiv(ir - i03 * ne0201, &div01);
+        const uint32_t i03 = fastdiv(ir, &src0->div21);
+        const uint32_t i02 = fastdiv(ir - i03 * ne0201, &src0->div1);
         const uint32_t i01 = (ir - i03 * ne0201 - i02 * ne01);
 
-        const uint32_t i13 = fastmodulo(i03, &div13);
-        const uint32_t i12 = fastmodulo(i02, &div12);
-        const uint32_t i11 = fastmodulo(i01, &div11);
+        const uint32_t i13 = fastmodulo(i03, ne13, &src1->div3);
+        const uint32_t i12 = fastmodulo(i02, ne12, &src1->div2);
+        const uint32_t i11 = fastmodulo(i01, ne11, &src1->div1);
 
         const uint8_t * restrict src1_ptr = data_src1 + i13 * nb13 + i12 * nb12 + i11 * src1_row_size;
 

@@ -2333,7 +2333,7 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
 }
 
 // Init hexagon tensor from GGML tensor and Hexagon buffer
-static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t) {
+static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t, bool is_src) {
     h->data  = 0;  // updated by the receiver
     h->type  = t->type;
     h->ne[0] = t->ne[0];
@@ -2344,6 +2344,13 @@ static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t) {
     h->nb[1] = t->nb[1];
     h->nb[2] = t->nb[2];
     h->nb[3] = t->nb[3];
+
+    if (is_src) {
+        h->div21 = init_fastdiv_values(h->ne[2] * h->ne[1]);
+        h->div3  = init_fastdiv_values(h->ne[3]);
+        h->div2  = init_fastdiv_values(h->ne[2]);
+        h->div1  = init_fastdiv_values(h->ne[1]);
+    }
 }
 
 static void hex_dump_dspbuf(const struct ggml_tensor * t, const dspqueue_buffer * d) {
@@ -2372,9 +2379,9 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     req.op    = HTP_OP_MUL_MAT;
     req.flags = flags;
 
-    init_htp_tensor(&req.src0, src0);
-    init_htp_tensor(&req.src1, src1);
-    init_htp_tensor(&req.dst, dst);
+    init_htp_tensor(&req.src0, src0, true);
+    init_htp_tensor(&req.src1, src1, true);
+    init_htp_tensor(&req.dst, dst, false);
 
     // Use opmask to override flags
     if (!(opt_opmask & HTP_OPMASK_QUANTIZE)) {
@@ -2476,10 +2483,10 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     req.op    = HTP_OP_MUL_MAT_ID;
     req.flags = flags;
 
-    init_htp_tensor(&req.src0, src0);
-    init_htp_tensor(&req.src1, src1);
-    init_htp_tensor(&req.src2, src2);
-    init_htp_tensor(&req.dst, dst);
+    init_htp_tensor(&req.src0, src0, true);
+    init_htp_tensor(&req.src1, src1, true);
+    init_htp_tensor(&req.src2, src2, true);
+    init_htp_tensor(&req.dst, dst, false);
 
     // Use opmask to override flags
     if (!(opt_opmask & HTP_OPMASK_QUANTIZE)) {
@@ -2616,9 +2623,9 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
             GGML_ABORT("ggml-hex: binary : unsupported op:%d\n", node->op);
     }
 
-    init_htp_tensor(&req.src0, src0);
-    init_htp_tensor(&req.src1, src1);
-    init_htp_tensor(&req.dst, dst);
+    init_htp_tensor(&req.src0, src0, true);
+    init_htp_tensor(&req.src1, src1, true);
+    init_htp_tensor(&req.dst, dst, false);
 
     dspqueue_buffer bufs[3];
     memset(bufs, 0, sizeof(bufs));
@@ -2735,10 +2742,10 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
             GGML_ABORT("ggml-hex: unsupported op:%d\n", node->op);
     }
 
-    init_htp_tensor(&req.src0, src0);
-    init_htp_tensor(&req.src1, src1);
-    init_htp_tensor(&req.src2, src2);
-    init_htp_tensor(&req.dst, dst);
+    init_htp_tensor(&req.src0, src0, true);
+    init_htp_tensor(&req.src1, src1, true);
+    init_htp_tensor(&req.src2, src2, true);
+    init_htp_tensor(&req.dst, dst, false);
 
     dspqueue_buffer bufs[4];
     memset(bufs, 0, sizeof(bufs));
@@ -2871,10 +2878,10 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
         GGML_ABORT("ggml-hex: unary : unsupported op:%d\n", op->op);
     }
 
-    init_htp_tensor(&req.dst, dst);
-    init_htp_tensor(&req.src0, src0);
+    init_htp_tensor(&req.dst, dst, false);
+    init_htp_tensor(&req.src0, src0, true);
     if (src1) {
-        init_htp_tensor(&req.src1, src1);
+        init_htp_tensor(&req.src1, src1, true);
     }
 
     // Use opmask to override flags
@@ -3007,11 +3014,11 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     req.flags = flags;
     req.op    = HTP_OP_ROPE;
 
-    init_htp_tensor(&req.dst, dst);
-    init_htp_tensor(&req.src0, src0);
-    init_htp_tensor(&req.src1, src1);
+    init_htp_tensor(&req.dst, dst, false);
+    init_htp_tensor(&req.src0, src0, true);
+    init_htp_tensor(&req.src1, src1, true);
     if (src2) {
-        init_htp_tensor(&req.src2, src2);
+        init_htp_tensor(&req.src2, src2, true);
     }
 
     // Use opmask to override flags
