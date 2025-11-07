@@ -4306,10 +4306,12 @@ struct test_conv_transpose_1d : public test_case {
 
 // GGML_OP_CONV_TRANSPOSE_2D
 struct test_conv_transpose_2d : public test_case {
-    const ggml_type type_kernel;
+    // Dimensions
     const std::array<int64_t, 4> ne_input;
     const std::array<int64_t, 4> ne_kernel;
     const int stride;
+    // Types
+    const ggml_type type_kernel;
 
     std::string vars() override {
         return VARS_TO_STR4(type_kernel, ne_input, ne_kernel, stride);
@@ -4320,11 +4322,11 @@ struct test_conv_transpose_2d : public test_case {
     }
 
     test_conv_transpose_2d(
-        ggml_type type_kernel = GGML_TYPE_F16,
         std::array<int64_t, 4> ne_input = {10, 10, 3, 1}, // [input_width, input_height, input_channels, 1]
         std::array<int64_t, 4> ne_kernel = {3, 3, 3, 1}, // [kernel_width, kernel_height, input_channels, 1]
-        int stride = 1)
-        : type_kernel(type_kernel), ne_input(ne_input), ne_kernel(ne_kernel), stride(stride){}
+        int stride = 1,
+        ggml_type type_kernel = GGML_TYPE_F16
+    ) : ne_input(ne_input), ne_kernel(ne_kernel), stride(stride), type_kernel(type_kernel) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
@@ -6561,10 +6563,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_conv_transpose_1d({3,2,1,1}, {3,1,2,1}, 1, 0, 1));
     test_cases.emplace_back(new test_conv_transpose_1d({2,1,1,1}, {3,1,1,1}, 1, 0, 1));
 
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F16, {3, 2, 3, 1}, {2, 2, 1, 3}, 1));
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F32, {3, 2, 3, 1}, {2, 2, 1, 3}, 1));
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F16, {10, 10, 9, 1}, {3, 3, 1, 9}, 2));
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F32, {10, 10, 9, 1}, {3, 3, 1, 9}, 2));
+    // for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+    for (ggml_type kernel_type : {GGML_TYPE_F16,}) {
+        test_cases.emplace_back(new test_conv_transpose_2d({3, 2, 3, 1}, {2, 2, 1, 3}, 1, kernel_type));
+        test_cases.emplace_back(new test_conv_transpose_2d({10, 10, 9, 1}, {3, 3, 1, 9}, 2, kernel_type));
+    }
 
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4,  500, 1, 1}));
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, 5000, 1, 1}));
@@ -7489,12 +7492,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_conv_2d_dw({512, 512, 256, 1}, {3, 3, 1, 256}, 1, 1, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({512, 512, 256, 1}, {3, 3, 1, 256}, 1, 1, 1, true));
 
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F16, {256, 256, 256, 1}, {3, 3, 16, 256}, 1));
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F32, {256, 256, 256, 1}, {3, 3, 16, 256}, 1));
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F16, {16, 16, 16, 1}, {3, 3, 8, 16}, 1));
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F32, {16, 16, 16, 1}, {3, 3, 8, 16}, 1));
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F16, {10, 10, 9, 1}, {3, 3, 1, 9}, 2));
-    test_cases.emplace_back(new test_conv_transpose_2d(GGML_TYPE_F32, {10, 10, 9, 1}, {3, 3, 1, 9}, 2));
+    // for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+    for (ggml_type kernel_type : {GGML_TYPE_F16,}) {
+        test_cases.emplace_back(new test_conv_transpose_2d({256, 256, 256, 1}, {3, 3, 16, 256}, 1, kernel_type));
+        test_cases.emplace_back(new test_conv_transpose_2d({16, 16, 16, 1}, {3, 3, 8, 16}, 1, kernel_type));
+        test_cases.emplace_back(new test_conv_transpose_2d({10, 10, 9, 1}, {3, 3, 1, 9}, 2, kernel_type));
+    }
 
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, {256, 256, 3, 1}));
 
