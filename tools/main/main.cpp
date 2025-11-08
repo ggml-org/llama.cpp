@@ -5,6 +5,7 @@
 #include "sampling.h"
 #include "llama.h"
 #include "chat.h"
+#include "gguf.h"
 
 #include <cstdio>
 #include <cstring>
@@ -14,6 +15,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <mutex>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -41,6 +44,18 @@ static std::vector<llama_token> * g_output_tokens;
 static bool is_interacting  = false;
 static bool need_insert_eot = false;
 
+// Activation dumping structures
+struct activation_tensor {
+    std::string name;
+    std::vector<int64_t> ne;  // dimensions
+    ggml_type type;
+    std::vector<char> data;
+};
+
+static std::unordered_map<std::string, activation_tensor> g_activations;
+static std::mutex g_activations_mutex;
+static bool g_dump_activations = false;
+
 static void print_usage(int argc, char ** argv) {
     (void) argc;
 
@@ -60,6 +75,189 @@ static bool file_is_empty(const std::string & path) {
     f.exceptions(std::ifstream::failbit | std::ifstream::badbit);
     f.open(path.c_str(), std::ios::in | std::ios::binary | std::ios::ate);
     return f.tellg() == 0;
+}
+
+// Filter tensor name (remove backend prefix and suffix)
+static std::string filter_tensor_name(const char * name) {
+    std::string wname;
+    const char * p = strchr(name, '#');
+    if (p != NULL) {
+        p = p + 1;
+        const char * q = strchr(p, '#');
+        if (q != NULL) {
+            wname = std::string(p, q - p);
+        } else {
+            wname = p;
+        }
+    } else {
+        wname = name;
+    }
+    return wname;
+}
+
+// Callback for collecting activations
+static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_data) {
+    (void) user_data;
+
+    if (!g_dump_activations) {
+        return false;
+    }
+
+    // Filter for interesting operations and tensors
+    if (ask) {
+        // We're interested in capturing activations from various operations
+        if (t->op == GGML_OP_MUL_MAT || t->op == GGML_OP_MUL_MAT_ID ||
+            t->op == GGML_OP_ADD || t->op == GGML_OP_MUL ||
+            t->op == GGML_OP_NORM || t->op == GGML_OP_RMS_NORM) {
+            return true;
+        }
+        return false;
+    }
+
+    // Collect the tensor data
+    std::lock_guard<std::mutex> lock(g_activations_mutex);
+
+    std::string tensor_name = filter_tensor_name(t->name);
+    if (tensor_name.empty()) {
+        tensor_name = std::string(t->name);
+    }
+
+    // Check if we already have this tensor (to avoid duplicates)
+    if (g_activations.find(tensor_name) != g_activations.end()) {
+        return true;
+    }
+
+    activation_tensor act;
+    act.name = tensor_name;
+    act.type = t->type;
+
+    // Store dimensions
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        act.ne.push_back(t->ne[i]);
+    }
+
+    // Copy tensor data
+    const size_t tensor_size = ggml_nbytes(t);
+    act.data.resize(tensor_size);
+
+    const bool is_host = ggml_backend_buffer_is_host(t->buffer);
+    if (is_host) {
+        memcpy(act.data.data(), t->data, tensor_size);
+    } else {
+        ggml_backend_tensor_get(t, act.data.data(), 0, tensor_size);
+    }
+
+    g_activations[tensor_name] = std::move(act);
+
+    return true;
+}
+
+// Save collected activations to GGUF file
+static bool save_activations_to_gguf(const std::string & filename) {
+    if (g_activations.empty()) {
+        LOG_ERR("No activations collected to save\n");
+        return false;
+    }
+
+    LOG("Saving %zu activations to %s\n", g_activations.size(), filename.c_str());
+
+    struct gguf_context * ctx = gguf_init_empty();
+
+    // Add metadata
+    gguf_set_val_u32(ctx, "activation.version", 1);
+    gguf_set_val_u32(ctx, "activation.count", (uint32_t)g_activations.size());
+
+    // Create a ggml context for tensor management
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ 1024ull*1024ull*1024ull, // 1GB should be enough for metadata
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,  // We already have the data, don't allocate
+    };
+
+    struct ggml_context * ctx_data = ggml_init(params);
+
+    // Add each activation tensor
+    for (auto & pair : g_activations) {
+        activation_tensor & act = pair.second;
+
+        // Create tensor
+        struct ggml_tensor * tensor = ggml_new_tensor(ctx_data, act.type, GGML_MAX_DIMS, act.ne.data());
+        ggml_set_name(tensor, act.name.c_str());
+
+        // Set tensor data pointer (non-const since ggml_tensor->data is void*)
+        tensor->data = act.data.data();
+
+        // Add to GGUF
+        gguf_add_tensor(ctx, tensor);
+    }
+
+    // Write to file
+    gguf_write_to_file(ctx, filename.c_str(), false);
+
+    LOG("Successfully saved %zu activations\n", g_activations.size());
+
+    ggml_free(ctx_data);
+    gguf_free(ctx);
+
+    return true;
+}
+
+// Load activations from GGUF file
+static bool load_activations_from_gguf(const std::string & filename) {
+    LOG("Loading activations from %s\n", filename.c_str());
+
+    struct ggml_context * ctx_data = NULL;
+
+    struct gguf_init_params params = {
+        /*.no_alloc = */ false,
+        /*.ctx      = */ &ctx_data,
+    };
+
+    struct gguf_context * ctx = gguf_init_from_file(filename.c_str(), params);
+
+    if (!ctx) {
+        LOG_ERR("Failed to load activations from %s\n", filename.c_str());
+        return false;
+    }
+
+    // Read metadata
+    const int n_kv = gguf_get_n_kv(ctx);
+    LOG("Activation file contains %d metadata entries\n", n_kv);
+
+    for (int i = 0; i < n_kv; i++) {
+        const char * key = gguf_get_key(ctx, i);
+        const enum gguf_type type = gguf_get_kv_type(ctx, i);
+
+        if (strcmp(key, "activation.count") == 0 && type == GGUF_TYPE_UINT32) {
+            uint32_t count = gguf_get_val_u32(ctx, i);
+            LOG("  activation.count = %u\n", count);
+        } else if (strcmp(key, "activation.version") == 0 && type == GGUF_TYPE_UINT32) {
+            uint32_t version = gguf_get_val_u32(ctx, i);
+            LOG("  activation.version = %u\n", version);
+        }
+    }
+
+    // Read tensors
+    const int n_tensors = gguf_get_n_tensors(ctx);
+    LOG("Loaded %d activation tensors:\n", n_tensors);
+
+    for (int i = 0; i < n_tensors; i++) {
+        const char * name = gguf_get_tensor_name(ctx, i);
+        struct ggml_tensor * tensor = ggml_get_tensor(ctx_data, name);
+
+        if (tensor) {
+            LOG("  [%d] %s: type=%s, dims=[", i, name, ggml_type_name(tensor->type));
+            for (int j = 0; j < GGML_MAX_DIMS; j++) {
+                if (j > 0) LOG(", ");
+                LOG("%lld", (long long)tensor->ne[j]);
+            }
+            LOG("], size=%zu bytes\n", ggml_nbytes(tensor));
+        }
+    }
+
+    gguf_free(ctx);
+
+    return true;
 }
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
@@ -145,6 +343,21 @@ int main(int argc, char ** argv) {
     if (model == NULL) {
         LOG_ERR("%s: error: unable to load model\n", __func__);
         return 1;
+    }
+
+    // Handle activation loading
+    if (!params.path_load_activations.empty()) {
+        if (!load_activations_from_gguf(params.path_load_activations)) {
+            LOG_ERR("%s: failed to load activations\n", __func__);
+            return 1;
+        }
+    }
+
+    // Setup activation dumping callback
+    if (!params.path_dump_activations.empty()) {
+        g_dump_activations = true;
+        params.cb_eval = activation_collector;
+        LOG("Activation dumping enabled, will save to: %s\n", params.path_dump_activations.c_str());
     }
 
     auto * mem = llama_get_memory(ctx);
@@ -979,6 +1192,14 @@ int main(int argc, char ** argv) {
     }
 
     LOG("\n\n");
+
+    // Save activations if dumping was enabled
+    if (g_dump_activations && !params.path_dump_activations.empty()) {
+        if (!save_activations_to_gguf(params.path_dump_activations)) {
+            LOG_ERR("%s: failed to save activations\n", __func__);
+        }
+    }
+
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);

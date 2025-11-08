@@ -1111,6 +1111,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
+        {"--dump-activations"}, "FNAME",
+        "file to dump activations to in GGUF format (default: none)",
+        [](common_params & params, const std::string & value) {
+            params.path_dump_activations = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    add_opt(common_arg(
+        {"--load-activations"}, "FNAME",
+        "file to load activations from in GGUF format (default: none)",
+        [](common_params & params, const std::string & value) {
+            params.path_load_activations = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    add_opt(common_arg(
         {"-r", "--reverse-prompt"}, "PROMPT",
         "halt generation at PROMPT, return control in interactive mode\n",
         [](common_params & params, const std::string & value) {
