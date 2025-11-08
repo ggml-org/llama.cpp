@@ -98,6 +98,9 @@
     flex-shrink: 1;
     min-height: 40vh;
 }
+#user-in[data-role="TOOL.TEMP"] {
+    background-color: lightyellow;
+}
 button {
     padding-inline: 2vmin;
 }
