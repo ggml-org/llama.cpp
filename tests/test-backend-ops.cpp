@@ -5835,7 +5835,7 @@ struct test_opt_step_adamw : public test_case {
     }
 };
 
-// OP_OPT_STEP_SGD
+// GGML_OP_OPT_STEP_SGD
 struct test_opt_step_sgd : public test_case {
     const ggml_type              type;
     const std::array<int64_t, 4> ne;
