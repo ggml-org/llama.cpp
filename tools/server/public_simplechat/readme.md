@@ -680,6 +680,25 @@ sliding window based drop off or even before they kick in, this can help in many
 * extract and include the outline of titles (along with calculated numbering) in the text output of pdftext
   * ensure that one doesnt recurse beyond a predefined limit.
 
+* Convert NSChatMessage from typedef to Class and update ChatMessageEx, SimpleChat, MultiChatUI classes to
+  make use of the same.
+  * helpers consolidated
+    * helpers to check if given instance contains reasoning or content or toolcall or tool response related
+      fields/info in them.
+    * helpers to get the corresponding field values
+    * some of these helpers where in ChatMessageEx and beyond before
+  * now the network handshaked fields are declared as undefined by default (instead of empty values).
+    this ensures that json stringify will automatically discard fields whose values are still undefined.
+  * add fields wrt tool response and update full flow to directly work with these fields instead of the
+    xml based serialisation which was previously used for maintaining the different tool response fields
+    within the content field (and inturn extract from there when sending to server).
+    * now a dataset based attribute is used to identify when input element contains user input and when
+      it contains tool call result/response.
+  * this simplifies the flow wrt showing chat message (also make it appear more cleanly) as well as
+    identifying not yet accepted tool result and showing in user query input field and related things.
+  * ALERT: ON-DISK-STORAGE structure of chat sessions have changed wrt tool responses. So old saves will
+    no longer work wrt tool responses
+
 
 #### ToDo
 
