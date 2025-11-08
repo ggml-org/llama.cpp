@@ -677,14 +677,12 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                 uint32_t (&reg_)[2] = reinterpret_cast<uint32_t(&)[2]>(acc_register_[mma_m][mma_n]);
                 uint idx = output_sts_addr +
                             mma_m * MMA_M * BN / 2 + (mma_n - i * mma_tiles_per_warp_n/2) * MMA_N;
-                uint idx8 = idx + 8 * BN / 2;
                 idx = idx ^ ((idx & 0b110000000000) >> 9);
                 idx = idx ^ ((idx & 0b1110000000) >> 4);
                 uint32_t* dst_ptr = reinterpret_cast<uint32_t*>(&smemoutput[idx]);
                 dst_ptr[0] = reg_[0];
-                idx8 = idx8 ^ ((idx8 & 0b110000000000) >> 9);
-                idx8 = idx8 ^ ((idx8 & 0b1110000000) >> 4);
-                dst_ptr = reinterpret_cast<uint32_t*>(&smemoutput[idx8]);
+                idx = (idx + 8 * BN / 2 ) ^ 0b010;
+                dst_ptr = reinterpret_cast<uint32_t*>(&smemoutput[idx]);
                 dst_ptr[0] = reg_[1];
             }
         }
