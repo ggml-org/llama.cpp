@@ -72,7 +72,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-        if (thread_row < param.k && curR < param.r && curS < param.s && curC < param.c && ki < end_k){
+        if (thread_row + blockIdx.x * TILE_ROWS < param.k && curR < param.r && curS < param.s && curC < param.c && ki < end_k){
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
             dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
@@ -273,7 +273,7 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
         const unsigned int src_index = thread_row * src_stride + ki;
-        if (thread_row < param.k && curR < param.r && curS < param.s && curC < param.c && ki < end_k){
+        if (thread_row + blockIdx.x * TILE_ROWS < param.k && curR < param.r && curS < param.s && curC < param.c && ki < end_k){
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
             dst_reg[i] = make_float4(0.f, 0.f, 0.f, 0.f);

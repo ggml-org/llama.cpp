@@ -856,13 +856,10 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         const unsigned int shmem_bytes = (BM_dim * BK_dim + BK_dim * BN_dim) * 2 * sizeof(half);
 
         const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
-        // const unsigned int ksplit = 6;
         // if (BlocksM * BlocksN < nsm && P.c >= 8 * ksplit && (P.c * P.r * P.s) % (8*ksplit) == 0) {
-        printf("split factor info = %d, %d, %d \n", BlocksM, BlocksN, nsm / (BlocksM * BlocksN));
-        if (BlocksM * BlocksN < nsm && nsm / (BlocksM * BlocksN) <= 8 ){
+        if (BlocksM * BlocksN < nsm){
 
             int ks = nsm / (BlocksM * BlocksN);
-            printf("split factor init = %d \n", ks);
             int j;
             bool can_split = false;
             for (j = ks; j >= 2; j--){
@@ -872,7 +869,6 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
                }
             }
             if(can_split){
-              printf("split factor = %d \n", j);
               if (j == 2) {
                 const unsigned int ksplit = 2;
                 launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, ksplit,
@@ -899,6 +895,22 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 8) {
                 const unsigned int ksplit = 8;
+                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, ksplit,
+                ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
+              } else if (j == 9) {
+                const unsigned int ksplit = 9;
+                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, ksplit,
+                ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
+              } else if (j == 10) {
+                const unsigned int ksplit = 10;
+                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, ksplit,
+                ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
+              } else if (j == 11) {
+                const unsigned int ksplit = 11;
+                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, ksplit,
+                ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
+              } else {
+                const unsigned int ksplit = 12;
                 launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, ksplit,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               }
