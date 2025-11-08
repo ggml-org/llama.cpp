@@ -253,7 +253,7 @@ class ChatMessageEx {
      * @param {ChatMessageEx} old
      */
     static newFrom(old) {
-        return new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls), old.trimmedContent)
+        return new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.ns.tool_call_id, old.ns.name), old.trimmedContent)
     }
 
     clear() {
@@ -465,7 +465,7 @@ class SimpleChat {
         this.iLastSys = ods.iLastSys;
         this.xchat = [];
         for (const cur of ods.xchat) {
-            this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls), cur.trimmedContent))
+            this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.ns.tool_call_id, cur.ns.name), cur.trimmedContent))
         }
     }
 
@@ -1053,10 +1053,10 @@ class MultiChatUI {
         }
         if (msg.ns.has_toolresponse()) {
             if (msg.ns.tool_call_id) {
-                showList.push(['toolcallid', msg.ns.tool_call_id])
+                showList.push(['toolcallid', `tool-call-id: ${msg.ns.tool_call_id}`])
             }
             if (msg.ns.name) {
-                showList.push(['toolname', msg.ns.name])
+                showList.push(['toolname', `tool-name: ${msg.ns.name}`])
             }
         }
         if (msg.ns.getContent().trim().length > 0) {
