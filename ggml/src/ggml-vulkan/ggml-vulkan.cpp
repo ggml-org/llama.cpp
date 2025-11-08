@@ -351,6 +351,12 @@ enum vk_conv_shapes {
     CONV_SHAPE_COUNT,
 };
 
+uint32_t conv_shapes_wg_denoms[][3] = {
+    { 128, 128, 1 },
+    {  64,  32, 1 },
+    {  32, 256, 1 },
+};
+
 enum dmmv_wg_sizes {
     DMMV_WG_SIZE_SUBGROUP,
     DMMV_WG_SIZE_LARGE,
@@ -376,6 +382,18 @@ struct vk_fa_pipeline_state {
     bool operator<(const vk_fa_pipeline_state &b) const {
         return std::tie(HSK, HSV, small_rows, path, aligned, f32acc) <
                std::tie(b.HSK, b.HSV, b.small_rows, b.path, b.aligned, b.f32acc);
+    }
+};
+
+struct vk_conv2d_pipeline_state {
+    vk_conv2d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t p0, uint32_t p1, uint32_t d0, uint32_t d1, uint32_t KW, uint32_t KH)
+        : s0(s0), s1(s1), p0(p0), p1(p1), d0(d0), d1(d1), KW(KW), KH(KH) {}
+
+    uint32_t s0, s1, p0, p1, d0, d1, KW, KH;
+
+    bool operator<(const vk_conv2d_pipeline_state &b) const {
+        return std::tie(s0, s1, p0, p1, d0, d1, KW, KH) <
+               std::tie(b.s0, b.s1, b.p0, b.p1, b.d0, b.d1, b.KW, b.KH);
     }
 };
 
@@ -675,10 +693,10 @@ struct vk_device_struct {
     vk_pipeline pipeline_ssm_conv_f32;
     vk_pipeline pipeline_opt_step_adamw_f32;
     vk_pipeline pipeline_opt_step_sgd_f32;
-    vk_pipeline pipeline_conv2d_f32[CONV_SHAPE_COUNT];
-    vk_pipeline pipeline_conv2d_f16_f32[CONV_SHAPE_COUNT];
-    vk_pipeline pipeline_conv_transpose_2d_f32[CONV_SHAPE_COUNT];
-    vk_pipeline pipeline_conv_transpose_2d_f16_f32[CONV_SHAPE_COUNT];
+    std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f32[CONV_SHAPE_COUNT];
+    std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f16_f32[CONV_SHAPE_COUNT];
+    std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f32[CONV_SHAPE_COUNT];
+    std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f16_f32[CONV_SHAPE_COUNT];
     vk_pipeline pipeline_conv2d_dw_whcn_f32, pipeline_conv2d_dw_whcn_f16_f32;
     vk_pipeline pipeline_conv2d_dw_cwhn_f32, pipeline_conv2d_dw_cwhn_f16_f32;
 
@@ -1258,17 +1276,13 @@ struct vk_op_conv2d_push_constants {
     uint32_t nb2;
     uint32_t nb3;
 
-    // init_fastdiv_values constants for dividing by KW, KW*KH, OW, OW*OH
-    uint32_t KWmp;   uint32_t KWL;
-    uint32_t KWKHmp; uint32_t KWKHL;
+    // init_fastdiv_values constants for dividing by OW, OW*OH
     uint32_t OWmp;   uint32_t OWL;
     uint32_t OWOHmp; uint32_t OWOHL;
 };
 
 template <> void init_pushconst_fastdiv(vk_op_conv2d_push_constants &p) {
-    // Compute magic values to divide by KW, KW*KH, OW, OW*OH
-    init_fastdiv_values(p.KW,       p.KWmp,    p.KWL);
-    init_fastdiv_values(p.KW*p.KH,  p.KWKHmp,  p.KWKHL);
+    // Compute magic values to divide by OW, OW*OH
     init_fastdiv_values(p.OW,       p.OWmp,    p.OWL);
     init_fastdiv_values(p.OW*p.OH,  p.OWOHmp,  p.OWOHL);
 }
@@ -1304,23 +1318,15 @@ struct vk_op_conv_transpose_2d_push_constants {
     uint32_t nb2;
     uint32_t nb3;
 
-    // init_fastdiv_values constants for dividing by KW, KW*KH, OW, OW*OH, s0, s1
-    uint32_t KWmp;   uint32_t KWL;
-    uint32_t KWKHmp; uint32_t KWKHL;
+    // init_fastdiv_values constants for dividing by OW, OW*OH
     uint32_t OWmp;   uint32_t OWL;
     uint32_t OWOHmp; uint32_t OWOHL;
-    uint32_t s0mp; uint32_t s0L;
-    uint32_t s1mp; uint32_t s1L;
 };
 
 template <> void init_pushconst_fastdiv(vk_op_conv_transpose_2d_push_constants &p) {
-    // Compute magic values to divide by KW, KW*KH, OW, OW*OH, s0, s1
-    init_fastdiv_values(p.KW,       p.KWmp,    p.KWL);
-    init_fastdiv_values(p.KW*p.KH,  p.KWKHmp,  p.KWKHL);
+    // Compute magic values to divide by OW, OW*OH
     init_fastdiv_values(p.OW,       p.OWmp,    p.OWL);
     init_fastdiv_values(p.OW*p.OH,  p.OWOHmp,  p.OWOHL);
-    init_fastdiv_values(p.s0,       p.s0mp,    p.s0L);
-    init_fastdiv_values(p.s1,       p.s1mp,    p.s1L);
 }
 
 struct vk_op_conv2d_dw_push_constants {
@@ -3858,22 +3864,22 @@ static void ggml_vk_load_shaders(vk_device& device) {
         switch (s) {
         default:
         case CONV_SHAPE_128x128:
-            conv2d_BS_K = 128;
-            conv2d_BS_NPQ = 128;
+            conv2d_BS_K = conv_shapes_wg_denoms[CONV_SHAPE_128x128][0];
+            conv2d_BS_NPQ = conv_shapes_wg_denoms[CONV_SHAPE_128x128][1];
             conv2d_BS_CRS = 16;
             if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != vk_device_architecture::AMD_GCN) {
                 conv2d_UNROLL = false;
             }
             break;
         case CONV_SHAPE_64x32:
-            conv2d_BS_K = 64;
-            conv2d_BS_NPQ = 32;
+            conv2d_BS_K = conv_shapes_wg_denoms[CONV_SHAPE_64x32][0];
+            conv2d_BS_NPQ = conv_shapes_wg_denoms[CONV_SHAPE_64x32][1];
             conv2d_BS_CRS = 32;
             conv2d_TS_K   = 4;
             break;
         case CONV_SHAPE_32x256:
-            conv2d_BS_K = 32;
-            conv2d_BS_NPQ = 256;
+            conv2d_BS_K = conv_shapes_wg_denoms[CONV_SHAPE_32x256][0];
+            conv2d_BS_NPQ = conv_shapes_wg_denoms[CONV_SHAPE_32x256][1];
             conv2d_BS_CRS = 16;
             break;
         }
@@ -3907,10 +3913,22 @@ static void ggml_vk_load_shaders(vk_device& device) {
         std::vector<uint32_t> spec_constants = { conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives, conv2d_SHMEM_PAD };
 
 #define CREATE_CONV(name, type_suffix, spv_suffix) \
-        ggml_vk_create_pipeline( \
-            device, device->pipeline_##name##type_suffix[s], #name #type_suffix, \
-            name##type_suffix##spv_suffix##_len, name##type_suffix##spv_suffix##_data, "main", 3, \
-            sizeof(vk_op_##name##_push_constants), wg_denoms, spec_constants, 1, true, use_collectives);
+        for (auto &c : device->pipeline_##name##type_suffix[s]) { \
+            const vk_conv2d_pipeline_state &state = c.first;  \
+            std::vector<uint32_t> spec_constants_cpy = spec_constants; \
+            spec_constants_cpy.push_back(state.s0); \
+            spec_constants_cpy.push_back(state.s1); \
+            spec_constants_cpy.push_back(state.p0); \
+            spec_constants_cpy.push_back(state.p1); \
+            spec_constants_cpy.push_back(state.d0); \
+            spec_constants_cpy.push_back(state.d1); \
+            spec_constants_cpy.push_back(state.KW); \
+            spec_constants_cpy.push_back(state.KH); \
+            ggml_vk_create_pipeline( \
+                device, c.second, #name #type_suffix, \
+                name##type_suffix##spv_suffix##_len, name##type_suffix##spv_suffix##_data, "main", 3, \
+                sizeof(vk_op_##name##_push_constants), wg_denoms, spec_constants_cpy, 1, true, use_collectives);    \
+        }
 #define CREATE_CONVS(spv_suffix) \
         CREATE_CONV(conv2d, _f32, spv_suffix) \
         CREATE_CONV(conv2d, _f16_f32, spv_suffix) \
@@ -8536,7 +8554,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
 
             uint32_t tiles[CONV_SHAPE_COUNT];
             for (uint32_t i = 0; i < CONV_SHAPE_COUNT; ++i) {
-                tiles[i] = CEIL_DIV(elements[0], ctx->device->pipeline_conv2d_f32[i]->wg_denoms[0]) * CEIL_DIV(elements[1], ctx->device->pipeline_conv2d_f32[i]->wg_denoms[1]);
+                tiles[i] = CEIL_DIV(elements[0], conv_shapes_wg_denoms[i][0]) * CEIL_DIV(elements[1], conv_shapes_wg_denoms[i][1]);
             }
 
             // We can't query number of shader cores on Intel, use 32 as a placeholder
@@ -8551,19 +8569,45 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 shape = CONV_SHAPE_64x32;
             }
 
+            uint32_t KW = static_cast<uint32_t>(src0->ne[0]);
+            uint32_t KH = static_cast<uint32_t>(src0->ne[1]);
+            uint32_t s0 = static_cast<uint32_t>(dst->op_params[0]);
+            uint32_t s1 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[1]) : static_cast<uint32_t>(dst->op_params[0]);
+            uint32_t p0 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[2]) : 0;
+            uint32_t p1 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[3]) : 0;
+            uint32_t d0 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[4]) : 1;
+            uint32_t d1 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[5]) : 1;
+
+            vk_conv2d_pipeline_state conv2d_pipeline_state(s0, s1, p0, p1, d0, d1, KW, KH);
+
+            std::map<vk_conv2d_pipeline_state, vk_pipeline> *pipelines = nullptr;
             if (op == GGML_OP_CONV_2D) {
                 if (src0->type == GGML_TYPE_F32) {
-                    return ctx->device->pipeline_conv2d_f32[shape];
+                    pipelines = &ctx->device->pipeline_conv2d_f32[shape];
                 } else if (src0->type == GGML_TYPE_F16) {
-                    return ctx->device->pipeline_conv2d_f16_f32[shape];
+                    pipelines = &ctx->device->pipeline_conv2d_f16_f32[shape];
                 }
             } else if (op == GGML_OP_CONV_TRANSPOSE_2D) {
                 if (src0->type == GGML_TYPE_F32) {
-                    return ctx->device->pipeline_conv_transpose_2d_f32[shape];
+                    pipelines = &ctx->device->pipeline_conv_transpose_2d_f32[shape];
                 } else if (src0->type == GGML_TYPE_F16) {
-                    return ctx->device->pipeline_conv_transpose_2d_f16_f32[shape];
+                    pipelines = &ctx->device->pipeline_conv_transpose_2d_f16_f32[shape];
                 }
             }
+
+            vk_pipeline pipeline = nullptr;
+
+            {
+                std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+                auto it = pipelines->find(conv2d_pipeline_state);
+                if (it != pipelines->end()) {
+                    pipeline = it->second;
+                } else {
+                    (*pipelines)[conv2d_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
+                }
+            }
+
+            return pipeline;
         }
         return nullptr;
     case GGML_OP_CONV_2D_DW:
