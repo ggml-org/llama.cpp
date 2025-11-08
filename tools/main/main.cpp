@@ -119,6 +119,8 @@ static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_d
     // Collect the tensor data
     std::lock_guard<std::mutex> lock(g_activations_mutex);
 
+    LOG_DBG("Collecting activation from tensor: %s\n", t->name);
+
     std::string tensor_name = filter_tensor_name(t->name);
     if (tensor_name.empty()) {
         tensor_name = std::string(t->name);
@@ -156,8 +158,11 @@ static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_d
 
 // Save collected activations to GGUF file
 static bool save_activations_to_gguf(const std::string & filename) {
+    LOG_DBG("save_activations_to_gguf called with %zu activations\n", g_activations.size());
+
     if (g_activations.empty()) {
-        LOG_ERR("No activations collected to save\n");
+        LOG_ERR("No activations collected to save (collected %zu tensors)\n", g_activations.size());
+        LOG_ERR("This might mean the callback wasn't triggered during inference.\n");
         return false;
     }
 
@@ -1036,11 +1041,13 @@ int main(int argc, char ** argv) {
                 if (params.interactive) {
                     // Save activations if one-time dump was requested
                     if (g_dump_activations_once && !g_activation_save_path.empty()) {
-                        LOG("\nSaving collected activations...\n");
+                        LOG("\nSaving collected activations to %s...\n", g_activation_save_path.c_str());
+                        LOG_DBG("g_dump_activations_once=%d, collected %zu activations\n",
+                               g_dump_activations_once, g_activations.size());
                         if (save_activations_to_gguf(g_activation_save_path)) {
-                            LOG("Activations saved successfully!\n");
+                            LOG("Activations saved successfully to %s!\n", g_activation_save_path.c_str());
                         } else {
-                            LOG_ERR("Failed to save activations\n");
+                            LOG_ERR("Failed to save activations to %s\n", g_activation_save_path.c_str());
                         }
                         g_dump_activations_once = false;
                         g_activation_save_path = "";
@@ -1123,8 +1130,9 @@ int main(int argc, char ** argv) {
                     filename.erase(filename.find_last_not_of(" \t\n\r\f\v") + 1);
 
                     if (!filename.empty()) {
+                        LOG("\n");
                         LOG("Activations will be saved to: %s\n", filename.c_str());
-                        LOG("Collecting activations for the next inference pass...\n");
+                        LOG("Please enter your next prompt to trigger activation collection.\n");
 
                         // Clear previous activations and prepare for new collection
                         {
@@ -1137,7 +1145,9 @@ int main(int argc, char ** argv) {
                     } else {
                         LOG_ERR("Error: No filename specified for /\\/save command\n");
                     }
-                    buffer.clear();
+                    // Keep is_interacting true and continue to wait for next input
+                    is_interacting = true;
+                    continue;
                 } else if (buffer.rfind("/\\/load ", 0) == 0) {
                     // Extract filename
                     std::string filename = buffer.substr(8); // Skip "/\/load "
@@ -1146,13 +1156,16 @@ int main(int argc, char ** argv) {
                     filename.erase(filename.find_last_not_of(" \t\n\r\f\v") + 1);
 
                     if (!filename.empty()) {
+                        LOG("\n");
                         if (!load_activations_from_gguf(filename)) {
                             LOG_ERR("Failed to load activations from: %s\n", filename.c_str());
                         }
                     } else {
                         LOG_ERR("Error: No filename specified for /\\/load command\n");
                     }
-                    buffer.clear();
+                    // Keep is_interacting true and continue to wait for next input
+                    is_interacting = true;
+                    continue;
                 }
 
                 if (buffer.empty()) { // Enter key on empty line lets the user pass control back
