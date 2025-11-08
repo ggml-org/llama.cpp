@@ -124,6 +124,7 @@ if (LLAMA_BUILD_BORINGSSL)
         -Wno-error
         -Wno-unused-parameter
         -Wno-missing-noreturn
+        -Wno-pedantic
         -Wno-cast-qual
     )
 
