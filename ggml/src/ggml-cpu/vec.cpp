@@ -683,7 +683,7 @@ void ggml_vec_hardswish_f32(const int n, float * y, const float * x) {
     }
 #endif
     for (; i < n; ++i) {
-        y[i] = x[i] * fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f));
+        y[i] = x[i] * fminf(one, fmaxf(zero, (x[i] + three) / six));
     }
 }
 
