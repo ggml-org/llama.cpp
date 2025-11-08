@@ -56,6 +56,11 @@
 				chatSidebar.editActiveConversation();
 			}
 		}
+
+		if (event.shiftKey && isCtrlOrCmd && (event.key === 's' || event.key === 'S')) {
+			event.preventDefault();
+			sidebarOpen = !sidebarOpen;
+		}
 	}
 
 	function handleTitleUpdateCancel() {
