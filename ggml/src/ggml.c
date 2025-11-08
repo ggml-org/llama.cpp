@@ -6565,15 +6565,7 @@ static void ggml_compute_backward(
                 } break;
                 case GGML_UNARY_OP_SOFTPLUS: {
                     if (src0_needs_grads) {
-                        // gradient of softplus: sigmoid(x) = 1 / (1 + exp(-x))
-                        struct ggml_tensor * neg_src0 = ggml_neg(ctx, src0);
-                        struct ggml_tensor * exp_neg  = ggml_exp(ctx, neg_src0);
-                        struct ggml_tensor * ones =
-                            ggml_scale_bias(ctx, ggml_new_tensor_4d(ctx, src0->type, src0->ne[0], src0->ne[1], src0->ne[2],
-                                                    src0->ne[3]), 0.0f, 1.0f);
-                        struct ggml_tensor * one_plus_exp = ggml_add(ctx, ones, exp_neg);
-                        struct ggml_tensor * sigmoid      = ggml_div(ctx, ones, one_plus_exp);
-                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, sigmoid));
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_sigmoid(ctx, src0)));
                     }
                 } break;
                 default: {
