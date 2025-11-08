@@ -16,6 +16,7 @@ class Roles {
     static ToolTemp = "TOOL.TEMP";
 }
 
+
 class ApiEP {
     static Type = {
         Chat: "chat",
@@ -41,32 +42,152 @@ class ApiEP {
 
 }
 
-/**
- * @typedef {{id: string, type: string, function: {name: string, arguments: string}}} NSToolCalls
- */
 
 /**
- * @typedef {{
- *      role: string,
- *      content: string|undefined,
- *      reasoning_content: string|undefined,
- *      tool_calls: Array<NSToolCalls>|undefined
- * }} NSChatMessage
+ * @typedef {{id: string, type: string, function: {name: string, arguments: string}}} NSToolCall
  */
+
+class NSChatMessage {
+    /**
+     * Represents a Message as seen in the http server Chat handshake
+     * @param {string} role
+     * @param {string|undefined} content
+     * @param {string|undefined} reasoning_content
+     * @param {Array<NSToolCall>|undefined} tool_calls
+     */
+    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined) {
+        this.role = role;
+        this.content = content;
+        this.reasoning_content = reasoning_content
+        this.tool_calls = structuredClone(tool_calls)
+    }
+
+    getContent() {
+        if (this.content) {
+            return this.content
+        }
+        return ""
+    }
+
+    getReasoningContent() {
+        if (this.reasoning_content) {
+            return this.reasoning_content.trim()
+        }
+        return ""
+    }
+
+    /**
+     * Get the function name wrt tool calls index
+     * @param {number} funcIndex
+     */
+    getFuncName(funcIndex) {
+        if (this.has_toolcalls()) {
+            if (this.tool_calls) {
+                return this.tool_calls[funcIndex].function.name
+            }
+        }
+        return ""
+    }
+
+    /**
+     * Get the function args wrt tool calls index
+     * @param {number} funcIndex
+     */
+    getFuncArgs(funcIndex) {
+        if (this.has_toolcalls()) {
+            if (this.tool_calls) {
+                return this.tool_calls[funcIndex].function.arguments
+            }
+        }
+        return ""
+    }
+
+    /**
+     * Append to the content, if already exists
+     * Else create the content.
+     * @param {string} content
+     */
+    content_adj(content="") {
+        if (this.content == undefined) {
+            this.content = content
+        } else {
+            this.content += content
+        }
+    }
+
+    /**
+     * Append to the reasoningContent, if already exists
+     * Else create the reasoningContent.
+     * @param {string} reasoningContent
+     */
+    reasoning_content_adj(reasoningContent="") {
+        if (this.reasoning_content == undefined) {
+            this.reasoning_content = reasoningContent
+        } else {
+            this.reasoning_content += reasoningContent
+        }
+    }
+
+    /**
+     * Add/Push a new tool call.
+     * If the underlying tool_calls is undefined, create it first.
+     * @param {NSToolCall} toolCall
+     */
+    tool_calls_push(toolCall) {
+        if (this.tool_calls == undefined) {
+            this.tool_calls = []
+        }
+        this.tool_calls.push(toolCall)
+    }
+
+    /**
+     * Check if this NSChatMessage has any content or not.
+     */
+    has_content() {
+        if (this.content) {
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Check if this NSChatMessage has any non empty reasoning content or not.
+     */
+    has_reasoning() {
+        if (this.reasoning_content) {
+            if (this.reasoning_content.trim().length == 0) {
+                return false
+            }
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Check if this NSChatMessage has atleast one tool call or not.
+     */
+    has_toolcalls() {
+        if (this.tool_calls) {
+            if (this.tool_calls.length == 0) {
+                return false
+            }
+            return true
+        }
+        return false
+    }
+
+}
+
 
 class ChatMessageEx {
 
     /**
      * Represent a Message in the Chat
-     * @param {string} role
-     * @param {string|undefined} content
-     * @param {string|undefined} reasoning_content
-     * @param {Array<any>|undefined} tool_calls
+     * @param {NSChatMessage} nsChatMsg
      * @param {string|undefined} trimmedContent
      */
-    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined, trimmedContent=undefined) {
-        /** @type {NSChatMessage} */
-        this.ns = { role: role, content: content, tool_calls: tool_calls, reasoning_content: reasoning_content }
+    constructor(nsChatMsg, trimmedContent=undefined) {
+        this.ns = nsChatMsg
         this.trimmedContent = trimmedContent;
     }
 
@@ -75,14 +196,11 @@ class ChatMessageEx {
      * @param {ChatMessageEx} old
      */
     static newFrom(old) {
-        return new ChatMessageEx(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.trimmedContent)
+        return new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls), old.trimmedContent)
     }
 
     clear() {
-        this.ns.role = "";
-        this.ns.content = undefined;
-        this.ns.reasoning_content = undefined;
-        this.ns.tool_calls = undefined;
+        this.ns = new NSChatMessage()
         this.trimmedContent = undefined;
     }
 
@@ -186,7 +304,7 @@ class ChatMessageEx {
                 let content = nwo["choices"][0]["delta"]["content"];
                 if (content !== undefined) {
                     if (content !== null) {
-                        this.ns.content += content;
+                        this.ns.content_adj(content);
                     } else {
                         this.ns.role = nwo["choices"][0]["delta"]["role"];
                     }
@@ -195,7 +313,7 @@ class ChatMessageEx {
                     let reasoningContent = nwo["choices"][0]["delta"]["reasoning_content"];
                     if (toolCalls !== undefined) {
                         if (toolCalls[0]["function"]["name"] !== undefined) {
-                            this.ns.tool_calls.push(toolCalls[0]);
+                            this.ns.tool_calls_push(toolCalls[0]);
                             /*
                             this.ns.tool_calls[0].function.name = toolCalls[0]["function"]["name"];
                             this.ns.tool_calls[0].id = toolCalls[0]["id"];
@@ -203,21 +321,26 @@ class ChatMessageEx {
                             this.ns.tool_calls[0].function.arguments = toolCalls[0]["function"]["arguments"]
                             */
                         } else {
-                            if (toolCalls[0]["function"]["arguments"] !== undefined) {
-                                this.ns.tool_calls[0].function.arguments += toolCalls[0]["function"]["arguments"];
+                            let toolCallArg = toolCalls[0]["function"]["arguments"];
+                            if (toolCallArg !== undefined) {
+                                if (this.ns.tool_calls) {
+                                    this.ns.tool_calls[0].function.arguments += toolCallArg;
+                                } else {
+                                    console.error(`ERRR:ChatMessageEx:UpdateStream:ToolCallsMissing, but TC arg [${toolCallArg}] needs appending...`)
+                                }
                             }
                         }
                     }
                     if (reasoningContent !== undefined) {
-                        this.ns.reasoning_content += reasoningContent
+                        this.ns.reasoning_content_adj(reasoningContent)
                     }
                 }
             }
         } else {
             try {
-                this.ns.content += nwo["choices"][0]["text"];
+                this.ns.content_adj(nwo["choices"][0]["text"]);
             } catch {
-                this.ns.content += nwo["content"];
+                this.ns.content_adj(nwo["content"]);
             }
         }
     }
@@ -252,13 +375,6 @@ class ChatMessageEx {
         }
     }
 
-    has_toolcall() {
-        if (this.ns.tool_calls.length == 0) {
-            return false
-        }
-        return true
-    }
-
     /**
      * Collate all the different parts of a chat message into a single string object.
      *
@@ -268,14 +384,14 @@ class ChatMessageEx {
         let reasoning = ""
         let content = ""
         let toolcall = ""
-        if (this.ns.reasoning_content.trim() !== "") {
-            reasoning = `!!!Reasoning: ${this.ns.reasoning_content.trim()} !!!\n\n`;
+        if (this.ns.has_reasoning()) {
+            reasoning = `!!!Reasoning: ${this.ns.getReasoningContent()} !!!\n\n`;
         }
-        if (this.ns.content !== "") {
-            content = this.ns.content;
+        if (this.ns.has_content()) {
+            content = this.ns.getContent();
         }
-        if (this.has_toolcall()) {
-            toolcall = `\n\n<tool_call>\n<tool_name>${this.ns.tool_calls[0].function.name}</tool_name>\n<tool_args>${this.ns.tool_calls[0].function.arguments}</tool_args>\n</tool_call>\n`;
+        if (this.ns.has_toolcalls()) {
+            toolcall = `\n\n<tool_call>\n<tool_name>${this.ns.getFuncName(0)}</tool_name>\n<tool_args>${this.ns.getFuncArgs(0)}</tool_args>\n</tool_call>\n`;
         }
         return `${reasoning} ${content} ${toolcall}`;
     }
