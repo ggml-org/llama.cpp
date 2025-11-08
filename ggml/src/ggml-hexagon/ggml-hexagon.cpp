@@ -1598,6 +1598,11 @@ static void ggml_backend_hexagon_buffer_clear(ggml_backend_buffer_t buffer, uint
     auto sess = ctx->sess;
     HEX_VERBOSE("ggml-hex: %s clear-buff base %p size %zu\n", sess->name.c_str(), (void *) ctx->base, ctx->size);
     memset(ctx->base, value, ctx->size);
+}
+
+static void ggml_backend_hexagon_buffer_reset(ggml_backend_buffer_t buffer) {
+    auto ctx  = (ggml_backend_hexagon_buffer_context *) buffer->context;
+    HEX_VERBOSE("ggml-hex: %s reset-buff base %p size %zu\n", ctx->sess->name.c_str(), (void *) ctx->base, ctx->size);
     ctx->clear_tensor_ctxs();
 }
 
@@ -1610,7 +1615,7 @@ static ggml_backend_buffer_i ggml_backend_hexagon_buffer_interface = {
     /* .get_tensor      = */ ggml_backend_hexagon_buffer_get_tensor,
     /* .cpy_tensor      = */ ggml_backend_hexagon_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_hexagon_buffer_clear,
-    /* .reset           = */ NULL,
+    /* .reset           = */ ggml_backend_hexagon_buffer_reset,
 };
 
 // ** backend buffer type
