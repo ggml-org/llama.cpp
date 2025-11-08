@@ -9,6 +9,7 @@
 #include <chrono>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 #ifdef _WIN32
 #    include <sal.h>
@@ -328,6 +329,35 @@ struct ggml_backend_hexagon_buffer_type_context {
     std::string            name;
 };
 
+struct ggml_backend_hexagon_tensor_context {
+    fastdiv_values div21;  // fastdiv values for ne2 * ne1
+    fastdiv_values div3;   // fastdiv values for ne3
+    fastdiv_values div2;   // fastdiv values for ne2
+    fastdiv_values div1;   // fastdiv values for ne1
+
+    explicit ggml_backend_hexagon_tensor_context(const ggml_tensor * t) {
+        div21 = init_fastdiv_values(t->ne[2] * t->ne[1]);
+        div3  = init_fastdiv_values(t->ne[3]);
+        div2  = init_fastdiv_values(t->ne[2]);
+        div1  = init_fastdiv_values(t->ne[1]);
+    }
+
+    ggml_backend_hexagon_tensor_context(ggml_backend_hexagon_tensor_context && other) {
+        *this = std::move(other);
+    }
+
+    void operator=(ggml_backend_hexagon_tensor_context && other) {
+        div21 = other.div21;
+        div3  = other.div3;
+        div2  = other.div2;
+        div1  = other.div1;
+    }
+
+private:
+    ggml_backend_hexagon_tensor_context(const ggml_backend_hexagon_tensor_context&) = delete;
+    void operator=(const ggml_backend_hexagon_tensor_context&) = delete;
+};
+
 struct ggml_backend_hexagon_buffer_context {
     bool mmap_to(ggml_hexagon_session * s) {
         HEX_VERBOSE("ggml-hex: %s mmaping buffer: base %p domain-id %d session-id %d size %zu fd %d repack %d\n",
@@ -404,12 +434,26 @@ struct ggml_backend_hexagon_buffer_context {
         }
     }
 
+    const ggml_backend_hexagon_tensor_context & get_tensor_ctx(const ggml_tensor * tensor) {
+        auto it = tensor_ctxs.find(tensor);
+        if (it != tensor_ctxs.end()) {
+            return it->second;
+        }
+
+        auto res = tensor_ctxs.emplace(tensor, ggml_backend_hexagon_tensor_context(tensor));
+        return res.first->second;
+    }
+
+    void clear_tensor_ctxs() { tensor_ctxs.clear(); }
+
     ggml_hexagon_session * sess;  // primary session
     uint8_t *              base;
     size_t                 size;
     int                    fd;
     bool                   mapped;  // mmap is done
     bool                   repack;  // repacked buffer
+
+    std::unordered_map<const ggml_tensor *, ggml_backend_hexagon_tensor_context> tensor_ctxs;
 };
 
 static ggml_hexagon_session * ggml_backend_hexagon_buffer_get_sess(ggml_backend_buffer_t buffer) {
@@ -1554,6 +1598,7 @@ static void ggml_backend_hexagon_buffer_clear(ggml_backend_buffer_t buffer, uint
     auto sess = ctx->sess;
     HEX_VERBOSE("ggml-hex: %s clear-buff base %p size %zu\n", sess->name.c_str(), (void *) ctx->base, ctx->size);
     memset(ctx->base, value, ctx->size);
+    ctx->clear_tensor_ctxs();
 }
 
 static ggml_backend_buffer_i ggml_backend_hexagon_buffer_interface = {
@@ -2333,7 +2378,7 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
 }
 
 // Init hexagon tensor from GGML tensor and Hexagon buffer
-static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t, bool is_src) {
+static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t) {
     h->data  = 0;  // updated by the receiver
     h->type  = t->type;
     h->ne[0] = t->ne[0];
@@ -2345,11 +2390,13 @@ static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t, bool is_src) 
     h->nb[2] = t->nb[2];
     h->nb[3] = t->nb[3];
 
-    if (is_src) {
-        h->div21 = init_fastdiv_values(h->ne[2] * h->ne[1]);
-        h->div3  = init_fastdiv_values(h->ne[3]);
-        h->div2  = init_fastdiv_values(h->ne[2]);
-        h->div1  = init_fastdiv_values(h->ne[1]);
+    {
+        auto * ctx = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
+        const auto &tensor_ctx = ctx->get_tensor_ctx(t);
+        h->div21        = tensor_ctx.div21;
+        h->div3         = tensor_ctx.div3;
+        h->div2         = tensor_ctx.div2;
+        h->div1         = tensor_ctx.div1;
     }
 }
 
@@ -2379,9 +2426,9 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     req.op    = HTP_OP_MUL_MAT;
     req.flags = flags;
 
-    init_htp_tensor(&req.src0, src0, true);
-    init_htp_tensor(&req.src1, src1, true);
-    init_htp_tensor(&req.dst, dst, false);
+    init_htp_tensor(&req.src0, src0);
+    init_htp_tensor(&req.src1, src1);
+    init_htp_tensor(&req.dst, dst);
 
     // Use opmask to override flags
     if (!(opt_opmask & HTP_OPMASK_QUANTIZE)) {
@@ -2483,10 +2530,10 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     req.op    = HTP_OP_MUL_MAT_ID;
     req.flags = flags;
 
-    init_htp_tensor(&req.src0, src0, true);
-    init_htp_tensor(&req.src1, src1, true);
-    init_htp_tensor(&req.src2, src2, true);
-    init_htp_tensor(&req.dst, dst, false);
+    init_htp_tensor(&req.src0, src0);
+    init_htp_tensor(&req.src1, src1);
+    init_htp_tensor(&req.src2, src2);
+    init_htp_tensor(&req.dst, dst);
 
     // Use opmask to override flags
     if (!(opt_opmask & HTP_OPMASK_QUANTIZE)) {
@@ -2623,9 +2670,9 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
             GGML_ABORT("ggml-hex: binary : unsupported op:%d\n", node->op);
     }
 
-    init_htp_tensor(&req.src0, src0, true);
-    init_htp_tensor(&req.src1, src1, true);
-    init_htp_tensor(&req.dst, dst, false);
+    init_htp_tensor(&req.src0, src0);
+    init_htp_tensor(&req.src1, src1);
+    init_htp_tensor(&req.dst, dst);
 
     dspqueue_buffer bufs[3];
     memset(bufs, 0, sizeof(bufs));
@@ -2742,10 +2789,10 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
             GGML_ABORT("ggml-hex: unsupported op:%d\n", node->op);
     }
 
-    init_htp_tensor(&req.src0, src0, true);
-    init_htp_tensor(&req.src1, src1, true);
-    init_htp_tensor(&req.src2, src2, true);
-    init_htp_tensor(&req.dst, dst, false);
+    init_htp_tensor(&req.src0, src0);
+    init_htp_tensor(&req.src1, src1);
+    init_htp_tensor(&req.src2, src2);
+    init_htp_tensor(&req.dst, dst);
 
     dspqueue_buffer bufs[4];
     memset(bufs, 0, sizeof(bufs));
@@ -2878,10 +2925,10 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
         GGML_ABORT("ggml-hex: unary : unsupported op:%d\n", op->op);
     }
 
-    init_htp_tensor(&req.dst, dst, false);
-    init_htp_tensor(&req.src0, src0, true);
+    init_htp_tensor(&req.dst, dst);
+    init_htp_tensor(&req.src0, src0);
     if (src1) {
-        init_htp_tensor(&req.src1, src1, true);
+        init_htp_tensor(&req.src1, src1);
     }
 
     // Use opmask to override flags
@@ -3014,11 +3061,11 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     req.flags = flags;
     req.op    = HTP_OP_ROPE;
 
-    init_htp_tensor(&req.dst, dst, false);
-    init_htp_tensor(&req.src0, src0, true);
-    init_htp_tensor(&req.src1, src1, true);
+    init_htp_tensor(&req.dst, dst);
+    init_htp_tensor(&req.src0, src0);
+    init_htp_tensor(&req.src1, src1);
     if (src2) {
-        init_htp_tensor(&req.src2, src2, true);
+        init_htp_tensor(&req.src2, src2);
     }
 
     // Use opmask to override flags
