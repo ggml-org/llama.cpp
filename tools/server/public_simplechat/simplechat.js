@@ -89,6 +89,19 @@ class NSChatMessage {
     }
 
     /**
+     * Get the function wrt tool calls index
+     * @param {number} funcIndex
+     */
+    getFunc(funcIndex) {
+        if (this.has_toolcalls()) {
+            if (this.tool_calls) {
+                return this.tool_calls[funcIndex]
+            }
+        }
+        return undefined
+    }
+
+    /**
      * Get the function name wrt tool calls index
      * @param {number} funcIndex
      */
@@ -989,11 +1002,11 @@ class MultiChatUI {
      * @param {boolean} bAuto - allows caller to explicitly control whether auto triggering should be setup.
      */
     ui_reset_toolcall_as_needed(ar, bAuto = false) {
-        if (ar.has_toolcall()) {
+        if (ar.ns.has_toolcalls()) {
             this.elDivTool.hidden = false
-            this.elInToolName.value = ar.ns.tool_calls[0].function.name
-            this.elInToolName.dataset.tool_call_id = ar.ns.tool_calls[0].id
-            this.elInToolArgs.value = ar.ns.tool_calls[0].function.arguments
+            this.elInToolName.value = ar.ns.getFuncName(0)
+            this.elInToolName.dataset.tool_call_id = ar.ns.getFunc(0)?.id
+            this.elInToolArgs.value = `${ar.ns.getFunc(0)?.function.arguments}`
             this.elBtnTool.disabled = false
             if ((this.me.tools.autoSecs > 0) && (bAuto)) {
                 this.timers.toolcallTriggerClick = setTimeout(()=>{
@@ -1027,7 +1040,7 @@ class MultiChatUI {
     /**
      * Show the passed function / tool call details in specified parent element.
      * @param {HTMLElement} elParent
-     * @param {NSToolCalls} tc
+     * @param {NSToolCall} tc
      */
     show_message_toolcall(elParent, tc) {
         let secTC = document.createElement('section')
@@ -1067,7 +1080,7 @@ class MultiChatUI {
         // Handle ToolTemp
         if (msg.ns.role === Roles.ToolTemp) {
             if (iFromLast == 0) {
-                this.elInUser.value = msg.ns.content;
+                this.elInUser.value = msg.ns.getContent();
             }
             return
         }
@@ -1087,11 +1100,11 @@ class MultiChatUI {
         // Add the content
         //entry = ui.el_create_append_p(`${msg.content_equiv()}`, secContents);
         let showList = []
-        if (msg.ns.reasoning_content.trim().length > 0) {
-            showList.push(['reasoning', `!!!Reasoning: ${msg.ns.reasoning_content.trim()} !!!\n\n`])
+        if (msg.ns.has_reasoning()) {
+            showList.push(['reasoning', `!!!Reasoning: ${msg.ns.getReasoningContent()} !!!\n\n`])
         }
-        if (msg.ns.content.trim().length > 0) {
-            showList.push(['content', msg.ns.content.trim()])
+        if (msg.ns.getContent().trim().length > 0) {
+            showList.push(['content', msg.ns.getContent().trim()])
         }
         for (const [name, content] of showList) {
             if (content.length > 0) {
@@ -1116,9 +1129,9 @@ class MultiChatUI {
             }
         }
         // Handle tool call non ui
-        if (msg.has_toolcall() && !bTC) {
-            for (const i in msg.ns.tool_calls) {
-                this.show_message_toolcall(secContents, msg.ns.tool_calls[i])
+        if (msg.ns.tool_calls && !bTC) {
+            for (const tc of msg.ns.tool_calls) {
+                this.show_message_toolcall(secContents, tc)
             }
         }
     }
@@ -1228,7 +1241,7 @@ class MultiChatUI {
                     limitedData = data.slice(0, this.me.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
                 }
             }
-            chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(tcid, name, limitedData)))
+            chat.add(new ChatMessageEx(new NSChatMessage(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(tcid, name, limitedData))))
             if (this.chat_show(cid)) {
                 if (this.me.tools.autoSecs > 0) {
                     this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
@@ -1317,7 +1330,7 @@ class MultiChatUI {
         if (content.startsWith("<tool_response>")) {
             chat.promote_tooltemp(content)
         } else {
-            chat.add(new ChatMessageEx(Roles.User, content))
+            chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content)))
         }
         this.chat_show(chat.chatId);
 
@@ -1328,7 +1341,7 @@ class MultiChatUI {
             let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, this.elDivChat)
             if (chatId == this.curChatId) {
                 this.chat_show(chatId);
-                if (theResp.trimmedContent.length > 0) {
+                if ((theResp.trimmedContent) && (theResp.trimmedContent.length > 0)) {
                     let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmedContent}`, this.elDivChat);
                     p.className="role-trim";
                 }
@@ -1356,13 +1369,13 @@ class MultiChatUI {
         }
         let toolResult = await chat.handle_toolcall(toolCallId, toolname, this.elInToolArgs.value)
         if (toolResult !== undefined) {
-            chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, toolResult)))
+            chat.add(new ChatMessageEx(new NSChatMessage(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, toolResult))))
             this.chat_show(chat.chatId)
             this.ui_reset_userinput(false)
         } else {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
                 this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
-                chat.add(new ChatMessageEx(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
+                chat.add(new ChatMessageEx(new NSChatMessage(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`))))
                 this.chat_show(chat.chatId)
                 this.ui_reset_userinput(false)
             }, this.me.tools.toolCallResponseTimeoutMS)
@@ -1439,7 +1452,7 @@ class MultiChatUI {
             console.error(`ERRR:SimpleChat:MCUI:HandleSessionSwitch:${chatId} missing...`);
             return;
         }
-        this.elInSystem.value = chat.get_system_latest().ns.content;
+        this.elInSystem.value = chat.get_system_latest().ns.getContent();
         this.elInUser.value = "";
         this.curChatId = chatId;
         this.chat_show(chatId, true, true);
@@ -1564,7 +1577,7 @@ export class Me {
             chat.load();
             queueMicrotask(()=>{
                 this.multiChat.chat_show(chat.chatId, true, true);
-                this.multiChat.elInSystem.value = chat.get_system_latest().ns.content;
+                this.multiChat.elInSystem.value = chat.get_system_latest().ns.getContent();
             });
         });
         div.appendChild(btn);
