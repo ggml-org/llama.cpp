@@ -460,7 +460,8 @@ struct common_params {
     float slot_prompt_similarity = 0.1f;
 
     // batched-bench params
-    bool is_pp_shared = false;
+    bool is_pp_shared   = false;
+    bool is_tg_separate = false;
 
     std::vector<int32_t> n_pp;
     std::vector<int32_t> n_tg;
