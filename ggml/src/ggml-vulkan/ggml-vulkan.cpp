@@ -13153,18 +13153,20 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     }
     vkdev.getMemoryProperties2(&memprops);
 
+    *total = 0;
+    *free = 0;
+
     for (uint32_t i = 0; i < memprops.memoryProperties.memoryHeapCount; ++i) {
         const vk::MemoryHeap & heap = memprops.memoryProperties.memoryHeaps[i];
 
         if (heap.flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
-            *total = heap.size;
+            *total += heap.size;
 
             if (membudget_supported && i < budgetprops.heapUsage.size()) {
-                *free = budgetprops.heapBudget[i] - budgetprops.heapUsage[i];
+                *free += budgetprops.heapBudget[i] - budgetprops.heapUsage[i];
             } else {
-                *free = heap.size;
+                *free += heap.size;
             }
-            break;
         }
     }
 }
