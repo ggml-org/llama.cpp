@@ -691,15 +691,18 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 #pragma unroll
         for (int subk = 0; subk < WN / 4; ++subk){
             const uint row =  m_i_wn + subk*2;
+            uint idx = output_lds_addr + subk*2;
+            idx = idx ^ ((idx & 0b110000000000) >> 9);
+            idx = idx ^ ((idx & 0b1110000000) >> 4);
 #pragma unroll
             for (int j = 0; j < 4; ++j){
                 const uint gemm_i =  n_idx + j*32;
                 const int n = fastdiv(gemm_i, param.OHOW_fastdiv);
                 const int col = fastmodulo(gemm_i, param.OHOW_fastdiv);
-                uint idx = output_lds_addr + subk*2 + j*32*BN/2;
-                idx = idx ^ ((idx & 0b110000000000) >> 9);
-                idx = idx ^ ((idx & 0b1110000000) >> 4);
-                uint32_t dst_ptr = *(reinterpret_cast<uint32_t*>(&smemoutput[idx]));
+                // uint idx = output_lds_addr + subk*2 + j*32*BN/2;
+                // idx = idx ^ ((idx & 0b110000000000) >> 9);
+                // idx = idx ^ ((idx & 0b1110000000) >> 4);
+                uint32_t dst_ptr = *(reinterpret_cast<uint32_t*>(&smemoutput[idx+j*32*BN/2]));
                 half (&res_)[2] = reinterpret_cast<half(&)[2]>(dst_ptr);
                 if (n < param.n && row < param.k && col < PQ) {
                     if constexpr (ksplit > 0) {

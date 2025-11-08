@@ -325,8 +325,8 @@ int main(void)
         std::make_tuple(512,256,416,608,3,3),
         std::make_tuple(256,128,832,1216,3,3),
         std::make_tuple(256,256,832,1216,3,3),
-        // std::make_tuple(320,256,1024,1920)
         std::make_tuple(32,64,58,58,3,3)
+        // std::make_tuple(320,256,1024,1920)
     };
         std::vector<std::tuple<int, int, int, int, int, int>> configs_sdxl_512 = {
         //512x512
@@ -648,7 +648,8 @@ int main(void)
 
     int k = 0;
 
-    for (auto c : configs_sdxl_1024){
+    for (auto c : configs_sdxl_512){
+    // for (auto c : configs){
         test_model model;
         load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c),
             std::get<3>(c), std::get<4>(c), std::get<5>(c), true);
