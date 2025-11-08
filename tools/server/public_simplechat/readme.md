@@ -699,6 +699,12 @@ sliding window based drop off or even before they kick in, this can help in many
   * ALERT: ON-DISK-STORAGE structure of chat sessions have changed wrt tool responses. So old saves will
     no longer work wrt tool responses
 
+* UI updates
+  * update logic to allow empty tool results to be sent to ai engine server
+  * css - when user input textarea is in tool result mode (ie wrt TOOL.TEMP role), change the background
+    color to match the tool role chat message block color, so that user can easily know that the input
+    area is being used for submitting tool response or user response, at any given moment in time.
+
 
 #### ToDo
 
