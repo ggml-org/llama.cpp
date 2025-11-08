@@ -2468,6 +2468,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--kv-cache-auto-save"}, "BASE_NAME",
+        "automatically save all KV cache to BASE_NAME_<timestamp>/ directory on server shutdown (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.kv_cache_auto_save_base = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--kv-cache-auto-load"}, "DIRNAME",
+        "automatically load KV cache from specified timestamped directory on server startup (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.kv_cache_auto_load = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--jinja"},
         "use jinja template for chat (default: disabled)",
         [](common_params & params) {

@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cinttypes>
 #include <deque>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <signal.h>
@@ -2596,6 +2597,110 @@ struct server_context {
             /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
             /* enable_thinking       */ enable_thinking,
         };
+
+        // Auto-load KV cache if requested
+        if (!params_base.kv_cache_auto_load.empty()) {
+            auto_load_kv_cache();
+        }
+    }
+
+    // Auto-save KV cache on shutdown with timestamp
+    void auto_save_kv_cache() {
+        if (params_base.kv_cache_auto_save_base.empty()) {
+            return;
+        }
+
+        // Generate timestamp directory name
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        std::tm tm_time;
+#ifdef _WIN32
+        localtime_s(&tm_time, &time_t);
+#else
+        localtime_r(&time_t, &tm_time);
+#endif
+        char timestamp[64];
+        std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm_time);
+
+        std::string dir_name = params_base.kv_cache_auto_save_base + "_" + timestamp;
+
+        SRV_INF("auto-saving KV cache to directory: %s\n", dir_name.c_str());
+
+        // Create directory
+#ifdef _WIN32
+        _mkdir(dir_name.c_str());
+#else
+        mkdir(dir_name.c_str(), 0755);
+#endif
+
+        // Save each slot
+        int saved_count = 0;
+        for (const server_slot & slot : slots) {
+            if (slot.prompt.tokens.empty()) {
+                continue; // Skip empty slots
+            }
+
+            std::string filepath = dir_name + DIRECTORY_SEPARATOR + "slot_" + std::to_string(slot.id) + ".bin";
+
+            const llama_tokens & tokens = slot.prompt.tokens.get_text_tokens();
+            const size_t token_count = tokens.size();
+
+            const size_t nwrite = llama_state_seq_save_file(ctx, filepath.c_str(), slot.id, tokens.data(), token_count);
+
+            if (nwrite > 0) {
+                SRV_INF("saved slot %d: %zu tokens, %zu bytes to %s\n", slot.id, token_count, nwrite, filepath.c_str());
+                saved_count++;
+            } else {
+                SRV_WRN("failed to save slot %d to %s\n", slot.id, filepath.c_str());
+            }
+        }
+
+        SRV_INF("KV cache auto-save complete: %d slots saved to %s\n", saved_count, dir_name.c_str());
+    }
+
+    // Auto-load KV cache on startup from specified directory
+    void auto_load_kv_cache() {
+        if (params_base.kv_cache_auto_load.empty()) {
+            return;
+        }
+
+        std::string dir_name = params_base.kv_cache_auto_load;
+
+        SRV_INF("auto-loading KV cache from directory: %s\n", dir_name.c_str());
+
+        int loaded_count = 0;
+
+        // Try to load each slot
+        for (server_slot & slot : slots) {
+            std::string filepath = dir_name + DIRECTORY_SEPARATOR + "slot_" + std::to_string(slot.id) + ".bin";
+
+            // Check if file exists
+            std::ifstream file(filepath);
+            if (!file.good()) {
+                SRV_DBG("slot %d file not found: %s - skipping\n", slot.id, filepath.c_str());
+                continue;
+            }
+            file.close();
+
+            llama_tokens tokens;
+            tokens.resize(slot.n_ctx);
+            size_t token_count = 0;
+
+            const size_t nread = llama_state_seq_load_file(ctx, filepath.c_str(), slot.id, tokens.data(), tokens.size(), &token_count);
+
+            if (nread > 0 && token_count > 0) {
+                tokens.resize(token_count);
+                slot.prompt.tokens.clear();
+                slot.prompt.tokens.insert(tokens);
+
+                SRV_INF("loaded slot %d: %zu tokens, %zu bytes from %s\n", slot.id, token_count, nread, filepath.c_str());
+                loaded_count++;
+            } else {
+                SRV_WRN("failed to load slot %d from %s\n", slot.id, filepath.c_str());
+            }
+        }
+
+        SRV_INF("KV cache auto-load complete: %d slots loaded from %s\n", loaded_count, dir_name.c_str());
     }
 
     server_slot * get_slot_by_id(int id) {
@@ -5672,6 +5777,10 @@ int main(int argc, char ** argv) {
     // clean up function, to be called before exit
     auto clean_up = [&svr, &ctx_server]() {
         SRV_INF("%s: cleaning up before exit...\n", __func__);
+
+        // Auto-save KV cache if enabled
+        ctx_server.auto_save_kv_cache();
+
         svr->stop();
         ctx_server.queue_results.terminate();
         llama_backend_free();

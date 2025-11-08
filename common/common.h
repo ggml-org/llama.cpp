@@ -459,6 +459,10 @@ struct common_params {
 
     std::string slot_save_path;
 
+    // Auto KV cache save/load for faster server restarts
+    std::string kv_cache_auto_save_base; // base name for auto-saving KV cache on shutdown (with timestamp)
+    std::string kv_cache_auto_load;      // specific timestamped name to load on startup
+
     float slot_prompt_similarity = 0.1f;
 
     // batched-bench params
