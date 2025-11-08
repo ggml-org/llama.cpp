@@ -611,6 +611,13 @@ bool fs_create_directory_with_parents(const std::string & path);
 std::string fs_get_cache_directory();
 std::string fs_get_cache_file(const std::string & filename);
 
+struct common_file_info {
+    std::string path;
+    std::string name;
+    size_t      size = 0; // in bytes
+};
+std::vector<common_file_info> fs_list_files(const std::string & path);
+
 //
 // Model utils
 //
