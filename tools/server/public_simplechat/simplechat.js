@@ -1280,13 +1280,13 @@ class MultiChatUI {
         chat.add_system_anytime(this.elInSystem.value, chatId);
 
         let content = this.elInUser.value;
-        if (content.trim() == "") {
-            console.debug(`WARN:SimpleChat:MCUI:${chatId}:HandleUserSubmit:Ignoring empty user input...`);
-            return;
-        }
         if (this.elInUser.dataset.role == Roles.ToolTemp) {
             chat.promote_tooltemp(content)
         } else {
+            if (content.trim() == "") {
+                console.log(`WARN:SimpleChat:MCUI:${chatId}:HandleUserSubmit:Ignoring empty user input...`);
+                return;
+            }
             chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content)))
         }
         this.chat_show(chat.chatId);
