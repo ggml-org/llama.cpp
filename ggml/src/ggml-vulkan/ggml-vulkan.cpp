@@ -6585,8 +6585,8 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
 
     const uint64_t ne20 = dst->ne[0];
     const uint64_t ne21 = dst->ne[1];
-    const uint64_t ne22 = dst->ne[2];
-    const uint64_t ne23 = dst->ne[3];
+    // const uint64_t ne22 = dst->ne[2];
+    // const uint64_t ne23 = dst->ne[3];
 
     const uint64_t r2 = ne12 / ne02;
     const uint64_t r3 = ne13 / ne03;
@@ -7168,7 +7168,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     const uint64_t ne00 = src0->ne[0];
     const uint64_t ne01 = src0->ne[1];
     const uint64_t ne02 = src0->ne[2];
-    const uint64_t ne03 = src0->ne[3];
+    // const uint64_t ne03 = src0->ne[3];
 
     const uint64_t ne10 = src1->ne[0];
     const uint64_t ne11 = src1->ne[1];
@@ -7183,8 +7183,8 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
 
     const uint64_t ne20 = dst->ne[0];
     const uint64_t ne21 = dst->ne[1];
-    const uint64_t ne22 = dst->ne[2];
-    const uint64_t ne23 = dst->ne[3];
+    // const uint64_t ne22 = dst->ne[2];
+    // const uint64_t ne23 = dst->ne[3];
 
     const uint64_t n_as = ne02;
 
@@ -7438,13 +7438,13 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
 
     const uint64_t ne00 = src0->ne[0];
     const uint64_t ne01 = src0->ne[1];
-    const uint64_t ne02 = src0->ne[2];
-    const uint64_t ne03 = src0->ne[3];
+    // const uint64_t ne02 = src0->ne[2];
+    // const uint64_t ne03 = src0->ne[3];
 
     const uint64_t ne10 = src1->ne[0];
     const uint64_t ne11 = src1->ne[1];
-    const uint64_t ne12 = src1->ne[2];
-    const uint64_t ne13 = src1->ne[3];
+    // const uint64_t ne12 = src1->ne[2];
+    // const uint64_t ne13 = src1->ne[3];
 
     const uint64_t nei0 = ids->ne[0];
     const uint64_t nei1 = ids->ne[1];
@@ -7455,8 +7455,8 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
 
     const uint64_t ne20 = dst->ne[0];
     const uint64_t ne21 = dst->ne[1];
-    const uint64_t ne22 = dst->ne[2];
-    const uint64_t ne23 = dst->ne[3];
+    // const uint64_t ne22 = dst->ne[2];
+    // const uint64_t ne23 = dst->ne[3];
 
     ggml_backend_vk_buffer_context * src0_buf_ctx = (ggml_backend_vk_buffer_context *)src0->buffer->context;
     ggml_backend_vk_buffer_context * src1_buf_ctx = (ggml_backend_vk_buffer_context *)src1->buffer->context;
