@@ -15,8 +15,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include <unordered_map>
-#include <mutex>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -44,19 +42,9 @@ static std::vector<llama_token> * g_output_tokens;
 static bool is_interacting  = false;
 static bool need_insert_eot = false;
 
-// Activation dumping structures
-struct activation_tensor {
-    std::string name;
-    std::vector<int64_t> ne;  // dimensions
-    ggml_type type;
-    std::vector<char> data;
-};
-
-static std::unordered_map<std::string, activation_tensor> g_activations;
-static std::mutex g_activations_mutex;
-static bool g_dump_activations = false;
-static bool g_dump_activations_once = false;
-static std::string g_activation_save_path = "";
+// State save/load flags for interactive commands
+static bool g_save_state_next = false;
+static std::string g_state_save_path = "";
 
 static void print_usage(int argc, char ** argv) {
     (void) argc;
@@ -79,212 +67,118 @@ static bool file_is_empty(const std::string & path) {
     return f.tellg() == 0;
 }
 
-// Filter tensor name (remove backend prefix and suffix)
-static std::string filter_tensor_name(const char * name) {
-    std::string wname;
-    const char * p = strchr(name, '#');
-    if (p != NULL) {
-        p = p + 1;
-        const char * q = strchr(p, '#');
-        if (q != NULL) {
-            wname = std::string(p, q - p);
-        } else {
-            wname = p;
-        }
-    } else {
-        wname = name;
-    }
-    return wname;
-}
+// Save complete LLM state (KV cache + RNG + logits + embeddings) to GGUF file
+static bool save_llm_state_to_gguf(llama_context * ctx, const std::string & filename) {
+    LOG("\nSaving LLM state to %s...\n", filename.c_str());
 
-// Callback for collecting activations
-static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_data) {
-    (void) user_data;
+    // Get the size of the state
+    const size_t state_size = llama_state_get_size(ctx);
+    LOG("State size: %zu bytes (%.2f MB)\n", state_size, state_size / (1024.0 * 1024.0));
 
-    // Log that callback is being called
-    static bool first_call = true;
-    if (first_call) {
-        LOG("Activation callback is being invoked!\n");
-        first_call = false;
-    }
+    // Allocate buffer and get state data
+    std::vector<uint8_t> state_data(state_size);
+    const size_t written = llama_state_get_data(ctx, state_data.data(), state_size);
 
-    if (!g_dump_activations && !g_dump_activations_once) {
+    if (written != state_size) {
+        LOG_ERR("Failed to get state data: got %zu bytes, expected %zu\n", written, state_size);
         return false;
     }
 
-    // Filter for interesting operations and tensors
-    if (ask) {
-        // We're interested in capturing activations from various operations
-        if (t->op == GGML_OP_MUL_MAT || t->op == GGML_OP_MUL_MAT_ID ||
-            t->op == GGML_OP_ADD || t->op == GGML_OP_MUL ||
-            t->op == GGML_OP_NORM || t->op == GGML_OP_RMS_NORM) {
-            LOG_DBG("Callback asking about tensor %s (op=%d)\n", t->name, t->op);
-            return true;
-        }
-        return false;
-    }
-
-    // Collect the tensor data
-    std::lock_guard<std::mutex> lock(g_activations_mutex);
-
-    static int collect_count = 0;
-    collect_count++;
-
-    LOG_DBG("Collecting activation #%d from tensor: %s (op=%d)\n", collect_count, t->name, t->op);
-
-    std::string tensor_name = filter_tensor_name(t->name);
-    if (tensor_name.empty()) {
-        tensor_name = std::string(t->name);
-    }
-
-    // Make unique name if we already have this tensor
-    std::string unique_name = tensor_name;
-    int counter = 1;
-    while (g_activations.find(unique_name) != g_activations.end()) {
-        unique_name = tensor_name + "_" + std::to_string(counter++);
-    }
-
-    activation_tensor act;
-    act.name = unique_name;
-    act.type = t->type;
-
-    // Store dimensions
-    for (int i = 0; i < GGML_MAX_DIMS; i++) {
-        act.ne.push_back(t->ne[i]);
-    }
-
-    // Copy tensor data - handle both CPU and GPU tensors
-    const size_t tensor_size = ggml_nbytes(t);
-    act.data.resize(tensor_size);
-
-    // Check if tensor is on host (CPU) or device (GPU)
-    const bool is_host = ggml_backend_buffer_is_host(t->buffer);
-
-    LOG_DBG("  Tensor %s: size=%zu bytes, is_host=%d\n", unique_name.c_str(), tensor_size, is_host);
-
-    if (is_host) {
-        memcpy(act.data.data(), t->data, tensor_size);
-    } else {
-        // Tensor is on GPU, need to copy it to host memory
-        ggml_backend_tensor_get(t, act.data.data(), 0, tensor_size);
-    }
-
-    g_activations[unique_name] = std::move(act);
-
-    if (collect_count % 10 == 0) {
-        LOG_DBG("  Collected %d activations so far (total unique: %zu)\n", collect_count, g_activations.size());
-    }
-
-    return true;
-}
-
-// Save collected activations to GGUF file
-static bool save_activations_to_gguf(const std::string & filename) {
-    LOG_DBG("save_activations_to_gguf called with %zu activations\n", g_activations.size());
-
-    if (g_activations.empty()) {
-        LOG_ERR("No activations collected to save (collected %zu tensors)\n", g_activations.size());
-        LOG_ERR("This might mean the callback wasn't triggered during inference.\n");
-        return false;
-    }
-
-    LOG("Saving %zu activations to %s\n", g_activations.size(), filename.c_str());
-
-    struct gguf_context * ctx = gguf_init_empty();
+    // Create GGUF context
+    struct gguf_context * gguf_ctx = gguf_init_empty();
 
     // Add metadata
-    gguf_set_val_u32(ctx, "activation.version", 1);
-    gguf_set_val_u32(ctx, "activation.count", (uint32_t)g_activations.size());
+    gguf_set_val_u32(gguf_ctx, "llm_state.version", 1);
+    gguf_set_val_u64(gguf_ctx, "llm_state.size", state_size);
+    gguf_set_val_str(gguf_ctx, "llm_state.type", "kv_cache_rng_logits_embeddings");
 
-    // Create a ggml context for tensor management
+    // Create a ggml context for the tensor
     struct ggml_init_params params = {
-        /*.mem_size   =*/ 1024ull*1024ull*1024ull, // 1GB should be enough for metadata
+        /*.mem_size   =*/ state_size + 1024*1024,  // Extra space for tensor metadata
         /*.mem_buffer =*/ NULL,
-        /*.no_alloc   =*/ true,  // We already have the data, don't allocate
+        /*.no_alloc   =*/ true,  // We already have the data
     };
 
-    struct ggml_context * ctx_data = ggml_init(params);
+    struct ggml_context * ggml_ctx = ggml_init(params);
 
-    // Add each activation tensor
-    for (auto & pair : g_activations) {
-        activation_tensor & act = pair.second;
+    // Create a 1D tensor to hold the state data
+    int64_t ne[4] = {(int64_t)state_size, 1, 1, 1};
+    struct ggml_tensor * state_tensor = ggml_new_tensor(ggml_ctx, GGML_TYPE_I8, 1, ne);
+    ggml_set_name(state_tensor, "llm_state_data");
+    state_tensor->data = state_data.data();
 
-        // Create tensor
-        struct ggml_tensor * tensor = ggml_new_tensor(ctx_data, act.type, GGML_MAX_DIMS, act.ne.data());
-        ggml_set_name(tensor, act.name.c_str());
-
-        // Set tensor data pointer (non-const since ggml_tensor->data is void*)
-        tensor->data = act.data.data();
-
-        // Add to GGUF
-        gguf_add_tensor(ctx, tensor);
-    }
+    // Add tensor to GGUF
+    gguf_add_tensor(gguf_ctx, state_tensor);
 
     // Write to file
-    gguf_write_to_file(ctx, filename.c_str(), false);
+    gguf_write_to_file(gguf_ctx, filename.c_str(), false);
 
-    LOG("Successfully saved %zu activations\n", g_activations.size());
+    LOG("Successfully saved LLM state (%zu bytes)\n", written);
 
-    ggml_free(ctx_data);
-    gguf_free(ctx);
+    // Cleanup
+    ggml_free(ggml_ctx);
+    gguf_free(gguf_ctx);
 
     return true;
 }
 
-// Load activations from GGUF file
-static bool load_activations_from_gguf(const std::string & filename) {
-    LOG("Loading activations from %s\n", filename.c_str());
+// Load complete LLM state from GGUF file
+static bool load_llm_state_from_gguf(llama_context * ctx, const std::string & filename) {
+    LOG("\nLoading LLM state from %s...\n", filename.c_str());
 
-    struct ggml_context * ctx_data = NULL;
+    struct ggml_context * ggml_ctx = NULL;
 
     struct gguf_init_params params = {
         /*.no_alloc = */ false,
-        /*.ctx      = */ &ctx_data,
+        /*.ctx      = */ &ggml_ctx,
     };
 
-    struct gguf_context * ctx = gguf_init_from_file(filename.c_str(), params);
+    struct gguf_context * gguf_ctx = gguf_init_from_file(filename.c_str(), params);
 
-    if (!ctx) {
-        LOG_ERR("Failed to load activations from %s\n", filename.c_str());
+    if (!gguf_ctx) {
+        LOG_ERR("Failed to load state file: %s\n", filename.c_str());
         return false;
     }
 
     // Read metadata
-    const int n_kv = gguf_get_n_kv(ctx);
-    LOG("Activation file contains %d metadata entries\n", n_kv);
+    const int n_kv = gguf_get_n_kv(gguf_ctx);
+    uint32_t version = 0;
+    uint64_t state_size = 0;
 
     for (int i = 0; i < n_kv; i++) {
-        const char * key = gguf_get_key(ctx, i);
-        const enum gguf_type type = gguf_get_kv_type(ctx, i);
+        const char * key = gguf_get_key(gguf_ctx, i);
+        const enum gguf_type type = gguf_get_kv_type(gguf_ctx, i);
 
-        if (strcmp(key, "activation.count") == 0 && type == GGUF_TYPE_UINT32) {
-            uint32_t count = gguf_get_val_u32(ctx, i);
-            LOG("  activation.count = %u\n", count);
-        } else if (strcmp(key, "activation.version") == 0 && type == GGUF_TYPE_UINT32) {
-            uint32_t version = gguf_get_val_u32(ctx, i);
-            LOG("  activation.version = %u\n", version);
+        if (strcmp(key, "llm_state.version") == 0 && type == GGUF_TYPE_UINT32) {
+            version = gguf_get_val_u32(gguf_ctx, i);
+        } else if (strcmp(key, "llm_state.size") == 0 && type == GGUF_TYPE_UINT64) {
+            state_size = gguf_get_val_u64(gguf_ctx, i);
         }
     }
 
-    // Read tensors
-    const int n_tensors = gguf_get_n_tensors(ctx);
-    LOG("Loaded %d activation tensors:\n", n_tensors);
+    LOG("State version: %u, size: %lu bytes (%.2f MB)\n", version, state_size, state_size / (1024.0 * 1024.0));
 
-    for (int i = 0; i < n_tensors; i++) {
-        const char * name = gguf_get_tensor_name(ctx, i);
-        struct ggml_tensor * tensor = ggml_get_tensor(ctx_data, name);
-
-        if (tensor) {
-            LOG("  [%d] %s: type=%s, dims=[", i, name, ggml_type_name(tensor->type));
-            for (int j = 0; j < GGML_MAX_DIMS; j++) {
-                if (j > 0) LOG(", ");
-                LOG("%lld", (long long)tensor->ne[j]);
-            }
-            LOG("], size=%zu bytes\n", ggml_nbytes(tensor));
-        }
+    // Get the state tensor
+    struct ggml_tensor * state_tensor = ggml_get_tensor(ggml_ctx, "llm_state_data");
+    if (!state_tensor) {
+        LOG_ERR("State tensor not found in file\n");
+        gguf_free(gguf_ctx);
+        return false;
     }
 
-    gguf_free(ctx);
+    // Set the state
+    const size_t loaded = llama_state_set_data(ctx, (const uint8_t*)state_tensor->data, ggml_nbytes(state_tensor));
+
+    if (loaded == 0) {
+        LOG_ERR("Failed to set state data\n");
+        gguf_free(gguf_ctx);
+        return false;
+    }
+
+    LOG("Successfully loaded LLM state (%zu bytes)\n", loaded);
+    LOG("LLM has been restored to the exact state when the save was made\n");
+
+    gguf_free(gguf_ctx);
 
     return true;
 }
@@ -362,29 +256,6 @@ int main(int argc, char ** argv) {
 
     std::vector<common_chat_msg> chat_msgs;
 
-    // Setup activation dumping callback BEFORE creating context
-    // The callback must be set on params before common_init_from_params is called
-    // IMPORTANT: Graph reuse must be disabled for callbacks to work properly
-    if (!params.path_dump_activations.empty()) {
-        g_dump_activations = true;
-        params.cb_eval = activation_collector;
-        params.cb_eval_user_data = nullptr;
-        params.warmup = false;  // Disable warmup to ensure callback works
-        // Disable graph reuse so callback gets set on every inference
-        setenv("LLAMA_GRAPH_REUSE_DISABLE", "1", 1);
-        LOG("Activation dumping enabled, will save to: %s\n", params.path_dump_activations.c_str());
-        LOG("Graph reuse disabled to ensure callback is invoked\n");
-    } else if (params.interactive) {
-        // Enable callback in interactive mode for on-demand activation dumping
-        params.cb_eval = activation_collector;
-        params.cb_eval_user_data = nullptr;
-        params.warmup = false;  // Disable warmup to ensure callback works
-        // Disable graph reuse so callback gets set on every inference
-        setenv("LLAMA_GRAPH_REUSE_DISABLE", "1", 1);
-        LOG_DBG("Activation callback enabled for interactive mode\n");
-        LOG("Graph reuse disabled to ensure callback works\n");
-    }
-
     // load the model and apply lora adapter, if any
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
     common_init_result llama_init = common_init_from_params(params);
@@ -397,10 +268,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Handle activation loading
+    // Handle state loading
     if (!params.path_load_activations.empty()) {
-        if (!load_activations_from_gguf(params.path_load_activations)) {
-            LOG_ERR("%s: failed to load activations\n", __func__);
+        if (!load_llm_state_from_gguf(ctx, params.path_load_activations)) {
+            LOG_ERR("%s: failed to load LLM state\n", __func__);
             return 1;
         }
     }
@@ -683,8 +554,8 @@ int main(int argc, char ** argv) {
     if (params.interactive) {
         LOG_INF("%s: interactive mode on.\n", __func__);
         LOG_INF("Special commands:\n");
-        LOG_INF("  /\\/save <filename> - Save activations from next inference to GGUF file\n");
-        LOG_INF("  /\\/load <filename> - Load and display activations from GGUF file\n");
+        LOG_INF("  /\\/save <filename> - Save complete LLM state (KV cache, etc.) to GGUF file\n");
+        LOG_INF("  /\\/load <filename> - Load LLM state from GGUF file to restore exact conversation state\n");
 
         if (!params.antiprompt.empty()) {
             for (const auto & antiprompt : params.antiprompt) {
@@ -1074,18 +945,13 @@ int main(int argc, char ** argv) {
                 LOG_DBG("found an EOG token\n");
 
                 if (params.interactive) {
-                    // Save activations if one-time dump was requested
-                    if (g_dump_activations_once && !g_activation_save_path.empty()) {
-                        LOG("\nSaving collected activations to %s...\n", g_activation_save_path.c_str());
-                        LOG_DBG("g_dump_activations_once=%d, collected %zu activations\n",
-                               g_dump_activations_once, g_activations.size());
-                        if (save_activations_to_gguf(g_activation_save_path)) {
-                            LOG("Activations saved successfully to %s!\n", g_activation_save_path.c_str());
-                        } else {
-                            LOG_ERR("Failed to save activations to %s\n", g_activation_save_path.c_str());
+                    // Save LLM state if requested
+                    if (g_save_state_next && !g_state_save_path.empty()) {
+                        if (!save_llm_state_to_gguf(ctx, g_state_save_path)) {
+                            LOG_ERR("Failed to save LLM state to %s\n", g_state_save_path.c_str());
                         }
-                        g_dump_activations_once = false;
-                        g_activation_save_path = "";
+                        g_save_state_next = false;
+                        g_state_save_path = "";
                     }
 
                     if (!params.antiprompt.empty()) {
@@ -1156,7 +1022,7 @@ int main(int argc, char ** argv) {
                     buffer.pop_back();
                 }
 
-                // Handle special activation commands
+                // Handle special state save/load commands
                 if (buffer.rfind("/\\/save ", 0) == 0) {
                     // Extract filename
                     std::string filename = buffer.substr(8); // Skip "/\/save "
@@ -1166,17 +1032,11 @@ int main(int argc, char ** argv) {
 
                     if (!filename.empty()) {
                         LOG("\n");
-                        LOG("Activations will be saved to: %s\n", filename.c_str());
-                        LOG("Please enter your next prompt to trigger activation collection.\n");
+                        LOG("LLM state will be saved to: %s\n", filename.c_str());
+                        LOG("State will be saved after your next prompt and response.\n");
 
-                        // Clear previous activations and prepare for new collection
-                        {
-                            std::lock_guard<std::mutex> lock(g_activations_mutex);
-                            g_activations.clear();
-                        }
-
-                        g_activation_save_path = filename;
-                        g_dump_activations_once = true;
+                        g_state_save_path = filename;
+                        g_save_state_next = true;
                     } else {
                         LOG_ERR("Error: No filename specified for /\\/save command\n");
                     }
@@ -1192,8 +1052,8 @@ int main(int argc, char ** argv) {
 
                     if (!filename.empty()) {
                         LOG("\n");
-                        if (!load_activations_from_gguf(filename)) {
-                            LOG_ERR("Failed to load activations from: %s\n", filename.c_str());
+                        if (!load_llm_state_from_gguf(ctx, filename)) {
+                            LOG_ERR("Failed to load LLM state from: %s\n", filename.c_str());
                         }
                     } else {
                         LOG_ERR("Error: No filename specified for /\\/load command\n");
@@ -1302,10 +1162,10 @@ int main(int argc, char ** argv) {
 
     LOG("\n\n");
 
-    // Save activations if dumping was enabled
-    if (g_dump_activations && !params.path_dump_activations.empty()) {
-        if (!save_activations_to_gguf(params.path_dump_activations)) {
-            LOG_ERR("%s: failed to save activations\n", __func__);
+    // Save LLM state if dumping was enabled via CLI flag
+    if (!params.path_dump_activations.empty()) {
+        if (!save_llm_state_to_gguf(ctx, params.path_dump_activations)) {
+            LOG_ERR("%s: failed to save LLM state\n", __func__);
         }
     }
 
