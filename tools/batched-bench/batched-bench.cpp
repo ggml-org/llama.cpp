@@ -221,7 +221,5 @@ int main(int argc, char ** argv) {
 
     llama_backend_free();
 
-    LOG("\n\n");
-
     return 0;
 }

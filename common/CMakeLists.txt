@@ -56,6 +56,8 @@ add_library(${TARGET} STATIC
     common.h
     console.cpp
     console.h
+    download.cpp
+    download.h
     http.h
     json-partial.cpp
     json-partial.h

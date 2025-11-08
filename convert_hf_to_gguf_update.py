@@ -141,6 +141,7 @@ models = [
     {"name": "mellum",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/JetBrains/Mellum-4b-base", },
     {"name": "bailingmoe2",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/inclusionAI/Ling-mini-base-2.0", },
     {"name": "granite-docling",  "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ibm-granite/granite-docling-258M", },
+    {"name": "minimax-m2",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/MiniMaxAI/MiniMax-M2", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
@@ -435,7 +436,7 @@ for model in models:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
         else:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
-    except OSError as e:
+    except (OSError, TypeError) as e:
         logger.error(f"Failed to load tokenizer for model {name}. Error: {e}")
         continue  # Skip this model and continue with the next one in the loop
 
