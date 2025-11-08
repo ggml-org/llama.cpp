@@ -5082,6 +5082,9 @@ struct ggml_tensor * ggml_tri(
     float constant,
     enum ggml_tri_type tritype) {
 
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(a->ne[0] == a->ne[1]);
+
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params_i32(result, 0, tritype);
@@ -5956,6 +5959,7 @@ struct ggml_tensor * ggml_opt_step_sgd(
 }
 
 // solve_tri
+
 struct ggml_tensor * ggml_solve_tri(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -5966,9 +5970,9 @@ struct ggml_tensor * ggml_solve_tri(
     // B must have same outer dimension as A
     GGML_ASSERT(a->ne[1] == b->ne[1]);
 
-    // B must be broadcastable to A
-    GGML_ASSERT(a->ne[2] % b->ne[2] == 0);
-    GGML_ASSERT(a->ne[3] % b->ne[3] == 0);
+    // batch dimensions must be equal
+    GGML_ASSERT(a->ne[2] == b->ne[2]);
+    GGML_ASSERT(a->ne[3] == b->ne[3]);
 
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(ggml_is_contiguous(b));
@@ -6565,12 +6569,12 @@ static void ggml_compute_backward(
                         struct ggml_tensor * neg_src0 = ggml_neg(ctx, src0);
                         struct ggml_tensor * exp_neg  = ggml_exp(ctx, neg_src0);
                         struct ggml_tensor * ones =
-                            ggml_exp(ctx, ggml_new_tensor_4d(ctx, src0->type, src0->ne[0], src0->ne[1], src0->ne[2],
-                                                             src0->ne[3]));
+                            ggml_scale_bias(ctx, ggml_new_tensor_4d(ctx, src0->type, src0->ne[0], src0->ne[1], src0->ne[2],
+                                                    src0->ne[3]), 0.0f, 1.0f);
                         struct ggml_tensor * one_plus_exp = ggml_add(ctx, ones, exp_neg);
                         struct ggml_tensor * sigmoid      = ggml_div(ctx, ones, one_plus_exp);
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, sigmoid));
-                    }
+                    } 
                 } break;
                 default: {
                     fprintf(stderr, "%s: unsupported unary op for backward pass: %s\n",

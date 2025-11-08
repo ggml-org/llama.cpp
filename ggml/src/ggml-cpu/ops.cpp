@@ -2208,6 +2208,16 @@ static void ggml_compute_forward_tri_f32(const ggml_compute_params * params, ggm
 
     const auto [ir0, ir1] = get_thread_range(params, src0);
 
+    bool (*bipred)(int, int);
+
+    switch (ttype) {
+        case GGML_TRI_TYPE_LOWER: bipred = [](int i, int r) { return i < r; }; break;
+        case GGML_TRI_TYPE_LOWER_DIAG: bipred = [](int i, int r) { return i <= r; }; break;
+        case GGML_TRI_TYPE_UPPER: bipred = [](int i, int r) { return i > r; }; break;
+        case GGML_TRI_TYPE_UPPER_DIAG:
+        default: bipred = [](int i, int r) { return i >= r; }; break;
+    }
+
     for (int64_t ir = ir0; ir < ir1; ++ir) {
         const int64_t i03 = ir/(ne02*ne01);
         const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
@@ -2216,7 +2226,7 @@ static void ggml_compute_forward_tri_f32(const ggml_compute_params * params, ggm
         float * dst_ptr  = (float  *) ((char *) dst->data   + i03*nb3  + i02*nb2  + i01*nb1);
         float * src_ptr  = (float  *) ((char *) src0->data  + i03*nb03 + i02*nb02 + i01*nb01);
 
-        ggml_vec_tri_f32(ne0, i01, dst_ptr, src_ptr, keep_org_val, c, ttype);
+        ggml_vec_tri_f32(ne0, i01, dst_ptr, src_ptr, keep_org_val, c, bipred);
     }
 
 }

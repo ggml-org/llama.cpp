@@ -1424,18 +1424,10 @@ inline static void ggml_vec_sum_f32(const int n, float * s, const float * x) {
 //   src          - input array
 //   keep_org_val - if true, keep original value where mask applies; otherwise use constant 'c'
 //   c            - constant value to use when not keeping original value
-//   type         - type of triangular mask (lower, upper, etc.)
-inline static void ggml_vec_tri_f32(const int n, const int r, float * dst, const float * src, bool keep_org_val, float c, enum ggml_tri_type type) {
+//   bipred       - the predicate on coordinates, derived from tri_type
+inline static void ggml_vec_tri_f32(const int n, const int r, float * dst, const float * src, bool keep_org_val, float c, bool (*bipred)(int, int)) {
     for (int i = 0; i < n; ++i) {
-        bool cmp = false;
-        switch (type) {
-            case GGML_TRI_TYPE_LOWER: cmp = i < r; break;
-            case GGML_TRI_TYPE_LOWER_DIAG: cmp = i <= r; break;
-            case GGML_TRI_TYPE_UPPER: cmp = i > r; break;
-            case GGML_TRI_TYPE_UPPER_DIAG:
-            default: cmp = i >= r; break;
-        }
-        dst[i] = cmp ? (keep_org_val ? src[i] : c) : 0.0f;
+        dst[i] = bipred(i, r) ? (keep_org_val ? src[i] : c) : 0.0f;
     }
 }
 

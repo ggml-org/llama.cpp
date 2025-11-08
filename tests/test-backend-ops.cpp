@@ -188,12 +188,11 @@ static void init_tensor_causal(ggml_tensor * tensor, float min = -1.0f, float ma
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(min, max);
 
-    for (int64_t i0 = 0; i0 < tensor->ne[0]; i0++) {
-        for (int64_t i1 = 0; i1 < tensor->ne[1]; i1++) {
-            for (int64_t i2 = 0; i2 < tensor->ne[2]; i2++) {
-                for (int64_t i3 = 0; i3 < tensor->ne[3]; i3++) {
-                    int64_t idx = i0 * tensor->nb[0] / sizeof(float) + i1 * tensor->nb[1] / sizeof(float) +
-                        i2 * tensor->nb[2] / sizeof(float) + i3 * tensor->nb[3] / sizeof(float);
+    for (int64_t i3 = 0; i3 < tensor->ne[3]; i3++) {
+        for (int64_t i2 = 0; i2 < tensor->ne[2]; i2++) {
+            for (int64_t i1 = 0; i2 < tensor->ne[1]; i1++) {
+                for (int64_t i0 = 0; i0 < tensor->ne[0]; i0++) {
+                    int64_t idx = (i0 * tensor->nb[0] + i1 * tensor->nb[1] + i2 * tensor->nb[2] + i3 * tensor->nb[3]) / sizeof(float);
                     if (i0 <= i1) {
                         data_f32[idx] = dis(gen);
                     } else {
@@ -4933,7 +4932,6 @@ struct test_argsort : public test_case {
     }
 };
 
-// GGML_OP_TOPK_MOE
 struct test_topk_moe: public test_case {
     const std::array<int64_t, 4> ne;
     const int n_expert_used;
@@ -5429,7 +5427,7 @@ struct test_pad : public test_case {
     }
 };
 
-// GGML_OP_EXT
+// GGML_OP_PAD (with extension)
 struct test_pad_ext : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
@@ -5877,63 +5875,6 @@ struct test_opt_step_sgd : public test_case {
     }
 };
 
-// GGML_OP_ADD
-// GGML_OP_SUB
-// GGML_OP_DIV
-// GGML_OP_MUL
-struct test_op_arith : public test_case {
-    const ggml_type              type;
-    const std::array<int64_t, 4> ne;
-    const ggml_op                op;
-
-    std::string vars() override { return VARS_TO_STR3(type, ne, op); }
-
-    test_op_arith(ggml_op op, ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = { 10, 5, 4, 3 })
-        : type(type), ne(ne), op(op) {
-        GGML_ASSERT(op == GGML_OP_ADD || op == GGML_OP_SUB || op == GGML_OP_DIV || op == GGML_OP_MUL);
-    }
-
-        ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
-        ggml_set_param(a);
-        ggml_set_name(a, "a");
-
-        ggml_tensor * b = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
-        ggml_set_name(b, "b");
-
-        ggml_tensor * out;
-
-        switch (op) {
-            case GGML_OP_ADD:
-                out = ggml_add(ctx, a, b);
-                break;
-            case GGML_OP_SUB:
-                out = ggml_sub(ctx, a, b);
-                break;
-            case GGML_OP_DIV:
-                out = ggml_div(ctx, a, b);
-                break;
-            case GGML_OP_MUL:
-                out = ggml_mul(ctx, a, b);
-                break;
-            default:
-                GGML_ABORT("This test only supports ADD, SUB, DIV and MUL");
-        }
-
-        ggml_set_name(out, "out");
-
-        return out;
-    }
-
-    void initialize_tensors(ggml_context * ctx) override {
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            init_tensor_uniform(t, 0.1f, 1.0f);  // no zeroes because div might complain
-        }
-    }
-
-};
-
 // GGML_OP_CUMSUM
 struct test_cumsum : public test_case {
     const ggml_type              type;
@@ -5951,6 +5892,66 @@ struct test_cumsum : public test_case {
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_cumsum(ctx, a);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -1.0f, 1.0f);
+        }
+    }
+};
+
+// GGML_OP_EXPM1
+struct test_expm1 : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override { return VARS_TO_STR2(type, ne); }
+
+    test_expm1(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 5, 4, 3 })
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_expm1(ctx, a);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -1.0f, 1.0f);
+        }
+    }
+};
+
+// GGML_OP_SOFTPLUS
+struct test_softplus : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override { return VARS_TO_STR2(type, ne); }
+
+    test_softplus(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 5, 4, 3 })
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_softplus(ctx, a);
 
         ggml_set_name(out, "out");
 
@@ -7364,6 +7365,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_ceil      (type));
         test_cases.emplace_back(new test_round     (type));
         test_cases.emplace_back(new test_trunc     (type));
+        test_cases.emplace_back(new test_expm1     (type));
+        test_cases.emplace_back(new test_softplus  (type));
         test_cases.emplace_back(new test_sqr       (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_sqrt      (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_log       (type, {7, 1, 5, 3}));
@@ -7376,12 +7379,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_round     (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_trunc     (type, {7, 1, 5, 3}));
     }
-
-    // basic arithmetic, have to do them manually now that fusion is not supported
-    test_cases.emplace_back(new test_op_arith(GGML_OP_ADD, GGML_TYPE_F32));
-    test_cases.emplace_back(new test_op_arith(GGML_OP_SUB, GGML_TYPE_F32));
-    test_cases.emplace_back(new test_op_arith(GGML_OP_DIV, GGML_TYPE_F32));
-    test_cases.emplace_back(new test_op_arith(GGML_OP_MUL, GGML_TYPE_F32));
 
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 1, 1}, 5));
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 3, 1}, 5));
