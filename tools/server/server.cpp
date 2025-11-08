@@ -2604,25 +2604,33 @@ struct server_context {
         }
     }
 
-    // Auto-save KV cache on shutdown with timestamp
-    void auto_save_kv_cache() {
-        if (params_base.kv_cache_auto_save_base.empty()) {
-            return;
-        }
+    // Save KV cache to specified directory (or generate timestamped name if empty)
+    // Returns the directory name used, or empty string on failure
+    std::string save_kv_cache_to_dir(const std::string & custom_dir = "") {
+        std::string dir_name;
 
-        // Generate timestamp directory name
-        auto now = std::chrono::system_clock::now();
-        auto time_t = std::chrono::system_clock::to_time_t(now);
-        std::tm tm_time;
+        if (custom_dir.empty()) {
+            // Auto-generate timestamp directory name
+            if (params_base.kv_cache_auto_save_base.empty()) {
+                SRV_ERR("%s", "no directory specified and no auto-save base configured\n");
+                return "";
+            }
+
+            auto now = std::chrono::system_clock::now();
+            auto time_t = std::chrono::system_clock::to_time_t(now);
+            std::tm tm_time;
 #ifdef _WIN32
-        localtime_s(&tm_time, &time_t);
+            localtime_s(&tm_time, &time_t);
 #else
-        localtime_r(&time_t, &tm_time);
+            localtime_r(&time_t, &tm_time);
 #endif
-        char timestamp[64];
-        std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm_time);
+            char timestamp[64];
+            std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm_time);
 
-        std::string dir_name = params_base.kv_cache_auto_save_base + "_" + timestamp;
+            dir_name = params_base.kv_cache_auto_save_base + "_" + timestamp;
+        } else {
+            dir_name = custom_dir;
+        }
 
         SRV_INF("auto-saving KV cache to directory: %s\n", dir_name.c_str());
 
@@ -2655,7 +2663,16 @@ struct server_context {
             }
         }
 
-        SRV_INF("KV cache auto-save complete: %d slots saved to %s\n", saved_count, dir_name.c_str());
+        SRV_INF("KV cache save complete: %d slots saved to %s\n", saved_count, dir_name.c_str());
+        return dir_name;
+    }
+
+    // Auto-save KV cache on shutdown with timestamp (convenience wrapper)
+    void auto_save_kv_cache() {
+        if (params_base.kv_cache_auto_save_base.empty()) {
+            return;
+        }
+        save_kv_cache_to_dir();  // Use default timestamped directory
     }
 
     // Auto-load KV cache on startup from specified directory
@@ -4978,6 +4995,34 @@ int main(int argc, char ** argv) {
         res_ok(res, result->to_json());
     };
 
+    const auto handle_kv_cache_save = [&ctx_server, &res_ok, &res_error](const httplib::Request & req, httplib::Response & res) {
+        std::string dirname;
+
+        // Parse request body if provided
+        if (!req.body.empty()) {
+            json request_data = json::parse(req.body);
+            if (request_data.contains("dirname") && request_data["dirname"].is_string()) {
+                dirname = request_data["dirname"];
+            }
+        }
+        // If dirname is empty, save_kv_cache_to_dir will generate a timestamped name
+
+        std::string saved_dir = ctx_server.save_kv_cache_to_dir(dirname);
+
+        if (saved_dir.empty()) {
+            res_error(res, format_error_response("Failed to save KV cache - check server logs", ERROR_TYPE_SERVER));
+            return;
+        }
+
+        json response = {
+            {"success", true},
+            {"directory", saved_dir},
+            {"message", "KV cache saved successfully"}
+        };
+
+        res_ok(res, response);
+    };
+
     const auto handle_slots_action = [&params, &res_error, &handle_slots_save, &handle_slots_restore, &handle_slots_erase](const httplib::Request & req, httplib::Response & res) {
         if (params.slot_save_path.empty()) {
             res_error(res, format_error_response("This server does not support slots action. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
@@ -5763,6 +5808,8 @@ int main(int argc, char ** argv) {
     // Save & load slots
     svr->Get (params.api_prefix + "/slots",               handle_slots);
     svr->Post(params.api_prefix + "/slots/:id_slot",      handle_slots_action);
+    // Save KV cache on demand
+    svr->Post(params.api_prefix + "/save-kv-cache",       handle_kv_cache_save);
 
     //
     // Start the server
