@@ -55,6 +55,8 @@ struct activation_tensor {
 static std::unordered_map<std::string, activation_tensor> g_activations;
 static std::mutex g_activations_mutex;
 static bool g_dump_activations = false;
+static bool g_dump_activations_once = false;
+static std::string g_activation_save_path = "";
 
 static void print_usage(int argc, char ** argv) {
     (void) argc;
@@ -99,7 +101,7 @@ static std::string filter_tensor_name(const char * name) {
 static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_data) {
     (void) user_data;
 
-    if (!g_dump_activations) {
+    if (!g_dump_activations && !g_dump_activations_once) {
         return false;
     }
 
@@ -358,6 +360,9 @@ int main(int argc, char ** argv) {
         g_dump_activations = true;
         params.cb_eval = activation_collector;
         LOG("Activation dumping enabled, will save to: %s\n", params.path_dump_activations.c_str());
+    } else if (params.interactive) {
+        // Enable callback in interactive mode for on-demand activation dumping
+        params.cb_eval = activation_collector;
     }
 
     auto * mem = llama_get_memory(ctx);
@@ -637,6 +642,9 @@ int main(int argc, char ** argv) {
 
     if (params.interactive) {
         LOG_INF("%s: interactive mode on.\n", __func__);
+        LOG_INF("Special commands:\n");
+        LOG_INF("  /\\/save <filename> - Save activations from next inference to GGUF file\n");
+        LOG_INF("  /\\/load <filename> - Load and display activations from GGUF file\n");
 
         if (!params.antiprompt.empty()) {
             for (const auto & antiprompt : params.antiprompt) {
@@ -1026,6 +1034,18 @@ int main(int argc, char ** argv) {
                 LOG_DBG("found an EOG token\n");
 
                 if (params.interactive) {
+                    // Save activations if one-time dump was requested
+                    if (g_dump_activations_once && !g_activation_save_path.empty()) {
+                        LOG("\nSaving collected activations...\n");
+                        if (save_activations_to_gguf(g_activation_save_path)) {
+                            LOG("Activations saved successfully!\n");
+                        } else {
+                            LOG_ERR("Failed to save activations\n");
+                        }
+                        g_dump_activations_once = false;
+                        g_activation_save_path = "";
+                    }
+
                     if (!params.antiprompt.empty()) {
                         // tokenize and inject first reverse prompt
                         const auto first_antiprompt = common_tokenize(ctx, params.antiprompt.front(), false, true);
@@ -1092,6 +1112,47 @@ int main(int argc, char ** argv) {
                     // this should be accomplished by explicitly adding a newline by using \ followed by return,
                     // then returning control by pressing return again.
                     buffer.pop_back();
+                }
+
+                // Handle special activation commands
+                if (buffer.rfind("/\\/save ", 0) == 0) {
+                    // Extract filename
+                    std::string filename = buffer.substr(8); // Skip "/\/save "
+                    // Trim whitespace
+                    filename.erase(0, filename.find_first_not_of(" \t\n\r\f\v"));
+                    filename.erase(filename.find_last_not_of(" \t\n\r\f\v") + 1);
+
+                    if (!filename.empty()) {
+                        LOG("Activations will be saved to: %s\n", filename.c_str());
+                        LOG("Collecting activations for the next inference pass...\n");
+
+                        // Clear previous activations and prepare for new collection
+                        {
+                            std::lock_guard<std::mutex> lock(g_activations_mutex);
+                            g_activations.clear();
+                        }
+
+                        g_activation_save_path = filename;
+                        g_dump_activations_once = true;
+                    } else {
+                        LOG_ERR("Error: No filename specified for /\\/save command\n");
+                    }
+                    buffer.clear();
+                } else if (buffer.rfind("/\\/load ", 0) == 0) {
+                    // Extract filename
+                    std::string filename = buffer.substr(8); // Skip "/\/load "
+                    // Trim whitespace
+                    filename.erase(0, filename.find_first_not_of(" \t\n\r\f\v"));
+                    filename.erase(filename.find_last_not_of(" \t\n\r\f\v") + 1);
+
+                    if (!filename.empty()) {
+                        if (!load_activations_from_gguf(filename)) {
+                            LOG_ERR("Failed to load activations from: %s\n", filename.c_str());
+                        }
+                    } else {
+                        LOG_ERR("Error: No filename specified for /\\/load command\n");
+                    }
+                    buffer.clear();
                 }
 
                 if (buffer.empty()) { // Enter key on empty line lets the user pass control back
