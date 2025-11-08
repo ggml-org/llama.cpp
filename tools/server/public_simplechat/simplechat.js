@@ -46,7 +46,12 @@ class ApiEP {
  */
 
 /**
- * @typedef {{role: string, content: string, reasoning_content: string, tool_calls: Array<NSToolCalls>}} NSChatMessage
+ * @typedef {{
+ *      role: string,
+ *      content: string|undefined,
+ *      reasoning_content: string|undefined,
+ *      tool_calls: Array<NSToolCalls>|undefined
+ * }} NSChatMessage
  */
 
 class ChatMessageEx {
@@ -54,12 +59,12 @@ class ChatMessageEx {
     /**
      * Represent a Message in the Chat
      * @param {string} role
-     * @param {string} content
-     * @param {string} reasoning_content
-     * @param {Array<any>} tool_calls
-     * @param {string} trimmedContent
+     * @param {string|undefined} content
+     * @param {string|undefined} reasoning_content
+     * @param {Array<any>|undefined} tool_calls
+     * @param {string|undefined} trimmedContent
      */
-    constructor(role = "", content="", reasoning_content="", tool_calls=[], trimmedContent="") {
+    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined, trimmedContent=undefined) {
         /** @type {NSChatMessage} */
         this.ns = { role: role, content: content, tool_calls: tool_calls, reasoning_content: reasoning_content }
         this.trimmedContent = trimmedContent;
@@ -75,10 +80,10 @@ class ChatMessageEx {
 
     clear() {
         this.ns.role = "";
-        this.ns.content = "";
-        this.ns.reasoning_content = "";
-        this.ns.tool_calls = [];
-        this.trimmedContent = "";
+        this.ns.content = undefined;
+        this.ns.reasoning_content = undefined;
+        this.ns.tool_calls = undefined;
+        this.trimmedContent = undefined;
     }
 
     /**
