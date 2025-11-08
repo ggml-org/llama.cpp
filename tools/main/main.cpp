@@ -340,6 +340,18 @@ int main(int argc, char ** argv) {
 
     std::vector<common_chat_msg> chat_msgs;
 
+    // Setup activation dumping callback BEFORE creating context
+    // The callback must be set on params before common_init_from_params is called
+    if (!params.path_dump_activations.empty()) {
+        g_dump_activations = true;
+        params.cb_eval = activation_collector;
+        LOG("Activation dumping enabled, will save to: %s\n", params.path_dump_activations.c_str());
+    } else if (params.interactive) {
+        // Enable callback in interactive mode for on-demand activation dumping
+        params.cb_eval = activation_collector;
+        LOG_DBG("Activation callback enabled for interactive mode\n");
+    }
+
     // load the model and apply lora adapter, if any
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
     common_init_result llama_init = common_init_from_params(params);
@@ -358,16 +370,6 @@ int main(int argc, char ** argv) {
             LOG_ERR("%s: failed to load activations\n", __func__);
             return 1;
         }
-    }
-
-    // Setup activation dumping callback
-    if (!params.path_dump_activations.empty()) {
-        g_dump_activations = true;
-        params.cb_eval = activation_collector;
-        LOG("Activation dumping enabled, will save to: %s\n", params.path_dump_activations.c_str());
-    } else if (params.interactive) {
-        // Enable callback in interactive mode for on-demand activation dumping
-        params.cb_eval = activation_collector;
     }
 
     auto * mem = llama_get_memory(ctx);
