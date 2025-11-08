@@ -26,6 +26,8 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <queue>
+#include <regex>
 #include <signal.h>
 #include <thread>
 #include <unordered_map>
@@ -2315,8 +2317,44 @@ struct server_response {
     }
 };
 
+// Activation capture entry for streaming to disk
+struct activation_entry {
+    uint64_t timestamp_us;      // microseconds since epoch
+    std::string label;          // tensor name like "blk.0.attn_q"
+    enum ggml_type type;        // tensor data type
+    int64_t ne[4];             // tensor dimensions
+    std::vector<uint8_t> data; // tensor data (copied from GPU if needed)
+};
+
+// Activation capture system for streaming intermediate tensors
+struct activation_capture {
+    std::atomic<bool> active{false};
+    std::string output_file;
+    std::vector<std::regex> filters;  // regex patterns for tensor names
+    int layer_start = -1;             // -1 = all layers
+    int layer_end = -1;
+    size_t max_size_bytes = 0;        // 0 = unlimited
+
+    std::mutex queue_mutex;
+    std::condition_variable queue_cv;
+    std::queue<activation_entry> entry_queue;
+    std::thread writer_thread;
+    std::atomic<bool> should_stop{false};
+    std::atomic<size_t> bytes_written{0};
+    std::atomic<size_t> entries_captured{0};
+
+    // Callback user data
+    llama_context * ctx = nullptr;
+};
+
+// Global pointer for activation capture (accessed by callback)
+static activation_capture * g_activation_capture = nullptr;
+
 struct server_context {
     common_params params_base;
+
+    // Activation capture system
+    std::unique_ptr<activation_capture> act_capture;
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result llama_init;
@@ -2384,6 +2422,10 @@ struct server_context {
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
         params_base = params;
+
+        // Set up activation capture callback (inactive until explicitly started)
+        params_base.cb_eval = activation_capture_callback;
+        params_base.cb_eval_user_data = nullptr;
 
         llama_init = common_init_from_params(params_base);
 
@@ -2718,6 +2760,232 @@ struct server_context {
         }
 
         SRV_INF("KV cache auto-load complete: %d slots loaded from %s\n", loaded_count, dir_name.c_str());
+    }
+
+    // Activation capture: background writer thread
+    static void activation_writer_thread(activation_capture * capture) {
+        std::ofstream file(capture->output_file, std::ios::binary);
+        if (!file.is_open()) {
+            SRV_ERR("failed to open activation file: %s\n", capture->output_file.c_str());
+            return;
+        }
+
+        // Write magic header
+        const char magic[9] = "LLMACT01";
+        file.write(magic, 8);
+
+        while (true) {
+            activation_entry entry;
+            {
+                std::unique_lock<std::mutex> lock(capture->queue_mutex);
+                capture->queue_cv.wait(lock, [capture] {
+                    return !capture->entry_queue.empty() || capture->should_stop.load();
+                });
+
+                if (capture->should_stop.load() && capture->entry_queue.empty()) {
+                    break;
+                }
+
+                if (capture->entry_queue.empty()) {
+                    continue;
+                }
+
+                entry = std::move(capture->entry_queue.front());
+                capture->entry_queue.pop();
+            }
+
+            // Write entry to file
+            // Format: timestamp(8) + label_len(4) + label + type(1) + dims(4*8) + data_size(8) + data
+            file.write(reinterpret_cast<const char*>(&entry.timestamp_us), sizeof(uint64_t));
+
+            uint32_t label_len = entry.label.size();
+            file.write(reinterpret_cast<const char*>(&label_len), sizeof(uint32_t));
+            file.write(entry.label.data(), label_len);
+
+            int8_t type_byte = static_cast<int8_t>(entry.type);
+            file.write(reinterpret_cast<const char*>(&type_byte), sizeof(int8_t));
+
+            file.write(reinterpret_cast<const char*>(entry.ne), sizeof(entry.ne));
+
+            uint64_t data_size = entry.data.size();
+            file.write(reinterpret_cast<const char*>(&data_size), sizeof(uint64_t));
+            file.write(reinterpret_cast<const char*>(entry.data.data()), data_size);
+
+            capture->bytes_written.fetch_add(sizeof(uint64_t) + sizeof(uint32_t) + label_len +
+                                              sizeof(int8_t) + sizeof(entry.ne) + sizeof(uint64_t) + data_size);
+
+            // Check size limit
+            if (capture->max_size_bytes > 0 && capture->bytes_written.load() >= capture->max_size_bytes) {
+                SRV_INF("activation capture reached size limit: %zu bytes\n", capture->bytes_written.load());
+                capture->active.store(false);
+                break;
+            }
+        }
+
+        file.close();
+        SRV_INF("activation writer thread finished: %zu entries, %zu bytes written to %s\n",
+                capture->entries_captured.load(), capture->bytes_written.load(), capture->output_file.c_str());
+    }
+
+    // Activation capture: callback for tensor evaluation
+    static bool activation_capture_callback(struct ggml_tensor * t, bool ask, void * user_data) {
+        (void)user_data;  // unused
+        if (!ask) return true;  // We only care about the "ask" phase
+
+        activation_capture * capture = g_activation_capture;
+        if (!capture || !capture->active.load()) {
+            return true;
+        }
+
+        const char * name = ggml_get_name(t);
+        if (!name || strlen(name) == 0) {
+            return true; // Skip unnamed tensors
+        }
+
+        std::string tensor_name(name);
+
+        // Apply filters
+        if (!capture->filters.empty()) {
+            bool matches = false;
+            for (const auto & filter : capture->filters) {
+                if (std::regex_match(tensor_name, filter)) {
+                    matches = true;
+                    break;
+                }
+            }
+            if (!matches) {
+                return true; // Doesn't match any filter
+            }
+        }
+
+        // Apply layer range filter (extract layer number from name like "blk.5.attn_q")
+        if (capture->layer_start >= 0) {
+            std::regex layer_regex(R"(blk\.(\d+)\.)");
+            std::smatch match;
+            if (std::regex_search(tensor_name, match, layer_regex)) {
+                int layer_num = std::stoi(match[1]);
+                if (layer_num < capture->layer_start || layer_num > capture->layer_end) {
+                    return true; // Outside layer range
+                }
+            }
+        }
+
+        // Create entry
+        activation_entry entry;
+        entry.timestamp_us = ggml_time_us();
+        entry.label = tensor_name;
+        entry.type = t->type;
+        for (int i = 0; i < 4; i++) {
+            entry.ne[i] = t->ne[i];
+        }
+
+        // Copy tensor data (handles GPU->CPU transfer automatically)
+        size_t nbytes = ggml_nbytes(t);
+        entry.data.resize(nbytes);
+        ggml_backend_tensor_get(t, entry.data.data(), 0, nbytes);
+
+        // Queue entry for writing
+        {
+            std::lock_guard<std::mutex> lock(capture->queue_mutex);
+            capture->entry_queue.push(std::move(entry));
+            capture->entries_captured.fetch_add(1);
+        }
+        capture->queue_cv.notify_one();
+
+        return true;  // Continue graph evaluation
+    }
+
+    // Start activation capture
+    bool start_activation_capture(const std::string & output_file,
+                                   const std::vector<std::string> & filter_patterns,
+                                   int layer_start = -1,
+                                   int layer_end = -1,
+                                   size_t max_size_mb = 0) {
+        if (act_capture && act_capture->active.load()) {
+            SRV_WRN("%s", "activation capture already active\n");
+            return false;
+        }
+
+        act_capture = std::make_unique<activation_capture>();
+        act_capture->output_file = output_file;
+        act_capture->layer_start = layer_start;
+        act_capture->layer_end = layer_end;
+        act_capture->max_size_bytes = max_size_mb * 1024 * 1024;
+        act_capture->ctx = ctx;
+
+        // Compile regex filters
+        for (const auto & pattern : filter_patterns) {
+            try {
+                act_capture->filters.emplace_back(pattern);
+            } catch (const std::regex_error & e) {
+                SRV_ERR("invalid regex pattern '%s': %s\n", pattern.c_str(), e.what());
+                return false;
+            }
+        }
+
+        // Start writer thread
+        act_capture->should_stop.store(false);
+        act_capture->writer_thread = std::thread(activation_writer_thread, act_capture.get());
+
+        // Set global pointer for callback
+        g_activation_capture = act_capture.get();
+
+        act_capture->active.store(true);
+
+        SRV_INF("activation capture started: file=%s, filters=%zu, layers=[%d,%d], max_size=%zu MB\n",
+                output_file.c_str(), filter_patterns.size(), layer_start, layer_end, max_size_mb);
+
+        return true;
+    }
+
+    // Stop activation capture
+    json stop_activation_capture() {
+        if (!act_capture || !act_capture->active.load()) {
+            return {
+                {"error", "no active capture"}
+            };
+        }
+
+        act_capture->active.store(false);
+
+        // Clear global pointer
+        g_activation_capture = nullptr;
+
+        // Stop writer thread
+        act_capture->should_stop.store(true);
+        act_capture->queue_cv.notify_one();
+        if (act_capture->writer_thread.joinable()) {
+            act_capture->writer_thread.join();
+        }
+
+        json result = {
+            {"success", true},
+            {"file", act_capture->output_file},
+            {"entries_captured", act_capture->entries_captured.load()},
+            {"bytes_written", act_capture->bytes_written.load()},
+            {"message", "Activation capture stopped"}
+        };
+
+        act_capture.reset();
+
+        return result;
+    }
+
+    // Get activation capture status
+    json get_activation_capture_status() const {
+        if (!act_capture) {
+            return {
+                {"active", false}
+            };
+        }
+
+        return {
+            {"active", act_capture->active.load()},
+            {"file", act_capture->output_file},
+            {"entries_captured", act_capture->entries_captured.load()},
+            {"bytes_written", act_capture->bytes_written.load()},
+            {"queue_size", act_capture->entry_queue.size()}
+        };
     }
 
     server_slot * get_slot_by_id(int id) {
@@ -5810,6 +6078,47 @@ int main(int argc, char ** argv) {
     svr->Post(params.api_prefix + "/slots/:id_slot",      handle_slots_action);
     // Save KV cache on demand
     svr->Post(params.api_prefix + "/save-kv-cache",       handle_kv_cache_save);
+
+    // Activation capture endpoints
+    const auto handle_activations_start = [&ctx_server, &res_ok, &res_error](const httplib::Request & req, httplib::Response & res) {
+        json request_data = json::parse(req.body);
+
+        std::string output_file = request_data.value("output_file", "activations.bin");
+        std::vector<std::string> filters = request_data.value("filters", std::vector<std::string>());
+        int layer_start = request_data.value("layer_start", -1);
+        int layer_end = request_data.value("layer_end", -1);
+        size_t max_size_mb = request_data.value("max_size_mb", 0);
+
+        bool success = ctx_server.start_activation_capture(output_file, filters, layer_start, layer_end, max_size_mb);
+
+        if (success) {
+            json response = {
+                {"success", true},
+                {"message", "Activation capture started"},
+                {"output_file", output_file},
+                {"filters", filters},
+                {"layer_range", {layer_start, layer_end}},
+                {"max_size_mb", max_size_mb}
+            };
+            res_ok(res, response);
+        } else {
+            res_error(res, format_error_response("Failed to start activation capture", ERROR_TYPE_SERVER));
+        }
+    };
+
+    const auto handle_activations_stop = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+        json result = ctx_server.stop_activation_capture();
+        res_ok(res, result);
+    };
+
+    const auto handle_activations_status = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+        json status = ctx_server.get_activation_capture_status();
+        res_ok(res, status);
+    };
+
+    svr->Post(params.api_prefix + "/activations/start",  handle_activations_start);
+    svr->Post(params.api_prefix + "/activations/stop",   handle_activations_stop);
+    svr->Get (params.api_prefix + "/activations/status", handle_activations_status);
 
     //
     // Start the server
