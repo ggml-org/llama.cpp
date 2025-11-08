@@ -4,6 +4,7 @@
 #include "log.h"
 
 #include <cmath>
+#include <cstring>
 #include <unordered_map>
 #include <algorithm>
 
@@ -598,4 +599,75 @@ std::vector<common_sampler_type> common_sampler_types_from_chars(const std::stri
     }
 
     return samplers;
+}
+
+// Get current temperature from the sampler
+float common_sampler_get_temp(const struct common_sampler * gsmpl) {
+    if (!gsmpl) {
+        return 0.0f;
+    }
+    return gsmpl->params.temp;
+}
+
+// Set temperature at runtime by replacing the temperature sampler in the chain
+bool common_sampler_set_temp(struct common_sampler * gsmpl, float new_temp) {
+    if (!gsmpl || !gsmpl->chain) {
+        return false;
+    }
+
+    // Find the temperature sampler in the chain
+    const int n_samplers = llama_sampler_chain_n(gsmpl->chain);
+    int temp_idx = -1;
+
+    for (int i = 0; i < n_samplers; i++) {
+        struct llama_sampler * s = llama_sampler_chain_get(gsmpl->chain, i);
+        const char * name = llama_sampler_name(s);
+
+        // Look for "temp" or "temp-ext" sampler
+        if (strcmp(name, "temp") == 0 || strcmp(name, "temp-ext") == 0) {
+            temp_idx = i;
+            break;
+        }
+    }
+
+    if (temp_idx == -1) {
+        // No temperature sampler found - this might happen with mirostat
+        return false;
+    }
+
+    // Remove the old temperature sampler
+    struct llama_sampler * old_temp = llama_sampler_chain_remove(gsmpl->chain, temp_idx);
+    if (old_temp) {
+        llama_sampler_free(old_temp);
+    }
+
+    // Create new temperature sampler
+    struct llama_sampler * new_temp_sampler;
+
+    // Use temp_ext if dynamic temperature was enabled, otherwise use simple temp
+    if (gsmpl->params.dynatemp_range > 0.0f) {
+        new_temp_sampler = llama_sampler_init_temp_ext(new_temp, gsmpl->params.dynatemp_range, gsmpl->params.dynatemp_exponent);
+    } else {
+        new_temp_sampler = llama_sampler_init_temp(new_temp);
+    }
+
+    // Add at the end first
+    llama_sampler_chain_add(gsmpl->chain, new_temp_sampler);
+
+    // Move it to the correct position by swapping
+    const int current_n = llama_sampler_chain_n(gsmpl->chain);
+    for (int i = current_n - 1; i > temp_idx; i--) {
+        // Remove from end
+        struct llama_sampler * s = llama_sampler_chain_remove(gsmpl->chain, i);
+        // Remove the one before
+        struct llama_sampler * s_prev = llama_sampler_chain_remove(gsmpl->chain, i - 1);
+        // Add them back in swapped order
+        llama_sampler_chain_add(gsmpl->chain, s);
+        llama_sampler_chain_add(gsmpl->chain, s_prev);
+    }
+
+    // Update the params to reflect the new temperature
+    gsmpl->params.temp = new_temp;
+
+    return true;
 }

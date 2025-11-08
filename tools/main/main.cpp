@@ -556,6 +556,8 @@ int main(int argc, char ** argv) {
         LOG_INF("Special commands:\n");
         LOG_INF("  /\\/save <filename> - Save complete LLM state (KV cache, etc.) to GGUF file\n");
         LOG_INF("  /\\/load <filename> - Load LLM state from GGUF file to restore exact conversation state\n");
+        LOG_INF("  /\\/temp            - Show current temperature setting\n");
+        LOG_INF("  /\\/temp <value>    - Set temperature to a new value (e.g., /\\/temp 0.7)\n");
 
         if (!params.antiprompt.empty()) {
             for (const auto & antiprompt : params.antiprompt) {
@@ -1057,6 +1059,40 @@ int main(int argc, char ** argv) {
                         }
                     } else {
                         LOG_ERR("Error: No filename specified for /\\/load command\n");
+                    }
+                    // Keep is_interacting true and continue to wait for next input
+                    is_interacting = true;
+                    continue;
+                } else if (buffer.rfind("/\\/temp", 0) == 0) {
+                    // Handle temperature get/set command
+                    std::string temp_arg = buffer.substr(7); // Skip "/\/temp"
+                    // Trim whitespace
+                    temp_arg.erase(0, temp_arg.find_first_not_of(" \t\n\r\f\v"));
+                    temp_arg.erase(temp_arg.find_last_not_of(" \t\n\r\f\v") + 1);
+
+                    if (temp_arg.empty()) {
+                        // Show current temperature
+                        LOG("\n");
+                        LOG("Current temperature: %.2f\n", common_sampler_get_temp(smpl));
+                    } else {
+                        // Set new temperature
+                        try {
+                            float new_temp = std::stof(temp_arg);
+                            if (new_temp < 0.0f) {
+                                LOG_ERR("Error: Temperature must be >= 0.0\n");
+                            } else {
+                                LOG("\n");
+                                float old_temp = common_sampler_get_temp(smpl);
+                                LOG("Changing temperature from %.2f to %.2f\n", old_temp, new_temp);
+                                if (common_sampler_set_temp(smpl, new_temp)) {
+                                    LOG("Temperature successfully updated to %.2f\n", new_temp);
+                                } else {
+                                    LOG_ERR("Failed to update temperature\n");
+                                }
+                            }
+                        } catch (const std::exception & e) {
+                            LOG_ERR("Error: Invalid temperature value '%s'\n", temp_arg.c_str());
+                        }
                     }
                     // Keep is_interacting true and continue to wait for next input
                     is_interacting = true;

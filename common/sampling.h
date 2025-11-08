@@ -99,6 +99,10 @@ std::string common_sampler_print(const struct common_sampler * gsmpl);
 // get a string representation of the last accepted tokens
 std::string common_sampler_prev_str(common_sampler * gsmpl, llama_context * ctx, int n);
 
+// get/set temperature at runtime
+float common_sampler_get_temp(const struct common_sampler * gsmpl);
+bool  common_sampler_set_temp(struct common_sampler * gsmpl, float temp);
+
 char        common_sampler_type_to_chr(enum common_sampler_type cnstr);
 std::string common_sampler_type_to_str(enum common_sampler_type cnstr);
 
