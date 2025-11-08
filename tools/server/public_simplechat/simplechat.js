@@ -65,12 +65,26 @@ class NSChatMessage {
      * @param {string|undefined} content
      * @param {string|undefined} reasoning_content
      * @param {Array<NSToolCall>|undefined} tool_calls
+     * @param {string|undefined} tool_call_id - toolcall response - the tool / function call id
+     * @param {string|undefined} name - toolcall response - the tool / function call name
      */
-    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined) {
+    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined, tool_call_id=undefined, name=undefined) {
         this.role = role;
         this.content = content;
         this.reasoning_content = reasoning_content
         this.tool_calls = structuredClone(tool_calls)
+        this.tool_call_id = tool_call_id
+        this.name = name
+    }
+
+    /**
+     * @param {string} role
+     * @param {string} tool_call_id
+     * @param {string} name
+     * @param {string} content
+     */
+    static new_tool_response(role, tool_call_id, name, content) {
+        return new NSChatMessage(role, content, undefined, undefined, tool_call_id, name)
     }
 
     getContent() {
@@ -238,74 +252,6 @@ class ChatMessageEx {
     clear() {
         this.ns = new NSChatMessage()
         this.trimmedContent = undefined;
-    }
-
-    /**
-     * Create a all in one tool call result string
-     * Use browser's dom logic to handle strings in a xml/html safe way by escaping things where needed,
-     * so that extracting the same later doesnt create any problems.
-     * @param {string} toolCallId
-     * @param {string} toolName
-     * @param {string} toolResult
-     */
-    static createToolCallResultAllInOne(toolCallId, toolName, toolResult) {
-        let dp = new DOMParser()
-        let doc = dp.parseFromString("<tool_response></tool_response>", "text/xml")
-        for (const k of [["id", toolCallId], ["name", toolName], ["content", toolResult]]) {
-            let el = doc.createElement(k[0])
-            el.appendChild(doc.createTextNode(k[1]))
-            doc.documentElement.appendChild(el)
-        }
-        let xmlStr = new XMLSerializer().serializeToString(doc);
-        xmlStr = xmlStr.replace(/\/name><content/, '\/name>\n<content');
-        return xmlStr;
-    }
-
-    /**
-     * Extract the elements of the all in one tool call result string
-     * @param {string} allInOne
-     */
-    static extractToolCallResultAllInOneSimpleMinded(allInOne) {
-        const regex = /<tool_response>\s*<id>(.*?)<\/id>\s*<name>(.*?)<\/name>\s*<content>([\s\S]*?)<\/content>\s*<\/tool_response>/si;
-        const caught = allInOne.match(regex)
-        let data = { tool_call_id: "Error", name: "Error", content: "Error" }
-        if (caught) {
-            data = {
-                tool_call_id: caught[1].trim(),
-                name: caught[2].trim(),
-                content: caught[3].trim()
-            }
-        }
-        return data
-    }
-
-    /**
-     * Extract the elements of the all in one tool call result string
-     * This should potentially account for content tag having xml/html content within to an extent.
-     *
-     * NOTE: Rather text/html is a more relaxed/tolarent mode for parseFromString than text/xml.
-     * NOTE: Maybe better to switch to a json string format or use a more intelligent xml encoder
-     * in createToolCallResultAllInOne so that extractor like this dont have to worry about special
-     * xml chars like & as is, in the AllInOne content. For now text/html tolarence seems ok enough.
-     *
-     * @param {string} allInOne
-     */
-    static extractToolCallResultAllInOne(allInOne) {
-        const dParser = new DOMParser();
-        const got = dParser.parseFromString(allInOne, 'text/html');
-        const parseErrors = got.querySelector('parseerror')
-        if (parseErrors) {
-            console.debug("WARN:ChatMessageEx:ExtractToolCallResultAllInOne:", parseErrors.textContent.trim())
-        }
-        const id = got.querySelector('id')?.textContent.trim();
-        const name = got.querySelector('name')?.textContent.trim();
-        const content = got.querySelector('content')?.textContent.trim();
-        let data = {
-            tool_call_id: id? id : "Error",
-            name: name? name : "Error",
-            content: content? content : "Error"
-        }
-        return data
     }
 
     /**
@@ -583,12 +529,6 @@ class SimpleChat {
             }
             if (tmsg.ns.getReasoningContent() === "") {
                 tmsg.ns_delete("reasoning_content")
-            }
-            if (tmsg.ns.role == Roles.Tool) {
-                let res = ChatMessageEx.extractToolCallResultAllInOne(tmsg.ns.getContent())
-                tmsg.ns.content = res.content
-                tmsg.ns_set_extra("tool_call_id", res.tool_call_id)
-                tmsg.ns_set_extra("name", res.name)
             }
             chat.push(tmsg.ns);
         }
@@ -1241,7 +1181,7 @@ class MultiChatUI {
                     limitedData = data.slice(0, this.me.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
                 }
             }
-            chat.add(new ChatMessageEx(new NSChatMessage(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(tcid, name, limitedData))))
+            chat.add(new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, tcid, name, limitedData)))
             if (this.chat_show(cid)) {
                 if (this.me.tools.autoSecs > 0) {
                     this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
@@ -1369,13 +1309,13 @@ class MultiChatUI {
         }
         let toolResult = await chat.handle_toolcall(toolCallId, toolname, this.elInToolArgs.value)
         if (toolResult !== undefined) {
-            chat.add(new ChatMessageEx(new NSChatMessage(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, toolResult))))
+            chat.add(new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
             this.chat_show(chat.chatId)
             this.ui_reset_userinput(false)
         } else {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
                 this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
-                chat.add(new ChatMessageEx(new NSChatMessage(Roles.ToolTemp, ChatMessageEx.createToolCallResultAllInOne(toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`))))
+                chat.add(new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
                 this.chat_show(chat.chatId)
                 this.ui_reset_userinput(false)
             }, this.me.tools.toolCallResponseTimeoutMS)
