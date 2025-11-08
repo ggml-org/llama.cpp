@@ -4984,8 +4984,10 @@ struct test_mul_mat_vec_fusion : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         if (!use_id) {
-            std::array<int64_t, 4> ne = {k, m, 1, 1};
-            std::array<int64_t, 4> ne0 = {k, n, 1, 1};
+            const int              channels = 4;
+            const int              samples  = 2;
+            std::array<int64_t, 4> ne       = { k, m, channels, samples };
+            std::array<int64_t, 4> ne0      = { k, n, channels, samples };
 
             ggml_tensor * cur  = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
             ggml_tensor * gate = with_gate ? ggml_new_tensor(ctx, type, 4, ne0.data()) : nullptr;
@@ -4993,14 +4995,14 @@ struct test_mul_mat_vec_fusion : public test_case {
 
             ggml_tensor * ffn_up = ggml_mul_mat(ctx, up, cur);
             if (with_bias) {
-                std::array<int64_t, 4> bias_ne = {ffn_up->ne[0], 1, 1, 1};
+                std::array<int64_t, 4> bias_ne = { ffn_up->ne[0], 1, channels, samples };
                 ggml_tensor * up_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
                 ffn_up = ggml_add(ctx, ffn_up, up_bias);
             }
 
             ggml_tensor * ffn_gate = with_gate ? ggml_mul_mat(ctx, gate, cur) : nullptr;
             if (with_bias && with_gate) {
-                std::array<int64_t, 4> bias_ne = {ffn_gate->ne[0], 1, 1, 1};
+                std::array<int64_t, 4> bias_ne   = { ffn_gate->ne[0], 1, channels, samples };
                 ggml_tensor * gate_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
                 ffn_gate = ggml_add(ctx, ffn_gate, gate_bias);
             }
