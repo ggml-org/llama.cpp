@@ -641,7 +641,14 @@ bool common_sampler_set_temp(struct common_sampler * gsmpl, float new_temp) {
         llama_sampler_free(old_temp);
     }
 
-    // Create new temperature sampler
+    // Collect all samplers that come after the temp position
+    std::vector<struct llama_sampler *> samplers_after;
+    int n_after = llama_sampler_chain_n(gsmpl->chain) - temp_idx;
+    for (int i = 0; i < n_after; i++) {
+        samplers_after.push_back(llama_sampler_chain_remove(gsmpl->chain, temp_idx));
+    }
+
+    // Create and add new temperature sampler
     struct llama_sampler * new_temp_sampler;
 
     // Use temp_ext if dynamic temperature was enabled, otherwise use simple temp
@@ -651,19 +658,11 @@ bool common_sampler_set_temp(struct common_sampler * gsmpl, float new_temp) {
         new_temp_sampler = llama_sampler_init_temp(new_temp);
     }
 
-    // Add at the end first
     llama_sampler_chain_add(gsmpl->chain, new_temp_sampler);
 
-    // Move it to the correct position by swapping
-    const int current_n = llama_sampler_chain_n(gsmpl->chain);
-    for (int i = current_n - 1; i > temp_idx; i--) {
-        // Remove from end
-        struct llama_sampler * s = llama_sampler_chain_remove(gsmpl->chain, i);
-        // Remove the one before
-        struct llama_sampler * s_prev = llama_sampler_chain_remove(gsmpl->chain, i - 1);
-        // Add them back in swapped order
+    // Add back the samplers that came after
+    for (auto * s : samplers_after) {
         llama_sampler_chain_add(gsmpl->chain, s);
-        llama_sampler_chain_add(gsmpl->chain, s_prev);
     }
 
     // Update the params to reflect the new temperature
