@@ -104,7 +104,7 @@ static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_d
     // Log that callback is being called
     static bool first_call = true;
     if (first_call) {
-        LOG_DBG("Activation callback is being invoked!\n");
+        LOG("Activation callback is being invoked!\n");
         first_call = false;
     }
 
@@ -127,20 +127,25 @@ static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_d
     // Collect the tensor data
     std::lock_guard<std::mutex> lock(g_activations_mutex);
 
-    LOG_DBG("Collecting activation from tensor: %s\n", t->name);
+    static int collect_count = 0;
+    collect_count++;
+
+    LOG_DBG("Collecting activation #%d from tensor: %s (op=%d)\n", collect_count, t->name, t->op);
 
     std::string tensor_name = filter_tensor_name(t->name);
     if (tensor_name.empty()) {
         tensor_name = std::string(t->name);
     }
 
-    // Check if we already have this tensor (to avoid duplicates)
-    if (g_activations.find(tensor_name) != g_activations.end()) {
-        return true;
+    // Make unique name if we already have this tensor
+    std::string unique_name = tensor_name;
+    int counter = 1;
+    while (g_activations.find(unique_name) != g_activations.end()) {
+        unique_name = tensor_name + "_" + std::to_string(counter++);
     }
 
     activation_tensor act;
-    act.name = tensor_name;
+    act.name = unique_name;
     act.type = t->type;
 
     // Store dimensions
@@ -148,18 +153,27 @@ static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_d
         act.ne.push_back(t->ne[i]);
     }
 
-    // Copy tensor data
+    // Copy tensor data - handle both CPU and GPU tensors
     const size_t tensor_size = ggml_nbytes(t);
     act.data.resize(tensor_size);
 
+    // Check if tensor is on host (CPU) or device (GPU)
     const bool is_host = ggml_backend_buffer_is_host(t->buffer);
+
+    LOG_DBG("  Tensor %s: size=%zu bytes, is_host=%d\n", unique_name.c_str(), tensor_size, is_host);
+
     if (is_host) {
         memcpy(act.data.data(), t->data, tensor_size);
     } else {
+        // Tensor is on GPU, need to copy it to host memory
         ggml_backend_tensor_get(t, act.data.data(), 0, tensor_size);
     }
 
-    g_activations[tensor_name] = std::move(act);
+    g_activations[unique_name] = std::move(act);
+
+    if (collect_count % 10 == 0) {
+        LOG_DBG("  Collected %d activations so far (total unique: %zu)\n", collect_count, g_activations.size());
+    }
 
     return true;
 }
