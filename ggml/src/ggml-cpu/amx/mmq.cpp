@@ -2423,25 +2423,27 @@ void ggml_backend_amx_mul_mat(const ggml_compute_params * params, struct ggml_te
     // pointer to work space, used convert A from float to quantized type
     void * wdata = params->wdata;
 
-    //TODO: performance improvement: merge quant A
-    if (params->ith == 0) {
-        GGML_DISPATCH_QTYPES(TYPE, [&] {
-            const size_t row_size_A = K / blck_size * sizeof(vec_dot_type);
-            const size_t desired_wsize = M * row_size_A;
-            if (params->wsize < desired_wsize) {
-                GGML_ABORT("insufficient work space size");
-            }
+    // Parallelize quantization of matrix A to improve cache locality and utilize multiple threads
+    GGML_DISPATCH_QTYPES(TYPE, [&] {
+        const size_t row_size_A = K / blck_size * sizeof(vec_dot_type);
+        const size_t desired_wsize = M * row_size_A;
+        if (params->wsize < desired_wsize) {
+            GGML_ABORT("insufficient work space size");
+        }
 
-            // Q4_0, Q4_1, Q8_0 handles 1 TILE_K per blck_size
-            // Q4_K, Q5_K, Q6_K, IQ4_XS handles 8 TILE_K per blck_size
-            GGML_ASSERT(TILE_K == blck_size || TILE_K * 8 == blck_size);
+        // Q4_0, Q4_1, Q8_0 handles 1 TILE_K per blck_size
+        // Q4_K, Q5_K, Q6_K, IQ4_XS handles 8 TILE_K per blck_size
+        GGML_ASSERT(TILE_K == blck_size || TILE_K * 8 == blck_size);
 
-            const float * A_data = static_cast<const float *>(src1->data);
-            for (int m = 0; m < M; ++m) {
-                from_float<vec_dot_type>(A_data + m * K, (char *)wdata + m * row_size_A, K);
-            }
-        });
-    }
+        const float * A_data = static_cast<const float *>(src1->data);
+        const int nth = params->nth;
+        const int ith = params->ith;
+        
+        // Parallelize quantization across threads
+        for (int m = ith; m < M; m += nth) {
+            from_float<vec_dot_type>(A_data + m * K, (char *)wdata + m * row_size_A, K);
+        }
+    });
 
     ggml_barrier(params->threadpool);
 

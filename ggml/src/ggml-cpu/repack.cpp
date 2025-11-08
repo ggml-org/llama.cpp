@@ -55,7 +55,6 @@ void ggml_quantize_mat_q8_0_4x4_generic(const float * GGML_RESTRICT x, void * GG
 
     block_q8_0x4 * GGML_RESTRICT y = (block_q8_0x4 *) vy;
 
-    // scalar
     const int blck_size_interleave = 4;
     float srcv[4][QK8_0];
     float id[4];
@@ -63,9 +62,44 @@ void ggml_quantize_mat_q8_0_4x4_generic(const float * GGML_RESTRICT x, void * GG
     for (int i = 0; i < nb; i++) {
         for (int row_iter = 0; row_iter < 4; row_iter++) {
             float amax = 0.0f; // absolute max
+            const float * src_row = x + row_iter * k + i * QK8_0;
 
-            for (int j = 0; j < QK8_0; j++) {
-                srcv[row_iter][j] = x[row_iter * k + i * QK8_0 + j];
+            // SIMD-optimized absolute max computation
+            int j = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+            __m512 vamax = _mm512_setzero_ps();
+            for (; j + 15 < QK8_0; j += 16) {
+                __m512 vx = _mm512_loadu_ps(src_row + j);
+                vamax = _mm512_max_ps(vamax, _mm512_andnot_ps(_mm512_set1_ps(-0.0f), vx));
+            }
+            amax = _mm512_reduce_max_ps(vamax);
+#elif defined(__AVX2__) && defined(__FMA__)
+            __m256 vamax = _mm256_setzero_ps();
+            for (; j + 7 < QK8_0; j += 8) {
+                __m256 vx = _mm256_loadu_ps(src_row + j);
+                vamax = _mm256_max_ps(vamax, _mm256_andnot_ps(_mm256_set1_ps(-0.0f), vx));
+            }
+            __m128 vamax128 = _mm_max_ps(_mm256_extractf128_ps(vamax, 1), _mm256_castps256_ps128(vamax));
+            vamax128 = _mm_max_ps(vamax128, _mm_movehl_ps(vamax128, vamax128));
+            vamax128 = _mm_max_ss(vamax128, _mm_movehdup_ps(vamax128));
+            amax = _mm_cvtss_f32(vamax128);
+#elif defined(__SSE2__)
+            __m128 vamax = _mm_setzero_ps();
+            for (; j + 3 < QK8_0; j += 4) {
+                __m128 vx = _mm_loadu_ps(src_row + j);
+                vamax = _mm_max_ps(vamax, _mm_andnot_ps(_mm_set1_ps(-0.0f), vx));
+            }
+            vamax = _mm_max_ps(vamax, _mm_movehl_ps(vamax, vamax));
+            vamax = _mm_max_ss(vamax, _mm_movehdup_ps(vamax));
+            amax = _mm_cvtss_f32(vamax);
+#endif
+            // Copy all elements to srcv and handle remaining elements
+            for (int j2 = 0; j2 < j; j2++) {
+                srcv[row_iter][j2] = src_row[j2];
+            }
+            // Scalar fallback for remaining elements
+            for (; j < QK8_0; j++) {
+                srcv[row_iter][j] = src_row[j];
                 amax = MAX(amax, fabsf(srcv[row_iter][j]));
             }
 
@@ -93,7 +127,6 @@ void ggml_quantize_mat_q8_0_4x8_generic(const float * GGML_RESTRICT x, void * GG
 
     block_q8_0x4 * GGML_RESTRICT y = (block_q8_0x4 *) vy;
 
-    // scalar
     const int blck_size_interleave = 8;
     float srcv[4][QK8_0];
     float id[4];
@@ -101,9 +134,44 @@ void ggml_quantize_mat_q8_0_4x8_generic(const float * GGML_RESTRICT x, void * GG
     for (int i = 0; i < nb; i++) {
         for (int row_iter = 0; row_iter < 4; row_iter++) {
             float amax = 0.0f; // absolute max
+            const float * src_row = x + row_iter * k + i * QK8_0;
 
-            for (int j = 0; j < QK8_0; j++) {
-                srcv[row_iter][j] = x[row_iter * k + i * QK8_0 + j];
+            // SIMD-optimized absolute max computation
+            int j = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+            __m512 vamax = _mm512_setzero_ps();
+            for (; j + 15 < QK8_0; j += 16) {
+                __m512 vx = _mm512_loadu_ps(src_row + j);
+                vamax = _mm512_max_ps(vamax, _mm512_andnot_ps(_mm512_set1_ps(-0.0f), vx));
+            }
+            amax = _mm512_reduce_max_ps(vamax);
+#elif defined(__AVX2__) && defined(__FMA__)
+            __m256 vamax = _mm256_setzero_ps();
+            for (; j + 7 < QK8_0; j += 8) {
+                __m256 vx = _mm256_loadu_ps(src_row + j);
+                vamax = _mm256_max_ps(vamax, _mm256_andnot_ps(_mm256_set1_ps(-0.0f), vx));
+            }
+            __m128 vamax128 = _mm_max_ps(_mm256_extractf128_ps(vamax, 1), _mm256_castps256_ps128(vamax));
+            vamax128 = _mm_max_ps(vamax128, _mm_movehl_ps(vamax128, vamax128));
+            vamax128 = _mm_max_ss(vamax128, _mm_movehdup_ps(vamax128));
+            amax = _mm_cvtss_f32(vamax128);
+#elif defined(__SSE2__)
+            __m128 vamax = _mm_setzero_ps();
+            for (; j + 3 < QK8_0; j += 4) {
+                __m128 vx = _mm_loadu_ps(src_row + j);
+                vamax = _mm_max_ps(vamax, _mm_andnot_ps(_mm_set1_ps(-0.0f), vx));
+            }
+            vamax = _mm_max_ps(vamax, _mm_movehl_ps(vamax, vamax));
+            vamax = _mm_max_ss(vamax, _mm_movehdup_ps(vamax));
+            amax = _mm_cvtss_f32(vamax);
+#endif
+            // Copy all elements to srcv and handle remaining elements
+            for (int j2 = 0; j2 < j; j2++) {
+                srcv[row_iter][j2] = src_row[j2];
+            }
+            // Scalar fallback for remaining elements
+            for (; j < QK8_0; j++) {
+                srcv[row_iter][j] = src_row[j];
                 amax = MAX(amax, fabsf(srcv[row_iter][j]));
             }
 
@@ -131,7 +199,6 @@ void ggml_quantize_mat_q8_K_4x8_generic(const float * GGML_RESTRICT x, void * GG
 
     block_q8_Kx4 * GGML_RESTRICT y = (block_q8_Kx4 *) vy;
 
-    // scalar
     const int blck_size_interleave = 8;
     float srcv[4][QK_K];
     float iscale[4];
@@ -140,12 +207,50 @@ void ggml_quantize_mat_q8_K_4x8_generic(const float * GGML_RESTRICT x, void * GG
         for (int row_iter = 0; row_iter < 4; row_iter++) {
             float amax = 0.0f; // absolute max
             float max = 0;
+            const float * src_row = x + row_iter * k + i * QK_K;
 
-            for (int j = 0; j < QK_K; j++) {
-                srcv[row_iter][j] = x[row_iter * k + i * QK_K + j];
-                // Update the maximum value of the corresponding super block
-                if(amax < fabsf(srcv[row_iter][j])) {
-                    amax = fabsf(srcv[row_iter][j]);
+            // SIMD-optimized absolute max computation
+            int j = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+            __m512 vamax = _mm512_setzero_ps();
+            for (; j + 15 < QK_K; j += 16) {
+                __m512 vx = _mm512_loadu_ps(src_row + j);
+                vamax = _mm512_max_ps(vamax, _mm512_andnot_ps(_mm512_set1_ps(-0.0f), vx));
+            }
+            amax = _mm512_reduce_max_ps(vamax);
+#elif defined(__AVX2__) && defined(__FMA__)
+            __m256 vamax = _mm256_setzero_ps();
+            for (; j + 7 < QK_K; j += 8) {
+                __m256 vx = _mm256_loadu_ps(src_row + j);
+                vamax = _mm256_max_ps(vamax, _mm256_andnot_ps(_mm256_set1_ps(-0.0f), vx));
+            }
+            __m128 vamax128 = _mm_max_ps(_mm256_extractf128_ps(vamax, 1), _mm256_castps256_ps128(vamax));
+            vamax128 = _mm_max_ps(vamax128, _mm_movehl_ps(vamax128, vamax128));
+            vamax128 = _mm_max_ss(vamax128, _mm_movehdup_ps(vamax128));
+            amax = _mm_cvtss_f32(vamax128);
+#elif defined(__SSE2__)
+            __m128 vamax = _mm_setzero_ps();
+            for (; j + 3 < QK_K; j += 4) {
+                __m128 vx = _mm_loadu_ps(src_row + j);
+                vamax = _mm_max_ps(vamax, _mm_andnot_ps(_mm_set1_ps(-0.0f), vx));
+            }
+            vamax = _mm_max_ps(vamax, _mm_movehl_ps(vamax, vamax));
+            vamax = _mm_max_ss(vamax, _mm_movehdup_ps(vamax));
+            amax = _mm_cvtss_f32(vamax);
+#endif
+            // Copy all elements to srcv and find max for SIMD-processed elements
+            for (int j2 = 0; j2 < j; j2++) {
+                srcv[row_iter][j2] = src_row[j2];
+                if (fabsf(src_row[j2]) == amax && max == 0) {
+                    max = src_row[j2];
+                }
+            }
+            // Scalar fallback for remaining elements and find max
+            for (; j < QK_K; j++) {
+                srcv[row_iter][j] = src_row[j];
+                float abs_val = fabsf(srcv[row_iter][j]);
+                if (amax < abs_val) {
+                    amax = abs_val;
                     max = srcv[row_iter][j];
                 }
             }
