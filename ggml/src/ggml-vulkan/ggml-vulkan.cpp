@@ -130,9 +130,9 @@ struct vk_pipeline_struct {
     // true if fields have been set by ggml_vk_create_pipeline
     bool initialized {};
     // set to true to request the pipeline is compiled
-    bool needed {};
+    std::atomic<bool> needed {};
     // set to true when the shader has been compiled
-    bool compiled {};
+    std::atomic<bool> compiled {};
     // number of registers used, extracted from pipeline executable properties
     uint32_t register_count {};
 };
@@ -1842,10 +1842,7 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         }
     }
 
-    {
-        std::lock_guard<std::recursive_mutex> guard(device->mutex);
-        device->all_pipelines.push_back(pipeline);
-    }
+    device->all_pipelines.push_back(pipeline);
 
     {
         std::lock_guard<std::mutex> guard(compile_count_mutex);
@@ -2536,6 +2533,7 @@ static uint32_t get_subgroup_size(const std::string &pipeline_name, const vk_dev
 static void ggml_vk_load_shaders(vk_device& device) {
     VK_LOG_DEBUG("ggml_vk_load_shaders(" << device->name << ")");
 
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
     // some shaders have a minimum subgroup size
     const uint32_t subgroup_size_8 = std::max(device->subgroup_size, 8u);
     const uint32_t subgroup_size_16 = std::max(device->subgroup_size, 16u);
@@ -2729,6 +2727,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
         if (!pipeline->needed || pipeline->compiled) {
             return;
         }
+        // TODO: We're no longer benefitting from the async compiles (shaders are
+        // compiled individually, as needed) and this complexity can be removed.
         {
             // wait until fewer than N compiles are in progress
             uint32_t N = std::max(1u, std::thread::hardware_concurrency());
@@ -7914,12 +7914,15 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     vk_pipeline pipeline = nullptr;
 
-    auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16[k->type];
-    auto it = pipelines.find(fa_pipeline_state);
-    if (it != pipelines.end()) {
-        pipeline = it->second;
-    } else {
-        pipelines[fa_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
+    {
+        std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+        auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16[k->type];
+        auto it = pipelines.find(fa_pipeline_state);
+        if (it != pipelines.end()) {
+            pipeline = it->second;
+        } else {
+            pipelines[fa_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
+        }
     }
 
     assert(pipeline);
