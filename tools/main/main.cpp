@@ -364,18 +364,25 @@ int main(int argc, char ** argv) {
 
     // Setup activation dumping callback BEFORE creating context
     // The callback must be set on params before common_init_from_params is called
+    // IMPORTANT: Graph reuse must be disabled for callbacks to work properly
     if (!params.path_dump_activations.empty()) {
         g_dump_activations = true;
         params.cb_eval = activation_collector;
         params.cb_eval_user_data = nullptr;
         params.warmup = false;  // Disable warmup to ensure callback works
+        // Disable graph reuse so callback gets set on every inference
+        setenv("LLAMA_GRAPH_REUSE_DISABLE", "1", 1);
         LOG("Activation dumping enabled, will save to: %s\n", params.path_dump_activations.c_str());
+        LOG("Graph reuse disabled to ensure callback is invoked\n");
     } else if (params.interactive) {
         // Enable callback in interactive mode for on-demand activation dumping
         params.cb_eval = activation_collector;
         params.cb_eval_user_data = nullptr;
         params.warmup = false;  // Disable warmup to ensure callback works
+        // Disable graph reuse so callback gets set on every inference
+        setenv("LLAMA_GRAPH_REUSE_DISABLE", "1", 1);
         LOG_DBG("Activation callback enabled for interactive mode\n");
+        LOG("Graph reuse disabled to ensure callback works\n");
     }
 
     // load the model and apply lora adapter, if any
