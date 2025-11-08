@@ -222,6 +222,13 @@ class NSChatMessage {
         return false;
     }
 
+    has_toolresponse() {
+        if (this.tool_call_id) {
+            return true
+        }
+        return false
+    }
+
 }
 
 
@@ -1021,6 +1028,7 @@ class MultiChatUI {
         if (msg.ns.role === Roles.ToolTemp) {
             if (iFromLast == 0) {
                 this.elInUser.value = msg.ns.getContent();
+                this.elInUser.dataset.role = Roles.ToolTemp
             }
             return
         }
@@ -1042,6 +1050,14 @@ class MultiChatUI {
         let showList = []
         if (msg.ns.has_reasoning()) {
             showList.push(['reasoning', `!!!Reasoning: ${msg.ns.getReasoningContent()} !!!\n\n`])
+        }
+        if (msg.ns.has_toolresponse()) {
+            if (msg.ns.tool_call_id) {
+                showList.push(['toolcallid', msg.ns.tool_call_id])
+            }
+            if (msg.ns.name) {
+                showList.push(['toolname', msg.ns.name])
+            }
         }
         if (msg.ns.getContent().trim().length > 0) {
             showList.push(['content', msg.ns.getContent().trim()])
