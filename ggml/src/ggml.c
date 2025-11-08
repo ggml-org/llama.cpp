@@ -6574,7 +6574,7 @@ static void ggml_compute_backward(
                         struct ggml_tensor * one_plus_exp = ggml_add(ctx, ones, exp_neg);
                         struct ggml_tensor * sigmoid      = ggml_div(ctx, ones, one_plus_exp);
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, sigmoid));
-                    } 
+                    }
                 } break;
                 default: {
                     fprintf(stderr, "%s: unsupported unary op for backward pass: %s\n",
