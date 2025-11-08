@@ -44,12 +44,12 @@
 			}
 		}
 
-		if (isCtrlOrCmd && event.shiftKey && event.key === 'o') {
+		if (isCtrlOrCmd && event.shiftKey && event.key === 'O') {
 			event.preventDefault();
 			goto('?new_chat=true#/');
 		}
 
-		if (event.shiftKey && isCtrlOrCmd && event.key === 'e') {
+		if (event.shiftKey && isCtrlOrCmd && event.key === 'E') {
 			event.preventDefault();
 
 			if (chatSidebar?.editActiveConversation) {
