@@ -101,6 +101,13 @@ static std::string filter_tensor_name(const char * name) {
 static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_data) {
     (void) user_data;
 
+    // Log that callback is being called
+    static bool first_call = true;
+    if (first_call) {
+        LOG_DBG("Activation callback is being invoked!\n");
+        first_call = false;
+    }
+
     if (!g_dump_activations && !g_dump_activations_once) {
         return false;
     }
@@ -111,6 +118,7 @@ static bool activation_collector(struct ggml_tensor * t, bool ask, void * user_d
         if (t->op == GGML_OP_MUL_MAT || t->op == GGML_OP_MUL_MAT_ID ||
             t->op == GGML_OP_ADD || t->op == GGML_OP_MUL ||
             t->op == GGML_OP_NORM || t->op == GGML_OP_RMS_NORM) {
+            LOG_DBG("Callback asking about tensor %s (op=%d)\n", t->name, t->op);
             return true;
         }
         return false;
@@ -345,10 +353,14 @@ int main(int argc, char ** argv) {
     if (!params.path_dump_activations.empty()) {
         g_dump_activations = true;
         params.cb_eval = activation_collector;
+        params.cb_eval_user_data = nullptr;
+        params.warmup = false;  // Disable warmup to ensure callback works
         LOG("Activation dumping enabled, will save to: %s\n", params.path_dump_activations.c_str());
     } else if (params.interactive) {
         // Enable callback in interactive mode for on-demand activation dumping
         params.cb_eval = activation_collector;
+        params.cb_eval_user_data = nullptr;
+        params.warmup = false;  // Disable warmup to ensure callback works
         LOG_DBG("Activation callback enabled for interactive mode\n");
     }
 
