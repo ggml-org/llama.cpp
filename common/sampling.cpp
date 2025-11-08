@@ -612,6 +612,7 @@ float common_sampler_get_temp(const struct common_sampler * gsmpl) {
 // Set temperature at runtime by replacing the temperature sampler in the chain
 bool common_sampler_set_temp(struct common_sampler * gsmpl, float new_temp) {
     if (!gsmpl || !gsmpl->chain) {
+        LOG_ERR("%s: invalid sampler or chain\n", __func__);
         return false;
     }
 
@@ -619,33 +620,46 @@ bool common_sampler_set_temp(struct common_sampler * gsmpl, float new_temp) {
     const int n_samplers = llama_sampler_chain_n(gsmpl->chain);
     int temp_idx = -1;
 
+    LOG_INF("%s: searching for temperature sampler in chain of %d samplers\n", __func__, n_samplers);
+
     for (int i = 0; i < n_samplers; i++) {
         struct llama_sampler * s = llama_sampler_chain_get(gsmpl->chain, i);
         const char * name = llama_sampler_name(s);
+        LOG_INF("%s: sampler[%d] = '%s'\n", __func__, i, name);
 
         // Look for "temp" or "temp-ext" sampler
         if (strcmp(name, "temp") == 0 || strcmp(name, "temp-ext") == 0) {
             temp_idx = i;
+            LOG_INF("%s: found temperature sampler '%s' at index %d\n", __func__, name, i);
             break;
         }
     }
 
     if (temp_idx == -1) {
         // No temperature sampler found - this might happen with mirostat
+        LOG_ERR("%s: no temperature sampler found in chain\n", __func__);
         return false;
     }
+
+    LOG_INF("%s: removing old temperature sampler at index %d\n", __func__, temp_idx);
 
     // Remove the old temperature sampler
     struct llama_sampler * old_temp = llama_sampler_chain_remove(gsmpl->chain, temp_idx);
     if (old_temp) {
         llama_sampler_free(old_temp);
+        LOG_INF("%s: freed old temperature sampler\n", __func__);
     }
 
     // Collect all samplers that come after the temp position
     std::vector<struct llama_sampler *> samplers_after;
     int n_after = llama_sampler_chain_n(gsmpl->chain) - temp_idx;
+    LOG_INF("%s: collecting %d samplers after temp position\n", __func__, n_after);
+
     for (int i = 0; i < n_after; i++) {
-        samplers_after.push_back(llama_sampler_chain_remove(gsmpl->chain, temp_idx));
+        struct llama_sampler * s = llama_sampler_chain_remove(gsmpl->chain, temp_idx);
+        const char * name = llama_sampler_name(s);
+        LOG_INF("%s: removed sampler '%s'\n", __func__, name);
+        samplers_after.push_back(s);
     }
 
     // Create and add new temperature sampler
@@ -653,20 +667,29 @@ bool common_sampler_set_temp(struct common_sampler * gsmpl, float new_temp) {
 
     // Use temp_ext if dynamic temperature was enabled, otherwise use simple temp
     if (gsmpl->params.dynatemp_range > 0.0f) {
+        LOG_INF("%s: creating temp-ext sampler with temp=%.2f, range=%.2f, exp=%.2f\n",
+                __func__, new_temp, gsmpl->params.dynatemp_range, gsmpl->params.dynatemp_exponent);
         new_temp_sampler = llama_sampler_init_temp_ext(new_temp, gsmpl->params.dynatemp_range, gsmpl->params.dynatemp_exponent);
     } else {
+        LOG_INF("%s: creating temp sampler with temp=%.2f\n", __func__, new_temp);
         new_temp_sampler = llama_sampler_init_temp(new_temp);
     }
 
     llama_sampler_chain_add(gsmpl->chain, new_temp_sampler);
+    LOG_INF("%s: added new temperature sampler\n", __func__);
 
     // Add back the samplers that came after
     for (auto * s : samplers_after) {
+        const char * name = llama_sampler_name(s);
         llama_sampler_chain_add(gsmpl->chain, s);
+        LOG_INF("%s: re-added sampler '%s'\n", __func__, name);
     }
 
     // Update the params to reflect the new temperature
     gsmpl->params.temp = new_temp;
+
+    LOG_INF("%s: final chain has %d samplers\n", __func__, llama_sampler_chain_n(gsmpl->chain));
+    LOG_INF("%s: temperature update complete\n", __func__);
 
     return true;
 }
