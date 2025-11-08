@@ -7,13 +7,24 @@ import * as du from "./datautils.mjs";
 import * as ui from "./ui.mjs"
 import * as mTools from "./tools.mjs"
 
+const ROLES_TEMP_ENDSWITH = ".TEMP"
 
 class Roles {
     static System = "system";
     static User = "user";
     static Assistant = "assistant";
     static Tool = "tool";
-    static ToolTemp = "TOOL.TEMP";
+
+    // List of roles for messages that shouldnt be sent to the ai server.
+    // Ensure all these end with .TEMP
+
+    /** Used to identify tool call response, which has not yet been accepted and submitted by users */
+    static ToolTemp = `TOOL${ROLES_TEMP_ENDSWITH}`;
+    /**
+     * Used to maintain errors that wont be normally communicated back to ai server
+     * like error got during handshake with ai server or so.
+     */
+    static ErrorTemp = `ERROR${ROLES_TEMP_ENDSWITH}`;
 }
 
 
@@ -69,6 +80,7 @@ class NSChatMessage {
         return ""
     }
 
+    /** Returns trimmed reasoning content, else empty string */
     getReasoningContent() {
         if (this.reasoning_content) {
             return this.reasoning_content.trim()
@@ -176,18 +188,29 @@ class NSChatMessage {
         return false
     }
 
+    has_role_temp() {
+        if (this.role.endsWith(ROLES_TEMP_ENDSWITH)) {
+            return true;
+        }
+        return false;
+    }
+
 }
 
 
 class ChatMessageEx {
 
     /**
-     * Represent a Message in the Chat
-     * @param {NSChatMessage} nsChatMsg
+     * Represent a Message in the Chat.
+     * @param {NSChatMessage|undefined} nsChatMsg - will create a default NSChatMessage instance, if undefined
      * @param {string|undefined} trimmedContent
      */
-    constructor(nsChatMsg, trimmedContent=undefined) {
-        this.ns = nsChatMsg
+    constructor(nsChatMsg=undefined, trimmedContent=undefined) {
+        if (nsChatMsg) {
+            this.ns = nsChatMsg
+        } else {
+            this.ns = new NSChatMessage()
+        }
         this.trimmedContent = trimmedContent;
     }
 
@@ -476,13 +499,7 @@ class SimpleChat {
         this.iLastSys = ods.iLastSys;
         this.xchat = [];
         for (const cur of ods.xchat) {
-            if (cur.ns == undefined) { // this relates to the old on-disk-structure/format, needs to be removed later
-                /** @typedef {{role: string, content: string}} OldChatMessage */
-                let tcur = /** @type {OldChatMessage} */(/** @type {unknown} */(cur));
-                this.xchat.push(new ChatMessageEx(tcur.role, tcur.content))
-            } else {
-                this.xchat.push(new ChatMessageEx(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.trimmedContent))
-            }
+            this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls), cur.trimmedContent))
         }
     }
 
@@ -505,7 +522,7 @@ class SimpleChat {
         /** @type {ChatMessages} */
         let rchat = [];
         let sysMsg = this.get_system_latest();
-        if (sysMsg.ns.content.length != 0) {
+        if (sysMsg.ns.getContent().length != 0) {
             rchat.push(sysMsg)
         }
         let iUserCnt = 0;
@@ -540,21 +557,22 @@ class SimpleChat {
         let xchat = this.recent_chat(iRecentUserMsgCnt);
         let chat = [];
         for (const msg of xchat) {
-            if (msg.ns.role == Roles.ToolTemp) {
-                // Skip (temp) tool response which has not yet been accepted by user
-                // In future need to check that it is the last message
+            if (msg.ns.has_role_temp()) {
+                // Skip Temp Role messages
+                // ex: tool response which has not yet been accepted by user
+                // In future need to check that non accepted tool response is the last message
                 // and not something in between, which shouldnt occur normally.
                 continue
             }
             let tmsg = ChatMessageEx.newFrom(msg);
-            if (!tmsg.has_toolcall()) {
+            if (!tmsg.ns.has_toolcalls()) {
                 tmsg.ns_delete("tool_calls")
             }
-            if (tmsg.ns.reasoning_content.trim() === "") {
+            if (tmsg.ns.getReasoningContent() === "") {
                 tmsg.ns_delete("reasoning_content")
             }
             if (tmsg.ns.role == Roles.Tool) {
-                let res = ChatMessageEx.extractToolCallResultAllInOne(tmsg.ns.content)
+                let res = ChatMessageEx.extractToolCallResultAllInOne(tmsg.ns.getContent())
                 tmsg.ns.content = res.content
                 tmsg.ns_set_extra("tool_call_id", res.tool_call_id)
                 tmsg.ns_set_extra("name", res.name)
@@ -706,12 +724,12 @@ class SimpleChat {
         }
 
         if (this.iLastSys < 0) {
-            return this.add(new ChatMessageEx(Roles.System, sysPrompt));
+            return this.add(new ChatMessageEx(new NSChatMessage(Roles.System, sysPrompt)));
         }
 
         let lastSys = this.xchat[this.iLastSys].ns.content;
         if (lastSys !== sysPrompt) {
-            return this.add(new ChatMessageEx(Roles.System, sysPrompt));
+            return this.add(new ChatMessageEx(new NSChatMessage(Roles.System, sysPrompt)));
         }
         return false;
     }
@@ -721,7 +739,7 @@ class SimpleChat {
      */
     get_system_latest() {
         if (this.iLastSys == -1) {
-            return new ChatMessageEx(Roles.System);
+            return new ChatMessageEx(new NSChatMessage(Roles.System));
         }
         return this.xchat[this.iLastSys];
     }
@@ -787,7 +805,7 @@ class SimpleChat {
     async handle_response_oneshot(resp, apiEP) {
         let respBody = await resp.json();
         console.debug(`DBUG:SimpleChat:SC:${this.chatId}:HandleUserSubmit:RespBody:${JSON.stringify(respBody)}`);
-        let cm = new ChatMessageEx(Roles.Assistant)
+        let cm = new ChatMessageEx(new NSChatMessage(Roles.Assistant))
         cm.update_oneshot(respBody, apiEP)
         return cm
     }
@@ -819,8 +837,10 @@ class SimpleChat {
         }
         if (this.me.chatProps.bTrimGarbage) {
             let origMsg = theResp.ns.content;
-            theResp.ns.content = du.trim_garbage_at_end(origMsg);
-            theResp.trimmedContent = origMsg.substring(theResp.ns.content.length);
+            if (origMsg) {
+                theResp.ns.content = du.trim_garbage_at_end(origMsg);
+                theResp.trimmedContent = origMsg.substring(theResp.ns.content.length);
+            }
         }
         theResp.ns.role = Roles.Assistant;
         this.add(theResp);
