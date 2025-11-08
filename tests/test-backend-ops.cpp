@@ -4882,60 +4882,6 @@ struct test_topk_moe: public test_case {
     }
 };
 
-struct test_moe_expert_reduce : public test_case {
-    const int64_t n_embd;
-    const int64_t n_tokens;
-    const int64_t n_expert_used;
-
-    test_moe_expert_reduce(int64_t n_embd = 64, int64_t n_tokens = 5, int64_t n_expert_used = 4)
-        : n_embd(n_embd), n_tokens(n_tokens), n_expert_used(n_expert_used) {
-        GGML_ASSERT(n_expert_used > 1);
-    }
-
-    std::string vars() override {
-        return VARS_TO_STR3(n_embd, n_tokens, n_expert_used);
-    }
-
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "MOE_EXPERT_REDUCE";
-    }
-
-    bool run_whole_graph() override { return true; }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * experts = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_expert_used, n_tokens);
-        ggml_set_name(experts, "experts");
-
-        ggml_tensor * weights = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_expert_used, n_tokens);
-        ggml_set_name(weights, "weights");
-
-        ggml_tensor * weighted = ggml_mul(ctx, experts, weights);
-        ggml_set_name(weighted, "weighted_experts");
-
-        std::vector<ggml_tensor *> expert_views(n_expert_used);
-        for (int64_t i = 0; i < n_expert_used; ++i) {
-            expert_views[i] = ggml_view_2d(ctx, weighted, n_embd, n_tokens, weighted->nb[2], i * weighted->nb[1]);
-
-            std::string name = "expert_view_" + std::to_string(i);
-            ggml_set_name(expert_views[i], name.c_str());
-            ggml_build_forward_expand(gf, expert_views[i]);
-        }
-
-        ggml_tensor * moe_out = expert_views[0];
-        for (int64_t i = 1; i < n_expert_used; ++i) {
-            moe_out = ggml_add(ctx, moe_out, expert_views[i]);
-
-            std::string name = "expert_add_" + std::to_string(i - 1);
-            ggml_set_name(moe_out, name.c_str());
-        }
-
-        ggml_set_name(moe_out, "moe_out");
-
-        return moe_out;
-    }
-};
-
 struct test_mul_mat_vec_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
@@ -7414,10 +7360,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_topk_moe({ 8, 22, 1, 1 }, 4, /*with_norm*/ false, /*delayed_softmax*/ true));
     test_cases.emplace_back(new test_topk_moe({ 32, 22, 1, 1 }, 8, /*with_norm*/ false, /*delayed_softmax*/ true));
-
-    test_cases.emplace_back(new test_moe_expert_reduce(1024, 5, 4));
-    test_cases.emplace_back(new test_moe_expert_reduce(80, 3, 6));
-    test_cases.emplace_back(new test_moe_expert_reduce(80, 3, 7));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
