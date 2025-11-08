@@ -72,9 +72,12 @@ def generate_variants(fname, input_dir, output_dir, outfile):
         except ValueError:
             decls_map = {}
 
-        with open(os.path.join(input_dir, "common_decls.tmpl"), "r", encoding="utf-8") as f:
-            common_decls = f.read()
-        decls_map.update(parse_decls(common_decls))
+        for fname in sorted(os.listdir(input_dir)):
+            if fname.endswith(".tmpl"):
+                tmpl_path = os.path.join(input_dir, fname)
+                with open(tmpl_path, "r", encoding="utf-8") as f_tmpl:
+                    decls = f_tmpl.read()
+                    decls_map.update(parse_decls(decls))
 
         shader_template = extract_block(text, "SHADER")
         for variant in variants:
