@@ -13146,7 +13146,8 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     vk::PhysicalDevice vkdev = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device]];
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT budgetprops;
     vk::PhysicalDeviceMemoryProperties2 memprops = {};
-    bool membudget_supported = vk_instance.device_supports_membudget[device];
+    const bool membudget_supported = vk_instance.device_supports_membudget[device];
+    const bool is_integrated_gpu = vkdev.getProperties().deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
 
     if (membudget_supported) {
         memprops.pNext = &budgetprops;
@@ -13159,7 +13160,7 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     for (uint32_t i = 0; i < memprops.memoryProperties.memoryHeapCount; ++i) {
         const vk::MemoryHeap & heap = memprops.memoryProperties.memoryHeaps[i];
 
-        if (heap.flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
+        if (is_integrated_gpu || (heap.flags & vk::MemoryHeapFlagBits::eDeviceLocal)) {
             *total += heap.size;
 
             if (membudget_supported && i < budgetprops.heapUsage.size()) {
