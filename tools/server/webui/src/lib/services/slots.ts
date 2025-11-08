@@ -252,6 +252,11 @@ export class SlotsService {
 			? Math.round((promptProgress.processed / promptProgress.total) * 100)
 			: undefined;
 
+		// Calculate parsing tokens per second from prompt_progress
+		const parsingTokensPerSecond = promptProgress && promptProgress.time_ms > 0
+			? (promptProgress.processed / promptProgress.time_ms) * 1000
+			: undefined;
+
 		return {
 			status: predictedTokens > 0 ? 'generating' : promptProgress ? 'preparing' : 'idle',
 			tokensDecoded: predictedTokens,
@@ -267,7 +272,10 @@ export class SlotsService {
 			speculative: false,
 			progressPercent,
 			promptTokens,
-			cacheTokens
+			cacheTokens,
+			parsingTokensPerSecond,
+			inputTokensProcessed: promptProgress?.processed,
+			inputTokensTotal: promptProgress?.total
 		};
 	}
 

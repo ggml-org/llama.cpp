@@ -294,4 +294,7 @@ export interface ApiProcessingState {
 	progressPercent?: number;
 	promptTokens?: number;
 	cacheTokens?: number;
+	parsingTokensPerSecond?: number;
+	inputTokensProcessed?: number; // Number of input tokens processed during parsing
+	inputTokensTotal?: number; // Total number of input tokens to process
 }
