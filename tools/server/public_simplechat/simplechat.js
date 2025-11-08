@@ -1252,10 +1252,11 @@ class MultiChatUI {
      *
      * NOTE: Currently the user query entry area is used for
      * * showing and allowing edits by user wrt tool call results
-     *   in a predfined simple xml format,
      *   ie before they submit tool result to ai engine on server
      * * as well as for user to enter their own queries.
-     * Based on presence of the predefined xml format data at beginning
+     *
+     * Based on the presence of predefined dataset attribute (role)
+     * wrt input element with value of Roles.ToolTemp,
      * the logic will treat it has a tool result and if not then as a
      * normal user query.
      *
@@ -1283,13 +1284,14 @@ class MultiChatUI {
             console.debug(`WARN:SimpleChat:MCUI:${chatId}:HandleUserSubmit:Ignoring empty user input...`);
             return;
         }
-        if (content.startsWith("<tool_response>")) {
+        if (this.elInUser.dataset.role == Roles.ToolTemp) {
             chat.promote_tooltemp(content)
         } else {
             chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content)))
         }
         this.chat_show(chat.chatId);
 
+        this.elInUser.dataset.role = ""
         this.elInUser.value = "working...";
         this.elInUser.disabled = true;
 
