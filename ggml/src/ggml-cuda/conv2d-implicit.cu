@@ -857,7 +857,7 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
 
         const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
         // if (BlocksM * BlocksN < nsm && P.c >= 8 * ksplit && (P.c * P.r * P.s) % (8*ksplit) == 0) {
-        if (BlocksM * BlocksN < nsm){
+        if (BlocksM * BlocksN < (unsigned int)nsm){
 
             int ks = min(12, nsm / (BlocksM * BlocksN));
             int j;
