@@ -786,6 +786,8 @@ int main(int argc, char ** argv) {
         LOG_INF("  /\\/load <filename> - Load LLM state from GGUF file to restore exact conversation state\n");
         LOG_INF("  /\\/temp            - Show current temperature setting\n");
         LOG_INF("  /\\/temp <value>    - Set temperature to a new value (e.g., /\\/temp 0.7)\n");
+        LOG_INF("  /\\/timeout         - Show or disable idle timeout (0 = disabled)\n");
+        LOG_INF("  /\\/timeout <mins>  - Set idle timeout to N minutes (e.g., /\\/timeout 5)\n");
         LOG_INF("\n");
         LOG_INF("Tool calling (when 'tools' directory exists):\n");
         LOG_INF("  Model can output <tools-help/> to get list of available tools\n");
@@ -1422,6 +1424,49 @@ int main(int argc, char ** argv) {
                             }
                         } catch (const std::exception & e) {
                             LOG_ERR("Error: Invalid temperature value '%s'\n", temp_arg.c_str());
+                        }
+                    }
+                    // Keep is_interacting true and continue to wait for next input
+                    is_interacting = true;
+                    continue;
+                } else if (buffer.rfind("/\\/timeout", 0) == 0) {
+                    // Handle idle timeout get/set command
+                    std::string timeout_arg = buffer.substr(10); // Skip "/\/timeout"
+                    // Trim whitespace
+                    timeout_arg.erase(0, timeout_arg.find_first_not_of(" \t\n\r\f\v"));
+                    timeout_arg.erase(timeout_arg.find_last_not_of(" \t\n\r\f\v") + 1);
+
+                    if (timeout_arg.empty()) {
+                        // Show current timeout or disable it
+                        LOG("\n");
+                        if (params.idle_action_interval > 0) {
+                            LOG("Current idle timeout: %d minutes\n", params.idle_action_interval);
+                            LOG("Disabling idle timeout\n");
+                            params.idle_action_interval = 0;
+                        } else {
+                            LOG("Idle timeout is currently disabled (0 minutes)\n");
+                        }
+                    } else {
+                        // Set new timeout
+                        try {
+                            int new_timeout = std::stoi(timeout_arg);
+                            if (new_timeout < 0) {
+                                LOG_ERR("Error: Timeout must be >= 0\n");
+                            } else {
+                                LOG("\n");
+                                int old_timeout = params.idle_action_interval;
+                                LOG("Changing idle timeout from %d to %d minutes\n", old_timeout, new_timeout);
+                                params.idle_action_interval = new_timeout;
+                                if (new_timeout == 0) {
+                                    LOG("Idle timeout disabled\n");
+                                } else {
+                                    LOG("Idle timeout set to %d minutes\n", new_timeout);
+                                    // Reset timer to start counting from now
+                                    update_activity_time();
+                                }
+                            }
+                        } catch (const std::exception & e) {
+                            LOG_ERR("Error: Invalid timeout value '%s'\n", timeout_arg.c_str());
                         }
                     }
                     // Keep is_interacting true and continue to wait for next input
