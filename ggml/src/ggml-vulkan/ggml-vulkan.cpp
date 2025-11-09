@@ -586,7 +586,6 @@ struct vk_device_struct {
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_id_q8_1[GGML_TYPE_COUNT];
 
     vk_pipeline pipeline_matmul_split_k_reduce;
-    vk_pipeline pipeline_quantize_q8_1;
     vk_pipeline pipeline_quantize_q8_1_x4;
 
     vk_pipeline pipeline_dequant[GGML_TYPE_COUNT];
@@ -3558,10 +3557,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 3, 5 * sizeof(uint32_t), {1, device->subgroup_size, 1}, {device->subgroup_size}, 1, true);
 
     if (device->subgroup_clustered && device->subgroup_require_full_support) {
-        ggml_vk_create_pipeline(device, device->pipeline_quantize_q8_1, "quantize_q8_1", quantize_q8_1_subgroup_len, quantize_q8_1_subgroup_data, "main", 2, 1 * sizeof(uint32_t), {32 * device->subgroup_size / 8, 1, 1}, { device->subgroup_size }, 1, true, true);
         ggml_vk_create_pipeline(device, device->pipeline_quantize_q8_1_x4, "quantize_q8_1_x4", quantize_q8_1_x4_subgroup_len, quantize_q8_1_x4_subgroup_data, "main", 2, 1 * sizeof(uint32_t), {32 * device->subgroup_size / 8, 1, 1}, { device->subgroup_size }, 1, true, true);
     } else {
-        ggml_vk_create_pipeline(device, device->pipeline_quantize_q8_1, "quantize_q8_1", quantize_q8_1_len, quantize_q8_1_data, "main", 2, 1 * sizeof(uint32_t), {32 * device->subgroup_size / 8, 1, 1}, { device->subgroup_size }, 1);
         ggml_vk_create_pipeline(device, device->pipeline_quantize_q8_1_x4, "quantize_q8_1_x4", quantize_q8_1_x4_len, quantize_q8_1_x4_data, "main", 2, 1 * sizeof(uint32_t), {32 * device->subgroup_size / 8, 1, 1}, { device->subgroup_size }, 1);
     }
 
@@ -6261,20 +6258,20 @@ static void ggml_vk_cpy_to_contiguous(ggml_backend_vk_context * ctx, vk_context&
     ggml_vk_sync_buffers(ctx, subctx);
 }
 
-static vk_pipeline ggml_vk_get_quantize_pipeline(ggml_backend_vk_context * ctx, ggml_type type, bool use_x4_blocks) {
+static vk_pipeline ggml_vk_get_quantize_pipeline(ggml_backend_vk_context * ctx, ggml_type type) {
     switch(type) {
         case GGML_TYPE_Q8_1:
-            return use_x4_blocks ? ctx->device->pipeline_quantize_q8_1_x4 : ctx->device->pipeline_quantize_q8_1;
+            return ctx->device->pipeline_quantize_q8_1_x4;
         default:
             std::cerr << "Missing quantize pipeline for type: " << ggml_type_name(type) << std::endl;
             GGML_ABORT("fatal error");
     }
 }
 
-static void ggml_vk_quantize_q8_1(ggml_backend_vk_context * ctx, vk_context& subctx, vk_subbuffer&& in, vk_subbuffer&& out, uint32_t ne, bool use_x4_blocks = false) {
+static void ggml_vk_quantize_q8_1(ggml_backend_vk_context * ctx, vk_context& subctx, vk_subbuffer&& in, vk_subbuffer&& out, uint32_t ne) {
     VK_LOG_DEBUG("ggml_vk_quantize_q8_1(" << "buffer in size=" << in.buffer->size << ", buffer out size=" << out.buffer->size << ", " << ne << ")");
 
-    vk_pipeline pipeline = use_x4_blocks ? ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1, true) : ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1, false);
+    vk_pipeline pipeline = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1);
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { in, out }, std::array<uint32_t, 1>{ne}, { ne, 1, 1 });
     ggml_vk_sync_buffers(ctx, subctx);
@@ -6365,16 +6362,17 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
 
     // Reserve extra storage in the N dimension for the Y matrix, so we can avoid bounds-checking
     uint32_t padded_n = qy_needs_dequant ? ROUNDUP_POW2(ne11, pipeline->wg_denoms[1]) : ne11;
-    const int x_ne = ne01 * ne00;
-    const int y_ne = padded_n * ne10;
-    const int d_ne = ne11 * ne01;
+    const uint64_t x_ne = ggml_nelements(src0);
+    // 128 elements per Q8_1 x4 block
+    const uint64_t y_ne = padded_n * ne10 * ne12 * ne13;
+    const uint64_t d_ne = ggml_nelements(dst);
 
     const uint32_t split_k = ggml_vk_guess_split_k(ctx, ne01, ne11, ne10, disable_split_k, pipeline);
 
     const uint64_t qx_sz = ggml_type_size(src0->type) * x_ne / ggml_blck_size(src0->type);
     const uint64_t qy_sz = ggml_type_size(src1->type) * y_ne / ggml_blck_size(src1->type);
     const uint64_t x_sz = !qx_needs_dequant ? qx_sz : sizeof(ggml_fp16_t) * x_ne;
-    const uint64_t y_sz = quantize_y ? (y_ne * ggml_type_size(GGML_TYPE_Q8_1) / ggml_blck_size(GGML_TYPE_Q8_1)) : (y_f32_kernel ? sizeof(float) * y_ne : sizeof(ggml_fp16_t) * y_ne);
+    const uint64_t y_sz = quantize_y ? (ggml_vk_align_size(y_ne, 128) * ggml_type_size(GGML_TYPE_Q8_1) / ggml_blck_size(GGML_TYPE_Q8_1)) : (y_f32_kernel ? sizeof(float) * y_ne : sizeof(ggml_fp16_t) * y_ne);
     const uint64_t d_sz = sizeof(float) * d_ne;
 
     vk_pipeline to_fp16_vk_0 = nullptr;
@@ -6395,28 +6393,23 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     GGML_ASSERT(!qy_needs_dequant || to_fp16_vk_1 != nullptr);  // NOLINT
 
     if (quantize_y) {
-        to_q8_1 = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1, true);
+        to_q8_1 = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1);
     }
 
     {
-        const uint64_t x_sz_upd = x_sz * ne02 * ne03;
-        uint64_t y_sz_upd = y_sz * ne12 * ne13;
-        if (quantize_y) {
-            y_sz_upd = CEIL_DIV(y_sz_upd, 144) * 144;
-        }
-        const uint64_t split_k_size = split_k > 1 ? d_sz * ne12 * ne13 * split_k : 0;
+        const uint64_t split_k_size = split_k > 1 ? d_sz * split_k : 0;
         if (
-                (qx_needs_dequant && x_sz_upd > ctx->device->properties.limits.maxStorageBufferRange) ||
-                (qy_needs_dequant && y_sz_upd > ctx->device->properties.limits.maxStorageBufferRange) ||
+                (qx_needs_dequant && x_sz > ctx->device->properties.limits.maxStorageBufferRange) ||
+                (qy_needs_dequant && y_sz > ctx->device->properties.limits.maxStorageBufferRange) ||
                 (split_k > 1 && split_k_size > ctx->device->properties.limits.maxStorageBufferRange)) {
             GGML_ABORT("Requested preallocation size is too large");
         }
-        if (qx_needs_dequant && ctx->prealloc_size_x < x_sz_upd) {
-            ctx->prealloc_size_x = x_sz_upd;
+        if (qx_needs_dequant && ctx->prealloc_size_x < x_sz) {
+            ctx->prealloc_size_x = x_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
-        if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz_upd) {
-            ctx->prealloc_size_y = y_sz_upd;
+        if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
+            ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
         if (split_k > 1 && ctx->prealloc_size_split_k < split_k_size) {
@@ -6443,7 +6436,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     vk_buffer d_D = dst_buf_ctx->dev_buffer;
     const uint64_t d_buf_offset = vk_tensor_offset(dst) + dst->view_offs;
     GGML_ASSERT(d_D != nullptr);
-    GGML_ASSERT(d_D->size >= d_buf_offset + d_sz * ne02 * ne03);
+    GGML_ASSERT(d_D->size >= d_buf_offset + d_sz);
     vk_buffer d_X;
     uint64_t x_buf_offset = 0;
     vk_buffer d_Y;
@@ -6460,7 +6453,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     }
     if (qx_needs_dequant) {
         d_X = ctx->prealloc_x;
-        GGML_ASSERT(d_X->size >= x_sz * ne02 * ne03);
+        GGML_ASSERT(d_X->size >= x_sz);
     } else {
         d_X = d_Qx;
         x_buf_offset = qx_buf_offset;
@@ -6468,10 +6461,10 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     }
     if (qy_needs_dequant) {
         d_Y = ctx->prealloc_y;
-        GGML_ASSERT(d_Y->size >= y_sz * ne12 * ne13);
+        GGML_ASSERT(d_Y->size >= y_sz);
     } else if (quantize_y) {
         d_Y = ctx->prealloc_y;
-        GGML_ASSERT(d_Y->size >= CEIL_DIV(y_sz * ne12 * ne13, 144) * 144);
+        GGML_ASSERT(d_Y->size >= CEIL_DIV(y_sz, 144) * 144);
     } else {
         d_Y = d_Qy;
         y_buf_offset = qy_buf_offset;
@@ -6488,7 +6481,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_0, src0, ggml_vk_subbuffer(ctx, d_Qx, qx_buf_offset), ggml_vk_subbuffer(ctx, d_X, 0));
     } else if (qx_needs_dequant) {
         const std::vector<uint32_t> pc = { (uint32_t)ne01, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)(ggml_nelements(src0)) };
-        ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0, { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz * ne02 * ne03 }, vk_subbuffer{ d_X, 0, x_sz * ne02 * ne03 } }, pc, { (uint32_t)(x_ne * ne02 * ne03), 1, 1});
+        ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0, { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz }, vk_subbuffer{ d_X, 0, x_sz } }, pc, { (uint32_t)(x_ne), 1, 1});
         ggml_vk_sync_buffers(ctx, subctx);
     }
     if (y_non_contig) {
@@ -6508,7 +6501,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
-            ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0), y_ne * ne12 * ne13, true);
+            ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0), y_ne);
             ctx->prealloc_y_last_pipeline_used = to_q8_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
         }
@@ -6525,16 +6518,11 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         stride_batch_y = src1->nb[0] / ggml_type_size(src1->type);
     }
 
-    uint32_t y_sz_total = y_sz * ne12 * ne13;
-    if (quantize_y) {
-        y_sz_total = CEIL_DIV(y_sz_total, 144) * 144;
-    }
-
     // compute
     ggml_vk_matmul(
         ctx, subctx, pipeline,
-        { d_X, x_buf_offset, x_sz * ne02 * ne03 }, { d_Y, y_buf_offset, y_sz_total },
-        ggml_vk_subbuffer(ctx, d_D, d_buf_offset), { ctx->prealloc_split_k, 0, d_sz * ne12 * ne13 * split_k },
+        { d_X, x_buf_offset, x_sz }, { d_Y, y_buf_offset, y_sz },
+        ggml_vk_subbuffer(ctx, d_D, d_buf_offset), { ctx->prealloc_split_k, 0, d_sz * split_k },
         ne01, ne11, ne10,
         ne10, ne10, stride_d, stride_batch_x, stride_batch_y, stride_batch_d,
         split_k, ne12*ne13, ne02, ne12, r2, r3, padded_n
@@ -6617,8 +6605,8 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
 
     const uint64_t ne20 = dst->ne[0];
     const uint64_t ne21 = dst->ne[1];
-    const uint64_t ne22 = dst->ne[2];
-    const uint64_t ne23 = dst->ne[3];
+    // const uint64_t ne22 = dst->ne[2];
+    // const uint64_t ne23 = dst->ne[3];
 
     const uint64_t r2 = ne12 / ne02;
     const uint64_t r3 = ne13 / ne03;
@@ -6674,7 +6662,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     }
 
     if (quantize_y) {
-        to_q8_1 = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1, true);
+        to_q8_1 = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1);
     }
 
     const bool qx_needs_dequant = x_non_contig;
@@ -6687,33 +6675,29 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     GGML_ASSERT(!qy_needs_dequant || to_fp16_vk_1 != nullptr);  // NOLINT
     GGML_ASSERT(dmmv != nullptr);
 
-    const uint64_t x_ne = ne01 * ne00;
-    const uint64_t y_ne = ne11 * ne10;
-    const uint64_t d_ne = ne11 * ne01;
+    const uint64_t x_ne = ggml_nelements(src0);
+    const uint64_t y_ne = ggml_nelements(src1);
+    const uint64_t d_ne = ggml_nelements(dst);
 
     const uint64_t qx_sz = ggml_vk_align_size(ggml_type_size(src0->type) * x_ne / ggml_blck_size(src0->type), ctx->device->properties.limits.minStorageBufferOffsetAlignment);
     const uint64_t qy_sz = ggml_type_size(src1->type) * y_ne / ggml_blck_size(src1->type);
     const uint64_t x_sz = x_non_contig ? ggml_vk_align_size(ggml_type_size(src0->type) * x_ne, ctx->device->properties.limits.minStorageBufferOffsetAlignment) : qx_sz;
-    const uint64_t y_sz = quantize_y ? (y_ne * ggml_type_size(GGML_TYPE_Q8_1) / ggml_blck_size(GGML_TYPE_Q8_1)) : (f16_f32_kernel ? sizeof(float) * y_ne : sizeof(ggml_fp16_t) * y_ne);
+    const uint64_t y_sz = quantize_y ? (ggml_vk_align_size(y_ne, 128) * ggml_type_size(GGML_TYPE_Q8_1) / ggml_blck_size(GGML_TYPE_Q8_1)) :
+                         (f16_f32_kernel ? sizeof(float) * y_ne : sizeof(ggml_fp16_t) * y_ne);
     const uint64_t d_sz = sizeof(float) * d_ne;
 
     {
-        const uint64_t x_sz_upd = x_sz * ne02 * ne03;
-        uint64_t y_sz_upd = y_sz * ne12 * ne13;
-        if (quantize_y) {
-            y_sz_upd = CEIL_DIV(y_sz_upd, 144) * 144;
-        }
         if (
-                (qx_needs_dequant && x_sz_upd > ctx->device->properties.limits.maxStorageBufferRange) ||
-                (qy_needs_dequant && y_sz_upd > ctx->device->properties.limits.maxStorageBufferRange)) {
+                (qx_needs_dequant && x_sz > ctx->device->properties.limits.maxStorageBufferRange) ||
+                (qy_needs_dequant && y_sz > ctx->device->properties.limits.maxStorageBufferRange)) {
             GGML_ABORT("Requested preallocation size is too large");
         }
-        if (qx_needs_dequant && ctx->prealloc_size_x < x_sz_upd) {
-            ctx->prealloc_size_x = x_sz_upd;
+        if (qx_needs_dequant && ctx->prealloc_size_x < x_sz) {
+            ctx->prealloc_size_x = x_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
-        if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz_upd) {
-            ctx->prealloc_size_y = y_sz_upd;
+        if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
+            ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
 
@@ -6770,7 +6754,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
         d_Y = ctx->prealloc_y;
     } else if (quantize_y) {
         d_Y = ctx->prealloc_y;
-        GGML_ASSERT(d_Y->size >= CEIL_DIV(y_sz * ne12 * ne13, 144) * 144);
+        GGML_ASSERT(d_Y->size >= CEIL_DIV(y_sz, 144) * 144);
     } else {
         d_Y = d_Qy;
         y_buf_offset = qy_buf_offset;
@@ -6803,7 +6787,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
-            ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0), y_ne * ne12 * ne13, true);
+            ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0), y_ne);
             ctx->prealloc_y_last_pipeline_used = to_q8_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
         }
@@ -6830,12 +6814,6 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     if (ne01 > max_groups_x) {
         groups_z = 64;
         groups_x = CEIL_DIV(groups_x, groups_z);
-    }
-
-    // TODO: Clean up this whole sz * ne_2 * ne_3 thing, it hasn't been necessary for a long time
-    uint32_t y_sz_total = y_sz * ne12 * ne13;
-    if (quantize_y) {
-        y_sz_total = CEIL_DIV(y_sz_total, 144) * 144;
     }
 
     uint32_t enable_bias = ctx->num_additional_fused_ops > 0;
@@ -6870,9 +6848,9 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     };
     ggml_vk_dispatch_pipeline(ctx, subctx, dmmv,
                               {
-                                vk_subbuffer{ d_X, x_buf_offset, x_sz * ne02 * ne03 },
-                                vk_subbuffer{ d_Y, y_buf_offset, y_sz_total },
-                                vk_subbuffer{ d_D, d_buf_offset, d_sz * ne22 * ne23},
+                                vk_subbuffer{ d_X, x_buf_offset, x_sz },
+                                vk_subbuffer{ d_Y, y_buf_offset, y_sz },
+                                vk_subbuffer{ d_D, d_buf_offset, d_sz },
                                 vk_subbuffer{ d_B, b_buf_offset, b_sz },
                               },
                               pc, { groups_x, (uint32_t)(ne12 * ne13), groups_z });
@@ -7210,7 +7188,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     const uint64_t ne00 = src0->ne[0];
     const uint64_t ne01 = src0->ne[1];
     const uint64_t ne02 = src0->ne[2];
-    const uint64_t ne03 = src0->ne[3];
+    // const uint64_t ne03 = src0->ne[3];
 
     const uint64_t ne10 = src1->ne[0];
     const uint64_t ne11 = src1->ne[1];
@@ -7225,8 +7203,8 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
 
     const uint64_t ne20 = dst->ne[0];
     const uint64_t ne21 = dst->ne[1];
-    const uint64_t ne22 = dst->ne[2];
-    const uint64_t ne23 = dst->ne[3];
+    // const uint64_t ne22 = dst->ne[2];
+    // const uint64_t ne23 = dst->ne[3];
 
     const uint64_t n_as = ne02;
 
@@ -7296,14 +7274,14 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
 
     // Reserve extra storage in the N dimension for the Y matrix, so we can avoid bounds-checking
     uint32_t padded_n = qy_needs_dequant ? ROUNDUP_POW2(ne11, pipeline->wg_denoms[1]) :ne11;
-    const uint64_t x_ne = ne01 * ne00;
-    const uint64_t y_ne = padded_n * ne10;
-    const uint64_t d_ne = ne21 * ne20;
+    const uint64_t x_ne = ggml_nelements(src0);
+    const uint64_t y_ne = padded_n * ne10 * ne12 * ne13;
+    const uint64_t d_ne = ggml_nelements(dst);
 
     const uint64_t qx_sz = ggml_type_size(src0->type) * x_ne / ggml_blck_size(src0->type);
     const uint64_t qy_sz = ggml_type_size(src1->type) * y_ne / ggml_blck_size(src1->type);
     const uint64_t x_sz = !qx_needs_dequant ? qx_sz : sizeof(ggml_fp16_t) * x_ne;
-    const uint64_t y_sz = quantize_y ? (y_ne * ggml_type_size(GGML_TYPE_Q8_1) / ggml_blck_size(GGML_TYPE_Q8_1)) : (y_f32_kernel ? sizeof(float) * y_ne : sizeof(ggml_fp16_t) * y_ne);
+    const uint64_t y_sz = quantize_y ? (ggml_vk_align_size(y_ne, 128) * ggml_type_size(GGML_TYPE_Q8_1) / ggml_blck_size(GGML_TYPE_Q8_1)) : (y_f32_kernel ? sizeof(float) * y_ne : sizeof(ggml_fp16_t) * y_ne);
     const uint64_t ids_sz = nbi2;
     const uint64_t d_sz = sizeof(float) * d_ne;
 
@@ -7325,26 +7303,21 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     GGML_ASSERT(!qy_needs_dequant || to_fp16_vk_1 != nullptr);  // NOLINT
 
     if (quantize_y) {
-        to_q8_1 = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1, true);
+        to_q8_1 = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1);
     }
 
     {
-        const uint64_t x_sz_upd = x_sz * ne02 * ne03;
-        uint64_t y_sz_upd = y_sz * ne12 * ne13;
-        if (quantize_y) {
-            y_sz_upd = CEIL_DIV(y_sz_upd, 144) * 144;
-        }
         if (
-                (qx_needs_dequant && x_sz_upd > ctx->device->properties.limits.maxStorageBufferRange) ||
-                (qy_needs_dequant && y_sz_upd > ctx->device->properties.limits.maxStorageBufferRange)) {
+                (qx_needs_dequant && x_sz > ctx->device->properties.limits.maxStorageBufferRange) ||
+                (qy_needs_dequant && y_sz > ctx->device->properties.limits.maxStorageBufferRange)) {
             GGML_ABORT("Requested preallocation size is too large");
         }
-        if (qx_needs_dequant && ctx->prealloc_size_x < x_sz_upd) {
-            ctx->prealloc_size_x = x_sz_upd;
+        if (qx_needs_dequant && ctx->prealloc_size_x < x_sz) {
+            ctx->prealloc_size_x = x_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
-        if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz_upd) {
-            ctx->prealloc_size_y = y_sz_upd;
+        if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
+            ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
 
@@ -7385,7 +7358,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     }
     if (qx_needs_dequant) {
         d_X = ctx->prealloc_x;
-        GGML_ASSERT(d_X->size >= x_sz * ne02 * ne03);
+        GGML_ASSERT(d_X->size >= x_sz);
     } else {
         d_X = d_Qx;
         x_buf_offset = qx_buf_offset;
@@ -7393,10 +7366,10 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     }
     if (qy_needs_dequant) {
         d_Y = ctx->prealloc_y;
-        GGML_ASSERT(d_Y->size >= y_sz * ne12 * ne13);
+        GGML_ASSERT(d_Y->size >= y_sz);
     } else if (quantize_y) {
         d_Y = ctx->prealloc_y;
-        GGML_ASSERT(d_Y->size >= CEIL_DIV(y_sz * ne12 * ne13, 144) * 144);
+        GGML_ASSERT(d_Y->size >= CEIL_DIV(y_sz, 144) * 144);
     } else {
         d_Y = d_Qy;
         y_buf_offset = qy_buf_offset;
@@ -7414,7 +7387,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     } else if (qx_needs_dequant) {
         const std::vector<uint32_t> pc = { (uint32_t)ne01, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)(ggml_nelements(src0)) };
         ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0,
-            { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz * ne02 * ne03 }, vk_subbuffer{ d_X, 0, x_sz * ne02 * ne03 } }, pc, { (uint32_t)(x_ne * ne02 * ne03), 1, 1});
+            { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz }, vk_subbuffer{ d_X, 0, x_sz } }, pc, { (uint32_t)x_ne, 1, 1});
         ggml_vk_sync_buffers(ctx, subctx);
     }
     if (y_non_contig) {
@@ -7434,7 +7407,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
-            ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0), y_ne * ne12 * ne13, true);
+            ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0), y_ne);
             ctx->prealloc_y_last_pipeline_used = to_q8_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
         }
@@ -7451,16 +7424,11 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         stride_batch_y = src1->nb[0] / ggml_type_size(src1->type);
     }
 
-    uint32_t y_sz_total = y_sz * ne12 * ne13;
-    if (quantize_y) {
-        y_sz_total = CEIL_DIV(y_sz_total, 144) * 144;
-    }
-
     // compute
     ggml_vk_matmul_id(
         ctx, subctx, pipeline,
-        { d_X, x_buf_offset, x_sz * ne02 * ne03 }, { d_Y, y_buf_offset, y_sz_total },
-        { d_D, d_buf_offset, d_sz * ne22 * ne23 }, { d_ids, ids_buf_offset, ids_sz },
+        { d_X, x_buf_offset, x_sz }, { d_Y, y_buf_offset, y_sz },
+        { d_D, d_buf_offset, d_sz }, { d_ids, ids_buf_offset, ids_sz },
         ne01, ne21, ne10, ne10, ne10, ne01,
         stride_batch_x, stride_batch_y, ne20*ne21,
         n_as, nei0, nei1, nbi1 / ggml_type_size(ids->type), ne11, padded_n
@@ -7490,13 +7458,13 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
 
     const uint64_t ne00 = src0->ne[0];
     const uint64_t ne01 = src0->ne[1];
-    const uint64_t ne02 = src0->ne[2];
-    const uint64_t ne03 = src0->ne[3];
+    // const uint64_t ne02 = src0->ne[2];
+    // const uint64_t ne03 = src0->ne[3];
 
     const uint64_t ne10 = src1->ne[0];
     const uint64_t ne11 = src1->ne[1];
-    const uint64_t ne12 = src1->ne[2];
-    const uint64_t ne13 = src1->ne[3];
+    // const uint64_t ne12 = src1->ne[2];
+    // const uint64_t ne13 = src1->ne[3];
 
     const uint64_t nei0 = ids->ne[0];
     const uint64_t nei1 = ids->ne[1];
@@ -7507,8 +7475,8 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
 
     const uint64_t ne20 = dst->ne[0];
     const uint64_t ne21 = dst->ne[1];
-    const uint64_t ne22 = dst->ne[2];
-    const uint64_t ne23 = dst->ne[3];
+    // const uint64_t ne22 = dst->ne[2];
+    // const uint64_t ne23 = dst->ne[3];
 
     ggml_backend_vk_buffer_context * src0_buf_ctx = (ggml_backend_vk_buffer_context *)src0->buffer->context;
     ggml_backend_vk_buffer_context * src1_buf_ctx = (ggml_backend_vk_buffer_context *)src1->buffer->context;
@@ -7545,9 +7513,9 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     // Not implemented
     GGML_ASSERT(y_non_contig || !qy_needs_dequant);  // NOLINT
 
-    const uint64_t x_ne = ne01 * ne00;
-    const uint64_t y_ne = ne11 * ne10;
-    const uint64_t d_ne = ne21 * ne20;
+    const uint64_t x_ne = ggml_nelements(src0);
+    const uint64_t y_ne = ggml_nelements(src1);
+    const uint64_t d_ne = ggml_nelements(dst);
 
     const uint64_t qx_sz = ggml_vk_align_size(ggml_type_size(src0->type) * x_ne / ggml_blck_size(src0->type), ctx->device->properties.limits.minStorageBufferOffsetAlignment);
     const uint64_t qy_sz = ggml_type_size(src1->type) * y_ne / ggml_blck_size(src1->type);
@@ -7572,19 +7540,17 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     GGML_ASSERT(dmmv != nullptr);
 
     {
-        const uint64_t x_sz_upd = x_sz * ne02 * ne03;
-        const uint64_t y_sz_upd = y_sz * ne12 * ne13;
         if (
-                (qx_needs_dequant && x_sz_upd > ctx->device->properties.limits.maxStorageBufferRange) ||
-                (qy_needs_dequant && y_sz_upd > ctx->device->properties.limits.maxStorageBufferRange)) {
+                (qx_needs_dequant && x_sz > ctx->device->properties.limits.maxStorageBufferRange) ||
+                (qy_needs_dequant && y_sz > ctx->device->properties.limits.maxStorageBufferRange)) {
             GGML_ABORT("Requested preallocation size is too large");
         }
-        if (qx_needs_dequant && ctx->prealloc_size_x < x_sz_upd) {
-            ctx->prealloc_size_x = x_sz_upd;
+        if (qx_needs_dequant && ctx->prealloc_size_x < x_sz) {
+            ctx->prealloc_size_x = x_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
-        if (qy_needs_dequant && ctx->prealloc_size_y < y_sz_upd) {
-            ctx->prealloc_size_y = y_sz_upd;
+        if (qy_needs_dequant && ctx->prealloc_size_y < y_sz) {
+            ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
 
@@ -7721,7 +7687,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     // compute
     const vk_mat_vec_id_push_constants pc = {
         (uint32_t)ne00, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)ne01,
-        (uint32_t)x_ne, stride_batch_y, (uint32_t)(ne20*ne21),
+        (uint32_t)(ne00 * ne01), stride_batch_y, (uint32_t)(ne20 * ne21),
 
         enable_bias, enable_scale,
 
@@ -7729,9 +7695,9 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     };
     ggml_vk_dispatch_pipeline(ctx, subctx, dmmv,
         {
-            vk_subbuffer{ d_X, x_buf_offset, x_sz * ne02 * ne03 },
-            vk_subbuffer{ d_Y, y_buf_offset, y_sz * ne12 * ne13 },
-            vk_subbuffer{ d_D, d_buf_offset, d_sz * ne22 * ne23},
+            vk_subbuffer{ d_X, x_buf_offset, x_sz },
+            vk_subbuffer{ d_Y, y_buf_offset, y_sz },
+            vk_subbuffer{ d_D, d_buf_offset, d_sz },
             vk_subbuffer{ d_B, b_buf_offset, b_sz },
             vk_subbuffer{ d_ids, ids_buf_offset, ids_sz },
         },
