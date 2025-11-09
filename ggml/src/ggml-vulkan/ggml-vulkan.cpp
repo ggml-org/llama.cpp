@@ -2220,9 +2220,12 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         }
         buf->memory_property_flags = req_flags;
 
+        bool done = false;
+
         for (auto mtype_it = memory_type_indices.begin(); mtype_it != memory_type_indices.end(); mtype_it++) {
             try {
                 buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &mem_flags_info });
+                done = true;
                 break;
             } catch (const vk::SystemError& e) {
                 // loop and retry
@@ -2232,6 +2235,10 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
                     throw e;
                 }
             }
+        }
+
+        if (done) {
+            break;
         }
     }
 
