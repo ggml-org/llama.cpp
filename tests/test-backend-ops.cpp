@@ -272,6 +272,10 @@ static double mean_abs_asymm(const float * a, const float * b, const size_t n, c
 
 // utils for printing the variables of the test cases
 
+static std::string var_to_str(const std::string & x) {
+    return x;
+}
+
 template<typename T>
 static std::string var_to_str(const T & x) {
     return std::to_string(x);
@@ -323,7 +327,8 @@ static std::string var_to_str(ggml_scale_mode mode) {
     switch (mode) {
         case GGML_SCALE_MODE_NEAREST:  return "nearest";
         case GGML_SCALE_MODE_BILINEAR: return "bilinear";
-        default:                      return std::to_string(mode);
+        case GGML_SCALE_MODE_BICUBIC:  return "bicubic";
+        default:                       return std::to_string(mode);
     }
 }
 
@@ -5165,7 +5170,9 @@ struct test_interpolate : public test_case {
     const uint32_t mode = GGML_SCALE_MODE_NEAREST;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, ne_tgt, mode);
+        ggml_scale_mode mode = (ggml_scale_mode)(this->mode & 0xFF);
+        std::string flags = (this->mode & GGML_SCALE_FLAG_ALIGN_CORNERS) ? "align_corners" : "none";
+        return VARS_TO_STR5(type, ne, ne_tgt, mode, flags);
     }
 
     test_interpolate(ggml_type type = GGML_TYPE_F32,
