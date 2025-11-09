@@ -9188,19 +9188,16 @@ class HunYuanMoEModel(TextModel):
         vocab_size = self.hparams["vocab_size"]
         assert tokenizer.vocab_size == vocab_size
         special_tokens = tokenizer.special_tokens
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items() if id_ is not None}
+        reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
         tokens: list[str] = []
         toktypes: list[int] = []
         for i in range(vocab_size):
             if i not in reverse_vocab:
-                tokens.append(f"[PAD{i}")
+                tokens.append(f"[PAD{i}]")
                 toktypes.append(gguf.TokenType.UNUSED)
             else:
                 token = reverse_vocab[i]
-                if token is None:
-                    tokens.append(f"[PAD{i}")
-                else:
-                    tokens.append(str(token))
+                tokens.append(token)
                 if i in special_tokens.values():
                     toktypes.append(gguf.TokenType.CONTROL)
                 else:
