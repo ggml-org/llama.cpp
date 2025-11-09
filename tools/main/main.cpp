@@ -1348,7 +1348,8 @@ int main(int argc, char ** argv) {
                     break;
                 }
 
-                if (buffer.back() == '\n') {
+                // Process newline handling only if buffer is not empty
+                if (!buffer.empty() && buffer.back() == '\n') {
                     // Implement #587:
                     // If the user wants the text to end in a newline,
                     // this should be accomplished by explicitly adding a newline by using \ followed by return,
