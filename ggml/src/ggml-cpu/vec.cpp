@@ -597,14 +597,14 @@ void ggml_vec_hardswish_f32(const int n, float * y, const float * x) {
     const float six = 6.0f;
     const float one = 1.0f;
     const float zero = 0.0f;
-    
+
     int i = 0;
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
     const __m512 v_three = _mm512_set1_ps(three);
     const __m512 v_six = _mm512_set1_ps(six);
     const __m512 v_one = _mm512_set1_ps(one);
     const __m512 v_zero = _mm512_set1_ps(zero);
-    
+
     for (; i + 15 < n; i += 16) {
         __m512 vx = _mm512_loadu_ps(x + i);
         __m512 vx_plus_3 = _mm512_add_ps(vx, v_three);
@@ -618,7 +618,7 @@ void ggml_vec_hardswish_f32(const int n, float * y, const float * x) {
     const __m256 v_six = _mm256_set1_ps(six);
     const __m256 v_one = _mm256_set1_ps(one);
     const __m256 v_zero = _mm256_set1_ps(zero);
-    
+
     for (; i + 7 < n; i += 8) {
         __m256 vx = _mm256_loadu_ps(x + i);
         __m256 vx_plus_3 = _mm256_add_ps(vx, v_three);
@@ -632,7 +632,7 @@ void ggml_vec_hardswish_f32(const int n, float * y, const float * x) {
     const __m128 v_six = _mm_set1_ps(six);
     const __m128 v_one = _mm_set1_ps(one);
     const __m128 v_zero = _mm_set1_ps(zero);
-    
+
     for (; i + 3 < n; i += 4) {
         __m128 vx = _mm_loadu_ps(x + i);
         __m128 vx_plus_3 = _mm_add_ps(vx, v_three);
@@ -647,7 +647,7 @@ void ggml_vec_hardswish_f32(const int n, float * y, const float * x) {
     const svfloat32_t v_six = svdup_n_f32(six);
     const svfloat32_t v_one = svdup_n_f32(one);
     const svfloat32_t v_zero = svdup_n_f32(zero);
-    
+
     for (; i < n; i += vlen) {
         const svbool_t pg = svwhilelt_b32_s32(i, n);
         svfloat32_t vx = svld1_f32(pg, x + i);
@@ -662,7 +662,7 @@ void ggml_vec_hardswish_f32(const int n, float * y, const float * x) {
     const float32x4_t v_six = vdupq_n_f32(six);
     const float32x4_t v_one = vdupq_n_f32(one);
     const float32x4_t v_zero = vdupq_n_f32(zero);
-    
+
     for (; i + 3 < n; i += 4) {
         float32x4_t vx = vld1q_f32(x + i);
         float32x4_t vx_plus_3 = vaddq_f32(vx, v_three);
@@ -693,14 +693,14 @@ void ggml_vec_hardsigmoid_f32(const int n, float * y, const float * x) {
     const float six = 6.0f;
     const float one = 1.0f;
     const float zero = 0.0f;
-    
+
     int i = 0;
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
     const __m512 v_three = _mm512_set1_ps(three);
     const __m512 v_six = _mm512_set1_ps(six);
     const __m512 v_one = _mm512_set1_ps(one);
     const __m512 v_zero = _mm512_set1_ps(zero);
-    
+
     for (; i + 15 < n; i += 16) {
         __m512 vx = _mm512_loadu_ps(x + i);
         __m512 vx_plus_3 = _mm512_add_ps(vx, v_three);
@@ -713,7 +713,7 @@ void ggml_vec_hardsigmoid_f32(const int n, float * y, const float * x) {
     const __m256 v_six = _mm256_set1_ps(six);
     const __m256 v_one = _mm256_set1_ps(one);
     const __m256 v_zero = _mm256_set1_ps(zero);
-    
+
     for (; i + 7 < n; i += 8) {
         __m256 vx = _mm256_loadu_ps(x + i);
         __m256 vx_plus_3 = _mm256_add_ps(vx, v_three);
@@ -726,7 +726,7 @@ void ggml_vec_hardsigmoid_f32(const int n, float * y, const float * x) {
     const __m128 v_six = _mm_set1_ps(six);
     const __m128 v_one = _mm_set1_ps(one);
     const __m128 v_zero = _mm_set1_ps(zero);
-    
+
     for (; i + 3 < n; i += 4) {
         __m128 vx = _mm_loadu_ps(x + i);
         __m128 vx_plus_3 = _mm_add_ps(vx, v_three);
@@ -740,7 +740,7 @@ void ggml_vec_hardsigmoid_f32(const int n, float * y, const float * x) {
     const svfloat32_t v_six = svdup_n_f32(six);
     const svfloat32_t v_one = svdup_n_f32(one);
     const svfloat32_t v_zero = svdup_n_f32(zero);
-    
+
     for (; i < n; i += vlen) {
         const svbool_t pg = svwhilelt_b32_s32(i, n);
         svfloat32_t vx = svld1_f32(pg, x + i);
@@ -754,7 +754,7 @@ void ggml_vec_hardsigmoid_f32(const int n, float * y, const float * x) {
     const float32x4_t v_six = vdupq_n_f32(six);
     const float32x4_t v_one = vdupq_n_f32(one);
     const float32x4_t v_zero = vdupq_n_f32(zero);
-    
+
     for (; i + 3 < n; i += 4) {
         float32x4_t vx = vld1q_f32(x + i);
         float32x4_t vx_plus_3 = vaddq_f32(vx, v_three);

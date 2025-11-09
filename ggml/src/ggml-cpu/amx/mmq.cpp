@@ -2438,7 +2438,7 @@ void ggml_backend_amx_mul_mat(const ggml_compute_params * params, struct ggml_te
         const float * A_data = static_cast<const float *>(src1->data);
         const int nth = params->nth;
         const int ith = params->ith;
-        
+
         // Parallelize quantization across threads
         for (int m = ith; m < M; m += nth) {
             from_float<vec_dot_type>(A_data + m * K, (char *)wdata + m * row_size_A, K);
