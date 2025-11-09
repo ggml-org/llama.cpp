@@ -67,14 +67,16 @@ class NSChatMessage {
      * @param {Array<NSToolCall>|undefined} tool_calls
      * @param {string|undefined} tool_call_id - toolcall response - the tool / function call id
      * @param {string|undefined} name - toolcall response - the tool / function call name
+     * @param {string|undefined} image_url - a image url for vision models
      */
-    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined, tool_call_id=undefined, name=undefined) {
+    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined, tool_call_id=undefined, name=undefined, image_url=undefined) {
         this.role = role;
         this.content = content;
         this.reasoning_content = reasoning_content
         this.tool_calls = structuredClone(tool_calls)
         this.tool_call_id = tool_call_id
         this.name = name
+        this.image_url = image_url
     }
 
     /**
@@ -142,15 +144,22 @@ class NSChatMessage {
     }
 
     /**
-     * Append to the content, if already exists
-     * Else create the content.
+     * Creates/Defines the content field if undefined.
+     * If already defined, based on bOverwrite either
+     * * appends to the existing content or
+     * * overwrite the existing content
      * @param {string} content
+     * @param {boolean} bOverwrite
      */
-    content_adj(content="") {
+    content_adj(content="", bOverwrite=false) {
         if (this.content == undefined) {
             this.content = content
         } else {
-            this.content += content
+            if (bOverwrite) {
+                this.content = content
+            } else {
+                this.content += content
+            }
         }
     }
 
@@ -344,7 +353,7 @@ class ChatMessageEx {
             let curContent = nwo["choices"][0]["message"]["content"];
             if (curContent != undefined) {
                 if (curContent != null) {
-                    this.ns.content = curContent;
+                    this.ns.content_adj(curContent)
                 }
             }
             let curRC = nwo["choices"][0]["message"]["reasoning_content"];
@@ -357,9 +366,9 @@ class ChatMessageEx {
             }
         } else {
             try {
-                this.ns.content = nwo["choices"][0]["text"];
+                this.ns.content_adj(nwo["choices"][0]["text"]);
             } catch {
-                this.ns.content = nwo["content"];
+                this.ns.content_adj(nwo["content"]);
             }
         }
     }
@@ -585,7 +594,7 @@ class SimpleChat {
             return
         }
         this.xchat[lastIndex].ns.role = Roles.Tool;
-        this.xchat[lastIndex].ns.content = content;
+        this.xchat[lastIndex].ns.content_adj(content, true);
     }
 
     /**
@@ -651,7 +660,7 @@ class SimpleChat {
             if (bInsertStandardRolePrefix) {
                 prompt += `${msg.ns.role}: `;
             }
-            prompt += `${msg.ns.content}`;
+            prompt += `${msg.ns.getContent()}`;
         }
         let req = {
             prompt: prompt,
@@ -687,7 +696,7 @@ class SimpleChat {
             return this.add(new ChatMessageEx(new NSChatMessage(Roles.System, sysPrompt)));
         }
 
-        let lastSys = this.xchat[this.iLastSys].ns.content;
+        let lastSys = this.xchat[this.iLastSys].ns.getContent();
         if (lastSys !== sysPrompt) {
             return this.add(new ChatMessageEx(new NSChatMessage(Roles.System, sysPrompt)));
         }
@@ -796,10 +805,10 @@ class SimpleChat {
             theResp = await this.handle_response_oneshot(resp, apiEP);
         }
         if (this.me.chatProps.bTrimGarbage) {
-            let origMsg = theResp.ns.content;
+            let origMsg = theResp.ns.getContent();
             if (origMsg) {
-                theResp.ns.content = du.trim_garbage_at_end(origMsg);
-                theResp.trimmedContent = origMsg.substring(theResp.ns.content.length);
+                theResp.ns.content_adj(du.trim_garbage_at_end(origMsg), true);
+                theResp.trimmedContent = origMsg.substring(theResp.ns.getContent().length);
             }
         }
         theResp.ns.role = Roles.Assistant;
