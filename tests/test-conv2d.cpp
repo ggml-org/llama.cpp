@@ -653,8 +653,8 @@ int main(void)
 
     int k = 0;
 
-    for (auto c : configs_sdxl_1024){
-    // for (auto c : configs){
+    // for (auto c : configs_sdxl_1024){
+    for (auto c : configs){
         test_model model;
         load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c),
             std::get<3>(c), std::get<4>(c), std::get<5>(c), true);
