@@ -1076,6 +1076,7 @@ int main(int argc, char ** argv) {
             const std::string last_output = common_sampler_prev_str(smpl, ctx, n_prev);
 
             // Check for <tools-help/> request
+            // Note: Only one tool action per iteration to prevent help examples from being executed
             if (check_for_tools_help(last_output)) {
                 LOG_DBG("Detected <tools-help/> request\n");
 
@@ -1098,25 +1099,25 @@ int main(int argc, char ** argv) {
                     auto msg_tokens = common_tokenize(ctx, "\n\nNo 'tools' directory found.\n\n", false, true);
                     embd_inp.insert(embd_inp.end(), msg_tokens.begin(), msg_tokens.end());
                 }
-            }
+            } else {
+                // Check for <tool-launch>...</tool-launch> request only if we didn't handle tools-help
+                std::string tool_name, tool_args;
+                if (check_for_tool_launch(last_output, tool_name, tool_args)) {
+                    LOG_DBG("Detected <tool-launch> request: tool=%s, args=%s\n", tool_name.c_str(), tool_args.c_str());
 
-            // Check for <tool-launch>...</tool-launch> request
-            std::string tool_name, tool_args;
-            if (check_for_tool_launch(last_output, tool_name, tool_args)) {
-                LOG_DBG("Detected <tool-launch> request: tool=%s, args=%s\n", tool_name.c_str(), tool_args.c_str());
+                    // Execute the tool
+                    std::string tool_output = execute_tool("tools", tool_name, tool_args);
 
-                // Execute the tool
-                std::string tool_output = execute_tool("tools", tool_name, tool_args);
+                    LOG("%s", tool_output.c_str());
+                    LOG("[End of Tool Output]\n\n");
 
-                LOG("%s", tool_output.c_str());
-                LOG("[End of Tool Output]\n\n");
+                    // Inject the tool output back into the conversation
+                    auto output_tokens = common_tokenize(ctx, "\n\n" + tool_output + "\n\n", false, true);
+                    embd_inp.insert(embd_inp.end(), output_tokens.begin(), output_tokens.end());
 
-                // Inject the tool output back into the conversation
-                auto output_tokens = common_tokenize(ctx, "\n\n" + tool_output + "\n\n", false, true);
-                embd_inp.insert(embd_inp.end(), output_tokens.begin(), output_tokens.end());
-
-                // Continue generation after injecting output
-                is_interacting = false;
+                    // Continue generation after injecting output
+                    is_interacting = false;
+                }
             }
 
             // check for reverse prompt in the last n_prev tokens
