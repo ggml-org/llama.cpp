@@ -10,6 +10,7 @@ constexpr uint WARPSIZE = 32;
 #define CUDA_NCHW_2_NHWC_TILE_DIM 32
 #define CUDA_NCHW_2_NHWC_BLOCK_NM 8
 #define CUDA_NCHW_2_NHWC_BLOCK_ROWS 8
+#define CUDA_NCHW_2_NHWC_BLOCK_C 64
 
 
 //currently not use; in future for split-k kernels
@@ -59,6 +60,45 @@ static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, co
             if(ty + j < ne01 && tx < ne00){
                 const int col = (threadIdx.y+j) ^ threadIdx.x;
                 dst[imat*n + (ty+j)*ne00 + tx] = ggml_cuda_cast<dst_T>(tile[threadIdx.x][col]);
+            }
+        }
+    }
+}
+
+template <typename src_T, typename dst_T, const int rs, const unsigned int blk_c>
+static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, const int ne00, const int ne01){
+
+    const int64_t nmat = ne / (ne00 * ne01);
+    const int64_t n = ne00 * ne01;
+
+    const unsigned int tx   = threadIdx.x;
+    const unsigned int bx   = blockIdx.x;
+    const unsigned int by   = blockIdx.y;
+    // int y  = blockIdx.y * CUDA_NCHW_2_NHWC_TILE_DIM + threadIdx.y;
+    // int tx = blockIdx.y * CUDA_NCHW_2_NHWC_TILE_DIM + threadIdx.x;  // transpose block offset
+    // int ty = blockIdx.x * CUDA_NCHW_2_NHWC_TILE_DIM + threadIdx.y;
+
+    __shared__ src_T tile[rs*blk_c];
+
+    for(int i = 0; i < CUDA_NCHW_2_NHWC_BLOCK_NM; ++i){
+
+        const unsigned int imat = by * CUDA_NCHW_2_NHWC_BLOCK_NM + i;
+        if(imat >= nmat)
+            break;
+        for (unsigned int j = 0; j < rs; j++){
+            const unsigned int row = (j * blk_c + tx) % rs;
+            const unsigned int col = (j * blk_c + tx) / rs;
+            const unsigned int src_index = imat*n + bx * blk_c * rs + j * blk_c + tx;
+            if (src_index < ne) {
+              tile[row * blk_c + col] = src[src_index];
+            }
+        }
+        __syncthreads();
+
+        for (unsigned int j = 0; j < rs; j++){
+            const unsigned int dst_index = imat*n + j*ne00 + bx*blk_c + tx;
+            if(dst_index < ne){
+               dst[dst_index] = ggml_cuda_cast<dst_T>(tile[j*blk_c+tx]);
             }
         }
     }
@@ -808,6 +848,7 @@ static void launch_conv2d_implicit_split_kernel(ggml_backend_cuda_context & ctx,
 
 static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const float * X_D, const half * K_D, float * Y_D, int cc, const param_t P, cudaStream_t st) {
 
+    // if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0 && (P.r > 1 || P.s > 1)) {
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0 && (P.r > 1 || P.s > 1)) {
 
         int id = ggml_cuda_get_device();
@@ -826,13 +867,40 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         ne = P.c * P.r * P.s * P.k;
         ne01 = P.r * P.s;
         ggml_cuda_pool_alloc<half> kernel_f16(ctx.pool(id), ne);
-        dim3 dimGrid1((ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
-                      (ne00 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
-                      (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM) ;
-        NCHW2NHWC<half, half><<<dimGrid1, dimBlock, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+        if (ne01 > 1){
+          dim3 dimGrid1((ne00 + CUDA_NCHW_2_NHWC_BLOCK_C - 1) / CUDA_NCHW_2_NHWC_BLOCK_C,
+                          (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM,
+                          1) ;
+          if (ne01 == 25) {
+            NCHW2NHWC<half, half, 25, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          }else if (ne01 == 16) {
+            NCHW2NHWC<half, half, 16, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          }else if (ne01 == 9) {
+            NCHW2NHWC<half, half, 9, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          } else if (ne01 == 8) {
+            NCHW2NHWC<half, half, 8, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          } else if (ne01 == 7) {
+            NCHW2NHWC<half, half, 7, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          } else if (ne01 == 6) {
+            NCHW2NHWC<half, half, 6, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          } else if (ne01 == 5) {
+            NCHW2NHWC<half, half, 5, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          } else if (ne01 == 4) {
+            NCHW2NHWC<half, half, 4, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          } else if (ne01 == 3) {
+            NCHW2NHWC<half, half, 3, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          } else if (ne01 == 2) {
+            NCHW2NHWC<half, half, 2, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          } else {
+            dim3 dimGrid2((ne01 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                          (ne00 + CUDA_NCHW_2_NHWC_TILE_DIM - 1) / CUDA_NCHW_2_NHWC_TILE_DIM,
+                          (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM) ;
+            NCHW2NHWC<half, half><<<dimGrid2, dimBlock, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
+          }
+        }
 
         const half *X_H = input_f16.get();
-        const half *K_H = kernel_f16.get();
+        const half *K_H = ne01 == 1 ? K_D : kernel_f16.get();
 
         constexpr unsigned int BM_dim = 256;
         constexpr unsigned int BN_dim = 256;
