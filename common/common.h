@@ -406,6 +406,8 @@ struct common_params {
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
+    int image_min_tokens = -1;
+    int image_max_tokens = -1;
 
     // finetune
     struct lr_opt lr;
@@ -505,6 +507,10 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
+
+    bool has_speculative() const {
+        return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
+    }
 };
 
 // call once at the start of a program if it uses libcommon
@@ -604,6 +610,13 @@ bool fs_create_directory_with_parents(const std::string & path);
 
 std::string fs_get_cache_directory();
 std::string fs_get_cache_file(const std::string & filename);
+
+struct common_file_info {
+    std::string path;
+    std::string name;
+    size_t      size = 0; // in bytes
+};
+std::vector<common_file_info> fs_list_files(const std::string & path);
 
 //
 // Model utils
