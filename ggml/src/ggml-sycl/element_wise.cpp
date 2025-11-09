@@ -187,7 +187,7 @@ static void unary_op_abs_kernel(
         const size_t nbd0, const size_t nbd1, const size_t nbd2, const size_t nbd3,
         const sycl::nd_item<1> & item_ct1) {
 
-    (void) ne3;  
+    (void) ne3;
 
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         const int64_t i0 =  i % ne0;
@@ -695,7 +695,7 @@ static inline void ggml_sycl_op_abs(ggml_backend_sycl_context & ctx, ggml_tensor
     const size_t  nbd1 = dst->nb[1];
     const size_t  nbd2 = dst->nb[2];
     const size_t  nbd3 = dst->nb[3];
-    
+ 
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [=](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
             const int num_blocks = ceil_div(k_elements, 256);
