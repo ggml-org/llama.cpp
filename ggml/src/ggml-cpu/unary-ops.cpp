@@ -319,3 +319,7 @@ void ggml_compute_forward_xielu(const ggml_compute_params * params, ggml_tensor 
     unary_op_functor(params, dst, xielu_op_params);
 }
 
+void ggml_compute_forward_softplus(const ggml_compute_params * params, ggml_tensor * dst) {
+    unary_op<ggml_op_softplus>(params, dst);
+}
+

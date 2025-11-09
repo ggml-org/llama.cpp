@@ -1241,6 +1241,14 @@ kernel void kernel_scale_f32(
     dst[tpig] = src0[tpig] * args.scale + args.bias;
 }
 
+kernel void kernel_scale_f16(
+        constant ggml_metal_kargs_scale & args,
+        device const half * src0,
+        device       half * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = src0[tpig] * args.scale + args.bias;
+}
+
 kernel void kernel_scale_f32_4(
         constant ggml_metal_kargs_scale & args,
         device const float4 * src0,
@@ -1402,6 +1410,22 @@ kernel void kernel_silu_f32_4(
         uint tpig[[thread_position_in_grid]]) {
     device const float4 & x = src0[tpig];
     dst[tpig] = x / (1.0f + exp(-x));
+}
+
+kernel void kernel_softplus_f32(
+        device const float * src0,
+        device       float * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    device const float & x = src0[tpig];
+    dst[tpig] = (x > 20.0f) ? x : log(1.0f + exp(x));
+}
+
+kernel void kernel_softplus_f32_4(
+        device const float4 * src0,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    device const float4 & x = src0[tpig];
+    dst[tpig] = select(log(1.0f + exp(x)), x, x > 20.0f);
 }
 
 kernel void kernel_elu_f32(
@@ -1833,6 +1857,149 @@ template [[host_name("kernel_sum_rows_f32")]] kernel kernel_sum_rows_t kernel_su
 template [[host_name("kernel_mean_f32")]]     kernel kernel_sum_rows_t kernel_sum_rows<true>;
 
 template<typename T>
+kernel void kernel_cumsum(
+        constant ggml_metal_kargs_cumsum & args,
+        device const char * src0,
+        device const char * dst,
+        threadgroup float * shmem_f32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+
+    // Figure out the dize and stride of the cumsum dim
+    const int64_t ne_dim = (args.dim == 0) ? args.ne00 : (args.dim == 1) ? args.ne01 : (args.dim == 2) ? args.ne02 : args.ne03;
+    const int64_t nb_dim_src = (args.dim == 0) ? args.nb00 : (args.dim == 1) ? args.nb01 : (args.dim == 2) ? args.nb02 : args.nb03;
+    const int64_t nb_dim_dst = (args.dim == 0) ? args.nb0  : (args.dim == 1) ? args.nb1  : (args.dim == 2) ? args.nb2  : args.nb3;
+
+    // Map threadgroup indices to actual tensor dimensions
+    // tgpig.x, tgpig.y, tgpig.z represent the 3 non-cumsum dimensions
+    // tpitg.x represents position in the cumsum dimension
+    int64_t grid_indices[3] = {int64_t(tgpig.x), int64_t(tgpig.y), int64_t(tgpig.z)};
+    int64_t i_vals[4];
+
+    int grid_idx = 0;
+    for (int d = 0; d < 4; ++d) {
+        if (d == args.dim) {
+            i_vals[d] = 0; // Will be set in the loop below
+        } else {
+            i_vals[d] = grid_indices[grid_idx++];
+        }
+    }
+
+    // Base index offsets. The cumsum dim will be further offset by the position
+    // in the threadgroup
+    const int64_t i0 = i_vals[0];
+    const int64_t i1 = i_vals[1];
+    const int64_t i2 = i_vals[2];
+    const int64_t i3 = i_vals[3];
+
+    if (i3 >= args.ne03 || i2 >= args.ne02 || i1 >= args.ne01 || i0 >= args.ne00) {
+        return;
+    }
+
+    // Each thread processes elements at stride ntg.x along the cumsum dimension
+    for (int64_t i_dim = tpitg.x; i_dim < ne_dim; i_dim += ntg.x) {
+        const int64_t offset_src = i0*args.nb00 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03 + i_dim*nb_dim_src;
+        const int64_t offset_dst = i0*args.nb0  + i1*args.nb1  + i2*args.nb2  + i3*args.nb3  + i_dim*nb_dim_dst;
+
+        device const T * src_ptr = (device const T *) ((device const char *) src0 + offset_src);
+        device       T * dst_ptr = (device       T *) ((device       char *) dst  + offset_dst);
+
+        // Each thread does simd_prefix_inclusive_sum
+        float sumf = static_cast<float>(src_ptr[0]);
+        sumf = simd_prefix_inclusive_sum(sumf);
+        dst_ptr[0] = static_cast<T>(sumf);
+
+        // If this is the last element of the simd group, store its value in shared memory
+        if (tiisg == N_SIMDWIDTH - 1 || i_dim == ne_dim - 1) {
+            const ushort shmem_idx = i_dim / N_SIMDWIDTH;
+            shmem_f32[shmem_idx] = sumf;
+        }
+    }
+
+    // Ensure all simd groups sync here before proceeding
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Each element then adds the final value of all preceding simd groups
+    for (int64_t i_dim = tpitg.x; i_dim < ne_dim; i_dim += ntg.x) {
+        const int64_t offset_dst = i0*args.nb0 + i1*args.nb1 + i2*args.nb2 + i3*args.nb3 + i_dim*nb_dim_dst;
+        device T * dst_ptr = (device T *) ((device char *) dst + offset_dst);
+
+        const ushort shmem_idx = i_dim / N_SIMDWIDTH;
+        for (ushort j = 0; j < shmem_idx; ++j) {
+            dst_ptr[0] += static_cast<T>(shmem_f32[j]);
+        }
+    }
+}
+
+typedef decltype(kernel_cumsum<float>) kernel_cumsum_t;
+
+template [[host_name("kernel_cumsum_f32")]] kernel kernel_cumsum_t kernel_cumsum<float>;
+template [[host_name("kernel_cumsum_f16")]] kernel kernel_cumsum_t kernel_cumsum<half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_cumsum_bf16")]] kernel kernel_cumsum_t kernel_cumsum<bfloat>;
+#endif
+
+inline static bool _ggml_vec_tri_cmp(const int i, const int r, const uint32_t type) {
+    switch (type) {
+        // ggml.h:620
+        case /* GGML_TRI_TYPE_LOWER      */ 3: return i < r; break;
+        case /* GGML_TRI_TYPE_LOWER_DIAG */ 2: return i <= r; break;
+        case /* GGML_TRI_TYPE_UPPER      */ 1: return i > r; break;
+        case /* GGML_TRI_TYPE_UPPER_DIAG */ 0: return i >= r; break;
+    }
+}
+
+template<typename T>
+kernel void kernel_tri(
+        constant ggml_metal_kargs_tri & args,
+        device const char * src0,
+        device const char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int64_t i3 = tgpig.z;
+    const int64_t i2 = tgpig.y;
+    const int64_t i1 = tgpig.x;
+
+    if (i3 >= args.ne03 || i2 >= args.ne02 || i1 >= args.ne01) {
+        return;
+    }
+
+    const bool keep_org_val = isnan(args.c);
+    const T c_val = static_cast<T>(args.c);
+    const T zero_val = static_cast<T>(0.f);
+
+    // Each thread is a single element of the row if ne00 < max threads per
+    // threadgroup, so this will loop once for each index that this thread is
+    // responsible for
+    for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
+        int64_t i_vals[4] = {i0, i1, i2, i3};
+        int64_t iX = i_vals[args.dim_x];
+        int64_t iY = i_vals[args.dim_y];
+
+        device const T * src_ptr = (device const T *) ((device const char *) src0 + i0*args.nb00 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03);
+        device       T * dst_ptr = (device       T *) ((device       char *) dst  + i0*args.nb0  + i1*args.nb1  + i2*args.nb2  + i3*args.nb3);
+
+        dst_ptr[0] = _ggml_vec_tri_cmp(iX, iY, args.ttype)
+            ? (keep_org_val ? src_ptr[0] : c_val)
+            : zero_val;
+    }
+}
+
+typedef decltype(kernel_tri<float>) kernel_tri_t;
+
+template [[host_name("kernel_tri_f32")]] kernel kernel_tri_t kernel_tri<float>;
+template [[host_name("kernel_tri_f16")]] kernel kernel_tri_t kernel_tri<half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_tri_bf16")]] kernel kernel_tri_t kernel_tri<bfloat>;
+#endif
+
+template<typename T>
 kernel void kernel_soft_max(
         constant ggml_metal_kargs_soft_max & args,
         device const  char * src0,
@@ -2054,8 +2221,9 @@ template [[host_name("kernel_soft_max_f32")]]   kernel kernel_soft_max_t   kerne
 template [[host_name("kernel_soft_max_f16_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<half4>;
 template [[host_name("kernel_soft_max_f32_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<float4>;
 
-// ref: ggml.c:ggml_compute_forward_ssm_conv_f32
-kernel void kernel_ssm_conv_f32_f32(
+// ref: ggml.c:ggml_compute_forward_ssm_conv_impl
+template<typename src_t, typename conv_t>
+kernel void kernel_ssm_conv_impl(
         constant ggml_metal_kargs_ssm_conv & args,
         device const  void * src0,
         device const  void * src1,
@@ -2073,14 +2241,14 @@ kernel void kernel_ssm_conv_f32_f32(
   //const int64_t n_t = args.ne1;
   //const int64_t n_s = args.ne2;
 
-    device const float * s = (device const float *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
-    device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
-    device       float * x = (device       float *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
+    device const src_t  * s = (device const src_t  *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
+    device const conv_t * c = (device const conv_t *) ((device const char *) src1 + ir*args.nb11);
+    device       float  * x = (device       float  *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
 
     float sumf = 0.0f;
 
     for (int64_t i0 = 0; i0 < nc; ++i0) {
-        sumf += s[i0] * c[i0];
+        sumf += static_cast<float>(s[i0]) * static_cast<float>(c[i0]);
     }
 
     x[0] = sumf;
@@ -2116,6 +2284,13 @@ kernel void kernel_ssm_conv_f32_f32_4(
 
     x[0] = sumf;
 }
+
+typedef decltype(kernel_ssm_conv_impl<float, float>)      kernel_ssm_conv_t;
+template [[host_name("kernel_ssm_conv_f32_f32")]]  kernel kernel_ssm_conv_t kernel_ssm_conv_impl<float,  float>;
+template [[host_name("kernel_ssm_conv_f32_f16")]]  kernel kernel_ssm_conv_t kernel_ssm_conv_impl<float,  half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_ssm_conv_f32_bf16")]] kernel kernel_ssm_conv_t kernel_ssm_conv_impl<float, bfloat>;
+#endif
 
 // ref: ggml.c:ggml_compute_forward_ssm_scan_f32, Mamba-2 part
 kernel void kernel_ssm_scan_f32(

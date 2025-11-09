@@ -211,13 +211,14 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_unary(ggml_metal_library_t
                 case GGML_UNARY_OP_HARDSWISH:   op_str = "hardswish";   break;
                 case GGML_UNARY_OP_HARDSIGMOID: op_str = "hardsigmoid"; break;
                 case GGML_UNARY_OP_EXP:         op_str = "exp";         break;
+                case GGML_UNARY_OP_SOFTPLUS:    op_str = "softplus";    break;
                 default: GGML_ABORT("fatal error");
             } break;
         default: GGML_ABORT("fatal error");
     };
 
     const char * suffix = "";
-    if (n % 4 == 0) {
+    if (n % 4 == 0 && op->type == GGML_TYPE_F32) {
         suffix = "_4";
     }
 
@@ -318,6 +319,50 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_sum_rows(ggml_metal_librar
     return res;
 }
 
+ggml_metal_pipeline_t ggml_metal_library_get_pipeline_cumsum(ggml_metal_library_t lib, const ggml_tensor * op) {
+    char base[256];
+    char name[256];
+
+    const char * op_str = "cumsum";
+
+    snprintf(base, 256, "kernel_%s_%s", op_str, ggml_type_name(op->src[0]->type));
+
+    snprintf(name, 256, "%s", base);
+
+    // reuse existing precompiled pipeline, but allow memory size setting
+    ggml_metal_pipeline_t res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    // one shared memory element for each simd group in the threadgroup
+    GGML_TENSOR_LOCALS(int32_t, ne0, op->src[0], ne);
+    const int nsg = (ne00 + 31)/32;
+    ggml_metal_pipeline_set_smem(res, nsg*sizeof(float));
+
+    return res;
+}
+
+ggml_metal_pipeline_t ggml_metal_library_get_pipeline_tri(ggml_metal_library_t lib, const ggml_tensor * op) {
+    GGML_ASSERT(op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+
+    char base[256];
+    char name[256];
+
+    const char * op_str = "tri";
+
+    snprintf(base, 256, "kernel_%s_%s", op_str, ggml_type_name(op->src[0]->type));
+
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_t res = ggml_metal_library_get_pipeline(lib, name);
+    if (res) {
+        return res;
+    }
+
+    return ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+}
+
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_soft_max(ggml_metal_library_t lib, const ggml_tensor * op) {
     GGML_ASSERT(!op->src[1] || op->src[1]->type == GGML_TYPE_F16 || op->src[1]->type == GGML_TYPE_F32);
 
@@ -349,7 +394,6 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_soft_max(ggml_metal_librar
 
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_ssm_conv(ggml_metal_library_t lib, const ggml_tensor * op) {
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
 
     GGML_ASSERT(ggml_is_contiguous(op->src[0]));
     GGML_ASSERT(ggml_is_contiguous(op->src[1]));
@@ -359,7 +403,7 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_ssm_conv(ggml_metal_librar
 
     const char * suffix = "";
 
-    if (op->src[1]->ne[0] % 4 == 0) {
+    if (op->src[1]->ne[0] % 4 == 0 && op->src[1]->type == GGML_TYPE_F32) {
         suffix = "_4";
     }
 

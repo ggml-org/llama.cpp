@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include "llama-impl.h"
+
 llm_graph_context_mamba::llm_graph_context_mamba(const llm_graph_params & params) : llm_graph_context(params) {}
 
 ggml_tensor * llm_graph_context_mamba::build_mamba_layer(llm_graph_input_rs * inp,
@@ -241,9 +243,129 @@ ggml_tensor * llm_graph_context_mamba::build_mamba2_layer(llm_graph_input_rs * i
         auto get_ssm_rows = [&](ggml_context * ctx, ggml_tensor * states, ggml_tensor * ids) {
             ggml_tensor * ssm = ggml_reshape_4d(ctx, states, d_state, head_dim, n_head, mctx_cur->get_size());
 
-            // TODO: use semistructured matrices to implement state-space duality
-            // => {d_inner, n_seq_tokens, n_seqs} and {d_state, d_inner, n_seqs}
-            return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
+            if (n_seq_tokens == 1) {
+            // if (true) {
+                //DEBUG
+                LLAMA_LOG_DEBUG("build_mamba2_layer(layer %d): single-token update\n", il);
+                // If single-token, use ssm_scan op
+                ssm = ggml_cast(ctx, ssm, GGML_TYPE_F32);
+                return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
+            } else {
+                //DEBUG
+                LLAMA_LOG_DEBUG("build_mamba2_layer(layer %d): multi-token chunk scan\n", il);
+
+                // otherwise, use the SSD formulation
+
+                // extract the state(s) for the sequences identified by ids
+                if (ssm->ne[3] != ids->ne[0]) {
+                    ggml_tensor * ssm_perm = ggml_permute(ctx, ssm, 0, 2, 3, 1);        // put the target dim in dim 1
+                    ggml_tensor * ids_perm_rep = ggml_repeat_4d(ctx, ids,
+                        ids->ne[0], ssm->ne[1], ssm->ne[2], 1);                         // repeat to match expected shape
+                    ggml_tensor * ssm_ids = ggml_get_rows(ctx, ssm_perm, ids_perm_rep); // extract ids as rows
+                    ssm = ggml_cont(ctx, ggml_permute(ctx, ssm_ids, 0, 3, 1, 2));       // permute back to original shape
+                    GGML_ASSERT(ssm->ne[3] == ids->ne[0]);
+                }
+                // ssm -> {d_state, head_dim, n_head, n_seqs}
+
+                // step 1: compute dt softplus
+                // NOTE: In other implementations, the bias is added after
+                //  the softplus. This shouldn't be a problem, but it's a
+                //  difference.
+                ggml_tensor * dt_softplus = ggml_softplus(ctx, dt); // {n_head, n_seq_tokens, n_seqs}
+                dt_softplus = ggml_clamp(ctx, dt_softplus, 0.001, 100.0);
+                cb(dt_softplus, "dt_softplus", il);
+
+                // step 2: compute dtA and dtX
+                ggml_tensor * dtA = ggml_mul(ctx, dt_softplus, ggml_reshape_1d(ctx, A, A->ne[1])); // {n_head, n_seq_tokens, n_seqs}
+                cb(dtA, "dtA", il);
+                ggml_tensor * dtX = ggml_mul(ctx, x, ggml_reshape_4d(ctx, dt_softplus, 1, dt_softplus->ne[0], dt_softplus->ne[1], dt_softplus->ne[2])); // {head_dim, n_head, n_seq_tokens, n_seqs}
+                cb(dtX, "dtX", il);
+
+
+                // step 3: compute CB
+                uint32_t repeats = n_head / n_group;
+                ggml_tensor * C_perm = ggml_permute(ctx, C, 0, 2, 1, 3); // {d_state, n_seq_tokens, n_group, n_seqs}
+                ggml_tensor * B_perm = ggml_permute(ctx, B, 0, 2, 1, 3); // {d_state, n_seq_tokens, n_group, n_seqs}
+                ggml_tensor * CB = ggml_mul_mat(ctx, B_perm, C_perm); // {n_seq_tokens, n_seq_tokens, n_group, n_seqs}
+                CB = ggml_repeat_4d(ctx, CB, CB->ne[0], CB->ne[1], CB->ne[2] * repeats, CB->ne[3]); // {n_seq_tokens, n_seq_tokens, n_head (repeats * n_group), n_seqs}
+                cb(CB, "CB", il);
+
+                // step 4: compute decay
+                ggml_tensor * dtA_tmp0 = ggml_repeat_4d(ctx, dtA,
+                    dtA->ne[0], dtA->ne[1], dtA->ne[2], dtA->ne[3] * n_seq_tokens); // {n_head, n_seq_tokens_0, n_seqs, n_seq_tokens_1}
+                ggml_tensor * dtA_tmp1 = ggml_tri_dims(ctx, dtA_tmp0, nan(""), GGML_TRI_TYPE_LOWER, 3, 1); // {n_head, n_seq_tokens_0, n_seqs, n_seq_tokens_1}
+                ggml_tensor * segsum = ggml_cumsum(ctx, dtA_tmp1, 1); // {n_head, n_seq_tokens_0, n_seqs, n_seq_tokens_1}
+                cb(segsum, "segsum", il);
+                ggml_tensor * decay = ggml_exp(ctx, segsum); // {n_head, n_seq_tokens_0, n_seqs, n_seq_tokens_1}
+                decay = ggml_permute(ctx, decay, 2, 1, 3, 0);  // {n_seq_tokens_1, n_seq_tokens_0, n_head, n_seqs}
+                cb(decay, "decay", il);
+
+                // step 5: compute surrogate_attention_matrix
+                ggml_tensor * CBdecay = ggml_mul(ctx, CB, ggml_cont(ctx, decay));
+                ggml_tensor * surrogate_attention_matrix = ggml_tri_keep(ctx, CBdecay, GGML_TRI_TYPE_LOWER_DIAG);
+                cb(surrogate_attention_matrix, "surrogate_attention_matrix", il);
+
+                // step 6: compute y
+                ggml_tensor * dtX_chunk_perm = ggml_cont(ctx, ggml_permute(ctx, dtX, 1, 2, 0, 3));
+                ggml_tensor * y = ggml_mul_mat(ctx, dtX_chunk_perm, surrogate_attention_matrix);
+                y = ggml_cont(ctx, ggml_permute(ctx, y, 0, 2, 1, 3));
+                cb(y, "y", il);
+
+                // step 7: compute dtxdecay
+                ggml_tensor * decay_last = ggml_view_4d(ctx, decay,
+                    decay->ne[0], 1, decay->ne[2], decay->ne[3],
+                    decay->nb[1], decay->nb[2], decay->nb[3],
+                    (decay->ne[1] - 1) * decay->nb[1]);
+                decay_last = ggml_cont(ctx, ggml_permute(ctx, decay_last, 2, 0, 1, 3));
+                cb(decay_last, "decay_last", il);
+                B_perm = ggml_cont(ctx, B_perm);
+                B_perm = ggml_repeat_4d(ctx, B_perm,
+                    B_perm->ne[0], B_perm->ne[1], B_perm->ne[2] * repeats, B_perm->ne[3]);
+                ggml_tensor * dtxdecay = ggml_mul(ctx, dtX, decay_last);
+                dtxdecay = ggml_cont(ctx, ggml_permute(ctx, dtxdecay, 1, 2, 0, 3));
+                cb(dtxdecay, "dtxdecay", il);
+
+                // step 8: compute next_state
+                ggml_tensor * next_state = ggml_mul_mat(ctx, ggml_cont(ctx, ggml_permute(ctx, B_perm, 1, 0, 2, 3)), dtxdecay);
+                if (next_state->type != ssm->type) {
+                    next_state = ggml_cast(ctx, next_state, ssm->type);
+                }
+                cb(next_state, "next_state", il);
+
+                // TODO: Skip y and state updates if no previous state
+
+                // step 9: update from previous state
+                ggml_tensor * exp_dtA_cumsum = ggml_exp(ctx, ggml_cumsum(ctx, dtA, 1)); // {n_head, chunk_size_i, n_seqs}
+                cb(exp_dtA_cumsum, "exp_dtA_cumsum", il);
+                ggml_tensor * exp_dtA_cumsum_last = ggml_view_4d(ctx, exp_dtA_cumsum,
+                    exp_dtA_cumsum->ne[0], 1, exp_dtA_cumsum->ne[2], exp_dtA_cumsum->ne[3],
+                    exp_dtA_cumsum->nb[1], exp_dtA_cumsum->nb[2], exp_dtA_cumsum->nb[3],
+                    (exp_dtA_cumsum->ne[1] - 1) * exp_dtA_cumsum->nb[1]); // {n_head, 1, n_seqs}
+                cb(exp_dtA_cumsum_last, "exp_dtA_cumsum_last", il);
+                ggml_tensor * exp_dtA_cumsum_perm = ggml_permute(ctx, exp_dtA_cumsum_last, 2, 1, 3, 0); // {1, 1, n_head, n_seqs}
+                next_state = ggml_add(ctx, next_state, ggml_mul(ctx, ssm, ggml_cont(ctx, exp_dtA_cumsum_perm)));
+                cb(next_state, "next_state_updated", il);
+
+                // step 10: update from previous y
+                ggml_tensor * y_prev = ggml_mul_mat(ctx, ggml_permute(ctx, C, 0, 2, 1, 3), ssm);
+                cb(y_prev, "y_prev", il);
+                y_prev = ggml_mul(ctx,
+                    ggml_cont(ctx, ggml_permute(ctx, y_prev, 2, 0, 1, 3)),
+                    ggml_cont(ctx, ggml_permute(ctx, exp_dtA_cumsum, 1, 2, 3, 0)));
+                cb(y_prev, "y_prev_mul", il);
+                y = ggml_add(ctx, y, y_prev);
+                cb(y, "y_updated", il);
+
+                // Concat the output y and state
+                if (ssm->type != y->type) {
+                    ssm = ggml_cast(ctx, ssm, y->type);
+                }
+                ggml_tensor * out = ggml_concat(ctx,
+                    ggml_view_1d(ctx, y, ggml_nelements(y), 0),
+                    ggml_view_1d(ctx, ssm, ggml_nelements(ssm), 0),
+                    0);
+                return out;
+            }
         };
 
         ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
