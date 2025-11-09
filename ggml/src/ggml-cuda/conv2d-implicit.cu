@@ -90,11 +90,13 @@ static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, co
 
     __shared__ src_T tile[rs*blk_c];
 
+#pragma unroll
     for(int i = 0; i < CUDA_NCHW_2_NHWC_BLOCK_NM; ++i){
 
         const unsigned int imat = by * CUDA_NCHW_2_NHWC_BLOCK_NM + i;
         if(imat >= nmat)
             break;
+#pragma unroll
         for (unsigned int j = 0; j < rs; j++){
             const unsigned int row = (j * blk_c + tx) % rs;
             const unsigned int col = (j * blk_c + tx) / rs;
@@ -106,7 +108,7 @@ static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, co
             }
         }
         __syncthreads();
-
+#pragma unroll
         for (unsigned int j = 0; j < rs; j++){
             const unsigned int dst_index = imat*n + j*ne00 + bx*blk_c + tx;
             if(dst_index < ne){
