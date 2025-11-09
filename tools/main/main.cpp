@@ -1324,6 +1324,10 @@ int main(int argc, char ** argv) {
                         LOG_DBG("Idle timeout triggered during input wait\n");
                         LOG("\n[Idle timeout - auto-submitting empty input]\n");
                         update_activity_time(); // Reset timer for next iteration
+
+                        // Reset tool execution tracking to allow tools during idle thinking
+                        g_last_executed_tool_signature = "";
+
                         another_line = false; // Stop reading more lines
                         break;
                     }
