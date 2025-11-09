@@ -372,6 +372,7 @@ struct common_params {
     bool special           = false; // enable special token output
     bool interactive       = false; // interactive mode
     bool interactive_first = false; // wait for user input immediately
+    int32_t idle_action_interval = 0; // auto-submit empty input after N minutes of idle (0 = disabled)
     bool prompt_cache_all  = false; // save user input and generations to prompt cache
     bool prompt_cache_ro   = false; // open the prompt cache read-only and do not update it
 

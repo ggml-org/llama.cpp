@@ -53,6 +53,32 @@ static std::string g_state_save_path = "";
 // Tool execution tracking to prevent duplicate executions
 static std::string g_last_executed_tool_signature = "";
 
+// Idle timeout tracking
+static time_t g_last_activity_time = 0;
+
+// Check if idle timeout has elapsed and we should auto-submit empty input
+static bool should_auto_submit_on_idle(int idle_interval_minutes) {
+    if (idle_interval_minutes <= 0) {
+        return false; // Feature disabled
+    }
+
+    time_t current_time = time(nullptr);
+    if (g_last_activity_time == 0) {
+        g_last_activity_time = current_time;
+        return false;
+    }
+
+    int elapsed_seconds = (int)(current_time - g_last_activity_time);
+    int idle_threshold_seconds = idle_interval_minutes * 60;
+
+    return elapsed_seconds >= idle_threshold_seconds;
+}
+
+// Update activity timestamp
+static void update_activity_time() {
+    g_last_activity_time = time(nullptr);
+}
+
 static void print_usage(int argc, char ** argv) {
     (void) argc;
 
@@ -1265,18 +1291,33 @@ int main(int argc, char ** argv) {
                 console::set_display(console::user_input);
                 display = params.display_prompt;
 
-                std::string line;
-                bool another_line = true;
-                do {
-                    another_line = console::readline(line, params.multiline_input);
-                    buffer += line;
-                } while (another_line);
+                // Check for idle timeout before reading input
+                bool auto_submitted = false;
+                if (should_auto_submit_on_idle(params.idle_action_interval)) {
+                    // Auto-submit empty input due to idle timeout
+                    LOG_DBG("Auto-submitting empty input after %d minutes of idle time\n", params.idle_action_interval);
+                    LOG("\n[Idle timeout - auto-submitting empty input]\n");
+                    buffer = ""; // Empty input
+                    auto_submitted = true;
+                    update_activity_time(); // Reset timer for next iteration
+                } else {
+                    // Normal input reading
+                    std::string line;
+                    bool another_line = true;
+                    do {
+                        another_line = console::readline(line, params.multiline_input);
+                        buffer += line;
+                    } while (another_line);
+
+                    // User provided input, update activity time
+                    update_activity_time();
+                }
 
                 // done taking input, reset color
                 console::set_display(console::reset);
                 display = true;
 
-                if (buffer.empty()) { // Ctrl+D on empty line exits
+                if (buffer.empty() && !auto_submitted) { // Ctrl+D on empty line exits (but not auto-submit)
                     LOG("EOF by user\n");
                     break;
                 }

@@ -1179,6 +1179,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
+        {"--idle-action-interval"}, "N",
+        "auto-submit empty input after N minutes of idle time with no keystrokes (default: 0 = disabled)",
+        [](common_params & params, const std::string & value) {
+            params.idle_action_interval = std::stoi(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    add_opt(common_arg(
         {"-mli", "--multiline-input"},
         "allows you to write or paste multiple lines without ending each in '\\'",
         [](common_params & params) {
