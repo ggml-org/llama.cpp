@@ -427,6 +427,7 @@ class MODEL_ARCH(IntEnum):
     COGVLM           = auto()
     MINIMAXM2        = auto()
     PANGU_EMBED      = auto()
+    MEGREZ_MOE       = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -795,6 +796,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MINIMAXM2:        "minimax-m2",
     MODEL_ARCH.COGVLM:           "cogvlm",
     MODEL_ARCH.PANGU_EMBED:      "pangu-embedded",
+    MODEL_ARCH.MEGREZ_MOE:       "megrez-moe",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
