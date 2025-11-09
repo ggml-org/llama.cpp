@@ -917,6 +917,8 @@ class MultiChatUI {
         this.elInToolName = /** @type{HTMLInputElement} */(document.getElementById("toolname-in"));
         this.elInToolArgs = /** @type{HTMLInputElement} */(document.getElementById("toolargs-in"));
 
+        this.elInUser.dataset.placeholder = this.elInUser.placeholder
+
         this.validate_element(this.elInSystem, "system-in");
         this.validate_element(this.elDivChat, "chat-div");
         this.validate_element(this.elInUser, "user-in");
@@ -1284,10 +1286,13 @@ class MultiChatUI {
             chat.promote_tooltemp(content)
         } else {
             if (content.trim() == "") {
-                console.log(`WARN:SimpleChat:MCUI:${chatId}:HandleUserSubmit:Ignoring empty user input...`);
+                this.elInUser.placeholder = "dont forget to enter a message, before submitting to ai"
                 return;
             }
             chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content)))
+        }
+        if (this.elInUser.dataset.placeholder) {
+            this.elInUser.placeholder = this.elInUser.dataset.placeholder;
         }
         this.chat_show(chat.chatId);
 
@@ -1405,6 +1410,9 @@ class MultiChatUI {
      * @param {string} chatId
      */
     async handle_session_switch(chatId) {
+        if (this.elInUser.dataset.placeholder) {
+            this.elInUser.placeholder = this.elInUser.dataset.placeholder;
+        }
         let chat = this.simpleChats[chatId];
         if (chat == undefined) {
             console.error(`ERRR:SimpleChat:MCUI:HandleSessionSwitch:${chatId} missing...`);
