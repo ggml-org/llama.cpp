@@ -55,6 +55,8 @@ class ApiEP {
 
 
 /**
+ * THis is created and used only in recent_chat_ns
+ * and inturn directly sent over the network, without any addiitional processing.
  * @typedef {Array<Object<string, string|Object<string, string>>>} NSMixedContent
  */
 
@@ -558,6 +560,19 @@ class SimpleChat {
             }
             if (tmsg.ns.getReasoningContent() === "") {
                 tmsg.ns_delete("reasoning_content")
+            }
+            if (tmsg.ns.image_url) {
+                // Has I need to know if really there or if undefined, so direct access and not through getContent helper.
+                let tContent = tmsg.ns.content
+                /** @type{NSMixedContent} */
+                let tMixed = []
+                if (tContent) {
+                    tMixed.push({"type": "text", "text": tContent})
+                }
+                tMixed.push({"type": "image_url", "image_url": {"url": tmsg.ns.image_url}})
+                // @ts-ignore
+                tmsg.ns.content = tMixed
+                tmsg.ns_delete("image_url")
             }
             chat.push(tmsg.ns);
         }
