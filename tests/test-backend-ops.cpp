@@ -2294,6 +2294,79 @@ struct test_rope_set_rows : public test_case {
     }
 };
 
+// GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ROPE (+ GGML_OP_VIEW + GGML_OP_SET_ROWS)
+struct test_rms_norm_mul_rope : public test_case {
+    const std::array<int64_t, 4> ne;
+    const float eps;
+    const bool multi_add; // test a sequence of adds feeding into rms_norm
+    const bool set_rows;
+    int mode;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_MUL_ROPE";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR5(ne, eps, multi_add, set_rows, mode);
+    }
+
+    test_rms_norm_mul_rope(std::array<int64_t, 4> ne, float eps = 1e-6f, bool multi_add = false,
+                           bool set_rows = false, int mode = GGML_ROPE_TYPE_NORMAL)
+        : ne(ne), eps(eps), multi_add(multi_add), set_rows(set_rows), mode(mode) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], 1);
+        ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], 1);
+        ggml_tensor * c = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], 1);
+
+        if (multi_add) {
+            a = ggml_add(ctx, ggml_add(ctx, a, b), c);
+        }
+
+        a = ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b);
+
+        ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ne[2]);
+
+        ggml_tensor * rope = ggml_rope(ctx, a, pos, ne[0], mode);
+
+        ggml_tensor * out;
+
+        if (set_rows) {
+            ggml_tensor * view = ggml_view_2d(ctx, rope, ne[0] * ne[1], ne[2], rope->nb[2], 0);
+
+            ggml_tensor * dst = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, ne[0] * ne[1], ne[2] * ne[3], 1, 1);
+            ggml_set_name(dst, "dst");
+
+            ggml_tensor * row_idxs = ggml_new_tensor_3d(ctx, GGML_TYPE_I64, ne[2], 1, 1);
+            ggml_set_name(row_idxs, "row_idxs");
+
+            out = ggml_set_rows(ctx, dst, view, row_idxs);
+            ggml_set_name(out, "out");
+        } else {
+            out = rope;
+        }
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I64 || t->type == GGML_TYPE_I32) {
+                if (ggml_is_view_op(t->op)) {
+                    continue;
+                }
+
+                init_set_rows_row_ids(t, ne[2]);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_ARGMAX
 struct test_argmax : public test_case {
     const ggml_type type;
@@ -4809,60 +4882,6 @@ struct test_topk_moe: public test_case {
     }
 };
 
-struct test_moe_expert_reduce : public test_case {
-    const int64_t n_embd;
-    const int64_t n_tokens;
-    const int64_t n_expert_used;
-
-    test_moe_expert_reduce(int64_t n_embd = 64, int64_t n_tokens = 5, int64_t n_expert_used = 4)
-        : n_embd(n_embd), n_tokens(n_tokens), n_expert_used(n_expert_used) {
-        GGML_ASSERT(n_expert_used > 1);
-    }
-
-    std::string vars() override {
-        return VARS_TO_STR3(n_embd, n_tokens, n_expert_used);
-    }
-
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "MOE_EXPERT_REDUCE";
-    }
-
-    bool run_whole_graph() override { return true; }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * experts = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_expert_used, n_tokens);
-        ggml_set_name(experts, "experts");
-
-        ggml_tensor * weights = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_expert_used, n_tokens);
-        ggml_set_name(weights, "weights");
-
-        ggml_tensor * weighted = ggml_mul(ctx, experts, weights);
-        ggml_set_name(weighted, "weighted_experts");
-
-        std::vector<ggml_tensor *> expert_views(n_expert_used);
-        for (int64_t i = 0; i < n_expert_used; ++i) {
-            expert_views[i] = ggml_view_2d(ctx, weighted, n_embd, n_tokens, weighted->nb[2], i * weighted->nb[1]);
-
-            std::string name = "expert_view_" + std::to_string(i);
-            ggml_set_name(expert_views[i], name.c_str());
-            ggml_build_forward_expand(gf, expert_views[i]);
-        }
-
-        ggml_tensor * moe_out = expert_views[0];
-        for (int64_t i = 1; i < n_expert_used; ++i) {
-            moe_out = ggml_add(ctx, moe_out, expert_views[i]);
-
-            std::string name = "expert_add_" + std::to_string(i - 1);
-            ggml_set_name(moe_out, name.c_str());
-        }
-
-        ggml_set_name(moe_out, "moe_out");
-
-        return moe_out;
-    }
-};
-
 struct test_mul_mat_vec_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
@@ -4911,8 +4930,10 @@ struct test_mul_mat_vec_fusion : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         if (!use_id) {
-            std::array<int64_t, 4> ne = {k, m, 1, 1};
-            std::array<int64_t, 4> ne0 = {k, n, 1, 1};
+            const int              channels = 4;
+            const int              samples  = 2;
+            std::array<int64_t, 4> ne       = { k, m, channels, samples };
+            std::array<int64_t, 4> ne0      = { k, n, channels, samples };
 
             ggml_tensor * cur  = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
             ggml_tensor * gate = with_gate ? ggml_new_tensor(ctx, type, 4, ne0.data()) : nullptr;
@@ -4920,14 +4941,14 @@ struct test_mul_mat_vec_fusion : public test_case {
 
             ggml_tensor * ffn_up = ggml_mul_mat(ctx, up, cur);
             if (with_bias) {
-                std::array<int64_t, 4> bias_ne = {ffn_up->ne[0], 1, 1, 1};
+                std::array<int64_t, 4> bias_ne = { ffn_up->ne[0], 1, channels, samples };
                 ggml_tensor * up_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
                 ffn_up = ggml_add(ctx, ffn_up, up_bias);
             }
 
             ggml_tensor * ffn_gate = with_gate ? ggml_mul_mat(ctx, gate, cur) : nullptr;
             if (with_bias && with_gate) {
-                std::array<int64_t, 4> bias_ne = {ffn_gate->ne[0], 1, 1, 1};
+                std::array<int64_t, 4> bias_ne   = { ffn_gate->ne[0], 1, channels, samples };
                 ggml_tensor * gate_bias = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias_ne.data());
                 ffn_gate = ggml_add(ctx, ffn_gate, gate_bias);
             }
@@ -6648,6 +6669,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F16, {256, 4, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, true));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 4, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, true));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_BF16, GGML_TYPE_BF16, {256, 4, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, true));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 1, 4, 1}, {1, 2, 0, 3}, {0, 0, 0, 0}));
 
     test_cases.emplace_back(new test_cont());
     test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {2, 1, 1 ,1}));
@@ -6747,6 +6769,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (uint32_t n : {1, 511, 1025, 8192, 33*512}) {
         for (bool multi_add : {false, true}) {
             test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {n, 1, 1, 1}, 1e-6f, false, multi_add));
+        }
+    }
+
+    for (auto multi_add : {false, true}) {
+        for (auto set_rows : {false, true}) {
+            for (auto rope : {GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX}) {
+                test_cases.emplace_back(new test_rms_norm_mul_rope({768, 1, 1, 1}, 1e-6f, multi_add, set_rows, rope));
+                test_cases.emplace_back(new test_rms_norm_mul_rope({768, 3, 1, 1}, 1e-6f, multi_add, set_rows, rope));
+                test_cases.emplace_back(new test_rms_norm_mul_rope({768, 3, 5, 1}, 1e-6f, multi_add, set_rows, rope));
+                test_cases.emplace_back(new test_rms_norm_mul_rope({128, 32, 2, 1}, 1e-6f, multi_add, set_rows, rope));
+                test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 2, 1}, 1e-6f, multi_add, set_rows, rope));
+                test_cases.emplace_back(new test_rms_norm_mul_rope({128, 32, 50, 1}, 1e-6f, multi_add, set_rows, rope));
+                test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 50, 1}, 1e-6f, multi_add, set_rows, rope));
+                test_cases.emplace_back(new test_rms_norm_mul_rope({8192, 2, 2, 1}, 1e-6f, multi_add, set_rows, rope));
+                test_cases.emplace_back(new test_rms_norm_mul_rope({8192, 2, 2, 1}, 1e-6f, multi_add, set_rows, rope));
+            }
         }
     }
 
@@ -7322,10 +7360,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_topk_moe({ 8, 22, 1, 1 }, 4, /*with_norm*/ false, /*delayed_softmax*/ true));
     test_cases.emplace_back(new test_topk_moe({ 32, 22, 1, 1 }, 8, /*with_norm*/ false, /*delayed_softmax*/ true));
-
-    test_cases.emplace_back(new test_moe_expert_reduce(1024, 5, 4));
-    test_cases.emplace_back(new test_moe_expert_reduce(80, 3, 6));
-    test_cases.emplace_back(new test_moe_expert_reduce(80, 3, 7));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging

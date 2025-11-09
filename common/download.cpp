@@ -50,6 +50,22 @@ using json = nlohmann::ordered_json;
 // downloader
 //
 
+// validate repo name format: owner/repo
+static bool validate_repo_name(const std::string & repo) {
+    static const std::regex repo_regex(R"(^[A-Za-z0-9_.\-]+\/[A-Za-z0-9_.\-]+$)");
+    return std::regex_match(repo, repo_regex);
+}
+
+static std::string get_manifest_path(const std::string & repo, const std::string & tag) {
+    // we use "=" to avoid clashing with other component, while still being allowed on windows
+    std::string fname = "manifest=" + repo + "=" + tag + ".json";
+    if (!validate_repo_name(repo)) {
+        throw std::runtime_error("error: repo name must be in the format 'owner/repo'");
+    }
+    string_replace_all(fname, "/", "=");
+    return fs_get_cache_file(fname);
+}
+
 static std::string read_file(const std::string & fname) {
     std::ifstream file(fname);
     if (!file) {
@@ -829,17 +845,13 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag, cons
     // Important: the User-Agent must be "llama-cpp" to get the "ggufFile" field in the response
     // User-Agent header is already set in common_remote_get_content, no need to set it here
 
-    // we use "=" to avoid clashing with other component, while still being allowed on windows
-    std::string cached_response_fname = "manifest=" + hf_repo + "=" + tag + ".json";
-    string_replace_all(cached_response_fname, "/", "_");
-    std::string cached_response_path = fs_get_cache_file(cached_response_fname);
-
     // make the request
     common_remote_params params;
     params.headers = headers;
     long res_code = 0;
     std::string res_str;
     bool use_cache = false;
+    std::string cached_response_path = get_manifest_path(hf_repo, tag);
     if (!offline) {
         try {
             auto res = common_remote_get_content(url, params);
@@ -893,6 +905,33 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag, cons
     }
 
     return { hf_repo, ggufFile, mmprojFile };
+}
+
+std::vector<common_cached_model_info> common_list_cached_models() {
+    std::vector<common_cached_model_info> models;
+    const std::string cache_dir = fs_get_cache_directory();
+    const std::vector<common_file_info> files = fs_list_files(cache_dir);
+    for (const auto & file : files) {
+        if (string_starts_with(file.name, "manifest=") && string_ends_with(file.name, ".json")) {
+            common_cached_model_info model_info;
+            model_info.manifest_path = file.path;
+            std::string fname = file.name;
+            string_replace_all(fname, ".json", ""); // remove extension
+            auto parts = string_split<std::string>(fname, '=');
+            if (parts.size() == 4) {
+                // expect format: manifest=<user>=<model>=<tag>=<other>
+                model_info.user  = parts[1];
+                model_info.model = parts[2];
+                model_info.tag   = parts[3];
+            } else {
+                // invalid format
+                continue;
+            }
+            model_info.size = 0; // TODO: get GGUF size, not manifest size
+            models.push_back(model_info);
+        }
+    }
+    return models;
 }
 
 //
@@ -959,6 +998,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string token = common_docker_get_token(repo);  // Get authentication token
 
         // Get manifest
+        // TODO: cache the manifest response so that it appears in the model list
         const std::string    url_prefix = "https://registry-1.docker.io/v2/" + repo;
         std::string          manifest_url = url_prefix + "/manifests/" + tag;
         common_remote_params manifest_params;
