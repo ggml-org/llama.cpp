@@ -15,10 +15,14 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #elif defined (_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -65,6 +69,171 @@ static bool file_is_empty(const std::string & path) {
     f.exceptions(std::ifstream::failbit | std::ifstream::badbit);
     f.open(path.c_str(), std::ios::in | std::ios::binary | std::ios::ate);
     return f.tellg() == 0;
+}
+
+// Tool calling support functions
+#if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
+static bool is_executable(const std::string & path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) {
+        return false;
+    }
+    return (st.st_mode & S_IXUSR) != 0;
+}
+
+static std::string execute_command(const std::string & command) {
+    std::string result;
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) {
+        return "Error: Failed to execute command\n";
+    }
+
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+
+    int status = pclose(pipe);
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        result += "\n[Tool exited with code " + std::to_string(WEXITSTATUS(status)) + "]\n";
+    }
+
+    return result;
+}
+
+static std::vector<std::string> get_tool_executables(const std::string & tools_dir) {
+    std::vector<std::string> executables;
+
+    DIR* dir = opendir(tools_dir.c_str());
+    if (!dir) {
+        return executables;
+    }
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        if (entry->d_name[0] == '.') {
+            continue; // Skip hidden files and . / ..
+        }
+
+        std::string full_path = tools_dir + "/" + entry->d_name;
+        if (is_executable(full_path)) {
+            executables.push_back(entry->d_name);
+        }
+    }
+
+    closedir(dir);
+
+    // Sort alphabetically
+    std::sort(executables.begin(), executables.end());
+
+    return executables;
+}
+
+static std::string collect_tools_help(const std::string & tools_dir) {
+    std::vector<std::string> executables = get_tool_executables(tools_dir);
+
+    if (executables.empty()) {
+        return "No executable tools found in the 'tools' directory.\n";
+    }
+
+    std::ostringstream help_text;
+    help_text << "Available tools:\n\n";
+
+    for (const auto & tool_name : executables) {
+        help_text << "=== " << tool_name << " ===\n";
+        std::string command = tools_dir + "/" + tool_name + " help";
+        std::string output = execute_command(command);
+        help_text << output;
+        if (!output.empty() && output.back() != '\n') {
+            help_text << "\n";
+        }
+        help_text << "\nTo use this tool: <tool-launch>" << tool_name << " [arguments]</tool-launch>\n\n";
+    }
+
+    return help_text.str();
+}
+
+static std::string execute_tool(const std::string & tools_dir, const std::string & tool_name, const std::string & args) {
+    std::string full_path = tools_dir + "/" + tool_name;
+
+    if (!is_executable(full_path)) {
+        return "Error: Tool '" + tool_name + "' not found or not executable\n";
+    }
+
+    std::string command = full_path;
+    if (!args.empty()) {
+        // Simple shell escaping - wrap in quotes if contains spaces
+        command += " " + args;
+    }
+
+    LOG("\n[Executing tool: %s]\n", command.c_str());
+    std::string output = execute_command(command);
+    LOG("[Tool output follows]\n");
+
+    return output;
+}
+#elif defined (_WIN32)
+// Windows implementations (simplified - no tool support on Windows for now)
+static bool is_executable(const std::string & path) {
+    return false;
+}
+
+static std::string execute_command(const std::string & command) {
+    return "Error: Tool execution not supported on Windows\n";
+}
+
+static std::vector<std::string> get_tool_executables(const std::string & tools_dir) {
+    return std::vector<std::string>();
+}
+
+static std::string collect_tools_help(const std::string & tools_dir) {
+    return "Tool execution is not supported on Windows.\n";
+}
+
+static std::string execute_tool(const std::string & tools_dir, const std::string & tool_name, const std::string & args) {
+    return "Error: Tool execution not supported on Windows\n";
+}
+#endif
+
+// Check if the recent output contains <tools-help/>
+static bool check_for_tools_help(const std::string & text) {
+    return text.find("<tools-help/>") != std::string::npos;
+}
+
+// Check if the recent output contains <tool-launch>...</tool-launch> and extract tool name and args
+static bool check_for_tool_launch(const std::string & text, std::string & tool_name, std::string & args) {
+    size_t start = text.find("<tool-launch>");
+    if (start == std::string::npos) {
+        return false;
+    }
+
+    size_t end = text.find("</tool-launch>", start);
+    if (end == std::string::npos) {
+        return false;
+    }
+
+    // Extract the content between tags
+    start += 13; // length of "<tool-launch>"
+    std::string content = text.substr(start, end - start);
+
+    // Trim whitespace
+    content.erase(0, content.find_first_not_of(" \t\n\r"));
+    content.erase(content.find_last_not_of(" \t\n\r") + 1);
+
+    // Split into tool name and args
+    size_t space_pos = content.find(' ');
+    if (space_pos == std::string::npos) {
+        tool_name = content;
+        args = "";
+    } else {
+        tool_name = content.substr(0, space_pos);
+        args = content.substr(space_pos + 1);
+        // Trim args
+        args.erase(0, args.find_first_not_of(" \t\n\r"));
+        args.erase(args.find_last_not_of(" \t\n\r") + 1);
+    }
+
+    return !tool_name.empty();
 }
 
 // Save complete LLM state (KV cache + RNG + logits + embeddings) to GGUF file
@@ -558,6 +727,10 @@ int main(int argc, char ** argv) {
         LOG_INF("  /\\/load <filename> - Load LLM state from GGUF file to restore exact conversation state\n");
         LOG_INF("  /\\/temp            - Show current temperature setting\n");
         LOG_INF("  /\\/temp <value>    - Set temperature to a new value (e.g., /\\/temp 0.7)\n");
+        LOG_INF("\n");
+        LOG_INF("Tool calling (when 'tools' directory exists):\n");
+        LOG_INF("  Model can output <tools-help/> to get list of available tools\n");
+        LOG_INF("  Model can output <tool-launch>tool-name args</tool-launch> to execute a tool\n");
 
         if (!params.antiprompt.empty()) {
             for (const auto & antiprompt : params.antiprompt) {
@@ -898,10 +1071,57 @@ int main(int argc, char ** argv) {
 
         // if not currently processing queued inputs;
         if ((int) embd_inp.size() <= n_consumed) {
+            // Check for tool requests in recent output
+            const int n_prev = 128; // Look back further to catch full tags
+            const std::string last_output = common_sampler_prev_str(smpl, ctx, n_prev);
+
+            // Check for <tools-help/> request
+            if (check_for_tools_help(last_output)) {
+                LOG_DBG("Detected <tools-help/> request\n");
+
+                // Check if tools directory exists
+                if (file_exists("tools")) {
+                    std::string help_text = collect_tools_help("tools");
+
+                    LOG("\n[Tools Help Requested]\n");
+                    LOG("%s", help_text.c_str());
+                    LOG("[End of Tools Help]\n\n");
+
+                    // Inject the help text back into the conversation
+                    auto help_tokens = common_tokenize(ctx, "\n\n" + help_text, false, true);
+                    embd_inp.insert(embd_inp.end(), help_tokens.begin(), help_tokens.end());
+
+                    // Continue generation after injecting help
+                    is_interacting = false;
+                } else {
+                    LOG("\n[Tools Help Requested but 'tools' directory not found]\n\n");
+                    auto msg_tokens = common_tokenize(ctx, "\n\nNo 'tools' directory found.\n\n", false, true);
+                    embd_inp.insert(embd_inp.end(), msg_tokens.begin(), msg_tokens.end());
+                }
+            }
+
+            // Check for <tool-launch>...</tool-launch> request
+            std::string tool_name, tool_args;
+            if (check_for_tool_launch(last_output, tool_name, tool_args)) {
+                LOG_DBG("Detected <tool-launch> request: tool=%s, args=%s\n", tool_name.c_str(), tool_args.c_str());
+
+                // Execute the tool
+                std::string tool_output = execute_tool("tools", tool_name, tool_args);
+
+                LOG("%s", tool_output.c_str());
+                LOG("[End of Tool Output]\n\n");
+
+                // Inject the tool output back into the conversation
+                auto output_tokens = common_tokenize(ctx, "\n\n" + tool_output + "\n\n", false, true);
+                embd_inp.insert(embd_inp.end(), output_tokens.begin(), output_tokens.end());
+
+                // Continue generation after injecting output
+                is_interacting = false;
+            }
+
             // check for reverse prompt in the last n_prev tokens
             if (!params.antiprompt.empty()) {
-                const int n_prev = 32;
-                const std::string last_output = common_sampler_prev_str(smpl, ctx, n_prev);
+                const std::string last_output_for_antiprompt = common_sampler_prev_str(smpl, ctx, 32);
 
                 is_antiprompt = false;
                 // Check if each of the reverse prompts appears at the end of the output.
@@ -909,11 +1129,11 @@ int main(int argc, char ** argv) {
                 // so we'll compensate for that by widening the search window a bit.
                 for (std::string & antiprompt : params.antiprompt) {
                     size_t extra_padding = params.interactive ? 0 : 2;
-                    size_t search_start_pos = last_output.length() > static_cast<size_t>(antiprompt.length() + extra_padding)
-                        ? last_output.length() - static_cast<size_t>(antiprompt.length() + extra_padding)
+                    size_t search_start_pos = last_output_for_antiprompt.length() > static_cast<size_t>(antiprompt.length() + extra_padding)
+                        ? last_output_for_antiprompt.length() - static_cast<size_t>(antiprompt.length() + extra_padding)
                         : 0;
 
-                    if (last_output.find(antiprompt, search_start_pos) != std::string::npos) {
+                    if (last_output_for_antiprompt.find(antiprompt, search_start_pos) != std::string::npos) {
                         if (params.interactive) {
                             is_interacting = true;
                         }
@@ -923,8 +1143,8 @@ int main(int argc, char ** argv) {
                 }
 
                 // check for reverse prompt using special tokens
-                // avoid calling common_sampler_last() if last_output is empty
-                if (!last_output.empty()) {
+                // avoid calling common_sampler_last() if last_output_for_antiprompt is empty
+                if (!last_output_for_antiprompt.empty()) {
                     llama_token last_token = common_sampler_last(smpl);
                     for (auto token : antiprompt_token) {
                         if (token == last_token) {
