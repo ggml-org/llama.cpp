@@ -1400,7 +1400,6 @@ uint32_t llama_context::graph_max_nodes() const {
         base_nodes += 4096;
     }
 
-
     return base_nodes;
 }
 
