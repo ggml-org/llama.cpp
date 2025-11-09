@@ -55,6 +55,10 @@ class ApiEP {
 
 
 /**
+ * @typedef {Array<Object<string, string|Object<string, string>>>} NSMixedContent
+ */
+
+/**
  * @typedef {{id: string, type: string, function: {name: string, arguments: string}}} NSToolCall
  */
 
@@ -62,7 +66,7 @@ class NSChatMessage {
     /**
      * Represents a Message as seen in the http server Chat handshake
      * @param {string} role
-     * @param {string|undefined} content
+     * @param {string|undefined} content - used to store text content directly
      * @param {string|undefined} reasoning_content
      * @param {Array<NSToolCall>|undefined} tool_calls
      * @param {string|undefined} tool_call_id - toolcall response - the tool / function call id
@@ -89,6 +93,9 @@ class NSChatMessage {
         return new NSChatMessage(role, content, undefined, undefined, tool_call_id, name)
     }
 
+    /**
+     * Return the direct text content, or else empty string.
+     */
     getContent() {
         if (this.content) {
             return this.content
@@ -262,7 +269,7 @@ class ChatMessageEx {
      * @param {ChatMessageEx} old
      */
     static newFrom(old) {
-        return new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.ns.tool_call_id, old.ns.name), old.trimmedContent)
+        return new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.ns.tool_call_id, old.ns.name, old.ns.image_url), old.trimmedContent)
     }
 
     clear() {
@@ -458,12 +465,18 @@ class SimpleChat {
         return `SimpleChat-${this.chatId}`
     }
 
+    /**
+     * Save into localStorage
+     */
     save() {
         /** @type {SimpleChatODS} */
         let ods = {iLastSys: this.iLastSys, xchat: this.xchat};
         localStorage.setItem(this.ods_key(), JSON.stringify(ods));
     }
 
+    /**
+     * Load from localStorage
+     */
     load() {
         let sods = localStorage.getItem(this.ods_key());
         if (sods == null) {
@@ -474,7 +487,7 @@ class SimpleChat {
         this.iLastSys = ods.iLastSys;
         this.xchat = [];
         for (const cur of ods.xchat) {
-            this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.ns.tool_call_id, cur.ns.name), cur.trimmedContent))
+            this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.ns.tool_call_id, cur.ns.name, cur.ns.image_url), cur.trimmedContent))
         }
     }
 
