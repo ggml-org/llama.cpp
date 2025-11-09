@@ -16,4 +16,5 @@ namespace console {
     void cleanup();
     void set_display(display_t display);
     bool readline(std::string & line, bool multiline_input);
+    bool readline_with_timeout(std::string & line, bool multiline_input, int timeout_seconds, bool & timed_out);
 }

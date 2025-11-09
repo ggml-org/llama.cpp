@@ -1295,33 +1295,49 @@ int main(int argc, char ** argv) {
                 console::set_display(console::user_input);
                 display = params.display_prompt;
 
-                // Check for idle timeout before reading input
-                bool auto_submitted = false;
-                if (should_auto_submit_on_idle(params.idle_action_interval)) {
-                    // Auto-submit empty input due to idle timeout
-                    LOG_DBG("Auto-submitting empty input after %d minutes of idle time\n", params.idle_action_interval);
-                    LOG("\n[Idle timeout - auto-submitting empty input]\n");
-                    buffer = ""; // Empty input
-                    auto_submitted = true;
-                    update_activity_time(); // Reset timer for next iteration
-                } else {
-                    // Normal input reading
-                    std::string line;
-                    bool another_line = true;
-                    do {
-                        another_line = console::readline(line, params.multiline_input);
-                        buffer += line;
-                    } while (another_line);
+                // Calculate remaining timeout for readline
+                int timeout_seconds = 0;
+                if (params.idle_action_interval > 0) {
+                    time_t current_time = time(nullptr);
+                    int elapsed_seconds = (int)(current_time - g_last_activity_time);
+                    int idle_threshold_seconds = params.idle_action_interval * 60;
+                    int remaining_seconds = idle_threshold_seconds - elapsed_seconds;
 
-                    // User provided input, update activity time
-                    update_activity_time();
+                    if (remaining_seconds > 0) {
+                        timeout_seconds = remaining_seconds;
+                    } else {
+                        timeout_seconds = 1; // Will timeout immediately
+                    }
                 }
+
+                // Read input with timeout support
+                std::string line;
+                bool another_line = true;
+                bool timed_out = false;
+
+                do {
+                    another_line = console::readline_with_timeout(line, params.multiline_input, timeout_seconds, timed_out);
+                    buffer += line;
+
+                    if (timed_out) {
+                        // Idle timeout occurred
+                        LOG_DBG("Idle timeout triggered during input wait\n");
+                        LOG("\n[Idle timeout - auto-submitting empty input]\n");
+                        update_activity_time(); // Reset timer for next iteration
+                        another_line = false; // Stop reading more lines
+                        break;
+                    }
+
+                    // User provided input, update activity time and disable timeout for continuation lines
+                    update_activity_time();
+                    timeout_seconds = 0; // No timeout for continuation lines
+                } while (another_line);
 
                 // done taking input, reset color
                 console::set_display(console::reset);
                 display = true;
 
-                if (buffer.empty() && !auto_submitted) { // Ctrl+D on empty line exits (but not auto-submit)
+                if (buffer.empty() && !timed_out) { // Ctrl+D on empty line exits (but not timeout)
                     LOG("EOF by user\n");
                     break;
                 }

@@ -501,4 +501,60 @@ namespace console {
         return readline_advanced(line, multiline_input);
     }
 
+    bool readline_with_timeout(std::string & line, bool multiline_input, int timeout_seconds, bool & timed_out) {
+        timed_out = false;
+
+        if (timeout_seconds <= 0) {
+            // No timeout, use regular readline
+            return readline(line, multiline_input);
+        }
+
+#if defined(_WIN32)
+        // Windows: check if input is available with timeout
+        HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD result = WaitForSingleObject(hStdin, timeout_seconds * 1000);
+
+        if (result == WAIT_TIMEOUT) {
+            timed_out = true;
+            line.clear();
+            return false;
+        }
+
+        if (result != WAIT_OBJECT_0) {
+            // Error occurred
+            line.clear();
+            return false;
+        }
+
+        // Input is available, use regular readline
+        return readline(line, multiline_input);
+#else
+        // Unix: use select() to check for input with timeout
+        fd_set readfds;
+        struct timeval tv;
+
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+
+        tv.tv_sec = timeout_seconds;
+        tv.tv_usec = 0;
+
+        int retval = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv);
+
+        if (retval == -1) {
+            // Error occurred
+            line.clear();
+            return false;
+        } else if (retval == 0) {
+            // Timeout occurred
+            timed_out = true;
+            line.clear();
+            return false;
+        }
+
+        // Input is available, use regular readline
+        return readline(line, multiline_input);
+#endif
+    }
+
 }
