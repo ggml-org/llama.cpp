@@ -158,9 +158,30 @@ static void unary_op_sgn_kernel(const T * x, T * dst, const int k, const sycl::n
 }
 
 template<typename T>
-static void unary_op_abs_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
+static void unary_op_abs_kernel(
+        const T * x,
+        T * dst,
+        const int k,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3,
+        const size_t nb0,  const size_t nb1,  const size_t nb2,  const size_t nb3,
+        const size_t nbd0, const size_t nbd1, const size_t nbd2, const size_t nbd3,
+        const sycl::nd_item<1> & item_ct1) {
+
+    (void) ne3;  
+
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_abs(x[i]);
+        const int64_t i0 =  i % ne0;
+        const int64_t i1 = (i / ne0)       % ne1;
+        const int64_t i2 = (i / (ne0*ne1))  % ne2;
+        const int64_t i3 =  i / (ne0*ne1*ne2);
+
+        const char * src_base = (const char *) x;
+        char       * dst_base = (char *) dst;
+
+        const T * srcp = (const T *)(src_base + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        T *       dstp = (T *)(const_cast<char*>(dst_base) + i0*nbd0 + i1*nbd1 + i2*nbd2 + i3*nbd3);
+
+        *dstp = op_abs(*srcp);
     }
 }
 
@@ -583,14 +604,37 @@ static inline void ggml_sycl_op_sgn(ggml_backend_sycl_context & ctx, ggml_tensor
 }
 
 static inline void ggml_sycl_op_abs(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];
+
+    const int64_t ne0  = dst->ne[0];
+    const int64_t ne1  = dst->ne[1];
+    const int64_t ne2  = dst->ne[2];
+    const int64_t ne3  = dst->ne[3];
+
+    const size_t  nb0  = src0->nb[0];
+    const size_t  nb1  = src0->nb[1];
+    const size_t  nb2  = src0->nb[2];
+    const size_t  nb3  = src0->nb[3];
+
+    const size_t  nbd0 = dst->nb[0];
+    const size_t  nbd1 = dst->nb[1];
+    const size_t  nbd2 = dst->nb[2];
+    const size_t  nbd3 = dst->nb[3];
+    
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
+        [=](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
             const int num_blocks = ceil_div(k_elements, 256);
             stream->parallel_for(
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
                                   sycl::range<1>(256)),
                 [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_abs_kernel(src, dst_ptr, k_elements, item_ct1);
+                    unary_op_abs_kernel(
+                        src, dst_ptr, k_elements,
+                        ne0, ne1, ne2, ne3,
+                        nb0, nb1, nb2, nb3,
+                        nbd0, nbd1, nbd2, nbd3,
+                        item_ct1
+                    );
                 });
         });
 }

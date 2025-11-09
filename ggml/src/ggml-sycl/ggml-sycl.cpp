@@ -4253,16 +4253,33 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_SGN:
-                case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_ELU:
-#if defined (GGML_SYCL_F16)
+                case GGML_UNARY_OP_TRUNC:
+    #if defined(GGML_SYCL_F16)
                     return ggml_is_contiguous(op->src[0]) && (op->type == op->src[0]->type);
-#else
-                    return ggml_is_contiguous(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) && (op->type == op->src[0]->type);
-#endif
+    #else
+                    return ggml_is_contiguous(op->src[0]) &&
+                        (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) &&
+                        (op->type == op->src[0]->type);
+    #endif
+
+                case GGML_UNARY_OP_ABS:
+                {
+                    ggml_type src0_type = op->src[0]->type;
+    #if defined(GGML_SYCL_F16)
+                    return (op->type == src0_type) &&
+                        (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16);
+    #else
+                    return (op->type == src0_type) &&
+                        (src0_type == GGML_TYPE_F32);
+    #endif
+                }
+
                 default:
                     return false;
             }
+            break;
+
         case GGML_OP_GLU:
             switch (ggml_get_glu_op(op)) {
                 case GGML_GLU_OP_REGLU:
