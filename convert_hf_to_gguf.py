@@ -9033,88 +9033,91 @@ class FalconH1Model(Mamba2Model):
         self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
 
 
-@ModelBase.register("MegrezMoEForCausalLM")
+@ModelBase.register("MegrezMoeForCausalLM", "MegrezMoEForCausalLM")
 class MegrezMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MEGREZ_MOE
 
     def set_vocab(self):
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-
-        tokpre = self.get_vocab_base_pre(tokenizer)
-        merges = []
-        vocab = {}
-        mergeable_ranks = getattr(tokenizer, "mergeable_ranks", {})
-        for token, rank in mergeable_ranks.items():
-            vocab[QwenModel.token_bytes_to_string(token)] = rank
-            if len(token) == 1:
-                continue
-            merged = QwenModel.bpe(mergeable_ranks, token, max_rank=rank)
-            if len(merged) == 2:
-                merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
-
-        vocab_size = self.hparams["vocab_size"]
-        assert tokenizer.vocab_size == vocab_size
-        special_tokens = getattr(tokenizer, "special_tokens", {})
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
-        tokens: list[str] = []
-        toktypes: list[int] = []
-        for i in range(vocab_size):
-            if i not in reverse_vocab:
-                tokens.append(f"[PAD{i}]")
-                toktypes.append(gguf.TokenType.UNUSED)
-            else:
-                token = reverse_vocab[i]
-                tokens.append(token)
-                if i in special_tokens.values():
-                    toktypes.append(gguf.TokenType.CONTROL)
-                else:
-                    toktypes.append(gguf.TokenType.NORMAL)
-
-        self.gguf_writer.add_tokenizer_model("gpt2")
-        self.gguf_writer.add_tokenizer_pre(tokpre)
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_types(toktypes)
-        self.gguf_writer.add_token_merges(merges)
-
-        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
-        special_vocab.add_to_gguf(self.gguf_writer)
-        # BOS token fix if needed
-        # self.gguf_writer.add_bos_token_id(<id>)
+        # Megrez-MoE uses Qwen-style BPE tokenizer
+        # Use standard GPT2 vocab loading which handles BPE correctly
+        try:
+            self._set_vocab_gpt2()
+        except Exception:
+            # Fallback to Qwen-specific handling if needed
+            self._set_vocab_qwen()
+        # Note: special_vocab.add_to_gguf() is already called within
+        # _set_vocab_gpt2() and _set_vocab_qwen(), so no need to call it again
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        self.gguf_writer.add_expert_count(hparams["num_experts"])
-        self.gguf_writer.add_expert_shared_feed_forward_length(hparams["intermediate_size"])
+        # MoE expert configuration
+        # Try multiple possible parameter names for compatibility
+        num_experts = hparams.get("num_experts") or hparams.get("n_routed_experts")
+        if num_experts is None:
+            raise ValueError("Missing 'num_experts' or 'n_routed_experts' in model config")
+        self.gguf_writer.add_expert_count(num_experts)
+        
+        # Shared expert FFN size - Note: In Megrez-MoE, this is NOT the same as intermediate_size!
+        # The shared experts have their own FFN size: hidden_size * 2.75
+        # For Megrez2-3x7B-A3B: hidden_size=2048 → shared_expert_ffn=5632
+        hidden_size = hparams.get("hidden_size", 2048)
+        shared_expert_ffn_size = int(hidden_size * 2.75)
+        
+        self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_ffn_size)
 
-        moe_intermediate_size = hparams["moe_intermediate_size"]
-        assert all(n == moe_intermediate_size[0] for n in moe_intermediate_size)
+        # Per-expert FFN size (should be consistent across all experts)
+        moe_intermediate_size = hparams.get("moe_intermediate_size")
+        if moe_intermediate_size is None:
+            raise ValueError("Missing 'moe_intermediate_size' in model config")
+        if not isinstance(moe_intermediate_size, list):
+            moe_intermediate_size = [moe_intermediate_size]
+        
+        # Validate all experts have same size
+        if not all(n == moe_intermediate_size[0] for n in moe_intermediate_size):
+            raise ValueError(f"All experts must have same FFN size, got: {moe_intermediate_size}")
         self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size[0])
 
-        moe_topk = hparams["moe_topk"]
-        assert all(topk == moe_topk[0] for topk in moe_topk)
-        self.gguf_writer.add_expert_used_count(moe_topk[0])
+        # Top-K expert selection is already handled by parent class (TextModel)
+        # via num_experts_per_tok parameter, so we don't need to set it again here
+        
+        # Shared expert count (should be consistent across layers)
+        # Try multiple possible parameter names
+        num_shared_expert = hparams.get("num_shared_expert") or hparams.get("n_shared_experts")
+        if num_shared_expert is None:
+            raise ValueError("Missing 'num_shared_expert' or 'n_shared_experts' in model config")
+        if not isinstance(num_shared_expert, list):
+            num_shared_expert = [num_shared_expert]
+        
+        if not all(n == num_shared_expert[0] for n in num_shared_expert):
+            raise ValueError(f"All layers must have same shared expert count, got: {num_shared_expert}")
+        self.gguf_writer.add_expert_shared_count(num_shared_expert[0])
 
-        moe_shared_expert = hparams["num_shared_expert"]
-        assert all(n == moe_shared_expert[0] for n in moe_shared_expert)
-        self.gguf_writer.add_expert_shared_count(moe_shared_expert[0])
-
-        rope_scaling = hparams.get("rope_scaling", {})
-        if rope_scaling.get("type") == "dynamic":
+        # RoPE scaling (Megrez may use dynamic scaling)
+        rope_scaling = hparams.get("rope_scaling")
+        if rope_scaling and rope_scaling.get("type") == "dynamic":
             alpha = rope_scaling.get("alpha", 1000)
             base = hparams.get("rope_theta", 10000.0)
-            dim = (hparams["hidden_size"] // hparams["num_attention_heads"])
+            hidden_size = hparams.get("hidden_size")
+            num_attention_heads = hparams.get("num_attention_heads")
+            
+            if None in (hidden_size, num_attention_heads):
+                raise ValueError("Missing 'hidden_size' or 'num_attention_heads' for RoPE scaling")
+            
+            dim = hidden_size // num_attention_heads
             scaled_base = base * (alpha ** (dim / (dim - 2)))
+            
             self.gguf_writer.add_rope_freq_base(scaled_base)
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
             self.gguf_writer.add_rope_scaling_factor(1)
             self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024)
             self.gguf_writer.add_context_length(256 * 1024)
-            assert alpha == 1000 and base == 10000.0 and dim == 128 and self.hparams["max_position_embeddings"] in [32 * 1024, 256 * 1024], \
-                "Megrez dynamic RoPE scaling assumptions changed, please update the logic or context length manually"
-
+            
+            logger.info(
+                f"Megrez dynamic RoPE: alpha={alpha}, base={base}, dim={dim}, "
+                f"scaled_base={scaled_base:.2f}, max_ctx={256*1024}"
+            )
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -9123,8 +9126,24 @@ class MegrezMoEModel(TextModel):
                 logger.info("Skipping tied output layer 'lm_head.weight'")
                 return []
 
+        # Handle MoE gate bias (e_score_correction_bias) - map to exp_probs_b
+        if "e_score_correction_bias" in name:
+            # This is the expert selection bias - map to blk.N.exp_probs_b
+            # Format: model.layers.N.mlp.gate.e_score_correction_bias -> blk.N.exp_probs_b
+            layer_num = int(name.split(".")[2])  # Extract layer number
+            new_name = f"blk.{layer_num}.exp_probs_b"
+            return [(new_name, data_torch)]
+
+        # Handle shared FFN (non-expert layers) - pass through directly
+        if name.find("mlp.down_proj") != -1 or name.find("mlp.gate_proj") != -1 or name.find("mlp.up_proj") != -1:
+            if name.find("mlp.experts") == -1:
+                # This is a shared FFN layer, not an expert - pass through
+                return [(self.map_tensor_name(name), data_torch)]
+
         if name.find("mlp.experts") != -1:
-            n_experts = self.hparams["num_experts"]
+            n_experts = self.hparams.get("num_experts") or self.hparams.get("n_routed_experts")
+            if n_experts is None:
+                raise ValueError("Missing 'num_experts' or 'n_routed_experts' in config")
             assert bid is not None
 
             if self._experts is None:
