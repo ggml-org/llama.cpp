@@ -9014,30 +9014,37 @@ class MegrezMoEModel(TextModel):
         self.gguf_writer.add_expert_shared_feed_forward_length(hparams["intermediate_size"])
 
         moe_intermediate_size = hparams["moe_intermediate_size"]
-        assert all(n == moe_intermediate_size[0] for n in moe_intermediate_size)
-        self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size[0])
+        if moe_intermediate_size is not None and isinstance(moe_intermediate_size, (list, tuple)) and len(moe_intermediate_size) > 0:
+            assert all(n == moe_intermediate_size[0] for n in moe_intermediate_size)
+            self.gguf_writer.add_expert_feed_forward_length(int(moe_intermediate_size[0]))
 
         moe_topk = hparams["moe_topk"]
-        assert all(topk == moe_topk[0] for topk in moe_topk)
-        self.gguf_writer.add_expert_used_count(moe_topk[0])
+        if moe_topk is not None and isinstance(moe_topk, (list, tuple)) and len(moe_topk) > 0:
+            assert all(topk == moe_topk[0] for topk in moe_topk)
+            self.gguf_writer.add_expert_used_count(int(moe_topk[0]))
 
         moe_shared_expert = hparams["num_shared_expert"]
-        assert all(n == moe_shared_expert[0] for n in moe_shared_expert)
-        self.gguf_writer.add_expert_shared_count(moe_shared_expert[0])
+        if moe_shared_expert is not None and isinstance(moe_shared_expert, (list, tuple)) and len(moe_shared_expert) > 0:
+            assert all(n == moe_shared_expert[0] for n in moe_shared_expert)
+            self.gguf_writer.add_expert_shared_count(int(moe_shared_expert[0]))
 
         rope_scaling = hparams.get("rope_scaling", {})
         if rope_scaling.get("type") == "dynamic":
             alpha = rope_scaling.get("alpha", 1000)
             base = hparams.get("rope_theta", 10000.0)
-            dim = (hparams["hidden_size"] // hparams["num_attention_heads"])
-            scaled_base = base * (alpha ** (dim / (dim - 2)))
-            self.gguf_writer.add_rope_freq_base(scaled_base)
-            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
-            self.gguf_writer.add_rope_scaling_factor(1)
-            self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024)
-            self.gguf_writer.add_context_length(256 * 1024)
-            assert alpha == 1000 and base == 10000.0 and dim == 128 and self.hparams["max_position_embeddings"] in [32 * 1024, 256 * 1024], \
-                "Megrez dynamic RoPE scaling assumptions changed, please update the logic or context length manually"
+            hidden_size = hparams.get("hidden_size")
+            num_attention_heads = hparams.get("num_attention_heads")
+            max_position_embeddings = self.hparams.get("max_position_embeddings")
+            if None not in (hidden_size, num_attention_heads, max_position_embeddings):
+                dim = hidden_size // num_attention_heads
+                scaled_base = base * (alpha ** (dim / (dim - 2)))
+                self.gguf_writer.add_rope_freq_base(scaled_base)
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+                self.gguf_writer.add_rope_scaling_factor(1)
+                self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024)
+                self.gguf_writer.add_context_length(256 * 1024)
+                assert alpha == 1000 and base == 10000.0 and dim == 128 and max_position_embeddings in [32 * 1024, 256 * 1024], \
+                    "Megrez dynamic RoPE scaling assumptions changed, please update the logic or context length manually"
 
     _experts: list[dict[str, Tensor]] | None = None
 
@@ -9083,6 +9090,11 @@ class MegrezMoEModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+# ...existing code...
+
+@ModelBase.register("HunYuanMoEV1ForCausalLM")
+class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
 
     def set_vocab(self):
