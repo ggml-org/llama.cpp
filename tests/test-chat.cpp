@@ -168,7 +168,11 @@ static void assert_msg_equals(const common_chat_msg & expected, const common_cha
             assert_equals(expected_part.text, actual_part.text);
         }
     }
-    assert_equals(expected.reasoning_content, actual.reasoning_content);
+    if (ignore_whitespace_differences) {
+        assert_equals(string_strip(expected.reasoning_content), string_strip(actual.reasoning_content));
+    } else {
+        assert_equals(expected.reasoning_content, actual.reasoning_content);
+    }
     assert_equals(expected.tool_calls.size(), actual.tool_calls.size());
     for (size_t i = 0; i < expected.tool_calls.size(); i++) {
         const auto & expected_tool_call = expected.tool_calls[i];
@@ -246,6 +250,17 @@ struct delta_data {
     std::string        delta;
     common_chat_params params;
 };
+
+static common_chat_msg simple_assist_msg(const std::string & content, const std::string & reasoning_content = "", const std::string & tool_name = "", const std::string & arguments = "", const std::string & id = "") {
+    common_chat_msg msg;
+    msg.role = "assistant";
+    msg.content = content;
+    msg.reasoning_content = reasoning_content;
+    if (!tool_name.empty()) {
+        msg.tool_calls.push_back({ tool_name, arguments, id });
+    }
+    return msg;
+}
 
 static delta_data init_delta(const struct common_chat_templates * tmpls, const std::vector<std::string> & end_tokens,
                              const common_chat_msg & user_message,
@@ -407,6 +422,44 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
     }
 }
 
+/**
+ * Test if streaming=true is consistant with streaming=false for given partial parser
+ * Also test if there is any problem with partial message
+ */
+template <typename T>
+static void test_parser_with_streaming(const common_chat_msg & expected, const std::string & raw_message, T parse_msg) {
+    auto merged = simple_assist_msg("");
+    auto last_msg = parse_msg("");
+    for (size_t i = 1; i <= raw_message.size(); ++i) {
+        auto curr_msg = parse_msg(raw_message.substr(0, i));
+        if (curr_msg == simple_assist_msg("")) continue;
+        LOG_INF("Streaming msg: %s\n", common_chat_msgs_to_json_oaicompat<json>({curr_msg}).dump().c_str());
+        for (auto diff: common_chat_msg_diff::compute_diffs(last_msg, curr_msg)) {
+            LOG_INF("Streaming diff: %s\n", common_chat_msg_diff_to_json_oaicompat<json>(diff).dump().c_str());
+            if (!diff.reasoning_content_delta.empty()) {
+                merged.reasoning_content += diff.reasoning_content_delta;
+            }
+            if (!diff.content_delta.empty()) {
+                merged.content += diff.content_delta;
+            }
+            if (diff.tool_call_index != std::string::npos) {
+                if (!diff.tool_call_delta.name.empty()) {
+                    merged.tool_calls.push_back({diff.tool_call_delta.name, "", ""});
+                }
+                if (!diff.tool_call_delta.arguments.empty()) {
+                    GGML_ASSERT(!merged.tool_calls.empty());
+                    merged.tool_calls.back().arguments += diff.tool_call_delta.arguments;
+                }
+            }
+            LOG_INF("Streaming merged: %s\n", common_chat_msgs_to_json_oaicompat<json>({merged}).dump().c_str());
+        }
+        assert_msg_equals(curr_msg, merged, true);
+        last_msg = curr_msg;
+    }
+    assert_msg_equals(expected, parse_msg(raw_message), true);
+    assert_msg_equals(expected, merged, true);
+}
+
 const common_chat_msg message_user {
     "user",
     "Hey there!",
@@ -429,16 +482,7 @@ const common_chat_msg message_user_parts {
     /* .tool_name = */ "",
     /* .tool_call_id = */ "",
 };
-static common_chat_msg simple_assist_msg(const std::string & content, const std::string & reasoning_content = "", const std::string & tool_name = "", const std::string & arguments = "", const std::string & id = "") {
-    common_chat_msg msg;
-    msg.role = "assistant";
-    msg.content = content;
-    msg.reasoning_content = reasoning_content;
-    if (!tool_name.empty()) {
-        msg.tool_calls.push_back({ tool_name, arguments, id });
-    }
-    return msg;
-}
+
 const common_chat_msg message_assist                              = simple_assist_msg("Hello, world!\nWhat's up?");
 const common_chat_msg message_assist_empty                        = simple_assist_msg("");
 const common_chat_msg message_assist_thoughts_unparsed_deepseek   = simple_assist_msg("<think>I'm\nthinking</think>Hello, world!\nWhat's up?");
@@ -1869,14 +1913,14 @@ static void test_template_output_parsers() {
                 {COMMON_CHAT_FORMAT_SEED_OSS}));
 
         // Test partial parsing for incomplete tool call - don't actually add the call until parsing parameters is done
-        //assert_msg_equals(
-        //    simple_assist_msg("", ""),
-        //    common_chat_parse(
-        //        "<seed:tool_call>\n"
-        //        "<function=calculate_sum>\n"
-        //        "<parameter=numbers>[1,\n",
-        //        /* is_partial= */ true,
-        //        {COMMON_CHAT_FORMAT_SEED_OSS}));
+        assert_msg_equals(
+            simple_assist_msg("", "", "calculate_sum", "{\"numbers\":"),
+            common_chat_parse(
+                "<seed:tool_call>\n"
+                "<function=calculate_sum>\n"
+                "<parameter=numbers>[1,\n",
+                /* is_partial= */ true,
+                {COMMON_CHAT_FORMAT_SEED_OSS}));
 
         // Test incomplete reasoning tag
         assert_msg_equals(
@@ -2383,95 +2427,31 @@ Hey there!<|im_end|>
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
                 }));
 
-        // Test template generation for regular content
-        test_templates(tmpls.get(), end_tokens, message_assist, tools,
-                      "Hello, world!\nWhat's up?",
-                      /* expect_grammar_triggered= */ false);
-
-        // Test template generation for tool calls
-        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
-                      "<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>",
-                      /* expect_grammar_triggered= */ true,
-                      /* test_grammar_if_triggered= */ true,
-                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
-                      /* ignore_whitespace_differences= */ true
-        );
-
-        // Test template generation for tools with optional parameters
-        test_templates(tmpls.get(), end_tokens, message_assist_call_noopt, tools,
-                      "<minimax:tool_call>\n<invoke name=\"special_function_with_opt\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>",
-                      /* expect_grammar_triggered= */ true,
-                      /* test_grammar_if_triggered= */ true,
-                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
-                      /* ignore_whitespace_differences= */ true
-        );
-        test_templates(tmpls.get(), end_tokens, message_assist_call_withopt, tools,
-                      "<minimax:tool_call>\n<invoke name=\"special_function_with_opt\">\n<parameter name=\"arg1\">1</parameter>\n<parameter name=\"arg2\">2</parameter>\n</invoke>\n</minimax:tool_call>",
-                      /* expect_grammar_triggered= */ true,
-                      /* test_grammar_if_triggered= */ true,
-                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
-                      /* ignore_whitespace_differences= */ true
-        );
-    }
-
-    {
-        auto tmpls = read_templates("models/templates/MiniMax-M2.jinja");
-        std::vector<std::string> end_tokens{ "[e~[" };
-
-        assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
-
-        // Test parsing regular content
-        assert_msg_equals(message_assist,
-            common_chat_parse(
-                "Hello, world!\nWhat's up?",
-                /* is_partial= */ false,
-                {COMMON_CHAT_FORMAT_MINIMAX_M2}));
-
-        // Test parsing content with thinking
-        assert_msg_equals(message_assist_thoughts,
-            common_chat_parse(
-                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
-                /* is_partial= */ false,
-                {
-                    /* .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
-                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                }));
-
-        // Test parsing tool calls
-        assert_msg_equals(message_assist_call,
-            common_chat_parse(
-                "<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
-                /* is_partial= */ false,
-                {COMMON_CHAT_FORMAT_MINIMAX_M2}));
-
-        // Test parsing tool calls with thinking
-        assert_msg_equals(message_assist_call_thoughts,
-            common_chat_parse(
-                "<think>I'm\nthinking</think><minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
-                /* is_partial= */ false,
-                {
+        // Test streaming
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "<think>I'm\nthinking\n</think>Hello, world!\nWhat's up?\n<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
                     /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
-                }));
-
-        // Test tool calls with extra content
-        assert_msg_equals(message_assist_call_content,
-            common_chat_parse(
-                "<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>Hello, world!\nWhat's up?",
-                /* is_partial= */ false,
-                {COMMON_CHAT_FORMAT_MINIMAX_M2}
-            ));
-
-        // Test tool calls with extra content AND thinking
-        assert_msg_equals(message_assist_call_thoughts_content,
-            common_chat_parse(
-                "<think>I'm\nthinking</think><minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>Hello, world!\nWhat's up?",
-                /* is_partial= */ false,
-                {
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_unparsed,
+            "<think>I'm\nthinking</think>\n\n<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "<think>I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?\n\n<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>\n",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
                     /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
-                }));
+            }); });
+        test_parser_with_streaming(message_assist_call_withopt,
+            "<minimax:tool_call>\n<invoke name=\"special_function_with_opt\">\n<parameter name=\"arg1\">1</parameter>\n<parameter name=\"arg2\">2</parameter>\n</invoke>\n</minimax:tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
 
         // Test template generation for regular content
         test_templates(tmpls.get(), end_tokens, message_assist, tools,
@@ -2526,14 +2506,14 @@ Hey there!<|im_end|>
                 {
                     /* .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                }));
+                }), true);
 
         // Test parsing tool calls
         assert_msg_equals(message_assist_call,
             common_chat_parse(
                 "\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
                 /* is_partial= */ false,
-                {COMMON_CHAT_FORMAT_GLM_4_5}));
+                {COMMON_CHAT_FORMAT_GLM_4_5}), true);
 
         // Test parsing tool calls with thinking
         assert_msg_equals(message_assist_call_thoughts,
@@ -2543,7 +2523,7 @@ Hey there!<|im_end|>
                 {
                     /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
-                }));
+                }), true);
 
         // Test tool calls with extra content
         assert_msg_equals(message_assist_call_content,
@@ -2551,17 +2531,51 @@ Hey there!<|im_end|>
                 "\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>Hello, world!\nWhat's up?",
                 /* is_partial= */ false,
                 {COMMON_CHAT_FORMAT_GLM_4_5}
-            ));
+            ), true);
 
         // Test tool calls with extra content AND thinking
         assert_msg_equals(message_assist_call_thoughts_content,
             common_chat_parse(
-                "\n<think>I'm\nthinking</think>\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>Hello, world!\nWhat's up?",
+                "\n<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
                 /* is_partial= */ false,
                 {
                     /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
-                }));
+                }), true);
+
+        // Test streaming
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "\n<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_unparsed,
+            "\n<think>I'm\nthinking</think>\n\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+        test_parser_with_streaming(message_assist_call_withopt,
+            "\n<think></think>\n<tool_call>special_function_with_opt\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n<arg_key>arg2</arg_key>\n<arg_value>2</arg_value>\n</tool_call>\n",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+
+        // Test interleaved thinking
+        test_parser_with_streaming(simple_assist_msg("Hello, world!\n\nWhat's up?", "I'm\nthinkingThinking2", "special_function", "{\"arg1\": 1}"),
+            "\n<think>I'm\nthinking</think>Hello, world!\n<think>Thinking2</think>What's up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(simple_assist_msg("\n<think>I'm\nthinking</think>Hello, world!\n<think>Thinking2</think>What's up?", "", "special_function", "{\"arg1\": 1}"),
+            "\n<think>I'm\nthinking</think>Hello, world!\n<think>Thinking2</think>What's up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
 
         // Test template generation for regular content
         test_templates(tmpls.get(), end_tokens, message_assist, tools,

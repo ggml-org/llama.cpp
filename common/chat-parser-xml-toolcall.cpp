@@ -19,7 +19,18 @@ inline void sort_uniq(std::vector<T> &vec) {
     vec.erase(std::unique(vec.begin(), vec.end()), vec.end());
 }
 
-// make a GBNF that accept any strings except those containing any of the forbidden strings.
+template<typename T>
+inline bool all_space(const T &str) {
+    return std::all_of(str.begin(), str.end(), [](unsigned char ch) { return std::isspace(ch); });
+}
+
+/**
+ * make a GBNF that accept any strings except those containing any of the forbidden strings.
+ *
+ * Note: I'm planning to implement a more general grammar that constrains the model’s entire output.
+ * This work is still in progress and hasn’t been pushed yet, but it will require functionality to handle multiple strings at once.
+ * It is not a overdesign.
+ */
 std::string make_gbnf_excluding(std::vector<std::string> forbids) {
     constexpr auto charclass_escape = [](unsigned char c) -> std::string {
         if (c == '\\' || c == ']' || c == '^' || c == '-') {
@@ -49,7 +60,7 @@ std::string make_gbnf_excluding(std::vector<std::string> forbids) {
                    (unsigned char)forbids[j][depth] == c) {
                 ++j;
             }
-            children.push_back({c, {i,j}});
+            children.push_back({c, {i, j}});
             i = j;
         }
         std::vector<std::string> alts;
@@ -117,51 +128,7 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
     }
     GGML_ASSERT(!key_val_sep.empty());
 
-    constexpr auto encode_to_safe = [](const std::string &in) {
-        static const char hex[] = "0123456789abcdef";
-        std::string out;
-        out.reserve(in.size() * 4);
-        for (unsigned char uc : in) {
-            if (std::isalnum(uc) || uc == '-') {
-                out.push_back(static_cast<char>(uc));
-            } else {
-                out.push_back('_');
-                out.push_back(hex[(uc >> 4) & 0xF]);
-                out.push_back(hex[uc & 0xF]);
-                out.push_back('_');
-            }
-        }
-        return out;
-    };
-
     if (tools.is_array() && !tools.empty()) {
-        data.preserved_tokens.push_back(form.scope_start);
-        data.preserved_tokens.push_back(form.tool_start);
-        data.preserved_tokens.push_back(form.tool_sep);
-        data.preserved_tokens.push_back(form.key_start);
-        data.preserved_tokens.push_back(key_val_sep);
-        data.preserved_tokens.push_back(form.val_end);
-        data.preserved_tokens.push_back(form.tool_end);
-        data.preserved_tokens.push_back(form.scope_end);
-        for (auto &s : data.preserved_tokens) {
-            s.resize(std::distance(s.begin(), std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
-                return !std::isspace(ch);
-            }).base()));
-            size_t start = 0;
-            while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) {
-                ++start;
-            }
-            if (start != 0) {
-                s.erase(0, start);
-            }
-        }
-        data.preserved_tokens.erase(std::remove_if(
-                data.preserved_tokens.begin(),
-                data.preserved_tokens.end(),
-                [](const std::string &s) { return s.size() < 2; }
-        ), data.preserved_tokens.end());
-        sort_uniq(data.preserved_tokens);
-
         data.grammar = build_grammar([&](const common_grammar_builder &builder) {
             std::vector<std::string> tool_rules;
             for (const auto & tool : tools) {
@@ -179,7 +146,6 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                     continue;
                 }
                 std::string name = function.at("name");
-                std::string name_safe = encode_to_safe(name);
                 auto parameters = function.at("parameters");
                 builder.resolve_refs(parameters);
                 if (!parameters.contains("properties") || !parameters.at("properties").is_object()) {
@@ -212,10 +178,10 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                         if (value.contains("type") && value["type"].is_string() && value["type"] == "string") {
                             param_rules +=
                                     "( string-arg-val | " +
-                                    builder.add_schema(name_safe + "-arg-" + encode_to_safe(key), value) + " ) ";
+                                    builder.add_schema(name + "-arg-" + key, value) + " ) ";
                         } else {
                             param_rules +=
-                                    builder.add_schema(name_safe + "-arg-" + encode_to_safe(key), value) + " ";
+                                    builder.add_schema(name + "-arg-" + key, value) + " ";
                         }
                         param_rules += gbnf_format_literal(form.val_end) + " ";
                         if (!required) param_rules += ")? ";
@@ -227,7 +193,7 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                     quoted_name = gbnf_format_literal(name);
                     quoted_name = quoted_name.substr(1, quoted_name.size() - 2);
                 }
-                tool_rules.push_back(builder.add_rule(name_safe + "-call",
+                tool_rules.push_back(builder.add_rule(name + "-call",
                         gbnf_format_literal(form.tool_start) + " " +
                         gbnf_format_literal(quoted_name) + " " +
                         gbnf_format_literal(form.tool_sep) + " " +
@@ -257,9 +223,6 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
     GGML_ASSERT(!form.val_end.empty());
     GGML_ASSERT(!form.tool_end.empty());
 
-    constexpr auto all_space = [] (auto &str) {
-        return std::all_of(str.begin(), str.end(), [](unsigned char ch) { return std::isspace(ch); });
-    };
     // Helper to choose return false or throw error
     constexpr auto return_error = [](common_chat_msg_parser & builder, auto &start_pos, const bool &recovery) {
         LOG_DBG("Failed to parse XML-Style tool call at position: %s\n", gbnf_format_literal(builder.consume_rest().substr(0, 20)).c_str());
@@ -303,11 +266,12 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
     if (!all_space(form.scope_start) && !builder.try_consume_literal(form.scope_start)) return false;
     while (auto tc = builder.try_find_literal(form.tool_start)) {
         if (!all_space(tc->prelude)) {
-            LOG_DBG("Failed to parse XML-Style tool call: Expected %s, but found %s\n",
+            LOG_DBG("XML-Style tool call: Expected %s, but found %s, trying to match next pattern\n",
                     gbnf_format_literal(form.tool_start).c_str(),
                     gbnf_format_literal(tc->prelude).c_str()
             );
-            return return_error(builder, start_pos, recovery);
+            builder.move_to(tc->groups[0].begin - tc->prelude.size());
+            break;
         }
 
         // Find tool name
@@ -339,6 +303,14 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
 
         // Parse all arg_key/arg_value pairs
         while (auto tc = builder.try_find_literal(form.key_start)) {
+            if (!all_space(tc->prelude)) {
+                LOG_DBG("XML-Style tool call: Expected %s, but found %s, trying to match next pattern\n",
+                        gbnf_format_literal(form.key_start).c_str(),
+                        gbnf_format_literal(tc->prelude).c_str()
+                );
+                builder.move_to(tc->groups[0].begin - tc->prelude.size());
+                break;
+            }
             if (tc->groups[0].end - tc->groups[0].begin != form.key_start.size()) {
                 auto tool_call_arg = arguments.dump();
                 if (tool_call_arg.size() != 0 && tool_call_arg[tool_call_arg.size() - 1] == '}') {
@@ -346,13 +318,6 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                 }
                 builder.add_tool_call(function_name, "", tool_call_arg);
                 throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.key_start));
-            }
-            if (!all_space(tc->prelude)) {
-                LOG_DBG("Failed to parse XML-Style tool call: Expected %s, but found %s\n",
-                        gbnf_format_literal(form.key_start).c_str(),
-                        gbnf_format_literal(tc->prelude).c_str()
-                );
-                return return_error(builder, start_pos, recovery);
             }
 
             // Parse arg_key
@@ -371,10 +336,6 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
             // Parse arg_value
             if (form.key_val_sep2) {
                 if (auto tc = builder.try_find_literal(*form.key_val_sep2)) {
-                    if (tc->groups[0].end - tc->groups[0].begin != form.key_val_sep2->size()) {
-                        gen_partial_args([&](auto &&, auto &&needle) {arguments[key] = needle;});
-                        throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(*form.key_val_sep2));
-                    }
                     if (!all_space(tc->prelude)) {
                         LOG_DBG("Failed to parse XML-Style tool call: Unexcepted %s between %s and %s\n",
                                 gbnf_format_literal(tc->prelude).c_str(),
@@ -382,6 +343,10 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                                 gbnf_format_literal(*form.key_val_sep2).c_str()
                         );
                         return return_error(builder, start_pos, false);
+                    }
+                    if (tc->groups[0].end - tc->groups[0].begin != form.key_val_sep2->size()) {
+                        gen_partial_args([&](auto &&, auto &&needle) {arguments[key] = needle;});
+                        throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(*form.key_val_sep2));
                     }
                 } else {
                     gen_partial_args([&](auto &&, auto &&needle) {arguments[key] = needle;});
@@ -493,6 +458,7 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
 
 /**
  * Parse XML-Style tool call for given xml_tool_call_format. Return false for invalid syntax and get the position untouched.
+ * May cause std::runtime_error if there is invalid syntax because partial valid tool call is already sent out to client.
  * form.scope_start, form.tool_sep and form.scope_end can be empty.
  */
 bool common_chat_msg_parser::try_consume_xml_tool_calls(const struct xml_tool_call_format & form) {
@@ -523,18 +489,6 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         if (l != 0) l += 2;
         str.erase(l, r - l);
         return l;
-    };
-    // Handle unclosed </think> from content
-    constexpr auto filter_unclosed_think = [erase_spaces](auto &content, auto &&builder, const std::string &end_think) {
-        auto &syntax = std::forward<decltype(builder)>(builder).syntax();
-        if (syntax.reasoning_format == COMMON_REASONING_FORMAT_NONE || syntax.reasoning_in_content) return;
-        if (auto pos = content.rfind(end_think); pos != std::string::npos) {
-            // delete all </think> token
-            while (pos != std::string::npos) {
-                pos = erase_spaces(content, pos, pos + end_think.size() - 1);
-                pos = content.rfind(end_think, pos);
-            }
-        }
     };
     // Escape string literal to regex that match the literal
     constexpr auto escape_regex = [](const std::string &s) {
@@ -580,9 +534,41 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         }
         return out;
     };
+    constexpr auto trim_suffix = [](std::string &content, std::initializer_list<std::string_view> list) {
+        auto best_match = content.size();
+        for (auto pattern: list) {
+            if (pattern.size() == 0) continue;
+            for (auto match_idx = content.size() - std::min(pattern.size(), content.size()); content.size() > match_idx; match_idx++) {
+                auto match_len = content.size() - match_idx;
+                if (content.compare(match_idx, match_len, pattern.data(), match_len) == 0 && best_match > match_idx) {
+                    best_match = match_idx;
+                }
+            }
+        }
+        if (content.size() > best_match) {
+            content.erase(best_match);
+        }
+    };
+    const auto trim_potential_partial_word = [&start_think, &end_think, &form, trim_suffix](std::string &content) {
+        return trim_suffix(content, {
+            start_think, end_think, form.scope_start, form.tool_start, form.tool_sep, form.key_start, form.key_val_sep,
+            form.key_val_sep2 ? form.key_val_sep2->c_str() : "", form.val_end, form.tool_end, form.scope_end
+        });
+    };
 
     const common_regex tool_call_start_regex(escape_regex(form.scope_start) + "\\s*" + escape_regex(form.tool_start));
     LOG_DBG("Regex for tool start: %s\n", (escape_regex(form.scope_start) + "\\s*" + escape_regex(form.tool_start)).c_str());
+
+    // Trim leading spaces without affecting keyword matching
+    static const common_regex spaces_regex("\\s*");
+    {
+        auto tc = builder.consume_regex(spaces_regex);
+        auto spaces = builder.str(tc.groups[0]);
+        auto s1 = spaces.size();
+        trim_potential_partial_word(spaces);
+        auto s2 = spaces.size();
+        builder.move_to(builder.pos() - (s1 - s2));
+    }
 
     // Parse content
     bool reasoning_unclosed = builder.syntax().thinking_forced_open;
@@ -615,6 +601,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
                 }
                 continue;
             } else {
+                reasoning_unclosed = false;
                 std::string reasoning_content;
                 if (pos == std::string::npos) {
                     reasoning_content = std::move(content);
@@ -622,32 +609,41 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
                     reasoning_content = content.substr(0, pos);
                     content.erase(0, pos + end_think.size());
                 }
-                if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
-                    if (builder.result().content.size() != 0) {
-                        builder.add_content("\n\n");
+                if (builder.pos() == builder.input().size() && all_space(content)) {
+                    rstrip(reasoning_content);
+                    trim_potential_partial_word(reasoning_content);
+                    rstrip(reasoning_content);
+                    if (reasoning_content.empty()) {
+                        rstrip(unclosed_reasoning_content);
+                        trim_potential_partial_word(unclosed_reasoning_content);
+                        rstrip(unclosed_reasoning_content);
+                        if (unclosed_reasoning_content.empty()) continue;
                     }
+                }
+                if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
                     builder.add_content(start_think);
                     builder.add_content(unclosed_reasoning_content);
                     builder.add_content(reasoning_content);
-                    if (builder.pos() != builder.input().size() || std::any_of(content.begin(), content.end(), [](unsigned char c) { return !std::isspace(c); }))
+                    if (builder.pos() != builder.input().size() || !all_space(content))
                         builder.add_content(end_think);
                 } else {
                     builder.add_reasoning_content(unclosed_reasoning_content);
                     builder.add_reasoning_content(reasoning_content);
                 }
                 unclosed_reasoning_content.clear();
-                reasoning_unclosed = false;
             }
         }
 
         // Handle multiple think block
         bool toolcall_in_think = false;
-        for (auto think_start = content.rfind(start_think); think_start != std::string::npos; think_start = content.rfind(start_think, think_start - 1)) {
+        for (auto think_start = content.find(start_think); think_start != std::string::npos; think_start = content.find(start_think, think_start)) {
             if (auto think_end = content.find(end_think, think_start + start_think.size()); think_end != std::string::npos) {
                 if (builder.syntax().reasoning_format != COMMON_REASONING_FORMAT_NONE && !builder.syntax().reasoning_in_content) {
                     auto reasoning_content = content.substr(think_start + start_think.size(), think_end - think_start - start_think.size());
                     builder.add_reasoning_content(reasoning_content);
                     think_start = erase_spaces(content, think_start, think_end + end_think.size() - 1);
+                } else {
+                    think_start = think_end + end_think.size() - 1;
                 }
             } else {
                 // This <tool_call> start is in thinking block, skip this tool call
@@ -657,22 +653,34 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
                 content.resize(think_start);
                 toolcall_in_think = true;
             }
-            if (think_start == 0) break;
         }
-        rstrip(content);
 
-        // Handle unclosed </think> token
-        filter_unclosed_think(content, builder, end_think);
+        if (builder.syntax().reasoning_format != COMMON_REASONING_FORMAT_NONE && !builder.syntax().reasoning_in_content) {
+            rstrip(content);
+            // Handle unclosed </think> token from content: delete all </think> token
+            if (auto pos = content.rfind(end_think); pos != std::string::npos) {
+                while (pos != std::string::npos) {
+                    pos = erase_spaces(content, pos, pos + end_think.size() - 1);
+                    pos = content.rfind(end_think, pos);
+                }
+            }
+            // Strip if needed
+            if (content.size() > 0 && std::isspace(static_cast<unsigned char>(content[0]))) {
+                content = string_strip(content);
+            }
+        }
 
-        // Strip if needed
-        if (content.size() > 0 && std::isspace(static_cast<unsigned char>(content[0]))) {
-            content = string_strip(content);
+        // remove potential partial suffix
+        if (content.size() > 0 && builder.pos() == builder.input().size() && unclosed_reasoning_content.empty()) {
+            rstrip(content);
+            trim_potential_partial_word(content);
+            rstrip(content);
         }
 
         // Add content
         if (content.size() != 0) {
             // If there are multiple content blocks
-            if (builder.result().content.size() != 0) {
+            if (builder.syntax().reasoning_format != COMMON_REASONING_FORMAT_NONE && !builder.syntax().reasoning_in_content && builder.result().content.size() != 0) {
                 builder.add_content("\n\n");
             }
             builder.add_content(content);
@@ -692,7 +700,16 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         }
 
         builder.move_to(tc->groups[0].begin);
-        if (!parse_xml_tool_calls(builder, form)) {
+        if (builder.try_consume_xml_tool_calls(form)) {
+            auto end_of_tool = builder.pos();
+            builder.consume_spaces();
+            if (builder.pos() != builder.input().size()) {
+                builder.move_to(end_of_tool);
+                if (!builder.result().content.empty()) {
+                    builder.add_content("\n\n");
+                }
+            }
+        } else {
             static const common_regex next_char_regex(".");
             auto c = builder.str(builder.consume_regex(next_char_regex).groups[0]);
             rstrip(c);
