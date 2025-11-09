@@ -8980,7 +8980,7 @@ class MegrezMoEModel(TextModel):
         vocab_size = self.hparams["vocab_size"]
         assert tokenizer.vocab_size == vocab_size
         special_tokens = getattr(tokenizer, "special_tokens", {})
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items() if id_ is not None}
         tokens: list[str] = []
         toktypes: list[int] = []
         for i in range(vocab_size):
@@ -8989,7 +8989,10 @@ class MegrezMoEModel(TextModel):
                 toktypes.append(gguf.TokenType.UNUSED)
             else:
                 token = reverse_vocab[i]
-                tokens.append(token)
+                if token is None:
+                    tokens.append(f"[PAD{i}]")
+                else:
+                    tokens.append(str(token))
                 if i in special_tokens.values():
                     toktypes.append(gguf.TokenType.CONTROL)
                 else:
@@ -9010,20 +9013,24 @@ class MegrezMoEModel(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        self.gguf_writer.add_expert_count(hparams["num_experts"])
-        self.gguf_writer.add_expert_shared_feed_forward_length(hparams["intermediate_size"])
+        num_experts = hparams.get("num_experts")
+        if num_experts is not None:
+            self.gguf_writer.add_expert_count(int(num_experts))
+        intermediate_size = hparams.get("intermediate_size")
+        if intermediate_size is not None:
+            self.gguf_writer.add_expert_shared_feed_forward_length(int(intermediate_size))
 
-        moe_intermediate_size = hparams["moe_intermediate_size"]
+        moe_intermediate_size = hparams.get("moe_intermediate_size")
         if moe_intermediate_size is not None and isinstance(moe_intermediate_size, (list, tuple)) and len(moe_intermediate_size) > 0:
             assert all(n == moe_intermediate_size[0] for n in moe_intermediate_size)
             self.gguf_writer.add_expert_feed_forward_length(int(moe_intermediate_size[0]))
 
-        moe_topk = hparams["moe_topk"]
+        moe_topk = hparams.get("moe_topk")
         if moe_topk is not None and isinstance(moe_topk, (list, tuple)) and len(moe_topk) > 0:
             assert all(topk == moe_topk[0] for topk in moe_topk)
             self.gguf_writer.add_expert_used_count(int(moe_topk[0]))
 
-        moe_shared_expert = hparams["num_shared_expert"]
+        moe_shared_expert = hparams.get("num_shared_expert")
         if moe_shared_expert is not None and isinstance(moe_shared_expert, (list, tuple)) and len(moe_shared_expert) > 0:
             assert all(n == moe_shared_expert[0] for n in moe_shared_expert)
             self.gguf_writer.add_expert_shared_count(int(moe_shared_expert[0]))
@@ -9059,8 +9066,11 @@ class MegrezMoEModel(TextModel):
                 return []
 
         if name.find("mlp.experts") != -1:
-            n_experts = self.hparams["num_experts"]
-            assert bid is not None
+            n_experts = self.hparams.get("num_experts")
+            if n_experts is None or bid is None:
+                return []
+            n_experts = int(n_experts)
+            bid = int(bid)
 
             if self._experts is None:
                 self._experts = [{} for _ in range(self.block_count)]
