@@ -1272,6 +1272,10 @@ int main(int argc, char ** argv) {
             if ((n_past > 0 || waiting_for_first_input) && is_interacting) {
                 LOG_DBG("waiting for user input\n");
 
+                // Reset idle timer when we start waiting for user input
+                // This ensures we only count time spent waiting, not time spent generating
+                update_activity_time();
+
                 if (params.conversation_mode) {
                     LOG("\n> ");
                 }
