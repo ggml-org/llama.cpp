@@ -695,8 +695,7 @@ static inline void ggml_sycl_op_abs(ggml_backend_sycl_context & ctx, ggml_tensor
     const size_t  nbd1 = dst->nb[1];
     const size_t  nbd2 = dst->nb[2];
     const size_t  nbd3 = dst->nb[3];
- 
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [=](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
             const int num_blocks = ceil_div(k_elements, 256);
             stream->parallel_for(
