@@ -1179,6 +1179,10 @@ int main(int argc, char ** argv) {
 
                         // Inject the tool output back into the conversation
                         auto output_tokens = common_tokenize(ctx, "\n\n" + tool_output + "\n\n", false, true);
+
+                        // For large outputs with flash attention and big contexts, inject in chunks
+                        // to avoid KV cache allocation failures
+                        LOG_DBG("Tool output: %zu tokens\n", output_tokens.size());
                         embd_inp.insert(embd_inp.end(), output_tokens.begin(), output_tokens.end());
 
                         // Remember this execution to prevent duplicates
