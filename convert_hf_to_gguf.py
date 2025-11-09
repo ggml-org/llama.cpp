@@ -9036,15 +9036,19 @@ class MegrezMoEModel(TextModel):
             num_attention_heads = hparams.get("num_attention_heads")
             max_position_embeddings = self.hparams.get("max_position_embeddings")
             if None not in (hidden_size, num_attention_heads, max_position_embeddings):
-                dim = hidden_size // num_attention_heads
-                scaled_base = base * (alpha ** (dim / (dim - 2)))
-                self.gguf_writer.add_rope_freq_base(scaled_base)
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
-                self.gguf_writer.add_rope_scaling_factor(1)
-                self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024)
-                self.gguf_writer.add_context_length(256 * 1024)
-                assert alpha == 1000 and base == 10000.0 and dim == 128 and max_position_embeddings in [32 * 1024, 256 * 1024], \
-                    "Megrez dynamic RoPE scaling assumptions changed, please update the logic or context length manually"
+                try:
+                    dim = int(hidden_size) // int(num_attention_heads)
+                except (TypeError, ValueError):
+                    dim = None
+                if dim is not None and dim > 2:
+                    scaled_base = base * (alpha ** (dim / (dim - 2)))
+                    self.gguf_writer.add_rope_freq_base(scaled_base)
+                    self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+                    self.gguf_writer.add_rope_scaling_factor(1)
+                    self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024)
+                    self.gguf_writer.add_context_length(256 * 1024)
+                    assert alpha == 1000 and base == 10000.0 and dim == 128 and max_position_embeddings in [32 * 1024, 256 * 1024], \
+                        "Megrez dynamic RoPE scaling assumptions changed, please update the logic or context length manually"
 
     _experts: list[dict[str, Tensor]] | None = None
 
@@ -9091,7 +9095,6 @@ class MegrezMoEModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
-# ...existing code...
 
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
 class HunYuanMoEModel(TextModel):
