@@ -653,8 +653,8 @@ int main(void)
 
     int k = 0;
 
-    for (auto c : configs_sdxl_1024){
-    // for (auto c : configs){
+    // for (auto c : configs_sdxl_1024){
+    for (auto c : configs){
         test_model model;
         load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c),
             std::get<3>(c), std::get<4>(c), std::get<5>(c), true);
@@ -671,7 +671,7 @@ int main(void)
         // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
 
 
-        int iterations = 20;
+        int iterations = 0;
 
         double run_time0;
         std::vector<float> im2col_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
