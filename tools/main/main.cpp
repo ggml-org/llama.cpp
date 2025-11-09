@@ -50,6 +50,9 @@ static bool need_insert_eot = false;
 static bool g_save_state_next = false;
 static std::string g_state_save_path = "";
 
+// Tool execution tracking to prevent duplicate executions
+static std::string g_last_executed_tool_signature = "";
+
 static void print_usage(int argc, char ** argv) {
     (void) argc;
 
@@ -195,16 +198,46 @@ static std::string execute_tool(const std::string & tools_dir, const std::string
 }
 #endif
 
-// Check if the recent output contains <tools-help/>
+// Check if a position in text is inside <think>...</think> tags
+static bool is_inside_think_tags(const std::string & text, size_t pos) {
+    // Find the most recent <think> before pos
+    size_t think_start = text.rfind("<think>", pos);
+    if (think_start == std::string::npos) {
+        return false; // No <think> tag before this position
+    }
+
+    // Check if there's a </think> between think_start and pos
+    size_t think_end = text.find("</think>", think_start);
+    if (think_end == std::string::npos || think_end > pos) {
+        return true; // We're inside an unclosed or currently open think block
+    }
+
+    return false; // The think block was closed before pos
+}
+
+// Check if the recent output contains <tools-help/> (outside of think tags)
 static bool check_for_tools_help(const std::string & text) {
-    return text.find("<tools-help/>") != std::string::npos;
+    size_t pos = text.find("<tools-help/>");
+    if (pos == std::string::npos) {
+        return false;
+    }
+
+    // Make sure it's not inside think tags
+    return !is_inside_think_tags(text, pos);
 }
 
 // Check if the recent output contains <tool-launch>...</tool-launch> and extract tool name and args
-static bool check_for_tool_launch(const std::string & text, std::string & tool_name, std::string & args) {
-    size_t start = text.find("<tool-launch>");
+// Returns false if inside think tags or if already processed
+static bool check_for_tool_launch(const std::string & text, std::string & tool_name, std::string & args, size_t search_from = 0) {
+    size_t start = text.find("<tool-launch>", search_from);
     if (start == std::string::npos) {
         return false;
+    }
+
+    // Check if this tag is inside think tags
+    if (is_inside_think_tags(text, start)) {
+        // Try to find the next one after this
+        return check_for_tool_launch(text, tool_name, args, start + 1);
     }
 
     size_t end = text.find("</tool-launch>", start);
@@ -1103,20 +1136,31 @@ int main(int argc, char ** argv) {
                 // Check for <tool-launch>...</tool-launch> request only if we didn't handle tools-help
                 std::string tool_name, tool_args;
                 if (check_for_tool_launch(last_output, tool_name, tool_args)) {
-                    LOG_DBG("Detected <tool-launch> request: tool=%s, args=%s\n", tool_name.c_str(), tool_args.c_str());
+                    // Create signature to check for duplicate execution
+                    std::string tool_signature = tool_name + "|" + tool_args;
 
-                    // Execute the tool
-                    std::string tool_output = execute_tool("tools", tool_name, tool_args);
+                    // Only execute if this is a new tool call (not the same as last execution)
+                    if (tool_signature != g_last_executed_tool_signature) {
+                        LOG_DBG("Detected <tool-launch> request: tool=%s, args=%s\n", tool_name.c_str(), tool_args.c_str());
 
-                    LOG("%s", tool_output.c_str());
-                    LOG("[End of Tool Output]\n\n");
+                        // Execute the tool
+                        std::string tool_output = execute_tool("tools", tool_name, tool_args);
 
-                    // Inject the tool output back into the conversation
-                    auto output_tokens = common_tokenize(ctx, "\n\n" + tool_output + "\n\n", false, true);
-                    embd_inp.insert(embd_inp.end(), output_tokens.begin(), output_tokens.end());
+                        LOG("%s", tool_output.c_str());
+                        LOG("[End of Tool Output]\n\n");
 
-                    // Continue generation after injecting output
-                    is_interacting = false;
+                        // Inject the tool output back into the conversation
+                        auto output_tokens = common_tokenize(ctx, "\n\n" + tool_output + "\n\n", false, true);
+                        embd_inp.insert(embd_inp.end(), output_tokens.begin(), output_tokens.end());
+
+                        // Remember this execution to prevent duplicates
+                        g_last_executed_tool_signature = tool_signature;
+
+                        // Continue generation after injecting output
+                        is_interacting = false;
+                    } else {
+                        LOG_DBG("Skipping duplicate tool execution: tool=%s, args=%s\n", tool_name.c_str(), tool_args.c_str());
+                    }
                 }
             }
 
@@ -1376,6 +1420,9 @@ int main(int argc, char ** argv) {
 
                     // reset assistant message
                     assistant_ss.str("");
+
+                    // Reset tool execution tracking on new user input
+                    g_last_executed_tool_signature = "";
 
                     n_remain -= line_inp.size();
                     LOG_DBG("n_remain: %d\n", n_remain);
