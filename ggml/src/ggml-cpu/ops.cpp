@@ -7084,7 +7084,11 @@ static void ggml_compute_forward_conv_2d_dw_cwhn(
     const int64_t row_end = MIN(row_start + rows_per_thread, rows_total);
 
 #ifdef GGML_SIMD
-    const int64_t pkg_size = GGML_F32_EPR;
+    #if defined(__ARM_FEATURE_SVE)
+        const int64_t pkg_size = svcntw();
+    #else
+        const int64_t pkg_size = GGML_F32_EPR;
+    #endif
     const int64_t pkg_count = c / pkg_size;
     const int64_t c_pkg_end = pkg_count * pkg_size;
 #else
@@ -7507,9 +7511,16 @@ static void ggml_compute_forward_upscale_f32(
     float sf1 = (float)ne1/src0->ne[1];
     float sf2 = (float)ne2/src0->ne[2];
     float sf3 = (float)ne3/src0->ne[3];
+    float pixel_offset = 0.5f;
 
     const int32_t mode_flags = ggml_get_op_params_i32(dst, 0);
     const ggml_scale_mode mode = (ggml_scale_mode) (mode_flags & 0xFF);
+
+    if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
+        pixel_offset = 0.0f;
+        sf0 = ne0 > 1 && ne00 > 1 ? (float)(ne0 - 1) / (ne00 - 1) : sf0;
+        sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
+    }
 
     if (mode == GGML_SCALE_MODE_NEAREST) {
         for (int64_t i3 = 0; i3 < ne3; i3++) {
@@ -7530,13 +7541,6 @@ static void ggml_compute_forward_upscale_f32(
             }
         }
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
-        float pixel_offset = 0.5f;
-        if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
-            pixel_offset = 0.0f;
-            sf0 = ne0 > 1 && ne00 > 1 ? (float)(ne0 - 1) / (ne00 - 1) : sf0;
-            sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
-        }
-
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             const int64_t i03 = i3 / sf3;
             for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
@@ -7570,6 +7574,51 @@ static void ggml_compute_forward_upscale_f32(
                         const float d = *(const float *)((const char *)src0->data + x1*nb00 + y1*nb01 + i02*nb02 + i03*nb03);
 
                         const float val = a*(1 - dx)*(1 - dy) + b*dx*(1 - dy) + c*(1 - dx)*dy + d*dx*dy;
+
+                        float * y_dst = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+                        *y_dst = val;
+                    }
+                }
+            }
+        }
+    } else if (mode == GGML_SCALE_MODE_BICUBIC) {
+        // https://en.wikipedia.org/wiki/Bicubic_interpolation#Bicubic_convolution_algorithm
+        const float a = -0.75f; // use alpha = -0.75 (same as PyTorch)
+        auto weight1 = [a](float x) { return ((a + 2) * x - (a + 3)) * x * x + 1; };
+        auto weight2 = [a](float x) { return ((a * x - 5 * a) * x + 8 * a) * x - 4 * a; };
+        auto bicubic = [=](float p0, float p1, float p2, float p3, float x) {
+            const float w0 = weight2(x + 1);
+            const float w1 = weight1(x + 0);
+            const float w2 = weight1(1 - x);
+            const float w3 = weight2(2 - x);
+            return p0*w0 + p1*w1 + p2*w2 + p3*w3;
+        };
+
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            const int64_t i03 = i3 / sf3;
+            for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+                const int64_t i02 = i2 / sf2;
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    const float y = ((float)i1 + pixel_offset) / sf1 - pixel_offset;
+                    const int64_t y0 = (int64_t)floorf(y);
+                    const float dy = y - (float)y0;
+
+                    for (int64_t i0 = 0; i0 < ne0; i0++) {
+                        const float x = ((float)i0 + pixel_offset) / sf0 - pixel_offset;
+                        const int64_t x0 = (int64_t)floorf(x);
+                        const float dx = x - (float)x0;
+
+                        auto p = [=](int64_t x_off, int64_t y_off) -> float {
+                            int64_t i00 = std::max(int64_t(0), std::min(x0 + x_off, ne00 - 1));
+                            int64_t i01 = std::max(int64_t(0), std::min(y0 + y_off, ne01 - 1));
+                            return *(const float *)((const char *)src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
+                        };
+
+                        const float val = bicubic(
+                            bicubic(p(-1,-1), p(0,-1), p(1,-1), p(2,-1), dx),
+                            bicubic(p(-1, 0), p(0, 0), p(1, 0), p(2, 0), dx),
+                            bicubic(p(-1, 1), p(0, 1), p(1, 1), p(2, 1), dx),
+                            bicubic(p(-1, 2), p(0, 2), p(1, 2), p(2, 2), dx), dy);
 
                         float * y_dst = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
                         *y_dst = val;

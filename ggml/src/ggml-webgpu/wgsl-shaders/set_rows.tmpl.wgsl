@@ -1,13 +1,38 @@
+#define(VARIANTS)
+
+[
+  {
+    "SHADER_SUFFIX": "f16_vec",
+    "REPLS": {
+      "TYPE" : "vec4<f32>",
+      "DST_TYPE": "vec4<f16>",
+      "VEC_SIZE": 4
+    }
+  },
+  {
+    "SHADER_SUFFIX": "f16",
+    "REPLS": {
+      "TYPE" : "f32",
+      "DST_TYPE": "f16",
+      "VEC_SIZE": 1
+    }
+  }
+]
+
+#end(VARIANTS)
+
+#define(SHADER)
+
 enable f16;
 
 @group(0) @binding(0)
-var<storage, read_write> src: array<f32>;
+var<storage, read_write> src: array<{{TYPE}}>;
 
 @group(0) @binding(1)
 var<storage, read_write> idx: array<u32>;
 
 @group(0) @binding(2)
-var<storage, read_write> dst: array<f16>;
+var<storage, read_write> dst: array<{{DST_TYPE}}>;
 
 @group(0) @binding(3)
 var<storage, read_write> error: atomic<u32>;
@@ -47,10 +72,14 @@ var<uniform> params: Params;
 override wg_size: u32;
 @compute @workgroup_size(wg_size)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.n_rows * params.ne2 * params.ne3) {
+    if (gid.x >= (params.ne3 * params.ne2 * params.n_rows * params.ne0) / {{VEC_SIZE}}) {
         return;
     }
-    var i = gid.x;
+
+    // getting the row from gid
+    let elems_per_row = params.ne0 / {{VEC_SIZE}};
+    var i = gid.x / elems_per_row;
+
     let i_src3 = i / (params.ne2 * params.n_rows);
 
     i = i % (params.ne2 * params.n_rows);
@@ -75,7 +104,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_dst_row = params.offset_dst + idx_high_val * params.stride_dst1 + i_src2 * params.stride_dst2 + i_src3 * params.stride_dst3;
     let i_src_row = params.offset_src + i_src1 * params.stride_src1 + i_src2 * params.stride_src2 + i_src3 * params.stride_src3;
 
-    for (var i: u32 = 0; i < params.ne0; i++) {
-      dst[i_dst_row + i] = f16(src[i_src_row + i]);
-    }
+    let col_idx = (gid.x % elems_per_row);
+    dst[i_dst_row/{{VEC_SIZE}} + col_idx] = {{DST_TYPE}}(src[i_src_row/{{VEC_SIZE}} + col_idx]);
 }
+
+#end(SHADER)
+
