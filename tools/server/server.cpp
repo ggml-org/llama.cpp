@@ -1690,6 +1690,9 @@ struct server_slot {
         bool res = prompt_cache.load(prompt, tokens, ctx, id);
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
+
+            llama_memory_seq_rm(llama_get_memory(ctx), id, -1, -1);
+            prompt.tokens.clear();
         }
     }
 
@@ -2823,6 +2826,8 @@ struct server_context {
                 send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
+
+            SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl).c_str());
         }
 
         // initialize draft batch
@@ -3076,7 +3081,7 @@ struct server_context {
             res->progress.total     = slot.task->n_tokens();
             res->progress.cache     = slot.n_prompt_tokens_cache;
             res->progress.processed = slot.prompt.tokens.size();
-            res->progress.time_ms   = (ggml_time_us() - slot.t_start_process_prompt / 1000);
+            res->progress.time_ms   = (ggml_time_us() - slot.t_start_process_prompt) / 1000;
         } else {
             res->content = tkn.text_to_send;
             res->tokens  = { tkn.tok };
