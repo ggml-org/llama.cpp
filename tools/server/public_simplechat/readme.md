@@ -725,6 +725,8 @@ sliding window based drop off or even before they kick in, this can help in many
     * follow the openai format/template wrt these mixed content messages.
   * Usage: specify a mmproj file directly or through -hf, additionally had to set --batch-size to 8k
     and ubatch-size to 2k wrt gemma3-4b-it
+  * when showing chat instantiate img elements to show image_urls.
+    * limit horizontally to max width and vertically to 20% of the height
 
 * SimpleChat class now allows extra fields to be specified while adding, in a generic way using a
   object/literal object or equivalent.
