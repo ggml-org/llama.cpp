@@ -403,14 +403,13 @@ class optional_parser : public parser_base {
 
 class until_parser : public parser_base {
     std::string delimiter_;
-    bool include_spaces_;
     parser parser_;
 
     friend class gbnf_visitor;
 
   public:
     until_parser(const std::string & delimiter, bool include_spaces, int id, parser_builder & builder)
-        : parser_base(id), delimiter_(delimiter), include_spaces_(include_spaces) {
+        : parser_base(id), delimiter_(delimiter) {
         if (include_spaces) {
             auto ws = builder.zero_or_more(builder.char_class("[ \\t\\n\\r]"));
             parser_ = builder.zero_or_more(builder.negate(ws + builder.literal(delimiter)) + builder.any());
