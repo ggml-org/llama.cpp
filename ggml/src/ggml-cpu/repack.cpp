@@ -1630,10 +1630,11 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         const char * src0_ptr = (const char *) src0->data + i02 * nb02;
         const char * src1_ptr = (const char *) params->wdata + (i11 + i12 * ne11) * src1_col_stride;
         char *       dst_ptr  = ((char *) dst->data + (i1 * nb1 + i2 * nb2));
-        GGML_ASSERT(src1_ptr >= params->wdata && src1_ptr < ((const char *)params->wdata + params->wsize));
 
         const int64_t nrows = src1_end - src1_start;
         const int64_t ncols = src0_end - src0_start;
+
+        GGML_ASSERT(src1_ptr + src1_col_stride * nrows <= (const char *) params->wdata + params->wsize);
 
         // If there are more than three rows in src1, use gemm; otherwise, use gemv.
         if (nrows > 3) {
