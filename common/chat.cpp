@@ -1773,7 +1773,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
                 // If thinking_forced_open, then we capture the </think> tag in the grammar,
                 // (important for required tool choice) and in the trigger's first capture (decides what is sent to the grammar)
                 std::string(data.thinking_forced_open ? "[\\s\\S]*?(</think>\\s*)" : "(?:<think>[\\s\\S]*?</think>\\s*)?") +
-                    "(<|tool_calls_section_begin|>)[\\s\\S]*"
+                    "(<\\|tool_calls_section_begin\\|>)[\\s\\S]*"
             });
             data.preserved_tokens = {
                 "<think>",
@@ -1871,11 +1871,11 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
 }
 
 static void common_chat_parse_kimi_k2_content(common_chat_msg_parser & builder) {
-    static const common_regex function_regex("(?:<|tool_call_begin|>)?([^\\n<]+)(?:<|tool_call_argument_begin|>)");
+    static const common_regex function_regex("(?:<\\|tool_call_begin\\|>)?([^\\n<]+)(?:<\\|tool_call_argument_begin\\|>)");
 
-    static const common_regex close_regex("(?:[\\s]*)?<|tool_call_end|>");
-    static const common_regex tool_calls_begin("(?:<|tool_calls_section_begin|>)");
-    static const common_regex tool_calls_end("<|tool_calls_section_end|>");
+    static const common_regex close_regex("(?:[\\s]*)?<\\|tool_call_end\\|>");
+    static const common_regex tool_calls_begin("(?:<\\|tool_calls_section_begin\\|>)");
+    static const common_regex tool_calls_end("<\\|tool_calls_section_end\\|>");
 
     if (!builder.syntax().parse_tool_calls) {
         LOG_DBG("%s: not parse_tool_calls\n", __func__);
