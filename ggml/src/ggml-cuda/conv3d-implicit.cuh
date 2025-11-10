@@ -65,6 +65,8 @@ unsigned int NUM_THREADS>
 __device__ __forceinline__ void tileMemcpySwizzleB(
     const half* src,
     half* dst,
+    const unsigned int start_k,
+    const unsigned int end_k,
     const unsigned int src_stride,
     param_t param
 ){
@@ -90,7 +92,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
     unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
     const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
-    const unsigned int kidx = thread_col*8;
+    const unsigned int kidx = start_k + thread_col*8;
     const int4 curIdx = inputIndices<0>(kidx, param);
     const int curC = curIdx.x;
     const int curT = curIdx.y;
@@ -104,7 +106,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
         // TODO: move some checks outside of loop?
-        if (thread_row + blockIdx.x * TILE_ROWS < param.k && curR < param.r && curS < param.s && curT < param.t && curC < param.c){
+        if (thread_row + blockIdx.x * TILE_ROWS < param.k && curR < param.r && curS < param.s && curT < param.t && curC < param.c && kidx < end_k){
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
             dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
@@ -127,7 +129,8 @@ unsigned int NUM_THREADS>
 __device__ __forceinline__ void tileMemcpySwizzleA(
     const half* src,
     half* dst,
-    // const unsigned int src_stride,
+    const unsigned int start_k,
+    const unsigned int end_k,
     const unsigned int inNOffset,
     const unsigned int inDepthOffset,
     const unsigned int inChannelOffset,
@@ -157,7 +160,7 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
     unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
     const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
 
-    const unsigned int kidx = thread_col*8;
+    const unsigned int kidx = start_k+thread_col*8;
     const int4 curIdx = inputIndices<0>(kidx, param);
 
 #pragma unroll
@@ -177,7 +180,7 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-        if (curH >= 0 && curW >= 0 && curD >= 0 && curW < param.w && curH < param.h && curD < param.d && curC < param.c){
+        if (curH >= 0 && curW >= 0 && curD >= 0 && curW < param.w && curH < param.h && curD < param.d && curC < param.c && kidx < end_k){
             int inOffsetTmp = curD * inDepthOffset + curH * inChannelOffset + curW * param.c + curC;
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[n * inNOffset + inOffsetTmp])[0];
         } else{
@@ -203,6 +206,8 @@ __device__ __forceinline__ void tileMemcpyLoadA(
     float4 (&dst_reg)[ELEMENTS_PER_THREAD],
     // const unsigned int src_stride,
     const unsigned int block_k,
+    const unsigned int start_k,
+    const unsigned int end_k,
     const unsigned int inNOffset,
     const unsigned int inDepthOffset,
     const unsigned int inChannelOffset,
@@ -227,7 +232,7 @@ __device__ __forceinline__ void tileMemcpyLoadA(
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
 
-    const unsigned int kidx = block_k + thread_col*8;
+    const unsigned int kidx = start_k + block_k + thread_col*8;
     const int4 curIdx = inputIndices<0>(kidx, param);
 
     #pragma unroll
@@ -243,7 +248,8 @@ __device__ __forceinline__ void tileMemcpyLoadA(
         const int curH = posh_ori + curIdx.z * param.dilation1; // input h
         const int curW = posw_ori + curIdx.w * param.dilation0; // input w
         const int curC = curIdx.x;
-        if (curH >= 0 && curW >= 0 && curD >= 0 && curW < param.w && curH < param.h && curD < param.d && curC < param.c){
+        if (curH >= 0 && curW >= 0 && curD >= 0 && curW < param.w && curH < param.h && curD < param.d
+            && curC < param.c && kidx < end_k){
             int inOffsetTmp = curD * inDepthOffset + curH * inChannelOffset + curW * param.c + curC;
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[n * inNOffset + inOffsetTmp])[0];
         } else{
@@ -270,6 +276,8 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     const half* src,
     float4 (&dst_reg)[ELEMENTS_PER_THREAD],
     const unsigned int block_k,
+    const unsigned int start_k,
+    const unsigned int end_k,
     const unsigned int src_stride,
     param_t param
 ){
@@ -292,7 +300,7 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
 
-    const unsigned int kidx = block_k + thread_col*8;
+    const unsigned int kidx = start_k + block_k + thread_col*8;
     const int4 curIdx = inputIndices<0>(kidx, param);
     const int curC = curIdx.x;
     const int curT = curIdx.y;
@@ -300,9 +308,10 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     const int curS = curIdx.w;
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
-        const unsigned int src_index = thread_row * src_stride + block_k + thread_col * 8;
+        const unsigned int src_index = thread_row * src_stride + kidx;
         // TODO : move some checks outside of the loop
-        if (thread_row + blockIdx.x * TILE_ROWS < param.k && curR < param.r && curS < param.s && curT < param.t && curC < param.c){
+        if (thread_row + blockIdx.x * TILE_ROWS < param.k && curR < param.r && curS < param.s && curT < param.t
+            && curC < param.c && kidx < end_k){
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
             dst_reg[i] = make_float4(0.f, 0.f, 0.f, 0.f);
