@@ -14,8 +14,12 @@ A minimal Android app frontend is included to showcase the binding’s core func
 2.	**Obtain a `TierDetection` or `InferenceEngine`** instance through the high-level facade APIs.
 3.	**Send a raw user prompt** for automatic template formatting, prefill, and decoding. Then collect the generated tokens in a Kotlin `Flow`.
 
-For a production-ready experience that leverages advanced features such as system prompts and benchmarks, check out [Arm AI Chat](https://play.google.com/...) on Google Play.
-This project is made possible through a collaborative effort by Arm's CT-ML, CE-ML and STE groups.
+For a production-ready experience that leverages advanced features such as system prompts and benchmarks, check out [Arm AI Chat](https://play.google.com/store/apps/details?id=com.arm.aichat) on Google Play.
+This project is made possible through a collaborative effort by Arm's **CT-ML**, **CE-ML** and **STE** groups:
+
+| ![Home screen](./android/arm-ai-chat-home-screen.png)  | ![System prompt](./android/system-prompt-setup.png)  | !["Haiku"](./android/chat-with-system-prompt-haiku.png)  |
+|:------------------------------------------------------:|:----------------------------------------------------:|:--------------------------------------------------------:|
+|                      Home screen                       |                    System prompt                     |                         "Haiku"                          |
 
 ## Build on Android using Termux
 
