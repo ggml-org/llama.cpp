@@ -45,6 +45,8 @@ control over tool calling and response submitting.
 For GenAi/LLM models which support reasoning, the thinking of the model will be shown to the end user as the
 model is running through its reasoning.
 
+For GenAi/LLM models with vision support, one can specify image file and get the ai to respond wrt the same.
+
 NOTE: As all genai/llm web service apis may or may not expose the model context length directly, and also
 as using ai out of band for additional parallel work may not be efficient given the loading of current systems
 by genai/llm models, so client logic doesnt provide any adaptive culling of old messages nor of replacing them
@@ -110,6 +112,11 @@ remember to
 * other builtin tool / function calls like datetime, calculator, javascript runner, DataStore
   dont require the simpleproxy.py helper.
 
+### for vision models
+
+* remember to specify a mmproj file directly or by using -hf to fetch the model and its mmproj gguf
+  from huggingface.
+* additionally specify a large enough -batch-size (ex 8k) and -ubatch-size (ex 2k)
 
 
 ### using the front end
@@ -158,7 +165,10 @@ Once inside
     * this allows for the subsequent user chatting to be driven by the new system prompt set above.
 
 * Enter your query and either press enter or click on the submit button.
-  If you want to insert enter (\n) as part of your chat/query to ai model, use shift+enter.
+  * If you want to insert enter (\n) as part of your chat/query to ai model, use shift+enter.
+  * If the tool response has been placed into user input textarea, its color is changed to help user
+    identify the same easily.
+  * allow user to specify a image file, for vision models.
 
 * Wait for the logic to communicate with the server and get the response.
   * the user is not allowed to enter any fresh query during this time.
@@ -704,6 +714,20 @@ sliding window based drop off or even before they kick in, this can help in many
   * css - when user input textarea is in tool result mode (ie wrt TOOL.TEMP role), change the background
     color to match the tool role chat message block color, so that user can easily know that the input
     area is being used for submitting tool response or user response, at any given moment in time.
+
+* Vision
+  * Add image_url field. Allow user to load image, which is inturn stored as a dataURL in image_url.
+  * when user presses submit with a message, if there is some content (image for now) in dataURL,
+    then initialise image_url field with same.
+  * when generating chat messages for ai server network handshake, create the mixed content type of
+    content field which includes both the text (from content field) and image (from image_url field)
+    ie if a image_url is found wrt a image.
+    * follow the openai format/template wrt these mixed content messages.
+  * Usage: specify a mmproj file directly or through -hf, additionally had to set --batch-size to 8k
+    and ubatch-size to 2k wrt gemma3-4b-it
+
+* SimpleChat class now allows extra fields to be specified while adding, in a generic way using a
+  object/literal object or equivalent.
 
 
 #### ToDo

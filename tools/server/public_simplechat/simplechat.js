@@ -570,6 +570,7 @@ class SimpleChat {
                     tMixed.push({"type": "text", "text": tContent})
                 }
                 tMixed.push({"type": "image_url", "image_url": {"url": tmsg.ns.image_url}})
+                //tMixed.push({"type": "image", "image": tmsg.ns.image_url})
                 // @ts-ignore
                 tmsg.ns.content = tMixed
                 tmsg.ns_delete("image_url")
@@ -587,8 +588,9 @@ class SimpleChat {
      * NOTE: A new copy is created and added into xchat.
      * Also update iLastSys system prompt index tracker
      * @param {ChatMessageEx} chatMsg
+     * @param {Object<string,any>|undefined} extra - optional additional fieldName=Value pairs to be added, if any
      */
-    add(chatMsg) {
+    add(chatMsg, extra=undefined) {
         if (this.xchat.length > 0) {
             let lastIndex = this.xchat.length - 1;
             if (this.xchat[lastIndex].ns.role == Roles.ToolTemp) {
@@ -599,6 +601,11 @@ class SimpleChat {
         this.xchat.push(ChatMessageEx.newFrom(chatMsg));
         if (chatMsg.ns.role == Roles.System) {
             this.iLastSys = this.xchat.length - 1;
+        }
+        if (extra) {
+            for (const key in extra) {
+                this.xchat[this.xchat.length-1].ns_set_extra(key, extra[key])
+            }
         }
         this.save();
         return true;
@@ -956,7 +963,8 @@ class MultiChatUI {
 
         // Save any placeholder set by default like through html, to restore where needed
         this.elInUser.dataset.placeholder = this.elInUser.placeholder
-        this.elInFileX = ui.el_creatediv_inputfile('file', 'file', '', ()=>{
+        // Setup Image loading button and flow
+        this.elInFileX = ui.el_creatediv_inputfile('image', 'image', '', ()=>{
             let f0 = this.elInFileX.el.files?.item(0);
             if (!f0) {
                 return
@@ -1341,7 +1349,12 @@ class MultiChatUI {
                 this.elInUser.placeholder = "dont forget to enter a message, before submitting to ai"
                 return;
             }
-            chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content)))
+            let image = undefined
+            if (this.me.dataURLs.length > 0) {
+                image = /** @type{string} */(this.me.dataURLs[0])
+                this.me.dataURLs.pop()
+            }
+            chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
         }
         if (this.elInUser.dataset.placeholder) {
             this.elInUser.placeholder = this.elInUser.dataset.placeholder;
