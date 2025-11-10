@@ -13,6 +13,7 @@ class parser_base {
 
   public:
     parser_base(int id) : id_(id) {}
+    virtual ~parser_base() = default;
 
     virtual parser_type type() const = 0;
     virtual parser_result parse(parser_context & ctx, size_t start = 0) = 0;
