@@ -75,6 +75,10 @@
     word-break: break-word;
     hyphens: auto;
 }
+.chat-message-img {
+    max-width: fit-content;
+    max-height: 20vh;
+}
 
 
 .gridx2 {

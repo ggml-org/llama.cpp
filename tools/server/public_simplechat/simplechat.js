@@ -1130,6 +1130,13 @@ class MultiChatUI {
                 entry.classList.add(`chat-message-${name}`)
             }
         }
+        // Handle Image
+        if (msg.ns.image_url) {
+            let img = document.createElement('img')
+            img.classList.add('chat-message-img')
+            img.src = msg.ns.image_url
+            secContents?.append(img)
+        }
         // Handle tool call ui, if reqd
         let bTC = false
         let bAuto = false
