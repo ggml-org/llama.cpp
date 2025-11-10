@@ -379,6 +379,7 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      # Reduce false pass/failure on CI
       # - name: ccache
       #   uses: ggml-org/ccache-action@v1.2.16
       #   with:
@@ -412,11 +413,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-24-cmake-vulkan-deb
-          evict-old-files: 1d
+      # Reduce false pass/failure on CI
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: ubuntu-24-cmake-vulkan
+      #     evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -502,11 +504,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-24-cmake-webgpu
-          evict-old-files: 1d
+      # Reduce false pass/failure on CI
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: ubuntu-24-cmake-webgpu
+      #     evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -578,11 +581,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev rocwmma-dev
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: ubuntu-22-cmake-hip
-          evict-old-files: 1d
+      # Reduce false pass/failure on CI
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.16
+      #   with:
+      #     key: ubuntu-22-cmake-hip
+      #     evict-old-files: 1d
 
       - name: Build with native CMake HIP support
         id: cmake_build
