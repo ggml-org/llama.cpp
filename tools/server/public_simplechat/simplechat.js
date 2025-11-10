@@ -964,7 +964,7 @@ class MultiChatUI {
         // Save any placeholder set by default like through html, to restore where needed
         this.elInUser.dataset.placeholder = this.elInUser.placeholder
         // Setup Image loading button and flow
-        this.elInFileX = ui.el_creatediv_inputfile('image', 'image', '', ()=>{
+        this.elInFileX = ui.el_creatediv_inputfileimgbtn('image', 'image', '', ()=>{
             let f0 = this.elInFileX.el.files?.item(0);
             if (!f0) {
                 return
@@ -972,11 +972,14 @@ class MultiChatUI {
             console.log(`DBUG:InFileX:${f0?.name}`)
             let fR = new FileReader()
             fR.onload = () => {
-                this.me.dataURLs.push(fR.result)
-                console.log(`INFO:InFileX:Loaded file ${f0.name}`)
+                if ((fR.result) && (typeof(fR.result) == 'string')) {
+                    this.me.dataURLs.push(fR.result)
+                    this.elInFileX.elImg.src = fR.result
+                    console.log(`INFO:InFileX:Loaded file ${f0.name}`)
+                }
             }
             fR.readAsDataURL(f0)
-        }, "")
+        }, 'user-in')
         this.elBtnUser.parentElement?.appendChild(this.elInFileX.elB)
 
         this.validate_element(this.elInSystem, "system-in");
@@ -1362,6 +1365,7 @@ class MultiChatUI {
                 this.me.dataURLs.pop()
             }
             chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
+            this.elInFileX.elImg.src = ""
         }
         if (this.elInUser.dataset.placeholder) {
             this.elInUser.placeholder = this.elInUser.dataset.placeholder;
