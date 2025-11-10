@@ -5676,18 +5676,20 @@ static void ggml_compute_forward_rope_flt(
                 T * dst_data  = (T *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1);
 
                 switch (mode) {
-                  case GGML_ROPE_TYPE_NORMAL:
-                    rotate_pairs<T>(n_dims, 1, cache, src, dst_data, 1);
-                    break;
-                  case GGML_ROPE_TYPE_NEOX:
-                  case GGML_ROPE_TYPE_MROPE:
-                  case GGML_ROPE_TYPE_IMROPE:
-                    rotate_pairs<T>(n_dims, n_dims/2, cache, src, dst_data);
-                    break;
-                  case GGML_ROPE_TYPE_VISION:
-                    rotate_pairs<T>(ne0, n_dims, cache, src, dst_data);
-                    break;
-                  default:
+                    case GGML_ROPE_TYPE_NORMAL:
+                        rotate_pairs<T>(n_dims, 1, cache, src, dst_data, 1);
+                        break;
+                    case GGML_ROPE_TYPE_NEOX:
+                    case GGML_ROPE_TYPE_MROPE:
+                    case GGML_ROPE_TYPE_IMROPE:
+                        rotate_pairs<T>(n_dims, n_dims/2, cache, src, dst_data);
+                        break;
+                    case GGML_ROPE_TYPE_VISION:
+                        rotate_pairs<T>(ne0, n_dims, cache, src, dst_data);
+                        break;
+                    default:
+                        GGML_ABORT("rope type not supported");
+                }
                     GGML_ABORT("rope type not supported");
                 }
 
