@@ -169,21 +169,21 @@ llm_build_megrez_moe::llm_build_megrez_moe(const llama_model & model, const llm_
             ggml_tensor * gate_logits = build_lora_mm(model.layers[il].ffn_gate_inp, pre_gate_hidden);
             cb(gate_logits, "ffn_moe_logits", il);
 
+            // Megrez-MoE expert sharing: every 3 consecutive layers share experts
+            // Layers 1,2,3 use experts from layer 1; layers 4,5,6 from layer 4, etc.
+            const int expert_layer_stride = 3;
+            const int expert_layer        = ((il - 1) / expert_layer_stride) * expert_layer_stride + 1;
+
             // Use standard build_moe_ffn but with pre-computed gate logits
-            ggml_tensor * moe_out = build_moe_ffn(cur,
-                        model.layers[il].ffn_gate_inp,
-                        model.layers[((il - 1) / (3) * (3)) + 1].ffn_up_exps,
-                        model.layers[((il - 1) / (3) * (3)) + 1].ffn_gate_exps,
-                        model.layers[((il - 1) / (3) * (3)) + 1].ffn_down_exps,
-                        model.layers[il].ffn_exp_probs_b,
-                        n_expert, n_expert_used,
-                        LLM_FFN_SILU,
-                        true,  // norm_w
-                        false, // scale_w
-                        1.0f,  // w_scale
-                        LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID,
-                        il,
-                        gate_logits); // Use pre-computed logits from pre_gate_hidden
+            ggml_tensor * moe_out =
+                build_moe_ffn(cur, model.layers[il].ffn_gate_inp, model.layers[expert_layer].ffn_up_exps,
+                              model.layers[expert_layer].ffn_gate_exps, model.layers[expert_layer].ffn_down_exps,
+                              model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU,
+                              true,          // norm_w
+                              false,         // scale_w
+                              1.0f,          // w_scale
+                              LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID, il,
+                              gate_logits);  // Use pre-computed logits from pre_gate_hidden
             cb(moe_out, "ffn_moe_out", il);
 
             pre_gate_hidden = cur;

@@ -3392,16 +3392,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                             // Only layers 1, 4, 7, 10, 13, 16, 19, 22, 25, 28 have actual expert tensors
                             // Pattern: (i-1) % 3 == 0 for i > 0
-                            if ((i - 1) % 3 == 0) {
-                                // MoE branch - use the expert-specific FF size from hparams
-                                const int64_t n_ff_exp = hparams.n_ff_exp;
-
-                                layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
-                                layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
-                                layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
-                            }
+                            // Other layers (2,3,5,6...) don't have these tensors in the GGUF file - they share experts
+                            const int64_t n_ff_exp = hparams.n_ff_exp;
+                            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i),
+                                                                { n_embd, n_ff_exp, n_expert }, TENSOR_NOT_REQUIRED);
+                            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i),
+                                                                { n_ff_exp, n_embd, n_expert }, TENSOR_NOT_REQUIRED);
+                            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i),
+                                                                { n_embd, n_ff_exp, n_expert }, TENSOR_NOT_REQUIRED);
                             // Note: layers that share experts (2, 3, 5, 6, etc.) only have gate_inp and shared expert
-                            // They will reference the regular experts from their corresponding "full" layer during inference
+                            // These create_tensor calls will return NULL for layers without expert tensors
                         }
                     }
                 } break;
