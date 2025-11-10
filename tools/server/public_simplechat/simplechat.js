@@ -972,9 +972,8 @@ class MultiChatUI {
             console.log(`DBUG:InFileX:${f0?.name}`)
             let fR = new FileReader()
             fR.onload = () => {
-                if ((fR.result) && (typeof(fR.result) == 'string')) {
-                    this.me.dataURLs.push(fR.result)
-                    this.elInFileX.elImg.src = fR.result
+                if (fR.result) {
+                    this.dataurl_plus_add(fR.result)
                     console.log(`INFO:InFileX:Loaded file ${f0.name}`)
                 }
             }
@@ -1034,9 +1033,31 @@ class MultiChatUI {
         }
     }
 
+    /**
+     * Add a dataUrl, as well as show Image.
+     * @param {string | ArrayBuffer | null} dataUrl
+     */
+    dataurl_plus_add(dataUrl) {
+        if (typeof(dataUrl) == 'string') {
+            //this.me.dataURLs.push(dataUrl)
+            this.me.dataURLs[0] = dataUrl
+            this.elInFileX.elImg.src = dataUrl
+        }
+    }
+
+    /**
+     * Get the stored dataUrl
+     */
+    dataurl_get() {
+        //this.me.dataURLs.pop()
+        return /** @type{string} */(this.me.dataURLs[0])
+    }
+
+    /**
+     * Clear dataUrls, as well as clear Image.
+     */
     dataurl_plus_clear() {
         this.elInFileX.elImg.src = "";
-        //this.me.dataURLs.pop()
         this.me.dataURLs.length = 0;
     }
 
@@ -1368,7 +1389,7 @@ class MultiChatUI {
             try {
                 let image = undefined
                 if (this.me.dataURLs.length > 0) {
-                    image = /** @type{string} */(this.me.dataURLs[0])
+                    image = this.dataurl_get()
                 }
                 chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
             } catch (err) {
