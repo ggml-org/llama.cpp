@@ -727,6 +727,9 @@ sliding window based drop off or even before they kick in, this can help in many
     and ubatch-size to 2k wrt gemma3-4b-it
   * when showing chat instantiate img elements to show image_urls.
     * limit horizontally to max width and vertically to 20% of the height
+  * show any image loaded by the user, in the corresponding image button
+  * consolidate dataurl handling into a bunch of helper functions.
+  * trap quota errors wrt localStorage etal
 
 * SimpleChat class now allows extra fields to be specified while adding, in a generic way using a
   object/literal object or equivalent.
@@ -736,7 +739,7 @@ sliding window based drop off or even before they kick in, this can help in many
 
 Is the tool call promise land trap deep enough, need to think through and explore around this once later.
 
-Handle multimodal handshaking with ai models.
+Handle multimodal handshaking with ai models [WIP].
 
 Add fetch_rss and may be different document formats processing related tool calling, in turn through
 the simpleproxy.py if and where needed.
@@ -751,6 +754,9 @@ Save used config entries along with the auto saved chat sessions and inturn give
 same when saved chat is loaded.
 
 MAYBE make the settings in general chat session specific, rather than the current global config flow.
+
+Use indexedDB instead of localStorage for saving chat sessions, provided it is allocated more storage
+space by browsers.
 
 
 ### Debuging the handshake and beyond
