@@ -1178,7 +1178,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
             }
         }
     }
-#elif defined(AMD_WMMA_AVAILABLE)
+#elif defined(AMD_WMMA_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
     typedef tile<16,  4, int> tile_A;
     typedef tile<16,  4, int> tile_B;
     typedef tile<16, 16, int> tile_C;
@@ -1500,7 +1500,7 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
             }
         }
     }
-#elif defined(AMD_WMMA_AVAILABLE)
+#elif defined(AMD_WMMA_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
 
     typedef tile<16,  4, int> tile_A;
     typedef tile<16,  4, int> tile_B;
@@ -2313,7 +2313,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
             }
         }
     }
-#elif defined(AMD_WMMA_AVAILABLE)
+#elif defined(AMD_WMMA_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
     typedef tile<16,  4, int> tile_A;
     typedef tile<16,  4, int> tile_B;
     typedef tile<16, 16, int> tile_C;

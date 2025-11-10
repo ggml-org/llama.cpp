@@ -897,7 +897,7 @@ static __device__ __forceinline__ void mma(
         GGML_UNUSED(A);
         GGML_UNUSED(B);
         NO_DEVICE_CODE;
-#endif // AMD_MFMA_AVAILABLE
+#endif 
     }
 }
 
