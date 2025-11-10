@@ -299,7 +299,7 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(640,640,52,76,3,3),
         // std::make_tuple(640,640,104,152,3,3),
         // std::make_tuple(960,320,104,152,3,3),
-        std::make_tuple(1280,1280,26,38,3,3),
+        // std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1920,640,32,32,3,3)
         // std::make_tuple(1280,1280,16,16,3,3),
         // std::make_tuple(320,640,32,32,3,3),
@@ -317,7 +317,7 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(1920,1280,26,38,3,3),
         // std::make_tuple(2560,1280,26,38,3,3),
         // std::make_tuple(320,1280,26,38,3,3),
-        // std::make_tuple(512,512,104,152,3,3),
+        std::make_tuple(512,512,104,152,3,3),
         // std::make_tuple(512,512,208,304,3,3),
         // std::make_tuple(512,256,416,608,3,3),
         // std::make_tuple(256,128,832,1216,3,3),
@@ -714,7 +714,7 @@ int main(void)
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
         // for(int i = 0; i < 26*38; i++) {
-        // // for(int i = 0; i < conv2d_data.size(); i++) {
+        // for(int i = 0; i < conv2d_data.size(); i++) {
         //     float diff = fabs(im2col_data[i] - conv2d_data[i]);
         //     // if(diff > 0.5) {
         //           printf("(%7.3f, %7.3f, %.2f, %d) \n",
