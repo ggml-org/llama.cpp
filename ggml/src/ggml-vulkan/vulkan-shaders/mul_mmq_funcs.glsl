@@ -313,20 +313,27 @@ void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
     }
 }
 
-ACC_TYPE mmq_dot_product(const uint ib_a) {
-    int32_t sum_d = 0;
-    int32_t sum_m = 0;
+ACC_TYPE_VEC2 mmq_dot_product(const uint ib_a) {
+    i32vec2 sum_d = i32vec2(0);
+    i32vec2 sum_m = i32vec2(0);
 
     [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
-        const uint8_t scale = cache_a[ib_a].scales[iqs / 4];
-        const int32_t scale_m = int32_t(scale >> 4) * 0x01010101; // Duplicate 8-bit value across 32-bits.
-        const int32_t qs_a = int32_t((cache_a[ib_a].qs[iqs / 4] >> ((iqs % 4) * 2)) & 0x03030303);
+        const u8vec2 scale = u8vec2(cache_a[ib_a    ].scales[iqs / 4],
+                                    cache_a[ib_a + 1].scales[iqs / 4]);
+        const i32vec2 scale_m = i32vec2(int32_t(scale.x >> 4) * 0x01010101,
+                                        int32_t(scale.y >> 4) * 0x01010101); // Duplicate 8-bit value across 32-bits.
+        const i32vec2 qs_a = i32vec2((cache_a[ib_a    ].qs[iqs / 4] >> ((iqs % 4) * 2)) & 0x03030303,
+                                     (cache_a[ib_a + 1].qs[iqs / 4] >> ((iqs % 4) * 2)) & 0x03030303);
 
-        sum_d += dotPacked4x8EXT(qs_a, cache_b.qs[iqs]) * (scale & 0xF);
-        sum_m += dotPacked4x8EXT(scale_m, cache_b.qs[iqs]);
+        sum_d.x += dotPacked4x8EXT(qs_a.x, cache_b.qs[iqs]) * (scale.x & 0xF);
+        sum_d.y += dotPacked4x8EXT(qs_a.y, cache_b.qs[iqs]) * (scale.y & 0xF);
+
+        sum_m.x += dotPacked4x8EXT(scale_m.x, cache_b.qs[iqs]);
+        sum_m.y += dotPacked4x8EXT(scale_m.y, cache_b.qs[iqs]);
     }
 
-    return mul_q8_1(sum_d, sum_m, cache_a[ib_a].dm, cache_b.ds, 1);
+    return ACC_TYPE_VEC2(mul_q8_1(sum_d.x, sum_m.x, cache_a[ib_a    ].dm, cache_b.ds, 1),
+                         mul_q8_1(sum_d.y, sum_m.y, cache_a[ib_a + 1].dm, cache_b.ds, 1));
 }
 #endif // MMQ_SHMEM
 #endif
