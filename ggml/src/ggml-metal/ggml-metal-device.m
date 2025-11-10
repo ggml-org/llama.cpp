@@ -564,8 +564,10 @@ ggml_metal_device_t ggml_metal_device_init(void) {
             // TODO: try to update the tensor API kernels to at least match the simdgroup performance
             if (getenv("GGML_METAL_TENSOR_ENABLE") == NULL &&
                 ![[dev->mtl_device name] containsString:@"M5"] &&
-                ![[dev->mtl_device name] containsString:@"M6"]) {
-                GGML_LOG_WARN("%s: tensor API disabled for pre-M5 device\n", __func__);
+                ![[dev->mtl_device name] containsString:@"M6"] &&
+                ![[dev->mtl_device name] containsString:@"A19"] &&
+                ![[dev->mtl_device name] containsString:@"A20"]) {
+                GGML_LOG_WARN("%s: tensor API disabled for pre-M5 and pre-A19 devices\n", __func__);
                 dev->props.has_tensor = false;
             }
 
