@@ -79,6 +79,10 @@
     max-width: fit-content;
     max-height: 20vh;
 }
+.user-in-img {
+    max-width: 20vmin;
+    max-height: 20vmin;
+}
 
 
 .gridx2 {

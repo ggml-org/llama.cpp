@@ -48,8 +48,9 @@ export function el_children_config_class(elBase, idSelected, classSelected, clas
  * @param {(this: HTMLButtonElement, ev: MouseEvent) => any} callback
  * @param {string | undefined} name
  * @param {string | undefined} innerText
+ * @param {string | undefined} innerHTML
  */
-export function el_create_button(id, callback, name=undefined, innerText=undefined) {
+export function el_create_button(id, callback, name=undefined, innerText=undefined, innerHTML=undefined) {
     if (!name) {
         name = id;
     }
@@ -59,7 +60,11 @@ export function el_create_button(id, callback, name=undefined, innerText=undefin
     let btn = document.createElement("button");
     btn.id = id;
     btn.name = name;
-    btn.innerText = innerText;
+    if (innerHTML) {
+        btn.innerHTML = innerHTML;
+    } else {
+        btn.innerText = innerText;
+    }
     btn.addEventListener("click", callback);
     return btn;
 }
@@ -231,7 +236,6 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
     return { div: div, el: el };
 }
 
-
 /**
  * Create a div wrapped input of type file,
  * which hides input and shows a button which chains to underlying file type input.
@@ -241,14 +245,32 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * @param {(arg0: any) => void} cb
  * @param {string} className
  */
-export function el_creatediv_inputfile(id, label, defaultValue, cb, className) {
+export function el_creatediv_inputfilebtn(id, label, defaultValue, cb, className) {
     let elX = el_creatediv_input(id, label, "file", defaultValue, cb, className)
     elX.el.hidden = true
     let idB = `${id}-button`
     let elB = el_create_button(idB, (mev) => {
         elX.el.click()
-    }, idB, label)
+    }, idB, label, `<p>${label}</p>`)
     return { div: elX.div, el: elX.el, elB: elB };
+}
+
+
+/**
+ * Create a div wrapped input of type file,
+ * which hides input and shows a image button which chains to underlying file type input.
+ * @param {string} id
+ * @param {string} label
+ * @param {any} defaultValue
+ * @param {(arg0: any) => void} cb
+ * @param {string} className
+ */
+export function el_creatediv_inputfileimgbtn(id, label, defaultValue, cb, className) {
+    let elX = el_creatediv_inputfilebtn(id, label, defaultValue, cb, className);
+    let elImg = document.createElement('img')
+    elImg.classList.add(`${className}-img`)
+    elX.elB.appendChild(elImg)
+    return { div: elX.div, el: elX.el, elB: elX.elB, elImg: elImg };
 }
 
 
