@@ -149,16 +149,13 @@ namespace ggml_cuda_mma {
                 return -1;
             }
         }
-#elif defined(AMD_WMMA_AVAILABLE)
+#elif defined(AMD_WMMA_AVAILABLE) //adjusted the mapping for RDNA 4 
 
         static constexpr int ne = I * J / 32;
         T x[ne] = {0};
 
         static __device__ __forceinline__ int get_i(const int l) {
-            if constexpr (I == 64 && J == 2) { // Special tile size to load <16, 4> as <16, 8>
-                //return threadIdx.x % 16;
-                return 2 * (threadIdx.x % 16);
-            } else if constexpr (I == 16 && J == 8) {
+            if constexpr (I == 16 && J == 8) {
                 return threadIdx.x % 16;
             } else if constexpr (I == 32 && J == 4) {
                 return threadIdx.x % 32;
@@ -172,10 +169,7 @@ namespace ggml_cuda_mma {
         }
 
         static __device__ __forceinline__ int get_j(const int l) {
-            if constexpr (I == 64 && J == 2) { // Special tile size to load <16, 4> as <16, 8>
-                // return (2 * ((threadIdx.x / 16) % 2) + l);
-                return (4 * ((threadIdx.x / 16) % 2) + l);
-            } else if constexpr (I == 16 && J == 8) {
+            if constexpr (I == 16 && J == 8) {
                 return 2 * (threadIdx.x / 16) + l;
             } else if constexpr (I == 32 && J == 4) {
                 return 2 * (threadIdx.x / 32) + l;
@@ -842,7 +836,7 @@ static __device__ __forceinline__ void mma(
         GGML_UNUSED(A);
         GGML_UNUSED(B);
         NO_DEVICE_CODE;
-#endif // AMD_MFMA_AVAILABLE
+#endif 
     }
 }
 
