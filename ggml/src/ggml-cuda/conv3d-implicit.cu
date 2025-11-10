@@ -1082,7 +1082,6 @@ static void conv3d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
                cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
         dim3 gridDim(BlocksN, BlocksM);
         dim3 blockDim(ThreadsN, ThreadsM);
-
         conv3d_implicit_kernel<float, BM_dim, BN_dim, BK_dim,
             WM_dim, WN_dim, WK_dim, 0, NumThreads>
             <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_D, P);
