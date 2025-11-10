@@ -67,8 +67,8 @@ llm_build_ernie4_5::llm_build_ernie4_5(const llama_model & model, const llm_grap
         }
         if (il == n_layer - 1) {
             // skip computing output for unused tokens
-            cur                       = ggml_get_rows(ctx0, cur, inp_out_ids);
-            inpSA                     = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
+            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
