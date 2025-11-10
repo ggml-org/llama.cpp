@@ -2254,6 +2254,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
+        {"-tgs"},
+        string_format("is the text generation separated across the different sequences (default: %s)", params.is_tg_separate ? "true" : "false"),
+        [](common_params & params) {
+            params.is_tg_separate = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
+    add_opt(common_arg(
         {"-npp"}, "n0,n1,...",
         "number of prompt tokens",
         [](common_params & params, const std::string & value) {
