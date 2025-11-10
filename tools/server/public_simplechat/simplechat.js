@@ -1270,7 +1270,7 @@ class MultiChatUI {
                 return;
             }
             this.handle_user_submit(this.curChatId, this.me.chatProps.apiEP).catch((/** @type{Error} */reason)=>{
-                let msg = `ERRR:SimpleChat\nMCUI:HandleUserSubmit:${this.curChatId}\n${reason.name}:${reason.message}`;
+                let msg = `ERRR:SimpleChat\nMCUI:HandleUserSubmit:${this.curChatId}\n${reason.name}:${reason.message}\n${reason.cause?reason.cause:""}`;
                 console.error(msg.replace("\n", ":"));
                 alert(msg);
             });
