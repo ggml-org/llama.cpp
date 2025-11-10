@@ -1,11 +1,15 @@
 #pragma once
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <memory>
 #include <unordered_map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <functional>
+
+struct common_grammar_builder;
 
 enum parser_type {
     PARSER_LITERAL = 0,
@@ -19,6 +23,9 @@ enum parser_type {
     PARSER_GROUP = 8,
     PARSER_RULE = 9,
     PARSER_OPTIONAL = 10,
+    PARSER_UNTIL = 11,
+    PARSER_SPACE = 12,
+    PARSER_SCHEMA = 13,
 };
 
 enum parser_result_type {
@@ -94,6 +101,7 @@ class parser_base;
 class sequence_parser;
 class choice_parser;
 class parser_builder;
+class gbnf_visitor;
 
 class parser {
     std::shared_ptr<parser_base> ptr;
@@ -114,6 +122,7 @@ class parser {
     parser operator~() const;
     parser operator+(const parser & other) const;
     parser operator|(const parser & other) const;
+    parser operator<<(const parser & other) const;
 
     parser_base & operator*() const;
     parser_base * operator->() const;
@@ -127,6 +136,7 @@ class parser {
     parser_type type() const;
     parser_result parse(parser_context & ctx, size_t start = 0) const;
     std::string dump() const;
+    void build_grammar(common_grammar_builder& builder) const;
 };
 
 class parser_builder {
@@ -148,9 +158,11 @@ class parser_builder {
     parser group(const std::string & name, const parser & p);
     parser rule(const std::string & name);
     parser space();
+    parser until(const std::string & delimiter, bool include_spaces = true);
+    parser json();
+    parser schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema);
 
     parser add_rule(const std::string & name, const parser & p);
-    parser add_json_rule(const std::string & name);
 
     void assign_ids(parser & p);
 

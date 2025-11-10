@@ -2,6 +2,9 @@
 #include <string>
 
 #include "chat-parser-combinator.h"
+#include "json-schema-to-grammar.h"
+#include "nlohmann/json.hpp"
+#include "nlohmann/json_fwd.hpp"
 
 template <class T>
 static void assert_equals(const std::string_view label, const T & expected, const T & actual) {
@@ -365,53 +368,110 @@ static void test_optional() {
 
 static void test_json_parser() {
     auto json = build_parser([](parser_builder & p) {
-        return p.add_json_rule("json");
+        return p.json();
     });
 
-    // Test parsing a simple JSON object
-    std::string input = R"({"name": "test", "value": 42, "flag": true})";
-    parser_context ctx{input, parse_cache()};
+    {
+        // Test parsing a simple JSON object
+        std::string input = R"({"name": "test", "value": 42, "flag": true})";
+        parser_context ctx{input, parse_cache()};
 
-    auto result = json.parse(ctx);
+        auto result = json.parse(ctx);
 
-    assert_equals(true, result.is_success());
-    assert_equals(input.size(), result.end);
+        assert_equals(true, result.is_success());
+        assert_equals(input.size(), result.end);
+    }
+    {
+        // Test parsing a JSON array with mixed types
+        std::string input = R"([1, "hello", true, null, 3.14])";
+        parser_context ctx{input, parse_cache()};
+
+        auto result = json.parse(ctx);
+
+        assert_equals(true, result.is_success());
+        assert_equals(input.size(), result.end);
+    }
+    {
+        // Test parsing nested JSON with objects and arrays
+        std::string input = R"({"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], "count": 2, "metadata": {"version": "1.0", "tags": ["admin", "user"]}})";
+        parser_context ctx{input, parse_cache()};
+
+        auto result = json.parse(ctx);
+
+        assert_equals(true, result.is_success());
+        assert_equals(input.size(), result.end);
+    }
+    {
+        // Test partial parsing - incomplete object
+        std::string input = R"({"name": "test", "value": )";
+        parser_context ctx{input, parse_cache(), false};
+
+        auto result = json.parse(ctx);
+
+        assert_equals(true, result.is_success());
+    }
+    {
+        // Test partial parsing - incomplete array
+        std::string input = R"([1, 2, 3, )";
+        parser_context ctx{input, parse_cache(), false};
+
+        auto result = json.parse(ctx);
+
+        assert_equals(true, result.is_success());
+    }
+    {
+        // Test partial parsing - incomplete nested structure
+        std::string input = R"({"data": {"nested": )";
+        parser_context ctx{input, parse_cache(), false};
+
+        auto result = json.parse(ctx);
+
+        assert_equals(true, result.is_success());
+    }
 }
 
 static void test_complete_example() {
+    // Parser for a fictitious model that outputs:
+    //
+    //   <think>
+    //   ... reasoning content ...
+    //   </think>
+    //   ... content ...
+    //   <tool_call>
+    //   <name>tool_name</name>
+    //   <args>{ ... json args ... }</args>
+    //   </tool_call>
+    //
     auto parser = build_parser([](parser_builder & p) {
-        auto space = p.add_rule("space", p.space());
-
         auto reasoning = p.add_rule("reasoning",
-            p.literal("<think>") + space +
-            p.group("reasoning-content",
-                p.zero_or_more(~(space + p.literal("</think>")) + p.any())) +
-            space + p.literal("</think>"));
+            p.literal("<think>")
+            << p.group("reasoning-content", p.until("</think>"))
+            << p.literal("</think>"));
 
         auto content = p.add_rule("content",
-            p.group("content",
-                p.zero_or_more(~(space + p.literal("<tool_call>")) + p.any())));
+            p.group("content", p.until("<tool_call>")));
 
-        auto ident_chars = p.add_rule("ident-chars", p.char_class("[a-zA-Z\\-_]"));
-        auto json = p.add_json_rule("json");
+        auto json = p.json();
 
         auto tool_call_name = p.add_rule("tool-call-name",
-            p.literal("<name>") + space +
-            p.group("tool-name", p.one_or_more(~p.literal("</name>") + ident_chars)) +
-            space + p.literal("</name>"));
+            p.literal("<name>")
+            << p.group("tool-name", p.one_or_more(p.char_class("[a-zA-Z\\-_]")))
+            << p.literal("</name>"));
+
+        auto schema = nlohmann::ordered_json::parse(R"({"type": "object"})");
 
         auto tool_call_args = p.add_rule("tool-call-args",
-            p.literal("<args>") + space +
-            p.group("tool-args", json) +
-            space + p.literal("</args>"));
+            p.literal("<args>")
+            << p.group("tool-args", p.schema(json, "get_weather", schema))
+            << p.literal("</args>"));
 
         auto tool_call = p.add_rule("tool-call",
-            p.literal("<tool_call>") + space +
-            tool_call_name + space +
-            tool_call_args + space +
-            p.literal("</tool_call>"));
+            p.literal("<tool_call>")
+            << tool_call_name
+            << tool_call_args
+            << p.literal("</tool_call>"));
 
-        return p.add_rule("root", reasoning + p.optional(content) + p.optional(tool_call));
+        return reasoning << p.optional(content) << p.optional(tool_call);
     });
 
     // Test complete input
@@ -457,6 +517,165 @@ static void test_complete_example() {
     assert_equals(std::string("I need to call get_weather"), *result.group("reasoning-content", ctx.input));
     assert_equals(std::string("get_weather"), *result.group("tool-name", ctx.input));
     assert_equals(std::string(R"({"cit)"), *result.group("tool-args", ctx.input));
+
+    auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+        parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+    });
+
+    std::cout << "Grammar:\n" << gbnf << "\n";
+}
+
+static void test_gbnf_generation() {
+    {
+        // Test literal
+        auto parser = build_parser([](parser_builder& p) {
+            return p.literal("hello");
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= \"hello\"") != std::string::npos);
+        assert_equals(true, gbnf.find("space ::=") != std::string::npos);
+    }
+    {
+        // Test char class
+        auto parser = build_parser([](parser_builder& p) {
+            return p.char_class("[a-z]");
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= [a-z]") != std::string::npos);
+    }
+    {
+        // Test sequence
+        auto parser = build_parser([](parser_builder& p) {
+            return p.literal("hello") + p.literal(" ") + p.literal("world");
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= \"hello\" \" \" \"world\"") != std::string::npos);
+    }
+    {
+        // Test choice
+        auto parser = build_parser([](parser_builder& p) {
+            return p.literal("cat") | p.literal("dog");
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= \"cat\" | \"dog\"") != std::string::npos);
+    }
+    {
+        // Test one_or_more
+        auto parser = build_parser([](parser_builder& p) {
+            return p.one_or_more(p.char_class("[0-9]"));
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= [0-9]+") != std::string::npos);
+    }
+    {
+        // Test zero_or_more
+        auto parser = build_parser([](parser_builder& p) {
+            return p.zero_or_more(p.char_class("[a-z]"));
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= [a-z]*") != std::string::npos);
+    }
+    {
+        // Test optional
+        auto parser = build_parser([](parser_builder& p) {
+            return p.literal("hello") + p.optional(p.literal(" world"));
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= \"hello\" \" world\"?") != std::string::npos);
+    }
+    {
+        // Test until
+        auto parser = build_parser([](parser_builder& p) {
+            return p.until("</tag>");
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        // Should generate pattern that prevents matching the full delimiter
+        assert_equals(true, gbnf.find("root ::= ([^<] | \"<\" [^/] | \"</\" [^t] | \"</t\" [^a] | \"</ta\" [^g] | \"</tag\" [^>])*") != std::string::npos);
+    }
+    {
+        // Test groups are transparent
+        auto parser = build_parser([](parser_builder& p) {
+            return p.group("test", p.literal("hello"));
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= \"hello\"") != std::string::npos);
+    }
+    {
+        // Test complex expression with parentheses
+        auto parser = build_parser([](parser_builder& p) {
+            return p.one_or_more(p.literal("a") | p.literal("b"));
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= (\"a\" | \"b\")+") != std::string::npos);
+    }
+    {
+        // Test rule references
+        auto parser = build_parser([](parser_builder& p) {
+            auto digit = p.add_rule("digit", p.char_class("[0-9]"));
+            return p.one_or_more(digit);
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        // Should have digit rule defined and referenced
+        assert_equals(true, gbnf.find("digit ::= [0-9]") != std::string::npos);
+        assert_equals(true, gbnf.find("root ::= digit+") != std::string::npos);
+    }
+    {
+        // Test escaping in literals
+        auto parser = build_parser([](parser_builder& p) {
+            return p.literal("hello\nworld\t!");
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        assert_equals(true, gbnf.find("root ::= \"hello\\nworld\\t!\"") != std::string::npos);
+    }
+    {
+        // Test operator<< (whitespace insertion)
+        auto parser = build_parser([](parser_builder& p) {
+            return p.literal("hello") << p.literal("world");
+        });
+
+        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
+            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        });
+        // Should inline the whitespace pattern
+        assert_equals(true, gbnf.find("\"hello\"") != std::string::npos);
+        assert_equals(true, gbnf.find("\"world\"") != std::string::npos);
+    }
 }
 
 int main() {
@@ -467,6 +686,7 @@ int main() {
     test_optional();
     test_json_parser();
     test_complete_example();
+    test_gbnf_generation();
     std::cout << "All tests passed!\n";
     return 0;
 }
