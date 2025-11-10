@@ -233,6 +233,26 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
 
 
 /**
+ * Create a div wrapped input of type file,
+ * which hides input and shows a button which chains to underlying file type input.
+ * @param {string} id
+ * @param {string} label
+ * @param {any} defaultValue
+ * @param {(arg0: any) => void} cb
+ * @param {string} className
+ */
+export function el_creatediv_inputfile(id, label, defaultValue, cb, className) {
+    let elX = el_creatediv_input(id, label, "file", defaultValue, cb, className)
+    elX.el.hidden = true
+    let idB = `${id}-button`
+    let elB = el_create_button(idB, (mev) => {
+        elX.el.click()
+    }, idB, label)
+    return { div: elX.div, el: elX.el, elB: elB };
+}
+
+
+/**
  * Auto create ui input elements for specified fields/properties in given object
  * Currently supports text, number, boolean field types.
  * Also supports recursing if a object type field is found.
