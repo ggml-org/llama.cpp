@@ -1,5 +1,16 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 
+// v = { mp, L, d }
+inline uint fastdiv(uint n, uint4 v) {
+    uint msbs;
+    msbs = mul_hi(n, v.s0);
+    return (msbs + n) >> v.s1;
+}
+inline uint fastmod(uint n, uint4 v) {
+    uint q = fastdiv(n, v);
+    return n - q * v.s2;
+}
+
 kernel void kernel_set_rows_f32_i64(
         global char * src0,
         ulong         offset0,
@@ -11,8 +22,8 @@ kernel void kernel_set_rows_f32_i64(
         ulong         nb01,
         ulong         nb02,
         ulong         nb03,
-        int           ne11,
-        int           ne12,
+        uint4         ne11,
+        uint4         ne12,
         ulong         nb10,
         ulong         nb11,
         ulong         nb12,
@@ -33,8 +44,10 @@ kernel void kernel_set_rows_f32_i64(
         return;
     }
 
-    int i12 = i03%ne12;
-    int i11 = i02%ne11;
+    //int i12 = i03%ne12;
+    //int i11 = i02%ne11;
+    int i12 = fastmod(i03, ne12);
+    int i11 = fastmod(i02, ne11);
 
     int i10 = i01;
     long i1 = ((global long *)(src1 + i10*nb10 + i11*nb11 + i12*nb12))[0];
@@ -58,8 +71,8 @@ kernel void kernel_set_rows_f16_i64(
         ulong         nb01,
         ulong         nb02,
         ulong         nb03,
-        int           ne11,
-        int           ne12,
+        uint4         ne11,
+        uint4         ne12,
         ulong         nb10,
         ulong         nb11,
         ulong         nb12,
@@ -80,8 +93,10 @@ kernel void kernel_set_rows_f16_i64(
         return;
     }
 
-    int i12 = i03%ne12;
-    int i11 = i02%ne11;
+    //int i12 = i03%ne12;
+    //int i11 = i02%ne11;
+    int i12 = fastmod(i03, ne12);
+    int i11 = fastmod(i02, ne11);
 
     int i10 = i01;
     long i1 = ((global long *)(src1 + i10*nb10 + i11*nb11 + i12*nb12))[0];
@@ -105,8 +120,8 @@ kernel void kernel_set_rows_f32_i32(
         ulong         nb01,
         ulong         nb02,
         ulong         nb03,
-        int           ne11,
-        int           ne12,
+        uint4         ne11,
+        uint4         ne12,
         ulong         nb10,
         ulong         nb11,
         ulong         nb12,
@@ -127,8 +142,10 @@ kernel void kernel_set_rows_f32_i32(
         return;
     }
 
-    int i12 = i03%ne12;
-    int i11 = i02%ne11;
+    //int i12 = i03%ne12;
+    //int i11 = i02%ne11;
+    int i12 = fastmod(i03, ne12);
+    int i11 = fastmod(i02, ne11);
 
     int i10 = i01;
     int i1  = ((global int *)(src1 + i10*nb10 + i11*nb11 + i12*nb12))[0];
@@ -152,8 +169,8 @@ kernel void kernel_set_rows_f16_i32(
         ulong         nb01,
         ulong         nb02,
         ulong         nb03,
-        int           ne11,
-        int           ne12,
+        uint4         ne11,
+        uint4         ne12,
         ulong         nb10,
         ulong         nb11,
         ulong         nb12,
@@ -174,8 +191,10 @@ kernel void kernel_set_rows_f16_i32(
         return;
     }
 
-    int i12 = i03%ne12;
-    int i11 = i02%ne11;
+    //int i12 = i03%ne12;
+    //int i11 = i02%ne11;
+    int i12 = fastmod(i03, ne12);
+    int i11 = fastmod(i02, ne11);
 
     int i10 = i01;
     int i1  = ((global int *)(src1 + i10*nb10 + i11*nb11 + i12*nb12))[0];
