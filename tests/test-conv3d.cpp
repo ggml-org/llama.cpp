@@ -350,9 +350,9 @@ int main(void)
 {
     ggml_time_init();
     std::vector<std::tuple<int, int, int, int, int, int, int, int>> configs = {
-        std::make_tuple(1,2,16,32,4,3,3,3),
+        // std::make_tuple(1,2,16,32,4,3,3,3),
         // std::make_tuple(320,1280,26,38,8,3,3,3),
-        // std::make_tuple(1280,1280,26,38,8,3,3,3),
+        std::make_tuple(1280,1280,26,38,8,3,3,3),
         // std::make_tuple(320,1280,52,76,8,3,3,3),
         // std::make_tuple(1280,1280,52,76,8,3,3,3),
         // std::make_tuple(320,1280,104,152,8,3,3,3),
@@ -380,7 +380,7 @@ int main(void)
         // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
 
 
-        int iterations = 20;
+        int iterations = 0;
 
         double run_time0;
         std::vector<float> im2col_data = compute_graph(model, allocr, build_graph_0, iterations,
