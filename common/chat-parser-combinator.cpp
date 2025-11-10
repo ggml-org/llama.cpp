@@ -555,11 +555,11 @@ class group_parser : public parser_base {
 
 class rule_parser : public parser_base {
     std::string rule_name_;
-    std::shared_ptr<std::unordered_map<std::string, parser>> rules_;
+    std::weak_ptr<std::unordered_map<std::string, parser>> rules_;
 
   public:
     rule_parser(const std::string & name, std::shared_ptr<std::unordered_map<std::string, parser>> rules, int id)
-        : parser_base(id), rule_name_(name), rules_(std::move(rules)) {}
+        : parser_base(id), rule_name_(name), rules_(rules) {}
 
     parser_type type() const override { return PARSER_RULE; }
 
@@ -569,13 +569,14 @@ class rule_parser : public parser_base {
             return *cached;
         }
 
-        if (!rules_) {
-            LOG_ERR("rule_parser::parse called without rule registry\n");
+        auto rules = rules_.lock();
+        if (!rules) {
+            LOG_ERR("rule_parser::parse called with expired rule registry\n");
             return ctx.memo.set(id_, start, parser_result(PARSER_RESULT_FAIL, start));
         }
 
-        auto it = rules_->find(rule_name_);
-        if (it == rules_->end()) {
+        auto it = rules->find(rule_name_);
+        if (it == rules->end()) {
             LOG_ERR("rule_parser::parse rule '%s' not found in registry\n", rule_name_.c_str());
             return ctx.memo.set(id_, start, parser_result(PARSER_RESULT_FAIL, start));
         }
@@ -586,6 +587,32 @@ class rule_parser : public parser_base {
 
     std::string dump() const override {
         return "Rule(" + rule_name_ + ")";
+    }
+};
+
+class root_parser : public parser_base {
+    parser root_;
+    std::shared_ptr<std::unordered_map<std::string, parser>> rules_;
+
+  public:
+    root_parser(const parser & root, std::shared_ptr<std::unordered_map<std::string, parser>> rules, int id)
+        : parser_base(id), root_(root), rules_(std::move(rules)) {}
+
+    parser_type type() const override { return root_->type(); }
+
+    parser_result parse(parser_context & ctx, size_t start = 0) override {
+        return root_->parse(ctx, start);
+    }
+
+    std::string dump() const override {
+        return root_->dump();
+    }
+
+    void assign_ids_internal(int& next_id) override {
+        if (id_ == -1) {
+            id_ = next_id++;
+        }
+        root_->assign_ids_internal(next_id);
     }
 };
 
@@ -632,11 +659,11 @@ parser parser::operator~() const {
 }
 
 parser parser::operator+(const parser & other) const {
-    return parser(std::shared_ptr<sequence_parser>(new sequence_parser({*this, other}, -1)));
+    return parser(std::make_shared<sequence_parser>(std::initializer_list<parser>{*this, other}, -1));
 }
 
 parser parser::operator|(const parser & other) const {
-    return parser(std::shared_ptr<choice_parser>(new choice_parser({*this, other}, -1)));
+    return parser(std::make_shared<choice_parser>(std::initializer_list<parser>{*this, other}, -1));
 }
 
 parser_base & parser::operator*() const {
@@ -684,11 +711,11 @@ parser parser_builder::literal(const std::string & literal) {
 }
 
 parser parser_builder::sequence(std::initializer_list<parser> parsers) {
-    return parser(std::shared_ptr<sequence_parser>(new sequence_parser(parsers, next_id_++)));
+    return parser(std::make_shared<sequence_parser>(parsers, next_id_++));
 }
 
 parser parser_builder::choice(std::initializer_list<parser> parsers) {
-    return parser(std::shared_ptr<choice_parser>(new choice_parser(parsers, next_id_++)));
+    return parser(std::make_shared<choice_parser>(parsers, next_id_++));
 }
 
 parser parser_builder::one_or_more(const parser & p) {
@@ -816,5 +843,11 @@ parser build_parser(const std::function<parser(parser_builder&)> & fn) {
     parser_builder builder;
     auto root = fn(builder);
     builder.assign_ids(root); // Assign IDs to rules that were created with operators
+
+    // Wrap the root parser in a root_parser to own the rules and break circular references
+    auto rules = builder.rules();
+    if (rules && !rules->empty()) {
+        return parser(std::make_shared<root_parser>(root, rules, -1));
+    }
     return root;
 }

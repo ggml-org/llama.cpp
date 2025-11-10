@@ -153,6 +153,8 @@ class parser_builder {
     parser add_json_rule(const std::string & name);
 
     void assign_ids(parser & p);
+
+    std::shared_ptr<std::unordered_map<std::string, parser>> rules() const { return rules_; }
 };
 
 parser build_parser(const std::function<parser(parser_builder&)> & fn);
