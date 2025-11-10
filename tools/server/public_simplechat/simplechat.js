@@ -954,7 +954,22 @@ class MultiChatUI {
         this.elInToolName = /** @type{HTMLInputElement} */(document.getElementById("toolname-in"));
         this.elInToolArgs = /** @type{HTMLInputElement} */(document.getElementById("toolargs-in"));
 
+        // Save any placeholder set by default like through html, to restore where needed
         this.elInUser.dataset.placeholder = this.elInUser.placeholder
+        this.elInFileX = ui.el_creatediv_inputfile('file', 'file', '', ()=>{
+            let f0 = this.elInFileX.el.files?.item(0);
+            if (!f0) {
+                return
+            }
+            console.log(`DBUG:InFileX:${f0?.name}`)
+            let fR = new FileReader()
+            fR.onload = () => {
+                this.me.dataURLs.push(fR.result)
+                console.log(`INFO:InFileX:Loaded file ${f0.name}`)
+            }
+            fR.readAsDataURL(f0)
+        }, "")
+        this.elBtnUser.parentElement?.appendChild(this.elInFileX.elB)
 
         this.validate_element(this.elInSystem, "system-in");
         this.validate_element(this.elDivChat, "chat-div");
@@ -1552,6 +1567,10 @@ export class Me {
             //"presence_penalty": 1.2,
         };
         this.toolsMgr = new mTools.ToolsManager()
+        /**
+         * @type {(string | ArrayBuffer | null)[]}
+         */
+        this.dataURLs = []
     }
 
     /**
