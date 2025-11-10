@@ -643,6 +643,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_NEMOTRON_V2: return "Nemotron V2";
         case COMMON_CHAT_FORMAT_APERTUS: return "Apertus";
         case COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS: return "LFM2 with JSON tools";
+        case COMMON_CHAT_FORMAT_KIMI_K2: return "Kimi K2";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1726,6 +1727,68 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
     return data;
 }
 
+static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+
+    // Pass thinking context for Kimi K2 template
+    json additional_context = {
+        {"thinking", inputs.enable_thinking},
+    };
+
+    auto prompt = apply(tmpl, inputs,
+                       /* messages_override= */ inputs.messages,
+                       /* tools_override= */ std::nullopt,
+                       additional_context);
+    data.prompt = prompt;
+    data.format = COMMON_CHAT_FORMAT_KIMI_K2;
+    if (string_ends_with(data.prompt, "<think>")) {
+        if (!inputs.enable_thinking) {
+            data.prompt += "</think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
+    if (inputs.tools.is_array() && !inputs.tools.empty()) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED && inputs.json_schema.is_null();
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> tool_rules;
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string name = function.at("name");
+                auto parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+                tool_rules.push_back(builder.add_rule(name + "-call",
+                    "( \"<|tool_call_begin|>\" )? \"" + name + "<|tool_call_argument_begin|>"
+                    "\" " + builder.add_schema(name + "-args", parameters) + " "
+                    "\"<|tool_call_end|>\""));
+            });
+            builder.add_rule("root",
+                std::string(data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
+                "( \"<|tool_calls_section_begin|>\" ) "
+                "(" + string_join(tool_rules, " | ") + ")" + (inputs.parallel_tool_calls ? "*" : "") + " "
+                "\"<|tool_calls_section_end|>\""
+                " space");
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+                // If thinking_forced_open, then we capture the </think> tag in the grammar,
+                // (important for required tool choice) and in the trigger's first capture (decides what is sent to the grammar)
+                std::string(data.thinking_forced_open ? "[\\s\\S]*?(</think>\\s*)" : "(?:<think>[\\s\\S]*?</think>\\s*)?") +
+                    "(<|tool_calls_section_begin|>)[\\s\\S]*"
+            });
+            data.preserved_tokens = {
+                "<think>",
+                "</think>",
+                "<|tool_calls_section_begin|>",
+                "<|tool_call_begin|>",
+                "<|tool_call_argument_begin|>",
+                "<|tool_call_end|>",
+                "<|tool_calls_section_end|>",
+            };
+        });
+    }
+    return data;
+}
+
 static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
     if (!builder.syntax().parse_tool_calls) {
@@ -1803,6 +1866,66 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
             LOG_DBG("%s: no thinking_forced_open, adding content\n", __func__);
             // <｜tool▁call▁begin｜>NAME<｜tool▁sep｜>JSON<｜tool▁call▁end｜>
             common_chat_parse_deepseek_v3_1_content(builder);
+        }
+    }
+}
+
+static void common_chat_parse_kimi_k2_content(common_chat_msg_parser & builder) {
+    static const common_regex function_regex("(?:<|tool_call_begin|>)?([^\\n<]+)(?:<|tool_call_argument_begin|>)");
+
+    static const common_regex close_regex("(?:[\\s]*)?<|tool_call_end|>");
+    static const common_regex tool_calls_begin("(?:<|tool_calls_section_begin|>)");
+    static const common_regex tool_calls_end("<|tool_calls_section_end|>");
+
+    if (!builder.syntax().parse_tool_calls) {
+        LOG_DBG("%s: not parse_tool_calls\n", __func__);
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    LOG_DBG("%s: parse_tool_calls\n", __func__);
+
+    parse_json_tool_calls(
+        builder,
+        /* block_open= */ tool_calls_begin,
+        /* function_regex_start_only= */ std::nullopt,
+        function_regex,
+        close_regex,
+        tool_calls_end);
+}
+
+static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
+    // DeepSeek V3.1 outputs reasoning content between "<think>" and "</think>" tags, followed by regular content
+    // First try to parse using the standard reasoning parsing method
+    LOG_DBG("%s: thinking_forced_open: %s\n", __func__, std::to_string(builder.syntax().thinking_forced_open).c_str());
+
+    auto start_pos = builder.pos();
+    auto found_end_think = builder.try_find_literal("</think>");
+    builder.move_to(start_pos);
+
+    if (builder.syntax().thinking_forced_open && !builder.is_partial() && !found_end_think) {
+        LOG_DBG("%s: no end_think, not partial, adding content\n", __func__);
+        common_chat_parse_kimi_k2_content(builder);
+    } else if (builder.try_parse_reasoning("<think>", "</think>")) {
+        // If reasoning was parsed successfully, the remaining content is regular content
+        LOG_DBG("%s: parsed reasoning, adding content\n", __func__);
+        // </think><|tool_calls_section_begin|><|tool_call_begin|>function<|tool_call_argument_begin|>NAME\n```json\nJSON\n```<|tool_call_end|><|tool_calls_section_end|>
+        common_chat_parse_kimi_k2_content(builder);
+    } else {
+        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+          LOG_DBG("%s: reasoning_format none, adding content\n", __func__);
+          common_chat_parse_kimi_k2_content(builder);
+          return;
+        }
+        // If no reasoning tags found, check if we should treat everything as reasoning
+        if (builder.syntax().thinking_forced_open) {
+            // If thinking is forced open but no tags found, treat everything as reasoning
+            LOG_DBG("%s: thinking_forced_open, adding reasoning content\n", __func__);
+            builder.add_reasoning_content(builder.consume_rest());
+        } else {
+            LOG_DBG("%s: no thinking_forced_open, adding content\n", __func__);
+            // <|tool_call_begin|>NAME<|tool_call_argument_begin|>JSON<|tool_call_end|>
+            common_chat_parse_kimi_k2_content(builder);
         }
     }
 }
@@ -2912,6 +3035,12 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_deepseek_v3_1(tmpl, params);
     }
 
+    // Kimi K2: detect based on specific patterns in the template
+    if (src.find("<|tool_calls_section_begin|>") != std::string::npos &&
+        params.json_schema.is_null()) {
+        return common_chat_params_init_kimi_k2(tmpl, params);
+    }
+
     // DeepSeek R1: use handler in all cases except json schema (thinking / tools).
     if (src.find("<｜tool▁calls▁begin｜>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_deepseek_r1(tmpl, params);
@@ -3138,6 +3267,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS:
             common_chat_parse_lfm2(builder);
+            break;
+        case COMMON_CHAT_FORMAT_KIMI_K2:
+            common_chat_parse_kimi_k2(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));

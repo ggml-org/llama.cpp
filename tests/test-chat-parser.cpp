@@ -164,6 +164,36 @@ static void test_reasoning() {
     assert_equals(variant, std::string("REASONING</think>ok"), msg.content);
     assert_equals(variant, std::string(""), msg.reasoning_content);
   }
+  // Test Kimi K2 parsing - reasoning content followed by "</think>" and then regular content
+  {
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ true,
+        /* .parse_tool_calls = */ true,
+    };
+    const std::string variant("kimi_k2_reasoning_format_deepseek");
+    common_chat_msg_parser builder("REASONING</think>ok", /* is_partial= */ false, syntax);
+    assert_equals(variant, true, builder.try_parse_reasoning("<think>", "</think>"));
+    assert_equals(variant, std::string("REASONING"), builder.result().reasoning_content);
+    assert_equals(variant, std::string("ok"), builder.consume_rest());
+  }
+  // Test Kimi K2 parsing - reasoning_format none - reasoning content followed by "</think>" and then regular content
+  {
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_NONE,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ true,
+        /* .parse_tool_calls = */ true,
+    };
+    const std::string variant("kimi_k2_reasoning_format_none");
+    const std::string input = "REASONING</think>ok";
+    auto msg = common_chat_parse(input, false, syntax);
+    assert_equals(variant, std::string("REASONING</think>ok"), msg.content);
+    assert_equals(variant, std::string(""), msg.reasoning_content);
+  }
 }
 
 static void test_regex() {
@@ -390,6 +420,158 @@ static void test_deepseek_v3_1_tool_calls() {
     {
         common_chat_syntax syntax = {
             /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+            /* .reasoning_in_content = */ false,
+            /* .thinking_forced_open = */ false,
+            /* .parse_tool_calls = */ true,
+        };
+        const std::string variant("thinking_not_forced_open_missing_reasoning_no_tool_calls");
+        const std::string in = "CONTENT";
+        auto m = common_chat_parse(in, false, syntax);
+        assert_equals<std::size_t>(variant, 0, m.tool_calls.size());
+        assert_equals(variant, std::string("CONTENT"), m.content);
+        assert_equals(variant, std::string(""), m.reasoning_content);
+    }
+}
+
+static void test_kimi_k2_tool_calls() {
+    //common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
+    // variant: happy path for when it works as the model card says it should
+    const std::string variant("simple");
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+        /* .parse_tool_calls = */ true,
+    };
+    const std::string input = "<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+    auto msg = common_chat_parse(input, false, syntax);
+    assert_equals<std::size_t>(variant, 1, msg.tool_calls.size());
+    assert_equals(variant, std::string("get_time"), msg.tool_calls[0].name);
+    // JSON arguments are dumped without spaces
+    assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), msg.tool_calls[0].arguments);
+    assert_equals(variant, std::string(""), msg.content);
+    assert_equals(variant, std::string(""), msg.reasoning_content);
+
+    // variant: simple + thinking open
+    {
+        common_chat_syntax syntax = {
+            /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+            /* .reasoning_in_content = */ false,
+            /* .thinking_forced_open = */ true,
+            /* .parse_tool_calls = */ true,
+        };
+        const std::string variant("simple_thinking");
+        const std::string in = "REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+        auto m = common_chat_parse(in, false, syntax);
+        assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
+        assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
+        assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), m.tool_calls[0].arguments);
+        assert_equals(variant, std::string(""), m.content);
+        assert_equals(variant, std::string("REASONING"), m.reasoning_content);
+    }
+    // variant: simple + multiple tool calls
+    {
+        common_chat_syntax syntax = {
+            /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+            /* .reasoning_in_content = */ false,
+            /* .thinking_forced_open = */ false,
+            /* .parse_tool_calls = */ true,
+        };
+        const std::string variant("simple_multiple_tool_calls");
+        const std::string in = "CONTENT<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_call_begin|>get_weather<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_calls_section_end|>";
+        auto m = common_chat_parse(in, false, syntax);
+        assert_equals<std::size_t>(variant, 2, m.tool_calls.size());
+        assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
+        assert_equals(variant, std::string("{\"city\":\"Paris\"}"), m.tool_calls[0].arguments);
+        assert_equals(variant, std::string("get_weather"), m.tool_calls[1].name);
+        assert_equals(variant, std::string("{\"city\":\"Paris\"}"), m.tool_calls[1].arguments);
+        assert_equals(variant, std::string("CONTENT"), m.content);
+        assert_equals(variant, std::string(""), m.reasoning_content);
+    }
+
+
+    // variant: thinking forced open + tool call in reasoning content
+    {
+        common_chat_syntax syntax = {
+            /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+            /* .reasoning_in_content = */ false,
+            /* .thinking_forced_open = */ true,
+            /* .parse_tool_calls = */ true,
+        };
+        const std::string variant("thinking_forced_open_tool_call_in_reasoning");
+        const std::string in = "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time2<|tool_call_argument_begin|>{\"city\": \"Tokyo2\"}<|tool_call_end|><|tool_calls_section_end|>REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+        auto m = common_chat_parse(in, false, syntax);
+        assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
+        assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
+        assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), m.tool_calls[0].arguments);
+        assert_equals(variant, std::string(""), m.content);
+        assert_equals(variant, std::string("REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING"), m.reasoning_content);
+    }
+
+    // variant: thinking forced open + tool call in reasoning content + no closing think + not partial
+    //          This is a bit of a fine tuning issue on the model's part IMO. It really should not be attempting
+    //          to make tool calls in reasoning content according to the model card, but it does sometimes, so
+    //          add the reasoning content as regular content and parse the tool calls.
+    {
+        common_chat_syntax syntax = {
+            /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+            /* .reasoning_in_content = */ false,
+            /* .thinking_forced_open = */ true,
+            /* .parse_tool_calls = */ true,
+        };
+        const std::string variant("thinking_forced_open_tool_call_in_reasoning_no_closing_think_not_partial");
+        const std::string in = "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+        auto m = common_chat_parse(in, false, syntax);
+        assert_equals(variant, std::string("REASONING"), m.content);
+        assert_equals(variant, std::string(""), m.reasoning_content);
+        assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
+        assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
+        assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), m.tool_calls[0].arguments);
+    }
+
+    // variant: thinking forced open + tool call in reasoning content + no closing think + partial
+    {
+        common_chat_syntax syntax = {
+            /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+            /* .reasoning_in_content = */ false,
+            /* .thinking_forced_open = */ true,
+            /* .parse_tool_calls = */ true,
+        };
+        const std::string variant("thinking_forced_open_tool_call_in_reasoning_no_closing_think_partial");
+        const std::string in = "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+        auto m = common_chat_parse(in, /* is_partial= */ true, syntax);
+        assert_equals(variant, std::string("REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>"), m.reasoning_content);
+        assert_equals(variant, std::string(""), m.content);
+        assert_equals<std::size_t>(variant, 0, m.tool_calls.size());
+    }
+
+    // variant: thinking not forced open + reasoning + regular content + no tool calls
+    {
+        common_chat_syntax syntax = {
+            /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+            /* .reasoning_in_content = */ false,
+            /* .thinking_forced_open = */ true,
+            /* .parse_tool_calls = */ true,
+        };
+        const std::string variant("thinking_forced_open_reasoning_regular_content_no_tool_calls");
+        const std::string in = "REASONING</think>CONTENT";
+        auto m = common_chat_parse(in, false, syntax);
+        assert_equals<std::size_t>(variant, 0, m.tool_calls.size());
+        assert_equals(variant, std::string("CONTENT"), m.content);
+        assert_equals(variant, std::string("REASONING"), m.reasoning_content);
+    }
+    // variant: thinking not forced open + missing reasoning + no tool calls
+    {
+        common_chat_syntax syntax = {
+            /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
             /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
             /* .reasoning_in_content = */ false,
             /* .thinking_forced_open = */ false,
