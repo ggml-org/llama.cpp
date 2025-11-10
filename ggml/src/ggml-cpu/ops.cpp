@@ -5547,7 +5547,7 @@ static void ggml_mrope_cache_init(
 template<typename T>
 static void rotate_pairs(const int64_t n, const int64_t n_offset, const float * cache, const T * src_data, T * dst_data, const int scale = 2) {
   for (int64_t i0 = 0; i0 < n; i0 += 2) {
-    const int64_t ic = i0/scale; //hack for GGML_ROPE_TYPE_NORMAL, where we need ic = i0; for all other cases, ic = i0/2
+    const int64_t ic = i0/scale; // hack for GGML_ROPE_TYPE_NORMAL, where we need ic = i0; for all other cases, ic = i0/2
 
     const float cos_theta = cache[i0 + 0];
     const float sin_theta = cache[i0 + 1];
@@ -5689,8 +5689,6 @@ static void ggml_compute_forward_rope_flt(
                         break;
                     default:
                         GGML_ABORT("rope type not supported");
-                }
-                    GGML_ABORT("rope type not supported");
                 }
 
                 if (!is_vision) {
