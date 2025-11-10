@@ -9102,7 +9102,7 @@ class MegrezMoEModel(TextModel):
             hidden_size = hparams.get("hidden_size")
             num_attention_heads = hparams.get("num_attention_heads")
             
-            if None in (hidden_size, num_attention_heads):
+            if hidden_size is None or num_attention_heads is None:
                 raise ValueError("Missing 'hidden_size' or 'num_attention_heads' for RoPE scaling")
             
             dim = hidden_size // num_attention_heads
