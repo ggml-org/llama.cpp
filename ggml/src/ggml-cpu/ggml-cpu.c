@@ -1361,7 +1361,7 @@ UseGgmlGemm2:;
     //   Also, chunking by thread was measured to have perform better on NUMA systems.  See https://github.com/ggml-org/llama.cpp/pull/6915
     //   In theory, chunking should be just as useful on NUMA and non NUMA systems, but testing disagreed with that.
     // If the current chunking plan is inefficient for the available threads, re-chunk it by thread.
-    //   - Original observation: For low-core NUMA machines, re-chunking improves performance 
+    //   - Original observation: For low-core NUMA machines, re-chunking improves performance
     //     when there are too few chunks per thread (see https://github.com/ggml-org/llama.cpp/pull/6915).
     //   - Our observation on AWS Graviton4 (high-core, high-memory bandwidth) shows that
     //     disabling this re-chunking for nth >= 128 can actually improve performance.
