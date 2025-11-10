@@ -1034,6 +1034,12 @@ class MultiChatUI {
         }
     }
 
+    dataurl_plus_clear() {
+        this.elInFileX.elImg.src = "";
+        //this.me.dataURLs.pop()
+        this.me.dataURLs.length = 0;
+    }
+
     /**
      * Reset user input ui.
      * * clear user input (if requested, default true)
@@ -1044,6 +1050,7 @@ class MultiChatUI {
     ui_reset_userinput(bClearElInUser=true) {
         if (bClearElInUser) {
             this.elInUser.value = "";
+            this.dataurl_plus_clear()
         }
         this.elInUser.disabled = false;
         this.elInUser.focus();
@@ -1111,7 +1118,6 @@ class MultiChatUI {
         secContents.classList.add('chat-message-contents')
         secMain.append(secContents)
         // Add the content
-        //entry = ui.el_create_append_p(`${msg.content_equiv()}`, secContents);
         let showList = []
         if (msg.ns.has_reasoning()) {
             showList.push(['reasoning', `!!!Reasoning: ${msg.ns.getReasoningContent()} !!!\n\n`])
@@ -1359,13 +1365,19 @@ class MultiChatUI {
                 this.elInUser.placeholder = "dont forget to enter a message, before submitting to ai"
                 return;
             }
-            let image = undefined
-            if (this.me.dataURLs.length > 0) {
-                image = /** @type{string} */(this.me.dataURLs[0])
-                this.me.dataURLs.pop()
+            try {
+                let image = undefined
+                if (this.me.dataURLs.length > 0) {
+                    image = /** @type{string} */(this.me.dataURLs[0])
+                }
+                chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
+            } catch (err) {
+                throw new Error("HandleUserSubmit:ChatAdd failure", {cause: err})
+            } finally {
+                // TODO:MAYBE: in future if we dont want to clear up user loaded image on failure
+                // move this to end of try block
+                this.dataurl_plus_clear()
             }
-            chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
-            this.elInFileX.elImg.src = ""
         }
         if (this.elInUser.dataset.placeholder) {
             this.elInUser.placeholder = this.elInUser.dataset.placeholder;
