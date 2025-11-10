@@ -6831,7 +6831,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
 
     vk_buffer d_B = d_D;
     size_t b_buf_offset = 0;
-    uint64_t b_sz = 0;
+    uint64_t b_sz = 1;
 
     if (enable_bias) {
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
@@ -6965,7 +6965,7 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
 
     vk_buffer d_B = d_D;
     size_t b_buf_offset = 0;
-    uint64_t b_sz = 0;
+    uint64_t b_sz = 1;
 
     if (enable_bias) {
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
@@ -7101,7 +7101,7 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
 
     vk_buffer d_B = d_D;
     size_t b_buf_offset = 0;
-    uint64_t b_sz = 0;
+    uint64_t b_sz = 1;
 
     if (enable_bias) {
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
@@ -7676,7 +7676,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
 
     vk_buffer d_B = d_D;
     size_t b_buf_offset = 0;
-    uint64_t b_sz = 0;
+    uint64_t b_sz = 1;
 
     if (enable_bias || enable_scale) {
         const ggml_tensor * bias = cgraph->nodes[node_idx + 1]->src[1];
