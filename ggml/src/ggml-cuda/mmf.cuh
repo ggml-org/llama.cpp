@@ -2,6 +2,7 @@
 
 #include "mma.cuh"
 #include "common.cuh"
+#include "convert.cuh"
 
 using namespace ggml_cuda_mma;
 
@@ -150,13 +151,7 @@ static __device__ __forceinline__ void mul_mat_f_impl(
 #if !defined(GGML_USE_HIP)
                         tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
 #else
-                        if constexpr (std::is_same<T, half2>::value) {
-                            tile_xy[j0*tile_k_padded + threadIdx.x] = __float22half2_rn(tmp);
-                        } else if constexpr (std::is_same<T, nv_bfloat162>::value) {
-                            tile_xy[j0*tile_k_padded + threadIdx.x] = __float22bfloat162_rn(tmp);
-                        } else {
-                            static_assert(0, "unsupported type");
-                        }
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = ggml_cuda_cast<T, float2>(tmp);
 #endif // !defined(GGML_USE_HIP)
                     } else {
                         const bool valid = j < cols_per_block && (col_base + j) < ncols_dst_total && slot_map[j] >= 0;
@@ -164,13 +159,7 @@ static __device__ __forceinline__ void mul_mat_f_impl(
 #if !defined(GGML_USE_HIP)
                         tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
 #else
-                        if constexpr (std::is_same<T, half2>::value) {
-                            tile_xy[j0*tile_k_padded + threadIdx.x] = __float22half2_rn(tmp);
-                        } else if constexpr (std::is_same<T, nv_bfloat162>::value) {
-                            tile_xy[j0*tile_k_padded + threadIdx.x] = __float22bfloat162_rn(tmp);
-                        } else {
-                            static_assert(std::is_same_v<T, void>, "unsupported type");
-                        }
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = ggml_cuda_cast<T, float2>(tmp);
 #endif // !defined(GGML_USE_HIP)
                     }
                 }
@@ -448,13 +437,7 @@ static __device__ __forceinline__ void mul_mat_f_ids_impl(
 #if !defined(GGML_USE_HIP)
                     tile_xy[j0*tile_k_padded + threadIdx.x] = {tmp.x, tmp.y};
 #else
-                    if constexpr (std::is_same<T, half2>::value) {
-                        tile_xy[j0*tile_k_padded + threadIdx.x] = __float22half2_rn(tmp);
-                    } else if constexpr (std::is_same<T, nv_bfloat162>::value) {
-                         tile_xy[j0*tile_k_padded + threadIdx.x] = __float22bfloat162_rn(tmp);
-                    } else {
-                        static_assert(std::is_same_v<T, void>, "unsupported type");
-                    }
+                    tile_xy[j0*tile_k_padded + threadIdx.x] = ggml_cuda_cast<T, float2>(tmp);
 #endif // !defined(GGML_USE_HIP)
                 }
 
@@ -651,11 +634,8 @@ void mul_mat_f_cuda(
         cudaStream_t stream, const mmf_ids_data * ids_data) {
     typedef tile<16, 8, T>     tile_A_16;
     typedef tile<32, 8, T>     tile_A_32;
-#if defined(AMD_WMMA_AVAILABLE)
-    typedef tile<16, 8, T>     tile_B;
-#else
-    typedef tile< 8, 8, T>     tile_B;
-#endif // defined(AMD_WMMA_AVAILABLE)
+    typedef tile<16, 8, T>     tile_B_16;
+    typedef tile< 8, 8, T>     tile_B_8;
 
     GGML_ASSERT(ncols_x      % 2 == 0);
     GGML_ASSERT(stride_row   % 2 == 0);
@@ -682,7 +662,8 @@ void mul_mat_f_cuda(
 
     constexpr int rows_per_block = MMF_ROWS_PER_BLOCK;
     const int nbytes_shared_iter = nwarps_best * (volta_mma_available(cc) ? tile_A_32::I : tile_A_16::I) * (warp_size + 4) * 4;
-    const int nbytes_shared_combine = GGML_PAD(cols_per_block, tile_B::I) * (nwarps_best*rows_per_block + 4) * 4;
+    const int nbytes_cols_per_block_pad = amd_wmma_available(cc) ? tile_B_16::I : tile_B_8::I;
+    const int nbytes_shared_combine = GGML_PAD(cols_per_block, nbytes_cols_per_block_pad) * (nwarps_best*rows_per_block + 4) * 4;
     const int nbytes_shared = std::max(nbytes_shared_iter, nbytes_shared_combine);
     const int nbytes_slotmap = ids ? GGML_PAD(cols_per_block, 16) * sizeof(int) : 0;
     const int nbytes_shared_total = nbytes_shared + nbytes_slotmap;
