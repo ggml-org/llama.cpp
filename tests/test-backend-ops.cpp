@@ -175,8 +175,8 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
 }
 
-// generate a causal (lower diagonal) matrix
-static void init_tensor_causal(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
+// generate a causal (lower triangular) matrix
+static void init_tensor_tril(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F32);
     GGML_ASSERT(tensor->ne[0] == tensor->ne[1]);
 
