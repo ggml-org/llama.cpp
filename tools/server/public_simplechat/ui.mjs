@@ -363,15 +363,14 @@ export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sL
  * @param {Array<string>} lProps
  * @param {string} sLegend - the legend/title for the currrent block of properties
  * @param {string} sOffset - can be used to prefix each of the prop entries
- * @param {any | undefined} dClassNames - can specify class for top level parent and legend
+ * @param {any | undefined} dClassNames - can specify class for toplegend and remaining levels parent and legend
  */
 export function ui_show_obj_props_info(elParent, oObj, lProps, sLegend, sOffset="", dClassNames=undefined) {
     if (sOffset.length == 0) {
         let elDet = document.createElement("details");
         let elSum = document.createElement("summary")
-        if (dClassNames['legend']) {
-            elSum.classList.add(dClassNames['legend'])
-            dClassNames['legend'] = undefined
+        if (dClassNames && dClassNames['toplegend']) {
+            elSum.classList.add(dClassNames['toplegend'])
         }
         elSum.appendChild(document.createTextNode(sLegend))
         sLegend = ""
@@ -381,7 +380,7 @@ export function ui_show_obj_props_info(elParent, oObj, lProps, sLegend, sOffset=
         elParent = elDet
     }
     let elPLegend = el_create_append_p(sLegend, elParent)
-    if (dClassNames) {
+    if ((dClassNames) && (sOffset.length > 0)) {
         if (dClassNames['parent']) {
             elParent.classList.add(dClassNames['parent'])
         }
@@ -401,7 +400,7 @@ export function ui_show_obj_props_info(elParent, oObj, lProps, sLegend, sOffset=
         if (vtype != 'object') {
             el_create_append_p(`${kPrint}: ${oObj[k]}`, elS)
         } else {
-            ui_show_obj_props_info(elS, val, Object.keys(val), kPrint, `>${sOffset}`)
+            ui_show_obj_props_info(elS, val, Object.keys(val), kPrint, `>${sOffset}`, dClassNames)
             //el_create_append_p(`${k}:${JSON.stringify(oObj[k], null, " - ")}`, elS);
         }
     }
