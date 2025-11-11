@@ -1674,27 +1674,35 @@ export class Me {
      * @param {SimpleChat} chat
      */
     setup_load(div, chat) {
-        if (!(chat.ods_key() in localStorage)) {
-            return;
-        }
-        div.innerHTML += `<p class="role-system">Restore</p>
-        <p>Load previously saved chat session, if available</p>`;
-        let btn = ui.el_create_button(chat.ods_key(), (ev)=>{
-            let tag = `Me:Load:${chat.chatId}`;
-            console.log(`DBUG:${tag}`, chat);
-            chat.load((loadStatus, dbStatus, related)=>{
-                if (!loadStatus || !dbStatus) {
-                    console.log(`WARN:${tag}:DidntLoad:${loadStatus}:${dbStatus}:${related}`);
-                    return;
-                }
-                console.log(`INFO:${tag}:Loaded:${loadStatus}:${dbStatus}`);
-                queueMicrotask(()=>{
-                    this.multiChat.chat_show(chat.chatId, true, true);
-                    this.multiChat.elInSystem.value = chat.get_system_latest().ns.getContent();
+        let tag = `Me:Load:${chat.chatId}`;
+        mIdb.db_getkeys(DB_NAME, DB_STORE, tag, (status, related)=>{
+            if (!status || (related == null)) {
+                return
+            }
+            if (related.constructor.name == DOMException.name) {
+                return
+            }
+            if (/** @type {IDBValidKey[]} */(related).indexOf(chat.ods_key()) == -1) {
+                return;
+            }
+            div.innerHTML += `<p class="role-system">Restore</p>
+            <p>Load previously saved chat session, if available</p>`;
+            let btn = ui.el_create_button(chat.ods_key(), (ev)=>{
+                console.log(`DBUG:${tag}`, chat);
+                chat.load((loadStatus, dbStatus, related)=>{
+                    if (!loadStatus || !dbStatus) {
+                        console.log(`WARN:${tag}:DidntLoad:${loadStatus}:${dbStatus}:${related}`);
+                        return;
+                    }
+                    console.log(`INFO:${tag}:Loaded:${loadStatus}:${dbStatus}`);
+                    queueMicrotask(()=>{
+                        this.multiChat.chat_show(chat.chatId, true, true);
+                        this.multiChat.elInSystem.value = chat.get_system_latest().ns.getContent();
+                    });
                 });
             });
-        });
-        div.appendChild(btn);
+            div.appendChild(btn);
+        })
     }
 
     /**
