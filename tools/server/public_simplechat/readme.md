@@ -737,7 +737,9 @@ sliding window based drop off or even before they kick in, this can help in many
 * UI Cleanup - msgs spaced out, toolcall edit hr not always, scroll ui only when required,
   hide settings/info till user requests, heading gradient
 
-* iDB module - add open, transact, put and get. Use for chat session save and load
+* iDB module
+  * add open, transact, put and get. Use for chat session save and load
+  * getKeys used to show Restore/Load button wrt chat sessions.
 
 
 #### ToDo

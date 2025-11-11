@@ -103,3 +103,31 @@ export function db_get(dbName, storeName, key, callerTag, cb) {
         cb(false, errReason)
     })
 }
+
+
+/**
+ * Return all keys from a store in a db,
+ * through the provided callback.
+ *
+ * @param {string} dbName
+ * @param {string} storeName
+ * @param {string | undefined} callerTag
+ * @param {(status: boolean, related: IDBValidKey[] | DOMException | null) => void} cb
+ */
+export function db_getkeys(dbName, storeName, callerTag, cb) {
+    let tag = `iDB:GetKeys:${callerTag}`;
+    db_open(dbName, storeName, tag).then((/** @type {IDBDatabase} */db)=>{
+        let reqGet = db_trans_store(db, storeName, 'readonly').getAllKeys();
+        reqGet.onsuccess = (evGet) => {
+            console.info(`DBUG:${tag}:transact success`)
+            cb(true, reqGet.result)
+        }
+        reqGet.onerror = (evGet) => {
+            console.info(`ERRR:${tag}:OnError:transact failed:${reqGet.error}`)
+            cb(false, reqGet.error)
+        }
+    }).catch((errReason)=>{
+        console.info(`ERRR:${tag}:Caught:transact failed:${errReason}`)
+        cb(false, errReason)
+    })
+}
