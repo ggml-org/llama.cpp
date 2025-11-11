@@ -11,23 +11,6 @@
 
 struct common_grammar_builder;
 
-enum parser_type {
-    PARSER_LITERAL = 0,
-    PARSER_SEQUENCE = 1,
-    PARSER_CHOICE = 2,
-    PARSER_ZERO_OR_MORE = 3,
-    PARSER_ONE_OR_MORE = 4,
-    PARSER_NOT = 5,
-    PARSER_ANY = 6,
-    PARSER_CHAR_CLASS = 7,
-    PARSER_GROUP = 8,
-    PARSER_RULE = 9,
-    PARSER_OPTIONAL = 10,
-    PARSER_UNTIL = 11,
-    PARSER_SPACE = 12,
-    PARSER_SCHEMA = 13,
-};
-
 enum parser_result_type {
     PARSER_RESULT_FAIL = 0,
     PARSER_RESULT_NEED_MORE_INPUT = 1,
@@ -89,8 +72,6 @@ class parse_cache {
     void clear();
 };
 
-class parser;
-
 struct parser_context {
     std::string_view input;
     parse_cache memo;
@@ -98,15 +79,9 @@ struct parser_context {
 };
 
 class parser_base;
-class sequence_parser;
-class choice_parser;
-class parser_builder;
-class parser_visitor;
 
 class parser {
-    std::shared_ptr<parser_base> ptr;
-
-    friend class parser_builder;
+    std::shared_ptr<parser_base> ptr_;
 
   public:
     parser();
@@ -114,7 +89,7 @@ class parser {
     parser(const parser & other) = default;
     parser & operator=(const parser & other) {
         if (this != &other) {
-            ptr = other.ptr;
+            ptr_ = other.ptr_;
         }
         return *this;
     }
@@ -127,17 +102,13 @@ class parser {
     parser_base & operator*() const;
     parser_base * operator->() const;
 
-    bool is_sequence() const;
-    std::shared_ptr<sequence_parser> to_sequence() const;
+    std::shared_ptr<parser_base> ptr() const { return ptr_; }
 
-    bool is_choice() const;
-    std::shared_ptr<choice_parser> to_choice() const;
-
-    parser_type type() const;
     parser_result parse(parser_context & ctx, size_t start = 0) const;
+
     std::string dump() const;
 
-    void build_grammar(const common_grammar_builder & builder);
+    void build_grammar(const common_grammar_builder & builder) const;
 };
 
 class parser_builder {

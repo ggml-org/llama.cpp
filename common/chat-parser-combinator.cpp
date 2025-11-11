@@ -8,7 +8,24 @@
 #include <memory>
 #include <optional>
 
-class id_assignment_visitor;
+enum parser_type {
+    PARSER_LITERAL = 0,
+    PARSER_SEQUENCE = 1,
+    PARSER_CHOICE = 2,
+    PARSER_ZERO_OR_MORE = 3,
+    PARSER_ONE_OR_MORE = 4,
+    PARSER_NOT = 5,
+    PARSER_ANY = 6,
+    PARSER_CHAR_CLASS = 7,
+    PARSER_GROUP = 8,
+    PARSER_RULE = 9,
+    PARSER_OPTIONAL = 10,
+    PARSER_UNTIL = 11,
+    PARSER_SPACE = 12,
+    PARSER_SCHEMA = 13,
+};
+
+class parser_visitor;
 
 static parser json_parser();
 
@@ -16,11 +33,12 @@ class parser_base {
   protected:
     int id_;
 
-    friend class id_assignment_visitor;
-
   public:
     parser_base(int id) : id_(id) {}
     virtual ~parser_base() = default;
+
+    int id() const { return id_; }
+    void set_id(int id) { id_ = id; }
 
     virtual parser_type type() const = 0;
     virtual parser_result parse(parser_context & ctx, size_t start = 0) = 0;
@@ -77,9 +95,10 @@ class sequence_parser : public parser_base {
   public:
     sequence_parser(std::initializer_list<parser> parsers, int id) : parser_base(id) {
         for (const auto & p : parsers) {
-            if (p.is_sequence()) {
+            if (p->type() == PARSER_SEQUENCE) {
                 // Flatten sequences
-                for (const auto & embedded : p.to_sequence()->parsers()) {
+                auto seq = std::static_pointer_cast<sequence_parser>(p.ptr());
+                for (const auto & embedded : seq->parsers()) {
                     parsers_.push_back(embedded);
                 }
             } else {
@@ -143,9 +162,10 @@ class choice_parser : public parser_base {
   public:
     choice_parser(std::initializer_list<parser> parsers, int id) : parser_base(id) {
         for (const auto & p : parsers) {
-            if (p.is_choice()) {
+            if (p->type() == PARSER_CHOICE) {
                 // Flatten choices
-                for (const auto & embedded : p.to_choice()->parsers()) {
+                auto choice = std::static_pointer_cast<choice_parser>(p.ptr());
+                for (const auto & embedded : choice->parsers()) {
                     parsers_.push_back(embedded);
                 }
             } else {
@@ -952,8 +972,8 @@ class id_assignment_visitor : public parser_visitor {
     id_assignment_visitor(int & next_id) : next_id_(next_id) {}
 
     void assign_id(parser_base & p) {
-        if (p.id_ == -1) {
-            p.id_ = next_id_++;
+        if (p.id() == -1) {
+            p.set_id(next_id_++);
         }
     }
 
@@ -1085,7 +1105,7 @@ void parse_cache::clear() {
 
 parser::parser() {}
 
-parser::parser(std::shared_ptr<parser_base> parser) : ptr(std::move(parser)) {}
+parser::parser(std::shared_ptr<parser_base> parser) : ptr_(std::move(parser)) {}
 
 parser parser::operator~() const {
     return parser(std::make_shared<not_parser>(*this, -1));
@@ -1105,44 +1125,24 @@ parser parser::operator<<(const parser & other) const {
 }
 
 parser_base & parser::operator*() const {
-    return *ptr;
+    return *ptr_;
 }
 
 parser_base * parser::operator->() const {
-    return ptr.get();
-}
-
-bool parser::is_sequence() const {
-    return ptr->type() == PARSER_SEQUENCE;
-}
-
-std::shared_ptr<sequence_parser> parser::to_sequence() const {
-    return std::dynamic_pointer_cast<sequence_parser>(ptr);
-}
-
-bool parser::is_choice() const {
-    return ptr->type() == PARSER_CHOICE;
-}
-
-std::shared_ptr<choice_parser> parser::to_choice() const {
-    return std::dynamic_pointer_cast<choice_parser>(ptr);
-}
-
-parser_type parser::type() const {
-    return ptr->type();
+    return ptr_.get();
 }
 
 parser_result parser::parse(parser_context & ctx, size_t start) const {
-    return ptr->parse(ctx, start);
+    return ptr_->parse(ctx, start);
 }
 
 std::string parser::dump() const {
-    return ptr->dump();
+    return ptr_->dump();
 }
 
-void parser::build_grammar(const common_grammar_builder & builder) {
+void parser::build_grammar(const common_grammar_builder & builder) const {
     gbnf_visitor visitor(builder);
-    ptr->accept(visitor);
+    ptr_->accept(visitor);
     auto result = visitor.result();
     if (!result.empty()) {
         builder.add_rule("root", result);
@@ -1215,9 +1215,9 @@ parser parser_builder::add_rule(const std::string & name, const parser & p) {
 }
 
 void parser_builder::assign_ids(parser & p) {
-    if (p.ptr) {
+    if (p.ptr()) {
         id_assignment_visitor visitor(next_id_);
-        p.ptr->accept(visitor);
+        p.ptr()->accept(visitor);
     }
 }
 
