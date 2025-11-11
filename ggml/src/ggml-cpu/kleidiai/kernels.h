@@ -87,3 +87,4 @@ struct ggml_kleidiai_kernels {
 
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, const ggml_tensor * tensor);
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q4_0(cpu_feature features);
+ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q8_0(cpu_feature features);
