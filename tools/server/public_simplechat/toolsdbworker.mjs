@@ -4,44 +4,21 @@
 // by Humans for All
 //
 
+import * as mIdb from './idb.mjs'
+
+
 /**
  * Expects to get a message with cid, tcid, (f)name and args
  * Posts message with cid, tcid, (f)name and data if any
  */
 
 
-/**
- * Allows the db connection to be openned.
- */
-function db_open() {
-    return new Promise((resolve, reject) => {
-        const dbConn = indexedDB.open('TCDB', 1);
-        dbConn.onupgradeneeded = (ev) => {
-            console.debug("DBUG:WWDb:Conn:Upgrade needed...")
-            dbConn.result.createObjectStore('theDB');
-            dbConn.result.onerror = (ev) => {
-                console.info(`ERRR:WWDb:Db:Op failed [${ev}]...`)
-            }
-        };
-        dbConn.onsuccess = (ev) => {
-            console.debug("INFO:WWDb:Conn:Opened...")
-            resolve(dbConn.result);
-        }
-        dbConn.onerror = (ev) => {
-            console.info(`ERRR:WWDb:Conn:Failed [${ev}]...`)
-            reject(ev);
-        }
-    });
-}
-
-
 self.onmessage = async function (ev) {
     try {
         console.info(`DBUG:WWDb:${ev.data.name}:OnMessage started...`)
         /** @type {IDBDatabase} */
-        let db = await db_open();
-        let dbTrans = db.transaction('theDB', 'readwrite');
-        let dbOS = dbTrans.objectStore('theDB');
+        let db = await mIdb.db_open("TCDB", "theDB", "WWDb");
+        let dbOS = mIdb.db_trans_store(db, "theDB", 'readwrite');
         let args = ev.data.args;
         switch (ev.data.name) {
 
