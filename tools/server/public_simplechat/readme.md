@@ -734,6 +734,11 @@ sliding window based drop off or even before they kick in, this can help in many
 * SimpleChat class now allows extra fields to be specified while adding, in a generic way using a
   object/literal object or equivalent.
 
+* UI Cleanup - msgs spaced out, toolcall edit hr not always, scroll ui only when required,
+  hide settings/info till user requests, heading gradient
+
+* iDB module - add open, transact, put and get. Use for chat session save and load
+
 
 #### ToDo
 
