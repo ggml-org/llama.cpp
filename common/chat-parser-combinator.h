@@ -128,20 +128,64 @@ class parser_builder {
     parser_builder();
     parser_builder(std::shared_ptr<parser_id_counter> counter);
 
+    // Matches an exact literal string.
+    //   S -> "hello"
     parser literal(const std::string & literal);
+
+    // Matches a sequence of parsers in order, all must succeed.
+    //   S -> A B C
     parser sequence(std::initializer_list<parser> parsers);
+
+    // Matches the first parser that succeeds from a list of alternatives.
+    //   S -> A | B | C
     parser choice(std::initializer_list<parser> parsers);
+
+    // Matches one or more repetitions of a parser.
+    //   S -> A+
     parser one_or_more(const parser & p);
+
+    // Matches zero or more repetitions of a parser, always succeeds.
+    //   S -> A*
     parser zero_or_more(const parser & p);
+
+    // Matches zero or one occurrence of a parser, always succeeds.
+    //   S -> A?
     parser optional(const parser & p);
+
+    // Negative lookahead: succeeds if child parser fails, consumes no input.
+    //   S -> !A
     parser negate(const parser & p);
+
+    // Matches any single character.
+    //   S -> .
     parser any();
+
+    // Matches a single character from a character class or range.
+    //   S -> [a-z] or S -> [^0-9]
     parser char_class(const std::string & classes);
+
+    // Captures the matched text from a parser and stores it with a name.
+    //   S -> <name:A>
     parser group(const std::string & name, const parser & p);
+
+    // References a named rule for recursive or reusable grammar definitions.
+    //   expr -> term | expr "+" term
     parser rule(const std::string & name);
+
+    // Matches zero or more whitespace characters (space, tab, newline).
+    //   S -> [ \t\n]*
     parser space();
+
+    // Matches all characters until a delimiter is found (delimiter not consumed).
+    //   S -> (!delim .)*
     parser until(const std::string & delimiter, bool consume_spaces = true);
+
+    // Creates a complete JSON parser supporting objects, arrays, strings, numbers, booleans, and null.
+    //   value -> object | array | string | number | true | false | null
     parser json();
+
+    // Wraps a parser with JSON schema metadata for grammar generation.
+    // Used internally to convert JSON schemas to GBNF grammar rules.
     parser schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema);
 
     parser add_rule(const std::string & name, const parser & p);

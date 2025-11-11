@@ -44,6 +44,8 @@ class parser_base {
     virtual void accept(parser_visitor & visitor) = 0;
 };
 
+// Matches an exact literal string.
+//   S -> "hello"
 class literal_parser : public parser_base {
     std::string literal_;
 
@@ -84,6 +86,8 @@ class literal_parser : public parser_base {
     const std::string & literal() const { return literal_; }
 };
 
+// Matches a sequence of parsers in order, all must succeed.
+//   S -> A B C
 class sequence_parser : public parser_base {
     std::vector<parser> parsers_;
 
@@ -148,6 +152,8 @@ class sequence_parser : public parser_base {
     const std::vector<parser> & parsers() const { return parsers_; }
 };
 
+// Matches the first parser that succeeds from a list of alternatives.
+//   S -> A | B | C
 class choice_parser : public parser_base {
     std::vector<parser> parsers_;
 
@@ -201,6 +207,8 @@ class choice_parser : public parser_base {
     const std::vector<parser> & parsers() const { return parsers_; }
 };
 
+// Matches one or more repetitions of a parser.
+//   S -> A+
 class one_or_more_parser : public parser_base {
     parser parser_;
 
@@ -256,6 +264,8 @@ class one_or_more_parser : public parser_base {
     const parser & child() const { return parser_; }
 };
 
+// Matches zero or more repetitions of a parser, always succeeds.
+//   S -> A*
 class zero_or_more_parser : public parser_base {
     parser parser_;
 
@@ -302,6 +312,8 @@ class zero_or_more_parser : public parser_base {
     const parser & child() const { return parser_; }
 };
 
+// Matches zero or one occurrence of a parser, always succeeds.
+//   S -> A?
 class optional_parser : public parser_base {
     parser parser_;
 
@@ -338,6 +350,8 @@ class optional_parser : public parser_base {
     const parser & child() const { return parser_; }
 };
 
+// Negative lookahead: succeeds if child parser fails, consumes no input.
+//   S -> !A
 class not_parser : public parser_base {
     parser parser_;
 
@@ -374,6 +388,8 @@ class not_parser : public parser_base {
     const parser & child() const { return parser_; }
 };
 
+// Matches any single character.
+//   S -> .
 class any_parser : public parser_base {
   public:
     any_parser(int id) : parser_base(id) {}
@@ -400,6 +416,8 @@ class any_parser : public parser_base {
     void accept(parser_visitor & visitor) override;
 };
 
+// Matches zero or more whitespace characters (space, tab, newline).
+//   S -> [ \t\n]*
 class space_parser : public parser_base {
   public:
     space_parser(int id) : parser_base(id) {}
@@ -429,6 +447,8 @@ class space_parser : public parser_base {
     void accept(parser_visitor & visitor) override;
 };
 
+// Matches a single character from a character class or range.
+//   S -> [a-z] or S -> [^0-9]
 class char_class_parser : public parser_base {
     struct char_range {
         int start;
@@ -532,6 +552,8 @@ class char_class_parser : public parser_base {
     const std::string & pattern() const { return pattern_; }
 };
 
+// Captures the matched text from a parser and stores it with a name.
+//   S -> <name:A>
 class group_parser : public parser_base {
     std::string name_;
     parser parser_;
@@ -560,6 +582,8 @@ class group_parser : public parser_base {
     const parser & child() const { return parser_; }
 };
 
+// Matches all characters until a delimiter is found (delimiter not consumed).
+//   S -> (!delim .)*
 class until_parser : public parser_base {
     std::string delimiter_;
     parser parser_;
@@ -598,6 +622,8 @@ class until_parser : public parser_base {
     const parser & child() const { return parser_; }
 };
 
+// Wraps a parser with JSON schema metadata for grammar generation.
+// Used internally to convert JSON schemas to GBNF grammar rules.
 class schema_parser : public parser_base {
     parser parser_;
     std::string name_;
@@ -628,6 +654,8 @@ class schema_parser : public parser_base {
     const nlohmann::ordered_json & schema() const { return schema_; }
 };
 
+// References a named rule for recursive or reusable grammar definitions.
+//   expr -> term | expr "+" term
 class rule_parser : public parser_base {
     std::string name_;
     std::weak_ptr<std::unordered_map<std::string, parser>> rules_;
@@ -665,6 +693,8 @@ class rule_parser : public parser_base {
     const std::string & name() const { return name_; }
 };
 
+// Container for the root parser and all named rules in the grammar.
+// Manages ownership of rule registry to enable recursive grammar definitions.
 class root_parser : public parser_base {
     parser root_;
     std::shared_ptr<std::unordered_map<std::string, parser>> rules_;
