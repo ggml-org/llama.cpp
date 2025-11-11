@@ -2212,7 +2212,7 @@ static void ggml_compute_forward_const_f32(const ggml_compute_params * params, g
     }
 }
 
-void ggml_compute_forward_const(const ggml_compute_params * params, ggml_tensor * dst) {
+void ggml_compute_forward_fill(const ggml_compute_params * params, ggml_tensor * dst) {
     ggml_compute_forward_const_f32(params, dst);
 }
 

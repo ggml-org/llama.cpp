@@ -5098,40 +5098,18 @@ struct ggml_tensor * ggml_tri(
 
 // ggml_const
 
-struct ggml_tensor * ggml_const(
+struct ggml_tensor * ggml_fill(
     struct ggml_context *   ctx,
-    const int64_t           ne0,
-    const int64_t           ne1,
-    const int64_t           ne2,
-    const int64_t           ne3,
+    struct ggml_tensor *    dst,
     const float             c) {
 
-    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne0, ne1, ne2, ne3);
+    struct ggml_tensor * result = ggml_view_tensor(ctx, dst);
 
     ggml_set_op_params_f32(result, 0, c);
 
-    result->op = GGML_OP_CONST;
+    result->op = GGML_OP_FILL;
 
     return result;
-}
-
-struct ggml_tensor * ggml_const_1d(struct ggml_context * ctx, const int64_t ne0, const float c) {
-    return ggml_const(ctx, ne0, 1, 1, 1, c);
-}
-
-struct ggml_tensor * ggml_const_2d(struct ggml_context * ctx, const int64_t ne0, const int64_t ne1,
-                                   const float c) {
-    return ggml_const(ctx, ne0, ne1, 1, 1, c);
-}
-
-struct ggml_tensor * ggml_const_3d(struct ggml_context * ctx, const int64_t ne0, const int64_t ne1,
-                                   const int64_t ne2, const float c) {
-    return ggml_const(ctx, ne0, ne1, ne2, 1, c);
-}
-
-struct ggml_tensor * ggml_const_4d(struct ggml_context * ctx, const int64_t ne0, const int64_t ne1,
-                                   const int64_t ne2, const int64_t ne3, const float c) {
-    return ggml_const(ctx, ne0, ne1, ne2, ne3, c);
 }
 
 // ggml_argsort
@@ -5993,7 +5971,10 @@ struct ggml_tensor * ggml_opt_step_sgd(
 struct ggml_tensor * ggml_solve_tri(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        struct ggml_tensor  * b) {
+        struct ggml_tensor  * b,
+        bool                  lower,
+        bool                  left,
+        bool                  unitriangular) {
 
     // A must be square and lower diagonal
     GGML_ASSERT(a->ne[0] == a->ne[1]);
@@ -6006,6 +5987,8 @@ struct ggml_tensor * ggml_solve_tri(
 
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(ggml_is_contiguous(b));
+
+    GGML_ASSERT(lower && left && !unitriangular); // TODO: support other variants
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, b->ne[0], b->ne[1], b->ne[2], b->ne[3]);
 
