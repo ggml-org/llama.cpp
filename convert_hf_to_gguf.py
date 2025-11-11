@@ -9058,13 +9058,13 @@ class MegrezMoEModel(TextModel):
         if num_experts is None:
             raise ValueError("Missing 'num_experts' or 'n_routed_experts' in model config")
         self.gguf_writer.add_expert_count(num_experts)
-        
+
         # Shared expert FFN size - Note: In Megrez-MoE, this is NOT the same as intermediate_size!
         # The shared experts have their own FFN size: hidden_size * 2.75
         # For Megrez2-3x7B-A3B: hidden_size=2048 → shared_expert_ffn=5632
         hidden_size = hparams.get("hidden_size", 2048)
         shared_expert_ffn_size = int(hidden_size * 2.75)
-        
+
         self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_ffn_size)
 
         # Per-expert FFN size (should be consistent across all experts)
@@ -9073,7 +9073,7 @@ class MegrezMoEModel(TextModel):
             raise ValueError("Missing 'moe_intermediate_size' in model config")
         if not isinstance(moe_intermediate_size, list):
             moe_intermediate_size = [moe_intermediate_size]
-        
+
         # Validate all experts have same size
         if not all(n == moe_intermediate_size[0] for n in moe_intermediate_size):
             raise ValueError(f"All experts must have same FFN size, got: {moe_intermediate_size}")
@@ -9081,7 +9081,7 @@ class MegrezMoEModel(TextModel):
 
         # Top-K expert selection is already handled by parent class (TextModel)
         # via num_experts_per_tok parameter, so we don't need to set it again here
-        
+
         # Shared expert count (should be consistent across layers)
         # Try multiple possible parameter names
         num_shared_expert = hparams.get("num_shared_expert") or hparams.get("n_shared_experts")
@@ -9089,7 +9089,7 @@ class MegrezMoEModel(TextModel):
             raise ValueError("Missing 'num_shared_expert' or 'n_shared_experts' in model config")
         if not isinstance(num_shared_expert, list):
             num_shared_expert = [num_shared_expert]
-        
+
         if not all(n == num_shared_expert[0] for n in num_shared_expert):
             raise ValueError(f"All layers must have same shared expert count, got: {num_shared_expert}")
         self.gguf_writer.add_expert_shared_count(num_shared_expert[0])
@@ -9101,19 +9101,19 @@ class MegrezMoEModel(TextModel):
             base = hparams.get("rope_theta", 10000.0)
             hidden_size = hparams.get("hidden_size")
             num_attention_heads = hparams.get("num_attention_heads")
-            
+
             if hidden_size is None or num_attention_heads is None:
                 raise ValueError("Missing 'hidden_size' or 'num_attention_heads' for RoPE scaling")
-            
+
             dim = hidden_size // num_attention_heads
             scaled_base = base * (alpha ** (dim / (dim - 2)))
-            
+
             self.gguf_writer.add_rope_freq_base(scaled_base)
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
             self.gguf_writer.add_rope_scaling_factor(1)
             self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024)
             self.gguf_writer.add_context_length(256 * 1024)
-            
+
             logger.info(
                 f"Megrez dynamic RoPE: alpha={alpha}, base={base}, dim={dim}, "
                 f"scaled_base={scaled_base:.2f}, max_ctx={256*1024}"
