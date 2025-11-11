@@ -569,12 +569,26 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             cmake_policy(SET CMP0135 NEW)
         endif()
 
-        FetchContent_Declare(KleidiAI_Download
-            URL ${KLEIDIAI_DOWNLOAD_URL}
+        # Prepare arguments for FetchContent
+        set(KLEIDIAI_Download_ARGS
             DOWNLOAD_EXTRACT_TIMESTAMP NEW
-            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5})
+            URL                        ${KLEIDIAI_DOWNLOAD_URL}
+            URL_HASH                   MD5=${KLEIDIAI_ARCHIVE_MD5}
+        )
 
-        FetchContent_MakeAvailable(KleidiAI_Download)
+        # Set EXCLUDE_FROM_ALL in FetchContent_MakeAvailable to avoid subproject targets (cmake 3.28+)
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+            list(APPEND KLEIDIAI_Download_ARGS EXCLUDE_FROM_ALL)
+        endif()
+
+        FetchContent_Declare(KleidiAI_Download ${KLEIDIAI_Download_ARGS})
+
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+            FetchContent_MakeAvailable(KleidiAI_Download)
+        else()
+            FetchContent_Populate(KleidiAI_Download)
+        endif()
+
         FetchContent_GetProperties(KleidiAI_Download
             SOURCE_DIR  KLEIDIAI_SRC
             POPULATED   KLEIDIAI_POPULATED)
@@ -584,11 +598,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
 
         add_compile_definitions(GGML_USE_CPU_KLEIDIAI)
-
-        # Remove kleidiai target after fetching it
-        if (TARGET kleidiai)
-            set_target_properties(kleidiai PROPERTIES EXCLUDE_FROM_ALL TRUE)
-        endif()
 
         list(APPEND GGML_CPU_SOURCES
             ggml-cpu/kleidiai/kleidiai.cpp
