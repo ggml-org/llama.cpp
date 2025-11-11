@@ -1464,7 +1464,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
-                // --- SPARSEK: augment base KQ mask dynamically (union with 0/-INF encoding)
+        // SPARSEK: build final KQ mask once (union with base 0/-INF)
         ggml_tensor * kq_mask_final = maybe_apply_sparsek_mask(
             /*base_mask=*/kq_mask,
             /*q=*/q,
@@ -1473,6 +1473,15 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             /*n_rows=*/kq_mask->ne[1],
             /*n_stream=*/kq_mask->ne[3],
             /*il=*/il);
+
+        // Single flash-attn call using the final mask
+        cur = ggml_flash_attn_ext(
+            ctx0, q, k, v,
+            /*kq_mask=*/kq_mask_final,
+            kq_scale,
+            hparams.f_max_alibi_bias,
+            hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f
+        );
 
         cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
 
@@ -2057,7 +2066,7 @@ void llm_graph_context::build_pooling(
 
     GGML_ASSERT(inp != nullptr && "missing result_norm/result_embd tensor");
 
-    ggml_tensor * cur;
+   ggml_tensor * cur = nullptr; // ensure initialized
 
     switch (pooling_type) {
         case LLAMA_POOLING_TYPE_NONE:
