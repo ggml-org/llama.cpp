@@ -70,6 +70,8 @@ class parse_cache {
     parser_result set(int id, size_t start, parser_result result);
     std::optional<parser_result> get(int id, size_t start);
     void clear();
+
+    parser_result cached(int id, size_t start, const std::function<parser_result()> & fn);
 };
 
 struct parser_context {
