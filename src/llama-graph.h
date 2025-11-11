@@ -594,7 +594,7 @@ struct llm_graph_context {
     //
     // common
     //
-     
+
     // ===[ SPARSEK: config & builders ]===========================================
     // Runtime config toggles (filled in .cpp constructor; env or defaults)
     bool  sparsek_enable      = false;   // enable/disable dynamic Sparse-K
