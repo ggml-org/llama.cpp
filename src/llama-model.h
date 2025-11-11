@@ -12,6 +12,9 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#ifdef LLAMA_MOE_ENABLE
+#include <array>
+#endif
 
 struct llama_cparams;
 struct llama_ubatch;
@@ -291,6 +294,14 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_b   = nullptr; // b3
     struct ggml_tensor * ffn_act    = nullptr;
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
+#ifdef LLAMA_MOE_ENABLE
+    std::array<ggml_tensor *, LLAMA_MAX_EXPERTS> ffn_gate_exp_splits   = {};
+    std::array<ggml_tensor *, LLAMA_MAX_EXPERTS> ffn_down_exp_splits   = {};
+    std::array<ggml_tensor *, LLAMA_MAX_EXPERTS> ffn_up_exp_splits     = {};
+    std::array<ggml_tensor *, LLAMA_MAX_EXPERTS> ffn_gate_bias_splits  = {};
+    std::array<ggml_tensor *, LLAMA_MAX_EXPERTS> ffn_down_bias_splits  = {};
+    std::array<ggml_tensor *, LLAMA_MAX_EXPERTS> ffn_up_bias_splits    = {};
+#endif
 
     // mamba proj
     struct ggml_tensor * ssm_in  = nullptr;

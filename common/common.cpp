@@ -1213,10 +1213,16 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;
-    cparams.no_perf           = params.no_perf;
-    cparams.op_offload        = !params.no_op_offload;
-    cparams.swa_full          = params.swa_full;
-    cparams.kv_unified        = params.kv_unified;
+   cparams.no_perf           = params.no_perf;
+   cparams.op_offload        = !params.no_op_offload;
+   cparams.swa_full          = params.swa_full;
+   cparams.kv_unified        = params.kv_unified;
+#ifdef LLAMA_MOE_ENABLE
+    cparams.moe_enable             = params.moe_enable;
+    cparams.moe_cache_size         = params.moe_cache_size > 0 ? (uint32_t) params.moe_cache_size : 0;
+    cparams.moe_prefetch           = params.moe_prefetch;
+    cparams.moe_prefetch_lookahead = params.moe_prefetch_lookahead > 0 ? (uint32_t) params.moe_prefetch_lookahead : 1;
+#endif
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;

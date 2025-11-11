@@ -305,6 +305,20 @@ The Hugging Face platform provides a variety of online tools for converting, qua
 
 - Use the [GGUF-my-repo space](https://huggingface.co/spaces/ggml-org/gguf-my-repo) to convert to GGUF format and quantize model weights to smaller sizes
 - Use the [GGUF-my-LoRA space](https://huggingface.co/spaces/ggml-org/gguf-my-lora) to convert LoRA adapters to GGUF format (more info: https://github.com/ggml-org/llama.cpp/discussions/10123)
+
+### Converting MoE models
+
+Models with Mixture-of-Experts layers should be exported with the new `GGUF_MOE` metadata so that llama.cpp can route and cache experts lazily. The high-level steps are:
+
+1. Convert the base model with `convert_hf_to_gguf.py --moe` (see the updated script usage below).
+2. Ensure the converter emits router tensors (`blk.N.router.*`) and per-expert tensor groups (`blk.N.expert.K.W1`, `W2`, `W3`, …).
+3. Provide per-layer metadata keys:
+   - `moe.layer.N.num_experts`
+   - `moe.layer.N.top_k`
+   - optionally, `moe.layer.N.router_type`
+4. Run `python examples/moe_loader.py --validate path/to/model.gguf` to verify expert handles before inference.
+
+With these fields populated, llama.cpp will mmap each expert independently and hydrate them into GPU memory only when the router selects them.
 - Use the [GGUF-editor space](https://huggingface.co/spaces/CISCai/gguf-editor) to edit GGUF meta data in the browser (more info: https://github.com/ggml-org/llama.cpp/discussions/9268)
 - Use the [Inference Endpoints](https://ui.endpoints.huggingface.co/) to directly host `llama.cpp` in the cloud (more info: https://github.com/ggml-org/llama.cpp/discussions/9669)
 

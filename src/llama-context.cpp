@@ -7,9 +7,11 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 
 //
@@ -104,6 +106,12 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+#ifdef LLAMA_MOE_ENABLE
+    cparams.moe_enable             = params.moe_enable;
+    cparams.moe_cache_size         = params.moe_cache_size;
+    cparams.moe_prefetch           = params.moe_prefetch;
+    cparams.moe_prefetch_lookahead = params.moe_prefetch_lookahead;
+#endif
 
     {
         const char * LLAMA_GRAPH_REUSE_DISABLE = getenv("LLAMA_GRAPH_REUSE_DISABLE");
@@ -155,6 +163,36 @@ llama_context::llama_context(
     }
 
     if (!hparams.vocab_only) {
+#ifdef LLAMA_MOE_ENABLE
+        if (cparams.moe_enable) {
+            expert_cache = std::make_unique<ExpertCache>();
+            ExpertCache::Config cache_cfg{};
+            cache_cfg.max_resident_experts = cparams.moe_cache_size;
+            cache_cfg.vram_pool_bytes = 0;
+            cache_cfg.enable_prefetch = cparams.moe_prefetch;
+            cache_cfg.prefetch_lookahead = cparams.moe_prefetch_lookahead;
+            if (!model.devices.empty()) {
+                cache_cfg.device_policies.clear();
+                cache_cfg.auto_assign_devices = false;
+                for (size_t di = 0; di < model.devices.size(); ++di) {
+                    ggml_backend_dev_t dev = model.devices[di];
+                    if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+                        continue;
+                    }
+                    ExpertCache::Config::DevicePolicy policy{};
+                    policy.device = static_cast<int>(di);
+                    policy.max_resident_experts = cparams.moe_cache_size;
+                    policy.weight = 1.0f;
+                    cache_cfg.device_policies.push_back(policy);
+                }
+                if (cache_cfg.device_policies.empty()) {
+                    cache_cfg.auto_assign_devices = true;
+                }
+            }
+            expert_cache->configure(cache_cfg);
+            moe_initialize();
+        }
+#endif
         // GPU backends
         for (auto * dev : model.devices) {
             ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
@@ -603,6 +641,23 @@ float * llama_context::get_logits_ith(int32_t i) {
 #endif
     }
 }
+
+#ifdef LLAMA_MOE_ENABLE
+ExpertCache * llama_context::get_expert_cache() const {
+    return expert_cache ? expert_cache.get() : nullptr;
+}
+
+llama_moe_cache_stats llama_context::get_moe_cache_stats() const {
+    if (!expert_cache) {
+        return {};
+    }
+    return expert_cache->stats();
+}
+
+llama_moe_prefetch_stats llama_context::get_moe_prefetch_stats() const {
+    return moe_prefetch_.stats;
+}
+#endif
 
 float * llama_context::get_embeddings() {
     output_reorder();
@@ -1108,6 +1163,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
             n_outputs = n_outputs_new;
         }
 
+#ifdef LLAMA_MOE_ENABLE
+        if (cparams.moe_enable) {
+            moe_prefetch_for_batch(ubatch);
+        }
+#endif
+
         ggml_status status;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
 
@@ -1153,6 +1214,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
         if (t_embd && res->get_embd_pooled()) {
             t_embd = res->get_embd_pooled();
         }
+
+#ifdef LLAMA_MOE_ENABLE
+        if (cparams.moe_enable) {
+            moe_update_prefetch_state(res, ubatch);
+        }
+#endif
 
         // extract logits
         if (t_logits && n_outputs > 0) {
@@ -1459,6 +1526,9 @@ llm_graph_params llama_context::graph_params(
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
+#ifdef LLAMA_MOE_ENABLE
+        /*.expert_cache =*/ expert_cache.get(),
+#endif
     };
 }
 
@@ -1523,6 +1593,263 @@ llm_graph_cb llama_context::graph_get_cb() const {
         }
     };
 }
+
+#ifdef LLAMA_MOE_ENABLE
+void llama_context::moe_initialize() {
+    if (!expert_cache) {
+        return;
+    }
+
+    const auto & hparams = model.hparams;
+    if (hparams.n_expert == 0) {
+        LLAMA_LOG_WARN("%s: MoE enabled but model reports zero experts\n", __func__);
+        return;
+    }
+
+    const size_t n_layers = model.layers.size();
+    moe_prefetch_.initialized = true;
+    moe_prefetch_.score.assign(n_layers, std::vector<float>(hparams.n_expert, 0.0f));
+    moe_prefetch_.top_experts.assign(n_layers, {});
+    uint32_t base_width = hparams.n_expert_used > 0 ? hparams.n_expert_used : 1;
+    uint32_t lookahead = std::max<uint32_t>(1, cparams.moe_prefetch_lookahead);
+    uint32_t desired = base_width * lookahead;
+    desired = std::max<uint32_t>(desired, base_width);
+    desired = std::min<uint32_t>(desired, hparams.n_expert);
+    moe_prefetch_.width = desired > 0 ? desired : std::min<uint32_t>(hparams.n_expert, 4);
+    moe_prefetch_.stats = {};
+
+    for (size_t il = 0; il < n_layers; ++il) {
+        const auto & layer = model.layers[il];
+        std::vector<llama_moe_expert_handle> handles;
+        handles.reserve(hparams.n_expert * 6);
+
+        auto fill_metadata = [&](llama_moe_expert_handle & h, ggml_tensor * tensor, int axis) {
+            if (!tensor) {
+                return;
+            }
+            h.type = tensor->type;
+            h.n_dims = ggml_n_dims(tensor);
+            for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+                h.ne[i] = tensor->ne[i];
+                h.nb[i] = tensor->nb[i];
+            }
+            h.slice_axis = axis;
+            h.is_quantized = ggml_is_quantized(tensor->type);
+            h.is_contiguous = ggml_is_contiguous(tensor);
+            h.is_view = tensor->view_src != nullptr;
+            if (h.n_dims >= 2) {
+                h.cols = tensor->ne[0];
+                h.rows = tensor->ne[1];
+            } else if (h.n_dims == 1) {
+                h.cols = 1;
+                h.rows = tensor->ne[0];
+            } else {
+                h.cols = 0;
+                h.rows = 0;
+            }
+        };
+
+        auto register_combined = [&](ggml_tensor * tensor, llama_moe_weight_kind kind, int axis) {
+            if (!tensor) {
+                return;
+            }
+            const size_t stride = tensor->nb[axis];
+            if (stride == 0) {
+                return;
+            }
+            char * base = static_cast<char *>(tensor->data);
+            for (uint32_t ie = 0; ie < hparams.n_expert; ++ie) {
+                llama_moe_expert_handle h{};
+                h.layer = static_cast<int32_t>(il);
+                h.expert_index = static_cast<int32_t>(ie);
+                h.kind = kind;
+                h.tensor = tensor;
+                h.bytes = stride;
+                h.offset = stride * ie;
+                h.host_ptr = base ? base + h.offset : nullptr;
+                h.id = llama_moe_compose_id(h.layer, h.expert_index, h.kind);
+                fill_metadata(h, tensor, axis);
+                handles.push_back(h);
+            }
+        };
+
+        auto register_split = [&](ggml_tensor * tensor, llama_moe_weight_kind kind, uint32_t expert_index) {
+            if (!tensor) {
+                return;
+            }
+            llama_moe_expert_handle h{};
+            h.layer = static_cast<int32_t>(il);
+            h.expert_index = static_cast<int32_t>(expert_index);
+            h.kind = kind;
+            h.tensor = tensor;
+            h.bytes = ggml_nbytes(tensor);
+            h.offset = 0;
+            h.host_ptr = tensor->data;
+            h.id = llama_moe_compose_id(h.layer, h.expert_index, h.kind);
+            fill_metadata(h, tensor, -1);
+            handles.push_back(h);
+        };
+
+        // combined tensors
+        register_combined(layer.ffn_gate_exps, llama_moe_weight_kind::GATE_WEIGHT, 2);
+        register_combined(layer.ffn_up_exps,   llama_moe_weight_kind::UP_WEIGHT,   2);
+        register_combined(layer.ffn_down_exps, llama_moe_weight_kind::DOWN_WEIGHT, 2);
+        register_combined(layer.ffn_gate_exps_b, llama_moe_weight_kind::GATE_BIAS, 1);
+        register_combined(layer.ffn_up_exps_b,   llama_moe_weight_kind::UP_BIAS,   1);
+        register_combined(layer.ffn_down_exps_b, llama_moe_weight_kind::DOWN_BIAS, 1);
+
+        // split tensors per expert
+        for (uint32_t ie = 0; ie < hparams.n_expert; ++ie) {
+            register_split(layer.ffn_gate_exp_splits[ie],  llama_moe_weight_kind::GATE_WEIGHT, ie);
+            register_split(layer.ffn_up_exp_splits[ie],    llama_moe_weight_kind::UP_WEIGHT,   ie);
+            register_split(layer.ffn_down_exp_splits[ie],  llama_moe_weight_kind::DOWN_WEIGHT, ie);
+            register_split(layer.ffn_gate_bias_splits[ie], llama_moe_weight_kind::GATE_BIAS,   ie);
+            register_split(layer.ffn_up_bias_splits[ie],   llama_moe_weight_kind::UP_BIAS,     ie);
+            register_split(layer.ffn_down_bias_splits[ie], llama_moe_weight_kind::DOWN_BIAS,   ie);
+        }
+
+        expert_cache->register_experts(handles);
+    }
+}
+
+void llama_context::moe_prefetch_for_batch(const llama_ubatch & ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (!expert_cache || !cparams.moe_prefetch) {
+        return;
+    }
+
+    const auto & hparams = model.hparams;
+    if (hparams.n_expert == 0) {
+        return;
+    }
+
+    std::vector<int32_t> ids;
+    ids.reserve(moe_prefetch_.width * 6);
+
+    if (moe_prefetch_.initialized && moe_prefetch_.stats.updates > 0) {
+        const size_t layers = std::min(moe_prefetch_.top_experts.size(), model.layers.size());
+        for (size_t il = 0; il < layers; ++il) {
+            const auto & top = moe_prefetch_.top_experts[il];
+            if (top.empty()) {
+                continue;
+            }
+            const auto & layer = model.layers[il];
+            const bool has_gate = layer.ffn_gate_exps != nullptr || layer.ffn_gate_exp_splits[0] != nullptr;
+            const bool has_up_bias = layer.ffn_up_exps_b != nullptr || layer.ffn_up_bias_splits[0] != nullptr;
+            const bool has_down_bias = layer.ffn_down_exps_b != nullptr || layer.ffn_down_bias_splits[0] != nullptr;
+            const bool has_gate_bias = layer.ffn_gate_exps_b != nullptr || layer.ffn_gate_bias_splits[0] != nullptr;
+
+            const size_t width = std::min<size_t>(moe_prefetch_.width, top.size());
+            for (size_t idx = 0; idx < width; ++idx) {
+                const int32_t expert = top[idx];
+                ids.push_back(llama_moe_compose_id(static_cast<int32_t>(il), expert, llama_moe_weight_kind::UP_WEIGHT));
+                ids.push_back(llama_moe_compose_id(static_cast<int32_t>(il), expert, llama_moe_weight_kind::DOWN_WEIGHT));
+                if (has_gate) {
+                    ids.push_back(llama_moe_compose_id(static_cast<int32_t>(il), expert, llama_moe_weight_kind::GATE_WEIGHT));
+                }
+                if (has_up_bias) {
+                    ids.push_back(llama_moe_compose_id(static_cast<int32_t>(il), expert, llama_moe_weight_kind::UP_BIAS));
+                }
+                if (has_down_bias) {
+                    ids.push_back(llama_moe_compose_id(static_cast<int32_t>(il), expert, llama_moe_weight_kind::DOWN_BIAS));
+                }
+                if (has_gate_bias) {
+                    ids.push_back(llama_moe_compose_id(static_cast<int32_t>(il), expert, llama_moe_weight_kind::GATE_BIAS));
+                }
+            }
+        }
+    }
+
+    if (ids.empty()) {
+        const uint32_t fallback_prefetch = std::min<uint32_t>(
+            hparams.n_expert_used > 0 ? hparams.n_expert_used : 1,
+            hparams.n_expert);
+        ids.reserve(fallback_prefetch * model.layers.size() * 2);
+        for (size_t il = 0; il < model.layers.size(); ++il) {
+            for (uint32_t i = 0; i < fallback_prefetch; ++i) {
+                ids.push_back(llama_moe_compose_id(static_cast<int32_t>(il), static_cast<int32_t>(i), llama_moe_weight_kind::UP_WEIGHT));
+                ids.push_back(llama_moe_compose_id(static_cast<int32_t>(il), static_cast<int32_t>(i), llama_moe_weight_kind::DOWN_WEIGHT));
+            }
+        }
+    }
+
+    if (ids.empty()) {
+        return;
+    }
+
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+
+    expert_cache->prefetch(ids);
+    moe_prefetch_.stats.prefetch_calls++;
+}
+
+void llama_context::moe_update_prefetch_state(const llm_graph_result * res, const llama_ubatch & ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (!expert_cache || !cparams.moe_enable || !moe_prefetch_.initialized || res == nullptr) {
+        return;
+    }
+
+    const auto & states = res->get_moe_states();
+    const size_t layers = std::min(states.size(), moe_prefetch_.score.size());
+
+    for (size_t il = 0; il < layers; ++il) {
+        const auto & state = states[il];
+        if (state.selected == nullptr || state.weights == nullptr) {
+            continue;
+        }
+
+        const int64_t top_k = state.selected->ne[0];
+        const int64_t n_tokens = state.selected->ne[1];
+        if (top_k <= 0 || n_tokens <= 0) {
+            continue;
+        }
+
+        const size_t total = static_cast<size_t>(top_k) * static_cast<size_t>(n_tokens);
+
+        std::vector<int32_t> selected_host(total);
+        std::vector<float> weights_host(total);
+
+        ggml_backend_tensor_get(state.selected, selected_host.data(), 0, total * sizeof(int32_t));
+        ggml_backend_tensor_get(state.weights, weights_host.data(), 0, total * sizeof(float));
+
+        auto & score = moe_prefetch_.score[il];
+        const float decay = moe_prefetch_.decay;
+        for (float & s : score) {
+            s *= decay;
+        }
+
+        for (size_t idx = 0; idx < total; ++idx) {
+            const int32_t expert = selected_host[idx];
+            if (expert < 0 || static_cast<size_t>(expert) >= score.size()) {
+                continue;
+            }
+            score[expert] += weights_host[idx];
+        }
+
+        auto & top = moe_prefetch_.top_experts[il];
+        top.clear();
+        std::vector<int32_t> indices(score.size());
+        std::iota(indices.begin(), indices.end(), 0);
+
+        const size_t width = std::min<size_t>(moe_prefetch_.width, indices.size());
+        if (width == 0) {
+            continue;
+        }
+
+        std::nth_element(indices.begin(), indices.begin() + width, indices.end(),
+            [&](int a, int b) { return score[a] > score[b]; });
+        indices.resize(width);
+        std::sort(indices.begin(), indices.end(), [&](int a, int b) { return score[a] > score[b]; });
+        top = std::move(indices);
+    }
+
+    moe_prefetch_.stats.updates++;
+    moe_prefetch_.stats.tokens_observed += ubatch.n_tokens;
+}
+#endif
 
 //
 // state save/load
@@ -2319,6 +2646,12 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+#ifdef LLAMA_MOE_ENABLE
+        /*.moe_cache_size              =*/ 0,
+        /*.moe_prefetch_lookahead      =*/ 1,
+        /*.moe_enable                  =*/ false,
+        /*.moe_prefetch                =*/ false,
+#endif
     };
 
     return result;
@@ -2809,6 +3142,54 @@ void llama_perf_context_print(const llama_context * ctx) {
             __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
     LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
     LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
+#ifdef LLAMA_MOE_ENABLE
+    if (ctx) {
+        llama_moe_cache_stats cache_stats = ctx->get_moe_cache_stats();
+        if (cache_stats.loads > 0 || cache_stats.hits > 0 || cache_stats.prefetch_requests > 0 || cache_stats.resident > 0) {
+            const double denom = static_cast<double>(cache_stats.loads + cache_stats.hits);
+            const double hit_rate = denom > 0.0 ? (static_cast<double>(cache_stats.hits) / denom) * 100.0 : 0.0;
+            LLAMA_LOG_INFO(
+                "%s:     moe cache = resident=%zu, cap=%.2f MiB, loads=%" PRIu64 ", hits=%" PRIu64 ", evictions=%" PRIu64 ", hit_rate=%.2f%%, prefetch_req=%" PRIu64 "\n",
+                __func__,
+                cache_stats.resident,
+                cache_stats.capacity_bytes / (1024.0 * 1024.0),
+                cache_stats.loads,
+                cache_stats.hits,
+                cache_stats.evictions,
+                hit_rate,
+                cache_stats.prefetch_requests);
+        }
+
+        for (const auto & dev : cache_stats.per_device) {
+            const double denom_dev = static_cast<double>(dev.loads + dev.hits);
+            const double hit_rate_dev = denom_dev > 0.0 ? (static_cast<double>(dev.hits) / denom_dev) * 100.0 : 0.0;
+            LLAMA_LOG_INFO(
+                "%s:        device %d => resident=%zu, cap=%.2f MiB, loads=%" PRIu64 ", hits=%" PRIu64 ", evictions=%" PRIu64 ", hit_rate=%.2f%%\n",
+                __func__,
+                dev.device,
+                dev.resident,
+                dev.capacity_bytes / (1024.0 * 1024.0),
+                dev.loads,
+                dev.hits,
+                dev.evictions,
+                hit_rate_dev);
+        }
+
+        const auto prefetch_stats = ctx->get_moe_prefetch_stats();
+        if (prefetch_stats.prefetch_calls > 0 || prefetch_stats.updates > 0) {
+            const double avg_tokens = prefetch_stats.prefetch_calls > 0
+                ? static_cast<double>(prefetch_stats.tokens_observed) / static_cast<double>(prefetch_stats.prefetch_calls)
+                : 0.0;
+            LLAMA_LOG_INFO(
+                "%s:  moe prefetch = updates=%" PRIu64 ", calls=%" PRIu64 ", tokens=%" PRIu64 ", avg_tokens_per_call=%.2f\n",
+                __func__,
+                prefetch_stats.updates,
+                prefetch_stats.prefetch_calls,
+                prefetch_stats.tokens_observed,
+                avg_tokens);
+        }
+    }
+#endif
 }
 
 void llama_perf_context_reset(llama_context * ctx) {

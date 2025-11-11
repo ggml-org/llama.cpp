@@ -2542,9 +2542,76 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {n_ff}, TENSOR_NOT_REQUIRED);
                         } else {
                             layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
+#ifdef LLAMA_MOE_ENABLE
+                            auto has_tensor = [&](const LLM_TN_IMPL & tni) -> bool {
+                                return ml.get_tensor_meta(tni.str().c_str()) != nullptr;
+                            };
+
+                            std::fill(layer.ffn_gate_exp_splits.begin(), layer.ffn_gate_exp_splits.end(), nullptr);
+                            std::fill(layer.ffn_down_exp_splits.begin(), layer.ffn_down_exp_splits.end(), nullptr);
+                            std::fill(layer.ffn_up_exp_splits.begin(),   layer.ffn_up_exp_splits.end(),   nullptr);
+                            std::fill(layer.ffn_gate_bias_splits.begin(), layer.ffn_gate_bias_splits.end(), nullptr);
+                            std::fill(layer.ffn_down_bias_splits.begin(), layer.ffn_down_bias_splits.end(), nullptr);
+                            std::fill(layer.ffn_up_bias_splits.begin(),   layer.ffn_up_bias_splits.end(),   nullptr);
+
+                            if (has_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i))) {
+                                layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff, n_expert}, TENSOR_NOT_REQUIRED);
+                            } else {
+                                layer.ffn_gate_exps = nullptr;
+                                for (int64_t ie = 0; ie < n_expert; ++ie) {
+                                    layer.ffn_gate_exp_splits[ie] = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXP, "weight", i, ie), {n_embd, n_ff}, 0);
+                                }
+                            }
+
+                            if (has_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i))) {
+                                layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff, n_embd, n_expert}, 0);
+                            } else {
+                                layer.ffn_down_exps = nullptr;
+                                for (int64_t ie = 0; ie < n_expert; ++ie) {
+                                    layer.ffn_down_exp_splits[ie] = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXP, "weight", i, ie), {n_ff, n_embd}, 0);
+                                }
+                            }
+
+                            if (has_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i))) {
+                                layer.ffn_up_exps = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff, n_expert}, 0);
+                            } else {
+                                layer.ffn_up_exps = nullptr;
+                                for (int64_t ie = 0; ie < n_expert; ++ie) {
+                                    layer.ffn_up_exp_splits[ie] = create_tensor(tn(LLM_TENSOR_FFN_UP_EXP, "weight", i, ie), {n_embd, n_ff}, 0);
+                                }
+                            }
+
+                            if (has_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i))) {
+                                layer.ffn_gate_exps_b = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff, n_expert}, TENSOR_NOT_REQUIRED);
+                            } else {
+                                layer.ffn_gate_exps_b = nullptr;
+                                for (int64_t ie = 0; ie < n_expert; ++ie) {
+                                    layer.ffn_gate_bias_splits[ie] = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXP, "bias", i, ie), {n_ff}, TENSOR_NOT_REQUIRED);
+                                }
+                            }
+
+                            if (has_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i))) {
+                                layer.ffn_down_exps_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED);
+                            } else {
+                                layer.ffn_down_exps_b = nullptr;
+                                for (int64_t ie = 0; ie < n_expert; ++ie) {
+                                    layer.ffn_down_bias_splits[ie] = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXP, "bias", i, ie), {n_embd}, TENSOR_NOT_REQUIRED);
+                                }
+                            }
+
+                            if (has_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "bias", i))) {
+                                layer.ffn_up_exps_b = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff, n_expert}, TENSOR_NOT_REQUIRED);
+                            } else {
+                                layer.ffn_up_exps_b = nullptr;
+                                for (int64_t ie = 0; ie < n_expert; ++ie) {
+                                    layer.ffn_up_bias_splits[ie] = create_tensor(tn(LLM_TENSOR_FFN_UP_EXP, "bias", i, ie), {n_ff}, TENSOR_NOT_REQUIRED);
+                                }
+                            }
+#else
                             layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff, n_expert}, TENSOR_NOT_REQUIRED);
                             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff, n_embd, n_expert}, 0);
                             layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff, n_expert}, 0);
+#endif
 
                             // For Granite MoE Shared
                             if (hparams.n_ff_shexp > 0) {

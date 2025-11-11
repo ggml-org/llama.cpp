@@ -302,6 +302,13 @@ struct common_params {
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
+#ifdef LLAMA_MOE_ENABLE
+    bool    moe_enable             = false; // enable dynamic MoE routing
+    int32_t moe_cache_size         = 0;     // number of experts kept resident per device
+    bool    moe_prefetch           = false; // enable async prefetch
+    int32_t moe_prefetch_lookahead = 1;     // number of micro-batches to prefetch
+#endif
+
     struct cpu_params cpuparams;
     struct cpu_params cpuparams_batch;
 

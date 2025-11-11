@@ -1,11 +1,15 @@
 #include "llama-impl.h"
 
 #include "llama-chat.h"
+#include "llama-context.h"
 #include "llama-mmap.h"
 #include "llama-vocab.h"
 #include "llama-model-loader.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
+#ifdef LLAMA_MOE_ENABLE
+#include "llama-moe.h"
+#endif
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -415,3 +419,26 @@ const char * llama_print_system_info(void) {
     return s.c_str();
 }
 
+#ifdef LLAMA_MOE_ENABLE
+void llama_moe_cache_get_stats(const llama_context * ctx, llama_moe_cache_stats * out_stats) {
+    if (out_stats == nullptr) {
+        return;
+    }
+    if (ctx == nullptr) {
+        *out_stats = {};
+        return;
+    }
+    *out_stats = ctx->get_moe_cache_stats();
+}
+
+void llama_moe_prefetch_get_stats(const llama_context * ctx, llama_moe_prefetch_stats * out_stats) {
+    if (out_stats == nullptr) {
+        return;
+    }
+    if (ctx == nullptr) {
+        *out_stats = {};
+        return;
+    }
+    *out_stats = ctx->get_moe_prefetch_stats();
+}
+#endif

@@ -8,6 +8,12 @@
 #include "llama-kv-cache-iswa.h"
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
+#ifdef LLAMA_MOE_ENABLE
+#include "llama-moe.h"
+#ifdef GGML_USE_CUDA
+#include "ggml-cuda.h"
+#endif
+#endif
 
 #include <cassert>
 #include <cmath>
@@ -473,15 +479,36 @@ llm_graph_result::llm_graph_result(int64_t max_nodes) : max_nodes(max_nodes) {
     debug = LLAMA_GRAPH_RESULT_DEBUG ? atoi(LLAMA_GRAPH_RESULT_DEBUG) : 0;
 }
 
+llm_graph_result::~llm_graph_result() {
+#ifdef LLAMA_MOE_ENABLE
+    for (auto & fn : cleanups) {
+        if (fn) {
+            fn();
+        }
+    }
+    cleanups.clear();
+#endif
+}
+
 int64_t llm_graph_result::get_max_nodes() const {
     return max_nodes;
 }
 
 void llm_graph_result::reset() {
+#ifdef LLAMA_MOE_ENABLE
+    for (auto & fn : cleanups) {
+        if (fn) {
+            fn();
+        }
+    }
+    cleanups.clear();
+#endif
     t_tokens      = nullptr;
     t_logits      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
+
+    clear_moe_states();
 
     params = {};
 
@@ -499,6 +526,14 @@ void llm_graph_result::reset() {
 
     gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
 }
+
+#ifdef LLAMA_MOE_ENABLE
+void llm_graph_result::add_cleanup(std::function<void()> fn) {
+    if (fn) {
+        cleanups.push_back(std::move(fn));
+    }
+}
+#endif
 
 void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
     for (auto & input : inputs) {
@@ -547,6 +582,17 @@ void llm_graph_result::set_params(const llm_graph_params & params) {
     this->params = params;
 }
 
+void llm_graph_result::set_moe_state(size_t layer, moe_state_view state) {
+    if (moe_states.size() < layer + 1) {
+        moe_states.resize(layer + 1);
+    }
+    moe_states[layer] = state;
+}
+
+void llm_graph_result::clear_moe_states() {
+    moe_states.clear();
+}
+
 //
 // llm_graph_context
 //
@@ -590,7 +636,11 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     cb_func          (params.cb),
     res              (params.res),
     ctx0             (res->get_ctx()),
-    gf               (res->get_gf()) {
+    gf               (res->get_gf())
+#ifdef LLAMA_MOE_ENABLE
+    , expert_cache   (params.expert_cache)
+#endif
+{
         res->set_params(params);
     }
 
@@ -900,6 +950,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
+#ifdef LLAMA_MOE_ENABLE
+    const bool moe_runtime_enabled = cparams.moe_enable && expert_cache != nullptr;
+#else
+    const bool moe_runtime_enabled = false;
+#endif
 
     ggml_tensor * logits = nullptr;
 
@@ -995,6 +1050,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * weights = ggml_get_rows(ctx0, probs, selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
+    if (res) {
+        res->set_moe_state(il, {selected_experts, weights, probs});
+    }
+
 
     if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
@@ -1025,6 +1084,42 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     //call early so that topk-moe can be used
     ggml_build_forward_expand(gf, weights);
+
+#ifdef LLAMA_MOE_ENABLE
+    if (moe_runtime_enabled) {
+        llama_moe_dispatch_desc desc{};
+        desc.ctx = nullptr;
+        desc.cache = expert_cache;
+        desc.layer = il;
+        desc.n_expert = static_cast<int32_t>(n_expert);
+        desc.n_expert_used = static_cast<int32_t>(n_expert_used);
+        if (up_exps) {
+            desc.n_ff = static_cast<int32_t>(up_exps->ne[1]);
+        } else if (down_exps) {
+            desc.n_ff = static_cast<int32_t>(down_exps->ne[0]);
+        } else {
+            desc.n_ff = 0;
+        }
+        desc.activation = type_op;
+        desc.has_gate = gate_exps != nullptr;
+        desc.has_gate_in = gate_inp != nullptr;
+        desc.has_gate_bias = gate_exps_b != nullptr;
+        desc.has_up_bias = up_exps_b != nullptr;
+        desc.has_down_bias = down_exps_b != nullptr;
+        desc.weight_before_ffn = weight_before_ffn;
+        desc.allow_quantized = false;
+        ggml_backend_t tensor_backend = sched ? ggml_backend_sched_get_tensor_backend(sched, cur) : nullptr;
+        if (tensor_backend && ggml_backend_is_cuda(tensor_backend)) {
+            desc.use_cuda = true;
+            desc.backend = tensor_backend;
+        }
+
+        ggml_tensor * dispatch_input = ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
+        ggml_tensor * moe_out = llama_moe_build_dispatch(ctx0, dispatch_input, selected_experts, weights, desc, res);
+        cb(moe_out, "ffn_moe_dispatch", il);
+        return moe_out;
+    }
+#endif
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 

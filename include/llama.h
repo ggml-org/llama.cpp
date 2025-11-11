@@ -337,6 +337,12 @@ extern "C" {
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
 
+#ifdef LLAMA_MOE_ENABLE
+        // Mixture-of-Experts runtime controls
+        uint32_t moe_cache_size;   // number of experts to keep resident per device
+        uint32_t moe_prefetch_lookahead; // micro-batches to prefetch ahead
+#endif
+
         // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
         bool embeddings;  // if true, extract embeddings (together with logits)
         bool offload_kqv; // offload the KQV ops (including the KV cache) to GPU
@@ -348,6 +354,10 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+#ifdef LLAMA_MOE_ENABLE
+        bool moe_enable;   // enable dynamic MoE routing and caching
+        bool moe_prefetch; // overlap DMA with compute using auxiliary streams
+#endif
     };
 
     // model quantization parameters
@@ -1412,3 +1422,9 @@ extern "C" {
 #endif
 
 #endif // LLAMA_H
+#ifdef LLAMA_MOE_ENABLE
+struct llama_moe_cache_stats;
+struct llama_moe_prefetch_stats;
+LLAMA_API void llama_moe_cache_get_stats(const struct llama_context * ctx, struct llama_moe_cache_stats * out_stats);
+LLAMA_API void llama_moe_prefetch_get_stats(const struct llama_context * ctx, struct llama_moe_prefetch_stats * out_stats);
+#endif

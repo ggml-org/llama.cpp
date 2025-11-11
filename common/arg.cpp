@@ -975,6 +975,36 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.kv_unified = true;
         }
     ).set_env("LLAMA_ARG_KV_SPLIT"));
+#ifdef LLAMA_MOE_ENABLE
+    add_opt(common_arg(
+        {"--moe-enable"},
+        "enable dynamic Mixture-of-Experts routing with on-demand expert caching",
+        [](common_params & params) {
+            params.moe_enable = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_ENABLE"));
+    add_opt(common_arg(
+        {"--moe-cache-size"}, "N",
+        string_format("number of experts pinned in VRAM per device (default: %d, 0 = auto)", params.moe_cache_size),
+        [](common_params & params, int value) {
+            params.moe_cache_size = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE"));
+    add_opt(common_arg(
+        {"--moe-prefetch"},
+        string_format("overlap expert DMA with compute (default: %s)", params.moe_prefetch ? "true" : "false"),
+        [](common_params & params) {
+            params.moe_prefetch = true;
+        }
+    ).set_env("LLAMA_ARG_MOE_PREFETCH"));
+    add_opt(common_arg(
+        {"--moe-prefetch-lookahead"}, "N",
+        string_format("number of micro-batches to prefetch ahead (default: %d)", params.moe_prefetch_lookahead),
+        [](common_params & params, int value) {
+            params.moe_prefetch_lookahead = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_PREFETCH_LOOKAHEAD"));
+#endif
     add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
