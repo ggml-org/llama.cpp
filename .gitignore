@@ -152,3 +152,6 @@ poetry.toml
 # IDE
 *.code-workspace
 .windsurf/
+
+# local backups
+*.bak.*
