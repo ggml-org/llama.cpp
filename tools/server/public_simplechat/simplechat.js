@@ -6,6 +6,11 @@
 import * as du from "./datautils.mjs";
 import * as ui from "./ui.mjs"
 import * as mTools from "./tools.mjs"
+import * as mIdb from "./idb.mjs"
+
+
+const DB_NAME = "SimpleChatTCRV"
+const DB_STORE = "Sessions"
 
 const ROLES_TEMP_ENDSWITH = ".TEMP"
 
@@ -468,29 +473,48 @@ class SimpleChat {
     }
 
     /**
-     * Save into localStorage
+     * Save into indexedDB
      */
     save() {
+        let tag = `SimpleChat:Save:${this.chatId}`;
         /** @type {SimpleChatODS} */
         let ods = {iLastSys: this.iLastSys, xchat: this.xchat};
-        localStorage.setItem(this.ods_key(), JSON.stringify(ods));
+        mIdb.db_put(DB_NAME, DB_STORE, this.ods_key(), JSON.stringify(ods), tag, (status, related)=>{
+            console.log(`DBUG:${tag}:${status}:${related}`)
+            if (!status) {
+                throw new Error(`ERRR:${tag}:${related}`)
+            }
+        })
     }
 
     /**
-     * Load from localStorage
+     * Load from indexedDB, get status through callback.
+     * @param {((loadStatus: boolean, dbStatus: boolean, related: IDBValidKey | DOMException | null) => void)} cb
      */
-    load() {
-        let sods = localStorage.getItem(this.ods_key());
-        if (sods == null) {
-            return;
-        }
-        /** @type {SimpleChatODS} */
-        let ods = JSON.parse(sods);
-        this.iLastSys = ods.iLastSys;
-        this.xchat = [];
-        for (const cur of ods.xchat) {
-            this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.ns.tool_call_id, cur.ns.name, cur.ns.image_url), cur.trimmedContent))
-        }
+    load(cb) {
+        let tag = `SimpleChat:Load:${this.chatId}`;
+        mIdb.db_get(DB_NAME, DB_STORE, this.ods_key(), tag, (status, related)=>{
+            if (!status) {
+                cb(false, status, `ERRR:${tag}:Db failure:${related}`);
+                return
+            }
+            if (!related) {
+                cb(false, status, `ERRR:${tag}:No data?`);
+                return
+            }
+            if (typeof(related) == "string") {
+                /** @type {SimpleChatODS} */
+                let ods = JSON.parse(related);
+                this.iLastSys = ods.iLastSys;
+                this.xchat = [];
+                for (const cur of ods.xchat) {
+                    this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.ns.tool_call_id, cur.ns.name, cur.ns.image_url), cur.trimmedContent))
+                }
+                cb(true, status, related)
+            } else {
+                cb(false, status, `ERRR:${tag}:DOMException?:${related}`);
+            }
+        })
     }
 
     /**
@@ -587,6 +611,10 @@ class SimpleChat {
      *
      * NOTE: A new copy is created and added into xchat.
      * Also update iLastSys system prompt index tracker
+     *
+     * ALERT: Also triggers a save, which occurs assynchronously in the background, as of now,
+     * with no handle returned wrt same.
+     *
      * @param {ChatMessageEx} chatMsg
      * @param {Object<string,any>|undefined} extra - optional additional fieldName=Value pairs to be added, if any
      */
@@ -1652,11 +1680,18 @@ export class Me {
         div.innerHTML += `<p class="role-system">Restore</p>
         <p>Load previously saved chat session, if available</p>`;
         let btn = ui.el_create_button(chat.ods_key(), (ev)=>{
-            console.log("DBUG:SimpleChat:SC:Load", chat);
-            chat.load();
-            queueMicrotask(()=>{
-                this.multiChat.chat_show(chat.chatId, true, true);
-                this.multiChat.elInSystem.value = chat.get_system_latest().ns.getContent();
+            let tag = `Me:Load:${chat.chatId}`;
+            console.log(`DBUG:${tag}`, chat);
+            chat.load((loadStatus, dbStatus, related)=>{
+                if (!loadStatus || !dbStatus) {
+                    console.log(`WARN:${tag}:DidntLoad:${loadStatus}:${dbStatus}:${related}`);
+                    return;
+                }
+                console.log(`INFO:${tag}:Loaded:${loadStatus}:${dbStatus}`);
+                queueMicrotask(()=>{
+                    this.multiChat.chat_show(chat.chatId, true, true);
+                    this.multiChat.elInSystem.value = chat.get_system_latest().ns.getContent();
+                });
             });
         });
         div.appendChild(btn);
