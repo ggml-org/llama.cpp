@@ -22,11 +22,6 @@ target_compile_definitions(${TARGET} PRIVATE
     CPPHTTPLIB_TCP_NODELAY=1
 )
 
-if (${CMAKE_SYSTEM_NAME} MATCHES "visionOS")
-    # quick fix for https://github.com/ggml-org/llama.cpp/actions/runs/19247291428/job/55024294176?pr=17150
-    target_compile_definitions(${TARGET} PRIVATE NI_MAXHOST=1025)
-endif()
-
 if (LLAMA_OPENSSL)
     find_package(OpenSSL)
     if (OpenSSL_FOUND)

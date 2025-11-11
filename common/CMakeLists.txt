@@ -91,8 +91,10 @@ if (LLAMA_CURL)
     target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_CURL)
     include_directories(${CURL_INCLUDE_DIRS})
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
-else()
+elseif (LLAMA_HTTPLIB)
     # otherwise, use cpp-httplib
+    message(FATAL "test")
+    target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_HTTPLIB)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} cpp-httplib)
 endif()
 
