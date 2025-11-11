@@ -894,14 +894,17 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     ggml_tensor * topk_idx = ggml_top_k(ctx0, scores, sparsek_topk); // [topk, n_rows_p]
     cb(topk_idx, "sparsek_topk_idx", il);
 
-    // 3) Build 0/-INF mask from indices
-    ggml_tensor * all = ggml_dup(ctx0, scores);          // [n_kv, n_rows_p]
-    all = ggml_scale(ctx0, all, 0.0f);                   // fill 0
-    ggml_tensor * neg_inf = ggml_add(ctx0, all, ggml_new_f32(ctx0, -INFINITY)); // 0 + (-INF) broadcast → -INF
-    ggml_tensor * rows3d  = ggml_reshape_3d(ctx0, neg_inf, n_kv, 1, n_rows_p);   // [n_kv,1,n_rows_p]
-    ggml_tensor * picked  = ggml_get_rows(ctx0, rows3d, topk_idx);               // [topk,1,n_rows_p]
-    ggml_tensor * zeros   = ggml_scale(ctx0, picked, 0.0f);                      // zeros for selected
-    ggml_tensor * merged  = ggml_set_rows(ctx0, neg_inf, zeros, topk_idx);       // set selected to 0
+        // 3) Build -INF base of shape [n_kv, 1, n_rows_p]
+    // Create a zero tensor same shape as 'scores', then bias it to -INF using ggml_scale_bias
+    ggml_tensor * zero2d = ggml_dup(ctx0, scores);                // [n_kv, n_rows_p]
+    ggml_set_f32(zero2d, 0.0f);                                   // fill zeros
+    ggml_tensor * neg2d = ggml_scale_bias(ctx0, zero2d,
+                                        /*scale=*/0.0f,
+                                        /*bias =*/-INFINITY);    // 0*X + (-INF) = -INF
+    ggml_tensor * rows3d  = ggml_reshape_3d(ctx0, neg2d, n_kv, 1, n_rows_p);   // [n_kv,1,n_rows_p]
+    ggml_tensor * picked  = ggml_get_rows(ctx0, rows3d, topk_idx);            // [topk,1,n_rows_p]
+    ggml_tensor * zeros   = ggml_scale(ctx0, picked, 0.0f);                   // make selected rows = 0
+    ggml_tensor * merged  = ggml_set_rows(ctx0, neg2d, zeros, topk_idx);      // scatter zeros into -INF base
     ggml_tensor * allow   = ggml_reshape_4d(ctx0, merged, n_kv, n_rows_p, 1, 1); // [n_kv,n_rows_p,1,1]
     cb(allow, "sparsek_allow_topk_only", il);
 
@@ -1470,10 +1473,6 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             /*n_rows=*/kq_mask->ne[1],
             /*n_stream=*/kq_mask->ne[3],
             /*il=*/il);
-
-        // Use the final mask for flash attention
-        cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask_final, kq_scale, hparams.f_max_alibi_bias,
-                                hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
 
         cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
 
