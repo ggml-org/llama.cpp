@@ -5115,21 +5115,21 @@ struct ggml_tensor * ggml_const(
     return result;
 }
 
-struct ggml_tensor * ggml_const_1d(struct ggml_context *ctx, const int64_t ne0, const float c) {
+struct ggml_tensor * ggml_const_1d(struct ggml_context * ctx, const int64_t ne0, const float c) {
     return ggml_const(ctx, ne0, 1, 1, 1, c);
 }
 
-struct ggml_tensor * ggml_const_2d(struct ggml_context *ctx, const int64_t ne0, const int64_t ne1,
+struct ggml_tensor * ggml_const_2d(struct ggml_context * ctx, const int64_t ne0, const int64_t ne1,
                                    const float c) {
     return ggml_const(ctx, ne0, ne1, 1, 1, c);
 }
 
-struct ggml_tensor * ggml_const_3d(struct ggml_context *ctx, const int64_t ne0, const int64_t ne1,
+struct ggml_tensor * ggml_const_3d(struct ggml_context * ctx, const int64_t ne0, const int64_t ne1,
                                    const int64_t ne2, const float c) {
     return ggml_const(ctx, ne0, ne1, ne2, 1, c);
 }
 
-struct ggml_tensor * ggml_const_4d(struct ggml_context *ctx, const int64_t ne0, const int64_t ne1,
+struct ggml_tensor * ggml_const_4d(struct ggml_context * ctx, const int64_t ne0, const int64_t ne1,
                                    const int64_t ne2, const int64_t ne3, const float c) {
     return ggml_const(ctx, ne0, ne1, ne2, ne3, c);
 }
