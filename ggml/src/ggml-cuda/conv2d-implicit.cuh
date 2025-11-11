@@ -146,7 +146,7 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
         if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
-            curR < param.r && curS < param.s && curC < param.c && ki < end_k){
+            curR < param.r && curS < param.s && curC < param.c && n < param.n && ki < end_k){
             const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[n * chw + inOffsetTmp])[0];
         } else{
@@ -214,7 +214,7 @@ __device__ __forceinline__ void tileMemcpyLoadA(
         int curH = posh_ori + curR * param.d_h; // input h
         int curW = posw_ori + curS * param.d_w; // input w
         if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
-            curR < param.r && curS < param.s && curC < param.c && ki < end_k){
+            curR < param.r && curS < param.s && curC < param.c && n < param.n && ki < end_k){
             const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[n * chw + inOffsetTmp])[0];
         } else{
