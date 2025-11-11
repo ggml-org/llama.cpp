@@ -1,0 +1,154 @@
+# Extensions
+
+*.a
+*.bat
+*.bin
+*.d
+*.dll
+*.dot
+*.etag
+*.exe
+*.gcda
+*.gcno
+*.gcov
+*.gguf
+*.gguf.json
+*.lastModified
+*.log
+*.metallib
+*.o
+*.so
+*.swp
+*.tmp
+
+# IDE / OS
+
+.cache/
+.ccls-cache/
+.direnv/
+.DS_Store
+.envrc
+.idea/
+.swiftpm
+.vs/
+.vscode/
+nppBackup
+
+
+# Coverage
+
+gcovr-report/
+lcov-report/
+
+# Build Artifacts
+
+tags
+.build/
+build*
+release
+debug
+!build-info.cmake
+!build-info.cpp.in
+!build-info.sh
+!build.zig
+!docs/build.md
+/libllama.so
+/llama-*
+/vulkan-shaders-gen
+android-ndk-*
+arm_neon.h
+cmake-build-*
+CMakeSettings.json
+compile_commands.json
+ggml-metal-embed.metal
+llama-batched-swift
+/rpc-server
+out/
+tmp/
+autogen-*.md
+
+# Deprecated
+
+/main
+/server
+
+# CI
+
+!.github/workflows/*.yml
+
+# Models
+
+models/*
+models-mnt
+!models/.editorconfig
+!models/ggml-vocab-*.gguf*
+!models/templates
+
+# Zig
+zig-out/
+zig-cache/
+
+# Logs
+
+ppl-*.txt
+qnt-*.txt
+perf-*.txt
+
+# Examples
+
+examples/jeopardy/results.txt
+tools/server/*.css.hpp
+tools/server/*.html.hpp
+tools/server/*.js.hpp
+tools/server/*.mjs.hpp
+tools/server/*.gz.hpp
+!build_64.sh
+!examples/*.bat
+!examples/*/*.kts
+!examples/*/*/*.kts
+!examples/sycl/*.bat
+!examples/sycl/*.sh
+
+# Server Web UI temporary files
+node_modules
+tools/server/webui/dist
+
+# Python
+
+/.venv
+__pycache__/
+*/poetry.lock
+poetry.toml
+
+# Nix
+/result
+
+# Test binaries
+/tests/test-backend-ops
+/tests/test-double-float
+/tests/test-grad0
+/tests/test-grammar-parser
+/tests/test-llama-grammar
+/tests/test-opt
+/tests/test-quantize-fns
+/tests/test-quantize-perf
+/tests/test-rope
+/tests/test-sampling
+/tests/test-tokenizer-0
+/tests/test-tokenizer-1-bpe
+/tests/test-tokenizer-1-spm
+
+# Scripts
+!/scripts/install-oneapi.bat
+
+# Test models for lora adapters
+/lora-tests
+
+# Local scripts
+/run-vim.sh
+/run-chat.sh
+.ccache/
+
+# IDE
+*.code-workspace
+.windsurf/
