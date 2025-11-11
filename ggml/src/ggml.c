@@ -5097,14 +5097,14 @@ struct ggml_tensor * ggml_tri(
 }
 
 // ggml_const
+
 struct ggml_tensor * ggml_const(
     struct ggml_context *   ctx,
     const int64_t           ne0,
     const int64_t           ne1,
     const int64_t           ne2,
     const int64_t           ne3,
-    const float             c
-) {
+    const float             c) {
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne0, ne1, ne2, ne3);
 
