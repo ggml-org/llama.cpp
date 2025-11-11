@@ -21,27 +21,16 @@ import gguf
 
 # Import all model classes from the conversion module
 from conversion import (
-    ModelBase, ModelType, get_model_architecture, logger
+    ModelBase, ModelType, get_model_architecture, logger, get_model_class, print_registered_models
 )
 
-try:
-    from mistral_common.tokens.tokenizers.base import TokenizerVersion
-    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer
-    from mistral_common.tokens.tokenizers.sentencepiece import (
-        SentencePieceTokenizer,
-    )
+import importlib.util
 
-    _mistral_common_installed = True
-    _mistral_import_error_msg = ""
-except ImportError:
-    _MISTRAL_COMMON_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
-    _MISTRAL_COMMON_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
+# Check if mistral_common is available without importing it
+_mistral_common_installed = importlib.util.find_spec("mistral_common") is not None
+_mistral_import_error_msg = ""
 
-    _mistral_common_installed = False
-    TokenizerVersion = None
-    Tekkenizer = None
-    SentencePieceTokenizer = None
+if not _mistral_common_installed:
     _mistral_import_error_msg = (
         "Mistral format requires `mistral-common` to be installed. Please run "
         "`pip install mistral-common[image,audio]` to install it."
@@ -150,18 +139,18 @@ def parse_args() -> argparse.Namespace:
         "--sentence-transformers-dense-modules", action="store_true",
         help="include sentence-transformers dense modules safetensors files",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.print_supported_models and args.model is None:
+        parser.error("the following arguments are required: model")
+    return args
 
 
 def main() -> None:
     args = parse_args()
 
     if args.print_supported_models:
-        # Load all model modules to ensure they're registered
-        from conversion import _load_all_models
-        _load_all_models()
         logger.error("Supported models:")
-        ModelBase.print_registered_models()
+        print_registered_models()
         sys.exit(0)
 
     if args.verbose:
@@ -224,19 +213,19 @@ def main() -> None:
         model_type = ModelType.MMPROJ if args.mmproj else ModelType.TEXT
         hparams = ModelBase.load_hparams(dir_model, is_mistral_format)
         if not is_mistral_format:
+            # Load all model modules to ensure they're registered
             model_architecture = get_model_architecture(hparams, model_type)
             logger.info(f"Model architecture: {model_architecture}")
             try:
-                model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
+                is_mmproj = model_type == ModelType.MMPROJ
+                model_class = get_model_class(model_architecture, is_mmproj)
             except NotImplementedError:
                 logger.error(f"Model {model_architecture} is not supported")
                 sys.exit(1)
         elif args.mmproj:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
-            from conversion import get_model_class
             model_class = get_model_class("PixtralModel")
         else:
-            from conversion import get_model_class
             model_class = get_model_class("MistralModel")
 
         model_instance = model_class(dir_model, output_type, fname_out,
