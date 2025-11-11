@@ -896,9 +896,7 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
 
         // 3) Build -INF base of shape [n_kv, 1, n_rows_p]
     // Create a zero tensor same shape as 'scores', then bias it to -INF using ggml_scale_bias
-    ggml_tensor * zero2d = ggml_dup(ctx0, scores);                // [n_kv, n_rows_p]
-    ggml_set_f32(zero2d, 0.0f);                                   // fill zeros
-    ggml_tensor * neg2d = ggml_scale_bias(ctx0, zero2d,
+    ggml_tensor * neg2d = ggml_scale_bias(ctx0, scores,
                                         /*scale=*/0.0f,
                                         /*bias =*/-INFINITY);    // 0*X + (-INF) = -INF
     ggml_tensor * rows3d  = ggml_reshape_3d(ctx0, neg2d, n_kv, 1, n_rows_p);   // [n_kv,1,n_rows_p]
