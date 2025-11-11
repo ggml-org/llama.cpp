@@ -24,6 +24,7 @@ enum parser_type {
     PARSER_SPACE = 12,
     PARSER_SCHEMA = 13,
     PARSER_ROOT = 14,
+    PARSER_REPETITION = 15,
 };
 
 class parser_visitor;
@@ -208,96 +209,52 @@ class choice_parser : public parser_base {
     const std::vector<parser> & parsers() const { return parsers_; }
 };
 
-// Matches one or more repetitions of a parser.
-//   S -> A+
-class one_or_more_parser : public parser_base {
+// Matches between min and max repetitions of a parser (inclusive).
+//   S -> A{m,n}
+// Use -1 for max_count to represent unbounded repetition (equivalent to {m,})
+class repetition_parser : public parser_base {
     parser parser_;
+    int min_count_;
+    int max_count_;
 
   public:
-    one_or_more_parser(const parser & parser, int id) : parser_base(id), parser_(parser) {}
+    repetition_parser(const parser & parser, int min_count, int max_count, int id)
+        : parser_base(id), parser_(parser), min_count_(min_count), max_count_(max_count) {}
 
-    parser_type type() const override { return PARSER_ONE_OR_MORE; }
-
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            std::unordered_map<std::string, parser_match_location> groups;
-
-            // Parse at least once
-            auto first_result = parser_->parse(ctx, start);
-            if (!first_result.is_success()) {
-                return first_result;
-            }
-
-            auto pos = first_result.end;
-            groups.insert(first_result.groups.begin(), first_result.groups.end());
-
-            // Parse zero or more additional times
-            for (;;) {
-                auto result = parser_->parse(ctx, pos);
-                groups.insert(result.groups.begin(), result.groups.end());
-
-                if (result.is_need_more_input()) {
-                    return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos, groups);
-                }
-
-                if (result.is_fail()) {
-                    // Done with repetitions
-                    break;
-                }
-
-                if (result.end == pos) {
-                    break; // Prevent an infinite loop
-                }
-
-                pos = result.end;
-            }
-
-            return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
-        });
-    }
-
-    std::string dump() const override {
-        return "OneOrMore(" + parser_->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const parser & child() const { return parser_; }
-};
-
-// Matches zero or more repetitions of a parser, always succeeds.
-//   S -> A*
-class zero_or_more_parser : public parser_base {
-    parser parser_;
-
-  public:
-    zero_or_more_parser(const parser & parser, int id) : parser_base(id), parser_(parser) {}
-
-    parser_type type() const override { return PARSER_ZERO_OR_MORE; }
+    parser_type type() const override { return PARSER_REPETITION; }
 
     parser_result parse(parser_context & ctx, size_t start = 0) override {
         return ctx.memo.cached(id_, start, [&]() {
             std::unordered_map<std::string, parser_match_location> groups;
             auto pos = start;
+            int match_count = 0;
 
-            for (;;) {
+            // Try to match up to max_count times (or unlimited if max_count is -1)
+            while (max_count_ == -1 || match_count < max_count_) {
                 auto result = parser_->parse(ctx, pos);
                 groups.insert(result.groups.begin(), result.groups.end());
+
+                if (result.is_success()) {
+                    // Prevent infinite loop on empty matches
+                    if (result.end == pos) {
+                        break;
+                    }
+                    pos = result.end;
+                    match_count++;
+                    continue;
+                }
 
                 if (result.is_need_more_input()) {
                     return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos, groups);
                 }
 
-                if (result.is_fail()) {
-                    // Done with repetitions (zero or more is always valid)
-                    break;
-                }
+                // Child failed - stop trying
+                break;
+            }
 
-                if (result.end == pos) {
-                    break; // Prevent an infinite loop
-                }
-
-                pos = result.end;
+            // Check if we got enough matches
+            if (match_count < min_count_) {
+                return parser_result(PARSER_RESULT_FAIL, start, pos, groups);
             }
 
             return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
@@ -305,50 +262,106 @@ class zero_or_more_parser : public parser_base {
     }
 
     std::string dump() const override {
-        return "ZeroOrMore(" + parser_->dump() + ")";
+        if (max_count_ == -1) {
+            return "Repetition(" + parser_->dump() + ", " + std::to_string(min_count_) + ", unbounded)";
+        }
+        return "Repetition(" + parser_->dump() + ", " + std::to_string(min_count_) + ", " + std::to_string(max_count_) + ")";
     }
 
     void accept(parser_visitor & visitor) override;
 
     const parser & child() const { return parser_; }
+
+    int min_count() const { return min_count_; }
+
+    int max_count() const { return max_count_; }
+};
+
+// Matches one or more repetitions of a parser.
+//   S -> A+
+class one_or_more_parser : public parser_base {
+    parser delegate_;
+
+  public:
+    one_or_more_parser(const parser & p, int id) : parser_base(id) {
+        delegate_ = parser(std::make_shared<repetition_parser>(p, 1, -1, id));
+    }
+
+    parser_type type() const override { return PARSER_ONE_OR_MORE; }
+
+    parser_result parse(parser_context & ctx, size_t start = 0) override {
+        return delegate_->parse(ctx, start);
+    }
+
+    std::string dump() const override {
+        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
+        return "OneOrMore(" + rep->child()->dump() + ")";
+    }
+
+    void accept(parser_visitor & visitor) override;
+
+    const parser & child() const {
+        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
+        return rep->child();
+    }
+};
+
+// Matches zero or more repetitions of a parser, always succeeds.
+//   S -> A*
+class zero_or_more_parser : public parser_base {
+    parser delegate_;
+
+  public:
+    zero_or_more_parser(const parser & p, int id) : parser_base(id) {
+        delegate_ = parser(std::make_shared<repetition_parser>(p, 0, -1, id));
+    }
+
+    parser_type type() const override { return PARSER_ZERO_OR_MORE; }
+
+    parser_result parse(parser_context & ctx, size_t start = 0) override {
+        return delegate_->parse(ctx, start);
+    }
+
+    std::string dump() const override {
+        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
+        return "ZeroOrMore(" + rep->child()->dump() + ")";
+    }
+
+    void accept(parser_visitor & visitor) override;
+
+    const parser & child() const {
+        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
+        return rep->child();
+    }
 };
 
 // Matches zero or one occurrence of a parser, always succeeds.
 //   S -> A?
 class optional_parser : public parser_base {
-    parser parser_;
+    parser delegate_;
 
   public:
-    optional_parser(const parser & parser, int id) : parser_base(id), parser_(parser) {}
+    optional_parser(const parser & p, int id) : parser_base(id) {
+        delegate_ = parser(std::make_shared<repetition_parser>(p, 0, 1, id));
+    }
 
     parser_type type() const override { return PARSER_OPTIONAL; }
 
     parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            auto result = parser_->parse(ctx, start);
-
-            if (result.is_success()) {
-                // Matched successfully
-                return result;
-            }
-
-            if (result.is_need_more_input()) {
-                // Propagate - need more input to determine if optional matches
-                return result;
-            }
-
-            // No match, but optional always succeeds with zero matches
-            return parser_result(PARSER_RESULT_SUCCESS, start, start);
-        });
+        return delegate_->parse(ctx, start);
     }
 
     std::string dump() const override {
-        return "Optional(" + parser_->dump() + ")";
+        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
+        return "Optional(" + rep->child()->dump() + ")";
     }
 
     void accept(parser_visitor & visitor) override;
 
-    const parser & child() const { return parser_; }
+    const parser & child() const {
+        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
+        return rep->child();
+    }
 };
 
 // Negative lookahead: succeeds if child parser fails, consumes no input.
@@ -734,6 +747,7 @@ class parser_visitor {
     virtual void visit(one_or_more_parser & p) = 0;
     virtual void visit(zero_or_more_parser & p) = 0;
     virtual void visit(optional_parser & p) = 0;
+    virtual void visit(repetition_parser & p) = 0;
     virtual void visit(until_parser & p) = 0;
     virtual void visit(not_parser & p) = 0;
     virtual void visit(any_parser & p) = 0;
@@ -891,6 +905,24 @@ class gbnf_visitor : public parser_visitor {
         }
     }
 
+    void visit(repetition_parser & p) override {
+        p.child()->accept(*this);
+        std::string child_result = current_result_;
+
+        if (needs_parens(p.child()->type())) {
+            child_result = "(" + child_result + ")";
+        }
+
+        if (p.max_count() == -1) {
+            // Unbounded: {n,}
+            current_result_ = child_result + "{" + std::to_string(p.min_count()) + ",}";
+        } else {
+            // Bounded: {n,m}
+            current_result_ = child_result + "{" + std::to_string(p.min_count()) + "," +
+                             std::to_string(p.max_count()) + "}";
+        }
+    }
+
     void visit(until_parser & p) override {
         // Generate pattern that matches prefixes but prevents full delimiter match
         current_result_ = generate_until_pattern(p.delimiter()) + "*";
@@ -1021,6 +1053,11 @@ class id_assignment_visitor : public parser_visitor {
         p.child()->accept(*this);
     }
 
+    void visit(repetition_parser & p) override {
+        assign_id(p);
+        p.child()->accept(*this);
+    }
+
     void visit(until_parser & p) override {
         assign_id(p);
         p.child()->accept(*this);
@@ -1049,6 +1086,7 @@ void choice_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void one_or_more_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void zero_or_more_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void optional_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void repetition_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void until_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void not_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void any_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
@@ -1205,6 +1243,14 @@ parser parser_builder::space() {
 
 parser parser_builder::until(const std::string & delimiter, bool consume_spaces) {
     return parser(std::make_shared<until_parser>(delimiter, consume_spaces, counter_->next()));
+}
+
+parser parser_builder::repeat(const parser & p, int min, int max) {
+    return parser(std::make_shared<repetition_parser>(p, min, max, counter_->next()));
+}
+
+parser parser_builder::repeat(const parser & p, int n) {
+    return repeat(p, n, n);
 }
 
 parser parser_builder::schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema) {

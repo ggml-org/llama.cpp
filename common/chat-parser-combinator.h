@@ -180,6 +180,15 @@ class parser_builder {
     //   S -> (!delim .)*
     parser until(const std::string & delimiter, bool consume_spaces = true);
 
+    // Matches between min and max repetitions of a parser (inclusive).
+    //   S -> A{m,n}
+    // Use -1 for max to represent unbounded repetition (equivalent to {m,})
+    parser repeat(const parser & p, int min, int max);
+
+    // Matches exactly n repetitions of a parser.
+    //   S -> A{n}
+    parser repeat(const parser & p, int n);
+
     // Creates a complete JSON parser supporting objects, arrays, strings, numbers, booleans, and null.
     //   value -> object | array | string | number | true | false | null
     parser json();
