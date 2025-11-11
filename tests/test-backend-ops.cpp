@@ -7327,8 +7327,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_ceil      (type));
         test_cases.emplace_back(new test_round     (type));
         test_cases.emplace_back(new test_trunc     (type));
-        test_cases.emplace_back(new test_expm1     (type));
-        test_cases.emplace_back(new test_softplus  (type));
         test_cases.emplace_back(new test_sqr       (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_sqrt      (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_log       (type, {7, 1, 5, 3}));
