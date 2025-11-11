@@ -242,12 +242,14 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * @param {string} id
  * @param {string} label
  * @param {any} defaultValue
+ * @param {string} acceptable
  * @param {(arg0: any) => void} cb
  * @param {string} className
  */
-export function el_creatediv_inputfilebtn(id, label, defaultValue, cb, className) {
+export function el_creatediv_inputfilebtn(id, label, defaultValue, acceptable, cb, className) {
     let elX = el_creatediv_input(id, label, "file", defaultValue, cb, className)
     elX.el.hidden = true
+    elX.el.accept = acceptable
     let idB = `${id}-button`
     let elB = el_create_button(idB, (mev) => {
         elX.el.click()
@@ -262,11 +264,12 @@ export function el_creatediv_inputfilebtn(id, label, defaultValue, cb, className
  * @param {string} id
  * @param {string} label
  * @param {any} defaultValue
+ * @param {string} acceptable
  * @param {(arg0: any) => void} cb
  * @param {string} className
  */
-export function el_creatediv_inputfileimgbtn(id, label, defaultValue, cb, className) {
-    let elX = el_creatediv_inputfilebtn(id, label, defaultValue, cb, className);
+export function el_creatediv_inputfileimgbtn(id, label, defaultValue, acceptable, cb, className) {
+    let elX = el_creatediv_inputfilebtn(id, label, defaultValue, acceptable, cb, className);
     let elImg = document.createElement('img')
     elImg.classList.add(`${className}-img`)
     elX.elB.appendChild(elImg)
