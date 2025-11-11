@@ -518,8 +518,8 @@ static void test_complete_example() {
     assert_equals(std::string("get_weather"), *result.group("tool-name", ctx.input));
     assert_equals(std::string(R"({"cit)"), *result.group("tool-args", ctx.input));
 
-    auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-        parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+    auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+        parser.build_grammar(builder);
     });
 
     std::cout << "Grammar:\n" << gbnf << "\n";
@@ -532,9 +532,10 @@ static void test_gbnf_generation() {
             return p.literal("hello");
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= \"hello\"") != std::string::npos);
         assert_equals(true, gbnf.find("space ::=") != std::string::npos);
     }
@@ -544,9 +545,10 @@ static void test_gbnf_generation() {
             return p.char_class("[a-z]");
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= [a-z]") != std::string::npos);
     }
     {
@@ -555,9 +557,10 @@ static void test_gbnf_generation() {
             return p.literal("hello") + p.literal(" ") + p.literal("world");
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= \"hello\" \" \" \"world\"") != std::string::npos);
     }
     {
@@ -566,9 +569,10 @@ static void test_gbnf_generation() {
             return p.literal("cat") | p.literal("dog");
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= \"cat\" | \"dog\"") != std::string::npos);
     }
     {
@@ -577,9 +581,10 @@ static void test_gbnf_generation() {
             return p.one_or_more(p.char_class("[0-9]"));
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= [0-9]+") != std::string::npos);
     }
     {
@@ -588,9 +593,10 @@ static void test_gbnf_generation() {
             return p.zero_or_more(p.char_class("[a-z]"));
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= [a-z]*") != std::string::npos);
     }
     {
@@ -599,9 +605,10 @@ static void test_gbnf_generation() {
             return p.literal("hello") + p.optional(p.literal(" world"));
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= \"hello\" \" world\"?") != std::string::npos);
     }
     {
@@ -610,9 +617,10 @@ static void test_gbnf_generation() {
             return p.until("</tag>");
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         // Should generate pattern that prevents matching the full delimiter
         assert_equals(true, gbnf.find("root ::= ([^<] | \"<\" [^/] | \"</\" [^t] | \"</t\" [^a] | \"</ta\" [^g] | \"</tag\" [^>])*") != std::string::npos);
     }
@@ -622,9 +630,10 @@ static void test_gbnf_generation() {
             return p.group("test", p.literal("hello"));
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= \"hello\"") != std::string::npos);
     }
     {
@@ -633,9 +642,10 @@ static void test_gbnf_generation() {
             return p.one_or_more(p.literal("a") | p.literal("b"));
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= (\"a\" | \"b\")+") != std::string::npos);
     }
     {
@@ -645,9 +655,10 @@ static void test_gbnf_generation() {
             return p.one_or_more(digit);
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         // Should have digit rule defined and referenced
         assert_equals(true, gbnf.find("digit ::= [0-9]") != std::string::npos);
         assert_equals(true, gbnf.find("root ::= digit+") != std::string::npos);
@@ -658,9 +669,10 @@ static void test_gbnf_generation() {
             return p.literal("hello\nworld\t!");
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         assert_equals(true, gbnf.find("root ::= \"hello\\nworld\\t!\"") != std::string::npos);
     }
     {
@@ -669,9 +681,10 @@ static void test_gbnf_generation() {
             return p.literal("hello") << p.literal("world");
         });
 
-        auto gbnf = ::build_grammar([&](const common_grammar_builder& builder) {
-            parser.build_grammar(const_cast<common_grammar_builder&>(builder));
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
         });
+
         // Should inline the whitespace pattern
         assert_equals(true, gbnf.find("\"hello\"") != std::string::npos);
         assert_equals(true, gbnf.find("\"world\"") != std::string::npos);

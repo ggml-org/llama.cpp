@@ -136,7 +136,8 @@ class parser {
     parser_type type() const;
     parser_result parse(parser_context & ctx, size_t start = 0) const;
     std::string dump() const;
-    void build_grammar(common_grammar_builder& builder);
+
+    void build_grammar(const common_grammar_builder & builder);
 };
 
 class parser_builder {

@@ -736,12 +736,12 @@ class parser_visitor {
 };
 
 class gbnf_visitor : public parser_visitor {
-    common_grammar_builder& builder_;
+    const common_grammar_builder & builder_;
     std::unordered_map<std::string, std::string> rule_name_mapping_;
     std::string current_result_;
 
   public:
-    gbnf_visitor(common_grammar_builder& builder) : builder_(builder) {}
+    gbnf_visitor(const common_grammar_builder & builder) : builder_(builder) {}
 
     const std::string& result() const { return current_result_; }
 
@@ -1140,7 +1140,7 @@ std::string parser::dump() const {
     return ptr->dump();
 }
 
-void parser::build_grammar(common_grammar_builder& builder) {
+void parser::build_grammar(const common_grammar_builder & builder) {
     gbnf_visitor visitor(builder);
     ptr->accept(visitor);
     auto result = visitor.result();
