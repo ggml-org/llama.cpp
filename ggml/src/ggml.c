@@ -992,6 +992,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "ARGSORT",
     "LEAKY_RELU",
     "TRI",
+    "CONST",
 
     "FLASH_ATTN_EXT",
     "FLASH_ATTN_BACK",
@@ -1022,7 +1023,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 93, "GGML_OP_COUNT != 93");
+static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1099,6 +1100,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "argsort(x)",
     "leaky_relu(x)",
     "tri(x)",
+    "const(c)",
 
     "flash_attn_ext(x)",
     "flash_attn_back(x)",
@@ -1129,7 +1131,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 93, "GGML_OP_COUNT != 93");
+static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5077,18 +5079,16 @@ struct ggml_tensor * ggml_timestep_embedding(
 // ggml_tri
 
 struct ggml_tensor * ggml_tri(
-    struct ggml_context * ctx,
-    struct ggml_tensor * a,
-    float constant,
-    enum ggml_tri_type tritype) {
+    struct ggml_context *   ctx,
+    struct ggml_tensor *    a,
+    enum ggml_tri_type      type) {
 
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(a->ne[0] == a->ne[1]);
 
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
-    ggml_set_op_params_i32(result, 0, tritype);
-    ggml_set_op_params_f32(result, 1, constant);
+    ggml_set_op_params_i32(result, 0, type);
 
     result->op = GGML_OP_TRI;
     result->src[0] = a;
@@ -5096,12 +5096,42 @@ struct ggml_tensor * ggml_tri(
     return result;
 }
 
-struct ggml_tensor * ggml_tri_keep(
-    struct ggml_context * ctx,
-    struct ggml_tensor * a,
-    enum ggml_tri_type tritype) {
+// ggml_const
+struct ggml_tensor * ggml_const(
+    struct ggml_context *   ctx,
+    const int64_t           ne0,
+    const int64_t           ne1,
+    const int64_t           ne2,
+    const int64_t           ne3,
+    const float             c
+) {
 
-    return ggml_tri(ctx, a, nan(""), tritype);
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne0, ne1, ne2, ne3);
+
+    ggml_set_op_params_f32(result, 0, c);
+
+    result->op = GGML_OP_CONST;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_const_1d(struct ggml_context *ctx, const int64_t ne0, const float c) {
+    return ggml_const(ctx, ne0, 1, 1, 1, c);
+}
+
+struct ggml_tensor * ggml_const_2d(struct ggml_context *ctx, const int64_t ne0, const int64_t ne1,
+                                   const float c) {
+    return ggml_const(ctx, ne0, ne1, 1, 1, c);
+}
+
+struct ggml_tensor * ggml_const_3d(struct ggml_context *ctx, const int64_t ne0, const int64_t ne1,
+                                   const int64_t ne2, const float c) {
+    return ggml_const(ctx, ne0, ne1, ne2, 1, c);
+}
+
+struct ggml_tensor * ggml_const_4d(struct ggml_context *ctx, const int64_t ne0, const int64_t ne1,
+                                   const int64_t ne2, const int64_t ne3, const float c) {
+    return ggml_const(ctx, ne0, ne1, ne2, ne3, c);
 }
 
 // ggml_argsort

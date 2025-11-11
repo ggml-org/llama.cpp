@@ -190,7 +190,7 @@ static void init_tensor_causal(ggml_tensor * tensor, float min = -1.0f, float ma
 
     for (int64_t i3 = 0; i3 < tensor->ne[3]; i3++) {
         for (int64_t i2 = 0; i2 < tensor->ne[2]; i2++) {
-            for (int64_t i1 = 0; i2 < tensor->ne[1]; i1++) {
+            for (int64_t i1 = 0; i1 < tensor->ne[1]; i1++) {
                 for (int64_t i0 = 0; i0 < tensor->ne[0]; i0++) {
                     int64_t idx = (i0 * tensor->nb[0] + i1 * tensor->nb[1] + i2 * tensor->nb[2] + i3 * tensor->nb[3]) / sizeof(float);
                     if (i0 <= i1) {
@@ -6005,13 +6005,12 @@ struct test_tri : public test_case {
     const ggml_type              type;
     const std::array<int64_t, 4> ne;
     const ggml_tri_type          tri_type;
-    const bool                   keep;
 
-    std::string vars() override { return VARS_TO_STR4(type, ne, tri_type, keep); }
+    std::string vars() override { return VARS_TO_STR3(type, ne, tri_type); }
 
-    test_tri(ggml_tri_type tri_type, bool keep, ggml_type type = GGML_TYPE_F32,
+    test_tri(ggml_tri_type tri_type, ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = { 10, 10, 4, 3 })
-        : type(type), ne(ne), tri_type(tri_type), keep(keep) {
+        : type(type), ne(ne), tri_type(tri_type) {
             GGML_ASSERT(ne[0] == ne[1]);
         }
 
@@ -6020,7 +6019,7 @@ struct test_tri : public test_case {
         ggml_set_param(a);
         ggml_set_name(a, "a");
 
-        ggml_tensor * out = keep ? ggml_tri_keep(ctx, a, tri_type) : ggml_tri(ctx, a, 1.0f, tri_type);
+        ggml_tensor * out = ggml_tri(ctx, a, tri_type);
 
         ggml_set_name(out, "out");
 
@@ -6031,6 +6030,27 @@ struct test_tri : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             init_tensor_uniform(t, -1.0f, 1.0f);
         }
+    }
+};
+
+// GGML_OP_CONST
+struct test_const : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+    float                        c;
+
+    std::string vars() override { return VARS_TO_STR3(type, ne, c); }
+
+    test_const(float c, ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 10, 4, 3 })
+        : type(type), ne(ne), c(c) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = ggml_const(ctx, ne[0], ne[1], ne[2], ne[3], c);
+
+        ggml_set_name(out, "out");
+
+        return out;
     }
 };
 
@@ -7578,15 +7598,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_xielu());
 
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER, true));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG, true));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER, true));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG, true));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG));
 
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER, false));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG, false));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER, false));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG, false));
+    test_cases.emplace_back(new test_const(0.0f));
+    test_cases.emplace_back(new test_const(2.0f, GGML_TYPE_F32, { 303, 207, 11, 3 }));
+    test_cases.emplace_back(new test_const(-152.0f, GGML_TYPE_F32, { 800, 600, 4, 4 }));
 
     test_cases.emplace_back(new test_solve_tri());
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 11, 11, 1, 1 }, { 5, 11, 1, 1 }));

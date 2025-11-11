@@ -1425,9 +1425,15 @@ inline static void ggml_vec_sum_f32(const int n, float * s, const float * x) {
 //   keep_org_val - if true, keep original value where mask applies; otherwise use constant 'c'
 //   c            - constant value to use when not keeping original value
 //   bipred       - the predicate on coordinates, derived from tri_type
-inline static void ggml_vec_tri_f32(const int n, const int r, float * dst, const float * src, bool keep_org_val, float c, bool (*bipred)(int, int)) {
+inline static void ggml_vec_tri_f32(const int n, const int r, float * dst, const float * src, bool (*bipred)(int, int)) {
     for (int i = 0; i < n; ++i) {
-        dst[i] = bipred(i, r) ? (keep_org_val ? src[i] : c) : 0.0f;
+        dst[i] = bipred(i, r) ? src[i] : 0.0f;
+    }
+}
+
+inline static void ggml_vec_const_f32(const int n, float * dst, const float c) {
+    for (int i = 0; i < n; ++i) {
+        dst[i] = c;
     }
 }
 

@@ -532,6 +532,7 @@ extern "C" {
         GGML_OP_ARGSORT,
         GGML_OP_LEAKY_RELU,
         GGML_OP_TRI,
+        GGML_OP_CONST,
 
         GGML_OP_FLASH_ATTN_EXT,
         GGML_OP_FLASH_ATTN_BACK,
@@ -2219,17 +2220,48 @@ extern "C" {
             int                   shift2,
             int                   shift3);
 
-    // Make matrix into a triangular one (upper, upper + diagonal, lower or lower + diagonal) with constant value
+    // Convert matrix into a triangular one (upper, strict upper, lower or strict lower) by writing
+    // zeroes everywhere outside the masked area
     GGML_API struct ggml_tensor * ggml_tri(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            float                 constant,
-            enum ggml_tri_type    tritype);
+            struct ggml_context *   ctx,
+            struct ggml_tensor *    a,
+            enum ggml_tri_type      type);
 
-    GGML_API struct ggml_tensor * ggml_tri_keep(
-            struct ggml_context * ctx,
-            struct ggml_tensor * a,
-            enum ggml_tri_type tritype);
+    // Create a tensor of dimensions ne0, ne1, ne2, ne3 filled with the constant c
+    GGML_API struct ggml_tensor * ggml_const(
+            struct ggml_context *   ctx,
+            int64_t                 ne0,
+            int64_t                 ne1,
+            int64_t                 ne2,
+            int64_t                 ne3,
+            float                   c);
+
+    // Convenience calls
+    GGML_API struct ggml_tensor * ggml_const_1d(
+            struct ggml_context *   ctx,
+            int64_t                 ne0,
+            float                   c);
+
+    GGML_API struct ggml_tensor * ggml_const_2d(
+            struct ggml_context *   ctx,
+            int64_t                 ne0,
+            int64_t                 ne1,
+            float                   c);
+
+    GGML_API struct ggml_tensor * ggml_const_3d(
+            struct ggml_context *   ctx,
+            int64_t                 ne0,
+            int64_t                 ne1,
+            int64_t                 ne2,
+            float                   c);
+
+    GGML_API struct ggml_tensor * ggml_const_4d(
+            struct ggml_context *   ctx,
+            int64_t                 ne0,
+            int64_t                 ne1,
+            int64_t                 ne2,
+            int64_t                 ne3,
+            float                   c);
 
     // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
     // timesteps: [N,]
@@ -2399,10 +2431,16 @@ extern "C" {
             struct ggml_tensor  * b,
             struct ggml_tensor  * state);
 
+    /* Solves a specific equation of the form Ax=B, where A is a lower triangular matrix
+    *  B can have any number of columns, but must have the same number of rows as A
+    *  If A is [n, n] and B is [n, m], then the result will be [n, m] as well
+    *  Has O(n^3) complexity (unlike most matrix ops out there), so use on cases
+    *  where n > 100 sparingly, pre-chunk if necessary
+    */
     GGML_API struct ggml_tensor * ggml_solve_tri(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        struct ggml_tensor  * x);
+        struct ggml_tensor  * b);
 
     // custom operators
 

@@ -1935,6 +1935,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_tri(params, tensor);
             } break;
+        case GGML_OP_CONST:
+            {
+                ggml_compute_forward_const(params, tensor);
+            } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
                 ggml_compute_forward_flash_attn_ext(params, tensor);
@@ -2152,6 +2156,9 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ADD_ID:
         case GGML_OP_ADD1:
         case GGML_OP_ACC:
+        case GGML_OP_CUMSUM:
+        case GGML_OP_TRI:
+        case GGML_OP_CONST:
             {
                 n_tasks = n_threads;
             } break;
@@ -2165,8 +2172,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
         case GGML_OP_ARGMAX:
-        case GGML_OP_CUMSUM:
-        case GGML_OP_TRI:
             {
                 n_tasks = 1;
             } break;
