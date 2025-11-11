@@ -101,7 +101,7 @@ class parser_base;
 class sequence_parser;
 class choice_parser;
 class parser_builder;
-class gbnf_visitor;
+class parser_visitor;
 
 class parser {
     std::shared_ptr<parser_base> ptr;
@@ -136,7 +136,7 @@ class parser {
     parser_type type() const;
     parser_result parse(parser_context & ctx, size_t start = 0) const;
     std::string dump() const;
-    void build_grammar(common_grammar_builder& builder) const;
+    void build_grammar(common_grammar_builder& builder);
 };
 
 class parser_builder {

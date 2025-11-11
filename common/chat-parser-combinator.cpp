@@ -8,7 +8,7 @@
 #include <memory>
 #include <optional>
 
-class gbnf_visitor;
+class id_assignment_visitor;
 
 static parser json_parser();
 
@@ -16,7 +16,7 @@ class parser_base {
   protected:
     int id_;
 
-    void set_id(int id) { id_ = id; }
+    friend class id_assignment_visitor;
 
   public:
     parser_base(int id) : id_(id) {}
@@ -25,18 +25,11 @@ class parser_base {
     virtual parser_type type() const = 0;
     virtual parser_result parse(parser_context & ctx, size_t start = 0) = 0;
     virtual std::string dump() const = 0;
-    virtual std::string accept(gbnf_visitor & visitor) const = 0;
-    virtual void assign_ids_internal(int& next_id) {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-    }
+    virtual void accept(parser_visitor & visitor) = 0;
 };
 
 class literal_parser : public parser_base {
     std::string literal_;
-
-    friend class gbnf_visitor;
 
   public:
     literal_parser(const std::string & literal, int id) : parser_base(id), literal_(literal) {}
@@ -73,13 +66,13 @@ class literal_parser : public parser_base {
         return "Literal(" + literal_ + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
+
+    const std::string & literal() const { return literal_; }
 };
 
 class sequence_parser : public parser_base {
     std::vector<parser> parsers_;
-
-    friend class gbnf_visitor;
 
   public:
     sequence_parser(std::initializer_list<parser> parsers, int id) : parser_base(id) {
@@ -139,24 +132,13 @@ class sequence_parser : public parser_base {
         return "Sequence(" + string_join(parts, ", ") + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 
     const std::vector<parser> & parsers() const { return parsers_; }
-
-    void assign_ids_internal(int& next_id) override {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-        for (auto & p : parsers_) {
-            p->assign_ids_internal(next_id);
-        }
-    }
 };
 
 class choice_parser : public parser_base {
     std::vector<parser> parsers_;
-
-    friend class gbnf_visitor;
 
   public:
     choice_parser(std::initializer_list<parser> parsers, int id) : parser_base(id) {
@@ -205,24 +187,13 @@ class choice_parser : public parser_base {
         return "Choice(" + string_join(parts, ", ") + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 
     const std::vector<parser> & parsers() const { return parsers_; }
-
-    void assign_ids_internal(int& next_id) override {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-        for (auto & p : parsers_) {
-            p->assign_ids_internal(next_id);
-        }
-    }
 };
 
 class one_or_more_parser : public parser_base {
     parser parser_;
-
-    friend class gbnf_visitor;
 
   public:
     one_or_more_parser(const parser & parser, int id) : parser_base(id), parser_(parser) {}
@@ -279,22 +250,13 @@ class one_or_more_parser : public parser_base {
         return "OneOrMore(" + parser_->dump() + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 
     const parser & child() const { return parser_; }
-
-    void assign_ids_internal(int& next_id) override {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-        parser_->assign_ids_internal(next_id);
-    }
 };
 
 class zero_or_more_parser : public parser_base {
     parser parser_;
-
-    friend class gbnf_visitor;
 
   public:
     zero_or_more_parser(const parser & parser, int id) : parser_base(id), parser_(parser) {}
@@ -341,22 +303,13 @@ class zero_or_more_parser : public parser_base {
         return "ZeroOrMore(" + parser_->dump() + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 
     const parser & child() const { return parser_; }
-
-    void assign_ids_internal(int& next_id) override {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-        parser_->assign_ids_internal(next_id);
-    }
 };
 
 class optional_parser : public parser_base {
     parser parser_;
-
-    friend class gbnf_visitor;
 
   public:
     optional_parser(const parser & parser, int id) : parser_base(id), parser_(parser) {}
@@ -389,23 +342,14 @@ class optional_parser : public parser_base {
         return "Optional(" + parser_->dump() + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 
     const parser & child() const { return parser_; }
-
-    void assign_ids_internal(int& next_id) override {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-        parser_->assign_ids_internal(next_id);
-    }
 };
 
 class until_parser : public parser_base {
     std::string delimiter_;
     parser parser_;
-
-    friend class gbnf_visitor;
 
   public:
     until_parser(const std::string & delimiter, bool include_spaces, int id, parser_builder & builder)
@@ -434,20 +378,15 @@ class until_parser : public parser_base {
         return "Until(" + delimiter_ + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 
-    void assign_ids_internal(int& next_id) override {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-        parser_->assign_ids_internal(next_id);
-    }
+    const std::string & delimiter() const { return delimiter_; }
+
+    const parser & child() const { return parser_; }
 };
 
 class not_parser : public parser_base {
     parser parser_;
-
-    friend class gbnf_visitor;
 
   public:
     not_parser(const parser & parser, int id) : parser_base(id), parser_(parser) {}
@@ -480,21 +419,12 @@ class not_parser : public parser_base {
         return "Not(" + parser_->dump() + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 
     const parser & child() const { return parser_; }
-
-    void assign_ids_internal(int& next_id) override {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-        parser_->assign_ids_internal(next_id);
-    }
 };
 
 class any_parser : public parser_base {
-    friend class gbnf_visitor;
-
   public:
     any_parser(int id) : parser_base(id) {}
 
@@ -520,12 +450,10 @@ class any_parser : public parser_base {
         return "Any";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 };
 
 class space_parser : public parser_base {
-    friend class gbnf_visitor;
-
   public:
     space_parser(int id) : parser_base(id) {}
 
@@ -554,7 +482,7 @@ class space_parser : public parser_base {
         return "Space";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 };
 
 class char_class_parser : public parser_base {
@@ -568,8 +496,6 @@ class char_class_parser : public parser_base {
     std::string pattern_;
     std::vector<char_range> ranges_;
     bool negated_;
-
-    friend class gbnf_visitor;
 
   public:
     char_class_parser(const std::string & classes, int id) : parser_base(id), pattern_(classes), negated_(false) {
@@ -660,14 +586,14 @@ class char_class_parser : public parser_base {
         return "Char(" + pattern_ + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
+
+    const std::string & pattern() const { return pattern_; }
 };
 
 class group_parser : public parser_base {
     std::string name_;
     parser parser_;
-
-    friend class gbnf_visitor;
 
   public:
     group_parser(const std::string & name, const parser & parser, int id) : parser_base(id), name_(name), parser_(parser) {}
@@ -686,22 +612,15 @@ class group_parser : public parser_base {
         return "Group(" + name_ + ", " + parser_->dump() + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 
-    void assign_ids_internal(int& next_id) override {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-        parser_->assign_ids_internal(next_id);
-    }
+    const parser & child() const { return parser_; }
 };
 
 class schema_parser : public parser_base {
     parser parser_;
     std::string name_;
     nlohmann::ordered_json schema_;
-
-    friend class gbnf_visitor;
 
   public:
     schema_parser(const parser & parser, const std::string & name, const nlohmann::ordered_json & schema, int id)
@@ -717,18 +636,22 @@ class schema_parser : public parser_base {
         return "Schema(" + parser_->dump() + ", " + schema_.dump() + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
+
+    const parser & child() const { return parser_; }
+
+    const std::string & name() const { return name_; }
+
+    const nlohmann::ordered_json & schema() const { return schema_; }
 };
 
 class rule_parser : public parser_base {
-    std::string rule_name_;
+    std::string name_;
     std::weak_ptr<std::unordered_map<std::string, parser>> rules_;
 
-    friend class gbnf_visitor;
-
   public:
-    rule_parser(const std::string & name, std::shared_ptr<std::unordered_map<std::string, parser>> rules, int id)
-        : parser_base(id), rule_name_(name), rules_(rules) {}
+    rule_parser(const std::string & name, const std::shared_ptr<std::unordered_map<std::string, parser>> & rules, int id)
+        : parser_base(id), name_(name), rules_(rules) {}
 
     parser_type type() const override { return PARSER_RULE; }
 
@@ -744,9 +667,9 @@ class rule_parser : public parser_base {
             return ctx.memo.set(id_, start, parser_result(PARSER_RESULT_FAIL, start));
         }
 
-        auto it = rules->find(rule_name_);
+        auto it = rules->find(name_);
         if (it == rules->end()) {
-            LOG_ERR("rule_parser::parse rule '%s' not found in registry\n", rule_name_.c_str());
+            LOG_ERR("rule_parser::parse rule '%s' not found in registry\n", name_.c_str());
             return ctx.memo.set(id_, start, parser_result(PARSER_RESULT_FAIL, start));
         }
 
@@ -755,17 +678,19 @@ class rule_parser : public parser_base {
     }
 
     std::string dump() const override {
-        return "Rule(" + rule_name_ + ")";
+        return "Rule(" + name_ + ")";
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
+
+    const std::string & name() const { return name_; }
 };
 
 class root_parser : public parser_base {
     parser root_;
     std::shared_ptr<std::unordered_map<std::string, parser>> rules_;
 
-    friend class gbnf_visitor;
+    friend class parser_visitor;
 
   public:
     root_parser(const parser & root, std::shared_ptr<std::unordered_map<std::string, parser>> rules, int id)
@@ -781,22 +706,44 @@ class root_parser : public parser_base {
         return root_->dump();
     }
 
-    std::string accept(gbnf_visitor & visitor) const override;
+    void accept(parser_visitor & visitor) override;
 
-    void assign_ids_internal(int& next_id) override {
-        if (id_ == -1) {
-            id_ = next_id++;
-        }
-        root_->assign_ids_internal(next_id);
-    }
+    const parser & root() const { return root_; }
+
+    std::shared_ptr<std::unordered_map<std::string, parser>> rules() const { return rules_; }
 };
 
-class gbnf_visitor {
+// Base visitor class for parser tree traversal
+class parser_visitor {
+  public:
+    virtual ~parser_visitor() = default;
+
+    virtual void visit(literal_parser & p) = 0;
+    virtual void visit(sequence_parser & p) = 0;
+    virtual void visit(choice_parser & p) = 0;
+    virtual void visit(one_or_more_parser & p) = 0;
+    virtual void visit(zero_or_more_parser & p) = 0;
+    virtual void visit(optional_parser & p) = 0;
+    virtual void visit(until_parser & p) = 0;
+    virtual void visit(not_parser & p) = 0;
+    virtual void visit(any_parser & p) = 0;
+    virtual void visit(space_parser & p) = 0;
+    virtual void visit(char_class_parser & p) = 0;
+    virtual void visit(group_parser & p) = 0;
+    virtual void visit(schema_parser & p) = 0;
+    virtual void visit(rule_parser & p) = 0;
+    virtual void visit(root_parser & p) = 0;
+};
+
+class gbnf_visitor : public parser_visitor {
     common_grammar_builder& builder_;
     std::unordered_map<std::string, std::string> rule_name_mapping_;
+    std::string current_result_;
 
   public:
     gbnf_visitor(common_grammar_builder& builder) : builder_(builder) {}
+
+    const std::string& result() const { return current_result_; }
 
   private:
     // Escape special characters for GBNF literals
@@ -872,187 +819,235 @@ class gbnf_visitor {
     }
 
   public:
-    std::string visit(const literal_parser & p) {
-        return "\"" + escape_literal(p.literal_) + "\"";
+    void visit(literal_parser & p) override {
+        current_result_ = "\"" + escape_literal(p.literal()) + "\"";
     }
 
-    std::string visit(const sequence_parser & p) {
+    void visit(sequence_parser & p) override {
         std::string s;
-        for (size_t i = 0; i < p.parsers_.size(); ++i) {
-            if (i > 0) s += " ";
-            auto child_result = p.parsers_[i]->accept(*this);
-            s += child_result;
+        for (const auto & child : p.parsers()) {
+            if (!s.empty()) {
+                s += " ";
+            }
+            child->accept(*this);
+            s += current_result_;
         }
-        return s;
+        current_result_ = s;
     }
 
-    std::string visit(const choice_parser & p) {
+    void visit(choice_parser & p) override {
         std::string s;
-        for (size_t i = 0; i < p.parsers_.size(); ++i) {
-            if (i > 0) {
+        for (const auto & child : p.parsers()) {
+            if (!s.empty()) {
                 s += " | ";
             }
 
-            auto child_type = p.parsers_[i]->type();
-            auto child_result = p.parsers_[i]->accept(*this);
+            child->accept(*this);
 
             // Parenthesize sequences in choices
-            if (child_type == PARSER_SEQUENCE) {
-                s += "(" + child_result + ")";
+            if (child->type() == PARSER_SEQUENCE) {
+                s += "(" + current_result_ + ")";
             } else {
-                s += child_result;
+                s += current_result_;
             }
         }
-        return s;
+        current_result_ = s;
     }
 
-    std::string visit(const one_or_more_parser & p) {
-        auto child_type = p.parser_->type();
-        auto child_result = p.parser_->accept(*this);
-        if (needs_parens(child_type)) {
-            return "(" + child_result + ")+";
+    void visit(one_or_more_parser & p) override {
+        p.child()->accept(*this);
+        if (needs_parens(p.child()->type())) {
+            current_result_ = "(" + current_result_ + ")+";
+        } else {
+            current_result_ = current_result_ + "+";
         }
-        return child_result + "+";
     }
 
-    std::string visit(const zero_or_more_parser & p) {
-        auto child_type = p.parser_->type();
-        auto child_result = p.parser_->accept(*this);
-        if (needs_parens(child_type)) {
-            return "(" + child_result + ")*";
+    void visit(zero_or_more_parser & p) override {
+        p.child()->accept(*this);
+        if (needs_parens(p.child()->type())) {
+            current_result_ = "(" + current_result_ + ")*";
+        } else {
+            current_result_ = current_result_ + "*";
         }
-        return child_result + "*";
     }
 
-    std::string visit(const optional_parser & p) {
-        auto child_type = p.parser_->type();
-        auto child_result = p.parser_->accept(*this);
-        if (needs_parens(child_type)) {
-            return "(" + child_result + ")?";
+    void visit(optional_parser & p) override {
+        p.child()->accept(*this);
+        if (needs_parens(p.child()->type())) {
+            current_result_ = "(" + current_result_ + ")?";
+        } else {
+            current_result_ = current_result_ + "?";
         }
-        return child_result + "?";
     }
 
-    std::string visit(const until_parser & p) {
+    void visit(until_parser & p) override {
         // Generate pattern that matches prefixes but prevents full delimiter match
-        return generate_until_pattern(p.delimiter_) + "*";
+        current_result_ = generate_until_pattern(p.delimiter()) + "*";
     }
 
-    std::string visit(const not_parser &) {
+    void visit(not_parser &) override {
         // NOT is tricky in GBNF - for now, emit error
         LOG_ERR("NOT operator not directly supported in GBNF generation\n");
-        return ""; // This will cause compilation errors, which is intended
+        current_result_ = "";
     }
 
-    std::string visit(const any_parser &) {
+    void visit(any_parser &) override {
         // Match any single character
-        return "[\\x00-\\x{10FFFF}]";
+        current_result_ = "[\\x00-\\x{10FFFF}]";
     }
 
-    std::string visit(const space_parser &) {
+    void visit(space_parser &) override {
         // Reference the built-in space rule
-        return "space";
+        current_result_ = "space";
     }
 
-    std::string visit(const char_class_parser & p) {
+    void visit(char_class_parser & p) override {
         // Return pattern as-is (already in GBNF format)
-        return p.pattern_;
+        current_result_ = p.pattern();
     }
 
-    std::string visit(const group_parser & p) {
+    void visit(group_parser & p) override {
         // Groups are transparent - just visit child
-        return p.parser_->accept(*this);
+        p.child()->accept(*this);
     }
 
-    std::string visit(const schema_parser & p) {
-        return builder_.add_schema(p.name_, p.schema_);
+    void visit(schema_parser & p) override {
+        current_result_ = builder_.add_schema(p.name(), p.schema());
     }
 
-    std::string visit(const rule_parser & p) {
+    void visit(rule_parser & p) override {
         // Return canonical rule reference
-        auto it = rule_name_mapping_.find(p.rule_name_);
+        auto it = rule_name_mapping_.find(p.name());
         if (it != rule_name_mapping_.end()) {
-            return it->second;
+            current_result_ = it->second;
+        } else {
+            // Fallback to original name if not in mapping (shouldn't happen in valid usage)
+            current_result_ = p.name();
         }
-        // Fallback to original name if not in mapping (shouldn't happen in valid usage)
-        return p.rule_name_;
     }
 
-    std::string visit(const root_parser & p) {
+    void visit(root_parser & p) override {
         // Generate named rules first
-        if (p.rules_) {
-            for (const auto & [name, rule] : *p.rules_) {
-                auto rule_body = rule->accept(*this);
+        auto rules = p.rules();
+        if (rules) {
+            for (const auto & [name, rule] : *rules) {
+                rule->accept(*this);
+                auto rule_body = current_result_;
                 auto canonical_name = builder_.add_rule(name, rule_body);
                 rule_name_mapping_[name] = canonical_name;
             }
         }
 
         // Return root body for composition
-        return p.root_->accept(*this);
+        p.root()->accept(*this);
+    }
+};
+
+// ID assignment visitor for assigning unique IDs to parsers
+class id_assignment_visitor : public parser_visitor {
+    int & next_id_;
+
+  public:
+    id_assignment_visitor(int & next_id) : next_id_(next_id) {}
+
+    void assign_id(parser_base & p) {
+        if (p.id_ == -1) {
+            p.id_ = next_id_++;
+        }
+    }
+
+    void visit(literal_parser & p) override {
+        assign_id(p);
+    }
+
+    void visit(any_parser & p) override {
+        assign_id(p);
+    }
+
+    void visit(space_parser & p) override {
+        assign_id(p);
+    }
+
+    void visit(char_class_parser & p) override {
+        assign_id(p);
+    }
+
+    void visit(schema_parser & p) override {
+        assign_id(p);
+    }
+
+    void visit(rule_parser & p) override {
+        assign_id(p);
+    }
+
+    // Composite parsers - assign ID and traverse children
+    void visit(sequence_parser & p) override {
+        assign_id(p);
+        for (const auto & child : p.parsers()) {
+            child->accept(*this);
+        }
+    }
+
+    void visit(choice_parser & p) override {
+        assign_id(p);
+        for (const auto & child : p.parsers()) {
+            child->accept(*this);
+        }
+    }
+
+    void visit(one_or_more_parser & p) override {
+        assign_id(p);
+        p.child()->accept(*this);
+    }
+
+    void visit(zero_or_more_parser & p) override {
+        assign_id(p);
+        p.child()->accept(*this);
+    }
+
+    void visit(optional_parser & p) override {
+        assign_id(p);
+        p.child()->accept(*this);
+    }
+
+    void visit(until_parser & p) override {
+        assign_id(p);
+        p.child()->accept(*this);
+    }
+
+    void visit(not_parser & p) override {
+        assign_id(p);
+        p.child()->accept(*this);
+    }
+
+    void visit(group_parser & p) override {
+        assign_id(p);
+        p.child()->accept(*this);
+    }
+
+    void visit(root_parser & p) override {
+        assign_id(p);
+        p.root()->accept(*this);
     }
 };
 
 // Implement accept() methods for all parser classes
-std::string literal_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string sequence_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string choice_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string one_or_more_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string zero_or_more_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string optional_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string until_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string not_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string any_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string space_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string char_class_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string group_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string schema_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string rule_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
-
-std::string root_parser::accept(gbnf_visitor & visitor) const {
-    return visitor.visit(*this);
-}
+void literal_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void sequence_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void choice_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void one_or_more_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void zero_or_more_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void optional_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void until_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void not_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void any_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void space_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void char_class_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void group_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void schema_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void rule_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void root_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 
 std::optional<std::string> parser_result::group(const std::string & name, std::string_view input) const {
     auto it = groups.find(name);
@@ -1145,11 +1140,10 @@ std::string parser::dump() const {
     return ptr->dump();
 }
 
-void parser::build_grammar(common_grammar_builder& builder) const {
+void parser::build_grammar(common_grammar_builder& builder) {
     gbnf_visitor visitor(builder);
-    auto result = ptr->accept(visitor);
-    // The visitor returns the GBNF string for this parser
-    // root_parser registers its named rules and returns its root body
+    ptr->accept(visitor);
+    auto result = visitor.result();
     if (!result.empty()) {
         builder.add_rule("root", result);
     }
@@ -1222,7 +1216,8 @@ parser parser_builder::add_rule(const std::string & name, const parser & p) {
 
 void parser_builder::assign_ids(parser & p) {
     if (p.ptr) {
-        p.ptr->assign_ids_internal(next_id_);
+        id_assignment_visitor visitor(next_id_);
+        p.ptr->accept(visitor);
     }
 }
 
