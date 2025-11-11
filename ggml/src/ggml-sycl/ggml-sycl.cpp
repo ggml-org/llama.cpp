@@ -3933,7 +3933,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             break;
         case GGML_OP_SSM_CONV:
             ggml_sycl_ssm_conv(ctx, dst);
-	    break;
+	        break;
         case GGML_OP_ROLL:
             ggml_sycl_roll(ctx, dst);
             break;
