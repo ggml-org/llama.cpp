@@ -80,7 +80,7 @@ static inline void hvx_copy_fp16_aa(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -104,7 +104,7 @@ static inline void hvx_copy_fp16_ua(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -128,7 +128,7 @@ static inline void hvx_copy_fp16_au(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -153,7 +153,7 @@ static inline void hvx_copy_fp32_aa(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -177,7 +177,7 @@ static inline void hvx_copy_fp32_ua(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -201,7 +201,7 @@ static inline void hvx_copy_fp32_au(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -226,7 +226,7 @@ static inline void hvx_bcast_fp32_a(uint8_t * restrict dst, float elem, uint32_t
 
     uint32_t i = 0;
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (; i < nvec; i++) {
         vdst[i] = velem;
     }
@@ -411,8 +411,8 @@ static inline HVX_Vector hvx_vec_fp32_reduce_sum_n(HVX_Vector in, unsigned int n
 
     HVX_Vector sum = in, sum_t;
     while (width < total) {
-        sum_t = Q6_V_vror_VR(sum, width);       // rotate right
-        sum   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(sum, sum_t)); // elementwise sum
+        sum_t = Q6_V_vror_VR(sum, width);                               // rotate right
+        sum   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(sum, sum_t));  // elementwise sum
         width = width << 1;
     }
     return sum;
@@ -720,6 +720,17 @@ static inline HVX_Vector hvx_vec_inverse_fp32(HVX_Vector v_sf) {
     return Q6_Vsf_equals_Vqf32(r_qf);
 }
 
+static inline HVX_Vector hvx_vec_inverse_fp32_guard_inf(HVX_Vector v_sf) {
+    static const float kInf = INFINITY;
+
+    const HVX_Vector     inf   = Q6_V_vsplat_R(*((uint32_t *) &kInf));
+    const HVX_VectorPred pred0 = Q6_Q_vcmp_gt_VsfVsf(inf, v_sf);
+
+    HVX_Vector out = hvx_vec_inverse_fp32(v_sf);
+
+    return Q6_V_vmux_QVV(pred0, out, Q6_V_vzero());
+}
+
 #define FAST_SIGMOID_LOG2F (0x3fb8aa3b)  // 1.442695022
 #define FAST_SIGMOID_C1    (0x3d009076)  // 0.03138777
 #define FAST_SIGMOID_C2    (0x3e8d74bd)  // 0.276281267
@@ -954,7 +965,7 @@ static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * 
     const HVX_Vector * restrict v_src = (HVX_Vector *) src;
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {
         v_dst[i] = hvx_vec_fast_sigmoid_fp32_guard_inf(v_src[i]);
     }
