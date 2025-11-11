@@ -27,8 +27,6 @@ enum parser_type {
 
 class parser_visitor;
 
-static parser json_parser();
-
 class parser_base {
   protected:
     int id_;
@@ -970,14 +968,14 @@ class gbnf_visitor : public parser_visitor {
 
 // ID assignment visitor for assigning unique IDs to parsers
 class id_assignment_visitor : public parser_visitor {
-    int & next_id_;
+    std::shared_ptr<parser_id_counter> counter_;
 
   public:
-    id_assignment_visitor(int & next_id) : next_id_(next_id) {}
+    id_assignment_visitor(const std::shared_ptr<parser_id_counter> & counter) : counter_(counter) {}
 
     void assign_id(parser_base & p) {
         if (p.id() == -1) {
-            p.set_id(next_id_++);
+            p.set_id(counter_->next());
         }
     }
 
@@ -1155,62 +1153,66 @@ void parser::build_grammar(const common_grammar_builder & builder) const {
 
 parser_builder::parser_builder()
     : rules_(std::make_shared<std::unordered_map<std::string, parser>>())
-    , next_id_(0) {}
+    , counter_(std::make_shared<parser_id_counter>(0)) {}
+
+parser_builder::parser_builder(std::shared_ptr<parser_id_counter> counter)
+    : rules_(std::make_shared<std::unordered_map<std::string, parser>>())
+    , counter_(std::move(counter)) {}
 
 parser parser_builder::literal(const std::string & literal) {
-    return parser(std::make_shared<literal_parser>(literal, next_id_++));
+    return parser(std::make_shared<literal_parser>(literal, counter_->next()));
 }
 
 parser parser_builder::sequence(std::initializer_list<parser> parsers) {
-    return parser(std::make_shared<sequence_parser>(parsers, next_id_++));
+    return parser(std::make_shared<sequence_parser>(parsers, counter_->next()));
 }
 
 parser parser_builder::choice(std::initializer_list<parser> parsers) {
-    return parser(std::make_shared<choice_parser>(parsers, next_id_++));
+    return parser(std::make_shared<choice_parser>(parsers, counter_->next()));
 }
 
 parser parser_builder::one_or_more(const parser & p) {
-    return parser(std::make_shared<one_or_more_parser>(p, next_id_++));
+    return parser(std::make_shared<one_or_more_parser>(p, counter_->next()));
 }
 
 parser parser_builder::zero_or_more(const parser & p) {
-    return parser(std::make_shared<zero_or_more_parser>(p, next_id_++));
+    return parser(std::make_shared<zero_or_more_parser>(p, counter_->next()));
 }
 
 parser parser_builder::optional(const parser & p) {
-    return parser(std::make_shared<optional_parser>(p, next_id_++));
+    return parser(std::make_shared<optional_parser>(p, counter_->next()));
 }
 
 parser parser_builder::negate(const parser & p) {
-    return parser(std::make_shared<not_parser>(p, next_id_++));
+    return parser(std::make_shared<not_parser>(p, counter_->next()));
 }
 
 parser parser_builder::any() {
-    return parser(std::make_shared<any_parser>(next_id_++));
+    return parser(std::make_shared<any_parser>(counter_->next()));
 }
 
 parser parser_builder::char_class(const std::string & classes) {
-    return parser(std::make_shared<char_class_parser>(classes, next_id_++));
+    return parser(std::make_shared<char_class_parser>(classes, counter_->next()));
 }
 
 parser parser_builder::group(const std::string & name, const parser & p) {
-    return parser(std::make_shared<group_parser>(name, p, next_id_++));
+    return parser(std::make_shared<group_parser>(name, p, counter_->next()));
 }
 
 parser parser_builder::rule(const std::string & name) {
-    return parser(std::make_shared<rule_parser>(name, rules_, next_id_++));
+    return parser(std::make_shared<rule_parser>(name, rules_, counter_->next()));
 }
 
 parser parser_builder::space() {
-    return parser(std::make_shared<space_parser>(next_id_++));
+    return parser(std::make_shared<space_parser>(counter_->next()));
 }
 
 parser parser_builder::until(const std::string & delimiter, bool consume_spaces) {
-    return parser(std::make_shared<until_parser>(delimiter, consume_spaces, next_id_++));
+    return parser(std::make_shared<until_parser>(delimiter, consume_spaces, counter_->next()));
 }
 
 parser parser_builder::schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema) {
-    return parser(std::make_shared<schema_parser>(p, name, schema, next_id_++));
+    return parser(std::make_shared<schema_parser>(p, name, schema, counter_->next()));
 }
 
 parser parser_builder::add_rule(const std::string & name, const parser & p) {
@@ -1220,7 +1222,7 @@ parser parser_builder::add_rule(const std::string & name, const parser & p) {
 
 void parser_builder::assign_ids(parser & p) {
     if (p.ptr()) {
-        id_assignment_visitor visitor(next_id_);
+        id_assignment_visitor visitor(counter_);
         p.ptr()->accept(visitor);
     }
 }
@@ -1238,8 +1240,8 @@ parser build_parser(const std::function<parser(parser_builder&)> & fn) {
     return root;
 }
 
-static parser json_parser() {
-    parser_builder builder;
+static parser json_parser(std::shared_ptr<parser_id_counter> counter) {
+    parser_builder builder(std::move(counter));
 
     // Whitespace: space, tab, newline, carriage return
     auto ws = builder.zero_or_more(builder.char_class("[ \\t\\n\\r]"));
@@ -1280,17 +1282,6 @@ static parser json_parser() {
     auto false_lit = builder.literal("false");
     auto null_lit = builder.literal("null");
 
-    // Value - uses forward references for recursive structures
-    builder.add_rule("json_value",
-        builder.rule("json_object") |
-        builder.rule("json_array") |
-        builder.rule("json_string") |
-        builder.rule("json_number") |
-        true_lit |
-        false_lit |
-        null_lit
-    );
-
     // Object: { "key": value, ... }
     auto member = builder.rule("json_string") + ws + builder.literal(":") + ws + builder.rule("json_value");
     auto members = member + builder.zero_or_more(ws + builder.literal(",") + ws + member);
@@ -1310,14 +1301,21 @@ static parser json_parser() {
 
     builder.add_rule("json_array", array);
 
-    // Get the json_value rule as the root
-    auto root = builder.rule("json_value");
-    builder.assign_ids(root);
+    // Value - uses forward references for recursive structures
+    auto root = builder.add_rule("json_value",
+        builder.rule("json_object") |
+        builder.rule("json_array") |
+        builder.rule("json_string") |
+        builder.rule("json_number") |
+        true_lit |
+        false_lit |
+        null_lit
+    );
 
     // Wrap in root_parser to own the rules
     return parser(std::make_shared<root_parser>(root, builder.rules(), -1));
 }
 
 parser parser_builder::json() {
-    return json_parser();
+    return json_parser(counter_);
 }

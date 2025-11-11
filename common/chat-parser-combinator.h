@@ -111,12 +111,20 @@ class parser {
     void build_grammar(const common_grammar_builder & builder) const;
 };
 
+class parser_id_counter {
+    int next_id_;
+  public:
+    parser_id_counter(int start) : next_id_(start) {}
+    int next() { return next_id_++; }
+};
+
 class parser_builder {
     std::shared_ptr<std::unordered_map<std::string, parser>> rules_;
-    int next_id_;
+    std::shared_ptr<parser_id_counter> counter_;
 
   public:
     parser_builder();
+    parser_builder(std::shared_ptr<parser_id_counter> counter);
 
     parser literal(const std::string & literal);
     parser sequence(std::initializer_list<parser> parsers);
