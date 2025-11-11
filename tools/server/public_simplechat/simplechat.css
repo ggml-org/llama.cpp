@@ -38,6 +38,8 @@
     border-width: thin;
     border-radius: 2px;
     display: flex;
+    margin-bottom: 2vh;
+    /* box-shadow: 1px 1px 4px lightslategray; */
 }
 .chat-message-role {
     border-style: dotted;
@@ -101,7 +103,7 @@
 }
 
 #chat-div {
-    overflow: scroll;
+    overflow-y: auto;
     flex-grow: 1;
     flex-shrink: 1;
     min-height: 40vh;
