@@ -53,6 +53,37 @@
 
 bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor);
 
+// See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
+// Precompute mp (m' in the paper) and L such that division
+// can be computed using a multiply (high 32b of 64b result)
+// and a shift:
+//
+// n/d = (mulhi(n, mp) + n) >> L;
+struct fastdiv_vals {
+    uint32_t mp;
+    uint32_t L;
+    uint32_t d;
+    uint32_t pad;
+};
+static_assert(sizeof(fastdiv_vals) == 16, "fastdiv_vals size incorrect");
+
+static fastdiv_vals init_fastdiv_values(uint64_t d_64) {
+    GGML_ASSERT(d_64 != 0);
+    GGML_ASSERT(d_64 <= std::numeric_limits<uint32_t>::max());
+
+    uint32_t d = (uint32_t)d_64;
+
+    // compute L = ceil(log2(d));
+    uint32_t L = 0;
+    while (L < 32 && (uint32_t{ 1 } << L) < d) {
+        L++;
+    }
+
+    uint32_t mp = (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);
+    // pack divisor as well to reduce error surface
+    return { mp, L, d, 0 };
+}
+
 enum GPU_FAMILY {
     ADRENO,
     INTEL,
@@ -2944,8 +2975,11 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32; // Assuming F32 for now, can be expanded
         case GGML_OP_PAD:
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
-        case GGML_OP_UPSCALE:
-            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        case GGML_OP_UPSCALE: {
+            ggml_scale_mode mode = (ggml_scale_mode)(ggml_get_op_params_i32(op, 0) & 0xFF);
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                   (mode == GGML_SCALE_MODE_NEAREST || mode == GGML_SCALE_MODE_BILINEAR);
+        }
         case GGML_OP_CONV_2D:
             return (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16) ||
                    (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
@@ -4461,6 +4495,9 @@ static void ggml_cl_set_rows(ggml_backend_t backend, const ggml_tensor * src0, c
             GGML_ABORT("not implemented");
     }
 
+    fastdiv_vals ne11_ = init_fastdiv_values(ne11);
+    fastdiv_vals ne12_ = init_fastdiv_values(ne12);
+
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
     CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
@@ -4471,8 +4508,8 @@ static void ggml_cl_set_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &nb01));
     CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &nb02));
     CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb03));
-    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne11));
-    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(fastdiv_vals), &ne11_));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(fastdiv_vals), &ne12_));
     CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb10));
     CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &nb11));
     CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong), &nb12));

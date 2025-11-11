@@ -620,7 +620,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_add_id_f32;
 
     vk_pipeline pipeline_concat_f32, pipeline_concat_f16, pipeline_concat_i32;
-    vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32;
+    vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bicubic_f32;
     vk_pipeline pipeline_scale_f32;
     vk_pipeline pipeline_sqr_f32;
     vk_pipeline pipeline_sqrt_f32;
@@ -3702,6 +3702,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_upscale_nearest_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_NEAREST}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_upscale_bilinear_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_BILINEAR}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_upscale_bicubic_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_BICUBIC}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_scale_f32, "scale_f32", scale_f32_len, scale_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
@@ -6830,7 +6831,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
 
     vk_buffer d_B = d_D;
     size_t b_buf_offset = 0;
-    uint64_t b_sz = 0;
+    uint64_t b_sz = 1;
 
     if (enable_bias) {
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
@@ -6964,7 +6965,7 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
 
     vk_buffer d_B = d_D;
     size_t b_buf_offset = 0;
-    uint64_t b_sz = 0;
+    uint64_t b_sz = 1;
 
     if (enable_bias) {
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
@@ -7100,7 +7101,7 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
 
     vk_buffer d_B = d_D;
     size_t b_buf_offset = 0;
-    uint64_t b_sz = 0;
+    uint64_t b_sz = 1;
 
     if (enable_bias) {
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
@@ -7675,7 +7676,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
 
     vk_buffer d_B = d_D;
     size_t b_buf_offset = 0;
-    uint64_t b_sz = 0;
+    uint64_t b_sz = 1;
 
     if (enable_bias || enable_scale) {
         const ggml_tensor * bias = cgraph->nodes[node_idx + 1]->src[1];
@@ -8200,6 +8201,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                     return ctx->device->pipeline_upscale_nearest_f32;
                 case GGML_SCALE_MODE_BILINEAR:
                     return ctx->device->pipeline_upscale_bilinear_f32;
+                case GGML_SCALE_MODE_BICUBIC:
+                    return ctx->device->pipeline_upscale_bicubic_f32;
                 default:
                     return nullptr;
             }
