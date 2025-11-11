@@ -23,6 +23,7 @@ enum parser_type {
     PARSER_UNTIL = 11,
     PARSER_SPACE = 12,
     PARSER_SCHEMA = 13,
+    PARSER_ROOT = 14,
 };
 
 class parser_visitor;
@@ -705,7 +706,7 @@ class root_parser : public parser_base {
     root_parser(const parser & root, std::shared_ptr<std::unordered_map<std::string, parser>> rules, int id)
         : parser_base(id), root_(root), rules_(std::move(rules)) {}
 
-    parser_type type() const override { return root_->type(); }
+    parser_type type() const override { return PARSER_ROOT; }
 
     parser_result parse(parser_context & ctx, size_t start = 0) override {
         return root_->parse(ctx, start);
