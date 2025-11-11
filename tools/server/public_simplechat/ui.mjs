@@ -356,27 +356,37 @@ export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sL
 /**
  * Show the specified properties and their values wrt the given object,
  * with in the elParent provided.
+ * Uses recursion to show embedded objects.
+ *
  * @param {HTMLDivElement | HTMLElement} elParent
  * @param {any} oObj
  * @param {Array<string>} lProps
- * @param {string} sLegend
+ * @param {string} sLegend - the legend/title for the currrent block of properties
  * @param {string} sOffset - can be used to prefix each of the prop entries
- * @param {any | undefined} dClassNames - can specify class for top level div and legend
+ * @param {any | undefined} dClassNames - can specify class for top level parent and legend
  */
 export function ui_show_obj_props_info(elParent, oObj, lProps, sLegend, sOffset="", dClassNames=undefined) {
     if (sOffset.length == 0) {
-        let div = document.createElement("div");
-        div.classList.add(`DivObjPropsInfoL${sOffset.length}`)
-        elParent.appendChild(div)
-        elParent = div
+        let elDet = document.createElement("details");
+        let elSum = document.createElement("summary")
+        if (dClassNames['legend']) {
+            elSum.classList.add(dClassNames['legend'])
+            dClassNames['legend'] = undefined
+        }
+        elSum.appendChild(document.createTextNode(sLegend))
+        sLegend = ""
+        elDet.appendChild(elSum)
+        elDet.classList.add(`DivObjPropsInfoL${sOffset.length}`)
+        elParent.appendChild(elDet)
+        elParent = elDet
     }
     let elPLegend = el_create_append_p(sLegend, elParent)
     if (dClassNames) {
-        if (dClassNames['div']) {
-            elParent.className = dClassNames['div']
+        if (dClassNames['parent']) {
+            elParent.classList.add(dClassNames['parent'])
         }
         if (dClassNames['legend']) {
-            elPLegend.className = dClassNames['legend']
+            elPLegend.classList.add(dClassNames['legend'])
         }
     }
     let elS = document.createElement("section");
