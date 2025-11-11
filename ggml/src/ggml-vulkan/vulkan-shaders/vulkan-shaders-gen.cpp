@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <filesystem>
 
 #ifdef _WIN32
     #define NOMINMAX
@@ -1080,6 +1081,11 @@ int main(int argc, char** argv) {
 
     if (args.find("--glslc") != args.end()) {
         GLSLC = args["--glslc"]; // Path to glslc
+
+        if (!std::filesystem::exists(GLSLC) || !std::filesystem::is_regular_file(GLSLC)) {
+            std::cerr << "Error: glslc not found at " << GLSLC << std::endl;
+            return EXIT_FAILURE;
+        }
     }
     if (args.find("--source") != args.end()) {
         input_filepath = args["--source"]; // The shader source file to compile

@@ -11,6 +11,8 @@ llm_build_openai_moe_iswa::llm_build_openai_moe_iswa(const llama_model & model, 
 
     auto * inp_attn = build_attn_inp_kv_iswa();
 
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
@@ -69,7 +71,6 @@ llm_build_openai_moe_iswa::llm_build_openai_moe_iswa(const llama_model & model, 
         }
         if (il == n_layer - 1) {
             // skip computing output for unused tokens
-            ggml_tensor * inp_out_ids = build_inp_out_ids();
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }

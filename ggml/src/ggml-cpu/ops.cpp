@@ -4455,46 +4455,6 @@ void ggml_compute_forward_cont(
     ggml_compute_forward_dup(params, dst);
 }
 
-// ggml_compute_forward_reshape
-
-void ggml_compute_forward_reshape(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-    // NOP
-    GGML_UNUSED(params);
-    GGML_UNUSED(dst);
-}
-
-// ggml_compute_forward_view
-
-void ggml_compute_forward_view(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-    // NOP
-    GGML_UNUSED(params);
-    GGML_UNUSED(dst);
-}
-
-// ggml_compute_forward_permute
-
-void ggml_compute_forward_permute(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-    // NOP
-    GGML_UNUSED(params);
-    GGML_UNUSED(dst);
-}
-
-// ggml_compute_forward_transpose
-
-void ggml_compute_forward_transpose(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-    // NOP
-    GGML_UNUSED(params);
-    GGML_UNUSED(dst);
-}
-
 // ggml_compute_forward_get_rows
 
 static void ggml_compute_forward_get_rows_q(
