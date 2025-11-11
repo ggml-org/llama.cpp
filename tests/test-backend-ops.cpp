@@ -205,8 +205,6 @@ static void init_tensor_tril(ggml_tensor * tensor, float min = -1.0f, float max 
 
     ggml_backend_tensor_set(tensor, data_f32.data(), 0, ggml_nbytes(tensor));
 }
-
-
 static std::vector<float> tensor_to_float(const ggml_tensor * t) {
     std::vector<float> tv;
     tv.reserve(ggml_nelements(t));
