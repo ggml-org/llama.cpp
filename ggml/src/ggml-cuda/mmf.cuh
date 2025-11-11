@@ -20,15 +20,43 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
 
 bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const int64_t * scr0_ne, const size_t * src0_nb, const int src1_ncols, bool mul_mat_id);
 
-template <typename T, int rows_per_block, int cols_per_block, int nwarps, bool has_ids,
-          typename tile_A, typename tile_B, typename tile_C>
-static __device__ __forceinline__ void mul_mat_f_impl(
+template <typename T, int rows_per_block, int cols_per_block, int nwarps, bool has_ids>
+__launch_bounds__(ggml_cuda_get_physical_warp_size()*nwarps, 1)
+static __global__ void mul_mat_f(
         const T * __restrict__ x, const float * __restrict__ y, const int32_t * __restrict__ ids, float * __restrict__ dst,
         const int ncols, const int ncols_dst_total, const int nchannels_dst, const int stride_row, const int stride_col_y, const int stride_col_dst,
         const int stride_col_id, const int stride_row_id,
         const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
 #if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_WMMA_AVAILABLE)
+    // Special case for tf32, just dummy mma layout as wmma doesn't support it.
+    constexpr int tile_B_I = std::is_same_v<T, float> ? 8 : 16;
+    constexpr int tile_C_J = std::is_same_v<T, float> ? 8 : 16;
+    typedef tile<16,       8, T>     tile_A;
+    typedef tile<tile_B_I, 8, T>     tile_B;
+    typedef tile<16,       tile_C_J, float> tile_C;
+
+    constexpr bool a_supported = tile_A::supported();
+    constexpr bool b_supported = tile_B::supported();
+    constexpr bool c_supported = tile_C::supported();
+    constexpr bool supported = a_supported && b_supported && c_supported;
+#else
+    constexpr bool I_16_supported = tile<16, 8, T>::supported() && tile<16, 8, float>::supported();
+    constexpr bool I_32_supported = tile<32, 8, T>::supported() && tile<32, 8, float>::supported();
+    constexpr bool supported = I_16_supported || I_32_supported;
+
+    constexpr int I_preferred = I_16_supported ? 16 : 32; // For Turing MMA both work but 16 is ~1% faster.
+
+    typedef tile<I_preferred, 8, T>     tile_A;
+    typedef tile<8,           8, T>     tile_B;
+    typedef tile<I_preferred, 8, float> tile_C;
+#endif // defined(AMD_WMMA_AVAILABLE)
+    if (!supported) {
+        NO_DEVICE_CODE;
+        return;
+    }
+
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int tile_k_padded = warp_size + 4;
     constexpr int ntA = rows_per_block / tile_A::I;
@@ -237,19 +265,25 @@ static __device__ __forceinline__ void mul_mat_f_impl(
 #endif // (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
 }
 
-template <typename T, int rows_per_block, int cols_per_block, int nwarps, bool has_ids>
+//This kernel is for larger batch sizes of mul_mat_id
+template <typename T, int rows_per_block, int cols_per_block, int nwarps>
 __launch_bounds__(ggml_cuda_get_physical_warp_size()*nwarps, 1)
-static __global__ void mul_mat_f(
-        const T * __restrict__ x, const float * __restrict__ y, const int32_t * __restrict__ ids, float * __restrict__ dst,
+static __global__ void mul_mat_f_ids(
+        const T * __restrict__ x, const float * __restrict__ y,
+        const int32_t * __restrict__ ids_src_compact, const int32_t * __restrict__ ids_dst_compact,
+        const int32_t * __restrict__ expert_bounds, float * __restrict__ dst,
         const int ncols, const int ncols_dst_total, const int nchannels_dst, const int stride_row, const int stride_col_y, const int stride_col_dst,
-        const int stride_col_id, const int stride_row_id,
         const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
-        const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
+        const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
+        const uint3 sis1_fd, const uint3 nch_fd) {
 #if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
 #if defined(AMD_WMMA_AVAILABLE)
-    typedef tile<16,  8, T>     tile_A;
-    typedef tile<16,  8, T>     tile_B;
-    typedef tile<16, 16, float> tile_C;
+    // Special case for tf32, just dummy mma layout as wmma doesn't support it.
+    constexpr int tile_B_I = std::is_same_v<T, float> ? 8 : 16;
+    constexpr int tile_C_J = std::is_same_v<T, float> ? 8 : 16;
+    typedef tile<16,       8, T>     tile_A;
+    typedef tile<tile_B_I, 8, T>     tile_B;
+    typedef tile<16,       tile_C_J, float> tile_C;
 
     constexpr bool a_supported = tile_A::supported();
     constexpr bool b_supported = tile_B::supported();
@@ -266,34 +300,11 @@ static __global__ void mul_mat_f(
     typedef tile<8,           8, T>     tile_B;
     typedef tile<I_preferred, 8, float> tile_C;
 #endif // defined(AMD_WMMA_AVAILABLE)
-    if constexpr (supported) {
-        mul_mat_f_impl<T, rows_per_block, cols_per_block, nwarps, has_ids,
-            tile_A, tile_B, tile_C> (
-            x, y, ids, dst,
-            ncols, ncols_dst_total, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-            stride_col_id, stride_row_id,
-            channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-            sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst
-        );
-    } else {
+    if (!supported) {
         NO_DEVICE_CODE;
         return;
     }
-#endif // (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
-}
 
-//This kernel is for larger batch sizes of mul_mat_id
-template <typename T, int rows_per_block, int cols_per_block, int nwarps,
-          typename tile_A, typename tile_B, typename tile_C>
-static __device__ __forceinline__ void mul_mat_f_ids_impl(
-        const T * __restrict__ x, const float * __restrict__ y,
-        const int32_t * __restrict__ ids_src_compact, const int32_t * __restrict__ ids_dst_compact,
-        const int32_t * __restrict__ expert_bounds, float * __restrict__ dst,
-        const int ncols, const int ncols_dst_total, const int nchannels_dst, const int stride_row, const int stride_col_y, const int stride_col_dst,
-        const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
-        const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
-        const uint3 sis1_fd, const uint3 nch_fd) {
-#if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int tile_k_padded = warp_size + 4;
     constexpr int ntA = rows_per_block / tile_A::I;
@@ -522,56 +533,6 @@ static __device__ __forceinline__ void mul_mat_f_ids_impl(
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, sis1_fd, nch_fd);
     NO_DEVICE_CODE;
-#endif // (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
-}
-
-//This kernel is for larger batch sizes of mul_mat_id
-template <typename T, int rows_per_block, int cols_per_block, int nwarps>
-__launch_bounds__(ggml_cuda_get_physical_warp_size()*nwarps, 1)
-static __global__ void mul_mat_f_ids(
-        const T * __restrict__ x, const float * __restrict__ y,
-        const int32_t * __restrict__ ids_src_compact, const int32_t * __restrict__ ids_dst_compact,
-        const int32_t * __restrict__ expert_bounds, float * __restrict__ dst,
-        const int ncols, const int ncols_dst_total, const int nchannels_dst, const int stride_row, const int stride_col_y, const int stride_col_dst,
-        const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
-        const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
-        const uint3 sis1_fd, const uint3 nch_fd) {
-#if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
-#if defined(AMD_WMMA_AVAILABLE)
-    typedef tile<16,  8, T>     tile_A;
-    typedef tile<16,  8, T>     tile_B;
-    typedef tile<16, 16, float> tile_C;
-
-    constexpr bool a_supported = tile_A::supported();
-    constexpr bool b_supported = tile_B::supported();
-    constexpr bool c_supported = tile_C::supported();
-    constexpr bool supported = a_supported && b_supported && c_supported;
-#else
-    constexpr bool I_16_supported = tile<16, 8, T>::supported() && tile<16, 8, float>::supported();
-    constexpr bool I_32_supported = tile<32, 8, T>::supported() && tile<32, 8, float>::supported();
-    constexpr bool supported = I_16_supported || I_32_supported;
-
-    constexpr int I_preferred = I_16_supported ? 16 : 32; // For Turing MMA both work but 16 is ~1% faster.
-
-    typedef tile<I_preferred, 8, T>     tile_A;
-    typedef tile<8,           8, T>     tile_B;
-    typedef tile<I_preferred, 8, float> tile_C;
-#endif // defined(AMD_WMMA_AVAILABLE)
-    if constexpr (supported) {
-        mul_mat_f_ids_impl<T, rows_per_block, cols_per_block, nwarps,
-            tile_A, tile_B, tile_C> (
-            x, y,
-            ids_src_compact, ids_dst_compact,
-            expert_bounds, dst,
-            ncols, ncols_dst_total, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
-            channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-            sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst,
-            sis1_fd, nch_fd
-        );
-    } else {
-        NO_DEVICE_CODE;
-        return;
-    }
 #endif // (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
 }
 
