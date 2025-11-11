@@ -2381,7 +2381,7 @@ struct ggml_tensor * ggml_cumsum(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
 
-    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, a->ne);
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     result->op     = GGML_OP_CUMSUM;
     result->src[0] = a;
