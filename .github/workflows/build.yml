@@ -547,6 +547,46 @@ jobs:
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
 
+  ubuntu-24-wasm-webgpu:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-latest-wasm-webgpu
+          evict-old-files: 1d
+
+      - name: Install Emscripten
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git
+          cd emsdk
+          ./emsdk install latest
+          ./emsdk activate latest
+
+      - name: Fetch emdawnwebgpu
+        run: |
+          DAWN_TAG="v20251027.212519"
+          EMDAWN_PKG="emdawnwebgpu_pkg-${DAWN_TAG}.zip"
+          echo "Downloading ${EMDAWN_PKG}"
+          curl -L -o emdawn.zip \
+            "https://github.com/google/dawn/releases/download/${DAWN_TAG}/${EMDAWN_PKG}"
+          unzip emdawn.zip
+
+      - name: Build WASM WebGPU
+        run: |
+          source emsdk/emsdk_env.sh
+          emcmake cmake -B build-wasm \
+            -DGGML_WEBGPU=ON \
+            -DLLAMA_CURL=OFF \
+            -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
+
+          cmake --build build-wasm --target test-backend-ops -j $(nproc)
+
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:6.1.2
