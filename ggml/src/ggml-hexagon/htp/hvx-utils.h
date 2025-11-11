@@ -724,11 +724,11 @@ static inline HVX_Vector hvx_vec_inverse_fp32_guard_inf(HVX_Vector v_sf) {
     static const float kInf = INFINITY;
 
     const HVX_Vector     inf   = Q6_V_vsplat_R(*((uint32_t *) &kInf));
-    const HVX_VectorPred pred0 = Q6_Q_vcmp_gt_VsfVsf(inf, v_sf);
+    const HVX_VectorPred pred0 = Q6_Q_vcmp_eq_VwVw(inf, v_sf);
 
     HVX_Vector out = hvx_vec_inverse_fp32(v_sf);
 
-    return Q6_V_vmux_QVV(pred0, out, Q6_V_vzero());
+    return Q6_V_vmux_QVV(pred0, Q6_V_vzero(), out);
 }
 
 #define FAST_SIGMOID_LOG2F (0x3fb8aa3b)  // 1.442695022
