@@ -52,7 +52,7 @@ static __global__ void mul_mat_f(
     typedef tile<8,           8, T>     tile_B;
     typedef tile<I_preferred, 8, float> tile_C;
 #endif // defined(AMD_WMMA_AVAILABLE)
-    if (!supported) {
+    if constexpr (!supported) {
         NO_DEVICE_CODE;
         return;
     }
@@ -300,7 +300,7 @@ static __global__ void mul_mat_f_ids(
     typedef tile<8,           8, T>     tile_B;
     typedef tile<I_preferred, 8, float> tile_C;
 #endif // defined(AMD_WMMA_AVAILABLE)
-    if (!supported) {
+    if constexpr (!supported) {
         NO_DEVICE_CODE;
         return;
     }
