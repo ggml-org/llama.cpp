@@ -36,7 +36,7 @@ static void test_partial_parsing() {
         parser_context ctx;
         parser_result result;
 
-        ctx = parser_context{"hello", parse_cache()};
+        ctx = parser_context("hello");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
     }
@@ -49,11 +49,11 @@ static void test_partial_parsing() {
         parser_context ctx;
         parser_result result;
 
-        ctx = parser_context{"a", parse_cache()};
+        ctx = parser_context("a");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{"A", parse_cache()};
+        ctx = parser_context("A");
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
 
@@ -61,15 +61,15 @@ static void test_partial_parsing() {
             return p.char_class("a-z-");
         });
 
-        ctx = parser_context{"f", parse_cache()};
+        ctx = parser_context("f");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{"-", parse_cache()};
+        ctx = parser_context("-");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{"A", parse_cache()};
+        ctx = parser_context("A");
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
@@ -80,25 +80,25 @@ static void test_partial_parsing() {
         });
 
         // Partial matches
-        auto ctx = parser_context{"<thi", parse_cache(), false};
+        auto ctx = parser_context("<thi", false);
         auto result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
-        ctx = parser_context{"<think>", parse_cache(), false};
+        ctx = parser_context("<think>", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{"<think></", parse_cache(), false};
+        ctx = parser_context("<think></", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
         // Full match
-        ctx = parser_context{"<think></think>", parse_cache(), true};
+        ctx = parser_context("<think></think>", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
         // No match, since it does not adhere to the grammar
-        ctx = parser_context{"<think>I am parser", parse_cache(), false};
+        ctx = parser_context("<think>I am parser", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
@@ -109,25 +109,25 @@ static void test_partial_parsing() {
         });
 
         // Partial matches
-        auto ctx = parser_context{"<thi", parse_cache(), false};
+        auto ctx = parser_context("<thi", false);
         auto result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
-        ctx = parser_context{"<reas", parse_cache(), false};
+        ctx = parser_context("<reas", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
         // Full match
-        ctx = parser_context{"<think>", parse_cache(), true};
+        ctx = parser_context("<think>", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{"<reasoning>", parse_cache(), true};
+        ctx = parser_context("<reasoning>", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
         // No match
-        ctx = parser_context{"<thought>", parse_cache(), true};
+        ctx = parser_context("<thought>", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
@@ -138,16 +138,16 @@ static void test_partial_parsing() {
         });
 
         // Partial matches
-        auto ctx = parser_context{"a", parse_cache(), false};
+        auto ctx = parser_context("a", false);
         auto result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
-        ctx = parser_context{"aba", parse_cache(), false};
+        ctx = parser_context("aba", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
         // Full match
-        ctx = parser_context{"ab", parse_cache(), true};
+        ctx = parser_context("ab", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
     }
@@ -158,21 +158,21 @@ static void test_partial_parsing() {
         });
 
         // Partial matches
-        auto ctx = parser_context{"a", parse_cache(), false};
+        auto ctx = parser_context("a", false);
         auto result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
-        ctx = parser_context{"aba", parse_cache(), false};
+        ctx = parser_context("aba", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
         // Full match
-        ctx = parser_context{"ab", parse_cache(), true};
+        ctx = parser_context("ab", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
         // No match
-        ctx = parser_context{"cd", parse_cache(), true};
+        ctx = parser_context("cd", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
@@ -189,7 +189,7 @@ static void test_capture_groups() {
         });
 
         std::string input = "<think>I have a thought</think>";
-        auto ctx = parser_context{input, parse_cache()};
+        auto ctx = parser_context(input);
         auto result = parser.parse(ctx);
 
         assert_equals(true, result.is_success());
@@ -208,7 +208,7 @@ static void test_capture_groups() {
         });
 
         std::string input = "<think>I have a ";
-        auto ctx = parser_context{input, parse_cache(), false};
+        auto ctx = parser_context(input, false);
         auto result = parser.parse(ctx);
 
         assert_equals(true, result.is_success());
@@ -228,7 +228,7 @@ static void test_capture_groups() {
         });
 
         std::string input = "<think>The user said hello.</think>Hello!";
-        auto ctx = parser_context{input, parse_cache(), true};
+        auto ctx = parser_context(input, true);
         auto result = parser.parse(ctx);
 
         assert_equals(true, result.is_success());
@@ -253,19 +253,19 @@ static void test_char_class() {
         parser_context ctx;
         parser_result result;
 
-        ctx = parser_context{"\n", parse_cache()};
+        ctx = parser_context("\n");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{"\t", parse_cache()};
+        ctx = parser_context("\t");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{"\\", parse_cache()};
+        ctx = parser_context("\\");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{" ", parse_cache()};
+        ctx = parser_context(" ");
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
@@ -278,20 +278,20 @@ static void test_char_class() {
         parser_context ctx;
         parser_result result;
 
-        ctx = parser_context{"a", parse_cache()};
+        ctx = parser_context("a");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{"-", parse_cache()};
+        ctx = parser_context("-");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context{"z", parse_cache()};
+        ctx = parser_context("z");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
         // Should NOT match 'b' since \- is a literal dash, not a range
-        ctx = parser_context{"b", parse_cache()};
+        ctx = parser_context("b");
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
@@ -312,32 +312,32 @@ static void test_recursive_references() {
     parser_result result;
 
     // Test simple number
-    ctx = parser_context{"1", parse_cache(), true};
+    ctx = parser_context("1", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_success());
 
     // Test simple list
-    ctx = parser_context{"[1]", parse_cache(), true};
+    ctx = parser_context("[1]", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_success());
 
     // Test nested list
-    ctx = parser_context{"[[2]]", parse_cache(), true};
+    ctx = parser_context("[[2]]", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_success());
 
     // Test deeply nested list
-    ctx = parser_context{"[[[3]]]", parse_cache(), true};
+    ctx = parser_context("[[[3]]]", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_success());
 
     // Test partial match
-    ctx = parser_context{"[[", parse_cache(), false};
+    ctx = parser_context("[[", false);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_success());
 
     // Test no match
-    ctx = parser_context{"[a]", parse_cache(), true};
+    ctx = parser_context("[a]", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_fail());
 }
@@ -349,19 +349,19 @@ static void test_optional() {
     });
 
     // Full match with optional part present
-    auto ctx = parser_context{"hello world", parse_cache()};
+    auto ctx = parser_context("hello world");
     auto result = parser.parse(ctx);
     assert_equals(true, result.is_success());
     assert_equals((size_t)11, result.end);
 
     // Full match with optional part absent
-    ctx = parser_context{"hello", parse_cache(), true};
+    ctx = parser_context("hello", true);
     result = parser.parse(ctx);
     assert_equals(true, result.is_success());
     assert_equals((size_t)5, result.end);
 
     // Partial match - waiting for more input to determine if optional matches
-    ctx = parser_context{"hello ", parse_cache(), false};
+    ctx = parser_context("hello ", false);
     result = parser.parse(ctx);
     assert_equals(true, result.is_need_more_input());
 }
@@ -374,7 +374,7 @@ static void test_json_parser() {
     {
         // Test parsing a simple JSON object
         std::string input = R"({"name": "test", "value": 42, "flag": true})";
-        parser_context ctx{input, parse_cache()};
+        parser_context ctx(input);
 
         auto result = json.parse(ctx);
 
@@ -384,7 +384,7 @@ static void test_json_parser() {
     {
         // Test parsing a JSON array with mixed types
         std::string input = R"([1, "hello", true, null, 3.14])";
-        parser_context ctx{input, parse_cache()};
+        parser_context ctx(input);
 
         auto result = json.parse(ctx);
 
@@ -394,7 +394,7 @@ static void test_json_parser() {
     {
         // Test parsing nested JSON with objects and arrays
         std::string input = R"({"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], "count": 2, "metadata": {"version": "1.0", "tags": ["admin", "user"]}})";
-        parser_context ctx{input, parse_cache()};
+        parser_context ctx(input);
 
         auto result = json.parse(ctx);
 
@@ -404,7 +404,7 @@ static void test_json_parser() {
     {
         // Test partial parsing - incomplete object
         std::string input = R"({"name": "test", "value": )";
-        parser_context ctx{input, parse_cache(), false};
+        parser_context ctx(input, false);
 
         auto result = json.parse(ctx);
 
@@ -413,7 +413,7 @@ static void test_json_parser() {
     {
         // Test partial parsing - incomplete array
         std::string input = R"([1, 2, 3, )";
-        parser_context ctx{input, parse_cache(), false};
+        parser_context ctx(input, false);
 
         auto result = json.parse(ctx);
 
@@ -422,7 +422,7 @@ static void test_json_parser() {
     {
         // Test partial parsing - incomplete nested structure
         std::string input = R"({"data": {"nested": )";
-        parser_context ctx{input, parse_cache(), false};
+        parser_context ctx(input, false);
 
         auto result = json.parse(ctx);
 
@@ -476,7 +476,7 @@ static void test_complete_example() {
 
     // Test complete input
     std::string input = R"(<think>I need to call get_weather with city = New York</think><tool_call><name>get_weather</name><args>{"city": "New York"}</args></tool_call>)";
-    parser_context ctx{input, parse_cache()};
+    parser_context ctx(input);
 
     auto result = parser.parse(ctx);
 
@@ -488,21 +488,21 @@ static void test_complete_example() {
 
     // Test partial input
     input = R"(<think>I need to call get_weather )";
-    ctx = parser_context{input, parse_cache(), /* .is_input_complete = */ false};
+    ctx = parser_context(input, /* .is_input_complete = */ false);
     result = parser.parse(ctx);
 
     assert_equals(true, result.is_success());
     assert_equals(std::string("I need to call get_weather"), *result.group("reasoning-content", ctx.input));
 
     input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather)";
-    ctx = parser_context{input, parse_cache(), /* .is_input_complete = */ false};
+    ctx = parser_context(input, /* .is_input_complete = */ false);
     result = parser.parse(ctx);
 
     assert_equals(true, result.is_success());
     assert_equals(std::string("I need to call get_weather"), *result.group("reasoning-content", ctx.input));
 
     input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather</na)";
-    ctx = parser_context{input, parse_cache(), /* .is_input_complete = */ false};
+    ctx = parser_context(input, /* .is_input_complete = */ false);
     result = parser.parse(ctx);
 
     assert_equals(true, result.is_need_more_input());
@@ -510,7 +510,7 @@ static void test_complete_example() {
     assert_equals(std::string("get_weather"), *result.group("tool-name", ctx.input));
 
     input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather</name><args>{"cit)";
-    ctx = parser_context{input, parse_cache(), /* .is_input_complete = */ false};
+    ctx = parser_context(input, /* .is_input_complete = */ false);
     result = parser.parse(ctx);
 
     assert_equals(true, result.is_success());

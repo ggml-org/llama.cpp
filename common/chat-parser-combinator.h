@@ -52,9 +52,15 @@ struct parser_result {
     std::unordered_map<std::string, parser_match_location> groups;
 
     parser_result() : type(PARSER_RESULT_FAIL) {}
-    parser_result(parser_result_type type, size_t start) : type(type), start(start), end(start) {}
-    parser_result(parser_result_type type, size_t start, size_t end) : type(type), start(start), end(end) {}
-    parser_result(parser_result_type type, size_t start, size_t end, const std::unordered_map<std::string, parser_match_location> & groups) : type(type), start(start), end(end), groups(groups) {}
+
+    parser_result(parser_result_type type, size_t start)
+        : type(type), start(start), end(start) {}
+
+    parser_result(parser_result_type type, size_t start, size_t end)
+        : type(type), start(start), end(end) {}
+
+    parser_result(parser_result_type type, size_t start, size_t end, const std::unordered_map<std::string, parser_match_location> & groups)
+        : type(type), start(start), end(end), groups(groups) {}
 
     bool is_fail() const { return type == PARSER_RESULT_FAIL; }
     bool is_need_more_input() const { return type == PARSER_RESULT_NEED_MORE_INPUT; }
@@ -77,7 +83,19 @@ class parse_cache {
 struct parser_context {
     std::string_view input;
     parse_cache memo;
-    bool input_is_complete = true;
+    bool input_is_complete;
+
+    parser_context()
+        : memo(), input_is_complete(true) {}
+
+    parser_context(std::string_view input)
+        : input(input), memo(), input_is_complete(true) {}
+
+    parser_context(std::string_view input, bool complete)
+        : input(input), memo(), input_is_complete(complete) {}
+
+    parser_context(std::string_view input, parse_cache memo, bool complete = true)
+        : input(input), memo(std::move(memo)), input_is_complete(complete) {}
 };
 
 class parser_base;
