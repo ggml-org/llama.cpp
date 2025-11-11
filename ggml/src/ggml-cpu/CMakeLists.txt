@@ -216,35 +216,24 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 endif()
             endif()
 
-            # show enabled features
-            if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
-                set(FEAT_INPUT_FILE "NUL")
-            else()
-                set(FEAT_INPUT_FILE "/dev/null")
-            endif()
-
-            execute_process(
-                COMMAND ${CMAKE_C_COMPILER} ${ARCH_FLAGS} -dM -E -
-                INPUT_FILE ${FEAT_INPUT_FILE}
-                OUTPUT_VARIABLE ARM_FEATURE
-                RESULT_VARIABLE ARM_FEATURE_RESULT
-            )
-            if (ARM_FEATURE_RESULT)
-                message(WARNING "Failed to get ARM features")
-            else()
-                foreach(feature DOTPROD SVE MATMUL_INT8 FMA FP16_VECTOR_ARITHMETIC SME)
-                    string(FIND "${ARM_FEATURE}" "__ARM_FEATURE_${feature} 1" feature_pos)
-                    if (NOT ${feature_pos} EQUAL -1)
-                        # Special handling for MATMUL_INT8 when machine doesn't support i8mm
-                        if ("${feature}" STREQUAL "MATMUL_INT8" AND GGML_MACHINE_SUPPORTS_noi8mm)
-                            message(STATUS "ARM feature ${feature} detected but unsetting due to machine not supporting i8mm")
-                            list(APPEND ARCH_FLAGS -U__ARM_FEATURE_MATMUL_INT8)
-                        else()
-                            message(STATUS "ARM feature ${feature} enabled")
-                        endif()
-                    endif()
-                endforeach()
-            endif()
+            message(STATUS "Checking for ARM features using flags: ${ARCH_FLAGS}")
+            include(CheckCXXSourceCompiles)
+            set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
+            set(CMAKE_REQUIRED_FLAGS "${ARCH_FLAGS}")
+            foreach(feature DOTPROD SVE MATMUL_INT8 FMA FP16_VECTOR_ARITHMETIC SME)
+                set(ARM_FEATURE "HAVE_${feature}")
+                check_cxx_source_compiles(
+                    "
+                    #include <arm_neon.h>
+                    #if !defined(__ARM_FEATURE_${feature})
+                    #  error \"Feature ${feature} is not defined\"
+                    #endif
+                    int main() { return 0; }
+                    "
+                    ${ARM_FEATURE}
+                )
+            endforeach()
+            set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "x86")
         message(STATUS "x86 detected")
