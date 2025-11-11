@@ -699,7 +699,8 @@ static void parse_json_tool_calls(
     const common_regex & close_regex,
     const std::optional<common_regex> & block_close,
     bool allow_raw_python = false,
-    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_name = nullptr) {
+    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_name = nullptr,
+    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_id = nullptr) {
 
     auto parse_tool_calls = [&]() {
         size_t from = std::string::npos;
@@ -714,11 +715,17 @@ static void parse_json_tool_calls(
 
             if (res) {
                 std::string name;
+                std::string id;
                 if (get_function_name) {
                     name = get_function_name(*res);
                 } else {
                     GGML_ASSERT(res->groups.size() == 2);
                     name = builder.str(res->groups[1]);
+                }
+                if (get_function_id) {
+                    id = get_function_id(*res);
+                } else {
+                    id = "";
                 }
                 first = false;
                 if (name.empty()) {
@@ -731,7 +738,7 @@ static void parse_json_tool_calls(
                 auto maybe_raw_python = name == "python" && allow_raw_python;
                 if (builder.input()[builder.pos()] == '{' || !maybe_raw_python) {
                     if (auto arguments = builder.try_consume_json_with_dumped_args({{}})) {
-                        if (!builder.add_tool_call(name, "", arguments->value) || arguments->is_partial) {
+                        if (!builder.add_tool_call(name, id, arguments->value) || arguments->is_partial) {
                             throw common_chat_msg_partial_exception("incomplete tool call");
                         }
                         builder.consume_regex(close_regex);
@@ -740,7 +747,7 @@ static void parse_json_tool_calls(
                 }
                 if (maybe_raw_python) {
                     auto arguments = wrap_code_as_arguments(builder, builder.consume_rest());
-                    if (!builder.add_tool_call(name, "", arguments)) {
+                    if (!builder.add_tool_call(name, id, arguments)) {
                         throw common_chat_msg_partial_exception("incomplete tool call");
                     }
                     return;
@@ -1871,7 +1878,8 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
 }
 
 static void common_chat_parse_kimi_k2_content(common_chat_msg_parser & builder) {
-    static const common_regex function_regex("(?:<\\|tool_call_begin\\|>)?([^\\n<]+)(?:<\\|tool_call_argument_begin\\|>)");
+    // https://github.com/MoonshotAI/Kimi-K2/blob/main/docs/tool_call_guidance.md
+    static const common_regex function_regex("(?:<\\|tool_call_begin\\|>)?([\\w\\.]+:\\d+)\\s*(?:<\\|tool_call_argument_begin\\|>)");
 
     static const common_regex close_regex("(?:[\\s]*)?<\\|tool_call_end\\|>");
     static const common_regex tool_calls_begin("(?:<\\|tool_calls_section_begin\\|>)");
@@ -1891,7 +1899,26 @@ static void common_chat_parse_kimi_k2_content(common_chat_msg_parser & builder) 
         /* function_regex_start_only= */ std::nullopt,
         function_regex,
         close_regex,
-        tool_calls_end);
+        tool_calls_end,
+        /* allow_raw_python */ false,
+        /* get_function_name= */ [&](const auto & res) -> std::string {
+            auto function_id = builder.str(res.groups[1]);
+
+            auto dot_pos = function_id.find(".");
+            if (dot_pos == std::string::npos) {
+                return "";
+            }
+
+            auto colon_pos = function_id.find(':', dot_pos + 1);
+            if (colon_pos == std::string::npos)
+                return function_id.substr(dot_pos + 1);
+            else
+                return function_id.substr(dot_pos + 1, colon_pos - (dot_pos + 1));
+        },
+        /* get_function_id= */ [&](const auto & res) -> std::string {
+            return builder.str(res.groups[1]);
+        }
+    );
 }
 
 static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
