@@ -1758,14 +1758,16 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
     if (inputs.tools.is_array() && !inputs.tools.empty()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED && inputs.json_schema.is_null();
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            // https://github.com/MoonshotAI/Kimi-K2/blob/main/docs/tool_call_guidance.md
             std::vector<std::string> tool_rules;
             foreach_function(inputs.tools, [&](const json & tool) {
+                const auto number = builder.add_rule("number", "[0-9]+");
                 const auto & function = tool.at("function");
                 std::string name = function.at("name");
                 auto parameters = function.at("parameters");
                 builder.resolve_refs(parameters);
                 tool_rules.push_back(builder.add_rule(name + "-call",
-                    "( \"<|tool_call_begin|>\" )? \"" + name + "<|tool_call_argument_begin|>"
+                    "\"<|tool_call_begin|>functions." + name + ":\" " + number + " \"<|tool_call_argument_begin|>"
                     "\" " + builder.add_schema(name + "-args", parameters) + " "
                     "\"<|tool_call_end|>\""));
             });
@@ -1773,8 +1775,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
                 std::string(data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
                 "( \"<|tool_calls_section_begin|>\" ) "
                 "(" + string_join(tool_rules, " | ") + ")" + (inputs.parallel_tool_calls ? "*" : "") + " "
-                "\"<|tool_calls_section_end|>\""
-                " space");
+                "\"<|tool_calls_section_end|>\"");
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
                 // If thinking_forced_open, then we capture the </think> tag in the grammar,
@@ -1878,8 +1879,7 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
 }
 
 static void common_chat_parse_kimi_k2_content(common_chat_msg_parser & builder) {
-    // https://github.com/MoonshotAI/Kimi-K2/blob/main/docs/tool_call_guidance.md
-    static const common_regex function_regex("(?:<\\|tool_call_begin\\|>)?([\\w\\.]+:\\d+)\\s*(?:<\\|tool_call_argument_begin\\|>)");
+    static const common_regex function_regex("(?:<\\|tool_call_begin\\|>)([\\w\\.]+:\\d+)\\s*(?:<\\|tool_call_argument_begin\\|>)");
 
     static const common_regex close_regex("(?:[\\s]*)?<\\|tool_call_end\\|>");
     static const common_regex tool_calls_begin("(?:<\\|tool_calls_section_begin\\|>)");
@@ -1916,7 +1916,13 @@ static void common_chat_parse_kimi_k2_content(common_chat_msg_parser & builder) 
                 return function_id.substr(dot_pos + 1, colon_pos - (dot_pos + 1));
         },
         /* get_function_id= */ [&](const auto & res) -> std::string {
-            return builder.str(res.groups[1]);
+            auto function_id = builder.str(res.groups[1]);
+
+            auto dot_pos = function_id.find(".");
+            if (dot_pos == std::string::npos) {
+                return "";
+            }
+            return function_id;
         }
     );
 }
