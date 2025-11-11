@@ -82,7 +82,7 @@ static __device__ __forceinline__ float op_log(float x) {
 }
 
 static __device__ __forceinline__ float op_expm1(float x) {
-    return expf(x) - 1.0f;
+    return expm1f(x);
 }
 
 static __device__ __forceinline__ float op_softplus(float x) {
