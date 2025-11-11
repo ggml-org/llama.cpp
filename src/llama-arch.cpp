@@ -1505,8 +1505,9 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
     {
         LLM_ARCH_IFAIRY,
         {
-            { LLM_TENSOR_TOKEN_EMBD_IMAG,         "token_embd_imag" },
-            { LLM_TENSOR_TOKEN_EMBD_REAL,         "token_embd_real" },
+            { LLM_TENSOR_TOKEN_EMBD,         "token_embd" },
+            { LLM_TENSOR_OUTPUT,             "output" },
+            { LLM_TENSOR_OUTPUT_NORM,        "output_norm" },
             // quant at convert
             { LLM_TENSOR_ATTN_Q,                  "blk.%d.attn_q" },
             { LLM_TENSOR_ATTN_K,                  "blk.%d.attn_k" },

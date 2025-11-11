@@ -280,7 +280,6 @@ public:
     // used to create a full-cache context
     llama_kv_cache_context(
             llama_kv_cache * kv);
-
     // used to create an update context
     llama_kv_cache_context(
             llama_kv_cache * kv,
@@ -315,6 +314,9 @@ public:
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+    
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il, int32_t n_kv) const;
+    ggml_tensor * get_v(ggml_context * ctx, int32_t il, int32_t n_kv) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be layed out contiguously in memory

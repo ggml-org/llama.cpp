@@ -1540,7 +1540,8 @@ ggml_tensor * llm_graph_context::ifairy_build_attn(
     {
         const auto & k_idxs = inp->get_k_idxs();
         const auto & v_idxs = inp->get_v_idxs();
-
+        //LLAMA_LOG("ready to set k,v cache at il=%d, k_cur->ne0 = %ld, k_cur->ne1 = %ld\n", il, k_cur->ne[0], k_cur->ne[1]);
+        //LLAMA_LOG("ready to set k,v cache at il=%d, v_cur->ne0 = %ld, v_cur->ne1 = %ld\n", il, v_cur->ne[0], v_cur->ne[1]);
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
     }
@@ -1550,6 +1551,10 @@ ggml_tensor * llm_graph_context::ifairy_build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+
+    //LLAMA_LOG("before attention, k->ne0 = %ld, k->ne1 = %ld\n", k->ne[0], k->ne[1]);
+    //LLAMA_LOG("before attention, v->ne0 = %ld, v->ne1 = %ld\n", v->ne[0], v->ne[1]);
+
 
     ggml_tensor * cur = build_attn_mha(q, k, v, NULL, kq_mask, NULL, NULL, kq_scale, il);
 

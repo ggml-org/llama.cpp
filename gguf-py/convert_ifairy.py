@@ -9,17 +9,52 @@ import json
 import argparse
 from pathlib import Path
 
-
 import gguf
 import torch
-import tensorflow as tf
+#import tensorflow as tf
 from safetensors import safe_open
-from transformers import AutoConfig, AutoModel
 import numpy as np
 
 
-bf16 = tf.bfloat16.as_numpy_dtype
+#bf16 = tf.bfloat16.as_numpy_dtype
 
+def set_vocab_llama_hf(gguf_writer):
+        vocab = gguf.LlamaHfVocab(Path('.'))
+        tokens = []
+        scores = []
+        toktypes = []
+
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            toktypes.append(toktype)
+
+        assert len(tokens) == vocab.vocab_size
+
+        gguf_writer.add_tokenizer_model("llama")
+        gguf_writer.add_tokenizer_pre("default")
+        gguf_writer.add_token_list(tokens)
+        gguf_writer.add_token_scores(scores)
+        gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(Path('.'), n_vocab=len(tokens))
+        special_vocab.add_to_gguf(gguf_writer)
+
+def set_vocab(gguf_writer):
+        path_tokenizer_json = Path('.') / "tokenizer.json"
+        if not path_tokenizer_json.is_file():
+            raise FileNotFoundError("tokenizer.json not found")
+
+        set_vocab_llama_hf(gguf_writer)
+
+
+        tokenizer_config_file = Path('.') / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config_json = json.load(f)
+                if "add_prefix_space" in tokenizer_config_json:
+                    gguf_writer.add_add_space_prefix(tokenizer_config_json["add_prefix_space"])
+            
 # 从hf上直接扒下来的
 def forward(w_real: torch.Tensor, w_imag: torch.Tensor):
     w_imag = w_imag.to('cuda') # 本来没这两行，我这里不写不支持angle操作
@@ -100,6 +135,39 @@ def split_complex_tensors(merged_tensor):
     
     return imag_part, real_part
 
+def merge_complex_tensor(q_real: torch.Tensor, q_imag: torch.Tensor) -> torch.Tensor:
+    """
+    将实部和虚部张量合并为复数张量，通过浮点数最后一位标识类型
+    
+    参数:
+        q_real: 实数部分张量，虚数部分必须为0
+        q_imag: 虚数部分张量，实数部分必须为0
+    
+    返回:
+        合并后的复数张量，实数末位为0，虚数末位为1
+    """
+    # 创建合并张量（实部和虚部相加，因为非零位置不重叠）
+    merged = q_real + q_imag
+    
+    # 将合并张量转换为uint32视图进行位操作
+    uint32_view = merged.view(torch.int32)
+    
+    # 创建掩码：虚数位置（q_imag非零的位置）
+    imag_mask = (q_imag != 0)
+    
+    # 清除所有最后一位（设置为0）
+    uint32_view_cleared = uint32_view & 0xFFFFFFFE
+    
+    # 设置虚数位置的最后一位为1
+    uint32_view_with_flag = torch.where(imag_mask, 
+                                       uint32_view_cleared | 0x1,  # 虚数：最后一位为1
+                                       uint32_view_cleared)        # 实数：最后一位为0
+    
+    # 转换回float32格式
+    result = uint32_view_with_flag.view(torch.float32)
+    
+    return result
+
 # 接收key和对应的tensor，返回量化后的tensor
 def quant_and_merge(key, tensor, f, weight_map):
     if 'real' in key:
@@ -111,7 +179,7 @@ def quant_and_merge(key, tensor, f, weight_map):
         else:
             imag_tensor = f.get_tensor(imag_key).to(torch.float32)
         q_real, q_imag = forward(tensor, imag_tensor)
-        return combine_complex_tensors(q_imag, q_real)
+        return merge_complex_tensor(q_imag, q_real)
     elif 'imag' in key:
         real_key = key.replace('imag', 'real')
         f_name = weight_map.get(real_key)
@@ -121,7 +189,7 @@ def quant_and_merge(key, tensor, f, weight_map):
         else:
             real_tensor = f.get_tensor(real_key).to(torch.float32)
         q_real, q_imag = forward(real_tensor, tensor)   
-        return combine_complex_tensors(q_imag, q_real)
+        return merge_complex_tensor(q_imag, q_real)
     else:
         return tensor
 
@@ -217,7 +285,6 @@ def main():
 
     # 词汇表和分词器信息
     writer.add_vocab_size(config["vocab_size"])
-    writer.add_tokenizer_model("llama") 
 
     index_name = "model.safetensors.index.json"
     index_file = Path(model_dir) / index_name
@@ -270,10 +337,10 @@ def main():
                         if verbose:
                             print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
                         continue
-                    # 这个不做量化，直接bf16存储
+                    # 这个不做量化，直接bf32存储
                     if 'lm_head' in key :
                         tensor_data = f.get_tensor(key).to(torch.float32)
-                        numpy_array = tensor_data.cpu().numpy().astype(bf16)
+                        numpy_array = tensor_data.cpu().numpy()
                         model_arch = gguf.MODEL_ARCH.IFAIRY
                         mapper = gguf.get_tensor_name_map(model_arch, config["num_hidden_layers"])
                         try:
@@ -284,7 +351,7 @@ def main():
                         except Exception as e:
                             print(f"Error mapping tensor name '{key}': {e}")
                             exit(1)
-                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.BF16)
+                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F32)
                         if verbose:
                             print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
                         continue
@@ -316,6 +383,7 @@ def main():
                     tensor_data = f.get_tensor(key).to(torch.float32)
                     tensor_data = quant_and_merge(key, tensor_data, f, weight_map)
                     numpy_array = tensor_data.cpu().numpy()
+                    numpy_array = gguf.quants.quantize(numpy_array, gguf.GGMLQuantizationType.F16_I2)
 
                     model_arch = gguf.MODEL_ARCH.IFAIRY
 
@@ -345,6 +413,7 @@ def main():
 
     # 5. 写入文件
     try:
+        set_vocab(writer)
         writer.write_header_to_file()
         writer.write_kv_data_to_file()
         writer.write_tensors_to_file()

@@ -3041,7 +3041,6 @@ struct ggml_tensor * ggml_l2_norm_inplace(
 
 static inline bool ggml_can_mul_mat(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
     static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
-
     return (t0->ne[0]           == t1->ne[0])  &&
            (t1->ne[2]%t0->ne[2] == 0)          && // verify t0 is broadcastable
            (t1->ne[3]%t0->ne[3] == 0);
@@ -5185,6 +5184,8 @@ struct ggml_tensor * ggml_flash_attn_ext(
         float                 scale,
         float                 max_bias,
         float                 logit_softcap) {
+    //GGML_LOG("q shape: [%lld, %lld, %lld, %lld]\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
+    //GGML_LOG("k shape: [%lld, %lld, %lld, %lld]\n", k->ne[0], k->ne[1], k->ne[2], k->ne[3]);
     GGML_ASSERT(ggml_can_mul_mat(k, q));
     // TODO: check if vT can be multiplied by (k*qT)
 

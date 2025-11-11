@@ -620,6 +620,71 @@ class TQ1_0(__Quant, qtype=GGMLQuantizationType.TQ1_0):
         return (d * qs.astype(np.float32))
 
 
+class IFAIRY(__Quant, qtype=GGMLQuantizationType.F16_I2):
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        """
+        复数2bit量化实现
+        参数:
+            blocks: 输入数据块, shape为(n_blocks, block_size)的float32数组
+        返回:
+            量化后的数据块, 包含2bit量化数据和scale值
+        """
+        n_blocks = blocks.shape[0]
+        
+        # 预处理：分离实数和虚数
+        real_mask = (blocks.view(np.uint32) & 1) == 0  # 最后一位为0表示实数
+        imag_mask = ~real_mask  # 最后一位为1表示虚数
+        
+        real_values = blocks.copy()
+        imag_values = blocks.copy()
+        real_values[imag_mask] = 0  # 虚数位置设为0
+        imag_values[real_mask] = 0  # 实数位置设为0
+        
+        # 计算实部和虚部的scale
+        real_scale = abs(real_values).max(axis=-1, keepdims=True)
+        imag_scale = abs(imag_values).max(axis=-1, keepdims=True)
+        
+        # 2bit量化编码
+        quantized = np.zeros_like(blocks, dtype=np.uint8)
+        
+        # 编码规则：
+        # 00: 负实数  (0b00)
+        # 01: 正实数  (0b01)  
+        # 10: 负虚数  (0b10)
+        # 11: 正虚数  (0b11)
+        
+        # 实数编码
+        neg_real_mask = (real_values < 0) & real_mask
+        pos_real_mask = (real_values >= 0) & real_mask
+        quantized[neg_real_mask] = 0b00  # 负实数
+        quantized[pos_real_mask] = 0b01  # 正实数
+        
+        # 虚数编码  
+        neg_imag_mask = (imag_values < 0) & imag_mask
+        pos_imag_mask = (imag_values >= 0) & imag_mask
+        quantized[neg_imag_mask] = 0b10  # 负虚数
+        quantized[pos_imag_mask] = 0b11  # 正虚数
+        
+        # 打包2bit数据 (每个字节存储4个值)
+        quantized = quantized.reshape((n_blocks, -1, 4))
+        packed = np.zeros_like(quantized[..., 0], dtype=np.uint8)
+        
+        for i in range(4):
+            packed |= (quantized[..., i] & 0b11) << (i * 2)
+        
+        # 重塑为连续块
+        packed = packed.reshape((n_blocks, -1))
+        
+        # 准备scale数据
+        scales = np.concatenate([
+            real_scale.astype(np.float32).view(np.uint8),
+            imag_scale.astype(np.float32).view(np.uint8)
+        ], axis=-1)
+        
+        # 合并量化数据和scale
+        return np.concatenate([packed, scales], axis=-1)
+
 class TQ2_0(__Quant, qtype=GGMLQuantizationType.TQ2_0):
     @classmethod
     def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:

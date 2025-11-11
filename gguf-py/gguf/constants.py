@@ -1020,16 +1020,16 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.TOKEN_EMBD_IMAG:                "token_embd_imag",
     MODEL_TENSOR.FINAL_NORM_IMAG:                "final_norm_imag",
     MODEL_TENSOR.FINAL_NORM_REAL:                "final_norm_real",
-    MODEL_TENSOR.FINAL_NORM:                     "final_norm",
+    MODEL_TENSOR.FINAL_NORM:                     "output_norm",
     MODEL_TENSOR.POST_NORM_IMAG:                 "blk.{bid}.post_norm_imag",
     MODEL_TENSOR.POST_NORM_REAL:                 "blk.{bid}.post_norm_real",
-    MODEL_TENSOR.POST_NORM:                      "blk.{bid}.post_norm",
+    MODEL_TENSOR.POST_NORM:                      "blk.{bid}.ffn_norm",
     MODEL_TENSOR.PRE_NORM_IMAG:                  "blk.{bid}.pre_norm_imag",
     MODEL_TENSOR.PRE_NORM_REAL:                  "blk.{bid}.pre_norm_real",
-    MODEL_TENSOR.PRE_NORM:                       "blk.{bid}.pre_norm",
+    MODEL_TENSOR.PRE_NORM:                       "blk.{bid}.attn_norm",
     MODEL_TENSOR.ATTN_LAYERNORM_IMAG:            "blk.{bid}.attn_layernorm_imag",
     MODEL_TENSOR.ATTN_LAYERNORM_REAL:            "blk.{bid}.attn_layernorm_real",
-    MODEL_TENSOR.ATTN_LAYERNORM:                 "blk.{bid}.attn_layernorm",
+    MODEL_TENSOR.ATTN_LAYERNORM:                 "blk.{bid}.attn_sub_norm",
     MODEL_TENSOR.FFN_SUB_NORM_REAL:              "blk.{bid}.ffn_sub_norm_real",
     MODEL_TENSOR.FFN_SUB_NORM_IMAG:              "blk.{bid}.ffn_sub_norm_imag",
 }
@@ -1038,7 +1038,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     # newly added for ifairy
     MODEL_ARCH.IFAIRY: [
         MODEL_TENSOR.TOKEN_EMBD,
-        MODEL_TENSOR.FINAL_NORM,
+        MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FFN_SUB_NORM,
@@ -3054,7 +3054,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
     GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
     GGMLQuantizationType.MXFP4:   (32, 1 + 16),
-    GGMLQuantizationType.F16_I2:  (1, 4), # newly added for ifairy, 前面虚部后面实部
+    GGMLQuantizationType.F16_I2:  (256, 8 + 64), # newly added for ifairy
     GGMLQuantizationType.IFAIRY:  (4, 1), # newly added for ifairy
 }
 

@@ -460,15 +460,15 @@ void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
 
     for (int i = 0; i < nb; ++i) {
         // w: 权重矩阵, x: 激活向量
-        int16_t sum_ac = 0;
-        int16_t sum_bd = 0;
-        int16_t sum_ad = 0;
-        int16_t sum_bc = 0;
+        int32_t sum_ac = 0;
+        int32_t sum_bd = 0;
+        int32_t sum_ad = 0;
+        int32_t sum_bc = 0;
         
         for (size_t j = 0; j < sizeof(w->qs); j += 32) { // sizeof 512
             for (size_t k = 0; k < 32; ++k) {
                 // 解包权重
-                uint8_t weight = w->qs[j + k];
+                uint8_t weight = w[i].qs[j + k];
                 for (size_t l = 0; l < 4; ++l) {
                     // a: real_w, b: imag_w, c: real_x, d: imag_x
                     int8_t w_val = (weight >> (l*2)) & 3;
@@ -485,14 +485,14 @@ void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
         }
 
         // Apply scales
-        const float w_real = GGML_CPU_FP16_TO_FP32(w[i].d_real);
-        const float w_imag = GGML_CPU_FP16_TO_FP32(w[i].d_imag);
-        const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
-        const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
+        const float w_real = w[i].d_real;
+        const float w_imag = w[i].d_imag;
+        const float x_real = GGML_FP16_TO_FP32(x[i].d_real);
+        const float x_imag = GGML_FP16_TO_FP32(x[i].d_imag);
 
         // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-        sum_real += w_real * x_real * (float)sum_ac - w_imag * x_imag * (float)sum_bd;
-        sum_imag += w_real * x_imag * (float)sum_ad + w_imag * x_real * (float)sum_bc;
+        sum_real += w_real * x_real * (float)sum_ac + w_imag * x_imag * (float)sum_bd;
+        sum_imag += w_imag * x_real * (float)sum_bc - w_real * x_imag * (float)sum_ad;
     }
 
     ((ggml_bf16_t*)s)[0] = GGML_FP32_TO_BF16(sum_real);
