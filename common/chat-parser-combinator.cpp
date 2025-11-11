@@ -12,19 +12,19 @@ enum parser_type {
     PARSER_LITERAL = 0,
     PARSER_SEQUENCE = 1,
     PARSER_CHOICE = 2,
-    PARSER_ZERO_OR_MORE = 3,
-    PARSER_ONE_OR_MORE = 4,
-    PARSER_NOT = 5,
-    PARSER_ANY = 6,
-    PARSER_CHAR_CLASS = 7,
-    PARSER_GROUP = 8,
-    PARSER_RULE = 9,
-    PARSER_OPTIONAL = 10,
-    PARSER_UNTIL = 11,
-    PARSER_SPACE = 12,
-    PARSER_SCHEMA = 13,
-    PARSER_ROOT = 14,
-    PARSER_REPETITION = 15,
+    PARSER_REPETITION = 3,
+    PARSER_OPTIONAL = 4,
+    PARSER_ZERO_OR_MORE = 5,
+    PARSER_ONE_OR_MORE = 6,
+    PARSER_NOT = 7,
+    PARSER_ANY = 8,
+    PARSER_CHAR_CLASS = 9,
+    PARSER_GROUP = 10,
+    PARSER_RULE = 11,
+    PARSER_UNTIL = 12,
+    PARSER_SPACE = 13,
+    PARSER_SCHEMA = 14,
+    PARSER_ROOT = 15,
 };
 
 class parser_visitor;
@@ -279,89 +279,47 @@ class repetition_parser : public parser_base {
 
 // Matches one or more repetitions of a parser.
 //   S -> A+
-class one_or_more_parser : public parser_base {
-    parser delegate_;
-
+class one_or_more_parser : public repetition_parser {
   public:
-    one_or_more_parser(const parser & p, int id) : parser_base(id) {
-        delegate_ = parser(std::make_shared<repetition_parser>(p, 1, -1, id));
-    }
+    one_or_more_parser(const parser & p, int id) : repetition_parser(p, 1, -1, id) {}
 
     parser_type type() const override { return PARSER_ONE_OR_MORE; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return delegate_->parse(ctx, start);
-    }
-
     std::string dump() const override {
-        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
-        return "OneOrMore(" + rep->child()->dump() + ")";
+        return "OneOrMore(" + child()->dump() + ")";
     }
 
     void accept(parser_visitor & visitor) override;
-
-    const parser & child() const {
-        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
-        return rep->child();
-    }
 };
 
 // Matches zero or more repetitions of a parser, always succeeds.
 //   S -> A*
-class zero_or_more_parser : public parser_base {
-    parser delegate_;
-
+class zero_or_more_parser : public repetition_parser {
   public:
-    zero_or_more_parser(const parser & p, int id) : parser_base(id) {
-        delegate_ = parser(std::make_shared<repetition_parser>(p, 0, -1, id));
-    }
+    zero_or_more_parser(const parser & p, int id) : repetition_parser(p, 0, -1, id) {}
 
     parser_type type() const override { return PARSER_ZERO_OR_MORE; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return delegate_->parse(ctx, start);
-    }
-
     std::string dump() const override {
-        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
-        return "ZeroOrMore(" + rep->child()->dump() + ")";
+        return "ZeroOrMore(" + child()->dump() + ")";
     }
 
     void accept(parser_visitor & visitor) override;
-
-    const parser & child() const {
-        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
-        return rep->child();
-    }
 };
 
 // Matches zero or one occurrence of a parser, always succeeds.
 //   S -> A?
-class optional_parser : public parser_base {
-    parser delegate_;
-
+class optional_parser : public repetition_parser {
   public:
-    optional_parser(const parser & p, int id) : parser_base(id) {
-        delegate_ = parser(std::make_shared<repetition_parser>(p, 0, 1, id));
-    }
+    optional_parser(const parser & p, int id) : repetition_parser(p, 0, 1, id) {}
 
     parser_type type() const override { return PARSER_OPTIONAL; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return delegate_->parse(ctx, start);
-    }
-
     std::string dump() const override {
-        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
-        return "Optional(" + rep->child()->dump() + ")";
+        return "Optional(" + child()->dump() + ")";
     }
 
     void accept(parser_visitor & visitor) override;
-
-    const parser & child() const {
-        auto rep = std::static_pointer_cast<repetition_parser>(delegate_.ptr());
-        return rep->child();
-    }
 };
 
 // Negative lookahead: succeeds if child parser fails, consumes no input.
