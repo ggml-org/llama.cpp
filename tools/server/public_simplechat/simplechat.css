@@ -8,7 +8,7 @@
 }
 
 .heading {
-    background-color: lightgray;
+    background: linear-gradient(135deg, lightblue 0%, white 100%);
 }
 
 .session-selected {
@@ -21,7 +21,11 @@
 .role-user {
     background-color: lightgray;
 }
+.role-assistant {
+    text-align: initial;
+}
 .role-tool {
+    /* background-color: cornsilk; */
     background-color: lightyellow;
 }
 .role-trim {
@@ -40,6 +44,9 @@
     display: flex;
     margin-bottom: 2vh;
     /* box-shadow: 1px 1px 4px lightslategray; */
+}
+.chat-message:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 .chat-message-role {
     border-style: dotted;
@@ -97,6 +104,9 @@
 
 .flex-grow {
     flex-grow: 1;
+}
+.flex-nogrow {
+    flex-grow: 0;
 }
 .float-right {
     float: right;
