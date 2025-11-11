@@ -33,7 +33,7 @@ install(TARGETS ${TARGET} RUNTIME)
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PRIVATE common mtmd ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PRIVATE common mtmd cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
 if (WIN32)
     TARGET_LINK_LIBRARIES(${TARGET} PRIVATE ws2_32)

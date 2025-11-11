@@ -9,14 +9,6 @@
 #include "mtmd-helper.h"
 #include "chat.h"
 
-// increase max payload length to allow use of larger context size
-#define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
-// increase backlog size to avoid connection resets for >> 1 slots
-#define CPPHTTPLIB_LISTEN_BACKLOG 512
-// increase max URI length to handle longer prompts in query string
-#define CPPHTTPLIB_REQUEST_URI_MAX_LENGTH 32768
-// disable Nagle's algorithm
-#define CPPHTTPLIB_TCP_NODELAY true
 #include <cpp-httplib/httplib.h>
 
 #define JSON_ASSERT GGML_ASSERT
