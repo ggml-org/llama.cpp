@@ -9053,18 +9053,14 @@ class MegrezMoEModel(TextModel):
         hparams = self.hparams
 
         # MoE expert configuration
-        # Try multiple possible parameter names for compatibility
         num_experts = hparams.get("num_experts") or hparams.get("n_routed_experts")
         if num_experts is None:
             raise ValueError("Missing 'num_experts' or 'n_routed_experts' in model config")
         self.gguf_writer.add_expert_count(num_experts)
 
-        # Shared expert FFN size - Note: In Megrez-MoE, this is NOT the same as intermediate_size!
-        # The shared experts have their own FFN size: hidden_size * 2.75
-        # For Megrez2-3x7B-A3B: hidden_size=2048 → shared_expert_ffn=5632
+        # Shared expert FFN size
         hidden_size = hparams.get("hidden_size", 2048)
         shared_expert_ffn_size = int(hidden_size * 2.75)
-
         self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_ffn_size)
 
         # Per-expert FFN size (should be consistent across all experts)
@@ -9079,11 +9075,7 @@ class MegrezMoEModel(TextModel):
             raise ValueError(f"All experts must have same FFN size, got: {moe_intermediate_size}")
         self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size[0])
 
-        # Top-K expert selection is already handled by parent class (TextModel)
-        # via num_experts_per_tok parameter, so we don't need to set it again here
-
-        # Shared expert count (should be consistent across layers)
-        # Try multiple possible parameter names
+        # Shared expert count
         num_shared_expert = hparams.get("num_shared_expert") or hparams.get("n_shared_experts")
         if num_shared_expert is None:
             raise ValueError("Missing 'num_shared_expert' or 'n_shared_experts' in model config")
@@ -9114,10 +9106,6 @@ class MegrezMoEModel(TextModel):
             self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024)
             self.gguf_writer.add_context_length(256 * 1024)
 
-            logger.info(
-                f"Megrez dynamic RoPE: alpha={alpha}, base={base}, dim={dim}, "
-                f"scaled_base={scaled_base:.2f}, max_ctx={256*1024}"
-            )
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:

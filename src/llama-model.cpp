@@ -2645,9 +2645,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
 
-                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
-                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
-                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+                        layer.ffn_gate_exps =
+                            create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
+                        layer.ffn_down_exps =
+                            create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, 0);
+                        layer.ffn_up_exps =
+                            create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
                     }
                 } break;
             case LLM_ARCH_LLAMA4:
@@ -3333,9 +3336,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         // MoE branch
                         const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
 
-                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
-                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
-                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+                        layer.ffn_gate_exps =
+                            create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
+                        layer.ffn_down_exps =
+                            create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, 0);
+                        layer.ffn_up_exps =
+                            create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
 
                         // Shared expert branch
                         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
@@ -3366,14 +3372,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
-                        // Layer 0 is dense, layers 1-30 are MoE
                         if (i == 0) {
-                            // Dense layer
+                            // dense FFN
                             layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
                             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
                             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
                         } else {
-                            // All MoE layers (1-30) have these
+                            // MoE FFN
                             layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
                             layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, i), {n_expert}, 0);
 
@@ -3384,24 +3389,22 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                                 throw std::runtime_error("n_expert_used must be > 0 for MEGREZ_MOE");
                             }
 
-                            // All MoE layers have shared expert
-                            const int64_t n_ff_shexp = hparams.n_ff_shexp;
+                            // Shared expert branch
+                            const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
+
                             layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp}, 0);
                             layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, 0);
                             layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_shexp}, 0);
 
-                            // Only layers 1, 4, 7, 10, 13, 16, 19, 22, 25, 28 have actual expert tensors
-                            // Pattern: (i-1) % 3 == 0 for i > 0
-                            // Other layers (2,3,5,6...) don't have these tensors in the GGUF file - they share experts
-                            const int64_t n_ff_exp = hparams.n_ff_exp;
+                            // Routed expert branch
+                            const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+
                             layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i),
                                                                 { n_embd, n_ff_exp, n_expert }, TENSOR_NOT_REQUIRED);
                             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i),
                                                                 { n_ff_exp, n_embd, n_expert }, TENSOR_NOT_REQUIRED);
                             layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i),
                                                                 { n_embd, n_ff_exp, n_expert }, TENSOR_NOT_REQUIRED);
-                            // Note: layers that share experts (2, 3, 5, 6, etc.) only have gate_inp and shared expert
-                            // These create_tensor calls will return NULL for layers without expert tensors
                         }
                     }
                 } break;
