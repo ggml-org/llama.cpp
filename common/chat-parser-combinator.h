@@ -130,7 +130,7 @@ class parser_builder {
     parser group(const std::string & name, const parser & p);
     parser rule(const std::string & name);
     parser space();
-    parser until(const std::string & delimiter, bool include_spaces = true);
+    parser until(const std::string & delimiter, bool consume_spaces = true);
     parser json();
     parser schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema);
 

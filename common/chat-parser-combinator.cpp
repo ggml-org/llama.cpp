@@ -367,44 +367,6 @@ class optional_parser : public parser_base {
     const parser & child() const { return parser_; }
 };
 
-class until_parser : public parser_base {
-    std::string delimiter_;
-    parser parser_;
-
-  public:
-    until_parser(const std::string & delimiter, bool include_spaces, int id, parser_builder & builder)
-        : parser_base(id), delimiter_(delimiter) {
-        if (include_spaces) {
-            auto ws = builder.zero_or_more(builder.char_class("[ \\t\\n\\r]"));
-            parser_ = builder.zero_or_more(builder.negate(ws + builder.literal(delimiter)) + builder.any());
-        } else {
-            parser_ = builder.zero_or_more(builder.negate(builder.literal(delimiter)) + builder.any());
-        }
-    }
-
-    parser_type type() const override { return PARSER_UNTIL; }
-
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        auto cached = ctx.memo.get(id_, start);
-        if (cached != std::nullopt) {
-            return *cached;
-        }
-
-        auto result = parser_->parse(ctx, start);
-        return ctx.memo.set(id_, start, result);
-    }
-
-    std::string dump() const override {
-        return "Until(" + delimiter_ + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::string & delimiter() const { return delimiter_; }
-
-    const parser & child() const { return parser_; }
-};
-
 class not_parser : public parser_base {
     parser parser_;
 
@@ -633,6 +595,48 @@ class group_parser : public parser_base {
     }
 
     void accept(parser_visitor & visitor) override;
+
+    const parser & child() const { return parser_; }
+};
+
+class until_parser : public parser_base {
+    std::string delimiter_;
+    parser parser_;
+
+  public:
+    until_parser(const std::string & delimiter, bool consume_spaces, int id)
+        : parser_base(id), delimiter_(delimiter) {
+
+        auto delim = parser(std::make_shared<literal_parser>(delimiter, -1));
+        auto any = parser(std::make_shared<any_parser>(-1));
+
+        if (consume_spaces) {
+            auto ws = parser(std::make_shared<space_parser>(-1));
+            parser_ = parser(std::make_shared<zero_or_more_parser>(~(ws + delim) + any, -1));
+        } else {
+            parser_ = parser(std::make_shared<zero_or_more_parser>(~delim + any, -1));
+        }
+    }
+
+    parser_type type() const override { return PARSER_UNTIL; }
+
+    parser_result parse(parser_context & ctx, size_t start = 0) override {
+        auto cached = ctx.memo.get(id_, start);
+        if (cached != std::nullopt) {
+            return *cached;
+        }
+
+        auto result = parser_->parse(ctx, start);
+        return ctx.memo.set(id_, start, result);
+    }
+
+    std::string dump() const override {
+        return "Until(" + delimiter_ + ")";
+    }
+
+    void accept(parser_visitor & visitor) override;
+
+    const std::string & delimiter() const { return delimiter_; }
 
     const parser & child() const { return parser_; }
 };
@@ -1201,8 +1205,8 @@ parser parser_builder::space() {
     return parser(std::make_shared<space_parser>(next_id_++));
 }
 
-parser parser_builder::until(const std::string & delimiter, bool include_spaces) {
-    return parser(std::make_shared<until_parser>(delimiter, include_spaces, next_id_++, *this));
+parser parser_builder::until(const std::string & delimiter, bool consume_spaces) {
+    return parser(std::make_shared<until_parser>(delimiter, consume_spaces, next_id_++));
 }
 
 parser parser_builder::schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema) {
