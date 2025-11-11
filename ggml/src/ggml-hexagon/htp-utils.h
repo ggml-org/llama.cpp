@@ -42,8 +42,8 @@ extern "C" {
 
 /* Include windows specific header files. */
 #ifdef _WINDOWS
-#    include <sysinfoapi.h>
 #    include <windows.h>
+#    include <sysinfoapi.h>
 #    define _CRT_SECURE_NO_WARNINGS         1
 #    define _WINSOCK_DEPRECATED_NO_WARNINGS 1
 /* Including this file for custom implementation of getopt function. */
@@ -71,6 +71,13 @@ extern "C" {
 #if !defined(_WINDOWS)
 #    pragma weak remote_system_request
 #endif
+
+#ifdef _WINDOWS
+#     define DSPQUEUE_TIMEOUT DSPQUEUE_TIMEOUT_NONE
+#else
+#     define DSPQUEUE_TIMEOUT 1000000
+#endif
+
 /**
  * Wrapper for FastRPC Capability API: query DSP support.
  *

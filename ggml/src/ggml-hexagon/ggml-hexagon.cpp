@@ -150,9 +150,9 @@ void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_
                              0,                       // flags - the framework will autoset this
                              n_bufs,                  // number of buffers
                              bufs,                    // buffer references
-                             sizeof(req),
+                             sizeof(req),             // Message length
                              (const uint8_t *) &req,  // Message
-                             1000000                  // Timeout
+                             DSPQUEUE_TIMEOUT         // Timeout
     );
 
     if (err != 0) {
@@ -182,13 +182,13 @@ void ggml_hexagon_session::flush() {
 
         // Read response packet from queue
         int err = dspqueue_read(q, &flags,
-                                   HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
-                                   &n_bufs,                 // Number of buffer references
-                                   bufs,                    // Buffer references
-                                   sizeof(rsp),             // Max message length
-                                   &rsp_size,               // Message length
-                                   (uint8_t *) &rsp,
-                                   1000000);                // Timeout
+                                HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
+                                &n_bufs,                 // Number of buffer references
+                                bufs,                    // Buffer references
+                                sizeof(rsp),             // Max message length
+                                &rsp_size,               // Message length
+                                (uint8_t *) &rsp,        // Message
+                                DSPQUEUE_TIMEOUT);       // Timeout
 
         if (err == AEE_EEXPIRED) {
             // TODO: might need to bail out if the HTP is stuck on something
