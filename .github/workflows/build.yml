@@ -1653,17 +1653,9 @@ jobs:
      runs-on: ah-ubuntu_22_04-c8g_8x
 
      steps:
-       - name: Install Git LFS
-         run: |
-          sudo apt-get update
-          sudo apt-get install -y git-lfs
-          git lfs install
-
        - name: Clone
          id: checkout
          uses: actions/checkout@v4
-         with:
-          lfs: true
 
        - name: Dependencies
          id: depends
@@ -1671,7 +1663,16 @@ jobs:
            set -euxo pipefail
            sudo apt-get update
            sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
-           apt-get install -y build-essential libcurl4-openssl-dev python3-venv gpg wget time
+           apt-get install -y \
+            build-essential \
+            libcurl4-openssl-dev \
+            python3-venv \
+            gpg \
+            wget \
+            time \
+            git-lfs
+
+           git lfs install
 
            # install the latest cmake
            sudo install -d /usr/share/keyrings
