@@ -1677,7 +1677,7 @@ export class Me {
                 modelPath: json["model_path"],
                 ctxSize: json["default_generation_settings"]["n_ctx"]
             }
-            ui.ui_show_obj_props_info(elDiv, this, props, "Current Settings/Info (dev console document[gMe])", "", { legend: 'role-system' })
+            ui.ui_show_obj_props_info(elDiv, this, props, "Current Settings/Info (dev console document[gMe])", "", { toplegend: 'role-system' })
         }).catch(err=>console.log(`WARN:ShowInfo:${err}`))
     }
 
