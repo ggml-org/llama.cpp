@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent.parent / 'gguf-py'))
 import gguf
-
+from gguf.vocab import MistralTokenizerType, MistralVocab
 
 # Import QwenModel for its static methods (used in _set_vocab_qwen)
 # This is a lazy import to avoid circular dependencies
@@ -560,21 +560,6 @@ class ModelBase:
                 cls._model_classes[model_type][name] = modelcls
             return modelcls
         return func
-
-    @classmethod
-    def print_registered_models(cls):
-        for model_type, model_classes in cls._model_classes.items():
-            logger.error(f"{model_type.name} models:")
-            for name in sorted(model_classes.keys()):
-                logger.error(f"  - {name}")
-
-    @classmethod
-    def from_model_architecture(cls, arch: str, model_type = ModelType.TEXT) -> type[ModelBase]:
-        try:
-            return cls._model_classes[model_type][arch]
-        except KeyError:
-            raise NotImplementedError(f'Architecture {arch!r} not supported!') from None
-
 
 class TextModel(ModelBase):
     model_type = ModelType.TEXT
@@ -1493,9 +1478,45 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     return arch
 
 
+def get_community_chat_template(vocab: MistralVocab, templates_dir: Path, is_mistral_format: bool):
+    assert TokenizerVersion is not None and Tekkenizer is not None and SentencePieceTokenizer is not None, _mistral_import_error_msg
+    assert isinstance(vocab.tokenizer, (Tekkenizer, SentencePieceTokenizer)), (
+        f"Expected Tekkenizer or SentencePieceTokenizer, got {type(vocab.tokenizer)}"
+    )
+    if vocab.tokenizer.version == TokenizerVersion.v1:
+        return "mistral-v1"
+    elif vocab.tokenizer.version == TokenizerVersion.v3 and vocab.tokenizer_type == MistralTokenizerType.spm:
+        return "mistral-v3"
+    elif vocab.tokenizer.version == TokenizerVersion.v3 and vocab.tokenizer_type == MistralTokenizerType.tekken:
+        return "mistral-v3-tekken"
+    elif vocab.tokenizer.version == TokenizerVersion.v7 and vocab.tokenizer_type == MistralTokenizerType.spm:
+        return "mistral-v7"
+    elif vocab.tokenizer.version == TokenizerVersion.v7 and vocab.tokenizer_type == MistralTokenizerType.tekken:
+        return "mistral-v7-tekken"
+    elif vocab.tokenizer.version == TokenizerVersion.v11:
+        template_file = "Mistral-Small-3.2-24B-Instruct-2506.jinja"
+    elif vocab.tokenizer.version == TokenizerVersion.v13:
+        template_file = "unsloth-mistral-Devstral-Small-2507.jinja"
+    else:
+        err_message = f"Unknown tokenizer type: {vocab.tokenizer_type} and version {vocab.tokenizer.version}"
+        if is_mistral_format:
+            err_message += (
+                " . Please pass --disable-mistral-community-chat-template argument to the CLI "
+                "if you want to skip this error and use the Mistral official `mistral-common` pre-processing library."
+            )
+        raise ValueError(err_message)
+    template_path = templates_dir / template_file
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template file not found: {template_path}")
+    with open(template_path, "r", encoding="utf-8") as f:
+        template = f.read()
+    return template
+
+
 # Export these for use in the main script
 __all__ = [
     'ModelBase', 'TextModel', 'MmprojModel', 'ModelType', 'SentencePieceTokenTypes',
-    'get_model_architecture', 'LazyTorchTensor', 'logger',
-    '_mistral_common_installed', '_mistral_import_error_msg', 'gguf', 'torch'
+    'get_model_architecture', 'LazyTorchTensor', 'logger', 'get_community_chat_template',
+    '_mistral_common_installed', '_mistral_import_error_msg', 'gguf', 'torch',
+    'MistralTokenizerType', 'MistralVocab'
 ]

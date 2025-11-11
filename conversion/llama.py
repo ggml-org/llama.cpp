@@ -2,17 +2,13 @@ from __future__ import annotations
 import json
 import math
 from .base import (
-    ModelBase, TextModel, gguf, torch, logger, _mistral_common_installed, _mistral_import_error_msg
+    ModelBase, TextModel, gguf, torch, logger, _mistral_common_installed, _mistral_import_error_msg, 
+    get_community_chat_template, MistralTokenizerType, MistralVocab
 )
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable
 if TYPE_CHECKING:
     from torch import Tensor
-
-# Import mistral_common types
-from mistral_common.tokens.tokenizers.mistral import MistralTokenizerType
-from mistral_common.tokens.tokenizers.mistral import MistralVocab
-from mistral_common.tokens.tokenizers.mistral import MistralModel
 
 
 @ModelBase.register("LLaMAForCausalLM", "LlamaForCausalLM", "MistralForCausalLM", "MixtralForCausalLM", "VLlama3ForCausalLM", "LlavaForConditionalGeneration", "VoxtralForConditionalGeneration", "LlamaModel")
@@ -70,7 +66,7 @@ class LlamaModel(TextModel):
                     "Using a Mistral community chat template. These templates can be subject to errors in early days or weeks after a release. "
                     "Mistral recommends to use `mistral-common` to perform tokenization and detokenization."
                 )
-            template = MistralModel.get_community_chat_template(vocab, template_dir, self.is_mistral_format)
+            template = get_community_chat_template(vocab, template_dir, self.is_mistral_format)
             self.gguf_writer.add_chat_template(template)
         else:
             logger.info("Not using a Mistral community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
