@@ -444,6 +444,21 @@ struct llm_graph_params {
 
     std::unordered_map<llama_seq_id, llama_sampler*> samplers;
 
+    static bool samplers_equal(
+          const std::unordered_map<llama_seq_id, llama_sampler*> & lhs,
+          const std::unordered_map<llama_seq_id, llama_sampler*> & rhs) {
+        if (lhs.size() != rhs.size()) {
+            return false;
+        }
+        for (const auto & [seq_id, sampler] : lhs) {
+            auto it = rhs.find(seq_id);
+            if (it == rhs.end() || it->second != sampler) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     uint32_t n_outputs;
 
     llm_graph_cb cb;
@@ -491,7 +506,9 @@ struct llm_graph_params {
             cvec      == other.cvec  &&
             loras     == other.loras &&
             cross     == other.cross &&
-            n_outputs == other.n_outputs;
+            n_outputs == other.n_outputs &&
+            samplers_equal(samplers, other.samplers);
+
     }
 };
 

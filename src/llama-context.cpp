@@ -826,6 +826,37 @@ void llama_context::set_warmup(bool value) {
     cparams.warmup = value;
 }
 
+void llama_context::set_ggml_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+    LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
+
+    auto it = samplers.find(seq_id);
+    if (it != samplers.end()) {
+        // If the sampler to be set is the same that is already set, do nothing.
+        if (it->second == sampler) {
+            return;
+        }
+
+        llama_sampler_free(it->second);
+
+        // If sampler is nullptr, we remove the samppler chain for this seq_id.
+        // chain for this seq_id.
+        if (sampler == nullptr) {
+            samplers.erase(it);
+            return;
+        }
+
+        // Otherwise, we replace the existing sampler with the new one.
+        it->second = sampler;
+        return;
+    }
+
+    // If there is no sampler for this seq_id and the caller provides a non-null
+    // sampler, we set it.
+    if (sampler != nullptr) {
+        samplers[seq_id] = sampler;
+    }
+}
+
 void llama_context::set_adapter_lora(
             llama_adapter_lora * adapter,
             float scale) {
@@ -2680,6 +2711,10 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
     ctx->synchronize();
 
     return ctx->get_embeddings_seq(seq_id);
+}
+
+void llama_set_ggml_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * sampler) {
+    ctx->set_ggml_sampler(seq_id, sampler);
 }
 
 llama_token llama_get_sampled_token_ith(llama_context * ctx, int32_t i) {

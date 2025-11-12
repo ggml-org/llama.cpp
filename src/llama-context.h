@@ -218,6 +218,8 @@ public:
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false);
 
+    void set_ggml_sampler(llama_seq_id seq_id, llama_sampler * sampler);
+
 private:
     llm_graph_params graph_params(
                         llm_graph_result * res,

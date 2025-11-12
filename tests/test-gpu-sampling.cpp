@@ -21,12 +21,10 @@ struct test_model_context {
     llama_context * ctx = nullptr;
     const llama_vocab * vocab = nullptr;
     int n_vocab = 0;
-    std::vector<llama_sampler_seq_config> sampler_configs;
     std::unordered_map<llama_seq_id, int32_t> seq_positions;
     std::unordered_map<llama_seq_id, int32_t> last_batch_info;
 
-    bool setup(const char * model_path, const std::vector<llama_sampler_seq_config> & configs) {
-        sampler_configs = configs;
+    bool setup(const char * model_path, std::vector<llama_sampler_seq_config> & configs) {
         if (model != nullptr && ctx != nullptr) {
             return true;
         }
@@ -44,11 +42,11 @@ struct test_model_context {
         llama_context_params cparams = llama_context_default_params();
         cparams.n_ctx = 512;
         cparams.n_batch = 512;
-        cparams.samplers = sampler_configs.data();
-        cparams.n_samplers = sampler_configs.size();
+        cparams.samplers = configs.data();
+        cparams.n_samplers = configs.size();
 
         int32_t max_seq_id = 0;
-        for (const auto & config : sampler_configs) {
+        for (const auto & config : configs) {
             if (config.seq_id > max_seq_id) {
                 max_seq_id = config.seq_id;
             }
@@ -465,6 +463,70 @@ static void test_gpu_dist_sampling(const char * model_path) {
     }
 }
 
+static void test_gpu_set_sampler(const char * model_path) {
+    test_model_context test_ctx;
+
+    const int32_t seed = 88;
+    const int seq_id = 0;
+    struct llama_sampler_chain_params gpu_chain_params = llama_sampler_chain_default_params();
+    struct llama_sampler * gpu_sampler_chain = llama_sampler_chain_init(gpu_chain_params);
+    llama_sampler_chain_add(gpu_sampler_chain, llama_sampler_gpu_init_dist(seed));
+    std::vector<llama_sampler_seq_config> gpu_sampler_configs = {{ seq_id, gpu_sampler_chain }};
+
+    if (!test_ctx.setup(model_path, gpu_sampler_configs)) {
+        return;
+    }
+
+    if (!test_ctx.decode({{seq_id, "Hello"}})) {
+        return;
+    }
+
+    // Sample using GPU sampler configured above
+    llama_token gpu_token = llama_get_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(seq_id));
+    const std::string gpu_token_str = test_ctx.token_to_piece(gpu_token, false);
+    printf("dist sampled token = %d, string='%s'\n", gpu_token, gpu_token_str.c_str());
+
+    // Now clear the GPU sampler for this sequence.
+    llama_set_ggml_sampler(test_ctx.ctx, seq_id, nullptr);
+    printf("Cleared GPU sampler for seq_id %d\n", seq_id);
+
+    // Sample using CPU sampler
+    struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
+    struct llama_sampler * chain = llama_sampler_chain_init(chain_params);
+    llama_sampler_chain_add(chain, llama_sampler_init_dist(18));
+
+    std::map<llama_seq_id, llama_token> tokens = { { seq_id, gpu_token}, };
+    if (!test_ctx.decode_tokens(tokens)) {
+        return;
+    }
+
+    // Should not have any sampled token or probs after clearing the GPU sampler.
+    const int32_t idx = test_ctx.idx_for_seq(seq_id);
+    GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx, idx) == LLAMA_TOKEN_NULL);
+    GGML_ASSERT(llama_get_sampled_probs_ith(test_ctx.ctx, idx) == nullptr);
+
+    // Sample the token using the CPU sampler chain.
+    llama_token token2 = llama_sampler_sample(chain, test_ctx.ctx, seq_id);
+    const std::string token2_str = test_ctx.token_to_piece(token2, false);
+    printf("CPU sampled token after clearing GPU sampler: id=%d, string='%s'\n", token2, token2_str.c_str());
+    std::map<llama_seq_id, llama_token> tokens2 = { { seq_id, token2}, };
+
+    // Set a new GPU sampler for the sequence.
+    struct llama_sampler_chain_params new_gpu_chain_params = llama_sampler_chain_default_params();
+    struct llama_sampler * new_gpu_sampler_chain = llama_sampler_chain_init(new_gpu_chain_params);
+    llama_sampler_chain_add(new_gpu_sampler_chain, llama_sampler_gpu_init_top_k(20));
+    llama_sampler_chain_add(new_gpu_sampler_chain, llama_sampler_gpu_init_dist(seed));
+    llama_set_ggml_sampler(test_ctx.ctx, seq_id, new_gpu_sampler_chain);
+
+    if (!test_ctx.decode_tokens(tokens2)) {
+        return;
+    }
+
+    llama_token new_gpu_token = llama_get_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(seq_id));
+    const std::string new_gpu_token_str = test_ctx.token_to_piece(new_gpu_token, false);
+    printf("dist sampled token = %d, string='%s'\n", new_gpu_token, new_gpu_token_str.c_str());
+}
+
 struct gpu_test_case {
     const char * name;
     void (*fn)(const char *);
@@ -477,6 +539,7 @@ static const gpu_test_case GPU_TESTS[] = {
     { "gpu_top_k",           test_gpu_top_k_sampling,          true  },
     { "gpu_multi_sequence",  test_gpu_multi_sequence_sampling, true  },
     { "gpu_dist",            test_gpu_dist_sampling,           true  },
+    { "gpu_set_sampler",     test_gpu_set_sampler,             true  },
 };
 
 struct gpu_cli_args {
