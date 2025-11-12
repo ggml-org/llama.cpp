@@ -682,19 +682,10 @@ struct clip_graph {
             ggml_tensor * first_w = model.mm_0_w ? model.mm_0_w : model.mm_1_w;
             ggml_tensor * first_b = model.mm_0_b ? model.mm_0_b : model.mm_1_b;
 
-            // Debug shapes before projection to catch matmul mismatches
-            LOG_INF("%s: eagle2-mlp: cur shape:    [%lld, %lld, %lld]\n", __func__, (long long) cur->ne[0],
-                    (long long) cur->ne[1], (long long) cur->ne[2]);
-            if (first_w) {
-                LOG_INF("%s: eagle2-mlp: first_w:     [%lld, %lld]\n", __func__, (long long) first_w->ne[0],
-                        (long long) first_w->ne[1]);
-            }
-
             // Ensure 2D and correct orientation for matmul: first_w[out,in] x cur[in, tokens]
             cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], cur->ne[1]);
             if (first_w && first_w->ne[1] != cur->ne[0]) {
-                LOG_WRN("%s: eagle2-mlp: dim mismatch, transposing cur: first_w[in]=%lld, cur[0]=%lld, cur[1]=%lld\n",
-                        __func__, (long long) first_w->ne[1], (long long) cur->ne[0], (long long) cur->ne[1]);
+                // transpose to match expected [in, tokens]
                 cur = ggml_transpose(ctx0, cur);
                 cur = ggml_cont(ctx0, cur);
             }
@@ -1596,30 +1587,20 @@ struct clip_graph {
         if (ctx->model.hparams.has_llava_projector) {
             // consume the full post-merge sequence directly; no row selection via patches
             embeddings = ggml_reshape_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
-            // Eagle2-VL patch: explicitly log that we are NOT performing any row gather (uninitialized indices avoided)
-            // using full sequence (no row gather)
-
-            // print_tensor_info(embeddings, "embeddings");
+            
 
             // llava projector
             if (ctx->proj_type() == PROJECTOR_TYPE_MLP) {
-                 // Eagle2-VL: apply 2x2 patch merge on [C, T] layout directly when n_merge > 1
+                 // apply 2x2 patch merge on [C, T] layout directly when n_merge > 1
                 if (hparams.n_merge > 1) {
                     // ensure contiguous before reshape/permutation in patch merge
                     embeddings             = ggml_cont(ctx0, embeddings);
                     const int scale_factor = hparams.n_merge;
                     embeddings = build_patch_merge_permute(embeddings, scale_factor);
                 }
-                LOG_INF("%s: llava-mlp before mm_0: emb[%lld, %lld], w0[%lld, %lld]\n", __func__,
-                        (long long) embeddings->ne[0], (long long) embeddings->ne[1], (long long) model.mm_0_w->ne[0],
-                        (long long) model.mm_0_w->ne[1]);
                 ggml_tensor * w0 = model.mm_0_w;
-                // ggml expects w->ne[0] (in_dim) == emb->ne[0]. If loader stored [out,in], fix with transpose.
-                // shapes validated at runtime by checks below
+                // ensure projector weight orientation matches embeddings
                 if (w0->ne[0] != embeddings->ne[0] && w0->ne[1] == embeddings->ne[0]) {
-                    LOG_WRN("%s: llava-mlp: transposing mm_0_w for mul_mat: w0[%lld, %lld] emb[%lld, %lld]", __func__,
-                            (long long) w0->ne[0], (long long) w0->ne[1], (long long) embeddings->ne[0],
-                            (long long) embeddings->ne[1]);
                     w0 = ggml_cont(ctx0, ggml_transpose(ctx0, w0));
                 }
                 embeddings = ggml_mul_mat(ctx0, w0, embeddings);
@@ -1627,11 +1608,8 @@ struct clip_graph {
 
                 embeddings = ggml_gelu(ctx0, embeddings);
                 if (model.mm_2_w) {
-                     ggml_tensor * w2 = model.mm_2_w;
+                    ggml_tensor * w2 = model.mm_2_w;
                     if (w2->ne[0] != embeddings->ne[0] && w2->ne[1] == embeddings->ne[0]) {
-                        LOG_WRN("%s: llava-mlp: transposing mm_2_w for mul_mat: w2[%lld, %lld] emb[%lld, %lld]",
-                                __func__, (long long) w2->ne[0], (long long) w2->ne[1], (long long) embeddings->ne[0],
-                                (long long) embeddings->ne[1]);
                         w2 = ggml_cont(ctx0, ggml_transpose(ctx0, w2));
                     }
                     embeddings = ggml_mul_mat(ctx0, w2, embeddings);
@@ -2824,8 +2802,7 @@ struct clip_model_loader {
                     {
                         // Eagle2-VL: Load spatial merge size for patch merge
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
-                        // minimal debug: report n_merge loaded from metadata
-                        (void)hparams.n_merge;
+                        (void)hparams.n_merge; // keep variable referenced even if unused
                     }
                     break;
                 case PROJECTOR_TYPE_MINICPMV:
@@ -3683,7 +3660,7 @@ static void normalize_image_u8_to_f32(const clip_image_u8 & src, clip_image_f32 
     const size_t plane_sz = (size_t) dst.nx * (size_t) dst.ny;
     dst.buf.resize(3 * plane_sz); // planar RGB
 
-    // removed E2VL_STATS debug instrumentation
+    
 
     for (int y = 0; y < dst.ny; ++y) {
         for (int x = 0; x < dst.nx; ++x) {
@@ -5135,7 +5112,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         return false;
     }
 
-    // removed E2VL projector stats/dump block
+    
 
     // print debug nodes
     if (ctx->debug_graph) {

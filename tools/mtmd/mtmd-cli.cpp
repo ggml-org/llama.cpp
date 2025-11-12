@@ -1,4 +1,3 @@
-// TODO(E2VL_CLEANUP): Remove debug instrumentation and env-flag diagnostics before upstream submission.
 #include "arg.h"
 #include "log.h"
 #include "common.h"
@@ -180,33 +179,7 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
         generated_tokens.push_back(token_id);
         common_sampler_accept(ctx.smpl, token_id, true);
 
-        if (i == 0 && std::getenv("E2VL_STATS") != nullptr) {
-            // Dump top-10 logits used to sample the first generated token.
-            // Prefer llama_get_logits() over llama_get_logits_ith() since the latter may not be populated
-            // when using the helper chunk evaluation path.
-            const struct llama_vocab * v = llama_model_get_vocab(ctx.model);
-            const int n_vocab = llama_vocab_n_tokens(v);
-            const float * logits = llama_get_logits(ctx.lctx);
-            if (!logits) {
-                // fall back to ith accessor
-                logits = llama_get_logits_ith(ctx.lctx, 0);
-            }
-            if (logits) {
-                struct Item { int id; float logit; }; std::vector<Item> items; items.reserve(n_vocab);
-                for (int t = 0; t < n_vocab; ++t) items.push_back({t, logits[t]});
-                std::partial_sort(items.begin(), items.begin()+std::min<size_t>(10, items.size()), items.end(), [](const Item & a, const Item & b){return a.logit > b.logit;});
-                printf("[E2VL] first-token top10 logits:\n");
-                float denom = 0.0f; for (size_t j = 0; j < 10 && j < items.size(); ++j) denom += expf(items[j].logit - items[0].logit);
-                for (size_t k = 0; k < 10 && k < items.size(); ++k) {
-                    auto & it = items[k];
-                    std::string piece = common_token_to_piece(ctx.lctx, it.id);
-                    float prob = expf(it.logit - items[0].logit) / (denom > 0 ? denom : 1);
-                    printf("  id=%d piece='%s' logit=% .5f approx_prob=% .5f\n", it.id, piece.c_str(), it.logit, prob);
-                }
-            } else {
-                printf("[E2VL] WARN: logits unavailable for first-token probe (no logits pointer)\n");
-            }
-        }
+        
 
         if (llama_vocab_is_eog(ctx.vocab, token_id) || ctx.check_antiprompt(generated_tokens)) {
             LOG("\n");
@@ -240,8 +213,7 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
 }
 
 static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg & new_msg) {
-    LOG_DBG("chat_add_and_format: new_msg.role='%s', new_msg.content='%s'\n",
-        new_msg.role.c_str(), new_msg.content.c_str());
+    // format and append message
     auto formatted = common_chat_format_single(ctx.tmpls.get(), ctx.chat_history,
         new_msg, new_msg.role == "user",
         ctx.use_jinja);
@@ -252,7 +224,6 @@ static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg &
 static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     bool add_bos = ctx.chat_history.empty();
     auto formatted_chat = chat_add_and_format(ctx, msg);
-    LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
 
     mtmd_input_text text;
     text.text          = formatted_chat.c_str();
@@ -340,11 +311,8 @@ int main(int argc, char ** argv) {
 
     if (is_single_turn) {
         g_is_generating = true;
-        // TEMP: Guard against duplicate vision markers (safe for now, to be removed after EAGLE2_VL stabilization)
-        // Avoid auto-appending a media marker if the prompt already contains an IMG_CONTEXT placeholder
         const bool has_default_media_marker = params.prompt.find(mtmd_default_marker()) != std::string::npos;
-        const bool has_img_context_placeholder = params.prompt.find("<IMG_CONTEXT>") != std::string::npos;
-        if (!has_default_media_marker && !has_img_context_placeholder) {
+        if (!has_default_media_marker) {
             for (size_t i = 0; i < params.image.size(); i++) {
                 params.prompt += mtmd_default_marker();
             }

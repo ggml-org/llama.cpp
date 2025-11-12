@@ -1,4 +1,3 @@
-// TODO(E2VL_CLEANUP): Remove debug instrumentation and env-flag diagnostics before upstream submission.
 #include "clip.h"
 #include "clip-impl.h"
 #include "mtmd.h"
@@ -480,7 +479,6 @@ struct mtmd_tokenizer {
     }
 
     void add_text(const std::string & txt, bool parse_special) {
-        LOG_DBG("%s: %s\n", __func__, txt.c_str());
         auto tokens = mtmd_tokenize_text_internal(vocab, txt, /* add_special */ false, parse_special);
         add_text(tokens);
     }
@@ -614,10 +612,6 @@ struct mtmd_tokenizer {
                 image_tokens->batch_f32 = std::move(batch_f32);
                 image_tokens->id = bitmap->id; // optional
 
-                LOG_DBG("image_tokens->nx = %d\n", image_tokens->nx);
-                LOG_DBG("image_tokens->ny = %d\n", image_tokens->ny);
-                LOG_DBG("batch_f32 size = %d\n", (int)image_tokens->batch_f32.entries.size());
-
                 mtmd_input_chunk chunk{
                     MTMD_INPUT_CHUNK_TYPE_IMAGE,
                     {}, // text tokens
@@ -676,8 +670,6 @@ struct mtmd_tokenizer {
                 audio_tokens->n_tokens = n_tokens;
                 audio_tokens->batch_f32 = std::move(batch_f32);
                 audio_tokens->id = bitmap->id; // optional
-
-                LOG_DBG("audio_tokens->n_tokens = %d\n", audio_tokens->n_tokens);
 
                 mtmd_input_chunk chunk{
                     MTMD_INPUT_CHUNK_TYPE_AUDIO,
@@ -767,42 +759,6 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
             size_t n_bitmaps) {
     mtmd_tokenizer tokenizer(ctx, text, bitmaps, n_bitmaps);
     int32_t ret = tokenizer.tokenize(output);
-    if (ret == 0 && std::getenv("E2VL_STATS") != nullptr) {
-        // Inspect chunks to verify IMG_CONTEXT replacement: we should NOT see the literal media marker any more,
-        // instead we have an IMAGE chunk with projected embeddings.
-        size_t n_chunks = mtmd_input_chunks_size(output);
-        for (size_t i = 0; i < n_chunks; ++i) {
-            auto * chunk = mtmd_input_chunks_get(output, i);
-            if (!chunk) continue;
-            if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-                // find left and right neighboring text token ids for context
-                llama_token left_id = -1;
-                llama_token right_id = -1;
-                // search left
-                for (int64_t j = (int64_t)i - 1; j >= 0; --j) {
-                    auto * c2 = mtmd_input_chunks_get(output, j);
-                    if (c2 && mtmd_input_chunk_get_type(c2) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-                        size_t ntt = 0; auto * toks = mtmd_input_chunk_get_tokens_text(c2, &ntt);
-                        if (ntt > 0) { left_id = toks[ntt - 1]; }
-                        break;
-                    }
-                }
-                // search right
-                for (size_t j = i + 1; j < n_chunks; ++j) {
-                    auto * c2 = mtmd_input_chunks_get(output, j);
-                    if (c2 && mtmd_input_chunk_get_type(c2) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-                        size_t ntt = 0; auto * toks = mtmd_input_chunk_get_tokens_text(c2, &ntt);
-                        if (ntt > 0) { right_id = toks[0]; }
-                        break;
-                    }
-                }
-                const mtmd_image_tokens * img = mtmd_input_chunk_get_tokens_image(chunk);
-                uint32_t inserted_tokens = img ? img->n_tokens() : 0;
-                printf("[E2VL] IMG_CONTEXT replaced: left_id=%d right_id=%d inserted_image_tokens=%u\n",
-                       (int)left_id, (int)right_id, inserted_tokens);
-            }
-        }
-    }
     return ret;
 }
 
