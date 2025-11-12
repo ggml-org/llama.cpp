@@ -758,19 +758,25 @@ static void test_gbnf_generation() {
 static parser create_command_r7b_parser() {
     auto parser = build_parser([](parser_builder & p) {
         auto thinking = p.add_rule("thinking",
-            "<|START_THINKING|>" << p.until("<|END_THINKING|>") << "<|END_THINKING|>");
+            "<|START_THINKING|>" << p.append_reasoning(p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
 
         auto response = p.add_rule("response",
-            "<|START_RESPONSE|>" << p.until("<|END_RESPONSE|>") << "<|END_RESPONSE|>");
+            "<|START_RESPONSE|>" << p.append_content(p.until("<|END_RESPONSE|>")) << "<|END_RESPONSE|>");
 
         auto json = p.add_rule("json", p.json());
-        auto tool_call_id = p.add_rule("tool-call-id", p.json_key("tool_call_id", p.json_string(p.until("\""))));
-        auto tool_call_name = p.add_rule("tool-name", p.json_key("tool_name", p.json_string(p.until("\""))));
-        auto tool_call_args = p.add_rule("tool-args", p.json_key("parameters", json));
+
+        auto tool_call_id = p.add_rule("tool-call-id",
+            p.json_key("tool_call_id", "\"" + p.capture_tool_call_id(p.json_string(), /* unescape_json = */ true) + "\""));
+
+        auto tool_call_name = p.add_rule("tool-name",
+            p.json_key("tool_name", "\"" + p.capture_tool_call_name(p.json_string(), /* unescape_json = */ true) + "\""));
+
+        auto tool_call_args = p.add_rule("tool-args", p.json_key("parameters", p.capture_tool_call_args(json)));
+
         auto tool_call_fields = p.add_rule("tool-call-fields", tool_call_id | tool_call_name | tool_call_args);
 
         auto tool_call = p.add_rule("tool-call",
-            "{" << tool_call_fields << p.zero_or_more(p.literal(",") << tool_call_fields) << "}");
+            "{" << p.add_tool_call(tool_call_fields << p.zero_or_more(p.literal(",") << tool_call_fields)) << "}");
 
         auto tool_calls = p.add_rule("tool-calls",
             "<|START_ACTION|>"
@@ -789,12 +795,27 @@ static parser create_command_r7b_parser() {
     return parser;
 }
 
-static void test_command_r7b_parser(const parser & p, const std::string & input, bool partial) {
-    parser_context ctx(input, !partial);
+static void test_command_r7b_parser(const parser & p, const std::string & input, bool partial, bool print_results = false) {
+    parser_environment env;
+    parser_context ctx(input, &env, !partial);
     p.parse(ctx);
+
+    if (print_results) {
+        std::cout << "== Parsed (new) ==\n";
+        std::cout << "=== Reasoning ===\n";
+        std::cout << env.reasoning_content << "\n";
+        std::cout << "\n\n=== Content ===\n";
+        std::cout << env.content << "\n";
+        std::cout << "\n\n=== Tool Calls ===\n";
+        for (const auto & tc : env.tool_calls) {
+            std::cout << "id: " << tc.id << "\n";
+            std::cout << "name: " << tc.name << "\n";
+            std::cout << "args: " << tc.arguments << "\n";
+        }
+    }
 }
 
-static void test_command_r7b_legacy_parser(const std::string & input, bool partial) {
+static void test_command_r7b_legacy_parser(const std::string & input, bool partial, bool print_results = false) {
     // Original parser taken from chat.cpp
     common_chat_msg_parser builder(input,
         /* is_partial= */ partial, {
@@ -833,6 +854,20 @@ static void test_command_r7b_legacy_parser(const std::string & input, bool parti
         }
     } else {
         builder.add_content(builder.consume_rest());
+    }
+
+    if (print_results) {
+        std::cout << "== Parsed (legacy) ==\n";
+        std::cout << "=== Reasoning ===\n";
+        std::cout << builder.result().reasoning_content << "\n";
+        std::cout << "\n\n=== Content ===\n";
+        std::cout << builder.result().content << "\n";
+        std::cout << "\n\n=== Tool Calls ===\n";
+        for (const auto & tc : builder.result().tool_calls) {
+            std::cout << "id: " << tc.id << "\n";
+            std::cout << "name: " << tc.name << "\n";
+            std::cout << "args: " << tc.arguments << "\n";
+        }
     }
 }
 
@@ -907,13 +942,13 @@ static void benchmark_compare(
         tokens.emplace_back("<|END_ACTION|>");
     }
 
-    auto run = [&](const std::function<void(const std::string &, bool)> & fn) {
+    auto run = [&](const std::function<void(const std::string &, bool, bool)> & fn) {
         std::string input = std::accumulate(tokens.begin(), tokens.end(), std::string());
 
         std::chrono::microseconds duration(0);
         for (int i = 0; i < iterations; i++) {
             auto start = std::chrono::high_resolution_clock::now();
-            fn(input, false);
+            fn(input, false, i == 0);
             auto end = std::chrono::high_resolution_clock::now();
             duration += std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         }
@@ -922,13 +957,13 @@ static void benchmark_compare(
 
     auto parser = create_command_r7b_parser();
 
-    auto duration_new = run([&](const std::string & input, bool partial) {
-        test_command_r7b_parser(parser, input, partial);
+    auto duration_new = run([&](const std::string & input, bool partial, bool print_content) {
+        test_command_r7b_parser(parser, input, partial, print_content);
     });
 
-    auto duration_legacy = run([&](const std::string & input, bool partial) {
+    auto duration_legacy = run([&](const std::string & input, bool partial, bool print_content) {
         try {
-            test_command_r7b_legacy_parser(input, partial);
+            test_command_r7b_legacy_parser(input, partial, print_content);
         } catch (const common_chat_msg_partial_exception &) { }
     });
 
