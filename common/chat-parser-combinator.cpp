@@ -1222,6 +1222,8 @@ parser::parser(std::shared_ptr<parser_base> parser) : ptr_(std::move(parser)) {}
 
 parser::parser(const std::string & literal) : ptr_(std::make_shared<literal_parser>(literal, -1)) {}
 
+parser::parser(const char * literal) : ptr_(std::make_shared<literal_parser>(literal, -1)) {}
+
 parser parser::operator~() const {
     return parser(std::make_shared<not_parser>(*this, -1));
 }
@@ -1230,18 +1232,8 @@ parser parser::operator+(const parser & other) const {
     return parser(std::make_shared<sequence_parser>(std::initializer_list<parser>{*this, other}, -1));
 }
 
-parser parser::operator+(const std::string & literal) const {
-    auto lit = parser(std::make_shared<literal_parser>(literal, -1));
-    return parser(std::make_shared<sequence_parser>(std::initializer_list<parser>{*this, lit}, -1));
-}
-
 parser parser::operator|(const parser & other) const {
     return parser(std::make_shared<choice_parser>(std::initializer_list<parser>{*this, other}, -1));
-}
-
-parser parser::operator|(const std::string & literal) const {
-    auto lit = parser(std::make_shared<literal_parser>(literal, -1));
-    return parser(std::make_shared<choice_parser>(std::initializer_list<parser>{*this, lit}, -1));
 }
 
 parser parser::operator<<(const parser & other) const {
@@ -1249,11 +1241,9 @@ parser parser::operator<<(const parser & other) const {
     return parser(std::make_shared<sequence_parser>(std::initializer_list<parser>{*this, ws, other}, -1));
 }
 
-parser parser::operator<<(const std::string & literal) const {
-    auto ws = parser(std::make_shared<space_parser>(-1));
-    auto lit = parser(std::make_shared<literal_parser>(literal, -1));
-    return parser(std::make_shared<sequence_parser>(std::initializer_list<parser>{*this, ws, lit}, -1));
-}
+parser operator+(const char * lhs, const parser & rhs) { return parser(lhs) + rhs; }
+parser operator|(const char * lhs, const parser & rhs) { return parser(lhs) | rhs; }
+parser operator<<(const char * lhs, const parser & rhs) { return parser(lhs) << rhs; }
 
 parser_base & parser::operator*() const {
     return *ptr_;
@@ -1371,13 +1361,6 @@ parser parser_builder::json_key(const std::string & name, const parser & p) {
 parser parser_builder::json_string(const parser & p) {
     auto quote = literal("\"");
     return quote + p + quote;
-}
-
-parser parser_builder::between(const std::string & left, const parser & p, const std::string & right, bool allow_spaces) {
-    if (allow_spaces) {
-        return literal(left) << p << literal(right);
-    }
-    return literal(left) + p + literal(right);
 }
 
 parser parser_builder::add_rule(const std::string & name, const parser & p) {

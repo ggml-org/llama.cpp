@@ -106,6 +106,8 @@ class parser {
     parser(std::shared_ptr<parser_base> parser);
     parser(const parser & other) = default;
     parser(const std::string & literal);
+    parser(const char * literal);
+
     parser & operator=(const parser & other) {
         if (this != &other) {
             ptr_ = other.ptr_;
@@ -114,15 +116,9 @@ class parser {
     }
 
     parser operator~() const;
-
     parser operator+(const parser & other) const;
-    parser operator+(const std::string & literal) const;
-
     parser operator|(const parser & other) const;
-    parser operator|(const std::string & literal) const;
-
     parser operator<<(const parser & other) const;
-    parser operator<<(const std::string & literal) const;
 
     parser_base & operator*() const;
     parser_base * operator->() const;
@@ -135,6 +131,10 @@ class parser {
 
     void build_grammar(const common_grammar_builder & builder) const;
 };
+
+parser operator+(const char * lhs, const parser & rhs);
+parser operator|(const char * lhs, const parser & rhs);
+parser operator<<(const char * lhs, const parser & rhs);
 
 class parser_id_counter {
     int next_id_;
@@ -230,8 +230,6 @@ class parser_builder {
 
     parser json_key(const std::string & name, const parser & p);
     parser json_string(const parser & p);
-
-    parser between(const std::string & left, const parser & p, const std::string & right, bool allow_spaces = true);
 
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
