@@ -919,7 +919,7 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     ggml_tensor * merged2d = ggml_reshape_2d(ctx0, merged3d, scores->ne[0], scores->ne[1]); // [n_kv, cols]
     ggml_tensor * allow    = ggml_reshape_4d(ctx0, merged2d, scores->ne[0], scores->ne[1], 1, 1);
     cb(allow, "sparsek_allow_topk_only", il);
-    
+
     // 4) Final union with base (0/-INF encoding)
     // We need to tile base_mask columns from n_rows_p to cols_calc = n_rows_p * (heads*streams)
 
@@ -951,10 +951,15 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     ggml_tensor * base_rep2 = ggml_reshape_2d(ctx0, base_rep3, scores->ne[0], cols_calc2);          // [n_kv, cols_calc]
     ggml_tensor * base_rep4 = ggml_reshape_4d(ctx0, base_rep2, scores->ne[0], cols_calc2, 1, 1);    // [n_kv, cols_calc,1,1]
 
-    // Final union (order matters for broadcasting rules)
-    ggml_tensor * final_mask = ggml_add(ctx0, allow, base_rep4);
+        // === FIX: align final mask shape to base_mask shape ===
+    ggml_tensor *allow2d = ggml_reshape_2d(ctx0, merged3d, scores->ne[0], scores->ne[1]); // [n_kv, cols_calc]
+    ggml_tensor *allow4  = ggml_reshape_4d(ctx0, allow2d,
+        base_mask->ne[0], base_mask->ne[1], base_mask->ne[2], base_mask->ne[3]);
+
+    ggml_tensor *final_mask = ggml_add(ctx0, allow4, base_rep4);
     cb(final_mask, "sparsek_final_mask", il);
     return final_mask;
+
 }
 
 ggml_tensor * llm_graph_context::maybe_apply_sparsek_mask(
