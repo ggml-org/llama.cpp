@@ -1912,6 +1912,21 @@ static bool hex_supported_dims(const struct ggml_tensor * x, const struct ggml_t
     return true;
 }
 
+static inline bool hex_supported_buffer(const struct ggml_hexagon_session * sess) {
+    return true;
+}
+
+template <typename... _TBuffers>
+static inline bool hex_supported_buffer(const struct ggml_hexagon_session * sess,
+                                        ggml_backend_buffer_t               buffer,
+                                        _TBuffers... buffers) {
+    if (buffer && (!ggml_backend_buffer_is_hexagon(buffer) || ggml_backend_hexagon_buffer_get_sess(buffer) != sess)) {
+        return false;
+    }
+
+    return hex_supported_buffer(sess, buffers...);
+}
+
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -1959,16 +1974,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     }
 
     // src0 & src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0->buffer, src1->buffer, dst->buffer)) {
         return false;
     }
 
