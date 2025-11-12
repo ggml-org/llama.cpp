@@ -64,6 +64,12 @@ class parser_base {
     // Actual parsing implementation (to be overridden by subclasses)
     virtual parser_result parse_uncached(parser_context & ctx, size_t start = 0) = 0;
 
+    virtual void assign_id(std::shared_ptr<parser_id_counter> counter) {
+        if (id_ == -1) {
+            id_ = counter->next();
+        }
+    }
+
     virtual std::string dump() const = 0;
     virtual void accept(parser_visitor & visitor) = 0;
 };
@@ -164,6 +170,13 @@ class sequence_parser : public parser_base {
         return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
     }
 
+    void assign_id(std::shared_ptr<parser_id_counter> counter) override {
+        parser_base::assign_id(counter);
+        for (auto & p : parsers_) {
+            p->assign_id(counter);
+        }
+    }
+
     std::string dump() const override {
         std::vector<std::string> parts;
         parts.reserve(parsers_.size());
@@ -215,6 +228,13 @@ class choice_parser : public parser_base {
         }
 
         return parser_result(PARSER_RESULT_FAIL, start);
+    }
+
+    void assign_id(std::shared_ptr<parser_id_counter> counter) override {
+        parser_base::assign_id(counter);
+        for (auto & p : parsers_) {
+            p->assign_id(counter);
+        }
     }
 
     std::string dump() const override {
@@ -279,6 +299,11 @@ class repetition_parser : public parser_base {
         }
 
         return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
+    }
+
+    void assign_id(std::shared_ptr<parser_id_counter> counter) override {
+        parser_base::assign_id(counter);
+        parser_->assign_id(counter);
     }
 
     std::string dump() const override {
@@ -367,6 +392,11 @@ class not_parser : public parser_base {
 
         // Child failed, so negation succeeds
         return parser_result(PARSER_RESULT_SUCCESS, start);
+    }
+
+    void assign_id(std::shared_ptr<parser_id_counter> counter) override {
+        parser_base::assign_id(counter);
+        parser_->assign_id(counter);
     }
 
     std::string dump() const override {
@@ -680,6 +710,11 @@ class group_parser : public parser_base {
         return result;
     }
 
+    void assign_id(std::shared_ptr<parser_id_counter> counter) override {
+        parser_base::assign_id(counter);
+        parser_->assign_id(counter);
+    }
+
     std::string dump() const override {
         return "Group(" + name_ + ", " + parser_->dump() + ")";
     }
@@ -826,6 +861,11 @@ class root_parser : public parser_base {
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         return root_->parse(ctx, start);
+    }
+
+    void assign_id(std::shared_ptr<parser_id_counter> counter) override {
+        parser_base::assign_id(counter);
+        root_->assign_id(counter);
     }
 
     std::string dump() const override {
@@ -1117,102 +1157,6 @@ class gbnf_visitor : public parser_visitor {
     }
 };
 
-// ID assignment visitor for assigning unique IDs to parsers
-class id_assignment_visitor : public parser_visitor {
-    std::shared_ptr<parser_id_counter> counter_;
-
-  public:
-    id_assignment_visitor(const std::shared_ptr<parser_id_counter> & counter) : counter_(counter) {}
-
-    void assign_id(parser_base & p) {
-        if (p.id() == -1) {
-            p.set_id(counter_->next());
-        }
-    }
-
-    void visit(literal_parser & p) override {
-        assign_id(p);
-    }
-
-    void visit(any_parser & p) override {
-        assign_id(p);
-    }
-
-    void visit(space_parser & p) override {
-        assign_id(p);
-    }
-
-    void visit(chars_parser & p) override {
-        assign_id(p);
-    }
-
-    void visit(json_string_parser & p) override {
-        assign_id(p);
-    }
-
-    void visit(schema_parser & p) override {
-        assign_id(p);
-    }
-
-    void visit(rule_parser & p) override {
-        assign_id(p);
-    }
-
-    // Composite parsers - assign ID and traverse children
-    void visit(sequence_parser & p) override {
-        assign_id(p);
-        for (const auto & child : p.parsers()) {
-            child->accept(*this);
-        }
-    }
-
-    void visit(choice_parser & p) override {
-        assign_id(p);
-        for (const auto & child : p.parsers()) {
-            child->accept(*this);
-        }
-    }
-
-    void visit(one_or_more_parser & p) override {
-        assign_id(p);
-        p.child()->accept(*this);
-    }
-
-    void visit(zero_or_more_parser & p) override {
-        assign_id(p);
-        p.child()->accept(*this);
-    }
-
-    void visit(optional_parser & p) override {
-        assign_id(p);
-        p.child()->accept(*this);
-    }
-
-    void visit(repetition_parser & p) override {
-        assign_id(p);
-        p.child()->accept(*this);
-    }
-
-    void visit(until_parser & p) override {
-        assign_id(p);
-    }
-
-    void visit(not_parser & p) override {
-        assign_id(p);
-        p.child()->accept(*this);
-    }
-
-    void visit(group_parser & p) override {
-        assign_id(p);
-        p.child()->accept(*this);
-    }
-
-    void visit(root_parser & p) override {
-        assign_id(p);
-        p.root()->accept(*this);
-    }
-};
-
 // Implement accept() methods for all parser classes
 void literal_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void sequence_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
@@ -1419,8 +1363,7 @@ parser parser_builder::add_rule(const std::string & name, const parser & p) {
 
 void parser_builder::assign_ids(parser & p) {
     if (p.ptr()) {
-        id_assignment_visitor visitor(counter_);
-        p.ptr()->accept(visitor);
+        p.ptr()->assign_id(counter_);
     }
 }
 
