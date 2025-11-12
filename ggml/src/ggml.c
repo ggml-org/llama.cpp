@@ -5098,14 +5098,15 @@ struct ggml_tensor * ggml_tri(
 
 // ggml_fill
 
-struct ggml_tensor * ggml_fill(
+static struct ggml_tensor * ggml_fill_impl(
     struct ggml_context * ctx,
     struct ggml_tensor  * a,
-    const float           c) {
+    float                 c,
+    bool                  inplace) {
     GGML_ASSERT(a->type == GGML_TYPE_F32);
     GGML_ASSERT(ggml_is_contiguous(a));
 
-    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params_f32(result, 0, c);
 
@@ -5113,6 +5114,20 @@ struct ggml_tensor * ggml_fill(
     result->src[0] = a;
 
     return result;
+}
+
+struct ggml_tensor * ggml_fill(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    float                 c) {
+    return ggml_fill_impl(ctx, a, c, false);
+}
+
+struct ggml_tensor * ggml_fill_inplace(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    float                 c) {
+    return ggml_fill_impl(ctx, a, c, true);
 }
 
 // ggml_argsort

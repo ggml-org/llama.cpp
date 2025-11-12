@@ -2228,8 +2228,12 @@ extern "C" {
             enum ggml_tri_type    type);
 
     // Fill tensor a with constant c
-    // In-place, returns view(a)
     GGML_API struct ggml_tensor * ggml_fill(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 c);
+
+    GGML_API struct ggml_tensor * ggml_fill_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 c);
