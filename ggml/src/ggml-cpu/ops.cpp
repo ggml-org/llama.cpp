@@ -2195,7 +2195,7 @@ static void ggml_compute_forward_gelu(
 // ggml_compute_fill
 
 static void ggml_compute_forward_fill_f32(const ggml_compute_params * params, ggml_tensor * dst) {
-    float c = (float) dst->op_params[0];
+    const float c = ggml_get_op_params_f32(dst, 0);
 
     GGML_TENSOR_LOCALS(int64_t, ne, dst, ne);
     GGML_TENSOR_LOCALS(size_t,  nb, dst, nb);
