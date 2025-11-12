@@ -762,8 +762,11 @@ same when saved chat is loaded.
 
 MAYBE make the settings in general chat session specific, rather than the current global config flow.
 
-Use indexedDB instead of localStorage for saving chat sessions, provided it is allocated more storage
-space by browsers.
+Have unique id or use the index into chat messages array wrt each chat message in a chat session, so that
+it is easy to identify and remove chat messages from the UI even in sliding window mode.
+
+Have a seperate helper to show the user input area, based on set state. And have support for multiple images
+if the models support same.
 
 
 ### Debuging the handshake and beyond
