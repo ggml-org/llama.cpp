@@ -1,6 +1,5 @@
 #include "ggml.h"
 #include "llama.h"
-#include "llama-gpu-sampling.h"
 #include "get-model.h"
 #include "common.h"
 
@@ -24,8 +23,8 @@ struct test_model_context {
     std::unordered_map<llama_seq_id, int32_t> seq_positions;
     std::unordered_map<llama_seq_id, int32_t> last_batch_info;
 
-    bool setup(const char * model_path, std::vector<llama_sampler_seq_config> & configs) {
-        if (model != nullptr && ctx != nullptr) {
+    bool setup_model(const char * model_path) {
+        if (model != nullptr) {
             return true;
         }
 
@@ -37,6 +36,19 @@ struct test_model_context {
             fprintf(stderr, "Warning: failed to load model '%s', skipping test\n", model_path);
             cleanup();
             return false;
+        }
+        vocab = llama_model_get_vocab(model);
+
+        return true;
+    }
+
+    bool setup(const char * model_path, std::vector<llama_sampler_seq_config> & configs) {
+        if (model == nullptr) {
+            setup_model(model_path);
+        }
+
+        if (model != nullptr && ctx != nullptr) {
+            return true;
         }
 
         llama_context_params cparams = llama_context_default_params();
@@ -463,6 +475,53 @@ static void test_gpu_dist_sampling(const char * model_path) {
     }
 }
 
+static void test_gpu_logit_bias_sampling(const char * model_path) {
+    test_model_context test_ctx;
+
+    // Calling setup_model to ensure vocab is loaded and can be accessed
+    if (!test_ctx.setup_model(model_path)) {
+        return;
+    }
+
+    const int seq_id = 0;
+
+    // Create the logit biases vector.
+    std::vector<llama_logit_bias> logit_bias;
+
+    // Get the token for the piece "World".
+    const std::string piece = "World";
+    std::vector<llama_token> tokens(16);
+    llama_tokenize(test_ctx.vocab, piece.c_str(), piece.size(), tokens.data(), tokens.size(), false, false);
+    llama_token bias_token = tokens[0];
+    logit_bias.push_back({ bias_token, +100.0f });
+    printf("biasing token piece '%s' -> token id %d\n", piece.c_str(), bias_token);
+
+    struct llama_sampler_chain_params gpu_chain_params = llama_sampler_chain_default_params();
+    struct llama_sampler * gpu_sampler_chain = llama_sampler_chain_init(gpu_chain_params);
+    llama_sampler_chain_add(gpu_sampler_chain, llama_sampler_gpu_init_logit_bias(
+                llama_vocab_n_tokens(test_ctx.vocab),
+                logit_bias.size(),
+                logit_bias.data()));
+    llama_sampler_chain_add(gpu_sampler_chain, llama_sampler_gpu_init_dist(88));
+
+    std::vector<llama_sampler_seq_config> gpu_sampler_configs = {
+        { seq_id, gpu_sampler_chain },
+    };
+
+    if (!test_ctx.setup(model_path, gpu_sampler_configs)) {
+        return;
+    }
+
+    if (!test_ctx.decode({{seq_id, "Hello"}})) {
+        return;
+    }
+
+    llama_token gpu_token = llama_get_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(seq_id));
+    const std::string gpu_token_str = test_ctx.token_to_piece(gpu_token, false);
+    printf("logit bias sampled token = %d, string='%s'\n", gpu_token, gpu_token_str.c_str());
+    GGML_ASSERT(gpu_token == bias_token);
+}
+
 static void test_gpu_set_sampler(const char * model_path) {
     test_model_context test_ctx;
 
@@ -535,6 +594,7 @@ struct gpu_test_case {
 
 static const gpu_test_case GPU_TESTS[] = {
     { "gpu_greedy",          test_gpu_greedy_sampling,         true  },
+    { "gpu_logit_bias",      test_gpu_logit_bias_sampling,     true  },
     { "gpu_temp",            test_gpu_temp_sampling,           true  },
     { "gpu_top_k",           test_gpu_top_k_sampling,          true  },
     { "gpu_multi_sequence",  test_gpu_multi_sequence_sampling, true  },

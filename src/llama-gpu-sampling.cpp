@@ -1,4 +1,4 @@
-#include "llama-gpu-sampling.h"
+#include "llama.h"
 #include "ggml.h"
 #include <cstdio>
 #include <chrono>
@@ -355,6 +355,126 @@ struct llama_sampler * llama_sampler_gpu_init_dist(uint32_t seed) {
         /*.uniform  =*/ nullptr,
         /*.ctx      =*/ nullptr,
         /*.buffer   =*/ nullptr,
+    };
+
+    auto * sampler = new llama_sampler {
+        /*.iface =*/ &iface,
+        /*.ctx   =*/ ctx_data,
+    };
+
+    return sampler;
+}
+
+struct llama_sampler_gpu_logit_bias_ctx {
+    const int32_t n_vocab;
+
+    const std::vector<llama_logit_bias> logit_bias;
+
+    struct ggml_tensor * logit_bias_t;
+    struct ggml_context * ctx;
+    ggml_backend_buffer_t buffer;
+};
+
+static void llama_sampler_gpu_logit_bias_init_ggml(
+        struct llama_sampler      * smpl,
+        ggml_backend_buffer_type_t  buft) {
+    auto * sctx = (llama_sampler_gpu_logit_bias_ctx *) smpl->ctx;
+    if (sctx->logit_bias.empty()) {
+        return;
+    }
+    ggml_init_params params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * sctx->n_vocab * sizeof(float),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    sctx->ctx = ggml_init(params);
+
+    struct ggml_tensor * logit_bias = ggml_new_tensor_1d(sctx->ctx, GGML_TYPE_F32, sctx->n_vocab);
+    sctx->logit_bias_t = logit_bias;
+    ggml_set_name(sctx->logit_bias_t, "logit_bias");
+    ggml_set_input(sctx->logit_bias_t);
+    ggml_set_output(sctx->logit_bias_t);
+
+    // Allocate all tensors from our context to the backend
+    sctx->buffer = ggml_backend_alloc_ctx_tensors_from_buft(sctx->ctx, buft);
+}
+
+static void llama_sampler_gpu_logit_bias_set_input_ggml(struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_gpu_logit_bias_ctx *) smpl->ctx;
+    if (sctx->logit_bias.empty()) {
+        return;
+    }
+    GGML_ASSERT(sctx->logit_bias_t != nullptr);
+
+    // Create a sparse logit_bias vector from the logit_bias entries.
+    std::vector<float> logit_bias_sparse(sctx->n_vocab, 0.0f);
+    for (const auto & lb : sctx->logit_bias) {
+        GGML_ASSERT(lb.token >= 0 && lb.token < (int32_t) sctx->n_vocab);
+        logit_bias_sparse[lb.token] = lb.bias;
+    }
+
+    ggml_backend_tensor_set(sctx->logit_bias_t, logit_bias_sparse.data(), 0, ggml_nbytes(sctx->logit_bias_t));
+}
+
+static void llama_sampler_gpu_logit_bias_apply_ggml(
+        struct llama_sampler           * smpl,
+        struct ggml_context            * ctx,
+        struct ggml_cgraph             * gf,
+        struct llama_sampler_ggml_data * ggml_data) {
+    GGML_UNUSED(gf);
+    GGML_UNUSED(ctx);
+
+    auto * sctx = (llama_sampler_gpu_logit_bias_ctx *) smpl->ctx;
+    if (sctx->logit_bias_t == nullptr) {
+        return;
+    }
+
+    // Add the sparse logit logit_bias to the logits
+    struct ggml_tensor * logit_biased = ggml_add_inplace(sctx->ctx, ggml_data->logits, sctx->logit_bias_t);
+    ggml_build_forward_expand(gf, logit_biased);
+}
+
+static const char * llama_sampler_gpu_logit_bias_name(const struct llama_sampler *) {
+    return "gpu-logit_bias";
+}
+
+static void llama_sampler_gpu_logit_bias_free(struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_gpu_logit_bias_ctx *) smpl->ctx;
+    ggml_backend_buffer_free(sctx->buffer);
+    ggml_free(sctx->ctx);
+    delete sctx;
+}
+
+static struct llama_sampler * llama_sampler_gpu_logit_bias_clone(const struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_gpu_logit_bias_ctx *) smpl->ctx;
+    return llama_sampler_gpu_init_logit_bias(sctx->n_vocab,
+                                      sctx->logit_bias.size(),
+                                      sctx->logit_bias.data());
+}
+
+
+struct llama_sampler * llama_sampler_gpu_init_logit_bias(int32_t   n_vocab,
+                                                   int32_t   n_logit_bias,
+                                    const llama_logit_bias * logit_bias) {
+    static const llama_sampler_i iface = {
+        /*.name           =*/ llama_sampler_gpu_logit_bias_name,
+        /*.accept         =*/ nullptr,
+        /*.apply          =*/ nullptr,
+        /*.reset          =*/ nullptr,
+        /*.clone          =*/ llama_sampler_gpu_logit_bias_clone,
+        /*.free           =*/ llama_sampler_gpu_logit_bias_free,
+        /*.apply_ggml     =*/ llama_sampler_gpu_logit_bias_apply_ggml,
+        /*.accept_ggml    =*/ nullptr,
+        /*.set_input_ggml =*/ llama_sampler_gpu_logit_bias_set_input_ggml,
+        /*.init_ggml      =*/ llama_sampler_gpu_logit_bias_init_ggml,
+    };
+
+    auto * ctx_data = new llama_sampler_gpu_logit_bias_ctx {
+        /*.n_vocab      =*/ n_vocab,
+        /*.logit_bias   =*/ std::vector<llama_logit_bias>(logit_bias, logit_bias + n_logit_bias),
+        /*.logit_bias_t =*/ nullptr,
+        /*.ctx          =*/ nullptr,
+        /*.buffer       =*/ nullptr,
     };
 
     auto * sampler = new llama_sampler {

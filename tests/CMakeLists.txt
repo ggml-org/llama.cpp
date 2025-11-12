@@ -211,8 +211,9 @@ target_include_directories(test-gpu-sampling PRIVATE ${PROJECT_SOURCE_DIR}/src)
 llama_test(test-gpu-sampling NAME test-gpu-sampling-greedy      ARGS  --test gpu_greedy)
 llama_test(test-gpu-sampling NAME test-gpu-sampling-temp        ARGS  --test gpu_temp)
 llama_test(test-gpu-sampling NAME test-gpu-sampling-top_k       ARGS  --test gpu_top_k)
-llama_test(test-gpu-sampling NAME test-gpu-sampling-mul_seq     ARGS  --test gpu_multi_sequence)
 llama_test(test-gpu-sampling NAME test-gpu-sampling-dist        ARGS  --test gpu_dist)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-logit-bias  ARGS  --test gpu_logit_bias)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-mul_seq     ARGS  --test gpu_multi_sequence)
 llama_test(test-gpu-sampling NAME test-gpu-sampling-set-sampler ARGS  --test gpu_set_sampler)
 
 
