@@ -2380,6 +2380,7 @@ struct ggml_tensor * ggml_sum_rows(
 struct ggml_tensor * ggml_cumsum(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
 
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
@@ -5082,6 +5083,7 @@ struct ggml_tensor * ggml_tri(
     struct ggml_context * ctx,
     struct ggml_tensor  * a,
     enum ggml_tri_type    type) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
 
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(a->ne[0] == a->ne[1]);
@@ -5993,6 +5995,8 @@ struct ggml_tensor * ggml_solve_tri(
         bool                  left,
         bool                  lower,
         bool                  uni) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(b->type == GGML_TYPE_F32);
 
     // A must be square and lower diagonal
     GGML_ASSERT(a->ne[0] == a->ne[1]);
