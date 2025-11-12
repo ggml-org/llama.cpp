@@ -1384,7 +1384,7 @@ static parser json_parser(std::shared_ptr<parser_id_counter> counter) {
     parser_builder builder(std::move(counter));
 
     // Whitespace: space, tab, newline, carriage return
-    auto ws = builder.chars("[ \\t\\n\\r]", 0, -1);
+    auto ws = builder.space();
 
     // Number components
     auto digit1_9 = builder.chars("[1-9]", 1, 1);
