@@ -175,7 +175,7 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
 }
 
-// generate a causal (lower triangular) matrix
+// generate a lower triangular matrix
 static void init_tensor_tril(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F32);
     GGML_ASSERT(tensor->ne[0] == tensor->ne[1]);
@@ -205,6 +205,7 @@ static void init_tensor_tril(ggml_tensor * tensor, float min = -1.0f, float max 
 
     ggml_backend_tensor_set(tensor, data_f32.data(), 0, ggml_nbytes(tensor));
 }
+
 static std::vector<float> tensor_to_float(const ggml_tensor * t) {
     std::vector<float> tv;
     tv.reserve(ggml_nelements(t));
@@ -6000,23 +6001,23 @@ struct test_fill : public test_case {
 // GGML_OP_SOLVE_TRI
 struct test_solve_tri : public test_case {
     const ggml_type              type;
-    const std::array<int64_t, 4> neLHS;
-    const std::array<int64_t, 4> neRHS;
+    const std::array<int64_t, 4> ne_lhs;
+    const std::array<int64_t, 4> ne_rhs;
 
-    std::string vars() override { return VARS_TO_STR3(type, neLHS, neRHS); }
+    std::string vars() override { return VARS_TO_STR3(type, ne_lhs, ne_rhs); }
 
     test_solve_tri(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> neLHS = { 10, 10, 4, 3 },
-            std::array<int64_t, 4> neRHS = { 3, 10, 4, 3 }
+            std::array<int64_t, 4> ne_lhs = { 10, 10, 4, 3 },
+            std::array<int64_t, 4> ne_rhs = { 3, 10, 4, 3 }
         )
-        : type(type), neLHS(neLHS), neRHS(neRHS) {}
+        : type(type), ne_lhs(ne_lhs), ne_rhs(ne_rhs) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, neLHS[0], neLHS[1], neLHS[2], neLHS[3]);
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne_lhs[0], ne_lhs[1], ne_lhs[2], ne_lhs[3]);
         ggml_set_param(a);
         ggml_set_name(a, "a");
 
-        ggml_tensor * b = ggml_new_tensor_4d(ctx, type, neRHS[0], neRHS[1], neRHS[2], neRHS[3]);
+        ggml_tensor * b = ggml_new_tensor_4d(ctx, type, ne_rhs[0], ne_rhs[1], ne_rhs[2], ne_rhs[3]);
         ggml_set_param(b);
         ggml_set_name(b, "b");
 

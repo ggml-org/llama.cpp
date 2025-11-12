@@ -1416,25 +1416,6 @@ inline static void ggml_vec_sum_f32(const int n, float * s, const float * x) {
 #endif
 }
 
-// Applies a triangular mask to the input vector 'src' and writes the result to 'dst'.
-// Parameters:
-//   n            - number of elements
-//   r            - current row index
-//   dst          - output array
-//   src          - input array
-//   bipred       - the predicate on coordinates, derived from tri_type
-inline static void ggml_vec_tri_f32(const int n, const int r, float * dst, const float * src, bool (*bipred)(int, int)) {
-    for (int i = 0; i < n; ++i) {
-        dst[i] = bipred(i, r) ? src[i] : 0.0f;
-    }
-}
-
-inline static void ggml_vec_const_f32(const int n, float * dst, const float c) {
-    for (int i = 0; i < n; ++i) {
-        dst[i] = c;
-    }
-}
-
 inline static void ggml_vec_cumsum_f32(const int n, float * y, const float * x) {
     for (int i = 0; i < n; ++i) {
         if (i == 0) {

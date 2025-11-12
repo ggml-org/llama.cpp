@@ -5079,9 +5079,9 @@ struct ggml_tensor * ggml_timestep_embedding(
 // ggml_tri
 
 struct ggml_tensor * ggml_tri(
-    struct ggml_context *   ctx,
-    struct ggml_tensor *    a,
-    enum ggml_tri_type      type) {
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    enum ggml_tri_type    type) {
 
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(a->ne[0] == a->ne[1]);
@@ -5096,14 +5096,16 @@ struct ggml_tensor * ggml_tri(
     return result;
 }
 
-// ggml_const
+// ggml_fill
 
 struct ggml_tensor * ggml_fill(
-    struct ggml_context *   ctx,
-    struct ggml_tensor *    dst,
-    const float             c) {
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    const float           c) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(a));
 
-    struct ggml_tensor * result = ggml_view_tensor(ctx, dst);
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params_f32(result, 0, c);
 
@@ -5972,9 +5974,9 @@ struct ggml_tensor * ggml_solve_tri(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b,
-        bool                  lower,
         bool                  left,
-        bool                  unitriangular) {
+        bool                  lower,
+        bool                  uni) {
 
     // A must be square and lower diagonal
     GGML_ASSERT(a->ne[0] == a->ne[1]);
@@ -5988,13 +5990,13 @@ struct ggml_tensor * ggml_solve_tri(
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(ggml_is_contiguous(b));
 
-    GGML_ASSERT(lower && left && !unitriangular); // TODO: support other variants
+    GGML_ASSERT(lower && left && !uni); // TODO: support other variants
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, b->ne[0], b->ne[1], b->ne[2], b->ne[3]);
 
-    result->op      = GGML_OP_SOLVE_TRI;
-    result->src[0]  = a;
-    result->src[1]  = b;
+    result->op     = GGML_OP_SOLVE_TRI;
+    result->src[0] = a;
+    result->src[1] = b;
 
     return result;
 }

@@ -2223,16 +2223,16 @@ extern "C" {
     // Convert matrix into a triangular one (upper, strict upper, lower or strict lower) by writing
     // zeroes everywhere outside the masked area
     GGML_API struct ggml_tensor * ggml_tri(
-            struct ggml_context *   ctx,
-            struct ggml_tensor *    a,
-            enum ggml_tri_type      type);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            enum ggml_tri_type    type);
 
     // Fill tensor a with constant c
     // In-place, returns view(a)
     GGML_API struct ggml_tensor * ggml_fill(
-            struct ggml_context *   ctx,
-            struct ggml_tensor *    a,
-            float                   c);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 c);
 
     // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
     // timesteps: [N,]
@@ -2411,7 +2411,7 @@ extern "C" {
     *
     *  If left = false, solves xA=B instead
     *  If lower = false, assumes upper triangular instead
-    *  If unitriangular = true, assumes diagonal of A to be all ones (will override actual values)
+    *  If uni = true, assumes diagonal of A to be all ones (will override actual values)
     *
     *  TODO: currently only lower, right, non-unitriangular variant is implemented
     */
@@ -2421,7 +2421,7 @@ extern "C" {
         struct ggml_tensor  * b,
         bool                  left,
         bool                  lower,
-        bool                  unitriangular);
+        bool                  uni);
 
     // custom operators
 
