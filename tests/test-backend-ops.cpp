@@ -7631,6 +7631,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_sum(GGML_TYPE_F32, it));
     }
 
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, { 1024, 2, 1, 1 }, false, 1e-6f, false)); // qwen3-0.6b
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, { 2048, 2, 1, 1 }, false, 1e-5f, false)); // llama-3.2-1b, granite-3.3-2b
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, { 2880, 2, 1, 1 }, false, 1e-5f, false)); // gpt-oss-20b
+
     return test_cases;
 }
 
