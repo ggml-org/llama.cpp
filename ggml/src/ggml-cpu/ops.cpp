@@ -7,8 +7,9 @@
 #include "unary-ops.h"
 #include "vec.h"
 
-#include <float.h>
+#include <cfloat>
 #include <algorithm>
+#include <functional>
 
 // ggml_compute_forward_dup
 
