@@ -43,18 +43,18 @@ async function generateDirListing(dirPath, reqUrl) {
       <h1>Directory: ${reqUrl}</h1>
       <ul>
   `;
-  
+
   if (reqUrl !== '/') {
     html += `<li><a href="../">../ (Parent Directory)</a></li>`;
   }
-  
+
   for (const file of files) {
     const filePath = path.join(dirPath, file);
     const stats = await fs.stat(filePath);
     const link = encodeURIComponent(file) + (stats.isDirectory() ? '/' : '');
     html += `<li><a href="${link}">${file}${stats.isDirectory() ? '/' : ''}</a></li>`;
   }
-  
+
   html += `
       </ul>
     </body>
