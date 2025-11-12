@@ -998,7 +998,13 @@ class gbnf_visitor : public parser_visitor {
                 s += " ";
             }
             child->accept(*this);
-            s += current_result_;
+
+            // Parenthesize choices
+            if (needs_parens(child->type())) {
+                s += "(" + current_result_ + ")";
+            } else {
+                s += current_result_;
+            }
         }
         current_result_ = s;
     }
@@ -1012,8 +1018,8 @@ class gbnf_visitor : public parser_visitor {
 
             child->accept(*this);
 
-            // Parenthesize sequences in choices
-            if (child->type() == PARSER_SEQUENCE) {
+            // Parenthesize choices
+            if (child->type() == PARSER_CHOICE) {
                 s += "(" + current_result_ + ")";
             } else {
                 s += current_result_;
