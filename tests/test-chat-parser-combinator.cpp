@@ -710,13 +710,11 @@ static void test_gbnf_generation() {
 
 static parser create_command_r7b_parser() {
     auto parser = build_parser([](parser_builder & p) {
-        auto thinking = p.add_rule("thinking", p.literal("<|START_THINKING|>")
-            << p.until("<|END_THINKING|>")
-            << p.literal("<|END_THINKING|>"));
+        auto thinking = p.add_rule("thinking",
+            p.literal("<|START_THINKING|>") << p.until("<|END_THINKING|>") << "<|END_THINKING|>");
 
-        auto response = p.add_rule("response", p.literal("<|START_RESPONSE|>")
-            << p.until("<|END_RESPONSE|>")
-            << p.literal("<|END_RESPONSE|>"));
+        auto response = p.add_rule("response",
+            p.literal("<|START_RESPONSE|>") << p.until("<|END_RESPONSE|>") << "<|END_RESPONSE|>");
 
         auto json = p.add_rule("json", p.json());
         auto tool_call_id = p.add_rule("tool-call-id", p.json_key("tool_call_id", p.json_string(p.until("\""))));
@@ -724,16 +722,13 @@ static parser create_command_r7b_parser() {
         auto tool_call_args = p.add_rule("tool-args", p.json_key("parameters", json));
         auto tool_call_fields = p.add_rule("tool-call-fields", tool_call_id | tool_call_name | tool_call_args);
 
-        auto tool_call = p.add_rule("tool-call", p.between("{",
-            tool_call_fields << p.zero_or_more(p.literal(",") << tool_call_fields),
-        "}"));
+        auto tool_call = p.add_rule("tool-call",
+            p.between("{", tool_call_fields << p.zero_or_more(p.literal(",") << tool_call_fields), "}"));
 
-        auto tool_calls = p.add_rule("tool-calls", p.literal("<|START_ACTION|>")
-            << p.literal("[")
-            << tool_call
-            << p.zero_or_more(p.literal(",") << tool_call)
-            << p.literal("]")
-            << p.literal("<|END_ACTION|>"));
+        auto tool_calls = p.add_rule("tool-calls",
+            p.literal("<|START_ACTION|>")
+            << "[" << tool_call << p.zero_or_more(p.literal(",") << tool_call) << "]"
+            << "<|END_ACTION|>");
 
         return p.optional(thinking) << p.add_rule("content", (tool_calls | response));
     });

@@ -105,6 +105,7 @@ class parser {
     parser();
     parser(std::shared_ptr<parser_base> parser);
     parser(const parser & other) = default;
+    parser(const std::string & literal);
     parser & operator=(const parser & other) {
         if (this != &other) {
             ptr_ = other.ptr_;
@@ -113,9 +114,15 @@ class parser {
     }
 
     parser operator~() const;
+
     parser operator+(const parser & other) const;
+    parser operator+(const std::string & literal) const;
+
     parser operator|(const parser & other) const;
+    parser operator|(const std::string & literal) const;
+
     parser operator<<(const parser & other) const;
+    parser operator<<(const std::string & literal) const;
 
     parser_base & operator*() const;
     parser_base * operator->() const;

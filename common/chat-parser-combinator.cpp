@@ -1220,6 +1220,8 @@ parser::parser() {}
 
 parser::parser(std::shared_ptr<parser_base> parser) : ptr_(std::move(parser)) {}
 
+parser::parser(const std::string & literal) : ptr_(std::make_shared<literal_parser>(literal, -1)) {}
+
 parser parser::operator~() const {
     return parser(std::make_shared<not_parser>(*this, -1));
 }
@@ -1228,13 +1230,29 @@ parser parser::operator+(const parser & other) const {
     return parser(std::make_shared<sequence_parser>(std::initializer_list<parser>{*this, other}, -1));
 }
 
+parser parser::operator+(const std::string & literal) const {
+    auto lit = parser(std::make_shared<literal_parser>(literal, -1));
+    return parser(std::make_shared<sequence_parser>(std::initializer_list<parser>{*this, lit}, -1));
+}
+
 parser parser::operator|(const parser & other) const {
     return parser(std::make_shared<choice_parser>(std::initializer_list<parser>{*this, other}, -1));
+}
+
+parser parser::operator|(const std::string & literal) const {
+    auto lit = parser(std::make_shared<literal_parser>(literal, -1));
+    return parser(std::make_shared<choice_parser>(std::initializer_list<parser>{*this, lit}, -1));
 }
 
 parser parser::operator<<(const parser & other) const {
     auto ws = parser(std::make_shared<space_parser>(-1));
     return parser(std::make_shared<sequence_parser>(std::initializer_list<parser>{*this, ws, other}, -1));
+}
+
+parser parser::operator<<(const std::string & literal) const {
+    auto ws = parser(std::make_shared<space_parser>(-1));
+    auto lit = parser(std::make_shared<literal_parser>(literal, -1));
+    return parser(std::make_shared<sequence_parser>(std::initializer_list<parser>{*this, ws, lit}, -1));
 }
 
 parser_base & parser::operator*() const {
