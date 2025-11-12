@@ -179,8 +179,6 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
         generated_tokens.push_back(token_id);
         common_sampler_accept(ctx.smpl, token_id, true);
 
-        
-
         if (llama_vocab_is_eog(ctx.vocab, token_id) || ctx.check_antiprompt(generated_tokens)) {
             LOG("\n");
             break; // end of generation
@@ -213,7 +211,8 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
 }
 
 static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg & new_msg) {
-    // format and append message
+    LOG_DBG("chat_add_and_format: new_msg.role='%s', new_msg.content='%s'\n",
+        new_msg.role.c_str(), new_msg.content.c_str());
     auto formatted = common_chat_format_single(ctx.tmpls.get(), ctx.chat_history,
         new_msg, new_msg.role == "user",
         ctx.use_jinja);
@@ -224,6 +223,7 @@ static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg &
 static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     bool add_bos = ctx.chat_history.empty();
     auto formatted_chat = chat_add_and_format(ctx, msg);
+    LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
 
     mtmd_input_text text;
     text.text          = formatted_chat.c_str();
@@ -311,8 +311,7 @@ int main(int argc, char ** argv) {
 
     if (is_single_turn) {
         g_is_generating = true;
-        const bool has_default_media_marker = params.prompt.find(mtmd_default_marker()) != std::string::npos;
-        if (!has_default_media_marker) {
+        if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
             for (size_t i = 0; i < params.image.size(); i++) {
                 params.prompt += mtmd_default_marker();
             }

@@ -101,16 +101,17 @@ static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_
 }
 
 mtmd_context_params mtmd_context_params_default() {
-    mtmd_context_params params;
-    params.use_gpu = true;
-    params.print_timings = true;
-    params.n_threads = 4;
-    params.verbosity = GGML_LOG_LEVEL_INFO;
-    params.image_marker = MTMD_DEFAULT_IMAGE_MARKER;
-    params.media_marker = mtmd_default_marker();
-    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
-    params.image_min_tokens = -1;
-    params.image_max_tokens = -1;
+    mtmd_context_params params {
+        /* use_gpu           */ true,
+        /* print_timings     */ true,
+        /* n_threads         */ 4,
+        /* verbosity         */ GGML_LOG_LEVEL_INFO,
+        /* image_marker      */ MTMD_DEFAULT_IMAGE_MARKER,
+        /* media_marker      */ mtmd_default_marker(),
+        /* flash_attn_type   */ LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /* image_min_tokens  */ -1,
+        /* image_max_tokens  */ -1,
+    };
     return params;
 }
 
@@ -162,7 +163,7 @@ struct mtmd_context {
         print_timings(ctx_params.print_timings),
         n_threads    (ctx_params.n_threads),
         media_marker (ctx_params.media_marker),
-        n_embd_text  (llama_model_n_embd(text_model))
+        n_embd_text  (llama_model_n_embd_inp(text_model))
     {
         if (std::string(ctx_params.image_marker) != MTMD_DEFAULT_IMAGE_MARKER) {
             throw std::runtime_error("custom image_marker is not supported anymore, use media_marker instead");
@@ -172,13 +173,13 @@ struct mtmd_context {
             throw std::runtime_error("media_marker must not be empty");
         }
 
-        clip_context_params ctx_clip_params;
-        ctx_clip_params.use_gpu          = ctx_params.use_gpu;
-        ctx_clip_params.verbosity        = ctx_params.verbosity;
-        ctx_clip_params.flash_attn_type  = mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type);
-        // custom image token limits
-        ctx_clip_params.image_min_tokens = ctx_params.image_min_tokens;
-        ctx_clip_params.image_max_tokens = ctx_params.image_max_tokens;
+        clip_context_params ctx_clip_params {
+            /* use_gpu           */ ctx_params.use_gpu,
+            /* verbosity         */ ctx_params.verbosity,
+            /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
+            /* image_min_tokens  */ ctx_params.image_min_tokens,
+            /* image_max_tokens  */ ctx_params.image_max_tokens,
+        };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);
         ctx_v = res.ctx_v;
@@ -479,6 +480,7 @@ struct mtmd_tokenizer {
     }
 
     void add_text(const std::string & txt, bool parse_special) {
+        LOG_DBG("%s: %s\n", __func__, txt.c_str());
         auto tokens = mtmd_tokenize_text_internal(vocab, txt, /* add_special */ false, parse_special);
         add_text(tokens);
     }
@@ -612,6 +614,10 @@ struct mtmd_tokenizer {
                 image_tokens->batch_f32 = std::move(batch_f32);
                 image_tokens->id = bitmap->id; // optional
 
+                LOG_DBG("image_tokens->nx = %d\n", image_tokens->nx);
+                LOG_DBG("image_tokens->ny = %d\n", image_tokens->ny);
+                LOG_DBG("batch_f32 size = %d\n", (int)image_tokens->batch_f32.entries.size());
+
                 mtmd_input_chunk chunk{
                     MTMD_INPUT_CHUNK_TYPE_IMAGE,
                     {}, // text tokens
@@ -670,6 +676,8 @@ struct mtmd_tokenizer {
                 audio_tokens->n_tokens = n_tokens;
                 audio_tokens->batch_f32 = std::move(batch_f32);
                 audio_tokens->id = bitmap->id; // optional
+
+                LOG_DBG("audio_tokens->n_tokens = %d\n", audio_tokens->n_tokens);
 
                 mtmd_input_chunk chunk{
                     MTMD_INPUT_CHUNK_TYPE_AUDIO,
@@ -758,8 +766,7 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
             const mtmd_bitmap ** bitmaps,
             size_t n_bitmaps) {
     mtmd_tokenizer tokenizer(ctx, text, bitmaps, n_bitmaps);
-    int32_t ret = tokenizer.tokenize(output);
-    return ret;
+    return tokenizer.tokenize(output);
 }
 
 int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
