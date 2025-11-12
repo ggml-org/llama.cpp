@@ -252,6 +252,7 @@ export function el_creatediv_inputfilebtn(id, label, defaultValue, acceptable, c
     elX.el.accept = acceptable
     let idB = `${id}-button`
     let elB = el_create_button(idB, (mev) => {
+        elX.el.value = ""
         elX.el.click()
     }, idB, label, `<p>${label}</p>`)
     return { div: elX.div, el: elX.el, elB: elB };

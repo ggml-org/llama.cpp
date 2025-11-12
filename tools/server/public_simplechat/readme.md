@@ -730,6 +730,8 @@ sliding window based drop off or even before they kick in, this can help in many
   * show any image loaded by the user, in the corresponding image button
   * consolidate dataurl handling into a bunch of helper functions.
   * trap quota errors wrt localStorage etal
+  * dont forget to reset the file type input's value, so that reselecting the same image still
+    triggers the input's change event.
 
 * SimpleChat class now allows extra fields to be specified while adding, in a generic way using a
   object/literal object or equivalent.
@@ -767,6 +769,10 @@ it is easy to identify and remove chat messages from the UI even in sliding wind
 
 Have a seperate helper to show the user input area, based on set state. And have support for multiple images
 if the models support same.
+
+Make chat show messages by default only appends new chat messages to existing list of shown messages in ui,
+instead of clearing ui and recreating each message ui element again. Have forgotten what I had originally
+implemented, need to cross check.
 
 
 ### Debuging the handshake and beyond
