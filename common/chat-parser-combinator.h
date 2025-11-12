@@ -8,8 +8,18 @@
 #include <string>
 #include <string_view>
 #include <functional>
+#include <variant>
+#include <vector>
 
+struct common_chat_tool_call;
 struct common_grammar_builder;
+
+struct parser_environment {
+    std::string content;
+    std::string reasoning;
+    std::vector<common_chat_tool_call> tool_calls;
+    std::unordered_map<std::string, std::variant<int, double, std::string>> scratchpad;
+};
 
 enum parser_result_type {
     PARSER_RESULT_FAIL = 0,
@@ -82,18 +92,28 @@ struct parser_context {
     std::string_view input;
     parse_cache memo;
     bool input_is_complete;
+    parser_environment * env;
 
     parser_context()
-        : memo(), input_is_complete(true) {}
+        : memo(), input_is_complete(true), env(nullptr) {}
 
     parser_context(std::string_view input)
-        : input(input), memo(), input_is_complete(true) {}
+        : input(input), memo(), input_is_complete(true), env(nullptr) {}
 
     parser_context(std::string_view input, bool complete)
-        : input(input), memo(), input_is_complete(complete) {}
+        : input(input), memo(), input_is_complete(complete), env(nullptr) {}
 
     parser_context(std::string_view input, parse_cache memo, bool complete = true)
-        : input(input), memo(std::move(memo)), input_is_complete(complete) {}
+        : input(input), memo(std::move(memo)), input_is_complete(complete), env(nullptr) {}
+
+    parser_context(std::string_view input, parser_environment * environment)
+        : input(input), memo(), input_is_complete(true), env(environment) {}
+
+    parser_context(std::string_view input, parser_environment * environment, bool complete)
+        : input(input), memo(), input_is_complete(complete), env(environment) {}
+
+    parser_context(std::string_view input, parse_cache memo, parser_environment * environment, bool complete = true)
+        : input(input), memo(std::move(memo)), input_is_complete(complete), env(environment) {}
 };
 
 class parser_base;
@@ -234,6 +254,11 @@ class parser_builder {
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
     parser schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema);
+
+    // Wraps a parser with a semantic action callback.
+    // The callback is invoked on successful parse with the result, matched text, and environment.
+    //   S -> A [action]
+    parser action(const parser & p, std::function<void(const parser_result &, std::string_view, parser_environment &)> fn);
 
     parser add_rule(const std::string & name, const parser & p);
 

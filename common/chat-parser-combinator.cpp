@@ -26,6 +26,7 @@ enum parser_type {
     PARSER_SCHEMA = 14,
     PARSER_ROOT = 15,
     PARSER_JSON_STRING = 16,
+    PARSER_ACTION = 17,
 };
 
 class parser_visitor;
@@ -879,6 +880,43 @@ class root_parser : public parser_base {
     std::shared_ptr<std::unordered_map<std::string, parser>> rules() const { return rules_; }
 };
 
+// Wraps a parser with a semantic action callback.
+class action_parser : public parser_base {
+    parser parser_;
+    std::function<void(const parser_result &, std::string_view, parser_environment &)> action_;
+
+  public:
+    action_parser(const parser & parser, std::function<void(const parser_result &, std::string_view, parser_environment &)> action, int id)
+        : parser_base(id), parser_(parser), action_(std::move(action)) {}
+
+    parser_type type() const override { return PARSER_ACTION; }
+
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        auto result = parser_->parse(ctx, start);
+
+        // Invoke action callback on success if environment is available
+        if (result.is_success() && ctx.env && action_) {
+            std::string_view matched = ctx.input.substr(result.start, result.end - result.start);
+            action_(result, matched, *ctx.env);
+        }
+
+        return result;
+    }
+
+    void assign_id(std::shared_ptr<parser_id_counter> counter) override {
+        parser_base::assign_id(counter);
+        parser_->assign_id(counter);
+    }
+
+    std::string dump() const override {
+        return "Action(" + parser_->dump() + ")";
+    }
+
+    void accept(parser_visitor & visitor) override;
+
+    const parser & child() const { return parser_; }
+};
+
 // Base visitor class for parser tree traversal
 class parser_visitor {
   public:
@@ -901,6 +939,7 @@ class parser_visitor {
     virtual void visit(schema_parser & p) = 0;
     virtual void visit(rule_parser & p) = 0;
     virtual void visit(root_parser & p) = 0;
+    virtual void visit(action_parser & p) = 0;
 };
 
 class gbnf_visitor : public parser_visitor {
@@ -1161,6 +1200,11 @@ class gbnf_visitor : public parser_visitor {
         // Return root body for composition
         p.root()->accept(*this);
     }
+
+    void visit(action_parser & p) override {
+        // Actions are transparent for grammar generation - just visit child
+        p.child()->accept(*this);
+    }
 };
 
 // Implement accept() methods for all parser classes
@@ -1181,6 +1225,7 @@ void group_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void schema_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void rule_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void root_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void action_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 
 std::optional<std::string> parser_result::group(const std::string & name, std::string_view input) const {
     auto it = groups.find(name);
@@ -1352,6 +1397,10 @@ parser parser_builder::repeat(const parser & p, int n) {
 
 parser parser_builder::schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema) {
     return parser(std::make_shared<schema_parser>(p, name, schema, counter_->next()));
+}
+
+parser parser_builder::action(const parser & p, std::function<void(const parser_result &, std::string_view, parser_environment &)> fn) {
+    return parser(std::make_shared<action_parser>(p, std::move(fn), counter_->next()));
 }
 
 parser parser_builder::json_key(const std::string & name, const parser & p) {

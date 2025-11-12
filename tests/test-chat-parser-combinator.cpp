@@ -533,6 +533,117 @@ static void test_complete_example() {
     std::cout << "Grammar:\n" << gbnf << "\n";
 }
 
+static void test_actions() {
+    {
+        // Test simple action - append matched text to content
+        auto parser = build_parser([](parser_builder& p) {
+            auto word = p.chars("[a-z]+");
+            return p.action(word, [](const parser_result &, std::string_view matched, parser_environment & env) {
+                env.content += std::string(matched);
+            });
+        });
+
+        parser_environment env;
+        parser_context ctx("hello", &env);
+        auto result = parser.parse(ctx);
+
+        assert_equals(true, result.is_success());
+        assert_equals("hello", env.content);
+    }
+    {
+        // Test multiple sequential actions - build a sentence
+        auto parser = build_parser([](parser_builder& p) {
+            auto greeting = p.action(p.literal("hello"), [](const parser_result &, std::string_view matched, parser_environment & env) {
+                env.content += std::string(matched) + " ";
+            });
+
+            auto name = p.action(p.chars("[A-Z][a-z]+"), [](const parser_result &, std::string_view matched, parser_environment & env) {
+                env.content += std::string(matched);
+                env.scratchpad["name"] = std::string(matched);
+            });
+
+            return greeting + p.literal(" ") + name;
+        });
+
+        parser_environment env;
+        parser_context ctx("hello Alice", &env);
+        auto result = parser.parse(ctx);
+
+        assert_equals(true, result.is_success());
+        assert_equals("hello Alice", env.content);
+        assert_equals("Alice", std::get<std::string>(env.scratchpad["name"]));
+    }
+    {
+        // Test using scratchpad for intermediate calculations
+        auto parser = build_parser([](parser_builder& p) {
+            auto digit = p.action(p.one("[0-9]"), [](const parser_result &, std::string_view matched, parser_environment & env) {
+                auto it = env.scratchpad.find("sum");
+                int current_sum = it != env.scratchpad.end() ? std::get<int>(it->second) : 0;
+                current_sum += (matched[0] - '0');
+                env.scratchpad["sum"] = current_sum;
+            });
+
+            return p.one_or_more(digit + p.optional(p.literal("+")));
+        });
+
+        parser_environment env;
+        parser_context ctx("1+2+3+4", &env);
+        auto result = parser.parse(ctx);
+
+        assert_equals(true, result.is_success());
+        assert_equals(10, std::get<int>(env.scratchpad["sum"]));  // 1+2+3+4 = 10
+    }
+    {
+        // Test actions don't run when parse fails
+        auto parser = build_parser([](parser_builder& p) {
+            return p.action(p.literal("success"), [](const parser_result &, std::string_view, parser_environment & env) {
+                env.content = "action_ran";
+            });
+        });
+
+        parser_environment env;
+        parser_context ctx("failure", &env);
+        auto result = parser.parse(ctx);
+
+        assert_equals(true, result.is_fail());
+        assert_equals("", env.content);  // Action should not have run
+    }
+    {
+        // Test Actions work with partial parsing
+        auto parser = build_parser([](parser_builder& p) {
+            auto content = p.action(p.until("<end>"), [](const parser_result &, std::string_view matched, parser_environment & env) {
+                env.content += std::string(matched);
+            });
+            return "<start>" << content << "<end>";
+        });
+
+        {
+            parser_environment env;
+            parser_context ctx("<start>hello ", &env, false);
+            auto result = parser.parse(ctx);
+
+            assert_equals(true, result.is_success());
+            assert_equals("hello", env.content);
+        }
+        {
+            parser_environment env;
+            parser_context ctx("<start>hello world", &env, false);
+            auto result = parser.parse(ctx);
+
+            assert_equals(true, result.is_success());
+            assert_equals("hello world", env.content);
+        }
+        {
+            parser_environment env;
+            parser_context ctx("<start>hello world<end>", &env, true);
+            auto result = parser.parse(ctx);
+
+            assert_equals(true, result.is_success());
+            assert_equals("hello world", env.content);
+        }
+    }
+}
+
 static void test_gbnf_generation() {
     {
         // Test literal
@@ -888,6 +999,7 @@ int main() {
     test_optional();
     test_json_parser();
     test_complete_example();
+    test_actions();
     test_gbnf_generation();
     std::cout << "All tests passed!\n";
 
