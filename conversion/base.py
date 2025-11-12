@@ -22,6 +22,7 @@ if 'NO_LOCAL_GGUF' not in os.environ:
 import gguf
 from gguf.vocab import MistralTokenizerType, MistralVocab
 
+
 # Import QwenModel for its static methods (used in _set_vocab_qwen)
 # This is a lazy import to avoid circular dependencies
 def _get_qwen_model():
@@ -33,7 +34,7 @@ try:
     from mistral_common.tokens.tokenizers.base import TokenizerVersion # pyright: ignore[reportUnusedImport]
     from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD
     from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportUnusedImport]
-    from mistral_common.tokens.tokenizers.sentencepiece import ( 
+    from mistral_common.tokens.tokenizers.sentencepiece import (
         SentencePieceTokenizer, # pyright: ignore[reportUnusedImport]
     )
     _mistral_common_installed = True
@@ -560,6 +561,7 @@ class ModelBase:
                 cls._model_classes[model_type][name] = modelcls
             return modelcls
         return func
+
 
 class TextModel(ModelBase):
     model_type = ModelType.TEXT

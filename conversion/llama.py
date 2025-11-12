@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 import math
 from .base import (
-    ModelBase, TextModel, gguf, torch, logger, _mistral_common_installed, _mistral_import_error_msg, 
+    ModelBase, TextModel, gguf, torch, logger, _mistral_common_installed, _mistral_import_error_msg,
     get_community_chat_template, MistralTokenizerType, MistralVocab
 )
 from pathlib import Path
