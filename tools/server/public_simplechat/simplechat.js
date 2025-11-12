@@ -304,6 +304,16 @@ class ChatMessageEx {
     }
 
     /**
+     * Cross check if the got packet has error.
+     * @param {any} nwo
+     */
+    update_checkerror(nwo) {
+        if (nwo["error"]) {
+            throw new Error(`ChatMessageEx:UpdateCheckError:${nwo["error"]}`);
+        }
+    }
+
+    /**
      * Update based on the drip by drip data got from network in streaming mode.
      * Tries to support both Chat and Completion endpoints
      * @param {any} nwo
@@ -311,6 +321,7 @@ class ChatMessageEx {
      */
     update_stream(nwo, apiEP) {
         console.debug(nwo, apiEP)
+        this.update_checkerror(nwo)
         if (apiEP == ApiEP.Type.Chat) {
             if (nwo["choices"][0]["finish_reason"] === null) {
                 let content = nwo["choices"][0]["delta"]["content"];
@@ -363,6 +374,7 @@ class ChatMessageEx {
      * @param {string} apiEP
      */
     update_oneshot(nwo, apiEP) {
+        this.update_checkerror(nwo)
         if (apiEP == ApiEP.Type.Chat) {
             let curContent = nwo["choices"][0]["message"]["content"];
             if (curContent != undefined) {
@@ -853,19 +865,19 @@ class SimpleChat {
      */
     async handle_response(resp, apiEP, elDiv) {
         let theResp = null;
-        if (this.me.chatProps.stream) {
-            try {
+        try {
+            if (this.me.chatProps.stream) {
                 theResp = await this.handle_response_multipart(resp, apiEP, elDiv);
                 this.latestResponse.clear();
-            } catch (error) {
-                theResp = this.latestResponse;
-                theResp.ns.role = Roles.Assistant;
-                this.add(theResp);
-                this.latestResponse.clear();
-                throw error;
+            } else {
+                theResp = await this.handle_response_oneshot(resp, apiEP);
             }
-        } else {
-            theResp = await this.handle_response_oneshot(resp, apiEP);
+        } catch (error) {
+            theResp = this.latestResponse;
+            theResp.ns.role = Roles.Assistant;
+            this.add(theResp);
+            this.latestResponse.clear();
+            throw error;
         }
         if (this.me.chatProps.bTrimGarbage) {
             let origMsg = theResp.ns.getContent();
