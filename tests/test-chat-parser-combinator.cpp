@@ -4,6 +4,7 @@
 
 #include "nlohmann/json.hpp"
 
+#include "chat.h"
 #include "chat-parser.h"
 #include "chat-parser-combinator.h"
 #include "common.h"
@@ -178,71 +179,6 @@ static void test_partial_parsing() {
         ctx = parser_context("cd", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
-    }
-}
-
-static void test_capture_groups() {
-    {
-        auto parser = build_parser([](parser_builder& p) {
-            return p.literal("<think>") +
-                   p.group("reasoning_content",
-                       p.zero_or_more(~p.literal("</think>") + p.any())
-                   ) +
-                   p.literal("</think>");
-        });
-
-        std::string input = "<think>I have a thought</think>";
-        auto ctx = parser_context(input);
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_success());
-
-        auto it = result.groups.find("reasoning_content");
-        assert_equals(true, it != result.groups.end());
-        assert_equals("I have a thought", std::string(it->second.view(input)));
-    }
-    {
-        auto parser = build_parser([](parser_builder& p) {
-            return p.literal("<think>") +
-                   p.group("reasoning_content",
-                       p.zero_or_more(~p.literal("</think>") + p.any())
-                   ) +
-                   p.literal("</think>");
-        });
-
-        std::string input = "<think>I have a ";
-        auto ctx = parser_context(input, false);
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_success());
-
-        auto it = result.groups.find("reasoning_content");
-        assert_equals(true, it != result.groups.end());
-        assert_equals("I have a ", std::string(it->second.view(input)));
-    }
-    {
-        auto parser = build_parser([](parser_builder& p) {
-            return p.literal("<think>") +
-                   p.group("reasoning_content",
-                       p.zero_or_more(~p.literal("</think>") + p.any())
-                   ) +
-                   p.literal("</think>") +
-                   p.group("content", p.zero_or_more(p.any()));
-        });
-
-        std::string input = "<think>The user said hello.</think>Hello!";
-        auto ctx = parser_context(input, true);
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_success());
-
-        auto it = result.groups.find("reasoning_content");
-        assert_equals(true, it != result.groups.end());
-        assert_equals("The user said hello.", std::string(it->second.view(input)));
-
-        it = result.groups.find("content");
-        assert_equals(true, it != result.groups.end());
-        assert_equals("Hello!", std::string(it->second.view(input)));
     }
 }
 
@@ -446,85 +382,136 @@ static void test_complete_example() {
     //   </tool_call>
     //
     auto parser = build_parser([](parser_builder & p) {
+        auto handle_reasoning = [](const parser_result &, std::string_view match, parser_environment & env) {
+            env.reasoning_content += match;
+        };
+
+        auto handle_content = [](const parser_result &, std::string_view match, parser_environment & env) {
+            env.content += match;
+        };
+
+        auto handle_tool_call_name = [](const parser_result &, std::string_view match, parser_environment & env) {
+            env.scratchpad["tool_name"] = std::string(match);
+        };
+
+        auto handle_tool_call_args = [](const parser_result &, std::string_view match, parser_environment & env) {
+            env.scratchpad["tool_args"] = std::string(match);
+        };
+
+        auto handle_tool_call = [](const parser_result &, std::string_view, parser_environment & env) {
+            auto name = env.scratchpad.find("tool_name");
+            auto args = env.scratchpad.find("tool_args");
+            if (name != env.scratchpad.end() && args != env.scratchpad.end()) {
+                auto tool_call = common_chat_tool_call{
+                    std::get<std::string>(name->second),
+                    std::get<std::string>(args->second),
+                    std::string()
+                };
+
+                env.tool_calls.push_back(tool_call);
+            }
+        };
+
         auto reasoning = p.add_rule("reasoning",
-            "<think>" << p.group("reasoning-content", p.until("</think>")) << "</think>");
+            "<think>" << p.action(p.until("</think>"), handle_reasoning) << "</think>");
 
         auto content = p.add_rule("content",
-            p.group("content", p.until("<tool_call>")));
+            p.action(p.until("<tool_call>"), handle_content));
 
         auto json = p.json();
 
         auto tool_call_name = p.add_rule("tool-call-name",
-            "<name>" << p.group("tool-name", p.until("</name>")) << "</name>");
+            "<name>" << p.action(p.until("</name>"), handle_tool_call_name) << "</name>");
 
         auto schema = nlohmann::ordered_json::parse(R"({"type": "object"})");
 
         auto tool_call_args = p.add_rule("tool-call-args",
-            "<args>" << p.group("tool-args", p.schema(json, "get_weather", schema)) << "</args>");
+            "<args>" << p.action(p.schema(json, "get_weather", schema), handle_tool_call_args) << "</args>");
 
         auto tool_call = p.add_rule("tool-call",
-            "<tool_call>" << tool_call_name << tool_call_args << "</tool_call>");
+            "<tool_call>" << p.action(tool_call_name << tool_call_args, handle_tool_call) << "</tool_call>");
 
         return reasoning << p.optional(content) << p.optional(tool_call);
     });
 
     // Test complete input
-    std::string input = R"(<think>I need to call get_weather with city = New York</think><tool_call><name>get_weather</name><args>{"city": "New York"}</args></tool_call>)";
-    parser_context ctx(input);
+    {
+        std::string input = R"(<think>I need to call get_weather with city = New York</think><tool_call><name>get_weather</name><args>{"city": "New York"}</args></tool_call>)";
+        parser_environment env;
+        parser_context ctx(input, &env);
 
-    auto result = parser.parse(ctx);
+        auto result = parser.parse(ctx);
 
-    assert_equals(true, result.is_success());
-    assert_equals(input.size(), result.end);
-    assert_equals(std::string("I need to call get_weather with city = New York"), *result.group("reasoning-content", ctx.input));
-    assert_equals(std::string("get_weather"), *result.group("tool-name", ctx.input));
-    assert_equals(std::string(R"({"city": "New York"})"), *result.group("tool-args", ctx.input));
+        assert_equals(true, result.is_success());
+        assert_equals(input.size(), result.end);
+        assert_equals("I need to call get_weather with city = New York", env.reasoning_content);
+        assert_equals((size_t)1, env.tool_calls.size());
+        assert_equals("", env.tool_calls[0].id);
+        assert_equals("get_weather", env.tool_calls[0].name);
+        assert_equals(R"({"city": "New York"})", env.tool_calls[0].arguments);
+    }
 
     // Test partial input
-    input = R"(<think>I need to call get_weather )";
-    ctx = parser_context(input, /* .is_input_complete = */ false);
-    result = parser.parse(ctx);
+    {
+        std::string input = R"(<think>I need to call get_weather )";
+        parser_environment env = parser_environment();
+        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
 
-    assert_equals(true, result.is_success());
-    assert_equals(std::string("I need to call get_weather"), *result.group("reasoning-content", ctx.input));
+        auto result = parser.parse(ctx);
 
-    input = R"(<think>I need to call </thi get_weather</th)";
-    ctx = parser_context(input, /* .is_input_complete = */ false);
-    result = parser.parse(ctx);
+        assert_equals(true, result.is_success());
+        assert_equals("I need to call get_weather", env.reasoning_content);
+    }
+    {
+        std::string input = R"(<think>I need to call </thi get_weather</th)";
+        parser_environment env = parser_environment();
+        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
 
-    assert_equals(true, result.is_need_more_input());
-    assert_equals(std::string("I need to call </thi get_weather"), *result.group("reasoning-content", ctx.input));
+        auto result = parser.parse(ctx);
 
-    input = R"(<think>I need to call get_weather</th)";
-    ctx = parser_context(input, /* .is_input_complete = */ false);
-    result = parser.parse(ctx);
+        assert_equals(true, result.is_need_more_input());
+    }
+    {
+        std::string input = R"(<think>I need to call get_weather</th)";
+        parser_environment env = parser_environment();
+        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
 
-    assert_equals(true, result.is_need_more_input());
-    assert_equals(std::string("I need to call get_weather"), *result.group("reasoning-content", ctx.input));
+        auto result = parser.parse(ctx);
 
-    input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather)";
-    ctx = parser_context(input, /* .is_input_complete = */ false);
-    result = parser.parse(ctx);
+        assert_equals(true, result.is_need_more_input());
+    }
+    {
+        std::string input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather)";
+        parser_environment env = parser_environment();
+        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
 
-    assert_equals(true, result.is_success());
-    assert_equals(std::string("I need to call get_weather"), *result.group("reasoning-content", ctx.input));
+        auto result = parser.parse(ctx);
 
-    input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather</na)";
-    ctx = parser_context(input, /* .is_input_complete = */ false);
-    result = parser.parse(ctx);
+        assert_equals(true, result.is_success());
+        assert_equals("I need to call get_weather", env.reasoning_content);
+    }
+    {
+        std::string input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather</na)";
+        parser_environment env = parser_environment();
+        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
 
-    assert_equals(true, result.is_need_more_input());
-    assert_equals(std::string("I need to call get_weather"), *result.group("reasoning-content", ctx.input));
-    assert_equals(std::string("get_weather"), *result.group("tool-name", ctx.input));
+        auto result = parser.parse(ctx);
 
-    input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather</name><args>{"cit)";
-    ctx = parser_context(input, /* .is_input_complete = */ false);
-    result = parser.parse(ctx);
+        assert_equals(true, result.is_need_more_input());
+        assert_equals("I need to call get_weather", env.reasoning_content);
+    }
+    {
+        std::string input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather</name><args>{"cit)";
+        parser_environment env = parser_environment();
+        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
 
-    assert_equals(true, result.is_success());
-    assert_equals(std::string("I need to call get_weather"), *result.group("reasoning-content", ctx.input));
-    assert_equals(std::string("get_weather"), *result.group("tool-name", ctx.input));
-    assert_equals(std::string(R"({"cit)"), *result.group("tool-args", ctx.input));
+        auto result = parser.parse(ctx);
+
+        assert_equals(true, result.is_success());
+        assert_equals("I need to call get_weather", env.reasoning_content);
+        assert_equals("get_weather", std::get<std::string>(env.scratchpad["tool_name"]));
+        assert_equals(R"({"cit)", std::get<std::string>(env.scratchpad["tool_args"]));
+    }
 
     auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
         parser.build_grammar(builder);
@@ -742,18 +729,6 @@ static void test_gbnf_generation() {
 
         // Should generate pattern that prevents matching the full delimiter
         assert_equals(true, gbnf.find("root ::= ([^<] | \"<\" [^/] | \"</\" [^t] | \"</t\" [^a] | \"</ta\" [^g] | \"</tag\" [^>])*") != std::string::npos);
-    }
-    {
-        // Test groups are transparent
-        auto parser = build_parser([](parser_builder& p) {
-            return p.group("test", p.literal("hello"));
-        });
-
-        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder);
-        });
-
-        assert_equals(true, gbnf.find("root ::= \"hello\"") != std::string::npos);
     }
     {
         // Test complex expression with parentheses
@@ -994,7 +969,6 @@ static void benchmark_compare(
 int main() {
     test_partial_parsing();
     test_one();
-    test_capture_groups();
     test_recursive_references();
     test_optional();
     test_json_parser();

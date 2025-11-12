@@ -16,7 +16,7 @@ struct common_grammar_builder;
 
 struct parser_environment {
     std::string content;
-    std::string reasoning;
+    std::string reasoning_content;
     std::vector<common_chat_tool_call> tool_calls;
     std::unordered_map<std::string, std::variant<int, double, std::string>> scratchpad;
 };
@@ -43,23 +43,10 @@ struct std::hash<parse_cache_key> {
     }
 };
 
-struct parser_match_location {
-    size_t start;
-    size_t end;
-
-    size_t length() const { return end - start; }
-
-    std::string_view view(std::string_view sv) const {
-        return sv.substr(start, length());
-    }
-};
-
 struct parser_result {
     parser_result_type type = PARSER_RESULT_FAIL;
     size_t start = 0;
     size_t end = 0;
-
-    std::unordered_map<std::string, parser_match_location> groups;
 
     parser_result() : type(PARSER_RESULT_FAIL) {}
 
@@ -69,14 +56,9 @@ struct parser_result {
     parser_result(parser_result_type type, size_t start, size_t end)
         : type(type), start(start), end(end) {}
 
-    parser_result(parser_result_type type, size_t start, size_t end, const std::unordered_map<std::string, parser_match_location> & groups)
-        : type(type), start(start), end(end), groups(groups) {}
-
     bool is_fail() const { return type == PARSER_RESULT_FAIL; }
     bool is_need_more_input() const { return type == PARSER_RESULT_NEED_MORE_INPUT; }
     bool is_success() const { return type == PARSER_RESULT_SUCCESS; }
-
-    std::optional<std::string> group(const std::string & name, std::string_view input) const;
 };
 
 class parse_cache {
@@ -215,10 +197,6 @@ class parser_builder {
     // Equivalent to chars(classes, 1, 1)
     parser one(const std::string & classes);
 
-    // Captures the matched text from a parser and stores it with a name.
-    //   S -> <name:A>
-    parser group(const std::string & name, const parser & p);
-
     // References a named rule for recursive or reusable grammar definitions.
     //   expr -> term | expr "+" term
     parser rule(const std::string & name);
@@ -246,7 +224,6 @@ class parser_builder {
 
     // Specialized single-pass JSON string parser with escape sequence handling
     parser json_string();
-    parser json_string(const std::string & name);
 
     parser json_key(const std::string & name, const parser & p);
     parser json_string(const parser & p);

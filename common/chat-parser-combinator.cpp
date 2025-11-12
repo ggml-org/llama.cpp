@@ -19,14 +19,13 @@ enum parser_type {
     PARSER_NOT = 7,
     PARSER_ANY = 8,
     PARSER_CHARS = 9,
-    PARSER_GROUP = 10,
-    PARSER_RULE = 11,
-    PARSER_UNTIL = 12,
-    PARSER_SPACE = 13,
-    PARSER_SCHEMA = 14,
-    PARSER_ROOT = 15,
-    PARSER_JSON_STRING = 16,
-    PARSER_ACTION = 17,
+    PARSER_RULE = 10,
+    PARSER_UNTIL = 11,
+    PARSER_SPACE = 12,
+    PARSER_SCHEMA = 13,
+    PARSER_ROOT = 14,
+    PARSER_JSON_STRING = 15,
+    PARSER_ACTION = 16,
 };
 
 class parser_visitor;
@@ -79,6 +78,10 @@ class parser_base {
 // crashes for non-printable characters in Debug builds.
 static bool is_space(const char c) {
     return (c == ' ' || c == '\t' || c == '\n');
+}
+
+static bool is_hex_digit(const char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
 // Matches an exact literal string.
@@ -144,31 +147,26 @@ class sequence_parser : public parser_base {
     parser_type type() const override { return PARSER_SEQUENCE; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
-        std::unordered_map<std::string, parser_match_location> groups;
-
         auto pos = start;
         for (const auto & p : parsers_) {
             auto result = p->parse(ctx, pos);
 
-            // Copy groups
-            groups.insert(result.groups.begin(), result.groups.end());
-
             if (result.is_fail()) {
                 if (result.end >= ctx.input.size() && !ctx.input_is_complete) {
                     // If we fail because we don't have enough input, then return success
-                    return parser_result(PARSER_RESULT_SUCCESS, start, result.end, groups);
+                    return parser_result(PARSER_RESULT_SUCCESS, start, result.end);
                 }
-                return parser_result(PARSER_RESULT_FAIL, start, result.end, groups);
+                return parser_result(PARSER_RESULT_FAIL, start, result.end);
             }
 
             if (result.is_need_more_input()) {
-                return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, result.end, groups);
+                return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, result.end);
             }
 
             pos = result.end;
         }
 
-        return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
+        return parser_result(PARSER_RESULT_SUCCESS, start, pos);
     }
 
     void assign_id(std::shared_ptr<parser_id_counter> counter) override {
@@ -267,14 +265,12 @@ class repetition_parser : public parser_base {
     parser_type type() const override { return PARSER_REPETITION; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
-        std::unordered_map<std::string, parser_match_location> groups;
         auto pos = start;
         int match_count = 0;
 
         // Try to match up to max_count times (or unlimited if max_count is -1)
         while (max_count_ == -1 || match_count < max_count_) {
             auto result = parser_->parse(ctx, pos);
-            groups.insert(result.groups.begin(), result.groups.end());
 
             if (result.is_success()) {
                 // Prevent infinite loop on empty matches
@@ -287,7 +283,7 @@ class repetition_parser : public parser_base {
             }
 
             if (result.is_need_more_input()) {
-                return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos, groups);
+                return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos);
             }
 
             // Child failed - stop trying
@@ -296,10 +292,10 @@ class repetition_parser : public parser_base {
 
         // Check if we got enough matches
         if (match_count < min_count_) {
-            return parser_result(PARSER_RESULT_FAIL, start, pos, groups);
+            return parser_result(PARSER_RESULT_FAIL, start, pos);
         }
 
-        return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
+        return parser_result(PARSER_RESULT_SUCCESS, start, pos);
     }
 
     void assign_id(std::shared_ptr<parser_id_counter> counter) override {
@@ -595,20 +591,13 @@ class chars_parser : public parser_base {
 // Handles escape sequences and emits NEED_MORE_INPUT for incomplete input.
 //   S -> (regular chars and escape sequences)* until closing "
 class json_string_parser : public parser_base {
-    std::optional<std::string> capture_name_;
-
-    static bool is_hex_digit(char c) {
-        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-    }
 
   public:
-    json_string_parser(std::optional<std::string> capture_name, int id)
-        : parser_base(id), capture_name_(std::move(capture_name)) {}
+    json_string_parser(int id) : parser_base(id) {}
 
     parser_type type() const override { return PARSER_JSON_STRING; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
-        std::unordered_map<std::string, parser_match_location> groups;
         auto pos = start;
 
         // Parse string content (without quotes)
@@ -617,10 +606,7 @@ class json_string_parser : public parser_base {
 
             if (c == '"') {
                 // Found closing quote - success (don't consume it)
-                if (capture_name_) {
-                    groups[*capture_name_] = parser_match_location{start, pos};
-                }
-                return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
+                return parser_result(PARSER_RESULT_SUCCESS, start, pos);
             }
 
             if (c == '\\') {
@@ -681,48 +667,10 @@ class json_string_parser : public parser_base {
     }
 
     std::string dump() const override {
-        if (capture_name_) {
-            return "JsonString(" + *capture_name_ + ")";
-        }
         return "JsonString()";
     }
 
     void accept(parser_visitor & visitor) override;
-
-    const std::optional<std::string> & capture_name() const { return capture_name_; }
-};
-
-// Captures the matched text from a parser and stores it with a name.
-//   S -> <name:A>
-class group_parser : public parser_base {
-    std::string name_;
-    parser parser_;
-
-  public:
-    group_parser(const std::string & name, const parser & parser, int id) : parser_base(id), name_(name), parser_(parser) {}
-
-    parser_type type() const override { return PARSER_GROUP; }
-
-    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
-        auto result = parser_->parse(ctx, start);
-
-        // Store result
-        result.groups[name_] = parser_match_location{result.start, result.end};
-        return result;
-    }
-
-    void assign_id(std::shared_ptr<parser_id_counter> counter) override {
-        parser_base::assign_id(counter);
-        parser_->assign_id(counter);
-    }
-
-    std::string dump() const override {
-        return "Group(" + name_ + ", " + parser_->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const parser & child() const { return parser_; }
 };
 
 // Matches all characters until a delimiter is found (delimiter not consumed).
@@ -935,7 +883,6 @@ class parser_visitor {
     virtual void visit(space_parser & p) = 0;
     virtual void visit(chars_parser & p) = 0;
     virtual void visit(json_string_parser & p) = 0;
-    virtual void visit(group_parser & p) = 0;
     virtual void visit(schema_parser & p) = 0;
     virtual void visit(rule_parser & p) = 0;
     virtual void visit(root_parser & p) = 0;
@@ -1165,11 +1112,6 @@ class gbnf_visitor : public parser_visitor {
         current_result_ = R"(( [^"\\] | "\\" ( ["\\/ bfnrt] | "u" [0-9a-fA-F]{4} ) )*)";
     }
 
-    void visit(group_parser & p) override {
-        // Groups are transparent - just visit child
-        p.child()->accept(*this);
-    }
-
     void visit(schema_parser & p) override {
         current_result_ = builder_.add_schema(p.name(), p.schema());
     }
@@ -1221,20 +1163,10 @@ void any_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void space_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void chars_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void json_string_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void group_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void schema_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void rule_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void root_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void action_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-
-std::optional<std::string> parser_result::group(const std::string & name, std::string_view input) const {
-    auto it = groups.find(name);
-    if (it == groups.end()) {
-        return std::nullopt;
-    }
-
-    return std::string(it->second.view(input));
-}
 
 parser_result parse_cache::set(int id, size_t start, parser_result result) {
     if (id == -1) {
@@ -1364,15 +1296,7 @@ parser parser_builder::one(const std::string & classes) {
 }
 
 parser parser_builder::json_string() {
-    return parser(std::make_shared<json_string_parser>(std::nullopt, counter_->next()));
-}
-
-parser parser_builder::json_string(const std::string & name) {
-    return parser(std::make_shared<json_string_parser>(name, counter_->next()));
-}
-
-parser parser_builder::group(const std::string & name, const parser & p) {
-    return parser(std::make_shared<group_parser>(name, p, counter_->next()));
+    return parser(std::make_shared<json_string_parser>(counter_->next()));
 }
 
 parser parser_builder::rule(const std::string & name) {
