@@ -5110,6 +5110,7 @@ struct ggml_tensor * ggml_fill(
     ggml_set_op_params_f32(result, 0, c);
 
     result->op = GGML_OP_FILL;
+    result->src[0] = a;
 
     return result;
 }
