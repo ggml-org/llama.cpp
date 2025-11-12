@@ -904,7 +904,10 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
 
     // 3) Build -INF base and scatter 0's for selected rows
     // Keep shapes consistent: operate in 3D for set_rows, then reshape back.
-    ggml_tensor * neg2d  = ggml_scale_bias(ctx0, scores, 0.0f, -INFINITY); // [n_kv_calc, cols_calc]
+    // initialize tensor with -INF everywhere (safe replacement for ggml_scale_bias)
+    ggml_tensor * neg2d = ggml_scale(ctx0, scores, 0.0f);  // set all elements to 0
+    ggml_tensor * inf_tensor = ggml_new_f32(ctx0, -INFINITY);
+    neg2d = ggml_add1(ctx0, neg2d, inf_tensor);
     ggml_tensor * rows3d = ggml_reshape_3d(ctx0, neg2d, /*ne0*/ scores->ne[0],
                                         /*ne1*/ 1,
                                         /*ne2*/ scores->ne[1]);         // [n_kv,1,cols]
