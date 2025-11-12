@@ -49,6 +49,7 @@ layout (push_constant) uniform parameter
     uint batch_stride_d;
 
     uint enable_bias;
+    uint enable_scale;
 
 #ifdef MUL_MAT_ID
     uint nei0;
@@ -129,6 +130,12 @@ void reduce_result(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t 
                     temp[j][n] += FLOAT_TYPE(data_bias[j*p.batch_stride_d + d_offset + first_row + n]);
 #endif
                 }
+#ifdef MUL_MAT_ID
+                if (p.enable_scale != 0) {
+                    const uint expert_idx = gl_GlobalInvocationID.y;
+                    temp[j][n] *= FLOAT_TYPE(data_bias[expert_idx]);
+                }
+#endif
                 data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(temp[j][n]);
             }
         }
@@ -171,6 +178,12 @@ void reduce_result(FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offs
                     temp[j][n] += FLOAT_TYPE(data_bias[j*p.batch_stride_d + d_offset + first_row + n]);
 #endif
                 }
+#ifdef MUL_MAT_ID
+                if (p.enable_scale != 0) {
+                    const uint expert_idx = gl_GlobalInvocationID.y;
+                    temp[j][n] *= FLOAT_TYPE(data_bias[expert_idx]);
+                }
+#endif
                 data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(temp[j][n]);
             }
         }
@@ -203,6 +216,12 @@ void reduce_result(FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offs
                     tmpsh[j][n][0] += FLOAT_TYPE(data_bias[j*p.batch_stride_d + d_offset + first_row + n]);
 #endif
                 }
+#ifdef MUL_MAT_ID
+                if (p.enable_scale != 0) {
+                    const uint expert_idx = gl_GlobalInvocationID.y;
+                    tmpsh[j][n][0] *= FLOAT_TYPE(data_bias[expert_idx]);
+                }
+#endif
                 data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(tmpsh[j][n][0]);
             }
         }

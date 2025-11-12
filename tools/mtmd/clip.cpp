@@ -160,13 +160,13 @@ enum patch_merge_type {
 };
 
 struct clip_hparams {
-    int32_t image_size;
-    int32_t patch_size;
-    int32_t n_embd;
-    int32_t n_ff;
-    int32_t projection_dim;
-    int32_t n_head;
-    int32_t n_layer;
+    int32_t image_size = 0;
+    int32_t patch_size = 0;
+    int32_t n_embd = 0;
+    int32_t n_ff = 0;
+    int32_t projection_dim = 0;
+    int32_t n_head = 0;
+    int32_t n_layer = 0;
     // idefics3
     int32_t image_longest_edge = 0;
     int32_t image_min_pixels = -1;
@@ -1083,16 +1083,24 @@ struct clip_graph {
     }
 
     ggml_cgraph * build_minicpmv() {
-        const int batch_size = 1;
-
         GGML_ASSERT(model.class_embedding == nullptr);
-        const int n_pos = n_patches;
+        const int n_pos       = n_patches;
+        const int n_embd_proj = clip_n_mmproj_embd(ctx);
 
         // position embeddings for the projector (not for ViT)
-        int n_output_dim = clip_n_mmproj_embd(ctx);
-        ggml_tensor * pos_embed = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_output_dim, n_pos, batch_size);
-        ggml_set_name(pos_embed, "pos_embed");
-        ggml_set_input(pos_embed);
+        // see: https://huggingface.co/openbmb/MiniCPM-o-2_6/blob/main/resampler.py#L70
+        // base frequency omega
+        ggml_tensor * omega = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_embd_proj / 4);
+        ggml_set_name(omega, "omega");
+        ggml_set_input(omega);
+
+        // 2D input positions (using float for sinusoidal embeddings)
+        ggml_tensor * pos_h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_pos);
+        ggml_set_name(pos_h, "pos_h");
+        ggml_set_input(pos_h);
+        ggml_tensor * pos_w = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_pos);
+        ggml_set_name(pos_w, "pos_w");
+        ggml_set_input(pos_w);
 
         // for selecting learned pos embd, used by ViT
         struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
@@ -1103,7 +1111,7 @@ struct clip_graph {
 
         ggml_tensor * inp = build_inp();
         ggml_tensor * embeddings = build_vit(
-                                inp, n_patches,
+                                inp, n_pos,
                                 NORM_TYPE_NORMAL,
                                 hparams.ffn_op,
                                 learned_pos_embd,
@@ -1115,17 +1123,39 @@ struct clip_graph {
         ggml_tensor * v = ggml_mul_mat(ctx0, model.mm_model_kv_proj, embeddings);
 
         // norm
-        q = build_norm(q, model.mm_model_ln_q_w, model.mm_model_ln_q_b, NORM_TYPE_NORMAL, eps, -1);
+        q = build_norm(q, model.mm_model_ln_q_w,  model.mm_model_ln_q_b,  NORM_TYPE_NORMAL, eps, -1);
         v = build_norm(v, model.mm_model_ln_kv_w, model.mm_model_ln_kv_b, NORM_TYPE_NORMAL, eps, -1);
+
+        // calculate sinusoidal pos embd
+        ggml_tensor * pos_embed = nullptr;
+        {
+            // outer product
+            ggml_tensor * omega_b = ggml_repeat_4d(ctx0, omega, omega->ne[0], n_pos, 1, 1); // n_pos rows
+            ggml_tensor * theta_x = ggml_mul(ctx0, omega_b, pos_w);
+            ggml_tensor * theta_y = ggml_mul(ctx0, omega_b, pos_h);
+            // sin and cos
+            ggml_tensor * pos_embd_x = ggml_concat(
+                ctx0,
+                ggml_sin(ctx0, theta_x),
+                ggml_cos(ctx0, theta_x),
+                0 // concat on first dim
+            );
+            ggml_tensor * pos_embd_y = ggml_concat(
+                ctx0,
+                ggml_sin(ctx0, theta_y),
+                ggml_cos(ctx0, theta_y),
+                0 // concat on first dim
+            );
+            pos_embed = ggml_concat(ctx0, pos_embd_x, pos_embd_y, 0);
+        }
 
         // k = v + pos_embed
         ggml_tensor * k = ggml_add(ctx0, v, pos_embed);
 
         // attention
         {
-            int n_embd = clip_n_mmproj_embd(ctx);
             const int d_head = 128;
-            int n_head = n_embd/d_head;
+            int n_head = n_embd_proj/d_head;
             // Use actual config value if available, otherwise fall back to hardcoded values
             int num_query = ctx->model.hparams.minicpmv_query_num;
             ggml_tensor * Q = ggml_add(ctx0,
@@ -2653,6 +2683,9 @@ struct clip_model_loader {
                 }
             } else if (is_audio) {
                 get_u32(KEY_A_NUM_MEL_BINS, hparams.n_mel_bins);
+                // some hparams are unused, but still need to set to avoid issues
+                hparams.image_size = 0;
+                hparams.patch_size = 1;
 
             } else {
                 GGML_ASSERT(false && "unknown modality");
@@ -4564,92 +4597,6 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
     return n_patches;
 }
 
-static std::vector<std::vector<std::vector<float>>> get_1d_sincos_pos_embed_from_grid_new(int embed_dim, const std::vector<std::vector<float>> & pos) {
-    assert(embed_dim % 2 == 0);
-    int H = pos.size();
-    int W = pos[0].size();
-
-    std::vector<float> omega(embed_dim / 2);
-    for (int i = 0; i < embed_dim / 2; ++i) {
-        omega[i] = 1.0 / pow(10000.0, static_cast<float>(i) / (embed_dim / 2));
-    }
-
-    std::vector<std::vector<std::vector<float>>> emb(H, std::vector<std::vector<float>>(W, std::vector<float>(embed_dim)));
-    for (int h = 0; h < H; ++h) {
-        for (int w = 0; w < W; ++w) {
-            for (int d = 0; d < embed_dim / 2; ++d) {
-                float out_value = pos[h][w] * omega[d];
-                emb[h][w][d] = sin(out_value);
-                emb[h][w][d + embed_dim / 2] = cos(out_value);
-            }
-        }
-    }
-
-    return emb;
-}
-
-static std::vector<std::vector<std::vector<float>>> get_2d_sincos_pos_embed_from_grid(int embed_dim, const std::vector<std::vector<std::vector<float>>> & grid) {
-    assert(embed_dim % 2 == 0);
-    std::vector<std::vector<std::vector<float>>> emb_h = get_1d_sincos_pos_embed_from_grid_new(embed_dim / 2, grid[0]); // (H, W, D/2)
-    std::vector<std::vector<std::vector<float>>> emb_w = get_1d_sincos_pos_embed_from_grid_new(embed_dim / 2, grid[1]); // (H, W, D/2)
-
-    int H = emb_h.size();
-    int W = emb_h[0].size();
-    std::vector<std::vector<std::vector<float>>> emb(H, std::vector<std::vector<float>>(W, std::vector<float>(embed_dim)));
-
-    for (int h = 0; h < H; ++h) {
-        for (int w = 0; w < W; ++w) {
-            for (int d = 0; d < embed_dim / 2; ++d) {
-                emb[h][w][d] = emb_h[h][w][d];
-                emb[h][w][d + embed_dim / 2] = emb_w[h][w][d];
-            }
-        }
-    }
-    return emb;
-}
-
-static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, const std::pair<int, int> image_size) {
-    int grid_h_size = image_size.first;
-    int grid_w_size = image_size.second;
-
-    std::vector<float> grid_h(grid_h_size);
-    std::vector<float> grid_w(grid_w_size);
-
-    for (int i = 0; i < grid_h_size; ++i) {
-        grid_h[i] = static_cast<float>(i);
-    }
-    for (int i = 0; i < grid_w_size; ++i) {
-        grid_w[i] = static_cast<float>(i);
-    }
-
-    std::vector<std::vector<float>> grid(grid_h_size, std::vector<float>(grid_w_size));
-    for (int h = 0; h < grid_h_size; ++h) {
-        for (int w = 0; w < grid_w_size; ++w) {
-            grid[h][w] = grid_w[w];
-        }
-    }
-    std::vector<std::vector<std::vector<float>>> grid_2d = {grid, grid};
-    for (int h = 0; h < grid_h_size; ++h) {
-        for (int w = 0; w < grid_w_size; ++w) {
-            grid_2d[0][h][w] = grid_h[h];
-            grid_2d[1][h][w] = grid_w[w];
-        }
-    }
-
-    std::vector<std::vector<std::vector<float>>> pos_embed_3d = get_2d_sincos_pos_embed_from_grid(embed_dim, grid_2d);
-
-    int H = image_size.first;
-    int W = image_size.second;
-    std::vector<std::vector<float>> pos_embed_2d(H * W, std::vector<float>(embed_dim));
-    for (int h = 0; h < H; ++h) {
-        for (int w = 0; w < W; ++w) {
-            pos_embed_2d[w * H + h] = pos_embed_3d[h][w];
-        }
-    }
-
-    return pos_embed_2d;
-}
-
 bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f32 * img, float * vec) {
     clip_image_f32_batch imgs;
     clip_image_f32_ptr img_copy(clip_image_f32_init());
@@ -4788,22 +4735,28 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_i32("positions", positions);
 
-                // inspired from resampler of Qwen-VL:
-                //    -> https://huggingface.co/Qwen/Qwen-VL/tree/main
-                //    -> https://huggingface.co/Qwen/Qwen-VL/blob/0547ed36a86561e2e42fecec8fd0c4f6953e33c4/visual.py#L23
-                int embed_dim = clip_n_mmproj_embd(ctx);
-
-                // TODO @ngxson : this is very inefficient, can we do this using ggml_sin and ggml_cos?
-                auto pos_embed_t = get_2d_sincos_pos_embed(embed_dim, std::make_pair(pos_w, pos_h));
-
-                std::vector<float> pos_embed(embed_dim * pos_w * pos_h);
-                for(int i = 0; i < pos_w * pos_h; ++i){
-                    for(int j = 0; j < embed_dim; ++j){
-                        pos_embed[i * embed_dim + j] = pos_embed_t[i][j];
-                    }
+                // inputs for resampler projector
+                // set the 2D positions (using float for sinusoidal embedding)
+                int n_patches_per_col = image_size_width / patch_size;
+                std::vector<float> pos_data(n_pos);
+                // dimension H
+                for (int i = 0; i < n_pos; i++) {
+                    pos_data[i] = static_cast<float>(i / n_patches_per_col);
                 }
-
-                set_input_f32("pos_embed", pos_embed);
+                set_input_f32("pos_h", pos_data);
+                // dimension W
+                for (int i = 0; i < n_pos; i++) {
+                    pos_data[i] = static_cast<float>(i % n_patches_per_col);
+                }
+                set_input_f32("pos_w", pos_data);
+                // base frequency omega
+                const float base_freq   = 10000.0f;
+                const int   n_embd_proj = clip_n_mmproj_embd(ctx);
+                std::vector<float> omega(n_embd_proj / 4);
+                for (int i = 0; i < n_embd_proj / 4; ++i) {
+                    omega[i] = 1.0f / std::pow(base_freq, static_cast<float>(i) / (n_embd_proj / 4));
+                }
+                set_input_f32("omega", omega);
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:

@@ -51,10 +51,6 @@ void ggml_compute_forward_scale(const struct ggml_compute_params * params, struc
 void ggml_compute_forward_set(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_cpy(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_cont(const struct ggml_compute_params * params, struct ggml_tensor * dst);
-void ggml_compute_forward_reshape(const struct ggml_compute_params * params, struct ggml_tensor * dst);
-void ggml_compute_forward_view(const struct ggml_compute_params * params, struct ggml_tensor * dst);
-void ggml_compute_forward_permute(const struct ggml_compute_params * params, struct ggml_tensor * dst);
-void ggml_compute_forward_transpose(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_get_rows(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_get_rows_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_set_rows(const struct ggml_compute_params * params, struct ggml_tensor * dst);

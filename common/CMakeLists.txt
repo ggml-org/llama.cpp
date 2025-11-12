@@ -56,6 +56,8 @@ add_library(${TARGET} STATIC
     common.h
     console.cpp
     console.h
+    download.cpp
+    download.h
     http.h
     json-partial.cpp
     json-partial.h
@@ -77,10 +79,11 @@ if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
+# TODO: use list(APPEND LLAMA_COMMON_EXTRA_LIBS ...)
 set(LLAMA_COMMON_EXTRA_LIBS build_info)
 
-# Use curl to download model url
 if (LLAMA_CURL)
+    # Use curl to download model url
     find_package(CURL)
     if (NOT CURL_FOUND)
         message(FATAL_ERROR "Could NOT find CURL. Hint: to disable this feature, set -DLLAMA_CURL=OFF")
@@ -88,6 +91,9 @@ if (LLAMA_CURL)
     target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_CURL)
     include_directories(${CURL_INCLUDE_DIRS})
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
+else()
+    # otherwise, use cpp-httplib
+    set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} cpp-httplib)
 endif()
 
 if (LLAMA_OPENSSL)

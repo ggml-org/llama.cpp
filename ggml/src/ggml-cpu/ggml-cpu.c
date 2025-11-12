@@ -1807,22 +1807,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_cont(params, tensor);
             } break;
-        case GGML_OP_RESHAPE:
-            {
-                ggml_compute_forward_reshape(params, tensor);
-            } break;
-        case GGML_OP_VIEW:
-            {
-                ggml_compute_forward_view(params, tensor);
-            } break;
-        case GGML_OP_PERMUTE:
-            {
-                ggml_compute_forward_permute(params, tensor);
-            } break;
-        case GGML_OP_TRANSPOSE:
-            {
-                ggml_compute_forward_transpose(params, tensor);
-            } break;
         case GGML_OP_GET_ROWS:
             {
                 ggml_compute_forward_get_rows(params, tensor);
@@ -2039,6 +2023,22 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             }
             break;
         case GGML_OP_NONE:
+            {
+                // nop
+            } break;
+        case GGML_OP_RESHAPE:
+            {
+                // nop
+            } break;
+        case GGML_OP_PERMUTE:
+            {
+                // nop
+            } break;
+        case GGML_OP_VIEW:
+            {
+                // nop
+            } break;
+        case GGML_OP_TRANSPOSE:
             {
                 // nop
             } break;
@@ -2884,6 +2884,11 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
+        if (ggml_op_is_empty(node->op)) {
+            // skip NOPs
+            continue;
+        }
+
         ggml_compute_forward(&params, node);
 
         if (state->ith == 0 && cplan->abort_callback &&
@@ -3268,6 +3273,13 @@ void ggml_cpu_fp16_to_fp32(const ggml_fp16_t * x, float * y, int64_t n) {
         __m128i x_vec = _mm_loadl_epi64((const __m128i *)(x + i));
         __m128 y_vec = _mm_cvtph_ps(x_vec);
         _mm_storeu_ps(y + i, y_vec);
+    }
+#elif defined(__riscv_zvfh)
+    for (int vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e16m1(n - i);
+        vfloat16m1_t vx = __riscv_vle16_v_f16m1((_Float16 *)&x[i], vl);
+        vfloat32m2_t vy = __riscv_vfwcvt_f_f_v_f32m2(vx, vl);
+        __riscv_vse32_v_f32m2(&y[i], vy, vl);
     }
 #endif
 
