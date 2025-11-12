@@ -6030,9 +6030,10 @@ struct test_solve_tri : public test_case {
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "a") == 0) {
+                // note: avoid zeros in the diagonal
                 init_tensor_tril(t, 0.1, 1.0f);
             } else {
-                init_tensor_uniform(t, 0.1, 1.0f);
+                init_tensor_uniform(t, -1.0f, 1.0f);
             }
         }
     }
