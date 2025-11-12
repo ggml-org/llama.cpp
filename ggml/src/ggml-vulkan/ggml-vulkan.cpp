@@ -8130,8 +8130,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_LOG:
-        if ((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
-            (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16)) {
+        if (src0->type == dst->type &&
+            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
             return ctx->device->pipeline_log[dst->type == GGML_TYPE_F16];
         }
         return nullptr;
