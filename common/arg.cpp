@@ -1509,83 +1509,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--gpu-top-k"}, "N",
-        string_format("GPU top-k sampling (default: %d, <= 0 = disabled)", params.sampling.gpu_top_k),
-        [](common_params & params, int value) {
-            params.sampling.gpu_top_k = value;
-        }
-    ).set_sparam());
-    add_opt(common_arg(
-        {"--gpu-temp"}, "N",
-        string_format("GPU temperature (default: %.2f, 0.0 = disabled, greedy sampling)", (double)params.sampling.gpu_temp),
-        [](common_params & params, const std::string & value) {
-            params.sampling.gpu_temp = std::stof(value);
-            params.sampling.gpu_temp = std::max(params.sampling.gpu_temp, 0.0f);
-        }
-    ).set_sparam());
-    add_opt(common_arg(
         {"--gpu-dist"},
-        "add GPU dist (final sampling) to sampling chain (default: disabled)",
+        "perform final sampling on GPU (default: disabled)",
         [](common_params & params) {
             params.sampling.gpu_dist = true;
+            params.sampling.gpu_sampling = true;
         }
     ).set_sparam());
-    add_opt(common_arg(
-        // TODO: need to get feedback on how to best configure per slot GPU samplers
-        {"--gpu-slot"}, "SLOT_ID:CONFIG",
-        "configure GPU sampling for a specific slot\n"
-        "format: SLOT_ID:top-k=N,temp=F,dist=BOOL or SLOT_ID:none to disable GPU sampling\n"
-        "example: --gpu-slot 0:top-k=20,temp=0.8,dist=true --gpu-slot 1:none",
-        [](common_params & params, const std::string & value) {
-            auto colon_pos = value.find(':');
-            if (colon_pos == std::string::npos) {
-                throw std::invalid_argument("--gpu-slot format must be SLOT_ID:CONFIG");
-            }
-
-            int32_t slot_id = std::stoi(value.substr(0, colon_pos));
-            std::string config_str = value.substr(colon_pos + 1);
-
-            if (config_str == "none") {
-                common_params_sampling slot_config = params.sampling;
-                slot_config.gpu_sampling = false;
-                params.sampling.gpu_slot_configs[slot_id] = slot_config;
-                return;
-            }
-
-            common_params_sampling slot_config;
-            auto it = params.sampling.gpu_slot_configs.find(slot_id);
-            if (it != params.sampling.gpu_slot_configs.end()) {
-                slot_config = it->second;
-            } else {
-                slot_config = params.sampling;
-            }
-
-            size_t pos = 0;
-            while (pos < config_str.size()) {
-                size_t eq_pos = config_str.find('=', pos);
-                if (eq_pos == std::string::npos) break;
-
-                size_t comma_pos = config_str.find(',', eq_pos);
-                if (comma_pos == std::string::npos) {
-                    comma_pos = config_str.size();
-                }
-                std::string key = config_str.substr(pos, eq_pos - pos);
-                std::string val = config_str.substr(eq_pos + 1, comma_pos - eq_pos - 1);
-
-                if (key == "top-k") {
-                    slot_config.gpu_top_k = std::stoi(val);
-                } else if (key == "temp") {
-                    slot_config.gpu_temp = std::stof(val);
-                } else if (key == "dist") {
-                    slot_config.gpu_dist = (val == "true" || val == "1");
-                } else {
-                    throw std::invalid_argument("Unknown GPU sampling parameter: " + key);
-                }
-                pos = comma_pos + 1;
-            }
-            params.sampling.gpu_slot_configs[slot_id] = slot_config;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_sparam());
     add_opt(common_arg(
         {"--pooling"}, "{none,mean,cls,last,rank}",
         "pooling type for embeddings, use model default if unspecified",

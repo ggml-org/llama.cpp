@@ -164,6 +164,10 @@ struct common_sampler {
     }
 };
 
+static bool sampler_enabled(const struct common_params_sampling & params, enum common_sampler_type type) {
+    return std::find(params.samplers.begin(), params.samplers.end(), type) != params.samplers.end();
+}
+
 std::string common_params_sampling::print() const {
     char result[1024];
 
@@ -333,15 +337,19 @@ struct llama_sampler * common_sampler_gpu_init(const struct llama_model * model,
         return chain; // return empty chain
     }
 
-    if (params.gpu_temp > 0.0f) {
-        llama_sampler_chain_add(chain, llama_sampler_gpu_init_temp(params.gpu_temp));
+    const bool enable_temp  = params.temp  > 0.0f && sampler_enabled(params, COMMON_SAMPLER_TYPE_TEMPERATURE);
+    const bool enable_top_k = params.top_k > 0    && sampler_enabled(params, COMMON_SAMPLER_TYPE_TOP_K);
+    const bool enable_dist  = params.gpu_dist;
+
+    if (enable_temp) {
+        llama_sampler_chain_add(chain, llama_sampler_gpu_init_temp(params.temp));
     }
 
-    if (params.gpu_top_k > 0) {
-        llama_sampler_chain_add(chain, llama_sampler_gpu_init_top_k(params.gpu_top_k));
+    if (enable_top_k) {
+        llama_sampler_chain_add(chain, llama_sampler_gpu_init_top_k(params.top_k));
     }
 
-    if (params.gpu_dist) {
+    if (enable_dist) {
         llama_sampler_chain_add(chain, llama_sampler_gpu_init_dist(params.seed));
     }
 
@@ -402,6 +410,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     // return that token id directly.
     const llama_token gpu_sampled_token  = llama_get_sampled_token_ith(ctx, idx);
     if (gpu_sampled_token != LLAMA_TOKEN_NULL) {
+        LOG_INF("%s: GPU sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, gpu_sampled_token);
         return gpu_sampled_token;
     }
 
