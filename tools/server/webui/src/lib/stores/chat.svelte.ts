@@ -1457,6 +1457,10 @@ class ChatStore {
 					timestamp: Date.now()
 				});
 
+				// Ensure currNode points to the edited message to maintain correct path
+				await DatabaseStore.updateCurrentNode(this.activeConversation.id, messageToEdit.id);
+				this.activeConversation.currNode = messageToEdit.id;
+
 				this.updateMessageAtIndex(messageIndex, {
 					content: newContent,
 					timestamp: Date.now()
@@ -1473,6 +1477,16 @@ class ChatStore {
 	/**
 	 * Edits a user message and preserves all responses below
 	 * Updates the message content in-place without deleting or regenerating responses
+	 *
+	 * **Use Case**: When you want to fix a typo or rephrase a question without losing the assistant's response
+	 *
+	 * **Important Behavior:**
+	 * - Does NOT create a branch (unlike editMessageWithBranching)
+	 * - Does NOT regenerate assistant responses
+	 * - Only updates the user message content in the database
+	 * - Preserves the entire conversation tree below the edited message
+	 * - Updates conversation title if this is the first user message
+	 *
 	 * @param messageId - The ID of the user message to edit
 	 * @param newContent - The new content for the message
 	 */
@@ -1720,6 +1734,19 @@ class ChatStore {
 	/**
 	 * Continues generation for an existing assistant message
 	 * Appends new content to the existing message without branching
+	 *
+	 * **Important Implementation Details:**
+	 * - Sends a synthetic "continue" prompt to the API that is NOT persisted to the database
+	 * - This creates intentional divergence: API sees the prompt, database does not
+	 * - The synthetic prompt instructs the model to continue from where it left off
+	 * - Original message content is fetched from database to ensure accuracy after stops/edits
+	 * - New content is appended to the original message in-place (no branching)
+	 *
+	 * **Data Consistency Note:**
+	 * The conversation history in the database will not include the synthetic "continue" prompt.
+	 * This is by design - the prompt is a UI affordance, not part of the conversation content.
+	 * Export/import will preserve the actual conversation without synthetic prompts.
+	 *
 	 * @param messageId - The ID of the assistant message to continue
 	 */
 	async continueAssistantMessage(messageId: string): Promise<void> {
@@ -1738,14 +1765,33 @@ class ChatStore {
 				return;
 			}
 
+			// Race condition protection: Check if this specific conversation is already loading
+			// This prevents multiple rapid clicks on "Continue" from creating concurrent operations
+			if (this.isConversationLoading(this.activeConversation.id)) {
+				console.warn('Continuation already in progress for this conversation');
+				return;
+			}
+
 			this.errorDialogState = null;
 			this.setConversationLoading(this.activeConversation.id, true);
 			this.clearConversationStreaming(this.activeConversation.id);
 
-			// Get current content (includes any edits made to the message)
-			// This comes from activeMessages which is kept in sync with the database
-			const originalContent = messageToContinue.content;
-			const originalThinking = messageToContinue.thinking || '';
+			// IMPORTANT: Fetch the latest content from the database to ensure we have
+			// the most up-to-date content, especially after a stopped generation
+			// This prevents issues where the in-memory state might be stale
+			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
+			const dbMessage = allMessages.find((m) => m.id === messageId);
+
+			if (!dbMessage) {
+				console.error('Message not found in database for continuation');
+				this.setConversationLoading(this.activeConversation.id, false);
+
+				return;
+			}
+
+			// Use content from database as the source of truth
+			const originalContent = dbMessage.content;
+			const originalThinking = dbMessage.thinking || '';
 
 			// Get conversation context up to (but not including) the message to continue
 			const conversationContext = this.activeMessages.slice(0, messageIndex);
@@ -1780,6 +1826,7 @@ class ChatStore {
 
 			let appendedContent = '';
 			let appendedThinking = '';
+			let hasReceivedContent = false;
 
 			await chatService.sendMessage(
 				contextWithContinue,
@@ -1787,6 +1834,7 @@ class ChatStore {
 					...this.getApiOptions(),
 
 					onChunk: (chunk: string) => {
+						hasReceivedContent = true;
 						appendedContent += chunk;
 						// Preserve originalContent exactly as-is, including any trailing whitespace
 						// The concatenation naturally preserves any whitespace at the end of originalContent
@@ -1803,6 +1851,7 @@ class ChatStore {
 					},
 
 					onReasoningChunk: (reasoningChunk: string) => {
+						hasReceivedContent = true;
 						appendedThinking += reasoningChunk;
 						const fullThinking = originalThinking + appendedThinking;
 
@@ -1842,15 +1891,47 @@ class ChatStore {
 						slotsService.clearConversationState(messageToContinue.convId);
 					},
 
-					onError: (error: Error) => {
+					onError: async (error: Error) => {
 						if (this.isAbortError(error)) {
+							// User cancelled - save partial continuation if any content was received
+							if (hasReceivedContent && appendedContent) {
+								const partialContent = originalContent + appendedContent;
+								const partialThinking = originalThinking + appendedThinking;
+
+								await DatabaseStore.updateMessage(messageToContinue.id, {
+									content: partialContent,
+									thinking: partialThinking,
+									timestamp: Date.now()
+								});
+
+								this.updateMessageAtIndex(messageIndex, {
+									content: partialContent,
+									thinking: partialThinking,
+									timestamp: Date.now()
+								});
+							}
+
 							this.setConversationLoading(messageToContinue.convId, false);
 							this.clearConversationStreaming(messageToContinue.convId);
 							slotsService.clearConversationState(messageToContinue.convId);
 							return;
 						}
 
+						// Non-abort error - rollback to original content
 						console.error('Continue generation error:', error);
+
+						// Rollback: Restore original content in UI
+						this.updateMessageAtIndex(messageIndex, {
+							content: originalContent,
+							thinking: originalThinking
+						});
+
+						// Ensure database has original content (in case of partial writes)
+						await DatabaseStore.updateMessage(messageToContinue.id, {
+							content: originalContent,
+							thinking: originalThinking
+						});
+
 						this.setConversationLoading(messageToContinue.convId, false);
 						this.clearConversationStreaming(messageToContinue.convId);
 						slotsService.clearConversationState(messageToContinue.convId);
