@@ -181,6 +181,7 @@ static void init_tensor_tril(ggml_tensor * tensor, float min = -1.0f, float max 
     GGML_ASSERT(tensor->ne[0] == tensor->ne[1]);
 
     GGML_TENSOR_LOCALS(int32_t, ne, tensor, ne);
+    GGML_TENSOR_LOCALS(size_t, nb, tensor, nb);
 
     std::vector<float> data_f32(ne0*ne1*ne2*ne3);
 
@@ -188,11 +189,11 @@ static void init_tensor_tril(ggml_tensor * tensor, float min = -1.0f, float max 
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(min, max);
 
-    for (int64_t i3 = 0; i3 < tensor->ne[3]; i3++) {
-        for (int64_t i2 = 0; i2 < tensor->ne[2]; i2++) {
-            for (int64_t i1 = 0; i1 < tensor->ne[1]; i1++) {
-                for (int64_t i0 = 0; i0 < tensor->ne[0]; i0++) {
-                    int64_t idx = (i0 * tensor->nb[0] + i1 * tensor->nb[1] + i2 * tensor->nb[2] + i3 * tensor->nb[3]) / sizeof(float);
+    for (int64_t i3 = 0; i3 < ne3; i3++) {
+        for (int64_t i2 = 0; i2 < ne2; i2++) {
+            for (int64_t i1 = 0; i1 < ne1; i1++) {
+                for (int64_t i0 = 0; i0 < ne0; i0++) {
+                    int64_t idx = (i0 * nb0 + i1 * nb1 + i2 * nb2 + i3 * nb3) / sizeof(float);
                     if (i0 <= i1) {
                         data_f32[idx] = dis(gen);
                     } else {
