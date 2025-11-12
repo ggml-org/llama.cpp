@@ -41,7 +41,28 @@ class parser_base {
     void set_id(int id) { id_ = id; }
 
     virtual parser_type type() const = 0;
-    virtual parser_result parse(parser_context & ctx, size_t start = 0) = 0;
+
+    // Template Method: handles caching, delegates to parse_uncached()
+    virtual parser_result parse(parser_context & ctx, size_t start = 0) {
+        if (id_ == -1) {
+            // Don't cache parsers with ID -1 (from operators)
+            return parse_uncached(ctx, start);
+        }
+
+        // Check cache
+        auto cached = ctx.memo.get(id_, start);
+        if (cached) {
+            return *cached;
+        }
+
+        // Execute and cache
+        auto result = parse_uncached(ctx, start);
+        return ctx.memo.set(id_, start, result);
+    }
+
+    // Actual parsing implementation (to be overridden by subclasses)
+    virtual parser_result parse_uncached(parser_context & ctx, size_t start = 0) = 0;
+
     virtual std::string dump() const = 0;
     virtual void accept(parser_visitor & visitor) = 0;
 };
@@ -62,27 +83,25 @@ class literal_parser : public parser_base {
 
     parser_type type() const override { return PARSER_LITERAL; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            auto pos = start;
-            for (auto i = 0u; i < literal_.size(); ++i) {
-                if (pos >= ctx.input.size()) {
-                    if (ctx.input_is_complete) {
-                        return parser_result(PARSER_RESULT_FAIL, start);
-                    }
-                    if (i > 0) {
-                        return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos);
-                    }
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        auto pos = start;
+        for (auto i = 0u; i < literal_.size(); ++i) {
+            if (pos >= ctx.input.size()) {
+                if (ctx.input_is_complete) {
                     return parser_result(PARSER_RESULT_FAIL, start);
                 }
-                if (ctx.input[pos] != literal_[i]) {
-                    return parser_result(PARSER_RESULT_FAIL, start);
+                if (i > 0) {
+                    return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos);
                 }
-                ++pos;
+                return parser_result(PARSER_RESULT_FAIL, start);
             }
+            if (ctx.input[pos] != literal_[i]) {
+                return parser_result(PARSER_RESULT_FAIL, start);
+            }
+            ++pos;
+        }
 
-            return parser_result(PARSER_RESULT_SUCCESS, start, pos);
-        });
+        return parser_result(PARSER_RESULT_SUCCESS, start, pos);
     }
 
     std::string dump() const override {
@@ -116,34 +135,32 @@ class sequence_parser : public parser_base {
 
     parser_type type() const override { return PARSER_SEQUENCE; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            std::unordered_map<std::string, parser_match_location> groups;
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        std::unordered_map<std::string, parser_match_location> groups;
 
-            auto pos = start;
-            for (const auto & p : parsers_) {
-                auto result = p->parse(ctx, pos);
+        auto pos = start;
+        for (const auto & p : parsers_) {
+            auto result = p->parse(ctx, pos);
 
-                // Copy groups
-                groups.insert(result.groups.begin(), result.groups.end());
+            // Copy groups
+            groups.insert(result.groups.begin(), result.groups.end());
 
-                if (result.is_fail()) {
-                    if (result.end >= ctx.input.size() && !ctx.input_is_complete) {
-                        // If we fail because we don't have enough input, then return success
-                        return parser_result(PARSER_RESULT_SUCCESS, start, result.end, groups);
-                    }
-                    return parser_result(PARSER_RESULT_FAIL, start, result.end, groups);
+            if (result.is_fail()) {
+                if (result.end >= ctx.input.size() && !ctx.input_is_complete) {
+                    // If we fail because we don't have enough input, then return success
+                    return parser_result(PARSER_RESULT_SUCCESS, start, result.end, groups);
                 }
-
-                if (result.is_need_more_input()) {
-                    return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, result.end, groups);
-                }
-
-                pos = result.end;
+                return parser_result(PARSER_RESULT_FAIL, start, result.end, groups);
             }
 
-            return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
-        });
+            if (result.is_need_more_input()) {
+                return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, result.end, groups);
+            }
+
+            pos = result.end;
+        }
+
+        return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
     }
 
     std::string dump() const override {
@@ -182,23 +199,21 @@ class choice_parser : public parser_base {
 
     parser_type type() const override { return PARSER_CHOICE; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            auto pos = start;
-            for (const auto & p : parsers_) {
-                auto result = p->parse(ctx, pos);
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        auto pos = start;
+        for (const auto & p : parsers_) {
+            auto result = p->parse(ctx, pos);
 
-                if (result.is_success()) {
-                    return result;
-                }
-
-                if (result.is_need_more_input()) {
-                    return result;
-                }
+            if (result.is_success()) {
+                return result;
             }
 
-            return parser_result(PARSER_RESULT_FAIL, start);
-        });
+            if (result.is_need_more_input()) {
+                return result;
+            }
+        }
+
+        return parser_result(PARSER_RESULT_FAIL, start);
     }
 
     std::string dump() const override {
@@ -229,42 +244,40 @@ class repetition_parser : public parser_base {
 
     parser_type type() const override { return PARSER_REPETITION; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            std::unordered_map<std::string, parser_match_location> groups;
-            auto pos = start;
-            int match_count = 0;
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        std::unordered_map<std::string, parser_match_location> groups;
+        auto pos = start;
+        int match_count = 0;
 
-            // Try to match up to max_count times (or unlimited if max_count is -1)
-            while (max_count_ == -1 || match_count < max_count_) {
-                auto result = parser_->parse(ctx, pos);
-                groups.insert(result.groups.begin(), result.groups.end());
+        // Try to match up to max_count times (or unlimited if max_count is -1)
+        while (max_count_ == -1 || match_count < max_count_) {
+            auto result = parser_->parse(ctx, pos);
+            groups.insert(result.groups.begin(), result.groups.end());
 
-                if (result.is_success()) {
-                    // Prevent infinite loop on empty matches
-                    if (result.end == pos) {
-                        break;
-                    }
-                    pos = result.end;
-                    match_count++;
-                    continue;
+            if (result.is_success()) {
+                // Prevent infinite loop on empty matches
+                if (result.end == pos) {
+                    break;
                 }
-
-                if (result.is_need_more_input()) {
-                    return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos, groups);
-                }
-
-                // Child failed - stop trying
-                break;
+                pos = result.end;
+                match_count++;
+                continue;
             }
 
-            // Check if we got enough matches
-            if (match_count < min_count_) {
-                return parser_result(PARSER_RESULT_FAIL, start, pos, groups);
+            if (result.is_need_more_input()) {
+                return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos, groups);
             }
 
-            return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
-        });
+            // Child failed - stop trying
+            break;
+        }
+
+        // Check if we got enough matches
+        if (match_count < min_count_) {
+            return parser_result(PARSER_RESULT_FAIL, start, pos, groups);
+        }
+
+        return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
     }
 
     std::string dump() const override {
@@ -338,23 +351,21 @@ class not_parser : public parser_base {
 
     parser_type type() const override { return PARSER_NOT; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            auto result = parser_->parse(ctx, start);
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        auto result = parser_->parse(ctx, start);
 
-            if (result.is_success()) {
-                // Fail if the underlying parser matches
-                return parser_result(PARSER_RESULT_FAIL, start);
-            }
+        if (result.is_success()) {
+            // Fail if the underlying parser matches
+            return parser_result(PARSER_RESULT_FAIL, start);
+        }
 
-            if (result.is_need_more_input()) {
-                // Propagate - need to know what child would match before negating
-                return result;
-            }
+        if (result.is_need_more_input()) {
+            // Propagate - need to know what child would match before negating
+            return result;
+        }
 
-            // Child failed, so negation succeeds
-            return parser_result(PARSER_RESULT_SUCCESS, start);
-        });
+        // Child failed, so negation succeeds
+        return parser_result(PARSER_RESULT_SUCCESS, start);
     }
 
     std::string dump() const override {
@@ -374,17 +385,15 @@ class any_parser : public parser_base {
 
     parser_type type() const override { return PARSER_ANY; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            if (start >= ctx.input.size()) {
-                if (ctx.input_is_complete) {
-                    return parser_result(PARSER_RESULT_FAIL, start);
-                }
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        if (start >= ctx.input.size()) {
+            if (ctx.input_is_complete) {
                 return parser_result(PARSER_RESULT_FAIL, start);
             }
+            return parser_result(PARSER_RESULT_FAIL, start);
+        }
 
-            return parser_result(PARSER_RESULT_SUCCESS, start, start + 1);
-        });
+        return parser_result(PARSER_RESULT_SUCCESS, start, start + 1);
     }
 
     std::string dump() const override {
@@ -402,20 +411,18 @@ class space_parser : public parser_base {
 
     parser_type type() const override { return PARSER_SPACE; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            auto pos = start;
-            while (pos < ctx.input.size()) {
-                char c = ctx.input[pos];
-                if (is_space(c)) {
-                    ++pos;
-                } else {
-                    break;
-                }
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        auto pos = start;
+        while (pos < ctx.input.size()) {
+            char c = ctx.input[pos];
+            if (is_space(c)) {
+                ++pos;
+            } else {
+                break;
             }
+        }
 
-            return parser_result(PARSER_RESULT_SUCCESS, start, pos);
-        });
+        return parser_result(PARSER_RESULT_SUCCESS, start, pos);
     }
 
     std::string dump() const override {
@@ -491,34 +498,32 @@ class char_class_parser : public parser_base {
 
     parser_type type() const override { return PARSER_CHAR_CLASS; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            if (start >= ctx.input.size()) {
-                if (ctx.input_is_complete) {
-                    return parser_result(PARSER_RESULT_FAIL, start);
-                }
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        if (start >= ctx.input.size()) {
+            if (ctx.input_is_complete) {
                 return parser_result(PARSER_RESULT_FAIL, start);
             }
-
-            bool matches = false;
-            for (const auto & range : ranges_) {
-                if (range.contains(ctx.input[start])) {
-                    matches = true;
-                    break;
-                }
-            }
-
-            // If negated, invert the match result
-            if (negated_) {
-                matches = !matches;
-            }
-
-            if (matches) {
-                return parser_result(PARSER_RESULT_SUCCESS, start, start + 1);
-            }
-
             return parser_result(PARSER_RESULT_FAIL, start);
-        });
+        }
+
+        bool matches = false;
+        for (const auto & range : ranges_) {
+            if (range.contains(ctx.input[start])) {
+                matches = true;
+                break;
+            }
+        }
+
+        // If negated, invert the match result
+        if (negated_) {
+            matches = !matches;
+        }
+
+        if (matches) {
+            return parser_result(PARSER_RESULT_SUCCESS, start, start + 1);
+        }
+
+        return parser_result(PARSER_RESULT_FAIL, start);
     }
 
     std::string dump() const override {
@@ -541,14 +546,12 @@ class group_parser : public parser_base {
 
     parser_type type() const override { return PARSER_GROUP; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            auto result = parser_->parse(ctx, start);
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        auto result = parser_->parse(ctx, start);
 
-            // Store result
-            result.groups[name_] = parser_match_location{result.start, result.end};
-            return result;
-        });
+        // Store result
+        result.groups[name_] = parser_match_location{result.start, result.end};
+        return result;
     }
 
     std::string dump() const override {
@@ -575,36 +578,34 @@ class until_parser : public parser_base {
 
     parser_type type() const override { return PARSER_UNTIL; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            parser_result result(PARSER_RESULT_SUCCESS, start, ctx.input.size());
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        parser_result result(PARSER_RESULT_SUCCESS, start, ctx.input.size());
 
-            // Search for the delimiter
-            const auto * it = std::search(ctx.input.begin(), ctx.input.end(), searcher_);
+        // Search for the delimiter
+        const auto * it = std::search(ctx.input.begin(), ctx.input.end(), searcher_);
 
-            if (it != ctx.input.end()) {
-                result.type = PARSER_RESULT_SUCCESS;
-                result.end = std::distance(ctx.input.begin(), it);
-            } else {
-                // If not found, check if the input ends with a prefix of the delimiter
-                size_t max_overlap = std::min(ctx.input.size(), delimiter_.size() - 1);
-                for (size_t overlap = max_overlap; overlap > 0; --overlap) {
-                    if (std::equal(ctx.input.end() - overlap, ctx.input.end(), delimiter_.begin())) {
-                        result.type = PARSER_RESULT_NEED_MORE_INPUT;
-                        result.end = ctx.input.size() - overlap;
-                    }
+        if (it != ctx.input.end()) {
+            result.type = PARSER_RESULT_SUCCESS;
+            result.end = std::distance(ctx.input.begin(), it);
+        } else {
+            // If not found, check if the input ends with a prefix of the delimiter
+            size_t max_overlap = std::min(ctx.input.size(), delimiter_.size() - 1);
+            for (size_t overlap = max_overlap; overlap > 0; --overlap) {
+                if (std::equal(ctx.input.end() - overlap, ctx.input.end(), delimiter_.begin())) {
+                    result.type = (ctx.input_is_complete) ? PARSER_RESULT_FAIL : PARSER_RESULT_NEED_MORE_INPUT;
+                    result.end = ctx.input.size() - overlap;
                 }
             }
+        }
 
-            if (consume_spaces_) {
-                // Remove trailing spaces
-                while (result.end > start && is_space(ctx.input[result.end - 1])) {
-                    result.end--;
-                }
+        if (consume_spaces_) {
+            // Remove trailing spaces
+            while (result.end > start && is_space(ctx.input[result.end - 1])) {
+                result.end--;
             }
+        }
 
-            return result;
-        });
+        return result;
     }
 
     std::string dump() const override {
@@ -629,10 +630,8 @@ class schema_parser : public parser_base {
 
     parser_type type() const override { return PARSER_SCHEMA; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            return parser_->parse(ctx, start);
-        });
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        return parser_->parse(ctx, start);
     }
 
     std::string dump() const override {
@@ -660,22 +659,20 @@ class rule_parser : public parser_base {
 
     parser_type type() const override { return PARSER_RULE; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
-        return ctx.memo.cached(id_, start, [&]() {
-            auto rules = rules_.lock();
-            if (!rules) {
-                LOG_ERR("rule_parser::parse called with expired rule registry\n");
-                return parser_result(PARSER_RESULT_FAIL, start);
-            }
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        auto rules = rules_.lock();
+        if (!rules) {
+            LOG_ERR("rule_parser::parse called with expired rule registry\n");
+            return parser_result(PARSER_RESULT_FAIL, start);
+        }
 
-            auto it = rules->find(name_);
-            if (it == rules->end()) {
-                LOG_ERR("rule_parser::parse rule '%s' not found in registry\n", name_.c_str());
-                return parser_result(PARSER_RESULT_FAIL, start);
-            }
+        auto it = rules->find(name_);
+        if (it == rules->end()) {
+            LOG_ERR("rule_parser::parse rule '%s' not found in registry\n", name_.c_str());
+            return parser_result(PARSER_RESULT_FAIL, start);
+        }
 
-            return it->second->parse(ctx, start);
-        });
+        return it->second->parse(ctx, start);
     }
 
     std::string dump() const override {
@@ -701,7 +698,7 @@ class root_parser : public parser_base {
 
     parser_type type() const override { return PARSER_ROOT; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) override {
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         return root_->parse(ctx, start);
     }
 
@@ -1108,14 +1105,6 @@ std::optional<parser_result> parse_cache::get(int id, size_t start) {
 
 void parse_cache::clear() {
     results.clear();
-}
-
-parser_result parse_cache::cached(int id, size_t start, const std::function<parser_result()> & fn) {
-    auto result = get(id, start);
-    if (result) {
-        return *result;
-    }
-    return set(id, start, fn());
 }
 
 parser::parser() {}
