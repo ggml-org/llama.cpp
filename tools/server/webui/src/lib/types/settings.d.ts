@@ -36,6 +36,8 @@ export interface SettingsChatServiceOptions {
 	dry_penalty_last_n?: number;
 	// Sampler configuration
 	samplers?: string | string[];
+	gpu_sampling?: boolean;
+	gpu_dist?: boolean;
 	// Custom parameters
 	custom?: string;
 	// Callbacks
