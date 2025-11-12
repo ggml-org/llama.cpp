@@ -46,6 +46,7 @@
 #include <aclnnop/aclnn_cos.h>
 #include <aclnnop/aclnn_log.h>
 #include <aclnnop/aclnn_sign.h>
+#include <aclnnop/aclnn_norm.h>
 #include "acl_tensor.h"
 #include "common.h"
 
@@ -186,6 +187,29 @@ void ggml_cann_argsort(ggml_backend_cann_context & ctx, ggml_tensor * dst);
  * @attention `Var` defaults to dst->ne[0].
  */
 void ggml_cann_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief   Computes the L2 Normalization for a ggml tensor using the CANN
+ *          backend.
+ *
+ * @details This function applies the L2 Normalization operation on the
+ *          input tensor `src` and stores the result in the destination tensor
+ *          `dst`. L2 Normalization scales the input tensor such that the
+ *          L2 norm along the specified dimension equals 1. This operation
+ *          is commonly used in neural networks for feature normalization
+ *          and vector scaling.
+ *          The operation is defined as:
+ *          \f[
+ *              \text{out} = \frac{x}{\sqrt{\sum{x^2}}}
+ *          \f]
+ *          The normalization is performed along the last dimension by default.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the normalized values will be stored.
+ * @attention The normalization is performed along the last dimension of the
+ *            input tensor by default.
+ */
+void ggml_cann_l2_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
  * @brief  Computes the Group Normalization for a ggml tensor using the CANN
