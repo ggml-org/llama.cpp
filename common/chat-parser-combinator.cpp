@@ -696,7 +696,7 @@ class until_parser : public parser_base {
     std::string delimiter_;
     bool consume_spaces_;
 
-    std::boyer_moore_searcher<std::string::const_iterator> searcher_;
+    std::default_searcher<std::string::const_iterator> searcher_;
 
   public:
     until_parser(const std::string & delimiter, bool consume_spaces, int id)
