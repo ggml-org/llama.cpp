@@ -2222,10 +2222,9 @@ void ggml_compute_forward_fill(const ggml_compute_params * params, ggml_tensor *
 static void ggml_compute_forward_tri_f32(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
 
-    ggml_tri_type ttype = (ggml_tri_type) dst->op_params[0];
+    const ggml_tri_type ttype = (ggml_tri_type) ggml_get_op_params_i32(dst, 0);
 
     GGML_ASSERT(ggml_is_contiguous(src0));
-    GGML_ASSERT(src0->ne[0] == src0->ne[1]);
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
@@ -2237,8 +2236,8 @@ static void ggml_compute_forward_tri_f32(const ggml_compute_params * params, ggm
         case GGML_TRI_TYPE_LOWER:      bipred = [](int i, int r) { return i <  r; }; break;
         case GGML_TRI_TYPE_LOWER_DIAG: bipred = [](int i, int r) { return i <= r; }; break;
         case GGML_TRI_TYPE_UPPER:      bipred = [](int i, int r) { return i >  r; }; break;
-        case GGML_TRI_TYPE_UPPER_DIAG:
-        default:                       bipred = [](int i, int r) { return i >= r; }; break;
+        case GGML_TRI_TYPE_UPPER_DIAG: bipred = [](int i, int r) { return i >= r; }; break;
+        default: GGML_ABORT("invalid tri type");
     }
 
     for (int64_t ir = ir0; ir < ir1; ++ir) {
