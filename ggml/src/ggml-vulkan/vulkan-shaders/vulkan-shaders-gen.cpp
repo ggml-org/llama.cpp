@@ -76,7 +76,7 @@ enum MatMulIdType {
 
 namespace {
 
-void execute_command(const std::vector<std::string>& command, std::string& stdout_str, std::string& stderr_str) {
+void execute_command(std::vector<std::string>& command, std::string& stdout_str, std::string& stderr_str) {
 #ifdef _WIN32
     HANDLE stdout_read, stdout_write;
     HANDLE stderr_read, stderr_write;
@@ -99,14 +99,10 @@ void execute_command(const std::vector<std::string>& command, std::string& stdou
     si.hStdOutput = stdout_write;
     si.hStdError = stderr_write;
 
-    std::vector<char> cmd;
+    std::string cmd;
     for (const auto& part : command) {
-        for (char c : part) {
-            cmd.push_back(c);
-        }
-        cmd.push_back(' ');
+        cmd += part + " ";
     }
-    cmd.push_back('\0');
 
     if (!CreateProcessA(NULL, cmd.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
         throw std::runtime_error("Failed to create process");
@@ -145,8 +141,8 @@ void execute_command(const std::vector<std::string>& command, std::string& stdou
     }
 
     std::vector<char*> argv;
-    for (const std::string& part : command) {
-        argv.push_back(const_cast<char *>(part.c_str()));
+    for (std::string& part : command) {
+        argv.push_back(part.data());
     }
     argv.push_back(nullptr);
 
