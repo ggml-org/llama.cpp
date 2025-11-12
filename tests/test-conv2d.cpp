@@ -301,7 +301,7 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(960,320,104,152,3,3),
         // std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1920,640,32,32,3,3)
-        // std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
         // std::make_tuple(320,640,32,32,3,3),
         // std::make_tuple(4,320,96,128,3,3),
         // std::make_tuple(320,4,96,128,3,3),
@@ -317,7 +317,7 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(1920,1280,26,38,3,3),
         // std::make_tuple(2560,1280,26,38,3,3),
         // std::make_tuple(320,1280,26,38,3,3),
-        std::make_tuple(512,512,104,152,3,3),
+        // std::make_tuple(512,512,104,152,3,3),
         // std::make_tuple(512,512,208,304,3,3),
         // std::make_tuple(512,256,416,608,3,3),
         // std::make_tuple(256,128,832,1216,3,3),
@@ -653,7 +653,7 @@ int main(void)
 
     int k = 0;
 
-    // for (auto c : configs_sdxl_768){
+    // for (auto c : configs_sdxl_1024){
     for (auto c : configs){
         test_model model;
         load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c),
