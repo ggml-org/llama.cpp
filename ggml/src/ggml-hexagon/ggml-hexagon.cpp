@@ -2022,20 +2022,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
 
     // src0 (weights) must be repacked and mapped to the same session
     // src1 & sr2 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (src2->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src2->buffer) || ggml_backend_hexagon_buffer_get_sess(src2->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0->buffer, src1->buffer, src2->buffer, dst->buffer)) {
         return false;
     }
 
@@ -2069,16 +2056,7 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0->buffer, src1->buffer, dst->buffer)) {
         return false;
     }
 
@@ -2110,20 +2088,7 @@ static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * se
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (src2->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src2->buffer) || ggml_backend_hexagon_buffer_get_sess(src2->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0->buffer, src1->buffer, src2->buffer, dst->buffer)) {
         return false;
     }
 
@@ -2150,12 +2115,7 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
     }
 
     // src0 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0->buffer, dst->buffer)) {
         return false;
     }
 
@@ -2192,16 +2152,7 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1 && src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0->buffer, src1->buffer, dst->buffer)) {
         return false;
     }
 
@@ -2254,16 +2205,7 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1 && src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0->buffer, src1->buffer, dst->buffer)) {
         return false;
     }
 
@@ -2318,20 +2260,7 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     }
 
     // src0, src1, src2 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (src2 && src2->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src2->buffer) || ggml_backend_hexagon_buffer_get_sess(src2->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0->buffer, src1->buffer, src2->buffer, dst->buffer)) {
         return false;
     }
 
