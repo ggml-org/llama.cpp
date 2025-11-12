@@ -1,6 +1,7 @@
 #include "chat-parser-combinator.h"
 #include "json-schema-to-grammar.h"
 #include "common.h"
+#include "chat.h"
 #include "log.h"
 
 #include <nlohmann/json.hpp>
@@ -82,6 +83,22 @@ static bool is_space(const char c) {
 
 static bool is_hex_digit(const char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+// Unescapes a JSON string (without the surrounding quotes)
+// Uses nlohmann::json::parse to handle all JSON escape sequences
+static std::string unescape_json_string(std::string_view str) {
+    try {
+        // Wrap in quotes and parse as JSON string
+        std::string quoted = "\"" + std::string(str) + "\"";
+        auto parsed = nlohmann::json::parse(quoted);
+        if (parsed.is_string()) {
+            return parsed.get<std::string>();
+        }
+    } catch (...) {
+        // If parsing fails, return original string
+    }
+    return std::string(str);
 }
 
 // Matches an exact literal string.
@@ -1325,6 +1342,65 @@ parser parser_builder::schema(const parser & p, const std::string & name, const 
 
 parser parser_builder::action(const parser & p, std::function<void(const parser_result &, std::string_view, parser_environment &)> fn) {
     return parser(std::make_shared<action_parser>(p, std::move(fn), counter_->next()));
+}
+
+parser parser_builder::append_reasoning(const parser & p) {
+    return action(p, [](const parser_result &, std::string_view matched, parser_environment & env) {
+        if (!env.reasoning_content.empty()) {
+            env.reasoning_content += "\n";
+        }
+        env.reasoning_content += matched;
+    });
+}
+
+parser parser_builder::append_content(const parser & p) {
+    return action(p, [](const parser_result &, std::string_view matched, parser_environment & env) {
+        if (!env.content.empty()) {
+            env.content += "\n";
+        }
+        env.content += matched;
+    });
+}
+
+parser parser_builder::capture(const parser & p, const std::string & key, bool unescape_json) {
+    return action(p, [key, unescape_json](const parser_result &, std::string_view matched, parser_environment & env) {
+        std::string value = unescape_json ? unescape_json_string(matched) : std::string(matched);
+        env.scratchpad[key] = std::move(value);
+    });
+}
+
+parser parser_builder::capture_tool_call_id(const parser & p, bool unescape_json) {
+    return action(p, [unescape_json](const parser_result &, std::string_view matched, parser_environment & env) {
+        env.tool_call_id = unescape_json ? unescape_json_string(matched) : std::string(matched);
+    });
+}
+
+parser parser_builder::capture_tool_call_name(const parser & p, bool unescape_json) {
+    return action(p, [unescape_json](const parser_result &, std::string_view matched, parser_environment & env) {
+        env.tool_call_name = unescape_json ? unescape_json_string(matched) : std::string(matched);
+    });
+}
+
+parser parser_builder::capture_tool_call_args(const parser & p, bool unescape_json) {
+    return action(p, [unescape_json](const parser_result &, std::string_view matched, parser_environment & env) {
+        env.tool_call_args = unescape_json ? unescape_json_string(matched) : std::string(matched);
+    });
+}
+
+parser parser_builder::add_tool_call(const parser & p) {
+    return action(p, [](const parser_result &, std::string_view, parser_environment & env) {
+        auto tool_call = common_chat_tool_call{
+            env.tool_call_name,
+            env.tool_call_args,
+            env.tool_call_id
+        };
+        env.tool_calls.push_back(tool_call);
+
+        // Clear the fields to prevent bleeding to next tool call
+        env.tool_call_id.clear();
+        env.tool_call_name.clear();
+        env.tool_call_args.clear();
+    });
 }
 
 parser parser_builder::json_key(const std::string & name, const parser & p) {

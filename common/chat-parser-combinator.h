@@ -18,6 +18,13 @@ struct parser_environment {
     std::string content;
     std::string reasoning_content;
     std::vector<common_chat_tool_call> tool_calls;
+
+    // Tool call fields for building tool calls
+    std::string tool_call_id;
+    std::string tool_call_name;
+    std::string tool_call_args;
+
+    // Scratch pad for any custom logic
     std::unordered_map<std::string, std::variant<int, double, std::string>> scratchpad;
 };
 
@@ -225,6 +232,7 @@ class parser_builder {
     // Specialized single-pass JSON string parser with escape sequence handling
     parser json_string();
 
+    // TODO: improve convenience functions to allow users to build specific JSON fields
     parser json_key(const std::string & name, const parser & p);
     parser json_string(const parser & p);
 
@@ -236,6 +244,34 @@ class parser_builder {
     // The callback is invoked on successful parse with the result, matched text, and environment.
     //   S -> A [action]
     parser action(const parser & p, std::function<void(const parser_result &, std::string_view, parser_environment &)> fn);
+
+    // Convenience action wrappers for common patterns
+
+    // Appends matched text to env.reasoning_content
+    parser append_reasoning(const parser & p);
+
+    // Appends matched text to env.content
+    parser append_content(const parser & p);
+
+    // Captures matched text to env.scratchpad[key]
+    // If unescape_json is true, the matched text is unescaped as a JSON string
+    parser capture(const parser & p, const std::string & key, bool unescape_json = false);
+
+    // Captures matched text to env.tool_call_id
+    // If unescape_json is true, the matched text is unescaped as a JSON string
+    parser capture_tool_call_id(const parser & p, bool unescape_json = false);
+
+    // Captures matched text to env.tool_call_name
+    // If unescape_json is true, the matched text is unescaped as a JSON string
+    parser capture_tool_call_name(const parser & p, bool unescape_json = false);
+
+    // Captures matched text to env.tool_call_args
+    // If unescape_json is true, the matched text is unescaped as a JSON string
+    parser capture_tool_call_args(const parser & p, bool unescape_json = false);
+
+    // Adds a tool call to env.tool_calls using env.tool_call_{id,name,args}
+    // Clears the tool call fields after adding
+    parser add_tool_call(const parser & p);
 
     parser add_rule(const std::string & name, const parser & p);
 

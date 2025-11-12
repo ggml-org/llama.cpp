@@ -382,54 +382,24 @@ static void test_complete_example() {
     //   </tool_call>
     //
     auto parser = build_parser([](parser_builder & p) {
-        auto handle_reasoning = [](const parser_result &, std::string_view match, parser_environment & env) {
-            env.reasoning_content += match;
-        };
-
-        auto handle_content = [](const parser_result &, std::string_view match, parser_environment & env) {
-            env.content += match;
-        };
-
-        auto handle_tool_call_name = [](const parser_result &, std::string_view match, parser_environment & env) {
-            env.scratchpad["tool_name"] = std::string(match);
-        };
-
-        auto handle_tool_call_args = [](const parser_result &, std::string_view match, parser_environment & env) {
-            env.scratchpad["tool_args"] = std::string(match);
-        };
-
-        auto handle_tool_call = [](const parser_result &, std::string_view, parser_environment & env) {
-            auto name = env.scratchpad.find("tool_name");
-            auto args = env.scratchpad.find("tool_args");
-            if (name != env.scratchpad.end() && args != env.scratchpad.end()) {
-                auto tool_call = common_chat_tool_call{
-                    std::get<std::string>(name->second),
-                    std::get<std::string>(args->second),
-                    std::string()
-                };
-
-                env.tool_calls.push_back(tool_call);
-            }
-        };
-
         auto reasoning = p.add_rule("reasoning",
-            "<think>" << p.action(p.until("</think>"), handle_reasoning) << "</think>");
+            "<think>" << p.append_reasoning(p.until("</think>")) << "</think>");
 
         auto content = p.add_rule("content",
-            p.action(p.until("<tool_call>"), handle_content));
+            p.append_content(p.until("<tool_call>")));
 
         auto json = p.json();
 
         auto tool_call_name = p.add_rule("tool-call-name",
-            "<name>" << p.action(p.until("</name>"), handle_tool_call_name) << "</name>");
+            "<name>" << p.capture_tool_call_name(p.until("</name>")) << "</name>");
 
         auto schema = nlohmann::ordered_json::parse(R"({"type": "object"})");
 
         auto tool_call_args = p.add_rule("tool-call-args",
-            "<args>" << p.action(p.schema(json, "get_weather", schema), handle_tool_call_args) << "</args>");
+            "<args>" << p.capture_tool_call_args(p.schema(json, "get_weather", schema)) << "</args>");
 
         auto tool_call = p.add_rule("tool-call",
-            "<tool_call>" << p.action(tool_call_name << tool_call_args, handle_tool_call) << "</tool_call>");
+            "<tool_call>" << p.add_tool_call(tool_call_name << tool_call_args) << "</tool_call>");
 
         return reasoning << p.optional(content) << p.optional(tool_call);
     });
@@ -509,8 +479,8 @@ static void test_complete_example() {
 
         assert_equals(true, result.is_success());
         assert_equals("I need to call get_weather", env.reasoning_content);
-        assert_equals("get_weather", std::get<std::string>(env.scratchpad["tool_name"]));
-        assert_equals(R"({"cit)", std::get<std::string>(env.scratchpad["tool_args"]));
+        assert_equals("get_weather", env.tool_calls[0].name);
+        assert_equals(R"({"cit)", env.tool_calls[0].arguments);
     }
 
     auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
