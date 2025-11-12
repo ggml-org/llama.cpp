@@ -285,7 +285,7 @@ int main(int argc, char ** argv) {
     }
 
     mtmd_cli_context ctx(params);
-    LOG("%s: loading model: %s\n", __func__, params.model.path.c_str());
+    LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
     bool is_single_turn = !params.prompt.empty() && !params.image.empty();
 
