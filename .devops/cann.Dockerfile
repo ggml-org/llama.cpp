@@ -49,7 +49,7 @@ RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
 # -- Organize build artifacts for copying in later stages --
 # Create a lib directory to store all .so files
 RUN mkdir -p /app/lib && \
-    find build -name "*.so" -exec cp {} /app/lib \;
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
 
 # Create a full directory to store all executables and Python scripts
 RUN mkdir -p /app/full && \

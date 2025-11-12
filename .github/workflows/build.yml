@@ -161,15 +161,16 @@ jobs:
       - name: Dawn Dependency
         id: dawn-depends
         run: |
-          DAWN_VERSION="v1.0.0"
+          DAWN_VERSION="v2.0.0"
           DAWN_OWNER="reeselevine"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-macos-latest-Release.tar.gz"
+          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release.zip"
           echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
-          curl -L -o artifact.tar.gz \
+          curl -L -o artifact.zip \
             "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
           mkdir dawn
-          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+          unzip artifact.zip
+          tar -xvf Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -521,15 +522,16 @@ jobs:
         id: dawn-depends
         run: |
           sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
-          DAWN_VERSION="v1.0.0"
+          DAWN_VERSION="v2.0.0"
           DAWN_OWNER="reeselevine"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-ubuntu-latest-Release.tar.gz"
+          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release.zip"
           echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
-          curl -L -o artifact.tar.gz \
+          curl -L -o artifact.zip \
             "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
           mkdir dawn
-          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+          unzip artifact.zip
+          tar -xvf Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -1649,3 +1651,50 @@ jobs:
          run: |
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
+  ggml-ci-arm64-graviton4-kleidiai:
+     runs-on: ah-ubuntu_22_04-c8g_8x
+
+     steps:
+       - name: Clone
+         id: checkout
+         uses: actions/checkout@v4
+
+       - name: Dependencies
+         id: depends
+         run: |
+           set -euxo pipefail
+           sudo apt-get update
+           sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+           apt-get install -y \
+            build-essential \
+            libcurl4-openssl-dev \
+            python3-venv \
+            gpg \
+            wget \
+            time \
+            git-lfs
+
+           git lfs install
+
+           # install the latest cmake
+           sudo install -d /usr/share/keyrings
+           wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+           echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' \
+            | sudo tee /etc/apt/sources.list.d/kitware.list
+           sudo apt-get update
+           sudo apt-get install -y cmake
+
+       - name: ccache
+         uses: ggml-org/ccache-action@v1.2.16
+         with:
+           key: ggml-ci-arm64-graviton4-kleidiai
+           evict-old-files: 1d
+
+       - name: Test
+         id: ggml-ci
+         run: |
+           GG_BUILD_KLEIDIAI=1 \
+           GG_BUILD_EXTRA_TESTS_0=1 \
+           bash ./ci/run.sh ./tmp/results ./tmp/mnt

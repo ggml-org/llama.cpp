@@ -99,6 +99,7 @@ add_library(llama
             models/openai-moe-iswa.cpp
             models/openelm.cpp
             models/orion.cpp
+            models/pangu-embedded.cpp
             models/phi2.cpp
             models/phi3.cpp
             models/plamo.cpp
@@ -130,6 +131,11 @@ add_library(llama
             models/xverse.cpp
             models/graph-context-mamba.cpp
             )
+
+set_target_properties(llama PROPERTIES
+    VERSION ${LLAMA_INSTALL_VERSION}
+    SOVERSION 0
+)
 
 target_include_directories(llama PRIVATE .)
 target_include_directories(llama PUBLIC ../include)

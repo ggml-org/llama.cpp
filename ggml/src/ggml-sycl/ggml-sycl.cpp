@@ -3933,6 +3933,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             break;
         case GGML_OP_SSM_CONV:
             ggml_sycl_ssm_conv(ctx, dst);
+            break;
         case GGML_OP_ROLL:
             ggml_sycl_roll(ctx, dst);
             break;
@@ -4534,16 +4535,12 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 }
                 return false;
             }
-        case GGML_OP_CONCAT:
-            {
-                ggml_type src0_type = op->src[0]->type;
-                return src0_type != GGML_TYPE_I32 && src0_type != GGML_TYPE_I16;
-            }
         case GGML_OP_REPEAT_BACK:
             {
                 ggml_type src0_type = op->src[0]->type;
                 return src0_type == GGML_TYPE_F32;
             }
+        case GGML_OP_CONCAT:
         case GGML_OP_DUP:
         case GGML_OP_ARGMAX:
         case GGML_OP_NONE:
