@@ -1,3 +1,4 @@
+#include "convert.cuh"
 #include "ggml-cuda/common.cuh"
 #include "ggml.h"
 #include "rope.cuh"
@@ -77,10 +78,17 @@ static __global__ void rope_norm(const T *            x,
         idst += row_indices[channel_x] * set_rows_stride;
     }
 
+    const auto & store_coaelsced = [&](float x0, float x1) {
+        if constexpr (std::is_same_v<float, D>) {
+            float2 v = make_float2(x0, x1);
+            ggml_cuda_memcpy_1<8>(dst + idst, &v);
+        } else if constexpr (std::is_same_v<half, D>) {
+            half2 v = make_half2(x0, x1);
+            ggml_cuda_memcpy_1<4>(dst + idst, &v);
+        }
+    };
     if (i0 >= n_dims) {
-        dst[idst + 0] = D(x[ix + 0]);
-        dst[idst + 1] = D(x[ix + 1]);
-
+        store_coaelsced(x[ix + 0], x[ix + 1]);
         return;
     }
 
@@ -96,8 +104,7 @@ static __global__ void rope_norm(const T *            x,
     const float x0 = x[ix + 0];
     const float x1 = x[ix + 1];
 
-    dst[idst + 0] = D(x0 * cos_theta - x1 * sin_theta);
-    dst[idst + 1] = D(x0 * sin_theta + x1 * cos_theta);
+    store_coaelsced(x0 * cos_theta - x1 * sin_theta, x0 * sin_theta + x1 * cos_theta);
 }
 
 template <bool forward, bool has_ff, typename T, typename D>
@@ -139,8 +146,8 @@ static __global__ void rope_neox(const T *            x,
     }
 
     if (i0 >= n_dims) {
-        dst[idst + i0 / 2 + 0] = D(x[ix + i0 / 2 + 0]);
-        dst[idst + i0 / 2 + 1] = D(x[ix + i0 / 2 + 1]);
+        dst[idst + i0 / 2 + 0] = ggml_cuda_cast<D>(x[ix + i0 / 2 + 0]);
+        dst[idst + i0 / 2 + 1] = ggml_cuda_cast<D>(x[ix + i0 / 2 + 1]);
 
         return;
     }
@@ -157,8 +164,8 @@ static __global__ void rope_neox(const T *            x,
     const float x0 = x[ix + 0];
     const float x1 = x[ix + n_dims/2];
 
-    dst[idst + 0]          = D(x0 * cos_theta - x1 * sin_theta);
-    dst[idst + n_dims / 2] = D(x0 * sin_theta + x1 * cos_theta);
+    dst[idst + 0]          = ggml_cuda_cast<D>(x0 * cos_theta - x1 * sin_theta);
+    dst[idst + n_dims / 2] = ggml_cuda_cast<D>(x0 * sin_theta + x1 * cos_theta);
 }
 
 template<bool forward, bool has_ff, typename T>
