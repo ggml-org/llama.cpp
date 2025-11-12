@@ -1,8 +1,8 @@
 from __future__ import annotations
 from .base import (
-    gguf, _mistral_import_error_msg
+    gguf
 )
-from pathlib import Path
+
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     pass
