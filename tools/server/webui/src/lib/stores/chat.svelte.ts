@@ -1815,6 +1815,7 @@ class ChatStore {
 					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
 						return msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
 					}
+
 					return msg as ApiChatMessageData;
 				}),
 				{
@@ -1839,6 +1840,7 @@ class ChatStore {
 						// Preserve originalContent exactly as-is, including any trailing whitespace
 						// The concatenation naturally preserves any whitespace at the end of originalContent
 						const fullContent = originalContent + appendedContent;
+
 						this.setConversationStreaming(
 							messageToContinue.convId,
 							fullContent,
@@ -1853,6 +1855,7 @@ class ChatStore {
 					onReasoningChunk: (reasoningChunk: string) => {
 						hasReceivedContent = true;
 						appendedThinking += reasoningChunk;
+
 						const fullThinking = originalThinking + appendedThinking;
 
 						this.updateMessageAtIndex(messageIndex, {
@@ -1914,6 +1917,7 @@ class ChatStore {
 							this.setConversationLoading(messageToContinue.convId, false);
 							this.clearConversationStreaming(messageToContinue.convId);
 							slotsService.clearConversationState(messageToContinue.convId);
+
 							return;
 						}
 
