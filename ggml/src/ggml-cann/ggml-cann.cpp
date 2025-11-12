@@ -1777,6 +1777,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
         case GGML_OP_GROUP_NORM:
             ggml_cann_group_norm(ctx, dst);
             break;
+        case GGML_OP_L2_NORM:
+            ggml_cann_l2_norm(ctx, dst);
+            break;
         case GGML_OP_CROSS_ENTROPY_LOSS:
             ggml_cann_cross_entropy_loss(ctx, dst);
             break;
@@ -2518,6 +2521,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 // value of paddingW should be at most half of kernelW
                 return (p0 <= (k0 / 2)) && (p1 <= (k1 / 2));
             }
+        case GGML_OP_L2_NORM:
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_DUP:
         case GGML_OP_SUM:
