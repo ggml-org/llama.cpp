@@ -20,7 +20,7 @@ RUN cmake -B build -DGGML_NATIVE=OFF -DGGML_VULKAN=ON -DLLAMA_BUILD_TESTS=OFF -D
     cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib && \
-    find build -name "*.so" -exec cp {} /app/lib \;
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
 
 RUN mkdir -p /app/full \
     && cp build/bin/* /app/full \
