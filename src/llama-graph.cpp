@@ -899,15 +899,17 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     // 2) Top-K indices along dim-0 (per column)
     // Clamp top-k so it never exceeds the KV length
     const int32_t topk_safe = std::max<int32_t>(0, std::min<int32_t>(sparsek_topk, (int32_t)scores->ne[0]));
+    if (topk_safe == 0) {
+    cb(base_mask, "sparsek_topk_zero_passthrough", il);
+    return base_mask;
+    }
     ggml_tensor * topk_idx = ggml_top_k(ctx0, scores, topk_safe); // [topk, cols_calc]
     cb(topk_idx, "sparsek_topk_idx", il);
 
     // 3) Build -INF base and scatter 0's for selected rows
     // Keep shapes consistent: operate in 3D for set_rows, then reshape back.
     // initialize tensor with -INF everywhere (safe replacement for ggml_scale_bias)
-    ggml_tensor * neg2d = ggml_scale(ctx0, scores, 0.0f);  // set all elements to 0
-    ggml_tensor * inf_tensor = ggml_new_f32(ctx0, -INFINITY);
-    neg2d = ggml_add1(ctx0, neg2d, inf_tensor);
+    ggml_tensor * neg2d = ggml_scale_bias(ctx0, scores, 0.0f, -INFINITY); // fill with -INF directly
     ggml_tensor * rows3d = ggml_reshape_3d(ctx0, neg2d, /*ne0*/ scores->ne[0],
                                         /*ne1*/ 1,
                                         /*ne2*/ scores->ne[1]);         // [n_kv,1,cols]
@@ -952,8 +954,8 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
 
     // Flatten back to 2D [n_kv, cols_calc] and then to 4D to match 'allow'
     ggml_tensor * base_rep2 = ggml_reshape_2d(ctx0, base_rep3, scores->ne[0], cols_calc2);          // [n_kv, cols_calc]
-    ggml_tensor * base_rep4 = ggml_reshape_4d(ctx0, base_rep2, scores->ne[0], cols_calc2, 1, 1);    // [n_kv, cols_calc,1,1]
-
+    ggml_tensor * base_rep4 = ggml_reshape_4d(ctx0, base_rep2,
+    base_mask->ne[0], base_mask->ne[1], base_mask->ne[2], base_mask->ne[3]);
         // === FIX: align final mask shape to base_mask shape ===
     ggml_tensor *allow2d = ggml_reshape_2d(ctx0, merged3d, scores->ne[0], scores->ne[1]); // [n_kv, cols_calc]
     ggml_tensor *allow4  = ggml_reshape_4d(ctx0, allow2d,
