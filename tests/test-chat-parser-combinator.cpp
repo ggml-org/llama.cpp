@@ -447,9 +447,7 @@ static void test_complete_example() {
     //
     auto parser = build_parser([](parser_builder & p) {
         auto reasoning = p.add_rule("reasoning",
-            p.literal("<think>")
-            << p.group("reasoning-content", p.until("</think>"))
-            << p.literal("</think>"));
+            "<think>" << p.group("reasoning-content", p.until("</think>")) << "</think>");
 
         auto content = p.add_rule("content",
             p.group("content", p.until("<tool_call>")));
@@ -457,22 +455,15 @@ static void test_complete_example() {
         auto json = p.json();
 
         auto tool_call_name = p.add_rule("tool-call-name",
-            p.literal("<name>")
-            << p.group("tool-name", p.until("</name>"))
-            << p.literal("</name>"));
+            "<name>" << p.group("tool-name", p.until("</name>")) << "</name>");
 
         auto schema = nlohmann::ordered_json::parse(R"({"type": "object"})");
 
         auto tool_call_args = p.add_rule("tool-call-args",
-            p.literal("<args>")
-            << p.group("tool-args", p.schema(json, "get_weather", schema))
-            << p.literal("</args>"));
+            "<args>" << p.group("tool-args", p.schema(json, "get_weather", schema)) << "</args>");
 
         auto tool_call = p.add_rule("tool-call",
-            p.literal("<tool_call>")
-            << tool_call_name
-            << tool_call_args
-            << p.literal("</tool_call>"));
+            "<tool_call>" << tool_call_name << tool_call_args << "</tool_call>");
 
         return reasoning << p.optional(content) << p.optional(tool_call);
     });
