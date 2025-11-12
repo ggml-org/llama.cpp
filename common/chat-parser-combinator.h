@@ -211,6 +211,11 @@ class parser_builder {
     //   value -> object | array | string | number | true | false | null
     parser json();
 
+    parser json_key(const std::string & name, const parser & p);
+    parser json_string(const parser & p);
+
+    parser between(const std::string & left, const parser & p, const std::string & right, bool allow_spaces = true);
+
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
     parser schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema);

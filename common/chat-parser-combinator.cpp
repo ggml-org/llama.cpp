@@ -46,6 +46,12 @@ class parser_base {
     virtual void accept(parser_visitor & visitor) = 0;
 };
 
+// We define our own space function because MSVC's std::isspace()
+// crashes for non-printable characters in Debug builds.
+static bool is_space(const char c) {
+    return (c == ' ' || c == '\t' || c == '\n');
+}
+
 // Matches an exact literal string.
 //   S -> "hello"
 class literal_parser : public parser_base {
@@ -401,7 +407,7 @@ class space_parser : public parser_base {
             auto pos = start;
             while (pos < ctx.input.size()) {
                 char c = ctx.input[pos];
-                if (c == ' ' || c == '\t' || c == '\n') {
+                if (is_space(c)) {
                     ++pos;
                 } else {
                     break;
@@ -558,28 +564,46 @@ class group_parser : public parser_base {
 //   S -> (!delim .)*
 class until_parser : public parser_base {
     std::string delimiter_;
-    parser parser_;
+    bool consume_spaces_;
+
+    std::boyer_moore_searcher<std::string::const_iterator> searcher_;
 
   public:
     until_parser(const std::string & delimiter, bool consume_spaces, int id)
-        : parser_base(id), delimiter_(delimiter) {
-
-        auto delim = parser(std::make_shared<literal_parser>(delimiter, -1));
-        auto any = parser(std::make_shared<any_parser>(-1));
-
-        if (consume_spaces) {
-            auto ws = parser(std::make_shared<space_parser>(-1));
-            parser_ = parser(std::make_shared<zero_or_more_parser>(~(ws + delim) + any, -1));
-        } else {
-            parser_ = parser(std::make_shared<zero_or_more_parser>(~delim + any, -1));
-        }
+        : parser_base(id), delimiter_(delimiter), consume_spaces_(consume_spaces), searcher_(delimiter_.begin(), delimiter_.end()) {
     }
 
     parser_type type() const override { return PARSER_UNTIL; }
 
     parser_result parse(parser_context & ctx, size_t start = 0) override {
         return ctx.memo.cached(id_, start, [&]() {
-            return parser_->parse(ctx, start);
+            parser_result result(PARSER_RESULT_SUCCESS, start, ctx.input.size());
+
+            // Search for the delimiter
+            const auto * it = std::search(ctx.input.begin(), ctx.input.end(), searcher_);
+
+            if (it != ctx.input.end()) {
+                result.type = PARSER_RESULT_SUCCESS;
+                result.end = std::distance(ctx.input.begin(), it);
+            } else {
+                // If not found, check if the input ends with a prefix of the delimiter
+                size_t max_overlap = std::min(ctx.input.size(), delimiter_.size() - 1);
+                for (size_t overlap = max_overlap; overlap > 0; --overlap) {
+                    if (std::equal(ctx.input.end() - overlap, ctx.input.end(), delimiter_.begin())) {
+                        result.type = PARSER_RESULT_NEED_MORE_INPUT;
+                        result.end = ctx.input.size() - overlap;
+                    }
+                }
+            }
+
+            if (consume_spaces_) {
+                // Remove trailing spaces
+                while (result.end > start && is_space(ctx.input[result.end - 1])) {
+                    result.end--;
+                }
+            }
+
+            return result;
         });
     }
 
@@ -590,8 +614,6 @@ class until_parser : public parser_base {
     void accept(parser_visitor & visitor) override;
 
     const std::string & delimiter() const { return delimiter_; }
-
-    const parser & child() const { return parser_; }
 };
 
 // Wraps a parser with JSON schema metadata for grammar generation.
@@ -1018,7 +1040,6 @@ class id_assignment_visitor : public parser_visitor {
 
     void visit(until_parser & p) override {
         assign_id(p);
-        p.child()->accept(*this);
     }
 
     void visit(not_parser & p) override {
@@ -1213,6 +1234,22 @@ parser parser_builder::repeat(const parser & p, int n) {
 
 parser parser_builder::schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema) {
     return parser(std::make_shared<schema_parser>(p, name, schema, counter_->next()));
+}
+
+parser parser_builder::json_key(const std::string & name, const parser & p) {
+    return literal("\"" + name + "\"") << literal(":") << p;
+}
+
+parser parser_builder::json_string(const parser & p) {
+    auto quote = literal("\"");
+    return quote + p + quote;
+}
+
+parser parser_builder::between(const std::string & left, const parser & p, const std::string & right, bool allow_spaces) {
+    if (allow_spaces) {
+        return literal(left) << p << literal(right);
+    }
+    return literal(left) + p + literal(right);
 }
 
 parser parser_builder::add_rule(const std::string & name, const parser & p) {
