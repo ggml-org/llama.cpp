@@ -2812,7 +2812,7 @@ struct test_bin_bcast : public test_case {
     const std::array<int, 4> nr;
     int nf; // number of fused ops, nf == 1 -> single op (no fusion)
 
-    bool run_whole_graph() override { return true; }
+    bool run_whole_graph() override { return nf > 1; }
 
     std::string vars() override {
         return VARS_TO_STR4(type, ne, nr, nf);
