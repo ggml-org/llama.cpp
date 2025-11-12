@@ -46,7 +46,7 @@ static void test_partial_parsing() {
     {
         // Test char class
         auto parser = build_parser([](parser_builder& p) {
-            return p.char_class("a-z");
+            return p.one("a-z");
         });
 
         parser_context ctx;
@@ -61,7 +61,7 @@ static void test_partial_parsing() {
         assert_equals(true, result.is_fail());
 
         parser = build_parser([](parser_builder& p) {
-            return p.char_class("a-z-");
+            return p.one("a-z-");
         });
 
         ctx = parser_context("f");
@@ -246,11 +246,11 @@ static void test_capture_groups() {
     }
 }
 
-static void test_char_class() {
+static void test_one() {
     {
         // Test common escape sequences
         auto parser = build_parser([](parser_builder& p) {
-            return p.char_class("[\\n\\t\\\\]");
+            return p.one("[\\n\\t\\\\]");
         });
 
         parser_context ctx;
@@ -275,7 +275,7 @@ static void test_char_class() {
     {
         // Test escaped dash (literal dash, not a range)
         auto parser = build_parser([](parser_builder& p) {
-            return p.char_class("[a\\-z]");
+            return p.one("[a\\-z]");
         });
 
         parser_context ctx;
@@ -302,7 +302,7 @@ static void test_char_class() {
 
 static void test_recursive_references() {
     auto value_parser = build_parser([](parser_builder& p) {
-        p.add_rule("number", p.one_or_more(p.char_class("0-9")));
+        p.add_rule("number", p.one_or_more(p.one("0-9")));
         p.add_rule("list", p.sequence({
             p.literal("["),
             p.rule("value"),
@@ -559,7 +559,7 @@ static void test_gbnf_generation() {
     {
         // Test char class
         auto parser = build_parser([](parser_builder& p) {
-            return p.char_class("[a-z]");
+            return p.one("[a-z]");
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -595,7 +595,7 @@ static void test_gbnf_generation() {
     {
         // Test one_or_more
         auto parser = build_parser([](parser_builder& p) {
-            return p.one_or_more(p.char_class("[0-9]"));
+            return p.one_or_more(p.one("[0-9]"));
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -607,7 +607,7 @@ static void test_gbnf_generation() {
     {
         // Test zero_or_more
         auto parser = build_parser([](parser_builder& p) {
-            return p.zero_or_more(p.char_class("[a-z]"));
+            return p.zero_or_more(p.one("[a-z]"));
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -668,7 +668,7 @@ static void test_gbnf_generation() {
     {
         // Test rule references
         auto parser = build_parser([](parser_builder& p) {
-            auto digit = p.add_rule("digit", p.char_class("[0-9]"));
+            auto digit = p.add_rule("digit", p.one("[0-9]"));
             return p.one_or_more(digit);
         });
 
@@ -709,7 +709,7 @@ static void test_gbnf_generation() {
 }
 
 static parser create_command_r7b_parser() {
-    return build_parser([](parser_builder & p) {
+    auto parser = build_parser([](parser_builder & p) {
         auto thinking = p.literal("<|START_THINKING|>")
             << p.until("<|END_THINKING|>")
             << p.literal("<|END_THINKING|>");
@@ -737,6 +737,12 @@ static parser create_command_r7b_parser() {
 
         return p.optional(thinking) << (tool_calls | response);
     });
+
+    auto grammar = build_grammar([&](const common_grammar_builder & builder) {
+        parser.build_grammar(builder);
+    });
+
+    return parser;
 }
 
 static void test_command_r7b_parser(const parser & p, const std::string & input, bool partial) {
@@ -888,7 +894,7 @@ static void benchmark_compare(
 
 int main() {
     test_partial_parsing();
-    test_char_class();
+    test_one();
     test_capture_groups();
     test_recursive_references();
     test_optional();

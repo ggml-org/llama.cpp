@@ -176,9 +176,17 @@ class parser_builder {
     //   S -> .
     parser any();
 
+    // Matches between min and max repetitions of characters from a character class.
+    //   S -> [a-z]{m,n}
+    //
+    // Use -1 for max to represent unbounded repetition (equivalent to {m,})
+    parser chars(const std::string & classes, int min = 1, int max = -1);
+
     // Matches a single character from a character class or range.
     //   S -> [a-z] or S -> [^0-9]
-    parser char_class(const std::string & classes);
+    //
+    // Equivalent to chars(classes, 1, 1)
+    parser one(const std::string & classes);
 
     // Captures the matched text from a parser and stores it with a name.
     //   S -> <name:A>
@@ -208,6 +216,10 @@ class parser_builder {
     // Creates a complete JSON parser supporting objects, arrays, strings, numbers, booleans, and null.
     //   value -> object | array | string | number | true | false | null
     parser json();
+
+    // Specialized single-pass JSON string parser with escape sequence handling
+    parser json_string();
+    parser json_string(const std::string & name);
 
     parser json_key(const std::string & name, const parser & p);
     parser json_string(const parser & p);

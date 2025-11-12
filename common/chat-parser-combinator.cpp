@@ -18,13 +18,14 @@ enum parser_type {
     PARSER_ONE_OR_MORE = 6,
     PARSER_NOT = 7,
     PARSER_ANY = 8,
-    PARSER_CHAR_CLASS = 9,
+    PARSER_CHARS = 9,
     PARSER_GROUP = 10,
     PARSER_RULE = 11,
     PARSER_UNTIL = 12,
     PARSER_SPACE = 13,
     PARSER_SCHEMA = 14,
     PARSER_ROOT = 15,
+    PARSER_JSON_STRING = 16,
 };
 
 class parser_visitor;
@@ -93,7 +94,7 @@ class literal_parser : public parser_base {
                 if (i > 0) {
                     return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos);
                 }
-                return parser_result(PARSER_RESULT_FAIL, start);
+                return parser_result(PARSER_RESULT_FAIL, start, pos);
             }
             if (ctx.input[pos] != literal_[i]) {
                 return parser_result(PARSER_RESULT_FAIL, start);
@@ -432,9 +433,9 @@ class space_parser : public parser_base {
     void accept(parser_visitor & visitor) override;
 };
 
-// Matches a single character from a character class or range.
-//   S -> [a-z] or S -> [^0-9]
-class char_class_parser : public parser_base {
+// Matches between min and max repetitions of characters from a character class.
+//   S -> [a-z]{m,n}
+class chars_parser : public parser_base {
     struct char_range {
         int start;
         int end;
@@ -445,9 +446,13 @@ class char_class_parser : public parser_base {
     std::string pattern_;
     std::vector<char_range> ranges_;
     bool negated_;
+    int min_count_;
+    int max_count_;
 
   public:
-    char_class_parser(const std::string & classes, int id) : parser_base(id), pattern_(classes), negated_(false) {
+    chars_parser(const std::string & classes, int min_count, int max_count, int id)
+        : parser_base(id), pattern_(classes), negated_(false), min_count_(min_count), max_count_(max_count) {
+
         std::string content = classes;
         if (content.front() == '[') {
             content = content.substr(1);
@@ -496,43 +501,164 @@ class char_class_parser : public parser_base {
         }
     }
 
-    parser_type type() const override { return PARSER_CHAR_CLASS; }
+    parser_type type() const override { return PARSER_CHARS; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
-        if (start >= ctx.input.size()) {
-            if (ctx.input_is_complete) {
-                return parser_result(PARSER_RESULT_FAIL, start);
-            }
-            return parser_result(PARSER_RESULT_FAIL, start);
-        }
+        auto pos = start;
+        int match_count = 0;
 
-        bool matches = false;
-        for (const auto & range : ranges_) {
-            if (range.contains(ctx.input[start])) {
-                matches = true;
+        // Try to match up to max_count times (or unlimited if max_count is -1)
+        while (max_count_ == -1 || match_count < max_count_) {
+            if (pos >= ctx.input.size()) {
+                break;
+            }
+
+            bool matches = false;
+            for (const auto & range : ranges_) {
+                if (range.contains(ctx.input[pos])) {
+                    matches = true;
+                    break;
+                }
+            }
+
+            // If negated, invert the match result
+            if (negated_) {
+                matches = !matches;
+            }
+
+            if (matches) {
+                ++pos;
+                ++match_count;
+            } else {
                 break;
             }
         }
 
-        // If negated, invert the match result
-        if (negated_) {
-            matches = !matches;
+        // Check if we got enough matches
+        if (match_count < min_count_) {
+            return parser_result(PARSER_RESULT_FAIL, start);
         }
 
-        if (matches) {
-            return parser_result(PARSER_RESULT_SUCCESS, start, start + 1);
-        }
-
-        return parser_result(PARSER_RESULT_FAIL, start);
+        return parser_result(PARSER_RESULT_SUCCESS, start, pos);
     }
 
     std::string dump() const override {
-        return "Char(" + pattern_ + ")";
+        if (max_count_ == -1) {
+            return "CharRepeat(" + pattern_ + ", " + std::to_string(min_count_) + ", unbounded)";
+        }
+        return "CharRepeat(" + pattern_ + ", " + std::to_string(min_count_) + ", " + std::to_string(max_count_) + ")";
     }
 
     void accept(parser_visitor & visitor) override;
 
     const std::string & pattern() const { return pattern_; }
+
+    int min_count() const { return min_count_; }
+
+    int max_count() const { return max_count_; }
+};
+
+// Specialized parser for JSON string content (without quotes).
+// Parses the content between quotes with single-pass streaming support.
+// Stops before the closing quote (doesn't consume it).
+// Handles escape sequences and emits NEED_MORE_INPUT for incomplete input.
+//   S -> (regular chars and escape sequences)* until closing "
+class json_string_parser : public parser_base {
+    std::optional<std::string> capture_name_;
+
+    static bool is_hex_digit(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+
+  public:
+    json_string_parser(std::optional<std::string> capture_name, int id)
+        : parser_base(id), capture_name_(std::move(capture_name)) {}
+
+    parser_type type() const override { return PARSER_JSON_STRING; }
+
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        std::unordered_map<std::string, parser_match_location> groups;
+        auto pos = start;
+
+        // Parse string content (without quotes)
+        while (pos < ctx.input.size()) {
+            char c = ctx.input[pos];
+
+            if (c == '"') {
+                // Found closing quote - success (don't consume it)
+                if (capture_name_) {
+                    groups[*capture_name_] = parser_match_location{start, pos};
+                }
+                return parser_result(PARSER_RESULT_SUCCESS, start, pos, groups);
+            }
+
+            if (c == '\\') {
+                // Handle escape sequence
+                ++pos;
+                if (pos >= ctx.input.size()) {
+                    // Mid-escape sequence
+                    if (ctx.input_is_complete) {
+                        return parser_result(PARSER_RESULT_FAIL, start);
+                    }
+                    return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos);
+                }
+
+                char escape = ctx.input[pos];
+                switch (escape) {
+                    case '"':
+                    case '\\':
+                    case '/':
+                    case 'b':
+                    case 'f':
+                    case 'n':
+                    case 'r':
+                    case 't':
+                        // Valid escape
+                        ++pos;
+                        break;
+
+                    case 'u':
+                        // Unicode escape: must be followed by 4 hex digits
+                        ++pos;
+                        for (int i = 0; i < 4; ++i) {
+                            if (pos >= ctx.input.size()) {
+                                // Incomplete unicode escape
+                                if (ctx.input_is_complete) {
+                                    return parser_result(PARSER_RESULT_FAIL, start);
+                                }
+                                return parser_result(PARSER_RESULT_NEED_MORE_INPUT, start, pos);
+                            }
+                            if (!is_hex_digit(ctx.input[pos])) {
+                                return parser_result(PARSER_RESULT_FAIL, start);
+                            }
+                            ++pos;
+                        }
+                        break;
+
+                    default:
+                        // Invalid escape sequence
+                        return parser_result(PARSER_RESULT_FAIL, start);
+                }
+            } else {
+                // Regular character
+                ++pos;
+            }
+        }
+
+        // Reached end without finding closing quote
+        return parser_result(PARSER_RESULT_FAIL, start, pos);
+    }
+
+    std::string dump() const override {
+        if (capture_name_) {
+            return "JsonString(" + *capture_name_ + ")";
+        }
+        return "JsonString()";
+    }
+
+    void accept(parser_visitor & visitor) override;
+
+    const std::optional<std::string> & capture_name() const { return capture_name_; }
 };
 
 // Captures the matched text from a parser and stores it with a name.
@@ -729,7 +855,8 @@ class parser_visitor {
     virtual void visit(not_parser & p) = 0;
     virtual void visit(any_parser & p) = 0;
     virtual void visit(space_parser & p) = 0;
-    virtual void visit(char_class_parser & p) = 0;
+    virtual void visit(chars_parser & p) = 0;
+    virtual void visit(json_string_parser & p) = 0;
     virtual void visit(group_parser & p) = 0;
     virtual void visit(schema_parser & p) = 0;
     virtual void visit(rule_parser & p) = 0;
@@ -921,9 +1048,36 @@ class gbnf_visitor : public parser_visitor {
         current_result_ = "space";
     }
 
-    void visit(char_class_parser & p) override {
-        // Return pattern as-is (already in GBNF format)
-        current_result_ = p.pattern();
+    void visit(chars_parser & p) override {
+        const std::string & pattern = p.pattern();
+
+        if (p.min_count() == 0 && p.max_count() == -1) {
+            // Zero or more: *
+            current_result_ = pattern + "*";
+        } else if (p.min_count() == 1 && p.max_count() == -1) {
+            // One or more: +
+            current_result_ = pattern + "+";
+        } else if (p.max_count() == -1) {
+            // Unbounded: {n,}
+            current_result_ = pattern + "{" + std::to_string(p.min_count()) + ",}";
+        } else if (p.min_count() == p.max_count()) {
+            // Exact count: {n} or just pattern for n=1
+            if (p.min_count() == 1) {
+                current_result_ = pattern;
+            } else {
+                current_result_ = pattern + "{" + std::to_string(p.min_count()) + "}";
+            }
+        } else {
+            // Bounded: {n,m}
+            current_result_ = pattern + "{" + std::to_string(p.min_count()) + "," +
+                             std::to_string(p.max_count()) + "}";
+        }
+    }
+
+    void visit(json_string_parser &) override {
+        // JSON string content (without quotes)
+        // Pattern: (any non-quote/backslash OR escape sequences)* until closing quote
+        current_result_ = R"(( [^"\\] | "\\" ( ["\\/ bfnrt] | "u" [0-9a-fA-F]{4} ) )*)";
     }
 
     void visit(group_parser & p) override {
@@ -988,7 +1142,11 @@ class id_assignment_visitor : public parser_visitor {
         assign_id(p);
     }
 
-    void visit(char_class_parser & p) override {
+    void visit(chars_parser & p) override {
+        assign_id(p);
+    }
+
+    void visit(json_string_parser & p) override {
         assign_id(p);
     }
 
@@ -1067,7 +1225,8 @@ void until_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void not_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void any_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void space_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void char_class_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void chars_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void json_string_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void group_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void schema_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void rule_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
@@ -1193,8 +1352,20 @@ parser parser_builder::any() {
     return parser(std::make_shared<any_parser>(counter_->next()));
 }
 
-parser parser_builder::char_class(const std::string & classes) {
-    return parser(std::make_shared<char_class_parser>(classes, counter_->next()));
+parser parser_builder::chars(const std::string & classes, int min, int max) {
+    return parser(std::make_shared<chars_parser>(classes, min, max, counter_->next()));
+}
+
+parser parser_builder::one(const std::string & classes) {
+    return chars(classes, 1, 1);
+}
+
+parser parser_builder::json_string() {
+    return parser(std::make_shared<json_string_parser>(std::nullopt, counter_->next()));
+}
+
+parser parser_builder::json_string(const std::string & name) {
+    return parser(std::make_shared<json_string_parser>(name, counter_->next()));
 }
 
 parser parser_builder::group(const std::string & name, const parser & p) {
@@ -1270,36 +1441,28 @@ static parser json_parser(std::shared_ptr<parser_id_counter> counter) {
     parser_builder builder(std::move(counter));
 
     // Whitespace: space, tab, newline, carriage return
-    auto ws = builder.zero_or_more(builder.char_class("[ \\t\\n\\r]"));
+    auto ws = builder.chars("[ \\t\\n\\r]", 0, -1);
 
     // Number components
-    auto digit = builder.char_class("[0-9]");
-    auto digit1_9 = builder.char_class("[1-9]");
-    auto digits = builder.one_or_more(digit);
+    auto digit1_9 = builder.chars("[1-9]", 1, 1);
+    auto digits = builder.chars("[0-9]");
 
     // Integer part: 0 or non-zero digit followed by more digits
-    auto int_part = builder.literal("0") | (digit1_9 + builder.zero_or_more(digit));
+    auto int_part = builder.literal("0") | (digit1_9 + builder.chars("[0-9]", 0, -1));
 
     // Optional fractional part
     auto frac = builder.literal(".") + digits;
 
     // Optional exponent part
-    auto exp = (builder.literal("e") | builder.literal("E")) + builder.optional(builder.char_class("[+\\-]")) + digits;
+    auto exp = (builder.literal("e") | builder.literal("E")) + builder.optional(builder.chars("[+\\-]", 1, 1)) + digits;
 
     // Complete number
     auto number = builder.optional(builder.literal("-")) + int_part + builder.optional(frac) + builder.optional(exp);
 
     builder.add_rule("json_number", number);
 
-    // String components
-    auto hex = builder.char_class("[0-9a-fA-F]");
-    auto unicode_escape = builder.literal("\\u") + hex + hex + hex + hex;
-    auto simple_escape = builder.literal("\\") + builder.char_class("[\"\\\\bfnrt/]");
-    auto escape = simple_escape | unicode_escape;
-
-    // String character: escape sequence or any char except quote and backslash
-    auto string_char = escape | builder.char_class("[^\"\\\\]");
-    auto string = builder.literal("\"") + builder.zero_or_more(string_char) + builder.literal("\"");
+    // String: specialized single-pass parser (content only, wrapped with quotes)
+    auto string = builder.literal("\"") + builder.json_string() + builder.literal("\"");
 
     builder.add_rule("json_string", string);
 
