@@ -1080,7 +1080,7 @@ class gbnf_visitor : public parser_visitor {
 
     void visit(any_parser &) override {
         // Match any single character
-        current_result_ = "[\\x00-\\x{10FFFF}]";
+        current_result_ = ".";
     }
 
     void visit(space_parser &) override {
