@@ -340,7 +340,11 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
     if (dep_file) {
         cmd.push_back("-MD");
         cmd.push_back("-MF");
+#ifdef _WIN32
+        cmd.push_back("\"" + target_cpp + ".d\"");
+#else
         cmd.push_back(target_cpp + ".d");
+#endif
     }
 
     #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
