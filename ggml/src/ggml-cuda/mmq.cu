@@ -290,11 +290,11 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         return !fp16_mma_hardware_available(cc) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
     }
 
-    if (amd_mfma_available(cc)||amd_wmma_available(cc)) {
+    if (amd_mfma_available(cc) || amd_wmma_available(cc)) {
         // As of ROCM 7.0 rocblas/tensile performs very poorly on CDNA3 and hipblaslt (via ROCBLAS_USE_HIPBLASLT)
         // performs better but is currently suffering from a crash on this architecture.
         // TODO: Revisit when hipblaslt is fixed on CDNA3
-        if (GGML_CUDA_CC_IS_CDNA3(cc)||GGML_CUDA_CC_IS_RDNA4(cc)) {
+        if (GGML_CUDA_CC_IS_CDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
             return true;
         }
         if (ne11 <= 128 || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1) {

@@ -2262,7 +2262,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_dp4a(
 template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
-#if defined(AMD_MFMA_AVAILABLE) 
+#if defined(AMD_MFMA_AVAILABLE)
     typedef tile<16,  8, int> tile_A;
     typedef tile<16,  8, int> tile_B;
     typedef tile<16, 16, int> tile_C;

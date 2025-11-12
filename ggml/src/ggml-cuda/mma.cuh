@@ -155,30 +155,20 @@ namespace ggml_cuda_mma {
         T x[ne] = {0};
 
         static __device__ __forceinline__ int get_i(const int l) {
-            if constexpr (I == 16 && J == 8) {
-                return threadIdx.x % 16;
-            } else if constexpr (I == 32 && J == 4) {
-                return threadIdx.x % 32;
-            } else if constexpr (I == 16 && J == 16) {
+            if constexpr (I == 16 && J == 16) {
                 return 8 * (threadIdx.x / 16) + l;
-            } else if constexpr (I == 32 && J == 32) {
-                return 4 * (threadIdx.x / 32) + 8 * (l / 4) + (l % 4);
             } else {
-                static_assert(I == -1 && J == -1, "template specialization not implemented");
+                NO_DEVICE_CODE;
+                return -1;
             }
         }
 
         static __device__ __forceinline__ int get_j(const int l) {
-            if constexpr (I == 16 && J == 8) {
-                return 2 * (threadIdx.x / 16) + l;
-            } else if constexpr (I == 32 && J == 4) {
-                return 2 * (threadIdx.x / 32) + l;
-            } else if constexpr (I == 16 && J == 16) {
+            if constexpr (I == 16 && J == 16) {
                 return threadIdx.x % 16;
-            } else if constexpr (I == 32 && J == 32) {
-                return threadIdx.x % 32;
             } else {
-                static_assert(I == -1 && J == -1, "template specialization not implemented");
+                NO_DEVICE_CODE;
+                return -1;
             }
         }
 #else
