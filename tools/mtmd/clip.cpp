@@ -1,3 +1,4 @@
+// TODO(E2VL_CLEANUP): Remove debug instrumentation and env-flag diagnostics before upstream submission.
 // NOTE: This is modified from clip.cpp only for LLaVA,
 // so there might be still unnecessary artifacts hanging around
 // I'll gradually clean and extend it
@@ -1617,15 +1618,10 @@ struct clip_graph {
 
         // llava projector (also used by granite)
         if (ctx->model.hparams.has_llava_projector) {
+            // consume the full post-merge sequence directly; no row selection via patches
             embeddings = ggml_reshape_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
-
-            ggml_tensor * patches = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
-            ggml_set_name(patches, "patches");
-            ggml_set_input(patches);
-
-            // shape [1, 576, 1024]
-            // ne is whcn, ne = [1024, 576, 1, 1]
-            embeddings = ggml_get_rows(ctx0, embeddings, patches);
+            // Eagle2-VL patch: explicitly log that we are NOT performing any row gather (uninitialized indices avoided)
+            printf("[E2VL] projector: using full sequence (no row gather)\n");
 
             // print_tensor_info(embeddings, "embeddings");
 
@@ -1636,18 +1632,20 @@ struct clip_graph {
                     // ensure contiguous before reshape/permutation in patch merge
                     embeddings             = ggml_cont(ctx0, embeddings);
                     const int scale_factor = hparams.n_merge;
-                    // minimal debug: pre-merge C/T (embeddings)
-                    {
-                        int C = (int) embeddings->ne[0];
-                        int T = (int) embeddings->ne[1];
-                        printf("[E2VL] pre-merge: C=%d, T=%d\n", C, T);
-                    }
+                    int C_before = (int) embeddings->ne[0];
+                    int T_before = (int) embeddings->ne[1];
+                    printf("[E2VL] pre-merge: C=%d, T=%d (scale_factor=%d)\n", C_before, T_before, scale_factor);
                     embeddings = build_patch_merge_permute(embeddings, scale_factor);
-                    // minimal debug: post-merge C/T (embeddings)
-                    {
-                        int C_new = (int) embeddings->ne[0];
-                        int T_new = (int) embeddings->ne[1];
-                        printf("[E2VL] post-merge: C=%d, T=%d\n", C_new, T_new);
+                    int C_after = (int) embeddings->ne[0];
+                    int T_after = (int) embeddings->ne[1];
+                    printf("[E2VL] post-merge: C=%d, T=%d\n", C_after, T_after);
+                    int expected_C = C_before * scale_factor * scale_factor;
+                    int expected_T = T_before / (scale_factor * scale_factor);
+                    if (C_after != expected_C || T_after != expected_T) {
+                        printf("[E2VL] WARN: unexpected post-merge shape (possible double-merge?) got C=%d (exp %d) T=%d (exp %d)\n",
+                               C_after, expected_C, T_after, expected_T);
+                    } else {
+                        printf("[E2VL] merge check: single merge confirmed (C scales by %d^2, T divides by %d^2)\n", scale_factor, scale_factor);
                     }
                 }
                 LOG_INF("%s: llava-mlp before mm_0: emb[%lld, %lld], w0[%lld, %lld]\n", __func__,
@@ -1683,6 +1681,8 @@ struct clip_graph {
                     }
                     embeddings = ggml_mul_mat(ctx0, w2, embeddings);
                     embeddings = ggml_add(ctx0, embeddings, model.mm_2_b);
+                    // tag for post-compute stats collection
+                    ggml_set_name(embeddings, "e2vl_proj_out");
                 }
             }
             else if (ctx->proj_type() == PROJECTOR_TYPE_MLP_NORM) {
@@ -3727,12 +3727,70 @@ void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny
 static void normalize_image_u8_to_f32(const clip_image_u8 & src, clip_image_f32 & dst, const float mean[3], const float std[3]) {
     dst.nx = src.nx;
     dst.ny = src.ny;
-    dst.buf.resize(src.buf.size());
+    const size_t plane_sz = (size_t) dst.nx * (size_t) dst.ny;
+    dst.buf.resize(3 * plane_sz); // planar RGB
 
-    // TODO @ngxson : seems like this could be done more efficiently on cgraph
-    for (size_t i = 0; i < src.buf.size(); ++i) {
-        int c = i % 3; // rgb
-        dst.buf[i] = (static_cast<float>(src.buf[i]) / 255.0f - mean[c]) / std[c];
+    bool stats_enabled = std::getenv("E2VL_STATS") != nullptr;
+    double ch_sum[3] = {0.0,0.0,0.0};
+    double ch_min[3] = {1e9,1e9,1e9};
+    double ch_max[3] = {-1e9,-1e9,-1e9};
+    std::vector<float> ch_first8[3];
+    ch_first8[0].reserve(8); ch_first8[1].reserve(8); ch_first8[2].reserve(8);
+
+    for (int y = 0; y < dst.ny; ++y) {
+        for (int x = 0; x < dst.nx; ++x) {
+            size_t base = (size_t) y * (size_t) dst.nx + (size_t) x;
+            for (int c = 0; c < 3; ++c) {
+                size_t src_idx = 3ull * base + (size_t) c; // interleaved in src
+                float raw = static_cast<float>(src.buf[src_idx]) / 255.0f;
+                float v = (raw - mean[c]) / std[c];
+                size_t dst_idx = (size_t) c * plane_sz + base; // planar in dst
+                dst.buf[dst_idx] = v;
+                if (stats_enabled) {
+                    ch_sum[c] += v;
+                    ch_min[c] = std::min<double>(ch_min[c], v);
+                    ch_max[c] = std::max<double>(ch_max[c], v);
+                    if ((int)ch_first8[c].size() < 8) ch_first8[c].push_back(v);
+                }
+            }
+        }
+    }
+
+    if (stats_enabled) {
+        const double denom = double(dst.nx * dst.ny);
+        double ch_mean[3] = { ch_sum[0] / denom, ch_sum[1] / denom, ch_sum[2] / denom };
+        printf("[E2VL] preprocess stats (RGB channel order)\n");
+        for (int c = 0; c < 3; ++c) {
+            printf("[E2VL] channel %d first8: ", c);
+            for (float v : ch_first8[c]) printf(" % .6f ", v);
+            printf("\n");
+            printf("[E2VL] channel %d min=% .6f max=% .6f mean=% .6f\n", c, ch_min[c], ch_max[c], ch_mean[c]);
+        }
+    }
+
+    if (std::getenv("E2VL_PRE_DUMP") != nullptr) {
+        const char * path = std::getenv("E2VL_PRE_CPP_OUT");
+        if (!path) path = "e2vl_pre_cpp.bin";
+        std::vector<float> planar(dst.buf.size());
+        for (int c = 0; c < 3; ++c) {
+            for (int y = 0; y < dst.ny; ++y) {
+                for (int x = 0; x < dst.nx; ++x) {
+                    size_t src_idx = (size_t) c * plane_sz + (size_t) y * dst.nx + (size_t) x;
+                    size_t dst_idx = src_idx;
+                    planar[dst_idx] = dst.buf[src_idx];
+                }
+            }
+        }
+        FILE * f = fopen(path, "wb");
+        if (f) {
+            fwrite(planar.data(), sizeof(float), planar.size(), f);
+            fclose(f);
+            if (stats_enabled) {
+                printf("[E2VL] preprocess dump written (planar RGB) path=%s size=%zu floats\n", path, (size_t)planar.size());
+            }
+        } else if (stats_enabled) {
+            printf("[E2VL] WARN: failed to open preprocess dump path %s\n", path);
+        }
     }
 }
 
@@ -5107,7 +5165,19 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 for (int i = 0; i < num_patches; i++) {
                     patches[i] = i + patch_offset;
                 }
-                set_input_i32("patches", patches);
+                // Make patches optional: if the graph doesn't contain an input named "patches"
+                // (Eagle2-VL full-sequence path), skip without aborting.
+                ggml_tensor * patches_tensor = ggml_graph_get_tensor(gf, "patches");
+                if (patches_tensor && (patches_tensor->flags & GGML_TENSOR_FLAG_INPUT)) {
+                    GGML_ASSERT(patches_tensor->type == GGML_TYPE_I32);
+                    GGML_ASSERT(ggml_nelements(patches_tensor) == (int64_t)patches.size());
+                    ggml_backend_tensor_set(patches_tensor, patches.data(), 0, ggml_nbytes(patches_tensor));
+                } else {
+                    // Only log in verbose contexts (llava projector present) to avoid spam for other models.
+                    if (ctx->model.hparams.has_llava_projector) {
+                        printf("[E2VL] no 'patches' tensor in graph (full-sequence path)\n");
+                    }
+                }
             } break;
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_IDEFICS3:
@@ -5156,6 +5226,47 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     if (status != GGML_STATUS_SUCCESS) {
         LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
         return false;
+    }
+
+    // E2VL projector output stats/dump (post-compute)
+    if (std::getenv("E2VL_STATS") != nullptr || std::getenv("E2VL_DUMP") != nullptr) {
+        ggml_tensor * proj = ggml_graph_get_tensor(gf, "e2vl_proj_out");
+        if (proj != nullptr) {
+            const int64_t C = proj->ne[0];
+            const int64_t T = proj->ne[1];
+            const int64_t N = C * T;
+            std::vector<float> buf((size_t) N);
+            ggml_backend_tensor_get(proj, buf.data(), 0, ggml_nbytes(proj));
+
+            long double sum = 0.0L, sq = 0.0L;
+            for (int64_t i = 0; i < N; ++i) {
+                const long double v = buf[(size_t) i];
+                sum += v;
+                sq  += v * v;
+            }
+            const long double mean = sum / (long double) N;
+            const long double var  = std::max<long double>(0.0L, sq / (long double) N - mean * mean);
+            const long double stdv = sqrt((double) var);
+            const long double l2n  = sqrt((double) sq);
+            if (std::getenv("E2VL_STATS") != nullptr) {
+                printf("[E2VL] projector out stats (after mm.2): shape=[%lld,%lld] mean=% .6Lf std=% .6Lf L2=% .6Lf\n",
+                       (long long) C, (long long) T, mean, stdv, l2n);
+            }
+            if (std::getenv("E2VL_DUMP") != nullptr) {
+                const char * path = std::getenv("E2VL_CPP_OUT");
+                if (!path) path = "e2vl_projector_cpp.bin";
+                FILE * f = fopen(path, "wb");
+                if (f) {
+                    fwrite(buf.data(), sizeof(float), (size_t) N, f);
+                    fclose(f);
+                    printf("[E2VL] projector output dumped to %s (N=%lld)\n", path, (long long) N);
+                } else {
+                    printf("[E2VL] WARN: failed to open dump path %s\n", path);
+                }
+            }
+        } else {
+            // Silent if not present to avoid noise on non-E2VL models
+        }
     }
 
     // print debug nodes
