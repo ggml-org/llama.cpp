@@ -188,16 +188,16 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
             std::vector<std::string> tool_rules;
             for (const auto & tool : tools) {
                 if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
-                    LOG_INF("Skipping tool without function: %s", tool.dump(2).c_str());
+                    LOG_WRN("Skipping tool without function: %s", tool.dump(2).c_str());
                     continue;
                 }
                 const auto & function = tool.at("function");
                 if (!function.contains("name") || !function.at("name").is_string()) {
-                    LOG_INF("Skipping invalid function (invalid name): %s", function.dump(2).c_str());
+                    LOG_WRN("Skipping invalid function (invalid name): %s", function.dump(2).c_str());
                     continue;
                 }
                 if (!function.contains("parameters") || !function.at("parameters").is_object()) {
-                    LOG_INF("Skipping invalid function (invalid parameters): %s", function.dump(2).c_str());
+                    LOG_WRN("Skipping invalid function (invalid parameters): %s", function.dump(2).c_str());
                     continue;
                 }
                 std::string name = function.at("name");
@@ -210,14 +210,14 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                 };
                 std::vector<parameter_rule> arg_rules;
                 if (!parameters.contains("properties") || !parameters.at("properties").is_object()) {
-                    LOG_INF("Skipping invalid function (invalid properties): %s", function.dump(2).c_str());
+                    LOG_WRN("Skipping invalid function (invalid properties): %s", function.dump(2).c_str());
                     continue;
                 } else {
                     std::vector<std::string> requiredParameters;
                     if (parameters.contains("required")) {
                         try { parameters.at("required").get_to(requiredParameters); }
                         catch (const std::runtime_error&) {
-                            LOG_INF("Invalid function required parameters, ignoring: %s", function.at("required").dump(2).c_str());
+                            LOG_WRN("Invalid function required parameters, ignoring: %s", function.at("required").dump(2).c_str());
                         }
                     }
                     sort_uniq(requiredParameters);
@@ -282,7 +282,6 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
         });
 
         // grammar trigger for tool call
-        data.grammar_lazy = true;
         data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, form.scope_start + form.tool_start });
     }
 }

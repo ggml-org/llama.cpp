@@ -801,8 +801,7 @@ static std::string apply(
     const struct templates_params & inputs,
     const std::optional<json> & messages_override = std::nullopt,
     const std::optional<json> & tools_override = std::nullopt,
-    const std::optional<json> & additional_context = std::nullopt,
-    const std::optional<minja::chat_template_options> & tmpl_opts = std::nullopt)
+    const std::optional<json> & additional_context = std::nullopt)
 {
     minja::chat_template_inputs tmpl_inputs;
     tmpl_inputs.messages = messages_override ? *messages_override : inputs.messages;
@@ -820,11 +819,11 @@ static std::string apply(
     // TODO: add flag to control date/time, if only for testing purposes.
     // tmpl_inputs.now = std::chrono::system_clock::now();
 
-    minja::chat_template_options default_tmpl_opts;
+    minja::chat_template_options tmpl_opts;
     // To avoid double BOS / EOS tokens, we're manually removing begining / trailing tokens
     // instead of using `chat_template_options.use_bos_token = false`, since these tokens
     // may be needed inside the template / between messages too.
-    auto result = tmpl.apply(tmpl_inputs, tmpl_opts ? *tmpl_opts : default_tmpl_opts);
+    auto result = tmpl.apply(tmpl_inputs, tmpl_opts);
     if (inputs.add_bos && string_starts_with(result, tmpl.bos_token())) {
         result = result.substr(tmpl.bos_token().size());
     }
@@ -1817,6 +1816,7 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_minimax_m2(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
+    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_MINIMAX_M2;
@@ -1872,6 +1872,7 @@ static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
+    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
@@ -1920,6 +1921,7 @@ static void common_chat_parse_qwen3_coder_xml(common_chat_msg_parser & builder) 
 
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
+    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_KIMI_K2;
@@ -1977,6 +1979,7 @@ static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_apriel_1_5(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
+    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_APRIEL_1_5;
@@ -2030,6 +2033,7 @@ static void common_chat_parse_apriel_1_5(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_xiaomi_mimo(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
+    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_XIAOMI_MIMO;
@@ -2313,6 +2317,7 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_glm_4_5(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
+    data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     std::string prompt = apply(tmpl, inputs);
 
