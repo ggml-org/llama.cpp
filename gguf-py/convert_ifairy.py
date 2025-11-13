@@ -179,7 +179,7 @@ def quant_and_merge(key, tensor, f, weight_map):
         else:
             imag_tensor = f.get_tensor(imag_key).to(torch.float32)
         q_real, q_imag = forward(tensor, imag_tensor)
-        return merge_complex_tensor(q_imag, q_real)
+        return merge_complex_tensor(q_real, q_imag)
     elif 'imag' in key:
         real_key = key.replace('imag', 'real')
         f_name = weight_map.get(real_key)
@@ -189,7 +189,7 @@ def quant_and_merge(key, tensor, f, weight_map):
         else:
             real_tensor = f.get_tensor(real_key).to(torch.float32)
         q_real, q_imag = forward(real_tensor, tensor)   
-        return merge_complex_tensor(q_imag, q_real)
+        return merge_complex_tensor(q_real, q_imag)
     else:
         return tensor
 

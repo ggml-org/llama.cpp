@@ -13765,7 +13765,27 @@ struct llm_build_ifairy : public llm_graph_context {
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head/2, n_head,    n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head/2, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head/2, n_head_kv, n_tokens);
+/*
+            Qcur->type = GGML_TYPE_BF16;
+            Qcur->ne[0] *= 2;
+            Qcur->nb[0] /= 2;
+            Kcur->type = GGML_TYPE_BF16;
+            Kcur->ne[0] *= 2;
+            Kcur->nb[0] /= 2;
+            Qcur = ggml_cast(ctx0, Qcur, GGML_TYPE_F32);
+            Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F32);
 
+            Qcur = ggml_rope_ext(
+                        ctx0, Qcur, inp_pos, nullptr,
+                        n_rot / 2, 0, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+            Kcur = ggml_rope_ext(
+                        ctx0, Kcur, inp_pos, nullptr,
+                        n_rot / 2, 0, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+                        */
             Qcur = ggml_ifairy_rope(ctx0, Qcur, inp_pos, n_rot, 0);
             cb(Qcur, "Qcur_rope", il);
 
