@@ -65,10 +65,11 @@
 		</button>
 	{:else}
 		<!-- Non-readonly mode (ChatForm) -->
-		<div
+		<button
 			class="group relative rounded-lg border border-border bg-muted p-3 {className} {textContent
 				? 'max-w-72'
-				: 'max-w-36'}"
+				: 'max-w-36'} cursor-pointer text-left"
+			onclick={onClick}
 		>
 			<div class="absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100">
 				<RemoveButton {id} {onRemove} />
@@ -94,7 +95,7 @@
 					</div>
 				{/if}
 			</div>
-		</div>
+		</button>
 	{/if}
 {:else}
 	<button
