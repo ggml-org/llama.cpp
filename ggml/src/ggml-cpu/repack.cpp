@@ -1689,6 +1689,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         const ggml_from_float_t from_float = ggml_get_type_traits_cpu(PARAM_TYPE)->from_float;
 
+        // INFO: Quantization is done in planes to avoid extra complexity in chunking.
+        // Flattening dimensions not multiple of INTER_SIZE would require extra handling depending on how
+        // the planes are broadcast.
         for (int64_t i12 = 0; i12 < ne12; i12++) {
             char * data_ptr  = (char *) src1->data + i12 * nb12;
             char * wdata_ptr = wdata + i12 * nbw2;
@@ -1709,14 +1712,17 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         // 4x chunks per thread
         const int64_t nr0 = ggml_nrows(op->src[0]);
-        const int64_t nr1 = ne1 * ne2 * ne3;
 
         int     nth_scaled  = nth * 4;
         int64_t chunk_size0 = (nr0 + nth_scaled - 1) / nth_scaled;
-        // avoid too small chunks for narrow src1
-        int64_t chunk_size1 = MAX(16, (nr1 + nth - 1) / nth);
         int64_t nchunk0     = (nr0 + chunk_size0 - 1) / chunk_size0;
-        int64_t nchunk1     = (nr1 + chunk_size1 - 1) / chunk_size1;
+
+        // src1 is chunked only by full planes.
+        // When we flatten we need to address dimensions not multiple of the q8 INTER_SIZE
+        // to route them thorugh GEMV.
+        // nchunk1 = ne12 also avoids messing the chunking for models with no 3d tensors
+        // to avoid affecting their performance
+        int64_t nchunk1 = ne12;
 
         // Ensure minimum chunk size to avoid alignment issues with high thread counts
         // Minimum chunk size should be at least NB_COLS to prevent overlapping chunks after alignment
@@ -1725,13 +1731,11 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             nchunk0 = (nr0 + min_chunk_size - 1) / min_chunk_size;
         }
 
-        if (nth == 1 || nchunk0 * nchunk1 < nth || disable_chunking) {
-            nchunk0 = nr0 > nr1 ? nth : 1;
-            nchunk1 = nr0 > nr1 ? 1 : nth;
+        if (nth == 1 || nchunk0 < nth || disable_chunking) {
+            nchunk0 = nth;
         }
 
         const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
-        const int64_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
 
         // Ensure nchunk doesn't exceed the number of rows divided by minimum chunk size
         // This prevents creating too many tiny chunks that could overlap after alignment
@@ -1755,8 +1759,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             int64_t src0_start = dr0 * ith0;
             int64_t src0_end   = MIN(src0_start + dr0, nr0);
 
-            int64_t src1_start = dr1 * ith1;
-            int64_t src1_end   = MIN(src1_start + dr1, nr1);
+            // full-plane range for src1
+            int64_t src1_start = ith1 * ne11;
+            int64_t src1_end = (ith1 + 1) * ne11;
 
             // Align boundaries to NB_COLS - round up to ensure all data is included
             // The chunk size limiting above ensures chunks are large enough to prevent overlaps
