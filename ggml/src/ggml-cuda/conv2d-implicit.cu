@@ -781,9 +781,9 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   constexpr unsigned int MMA_M = 16;
   constexpr unsigned int MMA_N = 8;
 
-  const unsigned int K = param.c * param.r * param.s;
+  const unsigned int K = param.c;
   const uint inChannelOffset = param.c * param.w;
-  const uint weightKOffset = K;
+  const uint weightKOffset = param.c * param.r * param.s;
 
   const unsigned int PQ   = param.Ow * param.Oh;
   const unsigned int KPQ  = param.k * PQ;
@@ -799,18 +799,25 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   constexpr unsigned int mma_tiles_per_warp_n = WN / MMA_N;
   const unsigned int z = blockIdx.z;
 
-  const unsigned int ks =  (ksplit > 0) ? (weightKOffset + ksplit - 1) / ksplit : weightKOffset;
+  const unsigned int ks =  (ksplit > 0) ? (K + ksplit - 1) / ksplit : K;
   const unsigned int start_k = (ksplit > 0) ? z * ks : 0;
-  const unsigned int end_k = min(start_k + ks, weightKOffset);
+  const unsigned int end_k = min(start_k + ks, K);
   const unsigned int num_block_tiles_k = (ks + (BK-1)) / BK;
 
+  constexpr unsigned int TILE_COLS_VECTORIZED = BK / 8;
+  constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
+  constexpr unsigned int A_K_STRID = BM / ROW_STEP;
+  constexpr unsigned int B_K_STRID = BN / ROW_STEP;
 
+  unsigned int masks_a[A_K_STRID][2];
+  unsigned int element_offset_a[A_K_STRID];
 
   // calculate block/warp indices
   const unsigned int block_m = blockIdx.y;
   const unsigned int block_n = blockIdx.x;
   const unsigned int warp_m = threadIdx.y;
   const unsigned int warp_n = threadIdx.x / 32;
+  const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
 
   // double buffering
   extern __shared__ half shmem[];
@@ -858,12 +865,21 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   float4 A_gmem_cache_reg[4];
   float4 B_gmem_cache_reg[4];
 
+
+  prepareIteratorA<BM, BK, A_K_STRID, ROW_STEP>(thread_idx, masks_a, element_offset_a, param);
+ 
+
   // prefetch the first block tile of A,B into shared memory
 
   const half* A_block_gmem = input;
   const half* B_block_gmem = kernel + block_n * BN * weightKOffset;
-  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, start_k, end_k, inChannelOffset, param);
-  tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, start_k, end_k, weightKOffset, param);
+  int s = 0;
+  int r = 0;
+  while (r < param.r) {
+  // for (int r = 0; r < param.r; ++r) {
+
+  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, r, s, masks_a, element_offset_a, thread_idx, start_k, end_k, inChannelOffset, param);
+  tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, r, s, start_k, end_k, weightKOffset, param);
 
   int offset_direction = 1;
 
@@ -871,8 +887,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     __syncthreads();
 
     if (block_k != num_block_tiles_k){
-      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, block_k * BK, start_k, end_k, inChannelOffset, param);
-      tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, block_k * BK, start_k, end_k, weightKOffset, param);
+      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, r, s, block_k * BK, start_k, end_k, inChannelOffset, param);
+      tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, r, s, block_k * BK, start_k, end_k, weightKOffset, param);
     }
     half* A_warp_tile = A_block_smem + A_warp_tile_offset;
     half* B_warp_tile = B_block_smem + B_warp_tile_offset;
@@ -926,7 +942,14 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
       tileMemcpySwizzleStore<BM, NUM_THREADS, 4>(A_gmem_cache_reg, A_block_smem);
       tileMemcpySwizzleStore<BN, NUM_THREADS, 4>(B_gmem_cache_reg, B_block_smem);
     }
-  }
+  }  // iter block_k
+
+    s++;
+    if (s == param.s) {
+      s = 0;
+      r++;
+    }
+  } // iter r
 
     // reuse smem
     half *smemoutput = shmem;
@@ -1166,7 +1189,8 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
                 ks = 16;
             for (j = 2; j <= ks; j++){
                const int remainder = (BlocksM * BlocksN * j) % nsm;
-               if ((P.c * P.r * P.s) % (8*j) == 0){
+              //  if ((P.c * P.r * P.s) % (8*j) == 0){
+               if ((P.c) % (8*j) == 0){
                   if (remainder == 0) {
                     candidate = j;
                     max_remaining_waves = 0;

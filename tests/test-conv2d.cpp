@@ -301,7 +301,9 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(960,320,104,152,3,3),
         // std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1920,640,32,32,3,3)
-        std::make_tuple(1280,1280,16,16,3,3),
+        // std::make_tuple(1280,1280,16,16,3,3),
+        // std::make_tuple(32,8,24,24,3,3),
+        std::make_tuple(640,640,64,64,3,3),
         // std::make_tuple(320,640,32,32,3,3),
         // std::make_tuple(4,320,96,128,3,3),
         // std::make_tuple(320,4,96,128,3,3),
@@ -671,7 +673,7 @@ int main(void)
         // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
 
 
-        int iterations = 0;
+        int iterations = 20;
 
         double run_time0;
         std::vector<float> im2col_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
