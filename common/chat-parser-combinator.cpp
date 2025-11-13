@@ -737,7 +737,7 @@ class until_parser : public parser_base {
         parser_result result(PARSER_RESULT_SUCCESS, start, ctx.input.size());
 
         // Search for the delimiter
-        const auto it = std::search(ctx.input.begin(), ctx.input.end(), searcher_);
+        const auto it = std::search(ctx.input.begin() + start, ctx.input.end(), searcher_);
 
         if (it != ctx.input.end()) {
             result.end = std::distance(ctx.input.begin(), it);
