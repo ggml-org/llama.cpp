@@ -2477,9 +2477,14 @@ class AfmoeModel(LlamaModel):
         if (n_dense_layers := self.hparams.get("num_dense_layers")) is not None:
             self.gguf_writer.add_leading_dense_block_count(n_dense_layers)
 
-        # Gating function (sigmoid)
-        if (score_func := self.hparams.get("score_func")) is not None and score_func == "sigmoid":
+        # Expert Gating Function
+        score_func = self.hparams.get("score_func", "sigmoid")
+        if score_func == "sigmoid":
             self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        elif score_func == "softmax":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+        else:
+            raise ValueError(f"Unsupported score_function value: {score_func}")
 
         # Route normalization and scaling
         if (route_norm := self.hparams.get("route_norm")) is not None:
@@ -2524,29 +2529,6 @@ class AfmoeModel(LlamaModel):
             else:
                 return []
 
-        # Map attention gate
-        elif ".self_attn.gate_proj." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid), data_torch)]
-
-        # Map shared experts
-        elif ".mlp.shared_experts.gate_proj." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), data_torch)]
-        elif ".mlp.shared_experts.up_proj." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), data_torch)]
-        elif ".mlp.shared_experts.down_proj." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, bid), data_torch)]
-
-        # Pre FFN norm
-        elif ".pre_mlp_layernorm." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_PRE_NORM, bid), data_torch)]
-
-        # Post FFN norm
-        elif ".post_mlp_layernorm." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_POST_NORM, bid), data_torch)]
-
-        # Map router
-        elif ".mlp.router.gate." in name and bid is not None:
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_INP, bid), data_torch)]
 
         if name.endswith(".expert_bias"):
             name = name.replace(".expert_bias", ".expert_bias.bias")

@@ -314,6 +314,10 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.sinks", # openai-moe
         ),
 
+        MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.self_attn.gate_proj", # afmoe
+        ),
+
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
@@ -371,6 +375,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate.wg",                   # hunyuan
             "model.layers.{bid}.block_sparse_moe.primary_router", # smallthinker
             "model.layers.{bid}.feed_forward.gate",               # lfm2moe
+            "model.layers.{bid}.mlp.router.gate",               # afmoe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
