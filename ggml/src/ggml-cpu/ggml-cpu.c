@@ -3274,6 +3274,13 @@ void ggml_cpu_fp16_to_fp32(const ggml_fp16_t * x, float * y, int64_t n) {
         __m128 y_vec = _mm_cvtph_ps(x_vec);
         _mm_storeu_ps(y + i, y_vec);
     }
+#elif defined(__riscv_zvfh)
+    for (int vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e16m1(n - i);
+        vfloat16m1_t vx = __riscv_vle16_v_f16m1((_Float16 *)&x[i], vl);
+        vfloat32m2_t vy = __riscv_vfwcvt_f_f_v_f32m2(vx, vl);
+        __riscv_vse32_v_f32m2(&y[i], vy, vl);
+    }
 #endif
 
     for (; i < n; ++i) {

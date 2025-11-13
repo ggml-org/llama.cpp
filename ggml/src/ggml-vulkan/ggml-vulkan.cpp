@@ -12670,6 +12670,12 @@ static bool ggml_vk_can_fuse_rms_norm_mul_rope(ggml_backend_vk_context * ctx, co
         return false;
     }
 
+    // conditions for pipeline creation
+    if (!(ctx->device->float_controls_rte_fp16 &&
+        sizeof(vk_op_rms_norm_mul_rope_push_constants) <= ctx->device->properties.limits.maxPushConstantsSize)) {
+        return false;
+    }
+
     return true;
 }
 

@@ -448,6 +448,35 @@ void ggml_cann_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     ggml_cann_release_resources(ctx, norm, acl_src, acl_dst);
 }
 
+void ggml_cann_l2_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src = dst->src[0];
+
+    aclTensor * acl_src = ggml_cann_create_tensor(src);
+    aclTensor * acl_dst = ggml_cann_create_tensor(dst);
+
+    size_t  type_size = ggml_type_size(src->type);
+    int64_t n_bytes   = src->ne[3]* src->ne[2]* src->ne[1]* type_size;
+    ggml_cann_pool_alloc temp_buffer_allocator(ctx.pool(), n_bytes);
+    void *               buffer       = temp_buffer_allocator.get();
+
+    int64_t div_ne[] = {1, src->ne[1], src->ne[2], src->ne[3]};
+    size_t  div_nb[GGML_MAX_DIMS];
+    div_nb[0] = sizeof(float);
+    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+        div_nb[i] = div_nb[i - 1] * div_ne[i - 1];
+    }
+    aclTensor *          acl_div      = ggml_cann_create_tensor(buffer, ACL_FLOAT, type_size, div_ne, div_nb, GGML_MAX_DIMS);
+
+    std::vector<int64_t> norm_dims = { 3 };
+    aclIntArray * dims_array = aclCreateIntArray(norm_dims.data(), norm_dims.size());
+
+    float p_value = 2.0f;
+    aclScalar * p_scalar = aclCreateScalar(&p_value, aclDataType::ACL_FLOAT);
+    GGML_CANN_CALL_ACLNN_OP(ctx, Norm, acl_src, p_scalar, dims_array, true, acl_div);
+    GGML_CANN_CALL_ACLNN_OP(ctx, Div, acl_src, acl_div, acl_dst);
+    ggml_cann_release_resources(ctx, dims_array, p_scalar, acl_src, acl_dst, acl_div);
+}
+
 void ggml_cann_group_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     ggml_tensor * src = dst->src[0];
 
