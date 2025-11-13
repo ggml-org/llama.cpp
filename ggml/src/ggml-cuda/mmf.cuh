@@ -29,7 +29,6 @@ static __global__ void mul_mat_f(
         const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
 // TODO: handle this in a consistent and simpler way after AMD MFMA support has been added
-// The ideal one shall be: #if defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
 #if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
 #if defined(AMD_WMMA_AVAILABLE)
     // Special case for tf32, just dummy mma layout as wmma doesn't support it.
@@ -178,11 +177,11 @@ static __global__ void mul_mat_f(
 
                     if constexpr (!has_ids) {
                         const float2 tmp = j < cols_per_block ? y2[j*stride_col_y + col] : make_float2(0.0f, 0.0f);
-                        tile_xy[j0*tile_k_padded + threadIdx.x] = ggml_cuda_cast<T, float2>(tmp);
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = ggml_cuda_cast<T>(tmp);
                     } else {
                         const bool valid = j < cols_per_block && (col_base + j) < ncols_dst_total && slot_map[j] >= 0;
                         float2 tmp = valid ? *(const float2*) &y[slot_map[j]*stride_channel_y + 2*(j*stride_col_y + col)] : make_float2(0.0f, 0.0f);
-                        tile_xy[j0*tile_k_padded + threadIdx.x] = ggml_cuda_cast<T, float2>(tmp);
+                        tile_xy[j0*tile_k_padded + threadIdx.x] = ggml_cuda_cast<T>(tmp);
                     }
                 }
             } else {
@@ -271,7 +270,6 @@ static __global__ void mul_mat_f_ids(
         const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const uint3 sis1_fd, const uint3 nch_fd) {
 // TODO: handle this in a consistent and simpler way after AMD MFMA support has been added
-// The ideal one shall be: #if defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
 #if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
 #if defined(AMD_WMMA_AVAILABLE)
     // Special case for tf32, just dummy mma layout as wmma doesn't support it.
@@ -441,7 +439,7 @@ static __global__ void mul_mat_f_ids(
 #pragma unroll
                 for (int j0 = 0; j0 < tile_B::I; ++j0) {
                     const float2 tmp = vals_buf[curr_buf][j0];
-                    tile_xy[j0*tile_k_padded + threadIdx.x] = ggml_cuda_cast<T, float2>(tmp);
+                    tile_xy[j0*tile_k_padded + threadIdx.x] = ggml_cuda_cast<T>(tmp);
                 }
 
                 if (itB + 1 < ntB) {
