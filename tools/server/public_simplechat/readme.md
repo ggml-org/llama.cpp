@@ -746,7 +746,10 @@ sliding window based drop off or even before they kick in, this can help in many
 * ChatMessage
   * assign a globally unique (ie across sessions) id to each chat message instance.
   * add support for deleting chat message based on its uniquie id in SimpleChat.
-  * add a popover div block in html, which contains the edit menu wrt chat messages
+  * add a popover div block in html, which acts as a popup menu containing buttons to work with
+    individual chat messages.
+    * experiment and finalise on anchor based relative positioning of the popover menu.
+    * have a del button, which allows one to delete the currently in focus chat message.
 
 
 #### ToDo
