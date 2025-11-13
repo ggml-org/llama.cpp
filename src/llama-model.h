@@ -8,6 +8,7 @@
 #include "llama-vocab.h"
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -408,6 +409,13 @@ struct llama_layer {
     struct llama_layer_nextn nextn;
 };
 
+// define a comparator for the buft -> ctx map to ensure that the order is well-defined:
+struct ggml_backend_buft_comparator {
+    bool operator()(const ggml_backend_buffer_type_t & lhs, const ggml_backend_buffer_type_t & rhs) const {
+        return strcmp(ggml_backend_buft_name(lhs), ggml_backend_buft_name(rhs)) < 0;
+    }
+};
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -475,13 +483,13 @@ struct llama_model {
 
     /// @brief Create backend buffers for all tensors
     bool create_backend_buffers(std::size_t                                                  size_data,
-                                const std::map<ggml_backend_buffer_type_t, ggml_context *> & ctx_map,
+                                std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> & ctx_map,
                                 llama_model_loader & ml, bool use_mmap_buffer, bool use_mlock, int32_t n_gpu_layers,
                                 bool do_print_backend_buffers_info = true);
 
     /// @brief Create backend buffers for tensors on a split file idenfified by `idx`. Removes the split from the map.
     bool create_split_backend_buffers(
-        uint16_t idx, std::map<std::pair<ggml_backend_buffer_type_t, uint16_t>, ggml_context *> & ctx_split_map,
+        uint16_t idx, std::map<std::pair<ggml_backend_buffer_type_t, uint16_t>, ggml_context_ptr> & ctx_split_map,
         llama_model_loader & ml, bool use_mmap_buffer, bool use_mlock, int32_t n_gpu_layers);
 
     void print_backend_buffers_info(int32_t n_gpu_layers);
