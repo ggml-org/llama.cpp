@@ -245,7 +245,7 @@ class parser_builder {
     // Wraps a parser with a semantic action callback.
     // The callback is invoked on successful parse with the result, matched text, and environment.
     //   S -> A [action]
-    parser action(const parser & p, std::function<void(parser_result &, std::string_view, parser_environment &)> fn, int when = PARSER_RESULT_SUCCESS);
+    parser action(const parser & p, std::function<void(parser_result &, std::string_view, parser_environment &)> fn, int when = PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
 
     // Convenience action wrappers for common patterns
 
