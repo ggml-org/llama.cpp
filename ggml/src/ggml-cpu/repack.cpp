@@ -647,10 +647,10 @@ void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         }
         for (int l = 0; l < nb; l++) {
             for (int k = 0; k < (qk / (4 * blocklen)); k++) {
-                const int8_t *scales_0 = b_ptr[l].scales + (k / 4) * 64;
-                const int8_t *scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
-                const int8_t *scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
-                const int8_t *scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
+                const int8_t * scales_0 = b_ptr[l].scales + (k / 4) * 64;
+                const int8_t * scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
+                const int8_t * scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
+                const int8_t * scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
                 for (int j = 0; j < ncols_interleaved; j++) {
                     sumi1 = 0;
                     sumi2 = 0;
@@ -1226,10 +1226,10 @@ void ggml_gemm_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
             for (int l = 0; l < nb; l++) {
                 for (int k = 0; k < (qk / (4 * blocklen)); k++) {
 
-                    const int8_t *scales_0 = b_ptr[l].scales + (k / 4) * 64;
-                    const int8_t *scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
-                    const int8_t *scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
-                    const int8_t *scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
+                    const int8_t * scales_0 = b_ptr[l].scales + (k / 4) * 64;
+                    const int8_t * scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
+                    const int8_t * scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
+                    const int8_t * scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
                     for (int m = 0; m < 4; m++) {
                         for (int j = 0; j < ncols_interleaved; j++) {
                             sumi1 = 0;
@@ -1564,7 +1564,7 @@ static block_q2_Kx8 make_block_q2_Kx8(block_q2_K * in, unsigned int blck_size_in
 }
 
 
-static block_q6_Kx8 make_block_q6_Kx8(block_q6_K* in, unsigned int blck_size_interleave) {
+static block_q6_Kx8 make_block_q6_Kx8(block_q6_K * in, unsigned int blck_size_interleave) {
     block_q6_Kx8 out;
 
     // Delta(scale) of the eight Q6_K structures are copied onto the output interleaved structure
@@ -1596,7 +1596,6 @@ static block_q6_Kx8 make_block_q6_Kx8(block_q6_K* in, unsigned int blck_size_int
     }
 
     for (int i = 0; i < 128; i++) {
-
         // Index for selecting which q6k super block
         int src1 = (i % 16) / 2;
         // Index for selecting scale
@@ -1604,6 +1603,7 @@ static block_q6_Kx8 make_block_q6_Kx8(block_q6_K* in, unsigned int blck_size_int
 
         out.scales[i] = in[src1].scales[src2];
     }
+
     return out;
 
 }
@@ -1701,13 +1701,13 @@ static int repack_q2_K_to_q2_K_8_bl(struct ggml_tensor * t, int interleave_block
     GGML_UNUSED(data_size);
 }
 
-static int repack_q6_K_to_q6_K_8_bl(struct ggml_tensor* t, int interleave_block, const void* GGML_RESTRICT data, size_t data_size) {
+static int repack_q6_K_to_q6_K_8_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
     GGML_ASSERT(t->type == GGML_TYPE_Q6_K);
     GGML_ASSERT(interleave_block == 8);
     constexpr int nrows_interleaved = 8;
 
-    block_q6_Kx8* dst = (block_q6_Kx8*)t->data;
-    const block_q6_K* src = (const block_q6_K*)data;
+    block_q6_Kx8 * dst = (block_q6_Kx8 *)t->data;
+    const block_q6_K * src = (const block_q6_K *)data;
     block_q6_K dst_tmp[8];
     int nrow = ggml_nrows(t);
     int nblocks = t->ne[0] / QK_K;
@@ -2453,7 +2453,7 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
         }
     } else if (cur->type == GGML_TYPE_Q6_K) {
-        if (ggml_cpu_has_avx2()) {
+        if (ggml_cpu_has_avx512()) {
             if (cur->ne[1] % 8 == 0) {
                 return &q6_K_8x8_q8_K;
             }
