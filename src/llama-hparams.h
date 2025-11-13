@@ -151,10 +151,11 @@ struct llama_hparams {
     float    f_attn_out_scale = 0.0f;
     uint32_t attn_temp_length = 0;
 
-    bool causal_attn   = true;
-    bool use_alibi     = false;
-    bool attn_soft_cap = false;
-    bool use_kq_norm   = false;
+    bool causal_attn         = true;
+    bool use_alibi           = false;
+    bool attn_soft_cap       = false;
+    bool use_kq_norm         = false;
+    bool offload_input_layer = false;
 
     // for Classifiers
     uint32_t n_cls_out = 1;

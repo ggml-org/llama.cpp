@@ -2081,6 +2081,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
                 hparams.n_layer_dense_lead = hparams.n_layer;
+                hparams.offload_input_layer = true;
                 switch (hparams.n_ff()) {
                     case  4608: type = LLM_TYPE_350M; break;
                     case  6912: type = LLM_TYPE_700M; break;
@@ -2101,6 +2102,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
                 }
 
+                hparams.offload_input_layer = true;
                 type = LLM_TYPE_8B_A1B;
             } break;
         case LLM_ARCH_SMALLTHINKER:
@@ -2266,8 +2268,22 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     };
 
     // assign the input layer
-    // there is very little benefit to offloading the input layer, so always keep it on the CPU
+    // there is very little benefit to offloading the input layer, so keep it on the CPU, with exception for some specific models
     pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
+    if (hparams.offload_input_layer && act_gpu_layers > 0) {
+        int anchor_layer = 0;
+        if (n_layer == 0) {
+            anchor_layer = 0;
+        } else if (i_gpu_start < n_layer) {
+            anchor_layer = i_gpu_start;
+        } else {
+            anchor_layer = (int) n_layer - 1;
+        }
+        auto candidate = get_layer_buft_list(anchor_layer);
+        if (candidate.dev != cpu_dev) {
+            pimpl->dev_input = candidate;
+        }
+    }
 
     // assign the repeating layers to the devices according to the splits
     pimpl->dev_layer.resize(n_layer);
