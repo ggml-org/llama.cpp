@@ -946,10 +946,10 @@ static inline HVX_Vector hvx_vec_rsqrt_fp32(HVX_Vector in_vec) {
 }
 
 static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard_inf(HVX_Vector v) {
-    static const float kMaxExp = 88.02f;  // log(INF)
+    static const float kMaxExp = -88.02f;  // log(INF)
 
     const HVX_Vector     max_exp = Q6_V_vsplat_R(*((uint32_t *) &kMaxExp));
-    const HVX_VectorPred pred0   = Q6_Q_vcmp_gt_VsfVsf(v, max_exp);
+    const HVX_VectorPred pred0   = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
 
     HVX_Vector out = hvx_vec_fast_sigmoid_fp32(v);
 
