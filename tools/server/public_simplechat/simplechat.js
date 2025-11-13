@@ -1211,17 +1211,16 @@ class MultiChatUI {
         secMain.classList.add(`role-${msg.ns.role}`)
         secMain.classList.add('chat-message')
         secMain.addEventListener('mouseenter', (ev)=>{
-            let trect = secMain.getBoundingClientRect();
-            let prect = this.elPopoverChatMsg.getBoundingClientRect();
-            this.elPopoverChatMsg.style.top = `${trect.top+2}px`
-            this.elPopoverChatMsg.style.left = `${((trect.width)*0.9) - prect.width}px`
+            console.log(`DBUG:MCUI:ChatMessageMEnter:${msg.uniqId}`)
+            if (this.uniqIdChatMsgPO != msg.uniqId) {
+                this.elPopoverChatMsg.hidePopover()
+            }
             this.uniqIdChatMsgPO = msg.uniqId
             // @ts-ignore
             this.elPopoverChatMsg.showPopover({source: secMain})
         })
         secMain.addEventListener('mouseleave', (ev)=>{
-            this.elPopoverChatMsg.hidePopover()
-            //this.uniqIdChatMsgPO = -1
+            console.log(`DBUG:MCUI:ChatMessageMLeave:${msg.uniqId}`)
         })
         elParent?.append(secMain)
         this.elLastChatMessage = secMain;
