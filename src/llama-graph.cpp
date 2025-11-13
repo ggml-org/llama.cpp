@@ -600,22 +600,17 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
-            // ===[ SPARSEK: one-time env init ]===========================================
-    // NOTE: read once per process; used as defaults for this context.
-    static bool    SPARSEK_ENABLE_INIT    = [](){ if (const char* s=getenv("LLAMA_SPARSEK_ENABLE")) return atoi(s)!=0; return false; }();
-    static int32_t SPARSEK_TOPK_INIT      = [](){ if (const char* s=getenv("LLAMA_SPARSEK_TOPK"))   return std::max(0, atoi(s)); return 0; }();
-    static int32_t SPARSEK_WIN_INIT       = [](){ if (const char* s=getenv("LLAMA_SPARSEK_WIN"))    return std::max(0, atoi(s)); return 0; }();
-    static int32_t SPARSEK_STRIDE_INIT    = [](){ if (const char* s=getenv("LLAMA_SPARSEK_STRIDE")) return std::max(0, atoi(s)); return 0; }();
-    static bool    SPARSEK_EN_LOCAL_INIT  = [](){ if (const char* s=getenv("LLAMA_SPARSEK_ENABLE_LOCAL"))  return atoi(s)!=0; return true; }();
-    static bool    SPARSEK_EN_STRIDE_INIT = [](){ if (const char* s=getenv("LLAMA_SPARSEK_ENABLE_STRIDE")) return atoi(s)!=0; return true; }();
+      // === SparseK: load from model metadata (no env vars) =========================
+        this->sparsek_enable    = hparams.sparsek_enable;
+        this->sparsek_topk      = hparams.sparsek_topk;
+        this->sparsek_win_local = hparams.sparsek_window;
+        this->sparsek_stride    = hparams.sparsek_stride;
 
-    this->sparsek_enable    = SPARSEK_ENABLE_INIT;
-    this->sparsek_topk      = SPARSEK_TOPK_INIT;
-    this->sparsek_win_local = SPARSEK_WIN_INIT;
-    this->sparsek_stride    = SPARSEK_STRIDE_INIT;
-    this->sparsek_en_local  = SPARSEK_EN_LOCAL_INIT;
-    this->sparsek_en_stride = SPARSEK_EN_STRIDE_INIT;
-    // ============================================================================
+        // Default gating (until model metadata defines its own)
+        this->sparsek_en_local  = true;
+        this->sparsek_en_stride = true;
+        // ============================================================================
+
     }
 
 
