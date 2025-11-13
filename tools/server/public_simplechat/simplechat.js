@@ -663,16 +663,24 @@ class SimpleChat {
     }
 
     /**
-     * Delete a chat message in place using chat message uniqId.
+     * Get xchat index corresponding to given chat message uniqId.
      * @param {number} uniqId
      */
-    delete(uniqId) {
-        let index = this.xchat.findIndex((msg)=>{
+    get_chatmessage(uniqId) {
+        return this.xchat.findIndex((msg)=>{
             if (msg.uniqId == uniqId) {
                 return true
             }
             return false
         })
+    }
+
+    /**
+     * Delete a chat message in place using chat message uniqId.
+     * @param {number} uniqId
+     */
+    delete(uniqId) {
+        let index = this.get_chatmessage(uniqId);
         if (index >= 0) {
             this.xchat.splice(index, 1)
         }
@@ -1027,7 +1035,12 @@ class MultiChatUI {
         this.elBtnTool = /** @type{HTMLButtonElement} */(document.getElementById("tool-btn"));
         this.elInToolName = /** @type{HTMLInputElement} */(document.getElementById("toolname-in"));
         this.elInToolArgs = /** @type{HTMLInputElement} */(document.getElementById("toolargs-in"));
-        this.elPopoverEdit = /** @type{HTMLElement} */(document.getElementById("popover-edit"));
+
+        // chat message popover menu related
+        this.elPopoverChatMsg = /** @type{HTMLElement} */(document.getElementById("popover-chatmsg"));
+        this.elPopoverChatMsgCopyBtn = /** @type{HTMLElement} */(document.getElementById("popover-chatmsg-copy"));
+        this.elPopoverChatMsgDelBtn = /** @type{HTMLElement} */(document.getElementById("popover-chatmsg-del"));
+        this.uniqIdChatMsgPO = -1;
 
         // Save any placeholder set by default like through html, to restore where needed
         this.elInUser.dataset.placeholder = this.elInUser.placeholder
@@ -1197,6 +1210,19 @@ class MultiChatUI {
         let secMain = document.createElement('section')
         secMain.classList.add(`role-${msg.ns.role}`)
         secMain.classList.add('chat-message')
+        secMain.addEventListener('mouseenter', (ev)=>{
+            let trect = secMain.getBoundingClientRect();
+            let prect = this.elPopoverChatMsg.getBoundingClientRect();
+            this.elPopoverChatMsg.style.top = `${trect.top+2}px`
+            this.elPopoverChatMsg.style.left = `${((trect.width)*0.9) - prect.width}px`
+            this.uniqIdChatMsgPO = msg.uniqId
+            // @ts-ignore
+            this.elPopoverChatMsg.showPopover({source: secMain})
+        })
+        secMain.addEventListener('mouseleave', (ev)=>{
+            this.elPopoverChatMsg.hidePopover()
+            //this.uniqIdChatMsgPO = -1
+        })
         elParent?.append(secMain)
         this.elLastChatMessage = secMain;
         // Create role para
@@ -1398,6 +1424,21 @@ class MultiChatUI {
                 ev.preventDefault();
             }
         });
+
+        // ChatMessage edit popover menu
+
+        this.elPopoverChatMsgDelBtn.addEventListener('click', (ev) => {
+            console.log(`DBUG:MCUI:ChatMsgPO:Del:${this.curChatId}:${this.uniqIdChatMsgPO}`)
+            this.simpleChats[this.curChatId].delete(this.uniqIdChatMsgPO)
+            this.chat_show(this.curChatId)
+        })
+
+        this.elPopoverChatMsgCopyBtn.addEventListener('click', (ev) => {
+            console.log(`DBUG:MCUI:ChatMsgPO:Copy:${this.curChatId}:${this.uniqIdChatMsgPO}`)
+            let index = this.simpleChats[this.curChatId].get_chatmessage(this.uniqIdChatMsgPO)
+            let items = new ClipboardItem({ });
+            navigator.clipboard.write([items])
+        })
 
     }
 
