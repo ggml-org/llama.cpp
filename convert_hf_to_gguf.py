@@ -2478,12 +2478,12 @@ class AfmoeModel(LlamaModel):
             self.gguf_writer.add_leading_dense_block_count(n_dense_layers)
 
         # Expert Gating Function
-        score_func = self.hparams.get("score_func", "sigmoid")
+        score_func = self.hparams.get("score_func")
         if score_func == "sigmoid":
             self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
         elif score_func == "softmax":
             self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
-        else:
+        elif score_func is not None:
             raise ValueError(f"Unsupported score_function value: {score_func}")
 
         # Route normalization and scaling
