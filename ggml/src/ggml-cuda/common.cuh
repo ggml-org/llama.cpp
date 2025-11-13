@@ -997,7 +997,15 @@ struct ggml_cuda_concurrent_event {
     }
 };
 
-using ggml_cuda_stream_context = std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event>;
+struct ggml_cuda_stream_context {
+    std::vector<const ggml_tensor *> original_graph;
+    std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> concurrent_events;
+
+    void reset() {
+        original_graph.clear();
+        concurrent_events.clear();
+    }
+};
 
 struct ggml_backend_cuda_context {
     int device;
