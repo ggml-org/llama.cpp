@@ -816,7 +816,7 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
     } else if (regex_expr == "\\p{Han}+") {
         // K2's first pattern - handle all K2 patterns together
         bpe_offsets = unicode_regex_split_custom_kimi_k2(text, offsets);
-    } else if (regex_expr == "\\p{Nd}+") {
+    } else if (regex_expr == "\\p{AFMoE_digits}") {
         // AFMOE digit pattern - use custom implementation for proper splitting
         bpe_offsets = unicode_regex_split_custom_afmoe(text, offsets);
     }
