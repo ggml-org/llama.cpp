@@ -1,5 +1,6 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
+	import { expect } from 'storybook/test';
 	import { MarkdownContent } from '$lib/components/app';
 	import { AI_TUTORIAL_MD } from './fixtures/ai-tutorial.js';
 	import { API_DOCS_MD } from './fixtures/api-docs.js';
@@ -68,64 +69,62 @@ All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attr
 		class: 'max-w-[56rem] w-[calc(100vw-2rem)]'
 	}}
 	play={async ({ canvasElement }) => {
-		const { expect } = await import('storybook/internal/test');
-		
 		// Wait for component to render
-		await new Promise(resolve => setTimeout(resolve, 100));
-		
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
 		// Find all links in the rendered content
 		const links = canvasElement.querySelectorAll('a[href]');
-		
+
 		// Test that we have the expected number of links
 		expect(links.length).toBeGreaterThan(0);
-		
+
 		// Test each link for proper attributes
 		links.forEach((link) => {
 			const href = link.getAttribute('href');
-			
+
 			// Test that external links have proper security attributes
 			if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
 				expect(link.getAttribute('target')).toBe('_blank');
 				expect(link.getAttribute('rel')).toBe('noopener noreferrer');
 			}
 		});
-		
+
 		// Test specific links exist
-		const hugginFaceLink = Array.from(links).find(link => 
-			link.getAttribute('href') === 'https://huggingface.co'
+		const hugginFaceLink = Array.from(links).find(
+			(link) => link.getAttribute('href') === 'https://huggingface.co'
 		);
 		expect(hugginFaceLink).toBeTruthy();
 		expect(hugginFaceLink?.textContent).toBe('Hugging Face Homepage');
-		
-		const githubLink = Array.from(links).find(link => 
-			link.getAttribute('href') === 'https://github.com/ggml-org/llama.cpp'
+
+		const githubLink = Array.from(links).find(
+			(link) => link.getAttribute('href') === 'https://github.com/ggml-org/llama.cpp'
 		);
 		expect(githubLink).toBeTruthy();
 		expect(githubLink?.textContent).toBe('GitHub Repository');
-		
-		const openaiLink = Array.from(links).find(link => 
-			link.getAttribute('href') === 'https://openai.com'
+
+		const openaiLink = Array.from(links).find(
+			(link) => link.getAttribute('href') === 'https://openai.com'
 		);
 		expect(openaiLink).toBeTruthy();
 		expect(openaiLink?.textContent).toBe('OpenAI Website');
-		
-		const googleLink = Array.from(links).find(link => 
-			link.getAttribute('href') === 'https://www.google.com'
+
+		const googleLink = Array.from(links).find(
+			(link) => link.getAttribute('href') === 'https://www.google.com'
 		);
 		expect(googleLink).toBeTruthy();
 		expect(googleLink?.textContent).toBe('Google Search');
-		
+
 		// Test inline links (auto-linked URLs)
-		const exampleLink = Array.from(links).find(link => 
-			link.getAttribute('href') === 'https://example.com'
+		const exampleLink = Array.from(links).find(
+			(link) => link.getAttribute('href') === 'https://example.com'
 		);
 		expect(exampleLink).toBeTruthy();
-		
-		const pythonDocsLink = Array.from(links).find(link => 
-			link.getAttribute('href') === 'https://docs.python.org'
+
+		const pythonDocsLink = Array.from(links).find(
+			(link) => link.getAttribute('href') === 'https://docs.python.org'
 		);
 		expect(pythonDocsLink).toBeTruthy();
-		
+
 		console.log(`✅ URL Links test passed - Found ${links.length} links with proper attributes`);
 	}}
 />

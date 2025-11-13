@@ -7,8 +7,9 @@
 #include "unary-ops.h"
 #include "vec.h"
 
-#include <float.h>
+#include <cfloat>
 #include <algorithm>
+#include <functional>
 
 // ggml_compute_forward_dup
 
@@ -7664,6 +7665,18 @@ void ggml_compute_forward_timestep_embedding(
 
 // ggml_compute_forward_argsort
 
+template<enum ggml_sort_order order>
+struct argsort_cmp {
+    const float * data;
+    bool operator()(int32_t a, int32_t b) const {
+        if constexpr (order == GGML_SORT_ORDER_ASC) {
+            return data[a] < data[b];
+        } else {
+            return data[a] > data[b];
+        }
+    }
+};
+
 static void ggml_compute_forward_argsort_f32(
     const ggml_compute_params * params,
     ggml_tensor * dst) {
@@ -7682,23 +7695,25 @@ static void ggml_compute_forward_argsort_f32(
     ggml_sort_order order = (ggml_sort_order) ggml_get_op_params_i32(dst, 0);
 
     for (int64_t i = ith; i < nr; i += nth) {
-        int32_t * dst_data = (int32_t *)((char *) dst->data + i*nb1);
         const float * src_data = (float *)((char *) src0->data + i*nb01);
+
+        int32_t * dst_data = (int32_t *)((char *) dst->data + i*nb1);
 
         for (int64_t j = 0; j < ne0; j++) {
             dst_data[j] = j;
         }
 
-        // C doesn't have a functional sort, so we do a bubble sort instead
-        for (int64_t j = 0; j < ne0; j++) {
-            for (int64_t k = j + 1; k < ne0; k++) {
-                if ((order == GGML_SORT_ORDER_ASC  && src_data[dst_data[j]] > src_data[dst_data[k]]) ||
-                    (order == GGML_SORT_ORDER_DESC && src_data[dst_data[j]] < src_data[dst_data[k]])) {
-                    int32_t tmp = dst_data[j];
-                    dst_data[j] = dst_data[k];
-                    dst_data[k] = tmp;
-                }
-            }
+        switch (order) {
+            case GGML_SORT_ORDER_ASC:
+                std::sort(dst_data, dst_data + ne0, argsort_cmp<GGML_SORT_ORDER_ASC>{src_data});
+                break;
+
+            case GGML_SORT_ORDER_DESC:
+                std::sort(dst_data, dst_data + ne0, argsort_cmp<GGML_SORT_ORDER_DESC>{src_data});
+                break;
+
+            default:
+                GGML_ABORT("invalid sort order");
         }
     }
 }

@@ -20,7 +20,7 @@
 #if defined(LLAMA_USE_CURL)
 #include <curl/curl.h>
 #include <curl/easy.h>
-#else
+#elif defined(LLAMA_USE_HTTPLIB)
 #include "http.h"
 #endif
 
@@ -467,7 +467,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
     return { res_code, std::move(res_buffer) };
 }
 
-#else
+#elif defined(LLAMA_USE_HTTPLIB)
 
 static bool is_output_a_tty() {
 #if defined(_WIN32)
@@ -713,6 +713,8 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
 
 #endif // LLAMA_USE_CURL
 
+#if defined(LLAMA_USE_CURL) || defined(LLAMA_USE_HTTPLIB)
+
 static bool common_download_file_single(const std::string & url,
                                         const std::string & path,
                                         const std::string & bearer_token,
@@ -907,33 +909,6 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag, cons
     return { hf_repo, ggufFile, mmprojFile };
 }
 
-std::vector<common_cached_model_info> common_list_cached_models() {
-    std::vector<common_cached_model_info> models;
-    const std::string cache_dir = fs_get_cache_directory();
-    const std::vector<common_file_info> files = fs_list_files(cache_dir);
-    for (const auto & file : files) {
-        if (string_starts_with(file.name, "manifest=") && string_ends_with(file.name, ".json")) {
-            common_cached_model_info model_info;
-            model_info.manifest_path = file.path;
-            std::string fname = file.name;
-            string_replace_all(fname, ".json", ""); // remove extension
-            auto parts = string_split<std::string>(fname, '=');
-            if (parts.size() == 4) {
-                // expect format: manifest=<user>=<model>=<tag>=<other>
-                model_info.user  = parts[1];
-                model_info.model = parts[2];
-                model_info.tag   = parts[3];
-            } else {
-                // invalid format
-                continue;
-            }
-            model_info.size = 0; // TODO: get GGUF size, not manifest size
-            models.push_back(model_info);
-        }
-    }
-    return models;
-}
-
 //
 // Docker registry functions
 //
@@ -1051,4 +1026,47 @@ std::string common_docker_resolve_model(const std::string & docker) {
         LOG_ERR("%s: Docker Model download failed: %s\n", __func__, e.what());
         throw;
     }
+}
+
+#else
+
+common_hf_file_res common_get_hf_file(const std::string &, const std::string &, bool) {
+    throw std::runtime_error("download functionality is not enabled in this build");
+}
+
+bool common_download_model(const common_params_model &, const std::string &, bool) {
+    throw std::runtime_error("download functionality is not enabled in this build");
+}
+
+std::string common_docker_resolve_model(const std::string &) {
+    throw std::runtime_error("download functionality is not enabled in this build");
+}
+
+#endif // LLAMA_USE_CURL || LLAMA_USE_HTTPLIB
+
+std::vector<common_cached_model_info> common_list_cached_models() {
+    std::vector<common_cached_model_info> models;
+    const std::string cache_dir = fs_get_cache_directory();
+    const std::vector<common_file_info> files = fs_list_files(cache_dir);
+    for (const auto & file : files) {
+        if (string_starts_with(file.name, "manifest=") && string_ends_with(file.name, ".json")) {
+            common_cached_model_info model_info;
+            model_info.manifest_path = file.path;
+            std::string fname = file.name;
+            string_replace_all(fname, ".json", ""); // remove extension
+            auto parts = string_split<std::string>(fname, '=');
+            if (parts.size() == 4) {
+                // expect format: manifest=<user>=<model>=<tag>=<other>
+                model_info.user  = parts[1];
+                model_info.model = parts[2];
+                model_info.tag   = parts[3];
+            } else {
+                // invalid format
+                continue;
+            }
+            model_info.size = 0; // TODO: get GGUF size, not manifest size
+            models.push_back(model_info);
+        }
+    }
+    return models;
 }
