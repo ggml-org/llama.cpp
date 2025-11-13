@@ -94,13 +94,14 @@
 }
 #popover-chatmsg {
     position:fixed;
-    position-area: span-bottom center;
     /*
-    inset-block-end: anchor(end)-;
-    inset-inline-end: anchor(self-start);
+    position-area: span-bottom center;
     */
+    inset-block-start: anchor(start);
+    inset-inline-start: anchor(center);
     background-color: transparent;
     padding: 0;
+    margin: 0;
     border-width: 0;
 }
 #popover-chatmsg button {
