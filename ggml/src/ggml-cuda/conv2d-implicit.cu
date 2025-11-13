@@ -949,6 +949,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
       s = 0;
       r++;
     }
+    A_block_smem = shmem;
+    B_block_smem = &shmem[BM * BK];
   } // iter r
 
     // reuse smem
