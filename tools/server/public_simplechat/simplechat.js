@@ -1434,9 +1434,14 @@ class MultiChatUI {
 
         this.elPopoverChatMsgCopyBtn.addEventListener('click', (ev) => {
             console.log(`DBUG:MCUI:ChatMsgPO:Copy:${this.curChatId}:${this.uniqIdChatMsgPO}`)
-            let index = this.simpleChats[this.curChatId].get_chatmessage(this.uniqIdChatMsgPO)
-            let items = new ClipboardItem({ });
-            navigator.clipboard.write([items])
+            let chatSession = this.simpleChats[this.curChatId]
+            let index = chatSession.get_chatmessage(this.uniqIdChatMsgPO)
+            let chat = chatSession.xchat[index]
+            if (!chat.ns.has_content()) {
+                return
+            }
+            let item = new ClipboardItem({ 'text/plain': new Blob([chat.ns.getContent()], { type: 'text/plain'}) });
+            navigator.clipboard.write([item])
         })
 
     }
