@@ -3037,7 +3037,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
 #ifndef NDEBUG
     const size_t num_unary = std::count(ops.begin(), ops.end(), GGML_OP_UNARY);
     GGML_ASSERT(unary_ops.size() == num_unary);
-#endif;
+#endif
 
     //TODO: remove special case once ggml_can_fuse can handle empty nodes
     std::initializer_list<enum ggml_op> topk_moe_ops =
