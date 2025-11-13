@@ -743,12 +743,15 @@ sliding window based drop off or even before they kick in, this can help in many
   * add open, transact, put and get. Use for chat session save and load
   * getKeys used to show Restore/Load button wrt chat sessions.
 
+* ChatMessage
+  * assign a globally unique (ie across sessions) id to each chat message instance.
+  * add support for deleting chat message based on its uniquie id in SimpleChat.
+  * add a popover div block in html, which contains the edit menu wrt chat messages
+
 
 #### ToDo
 
 Is the tool call promise land trap deep enough, need to think through and explore around this once later.
-
-Handle multimodal handshaking with ai models [WIP].
 
 Add fetch_rss and may be different document formats processing related tool calling, in turn through
 the simpleproxy.py if and where needed.

@@ -257,6 +257,16 @@ class NSChatMessage {
 
 class ChatMessageEx {
 
+    static uniqCounter = 0
+
+    /**
+     * Get a globally (ie across chat sessions) unique id wrt chat messages.
+     */
+    static getUniqId() {
+        this.uniqCounter += 1
+        return this.uniqCounter
+    }
+
     /**
      * Represent a Message in the Chat.
      * @param {NSChatMessage|undefined} nsChatMsg - will create a default NSChatMessage instance, if undefined
@@ -268,6 +278,7 @@ class ChatMessageEx {
         } else {
             this.ns = new NSChatMessage()
         }
+        this.uniqId = ChatMessageEx.getUniqId()
         this.trimmedContent = trimmedContent;
     }
 
@@ -652,6 +663,22 @@ class SimpleChat {
     }
 
     /**
+     * Delete a chat message in place using chat message uniqId.
+     * @param {number} uniqId
+     */
+    delete(uniqId) {
+        let index = this.xchat.findIndex((msg)=>{
+            if (msg.uniqId == uniqId) {
+                return true
+            }
+            return false
+        })
+        if (index >= 0) {
+            this.xchat.splice(index, 1)
+        }
+    }
+
+    /**
      * Check if the last message in the chat history is a ToolTemp role based one.
      * If so, then
      * * update that to a regular Tool role based message.
@@ -1000,6 +1027,7 @@ class MultiChatUI {
         this.elBtnTool = /** @type{HTMLButtonElement} */(document.getElementById("tool-btn"));
         this.elInToolName = /** @type{HTMLInputElement} */(document.getElementById("toolname-in"));
         this.elInToolArgs = /** @type{HTMLInputElement} */(document.getElementById("toolargs-in"));
+        this.elPopoverEdit = /** @type{HTMLElement} */(document.getElementById("popover-edit"));
 
         // Save any placeholder set by default like through html, to restore where needed
         this.elInUser.dataset.placeholder = this.elInUser.placeholder
