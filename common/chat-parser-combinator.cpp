@@ -1397,19 +1397,19 @@ parser parser_builder::partial(const parser & p) {
 
 parser parser_builder::append_reasoning(const parser & p) {
     return action(p, [](parser_result &, std::string_view matched, parser_environment & env) {
-        if (!env.reasoning_content.empty()) {
-            env.reasoning_content += "\n";
+        if (!env.result.reasoning_content.empty()) {
+            env.result.reasoning_content += "\n";
         }
-        env.reasoning_content += matched;
+        env.result.reasoning_content += matched;
     }, PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
 }
 
 parser parser_builder::append_content(const parser & p) {
     return action(p, [](parser_result &, std::string_view matched, parser_environment & env) {
-        if (!env.content.empty()) {
-            env.content += "\n";
+        if (!env.result.content.empty()) {
+            env.result.content += "\n";
         }
-        env.content += matched;
+        env.result.content += matched;
     }, PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
 }
 
@@ -1445,7 +1445,7 @@ parser parser_builder::add_tool_call(const parser & p) {
             env.tool_call_args,
             env.tool_call_id
         };
-        env.tool_calls.push_back(tool_call);
+        env.result.tool_calls.push_back(tool_call);
 
         // Clear the fields to prevent bleeding to next tool call
         env.tool_call_id.clear();

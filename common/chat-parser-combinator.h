@@ -1,5 +1,7 @@
 #pragma once
 
+#include "chat.h"
+
 #include <nlohmann/json_fwd.hpp>
 
 #include <memory>
@@ -9,15 +11,11 @@
 #include <string_view>
 #include <functional>
 #include <variant>
-#include <vector>
 
-struct common_chat_tool_call;
 struct common_grammar_builder;
 
 struct parser_environment {
-    std::string content;
-    std::string reasoning_content;
-    std::vector<common_chat_tool_call> tool_calls;
+    common_chat_msg result;
 
     // Tool call fields for building tool calls
     std::string tool_call_id;
