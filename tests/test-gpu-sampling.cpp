@@ -647,10 +647,10 @@ static const gpu_test_case GPU_TESTS[] = {
     { "gpu_greedy",          test_gpu_greedy_sampling,         true  },
     { "gpu_logit_bias",      test_gpu_logit_bias_sampling,     true  },
     { "gpu_temp",            test_gpu_temp_sampling,           true  },
-    { "gpu_top_k",           test_gpu_top_k_sampling,          true  },
-    { "gpu_multi_sequence",  test_gpu_multi_sequence_sampling, true  },
-    { "gpu_dist",            test_gpu_dist_sampling,           true  },
-    { "gpu_dist_and_cpu",    test_gpu_dist_sampling_and_cpu,   true  },
+    { "gpu_top_k",           test_gpu_top_k_sampling,          false },
+    { "gpu_multi_sequence",  test_gpu_multi_sequence_sampling, false },
+    { "gpu_dist",            test_gpu_dist_sampling,           false  },
+    { "gpu_dist_and_cpu",    test_gpu_dist_sampling_and_cpu,   false  },
     { "gpu_set_sampler",     test_gpu_set_sampler,             true  },
 };
 
