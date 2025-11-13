@@ -13,6 +13,7 @@
 #include "ggml-cuda/concat.cuh"
 #include "ggml-cuda/conv-transpose-1d.cuh"
 #include "ggml-cuda/conv2d.cuh"
+#include "ggml-cuda/conv3d.cuh"
 #include "ggml-cuda/conv2d-dw.cuh"
 #include "ggml-cuda/conv2d-transpose.cuh"
 #include "ggml-cuda/convert.cuh"
@@ -2660,6 +2661,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_IM2COL_3D:
             ggml_cuda_op_im2col_3d(ctx, dst);
             break;
+        case GGML_OP_CONV_3D:
+            ggml_cuda_op_conv3d(ctx, dst);
+            break;
         case GGML_OP_CONV_2D:
             ggml_cuda_op_conv2d(ctx, dst);
             break;
@@ -4111,6 +4115,36 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ROPE_BACK: {
             return op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
         }
+        case GGML_OP_CONV_3D: {
+            if (op->src[0] == nullptr || op->src[1] == nullptr) {
+                return false;
+            }
+
+            const ggml_type in_t  = op->src[1]->type; // input
+            const ggml_type ker_t = op->src[0]->type; // kernel
+            const ggml_type out_t = op->type;         // dst
+
+            if (in_t != GGML_TYPE_F32) {
+                return false;
+            }
+            if (!(ker_t == GGML_TYPE_F16 || ker_t == GGML_TYPE_F32)) {
+                return false;
+            }
+            if (out_t != GGML_TYPE_F32) {
+                return false;
+            }
+            if (!ggml_is_contiguous(op->src[0])) {
+                return false;
+            }
+            if (op->src[1]->type != GGML_TYPE_F32) {
+                return false;
+            }
+            if (op->type         != GGML_TYPE_F32) {
+                return false;
+            }
+            
+            return true;
+        } break;
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_3D:
         case GGML_OP_CONV_2D:
