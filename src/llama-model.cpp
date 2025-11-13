@@ -84,6 +84,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_15B:           return "15B";
         case LLM_TYPE_16B:           return "16B";
         case LLM_TYPE_20B:           return "20B";
+        case LLM_TYPE_26B:           return "26B";
         case LLM_TYPE_27B:           return "27B";
         case LLM_TYPE_30B:           return "30B";
         case LLM_TYPE_32B:           return "32B";
@@ -723,7 +724,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
 
                 switch (hparams.n_layer) {
-                    case 56: type = LLM_TYPE_1B; break;
+                    case 56: type = LLM_TYPE_6B; break;
+                    case 32: type = LLM_TYPE_26B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
