@@ -437,10 +437,7 @@ namespace ggml_cuda_mma {
             xi[0] = xs[0];
         }
 #elif defined(AMD_WMMA_AVAILABLE)
-        constexpr int nbytes = sizeof(t.x);
-        // Special case for RDNA3 fp16 and bf16 wmma, the size is 32 bytes.
-        constexpr int alignment = nbytes > ggml_cuda_get_max_cpy_bytes() ? ggml_cuda_get_max_cpy_bytes() : nbytes;
-        ggml_cuda_memcpy_1<sizeof(t.x), alignment>(t.x, xs0 + t.get_i(0) * stride + t.get_j(0));
+        ggml_cuda_memcpy_1<sizeof(t.x)>(t.x, xs0 + t.get_i(0) * stride + t.get_j(0));
 #else
 #pragma unroll
         for (int l = 0; l < t.ne; ++l) {
@@ -742,17 +739,7 @@ namespace ggml_cuda_mma {
 
     static __device__ __forceinline__ void mma(
             tile<16, 16, float> & D, const tile<16, 8, nv_bfloat162> & A, const tile<16, 8, nv_bfloat162> & B) {
-#ifdef AMPERE_MMA_AVAILABLE
-        const int * Axi = (const int *) A.x;
-        const int * Bxi = (const int *) B.x;
-        int       * Dxi = (int       *) D.x;
-        asm("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};"
-            : "+r"(Dxi[0]), "+r"(Dxi[1]), "+r"(Dxi[2]), "+r"(Dxi[3])
-            : "r"(Axi[0]), "r"(Axi[1]), "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[0]), "r"(Bxi[2]));
-        asm("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};"
-            : "+r"(Dxi[4]), "+r"(Dxi[5]), "+r"(Dxi[6]), "+r"(Dxi[7])
-            : "r"(Axi[0]), "r"(Axi[1]), "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[1]), "r"(Bxi[3]));
-#elif defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_WMMA_AVAILABLE)
         using bf16x8_t = __attribute__((ext_vector_type(8))) __bf16;
         using floatx8_t = __attribute__((ext_vector_type(8))) float;
         floatx8_t& acc_frag = reinterpret_cast<floatx8_t&>(D.x[0]);
