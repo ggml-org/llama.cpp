@@ -462,7 +462,7 @@ enum test_mode {
 };
 
 // Output format support similar to llama-bench
-enum output_formats { CONSOLE, SQL, CSV };
+enum output_formats { CONSOLE, SQL, CSV, JSON };
 
 static const char * output_format_str(output_formats format) {
     switch (format) {
@@ -472,6 +472,8 @@ static const char * output_format_str(output_formats format) {
             return "sql";
         case CSV:
             return "csv";
+        case JSON:
+            return "json";
         default:
             GGML_ABORT("invalid output format");
     }
@@ -484,6 +486,8 @@ static bool output_format_from_str(const std::string & s, output_formats & forma
         format = SQL;
     } else if (s == "csv") {
         format = CSV;
+    } else if (s == "json") {
+        format = JSON;
     } else {
         return false;
     }
@@ -980,6 +984,212 @@ struct console_printer : public printer {
     }
 };
 
+struct json_printer : public printer {
+    void print_header() override {
+        printf("{\n");
+    }
+    void print_footer() override {
+        printf("\n]"); // backends end and before overall passed status
+    }
+    void print_test_result(const test_result & result) override {
+        if (result.test_mode == "test") {
+            print_test_console(result);
+        } else if (result.test_mode == "perf") {
+            print_perf_console(result);
+        } else if (result.test_mode == "support") {
+            print_support_console(result);
+        }
+    }
+
+    void print_operation(const test_operation_info & info) override {
+        printf("  %s(%s): ", info.op_name.c_str(), info.op_params.c_str());
+        fflush(stdout);
+
+        // Handle large tensor skip first
+        if (info.is_large_tensor_skip) {
+            printf("skipping large tensors for speed \n");
+            return;
+        }
+
+        // Handle not supported status
+        if (info.status == test_status_t::NOT_SUPPORTED) {
+            if (!info.failure_reason.empty()) {
+                printf("not supported [%s]\n", info.failure_reason.c_str());
+            } else {
+                printf("not supported [%s]\n", info.backend_name.c_str());
+            }
+            return;
+        }
+
+        // Handle errors and additional information
+        if (info.has_error) {
+            if (info.error_component == "allocation") {
+                fprintf(stderr, "failed to allocate tensors [%s] ", info.backend_name.c_str());
+            } else if (info.error_component == "backend") {
+                fprintf(stderr, "  Failed to initialize %s backend\n", info.backend_name.c_str());
+            } else {
+                fprintf(stderr, "Error in %s: %s\n", info.error_component.c_str(), info.error_details.c_str());
+            }
+        }
+
+        // Handle gradient info
+        if (info.has_gradient_info) {
+            printf("[%s] nonfinite gradient at index %" PRId64 " (%s=%f) ", info.op_name.c_str(), info.gradient_index,
+                   info.gradient_param_name.c_str(), info.gradient_value);
+        }
+
+        // Handle MAA error
+        if (info.has_maa_error) {
+            printf("[%s] MAA = %.9f > %.9f ", info.op_name.c_str(), info.maa_error, info.maa_threshold);
+        }
+
+        // Handle compare failure
+        if (info.is_compare_failure) {
+            printf("compare failed ");
+        }
+
+        // Print final status
+        if (info.status == test_status_t::OK) {
+            printf("\033[1;32mOK\033[0m\n");
+        } else {
+            printf("\033[1;31mFAIL\033[0m\n");
+        }
+    }
+
+    void print_summary(const test_summary_info & info) override {
+         printf(",\n\"passed\": \"%zu/%zu\"", info.tests_passed, info.tests_total);
+    }
+
+    void print_backend_status(const backend_status_info & info) override {
+        printf("],\n\"status\": \"%s\"", info.status == test_status_t::OK ? "OK" : "FAIL");
+
+        printf("}");
+    }
+
+    void print_testing_start(const testing_start_info & info) override {
+        info.device_count;
+    }
+
+    bool is_first_backend = true;
+    void print_backend_init(const backend_init_info & info) override {
+        if (info.skipped) {
+            return;
+        }
+
+        if (is_first_backend) {
+            printf("\n\"backends\"\n : [\n{\n");
+        }
+        else {
+            printf(",{\n");
+        }
+
+        printf("\"backend\": \"%s\"", info.device_name.c_str());
+        if (!info.description.empty()) {
+            printf(",\n\"description\": \"%s\"", info.description.c_str());
+        }
+        if (info.has_memory_info) {
+            printf(",\n\"memory\": \"%zu MB (%zu MB free)\"", info.memory_total_mb, info.memory_free_mb);
+        }
+        printf("\n");
+
+        is_first_backend = false;
+    }
+
+    void print_overall_summary(const overall_summary_info & info) override {
+        printf(",\n\"passed\": \"%zu/%zu\"", info.backends_passed, info.backends_total);
+        printf("}");
+    }
+
+    void print_failed_tests(const std::vector<std::string> & failed_tests) override {
+        if (failed_tests.empty()) {
+            return;
+        }
+
+        printf("\nFailing tests:\n");
+        for (const auto & test_name : failed_tests) {
+            printf("  %s\n", test_name.c_str());
+        }
+    }
+
+  private:
+    bool is_first_test = true;
+    void print_test_console(const test_result & result) {
+        if (is_first_test) {
+            printf(",\n\"op_tests\": [\n{");
+        } else {
+            printf(",{");
+        }
+
+        printf("\n\"op\":\"%s\"", result.op_name.c_str());
+        printf("\n,\"params\":\"%s\"", result.op_params.c_str());
+        fflush(stdout);
+
+        printf("\n,\"support\": %s", result.supported ? "true" : "false");
+        if (!result.supported) {
+            return;
+        }
+
+        printf("\n,\"result\": \"%s\"", result.passed ? "pass" : "fail");
+
+        printf("\n}");
+
+        is_first_test = false;
+    }
+
+    bool is_first_perf = true;
+    void print_perf_console(const test_result & result) {
+        if (is_first_perf) {
+            printf(",\n\"op_perfs\": [\n{");
+        }
+        else {
+            printf(",{");
+        }
+
+        printf("\n\"op\":\"%s\"", result.op_name.c_str());
+        printf("\n,\"params\":\"%s\"", result.op_params.c_str());
+        fflush(stdout);
+
+        if (!result.supported) {
+            printf("not supported\n");
+            return;
+        }
+
+        printf("\n,\"n_runs\":\"%d\"", result.n_runs);
+        printf("\n,\"time_us_per_run\":%8.2f", result.time_us);
+
+        if (result.flops > 0) {
+            printf("\n,\"perf\":%f", result.flops);
+            uint64_t op_flops_per_run = result.flops * result.time_us / 1e6;
+            printf("\n\",flops_per_run\":\"%" PRIu64 "\"", op_flops_per_run);
+        } else {
+            printf("\n,\"memory_per_run\":%zu", result.memory_kb);
+            printf("\n,\"bandwidth\":%f", result.bandwidth_gb_s);
+        }
+        printf("\n}");
+
+        is_first_perf = false;
+    }
+
+    bool is_first_support = true;
+    void print_support_console(const test_result & result) {
+        if (is_first_support) {
+            printf(",\n\"op_tests\": [\n{");
+        } else {
+            printf(",{");
+        }
+
+        printf("\n\"op\":\"%s\"", result.op_name.c_str());
+        printf("\n,\"params\":\"%s\"", result.op_params.c_str());
+        fflush(stdout);
+
+        printf("\n,\"support\": %s", result.supported ? "true" : "false");
+
+        printf("\n}");
+
+        is_first_support = false;
+    }
+};
+
 struct sql_printer : public printer {
     static std::string get_sql_field_type(const std::string & field) {
         switch (test_result::get_field_type(field)) {
@@ -1080,6 +1290,8 @@ static std::unique_ptr<printer> create_printer(output_formats format) {
             return std::make_unique<sql_printer>();
         case CSV:
             return std::make_unique<csv_printer>();
+        case JSON:
+            return std::make_unique<json_printer>();
     }
     GGML_ABORT("invalid output format");
 }
@@ -8645,7 +8857,7 @@ static void show_test_coverage() {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>] [--list-ops] [--show-coverage]\n", argv[0]);
+    printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv|json>] [--list-ops] [--show-coverage]\n", argv[0]);
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
