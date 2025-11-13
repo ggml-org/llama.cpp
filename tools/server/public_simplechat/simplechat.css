@@ -92,6 +92,15 @@
     max-width: 20vmin;
     max-height: 20vmin;
 }
+#popover-edit {
+    position:absolute;
+    background-color: transparent;
+    padding: 0;
+    border-width: 0;
+}
+#popover-edit button {
+    padding: 0;
+}
 
 
 .gridx2 {
