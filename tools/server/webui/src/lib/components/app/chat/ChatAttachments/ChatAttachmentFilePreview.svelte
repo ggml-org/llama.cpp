@@ -67,7 +67,7 @@
 		<!-- Non-readonly mode (ChatForm) -->
 		<button
 			class="group relative rounded-lg border border-border bg-muted p-3 {className} {textContent
-				? 'max-w-72'
+				? 'max-h-24 max-w-72'
 				: 'max-w-36'} cursor-pointer text-left"
 			onclick={onClick}
 		>
@@ -82,7 +82,7 @@
 					<div class="relative">
 						<div
 							class="overflow-hidden font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
-							style="max-height: 4rem; line-height: 1.2em;"
+							style="max-height: 3rem; line-height: 1.2em;"
 						>
 							{getPreviewText(textContent)}
 						</div>
