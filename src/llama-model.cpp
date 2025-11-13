@@ -7581,6 +7581,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_BAILINGMOE:
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_SMOLLM3:
+        case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
             return LLAMA_ROPE_TYPE_NORM;
@@ -7639,7 +7640,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_COGVLM:
         case LLM_ARCH_PANGU_EMBED:
-        case LLM_ARCH_ARCEE:
         case LLM_ARCH_AFMOE:
             return LLAMA_ROPE_TYPE_NEOX;
 
