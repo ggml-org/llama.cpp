@@ -868,80 +868,108 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
         ggml_tensor * k,
         ggml_tensor * base_mask,
         int          il) const {
+
     // If features are disabled, return base mask as-is.
-    if (!sparsek_enable ||
-        (sparsek_topk <= 0 && !sparsek_en_local && !sparsek_en_stride)) {
+    if (!sparsek_enable || sparsek_topk <= 0) {
         cb(base_mask, "sparsek_passthrough_base", il);
         return base_mask;
-   }
+    }
 
-    // 1) Compute content-based scores ~ K * Q without forcing 2D reshape
-    // Let GGML handle batched matmul on the current 4D layout
-    ggml_tensor * scores4 = ggml_mul_mat(ctx0, k, q);  // batched K * Q keeping head/stream dims
-    cb(scores4, "sparsek_scores4_raw", il);
+    // ---------------------------------------------------------------------
+    // 0) Derive layout from base_mask first (cheaper / more robust).
+    //    base_mask is assumed to be [n_kv, n_rows, n_head, n_stream].
+    // ---------------------------------------------------------------------
+    const int64_t n_kv    = base_mask->ne[0];
+    const int64_t n_rows  = base_mask->ne[1];
+    const int64_t n_head  = std::max<int64_t>(1, base_mask->ne[2]);
+    const int64_t n_stream= std::max<int64_t>(1, base_mask->ne[3]);
+    const int64_t hs      = n_head * n_stream;          // heads * streams
 
-    // Make contiguous before reshape
-    scores4 = ggml_cont(ctx0, scores4);
-
-    // IMPORTANT: include head/stream into the columns so nelements match
-    const int64_t n_kv_calc   = scores4->ne[0];                 // should equal n_kv
-    const int64_t cols_calc   = scores4->ne[1]                  // rows_p per head/stream slice
-                            * std::max<int64_t>(1, scores4->ne[2])
-                            * std::max<int64_t>(1, scores4->ne[3]);
-
-    // Safety: prefer runtime-derived n_kv_calc over base guess
-    ggml_tensor * scores = ggml_reshape_2d(ctx0, scores4, n_kv_calc, cols_calc);
-    cb(scores, "sparsek_scores", il);
-
-    // 2) Top-K indices along dim-0 (per column)
-    // Clamp top-k so it never exceeds the KV length
-    const int32_t topk_safe = std::max<int32_t>(0, std::min<int32_t>(sparsek_topk, (int32_t)scores->ne[0]));
-    ggml_tensor * topk_idx = ggml_top_k(ctx0, scores, topk_safe); // [topk, cols_calc]
-    cb(topk_idx, "sparsek_topk_idx", il);
-
-    // 3) Build -INF base and scatter 0's for selected rows
-    // Keep shapes consistent: operate in 3D for set_rows, then reshape back.
-    // initialize tensor with -INF everywhere (safe replacement for ggml_scale_bias)
-    ggml_tensor * neg2d = ggml_scale_bias(ctx0, scores, 0.0f, -INFINITY); // fill with -INF directly
-    ggml_tensor * rows3d = ggml_reshape_3d(ctx0, neg2d, /*ne0*/ scores->ne[0],
-                                        /*ne1*/ 1,
-                                        /*ne2*/ scores->ne[1]);         // [n_kv,1,cols]
- 
-    ggml_tensor * picked = ggml_get_rows(ctx0, rows3d, topk_idx);   // [topk,1,cols]
-    ggml_tensor * zeros  = ggml_scale(ctx0, picked, 0.0f);          // zero only selected rows
-    ggml_tensor * merged3d = ggml_set_rows(ctx0, rows3d, zeros, topk_idx);// safer scatter
-
-    // 4) Final union with base (0/-INF encoding)
-    // We need to tile base_mask columns from n_rows_p to cols_calc = n_rows_p * (heads*streams)
-
-    // Ensure 2D base
-    ggml_tensor * base2d = ggml_reshape_2d(ctx0, base_mask, base_mask->ne[0], base_mask->ne[1]); // [n_kv, n_rows_p]
-
-    // Compute replication factor along columns
-    const int64_t base_cols = base2d->ne[1];               // n_rows_p
-    const int64_t cols_calc2 = scores->ne[1];              // cols_calc (must match allow’s 2nd dim)
-    const int64_t hs = cols_calc2 / base_cols;             // heads*streams
-
-    // Optional runtime guard (passthrough if mismatch)
-    if (hs <= 0 || base_cols * hs != cols_calc2) {
-        // Fallback: if shapes don’t align, skip SparseK union to avoid assert
-        cb(base_mask, "sparsek_broadcast_mismatch_passthrough", il);
+    if (n_rows <= 0 || hs <= 0) {
+        cb(base_mask, "sparsek_invalid_base_layout_passthrough", il);
         return base_mask;
     }
-    ggml_tensor * base_rep2 = ggml_reshape_2d(ctx0, base2d, scores->ne[0], cols_calc2); // [n_kv, cols_calc]
-    ggml_tensor * base_rep4 = ggml_reshape_4d(ctx0, base_rep2,
-        base_mask->ne[0], base_mask->ne[1], base_mask->ne[2], base_mask->ne[3]);
 
-    // Align allow-mask to the same 4D shape as base_mask
-    ggml_tensor * allow2d = ggml_reshape_2d(ctx0, merged3d, scores->ne[0], scores->ne[1]); // [n_kv, cols_calc]
-    ggml_tensor * allow4  = ggml_reshape_4d(ctx0, allow2d,
-        base_mask->ne[0], base_mask->ne[1], base_mask->ne[2], base_mask->ne[3]);
-    cb(allow4, "sparsek_allow_topk_only", il);
+    // ---------------------------------------------------------------------
+    // 1) Compute content-based scores ~ K * Q on current 4D layout.
+    //    Result is [n_kv, n_rows, n_head, n_stream] or compatible.
+    // ---------------------------------------------------------------------
+    ggml_tensor * scores4 = ggml_mul_mat(ctx0, k, q);
+    cb(scores4, "sparsek_scores4_raw", il);
 
-    ggml_tensor * final_mask = ggml_add(ctx0, allow4, base_rep4);
+    // Make contiguous only if required by later reshape.
+    if (!ggml_is_contiguous(scores4)) {
+        scores4 = ggml_cont(ctx0, scores4);
+    }
+
+    // Flatten head/stream dimensions into column dimension.
+    // We want scores2d = [n_kv, n_rows * hs].
+    const int64_t cols_calc = n_rows * hs;
+    ggml_tensor * scores2d  = ggml_reshape_2d(ctx0, scores4, n_kv, cols_calc);
+    cb(scores2d, "sparsek_scores2d", il);
+
+    // ---------------------------------------------------------------------
+    // 2) Top-K indices along dim-0 (per column).
+    // ---------------------------------------------------------------------
+    const int32_t topk_safe =
+        std::max<int32_t>(0, std::min<int32_t>(sparsek_topk, (int32_t) n_kv));
+    if (topk_safe == 0) {
+        cb(base_mask, "sparsek_topk_zero_passthrough", il);
+        return base_mask;
+    }
+
+    ggml_tensor * topk_idx = ggml_top_k(ctx0, scores2d, topk_safe); // [topk, cols_calc]
+    cb(topk_idx, "sparsek_topk_idx", il);
+
+    // ---------------------------------------------------------------------
+    // 3) Build SparseK mask:
+    //    Start from all -INF [n_kv, cols_calc] then set selected rows to 0.
+    //    We avoid using "scores2d" as input to scale_bias to reduce
+    //    unnecessary dataflow dependencies.
+    // ---------------------------------------------------------------------
+    ggml_tensor * neg2d = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, cols_calc);
+    ggml_set_f32(neg2d, -INFINITY);                          // constant -INF
+
+    ggml_tensor * rows3d = ggml_reshape_3d(ctx0, neg2d, n_kv, 1, cols_calc); // [n_kv, 1, cols]
+    ggml_tensor * picked = ggml_get_rows(ctx0, rows3d, topk_idx);            // [topk, 1, cols]
+    ggml_tensor * zeros  = ggml_scale(ctx0, picked, 0.0f);                   // [topk, 1, cols] = 0
+    ggml_tensor * merged3d = ggml_set_rows(ctx0, rows3d, zeros, topk_idx);   // [n_kv, 1, cols]
+
+    // ---------------------------------------------------------------------
+    // 4) Broadcast into [n_kv, n_rows, hs] and combine with base_mask.
+    // ---------------------------------------------------------------------
+    ggml_tensor * mask3 = ggml_reshape_3d(ctx0, merged3d, n_kv, n_rows, hs);
+    cb(mask3, "sparsek_allow_topk_only", il);
+
+    // base2d: [n_kv, n_rows]
+    ggml_tensor * base2d = ggml_reshape_2d(ctx0, base_mask, n_kv, n_rows);
+
+    // Safety check: rows must match.
+    if (base2d->ne[0] != n_kv || base2d->ne[1] != n_rows) {
+        cb(base_mask, "sparsek_kv_or_rows_mismatch_passthrough", il);
+        return base_mask;
+    }
+
+    // Broadcast base_mask into [n_kv, n_rows, hs].
+    ggml_tensor * base3    = ggml_reshape_3d(ctx0, base2d, n_kv, n_rows, 1);
+    ggml_tensor * base_rep = ggml_repeat(ctx0, base3, mask3);                // [n_kv, n_rows, hs]
+
+    // Combine SparseK and base (0 / -INF encoding).
+    ggml_tensor * final3 = ggml_add(ctx0, mask3, base_rep);                 // [n_kv, n_rows, hs]
+
+    // ---------------------------------------------------------------------
+    // 5) Reshape back to original 4D layout.
+    // ---------------------------------------------------------------------
+    ggml_tensor * final_mask = ggml_reshape_4d(
+        ctx0,
+        final3,
+        base_mask->ne[0],
+        base_mask->ne[1],
+        base_mask->ne[2],
+        base_mask->ne[3]);
+
     cb(final_mask, "sparsek_final_mask", il);
     return final_mask;
-
 }
 
 ggml_tensor * llm_graph_context::maybe_apply_sparsek_mask(
