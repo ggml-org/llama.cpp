@@ -1150,7 +1150,9 @@ struct json_printer : public printer {
         fflush(stdout);
 
         if (!result.supported) {
-            printf("not supported\n");
+            printf(",\n\"support\": false");
+
+            printf("\n}");
             return;
         }
 
@@ -1160,7 +1162,7 @@ struct json_printer : public printer {
         if (result.flops > 0) {
             printf("\n,\"perf\":%f", result.flops);
             uint64_t op_flops_per_run = result.flops * result.time_us / 1e6;
-            printf("\n\",flops_per_run\":\"%" PRIu64 "\"", op_flops_per_run);
+            printf("\n,\"flops_per_run\":\"%" PRIu64 "\"", op_flops_per_run);
         } else {
             printf("\n,\"memory_per_run\":%zu", result.memory_kb);
             printf("\n,\"bandwidth\":%f", result.bandwidth_gb_s);
