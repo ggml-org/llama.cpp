@@ -3199,6 +3199,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
             [[maybe_unused]] int prev_i = 0;
 
             ggml_cuda_stream_context & stream_ctx = cuda_ctx->stream_context();
+
             if (stream_ctx.concurrent_events.size() > 0) {
                 cgraph->nodes = const_cast<ggml_tensor **>(stream_ctx.original_graph.data());
             }
@@ -3232,7 +3233,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     if (stream_ctx.concurrent_events.find(prev_node) != stream_ctx.concurrent_events.end()) {
                         concurrent_event = &stream_ctx.concurrent_events[prev_node];
 
-                        GGML_LOG_DEBUG("Launching %d streams at %s\n", concurrent_event->n_streams, node->name);
+                        GGML_LOG_DEBUG("Launching %d streams at %s\n", concurrent_event->n_streams, prev_node->name);
 
                         cudaStream_t main_stream = cuda_ctx->stream();  // this should be stream 0
                         GGML_ASSERT(cuda_ctx->curr_stream_no == 0);
@@ -3244,6 +3245,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         }
 
                         is_concurrent_event_active = true;
+                        cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
+                        GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
                     }
                 }
                 prev_i = i;
