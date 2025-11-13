@@ -410,7 +410,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     // return that token id directly.
     const llama_token gpu_sampled_token  = llama_get_sampled_token_ith(ctx, idx);
     if (gpu_sampled_token != LLAMA_TOKEN_NULL) {
-        LOG_INF("%s: GPU sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, gpu_sampled_token);
+        LOG_DBG("%s: GPU sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, gpu_sampled_token);
         return gpu_sampled_token;
     }
 
