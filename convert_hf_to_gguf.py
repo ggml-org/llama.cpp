@@ -794,17 +794,12 @@ class TextModel(ModelBase):
         if (n_ff := self.find_hparam(["intermediate_size", "n_inner", "hidden_dim"], optional=True)) is not None:
             self.gguf_writer.add_feed_forward_length(n_ff)
             logger.info(f"gguf: feed forward length = {n_ff}")
-
+        if (n_head := self.find_hparam(["num_attention_heads", "n_head", "n_heads"], optional=True)) is not None:
+            self.gguf_writer.add_head_count(n_head)
+            logger.info(f"gguf: head count = {n_head}")
         if (n_head_kv := self.find_hparam(["num_key_value_heads", "n_kv_heads"], optional=True)) is not None:
             self.gguf_writer.add_head_count_kv(n_head_kv)
             logger.info(f"gguf: key-value head count = {n_head_kv}")
-
-            # === SparseK dynamic attention metadata ===
-            self.gguf_writer.add_key("llama.sparsek.enable",  int(self.hparams.get("sparsek_enable", 0)))
-            self.gguf_writer.add_key("llama.sparsek.top_k",   int(self.hparams.get("sparsek_topk", 0)))
-            self.gguf_writer.add_key("llama.sparsek.window",  int(self.hparams.get("sparsek_window", 0)))
-            self.gguf_writer.add_key("llama.sparsek.stride",  int(self.hparams.get("sparsek_stride", 0)))
-            # ============================================
         if (rope_theta := self.hparams.get("rope_theta")) is not None:
             self.gguf_writer.add_rope_freq_base(rope_theta)
             logger.info(f"gguf: rope theta = {rope_theta}")
