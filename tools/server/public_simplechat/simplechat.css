@@ -93,7 +93,12 @@
     max-height: 20vmin;
 }
 #popover-chatmsg {
-    position:absolute;
+    position:fixed;
+    position-area: span-bottom center;
+    /*
+    inset-block-end: anchor(end)-;
+    inset-inline-end: anchor(self-start);
+    */
     background-color: transparent;
     padding: 0;
     border-width: 0;
