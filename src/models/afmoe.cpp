@@ -56,10 +56,10 @@ llm_build_afmoe::llm_build_afmoe(const llama_model & model, const llm_graph_para
             cb(Qcur, "Qcur_normed", il);
             cb(Kcur, "Kcur_normed", il);
 
-            // RoPE only for sliding_attention layers (every 4th layer is full_attention)
-            // layer_types[i] = "sliding_attention" if (i+1) % global_attn_every_n_layers != 0
-            bool is_sliding = ((il + 1) % 4) != 0;  // global_attn_every_n_layers = 4
-            if (is_sliding) {
+            // RoPE only for sliding_attention layers
+            const bool use_rope = hparams.n_no_rope_layer_step > 0 &&
+                                ((il + 1) % hparams.n_no_rope_layer_step) != 0;
+            if (use_rope) {
                 Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
