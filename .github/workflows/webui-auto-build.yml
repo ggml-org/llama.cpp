@@ -114,13 +114,14 @@ jobs:
                       core.setOutput('head_sha', pr.head.sha);
                       core.setOutput('head_repo', pr.head.repo.full_name);
                       core.setOutput('base_ref', pr.base.ref);
+                      core.setOutput('is_fork', pr.head.repo.full_name !== context.repo.owner + '/' + context.repo.repo);
 
             - name: Checkout PR branch
               uses: actions/checkout@v4
               with:
                   repository: ${{ steps.pr-details.outputs.head_repo }}
                   ref: ${{ steps.pr-details.outputs.head_ref }}
-                  token: ${{ secrets.GITHUB_TOKEN }}
+                  token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
                   fetch-depth: 0
 
             - name: Setup Node.js
@@ -169,13 +170,21 @@ jobs:
 
             - name: Commit and push changes
               if: steps.check-changes.outputs.has_changes == 'true'
+              id: commit-changes
               run: |
                   git config user.name "github-actions[bot]"
                   git config user.email "github-actions[bot]@users.noreply.github.com"
 
                   git add tools/server/public/index.html.gz
                   git commit -m "chore(webui): auto-rebuild static output [skip ci]"
-                  git push origin ${{ steps.pr-details.outputs.head_ref }}
+                  
+                  # Try to push, capture exit code
+                  if git push origin ${{ steps.pr-details.outputs.head_ref }}; then
+                    echo "push_success=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "push_success=false" >> $GITHUB_OUTPUT
+                    echo "::warning::Failed to push changes. This is expected for fork PRs without PAT_TOKEN configured."
+                  fi
 
             - name: Add comment to PR
               if: steps.check-changes.outputs.has_changes == 'true'
@@ -188,13 +197,18 @@ jobs:
                         issue_number: ${{ matrix.pr_number }}
                       });
 
+                      const pushSuccess = '${{ steps.commit-changes.outputs.push_success }}' === 'true';
+                      const isFork = '${{ steps.pr-details.outputs.is_fork }}' === 'true';
+
                       // Check if we already commented about auto-rebuild
                       const botComment = comments.find(comment => 
                         comment.user.type === 'Bot' && 
-                        comment.body.includes('🤖 WebUI static output auto-rebuilt')
+                        comment.body.includes('🤖 WebUI static output')
                       );
 
-                      const message = `🤖 **WebUI static output auto-rebuilt**
+                      let message;
+                      if (pushSuccess) {
+                        message = `🤖 **WebUI static output auto-rebuilt**
 
                       The static build has been automatically updated to reflect the latest changes.
 
@@ -206,6 +220,22 @@ jobs:
                       - **Triggered by**: ${context.eventName === 'pull_request' ? 'PR update' : 'master branch update'}
 
                       </details>`;
+                      } else {
+                        message = `🤖 **WebUI static output needs rebuild**
+
+                      The static build was generated successfully, but could not be automatically committed${isFork ? ' (fork PR requires PAT_TOKEN)' : ''}.
+
+                      **Action required:** Please run \`npm run build\` locally in \`tools/server/webui/\` and commit the updated \`tools/server/public/index.html.gz\`.
+
+                      <details>
+                      <summary>Build details</summary>
+
+                      - **Workflow run**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                      - **Status**: Build succeeded, push failed
+                      ${isFork ? '- **Note**: Fork PRs require a PAT_TOKEN secret to auto-commit' : ''}
+
+                      </details>`;
+                      }
 
                       if (botComment) {
                         // Update existing comment
