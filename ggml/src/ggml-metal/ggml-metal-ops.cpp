@@ -508,10 +508,10 @@ int ggml_metal_op_concat(ggml_metal_op_t ctx, int idx) {
         /*.ne1  =*/ ne1,
         /*.ne2  =*/ ne2,
         /*.ne3  =*/ ne3,
-        /*.nb0  =*/ (uint64_t) nb0,
-        /*.nb1  =*/ (uint64_t) nb1,
-        /*.nb2  =*/ (uint64_t) nb2,
-        /*.nb3  =*/ (uint64_t) nb3,
+        /*.nb0  =*/ nb0,
+        /*.nb1  =*/ nb1,
+        /*.nb2  =*/ nb2,
+        /*.nb3  =*/ nb3,
         /*.dim  =*/ dim,
     };
 
@@ -3093,7 +3093,7 @@ int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne1, op->src[1], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb1, op->src[1], nb);
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
-    GGML_TENSOR_LOCALS(uint32_t, nb,  op,         nb);
+    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
     GGML_ASSERT(ggml_is_contiguous(op->src[0]));
     GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
@@ -3143,11 +3143,11 @@ int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
     nth = std::min(nth, 256);
     nth = std::max(nth, 1);
 
-    const uint64_t n_out = (uint64_t) ne0 * ne1 * ne2 * ne3;
-    uint64_t tg64 = (n_out + nth - 1)/nth;
-    tg64 = std::max<uint64_t>(tg64, 1);
-    tg64 = std::min<uint64_t>(tg64, (uint64_t) std::numeric_limits<int>::max());
-    const int tg = (int) tg64;
+    const uint64_t n_out = ggml_nelements(op);
+
+    uint64_t tg = (n_out + nth - 1)/nth;
+    tg = std::max<uint64_t>(tg, 1);
+    tg = std::min<uint64_t>(tg, (uint64_t) std::numeric_limits<int>::max());
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);

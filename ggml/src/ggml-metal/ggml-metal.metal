@@ -4149,9 +4149,9 @@ template [[host_name("kernel_im2col_f16")]] kernel im2col_t kernel_im2col<half>;
 template <typename TK>
 kernel void kernel_conv_2d(
         constant ggml_metal_kargs_conv_2d & args,
-        device const TK * weights,
-        device const float * src,
-        device       float * dst,
+        device const char * weights,
+        device const char * src,
+        device       char * dst,
         uint3   tgpig[[threadgroup_position_in_grid]],
         uint3    tgpg[[threadgroups_per_grid]],
         uint3   tpitg[[thread_position_in_threadgroup]],
@@ -4163,10 +4163,6 @@ kernel void kernel_conv_2d(
     const uint thread_index = tg_index * threads_per_tg + local_thread;
     const uint64_t total_threads = (uint64_t) threads_per_tg * tgpg.x * tgpg.y * tgpg.z;
     const uint64_t total_outputs = (uint64_t) args.N * args.OC * args.OH * args.OW;
-
-    device const char * weights_bytes = (device const char *) weights;
-    device const char * src_bytes     = (device const char *) src;
-    device       char * dst_bytes     = (device       char *) dst;
 
     for (uint64_t index = thread_index; index < total_outputs; index += total_threads) {
         uint64_t tmp = index;
@@ -4223,8 +4219,8 @@ kernel void kernel_conv_2d(
                         const uint64_t src_offs = src_base_row + (uint64_t) ix * args.nb10;
                         const uint64_t w_offs   = w_base_row   + (uint64_t) kx * args.nb00;
 
-                        const float x = *(device const float *)(src_bytes + src_offs);
-                        const float w = (float) (*(device const TK *)(weights_bytes + w_offs));
+                        const float x = *(device const float *)(src + src_offs);
+                        const float w = (float) (*(device const TK *)(weights + w_offs));
 
                         acc += x * w;
                     }
@@ -4238,16 +4234,16 @@ kernel void kernel_conv_2d(
             (uint64_t) oh * args.nb1 +
             (uint64_t) ow * args.nb0;
 
-        *(device float *)(dst_bytes + dst_offs) = acc;
+        *(device float *)(dst + dst_offs) = acc;
     }
 }
 
 template [[host_name("kernel_conv_2d_f32_f32")]]
 kernel void kernel_conv_2d<float>(
         constant ggml_metal_kargs_conv_2d & args,
-        device const float * weights,
-        device const float * src,
-        device       float * dst,
+        device const char * weights,
+        device const char * src,
+        device       char * dst,
         uint3   tgpig[[threadgroup_position_in_grid]],
         uint3    tgpg[[threadgroups_per_grid]],
         uint3   tpitg[[thread_position_in_threadgroup]],
@@ -4256,9 +4252,9 @@ kernel void kernel_conv_2d<float>(
 template [[host_name("kernel_conv_2d_f16_f32")]]
 kernel void kernel_conv_2d<half>(
         constant ggml_metal_kargs_conv_2d & args,
-        device const half  * weights,
-        device const float * src,
-        device       float * dst,
+        device const char * weights,
+        device const char * src,
+        device       char * dst,
         uint3   tgpig[[threadgroup_position_in_grid]],
         uint3    tgpg[[threadgroups_per_grid]],
         uint3   tpitg[[thread_position_in_threadgroup]],
