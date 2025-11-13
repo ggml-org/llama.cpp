@@ -874,10 +874,12 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
         ggml_tensor * base_mask,
         int          il) const {
     // If features are disabled, return base mask as-is.
-    if (!sparsek_enable || sparsek_topk <= 0) {
+    if (!sparsek_enable ||
+        (sparsek_topk <= 0 && !sparsek_en_local && !sparsek_en_stride)) {
         cb(base_mask, "sparsek_passthrough_base", il);
         return base_mask;
-    }
+   }
+
     // 1) Compute content-based scores ~ K * Q without forcing 2D reshape
     // Let GGML handle batched matmul on the current 4D layout
     ggml_tensor * scores4 = ggml_mul_mat(ctx0, k, q);  // batched K * Q keeping head/stream dims
@@ -899,11 +901,6 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     // 2) Top-K indices along dim-0 (per column)
     // Clamp top-k so it never exceeds the KV length
     const int32_t topk_safe = std::max<int32_t>(0, std::min<int32_t>(sparsek_topk, (int32_t)scores->ne[0]));
-    if (topk_safe == 0) {
-        cb(base_mask, "sparsek_topk_zero_passthrough", il);
-        return base_mask;
-   }
-
     ggml_tensor * topk_idx = ggml_top_k(ctx0, scores, topk_safe); // [topk, cols_calc]
     cb(topk_idx, "sparsek_topk_idx", il);
 
@@ -914,13 +911,11 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     ggml_tensor * rows3d = ggml_reshape_3d(ctx0, neg2d, /*ne0*/ scores->ne[0],
                                         /*ne1*/ 1,
                                         /*ne2*/ scores->ne[1]);         // [n_kv,1,cols]
+ 
+    ggml_tensor * picked = ggml_get_rows(ctx0, rows3d, topk_idx);   // [topk,1,cols]
+    ggml_tensor * zeros  = ggml_scale(ctx0, picked, 0.0f);          // zero only selected rows
+    ggml_tensor * merged3d = ggml_set_rows(ctx0, rows3d, zeros, topk_idx);// safer scatter
 
-    ggml_tensor * picked = ggml_get_rows(ctx0, rows3d, topk_idx);          // [topk,1,cols]
-    ggml_tensor * zeros  = ggml_scale(ctx0, picked, 0.0f);                 // selected rows -> 0
-
-    // FIX: set_rows must receive tensors with matching ne[2]; use rows3d as 'a'
-    ggml_tensor * merged3d = ggml_set_rows(ctx0, rows3d, zeros, topk_idx); // [n_kv,1,cols]
-    
     // 4) Final union with base (0/-INF encoding)
     // We need to tile base_mask columns from n_rows_p to cols_calc = n_rows_p * (heads*streams)
 
