@@ -83,7 +83,9 @@
 		toolCallContent = null
 	}: Props = $props();
 
-	const toolCalls = $derived(Array.isArray(toolCallContent) ? (toolCallContent as ApiChatCompletionToolCall[]) : null);
+	const toolCalls = $derived(
+		Array.isArray(toolCallContent) ? (toolCallContent as ApiChatCompletionToolCall[]) : null
+	);
 	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
 
 	const processingState = useProcessingState();
