@@ -81,6 +81,14 @@ static __device__ __forceinline__ float op_log(float x) {
     return logf(x);
 }
 
+static __device__ __forceinline__ float op_expm1(float x) {
+    return expm1f(x);
+}
+
+static __device__ __forceinline__ float op_softplus(float x) {
+    return (x > 20.0f) ? x : logf(1.0f + expf(x));
+}
+
 static __device__ __forceinline__ float op_elu(float x) {
     return (x > 0.f) ? x : expm1f(x);
 }
@@ -232,6 +240,14 @@ void ggml_cuda_op_round(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 void ggml_cuda_op_trunc(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_trunc>(ctx, dst);
+}
+
+void ggml_cuda_op_expm1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_expm1>(ctx, dst);
+}
+
+void ggml_cuda_op_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_softplus>(ctx, dst);
 }
 /* gated ops */
 
