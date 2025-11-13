@@ -2893,7 +2893,7 @@ struct server_context {
             return true;
         }
 
-        llama_sampler * gpu_chain = common_sampler_gpu_init(nullptr, sampling);
+        llama_sampler * gpu_chain = common_sampler_gpu_init(model, sampling);
         if (gpu_chain == nullptr) {
             SLT_ERR(slot, "%s", "failed to initialize GPU sampler\n");
             return false;
