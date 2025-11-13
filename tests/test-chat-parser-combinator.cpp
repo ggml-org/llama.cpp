@@ -90,7 +90,7 @@ static void test_partial_parsing() {
 
         ctx = parser_context("<think>", false);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.is_need_more_input());
 
         ctx = parser_context("<think></", false);
         result = parser.parse(ctx);
@@ -273,7 +273,7 @@ static void test_recursive_references() {
     // Test partial match
     ctx = parser_context("[[", false);
     result = value_parser.parse(ctx);
-    assert_equals(true, result.is_success());
+    assert_equals(true, result.is_need_more_input());
 
     // Test no match
     ctx = parser_context("[a]", true);
@@ -347,7 +347,7 @@ static void test_json_parser() {
 
         auto result = json.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.is_need_more_input());
     }
     {
         // Test partial parsing - incomplete array
@@ -356,7 +356,7 @@ static void test_json_parser() {
 
         auto result = json.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.is_need_more_input());
     }
     {
         // Test partial parsing - incomplete nested structure
@@ -365,7 +365,7 @@ static void test_json_parser() {
 
         auto result = json.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.is_need_more_input());
     }
 }
 
@@ -396,10 +396,10 @@ static void test_complete_example() {
         auto schema = nlohmann::ordered_json::parse(R"({"type": "object"})");
 
         auto tool_call_args = p.add_rule("tool-call-args",
-            "<args>" << p.capture_tool_call_args(p.schema(json, "get_weather", schema)) << "</args>");
+            "<args>" << p.capture_tool_call_args(p.schema(p.partial(json), "get_weather", schema)) << "</args>");
 
         auto tool_call = p.add_rule("tool-call",
-            "<tool_call>" << p.add_tool_call(tool_call_name << tool_call_args) << "</tool_call>");
+            "<tool_call>" << p.add_tool_call(tool_call_name << p.partial(tool_call_args)) << "</tool_call>");
 
         return reasoning << p.optional(content) << p.optional(tool_call);
     });
@@ -429,7 +429,7 @@ static void test_complete_example() {
 
         auto result = parser.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.is_need_more_input());
         assert_equals("I need to call get_weather", env.reasoning_content);
     }
     {
@@ -457,7 +457,7 @@ static void test_complete_example() {
 
         auto result = parser.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.is_need_more_input());
         assert_equals("I need to call get_weather", env.reasoning_content);
     }
     {
@@ -477,7 +477,7 @@ static void test_complete_example() {
 
         auto result = parser.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.is_partial());
         assert_equals("I need to call get_weather", env.reasoning_content);
         assert_equals("get_weather", env.tool_calls[0].name);
         assert_equals(R"({"cit)", env.tool_calls[0].arguments);
@@ -579,7 +579,7 @@ static void test_actions() {
             parser_context ctx("<start>hello ", &env, false);
             auto result = parser.parse(ctx);
 
-            assert_equals(true, result.is_success());
+            assert_equals(true, result.is_need_more_input());
             assert_equals("hello", env.content);
         }
         {
@@ -587,7 +587,7 @@ static void test_actions() {
             parser_context ctx("<start>hello world", &env, false);
             auto result = parser.parse(ctx);
 
-            assert_equals(true, result.is_success());
+            assert_equals(true, result.is_need_more_input());
             assert_equals("hello world", env.content);
         }
         {
