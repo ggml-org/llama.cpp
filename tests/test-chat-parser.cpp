@@ -445,7 +445,7 @@ static void test_kimi_k2_tool_calls() {
         /* .thinking_forced_open = */ false,
         /* .parse_tool_calls = */ true,
     };
-    const std::string input = "<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+    const std::string input = "<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
     auto msg = common_chat_parse(input, false, syntax);
     assert_equals<std::size_t>(variant, 1, msg.tool_calls.size());
     assert_equals(variant, std::string("get_time"), msg.tool_calls[0].name);
@@ -464,7 +464,7 @@ static void test_kimi_k2_tool_calls() {
             /* .parse_tool_calls = */ true,
         };
         const std::string variant("simple_thinking");
-        const std::string in = "REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+        const std::string in = "REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
         auto m = common_chat_parse(in, false, syntax);
         assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
         assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
@@ -482,7 +482,7 @@ static void test_kimi_k2_tool_calls() {
             /* .parse_tool_calls = */ true,
         };
         const std::string variant("simple_multiple_tool_calls");
-        const std::string in = "CONTENT<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_call_begin|>get_weather<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_calls_section_end|>";
+        const std::string in = "CONTENT<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_call_begin|>get_weather<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_calls_section_end|>";
         auto m = common_chat_parse(in, false, syntax);
         assert_equals<std::size_t>(variant, 2, m.tool_calls.size());
         assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
@@ -504,7 +504,7 @@ static void test_kimi_k2_tool_calls() {
             /* .parse_tool_calls = */ true,
         };
         const std::string variant("thinking_forced_open_tool_call_in_reasoning");
-        const std::string in = "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time2<|tool_call_argument_begin|>{\"city\": \"Tokyo2\"}<|tool_call_end|><|tool_calls_section_end|>REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+        const std::string in = "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time2<|tool_call_argument_begin|>{\"city\": \"Tokyo2\"}<|tool_call_end|><|tool_calls_section_end|>REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
         auto m = common_chat_parse(in, false, syntax);
         assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
         assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
@@ -526,7 +526,7 @@ static void test_kimi_k2_tool_calls() {
             /* .parse_tool_calls = */ true,
         };
         const std::string variant("thinking_forced_open_tool_call_in_reasoning_no_closing_think_not_partial");
-        const std::string in = "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+        const std::string in = "REASONING<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
         auto m = common_chat_parse(in, false, syntax);
         assert_equals(variant, std::string("REASONING"), m.content);
         assert_equals(variant, std::string(""), m.reasoning_content);
@@ -545,9 +545,9 @@ static void test_kimi_k2_tool_calls() {
             /* .parse_tool_calls = */ true,
         };
         const std::string variant("thinking_forced_open_tool_call_in_reasoning_no_closing_think_partial");
-        const std::string in = "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
+        const std::string in = "REASONING<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>";
         auto m = common_chat_parse(in, /* is_partial= */ true, syntax);
-        assert_equals(variant, std::string("REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>"), m.reasoning_content);
+        assert_equals(variant, std::string("REASONING<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>"), m.reasoning_content);
         assert_equals(variant, std::string(""), m.content);
         assert_equals<std::size_t>(variant, 0, m.tool_calls.size());
     }

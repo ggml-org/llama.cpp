@@ -2074,11 +2074,11 @@ static void test_template_output_parsers() {
         for (const auto & inputs : { inputs_no_tools, inputs_tools }) {
             auto params = common_chat_templates_apply(tmpls.get(), inputs);
             assert_equals(COMMON_CHAT_FORMAT_KIMI_K2, params.format);
-            assert_equals(true, params.thinking_forced_open);
+            assert_equals(false, params.thinking_forced_open);
         }
 
-        test_templates(tmpls.get(), end_tokens, message_assist, tools, "</think>Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
-        test_templates(tmpls.get(), end_tokens, message_assist_thoughts, tools, "</think>Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
+        test_templates(tmpls.get(), end_tokens, message_assist, tools, "<think></think>Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
+        test_templates(tmpls.get(), end_tokens, message_assist_thoughts, tools, "<think></think>Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
         assert_msg_equals(
             simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking"),
             common_chat_parse(
@@ -2105,9 +2105,9 @@ static void test_template_output_parsers() {
                 }));
         // variant: happy path for when it works as the model card says it should
         assert_msg_equals(
-            simple_assist_msg("", "", "get_time", "{\"city\":\"Tokyo\"}"),
+            simple_assist_msg("", "", "get_time", "{\"city\":\"Tokyo\"}", "functions.get_time:0"),
             common_chat_parse(
-                "<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
                 /* is_partial= */ false,
                 {
                     COMMON_CHAT_FORMAT_KIMI_K2,
@@ -2118,9 +2118,9 @@ static void test_template_output_parsers() {
                 }));
         // variant: simple + thinking open
         assert_msg_equals(
-            simple_assist_msg("", "REASONING", "get_time", "{\"city\":\"Tokyo\"}"),
+            simple_assist_msg("", "REASONING", "get_time", "{\"city\":\"Tokyo\"}", "functions.get_time:0"),
             common_chat_parse(
-                "REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
+                "REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
                 /* is_partial= */ false,
                 {
                     COMMON_CHAT_FORMAT_KIMI_K2,
@@ -2133,12 +2133,12 @@ static void test_template_output_parsers() {
         common_chat_msg message_assist_multiple_calls;
         message_assist_multiple_calls.role = "assistant";
         message_assist_multiple_calls.content = "CONTENT";
-        message_assist_multiple_calls.tool_calls.push_back({"get_time", "{\"city\":\"Paris\"}", ""});
-        message_assist_multiple_calls.tool_calls.push_back({"get_weather", "{\"city\":\"Paris\"}", ""});
+        message_assist_multiple_calls.tool_calls.push_back({"get_time", "{\"city\":\"Paris\"}", "functions.get_time:0"});
+        message_assist_multiple_calls.tool_calls.push_back({"get_weather", "{\"city\":\"Paris\"}", "functions.get_weather:1"});
         assert_msg_equals(
             message_assist_multiple_calls,
             common_chat_parse(
-                "CONTENT<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_call_begin|>get_weather<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_calls_section_end|>",
+                "CONTENT<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_call_begin|>functions.get_weather:1<|tool_call_argument_begin|>{\"city\": \"Paris\"}<|tool_call_end|><|tool_calls_section_end|>",
                 /* is_partial= */ false,
                 {
                     COMMON_CHAT_FORMAT_KIMI_K2,
@@ -2149,9 +2149,9 @@ static void test_template_output_parsers() {
                 }));
         // variant: thinking forced open + tool call in reasoning content
         assert_msg_equals(
-            simple_assist_msg("", "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time2<|tool_call_argument_begin|>{\"city\": \"Tokyo2\"}<|tool_call_end|><|tool_calls_section_end|>REASONING", "get_time", "{\"city\":\"Tokyo\"}"),
+            simple_assist_msg("", "REASONING<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time2:0<|tool_call_argument_begin|>{\"city\": \"Tokyo2\"}<|tool_call_end|><|tool_calls_section_end|>REASONING", "get_time", "{\"city\":\"Tokyo\"}", "functions.get_time:1"),
             common_chat_parse(
-                "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time2<|tool_call_argument_begin|>{\"city\": \"Tokyo2\"}<|tool_call_end|><|tool_calls_section_end|>REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
+                "REASONING<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time2:0<|tool_call_argument_begin|>{\"city\": \"Tokyo2\"}<|tool_call_end|><|tool_calls_section_end|>REASONING</think><|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:1<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
                 /* is_partial= */ false,
                 {
                     COMMON_CHAT_FORMAT_KIMI_K2,
@@ -2165,9 +2165,9 @@ static void test_template_output_parsers() {
         //          to make tool calls in reasoning content according to the model card, but it does sometimes, so
         //          add the reasoning content as regular content and parse the tool calls.
         assert_msg_equals(
-            simple_assist_msg("REASONING", "", "get_time", "{\"city\":\"Tokyo\"}"),
+            simple_assist_msg("REASONING", "", "get_time", "{\"city\":\"Tokyo\"}", "functions.get_time:0"),
             common_chat_parse(
-                "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
+                "REASONING<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
                 /* is_partial= */ false,
                 {
                     COMMON_CHAT_FORMAT_KIMI_K2,
@@ -2178,9 +2178,9 @@ static void test_template_output_parsers() {
                 }));
         // variant: thinking forced open + tool call in reasoning content + no closing think + partial
         assert_msg_equals(
-            simple_assist_msg("", "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>", "", ""),
+            simple_assist_msg("", "REASONING<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>", "", ""),
             common_chat_parse(
-                "REASONING<|tool_calls_section_begin|><|tool_call_begin|>get_time<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
+                "REASONING<|tool_calls_section_begin|><|tool_call_begin|>functions.get_time:0<|tool_call_argument_begin|>{\"city\": \"Tokyo\"}<|tool_call_end|><|tool_calls_section_end|>",
                 /* is_partial= */ true,
                 {
                     COMMON_CHAT_FORMAT_KIMI_K2,
