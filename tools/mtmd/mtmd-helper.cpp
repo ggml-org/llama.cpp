@@ -32,8 +32,24 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
-#define LOG_INF(...) fprintf(stdout, __VA_ARGS__)
-#define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
+static void log_callback_default(enum ggml_log_level level, const char * fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    if (level >= GGML_LOG_LEVEL_ERROR) {
+        vfprintf(stderr, fmt, args);
+    } else {
+        vfprintf(stdout, fmt, args);
+    }
+    va_end(args);
+
+}
+static mtmd_log_callback_t log_callback = log_callback_default;
+
+void mtmd_set_log_callback(mtmd_log_callback_t callback) {
+    log_callback = callback;
+}
+#define LOG_INF(...) (*log_callback)(GGML_LOG_LEVEL_INFO, __VA_ARGS__)
+#define LOG_ERR(...) (*log_callback)(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
 
 size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks) {
     size_t n_tokens = 0;

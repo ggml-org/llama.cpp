@@ -266,6 +266,13 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     return 0;
 }
 
+static void mtmd_log_callback(enum ggml_log_level level, const char * fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+   common_log_add_v(common_log_main(), level, fmt, args);
+    va_end(args);
+}
+
 int main(int argc, char ** argv) {
     ggml_time_init();
 
@@ -277,6 +284,7 @@ int main(int argc, char ** argv) {
     }
 
     common_init();
+    mtmd_set_log_callback(mtmd_log_callback);
 
     if (params.mmproj.path.empty()) {
         show_additional_info(argc, argv);
@@ -285,7 +293,7 @@ int main(int argc, char ** argv) {
     }
 
     mtmd_cli_context ctx(params);
-    LOG("%s: loading model: %s\n", __func__, params.model.path.c_str());
+    LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
     bool is_single_turn = !params.prompt.empty() && !params.image.empty();
 

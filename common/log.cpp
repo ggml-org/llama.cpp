@@ -416,6 +416,10 @@ void common_log_add(struct common_log * log, enum ggml_log_level level, const ch
     va_end(args);
 }
 
+void common_log_add_v(struct common_log * log, enum ggml_log_level level, const char * fmt, va_list args) {
+    log->add(level, fmt, args);
+}
+
 void common_log_set_file(struct common_log * log, const char * file) {
     log->set_file(file);
 }

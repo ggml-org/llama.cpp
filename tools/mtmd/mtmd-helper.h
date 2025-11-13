@@ -80,6 +80,9 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 int32_t n_batch,
                                                 llama_pos * new_n_past);
 
+typedef void (*mtmd_log_callback_t)(enum ggml_log_level level, const char * fmt, ...);                                                
+MTMD_API void mtmd_set_log_callback(mtmd_log_callback_t callback);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

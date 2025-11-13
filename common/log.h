@@ -49,6 +49,8 @@ void                common_log_free  (struct common_log * log);
 LOG_ATTRIBUTE_FORMAT(3, 4)
 void common_log_add(struct common_log * log, enum ggml_log_level level, const char * fmt, ...);
 
+void common_log_add_v(struct common_log * log, enum ggml_log_level level, const char * fmt, va_list args);
+
 // defaults: file = NULL, colors = false, prefix = false, timestamps = false
 //
 // regular log output:
