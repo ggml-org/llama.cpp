@@ -1210,11 +1210,11 @@ static void ggml_compute_forward_mul_mat_one_chunk(
         }
     }
 }
-
+int n_ti = 0;
 void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
-
+    //GGML_LOG("mul_mat start\n");
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
@@ -1403,6 +1403,7 @@ UseGgmlGemm2:;
 
         current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
     }
+    GGML_LOG("mul_mat end, time = %d\n", n_ti++);
 }
 
 // ggml_compute_forward_mul_mat_id
@@ -2802,6 +2803,7 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_IFAIRY_MUL:
                 case GGML_OP_IFAIRY_MERGE:
                 case GGML_OP_IFAIRY_ROPE:
+                case GGML_OP_IFAIRY_RMSNORM:
                     {
                         cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * n_tasks;
                     } break;

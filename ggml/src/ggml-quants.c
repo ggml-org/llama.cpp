@@ -2690,10 +2690,19 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
             float* x_com = x + j;
 
             ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
+            //GGML_ASSERT(sizeof(ggml_bf16_t) == 2);
+            //GGML_ASSERT((void*)((ggml_bf16_t*)(x_com)) == (void*)x_com);
+            //GGML_ASSERT((void*)((ggml_bf16_t*)(x_com) + 1) == (void*)((char*)x_com + 2));
             ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
 
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);
             float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+
+            if(x_real != x_real){
+                //GGML_ABORT("nan discovered, x_com in binary32 format: [%08x]", (x_com)[0]);
+
+                GGML_ABORT("nan discovered, x_com in binary32 format: [%08x] [%04x %04x]",((uint32_t*)(x_com))[0], ((ggml_bf16_t*)(x_com))[0].bits, ((ggml_bf16_t*)(x_com))[1].bits);
+            }
 
             max_real = MAX(max_real, fabsf(x_real));
             max_imag = MAX(max_imag, fabsf(x_imag));
@@ -2701,6 +2710,7 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
 
         const float iscale_real = 127.f / max_real;
         const float iscale_imag = 127.f / max_imag;
+        //GGML_LOG("max_real = %f, iscale_real = %f, max_imag = %f, iscale_imag = %f\n", max_real, iscale_real, max_imag, iscale_imag);
         for (int j = 0; j < QK_K; ++j) {
             float* x_com = x + j;
 
@@ -2715,8 +2725,8 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
             v = nearest_int(iscale_imag * x_imag);
             y[i].x_imag[j] = MIN(127, v);
         }
-        y[i].d_real = 1.0 / iscale_real;
-        y[i].d_imag = 1.0 / iscale_imag;
+        y[i].d_real = 1.f / iscale_real;
+        y[i].d_imag = 1.f / iscale_imag;
         x += QK_K;
     }
 }

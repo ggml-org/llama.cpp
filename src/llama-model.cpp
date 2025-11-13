@@ -13752,7 +13752,7 @@ struct llm_build_ifairy : public llm_graph_context {
                     model.layers[il].attn_norm,
                     il);
             cb(cur, "attn_norm", il);
-
+            
             ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
             cb(Qcur, "Qcur", il);
 

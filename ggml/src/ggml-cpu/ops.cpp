@@ -9,6 +9,7 @@
 
 #include <float.h>
 #include <algorithm>
+#include <math.h>
 
 // ggml_compute_forward_dup
 
@@ -3587,6 +3588,7 @@ void ggml_compute_forward_rms_norm(
     }
 }
 
+int n_ti_norm = 0;
 static void ggml_compute_forward_rms_norm_ifairy(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -3633,9 +3635,15 @@ static void ggml_compute_forward_rms_norm_ifairy(
                 assert(scale > 0.0f);
 
                 ggml_vec_scale_f32(ne00, y, scale);
+                for(int i=0;i<ne00;i++){
+                    if(y[i] != y[i]){
+                        GGML_ABORT("nan or > 1 discovered, rmsnorm_ifairy failed, y[%d] is %f\n", i, y[i]);
+                    }
+                }
             }
         }
     }
+    GGML_LOG("n_ti_norm=%d\n", n_ti_norm++);
 }
 
 void ggml_compute_forward_ifairy_rmsnorm(
@@ -5955,6 +5963,7 @@ static void ggml_compute_forward_rope_f16(
     }
 }
 
+int n_ti_rope = 0;
 // 只在line 6044开始有差异, 只处理mode==0的情况
 static void ggml_compute_forward_rope_ifairy(
         const ggml_compute_params * params,
@@ -5968,7 +5977,7 @@ static void ggml_compute_forward_rope_ifairy(
     int sections[4];
 
     //const int n_past     = ((int32_t *) dst->op_params)[0];
-    const int n_dims     = ((int32_t *) dst->op_params)[1];
+    const int n_dims     = ((int32_t *) dst->op_params)[1] / 2;
     const int mode       = ((int32_t *) dst->op_params)[2];
     //const int n_ctx      = ((int32_t *) dst->op_params)[3];
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
@@ -6009,7 +6018,7 @@ static void ggml_compute_forward_rope_ifairy(
     const float theta_scale = powf(freq_base, -2.0f/n_dims);
 
     float corr_dims[2];
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+    ggml_rope_yarn_corr_dims(n_dims * 2, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
     const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
@@ -6049,30 +6058,44 @@ static void ggml_compute_forward_rope_ifairy(
                     p_t, p_h, p_w, p_e, sections, is_vision,
                     freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
             }
-
+            for(int i=0;i<n_dims*2;i++){
+                if(cache[i] != cache[i] || cache[i] > 1.f || cache[i] < -1.f){
+                    GGML_ABORT("nan discovered in cache, index: %d, value: %f, n_dims = %d, ne00 = %d, ne0 = %d", i, cache[i], n_dims, ne00, ne0);
+                }
+            }
+            GGML_ASSERT(nb0 == 4);
             for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
                 if (ir++ < ir0) continue;
                 if (ir   > ir1) break;
 
                 
                 for (int64_t i0 = 0; i0 < n_dims; i0 ++) {
-                    const float cos_theta = cache[i0 + 0];
-                    const float sin_theta = cache[i0 + 1];
+                    const float cos_theta = cache[2 * i0 + 0];
+                    const float sin_theta = cache[2 * i0 + 1];
 
                     const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
                           float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+                        
 
                     const float x0 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[0]); //real
                     const float x1 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[1]); //imag
 
                     dst_data[0]      = x0*cos_theta - x1*sin_theta;
                     dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
+                    if(dst_data[0] != dst_data[0] || dst_data[0] > 65504.f || dst_data[0] < -65504.f){
+                        GGML_ABORT("nan discovered, dst0 is nan, value: %f, x0: %f, x1: %f, cos_theta: %f, sin_theta: %f", dst_data[0], x0, x1, cos_theta, sin_theta);
+                    }
+                    if(dst_data[n_dims] != dst_data[n_dims] || dst_data[n_dims] > 65504.f || dst_data[n_dims] < -65504.f){
+                        GGML_ABORT("nan discovered, dstndim is nan, value is %f,  x0: %f, x1: %f, cos_theta: %f, sin_theta: %f", dst_data[n_dims], x0, x1, cos_theta, sin_theta);
+                    }
                 }
             }
         }
     }
+    GGML_LOG("rope end, time = %d\n", n_ti_rope++);
 }
 
+int n_ti_split = 0;
 static void ggml_compute_forward_ifairy_split_impl(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -6099,7 +6122,7 @@ static void ggml_compute_forward_ifairy_split_impl(
 
     // row index used to determine which thread to use
     int ir = 0;
-
+    GGML_ASSERT(nb0 == 4);
 
     for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
         for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
@@ -6114,6 +6137,13 @@ static void ggml_compute_forward_ifairy_split_impl(
                     const float x0 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[0]); //real
                     const float x1 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[1]); //imag
 
+                    if(x0 != x0 || x0 > 65504.f || x0 < -65504.f){
+                        GGML_ABORT("nan discovered, src0 is nan, value: %f, at time %d", x0, n_ti_split);
+                    }
+                    if(x1 != x1 || x1 > 65504.f || x1 < -65504.f){
+                        GGML_ABORT("nan discovered, src1 is nan, value is %f, at time %d", x1, n_ti_split);
+                    }
+
                     dst_data[0]      = x0;
                     dst_data[n_dims] = x1;
                 }
@@ -6121,12 +6151,14 @@ static void ggml_compute_forward_ifairy_split_impl(
             }
         }
     }
+    GGML_LOG("split end, time = %d\n", n_ti_split++);
 }
 
 void ggml_compute_forward_ifairy_split(const struct ggml_compute_params * params, struct ggml_tensor * dst){
     ggml_compute_forward_ifairy_split_impl(params, dst);
 }
 
+int n_ti_merge = 0;
 static void ggml_compute_forward_ifairy_merge_impl(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -6157,7 +6189,7 @@ static void ggml_compute_forward_ifairy_merge_impl(
     // row index used to determine which thread to use
     int ir = 0;
 
-
+    GGML_ASSERT(nb0 == 4);
     for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
         for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
             for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
@@ -6168,8 +6200,22 @@ static void ggml_compute_forward_ifairy_merge_impl(
                     const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
                     float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
+                    if(src[0] != src[0]){
+                        GGML_ABORT("nan discovered, src0 is nan, bytes: %x %x %x %x", ((char*)src)[0], ((char*)src)[1], ((char*)src)[2], ((char*)src)[3]);
+                    }
+                    if(src[n_dims/2] != src[n_dims/2]){
+                        GGML_ABORT("nan discovered, srcNdim is nan, bytes: %x %x %x %x", ((char*)src + n_dims*sizeof(float))[0], ((char*)src + n_dims*sizeof(float))[1], ((char*)src + n_dims*sizeof(float))[2], ((char*)src + n_dims*sizeof(float))[3]);
+                    }
+                    // 检查inf
+                    if(isinf(src[0])){
+                        GGML_LOG("inf discovered, src0 is inf, value: %f, i0: %d, n_dim: %d", src[0], i0, n_dims);
+                    }
+                    if(isinf(src[n_dims/2])){
+                        GGML_LOG("inf discovered, src_ndim is inf, value is %f, i0: %d, n_dim: %d", src[n_dims/2], i0, n_dims);
+                    }
+                    
                     const ggml_bf16_t x0 = GGML_FP32_TO_BF16(src[0]); //real
-                    const ggml_bf16_t x1 = GGML_FP32_TO_BF16(src[n_dims]); //imag
+                    const ggml_bf16_t x1 = GGML_FP32_TO_BF16(src[n_dims/2]); //imag
 
                     ((ggml_bf16_t *)dst_data)[0]      = x0;
                     ((ggml_bf16_t *)dst_data)[1]      = x1;
@@ -6177,6 +6223,7 @@ static void ggml_compute_forward_ifairy_merge_impl(
             }
         }
     }
+    GGML_LOG("merge end, time = %d\n", n_ti_merge++);
 }
 
 void ggml_compute_forward_ifairy_merge(const struct ggml_compute_params * params, struct ggml_tensor * dst){
@@ -8197,6 +8244,7 @@ void ggml_compute_forward_argsort(
 
 // ggml_compute_forward_flash_attn_ext
 
+int n_ti_attn = 0;
 static void ggml_compute_forward_flash_attn_ext_f16(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -8339,7 +8387,19 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
             kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
 
+            if(s != s){
+                GGML_ABORT("nan discovered in flash attention");
+            }
+            if(isinf(s)){
+                GGML_ABORT("inf discovered in flash attention");
+            }
             s = s*scale; // scale KQ value
+            if(s != s){
+                GGML_ABORT("nan discovered in flash attention");
+            }
+            if(isinf(s)){
+                GGML_ABORT("inf discovered in flash attention");
+            }
 
             if (logit_softcap != 0.0f) {
                 s = logit_softcap*tanhf(s);
@@ -8393,6 +8453,13 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             }
 
             S = S*ms + vs; // scale and increment sum with partial sum
+
+            if(S != S){
+                GGML_ABORT("nan discovered in flash attention");
+            }
+            if(isinf(S)){
+                GGML_ABORT("inf discovered in flash attention");
+            }
         }
 
         if (v->type == GGML_TYPE_F16) {
@@ -8420,6 +8487,12 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
         // V /= S
         const float S_inv = 1.0f/S;
+        if(S_inv != S_inv){
+                GGML_ABORT("nan discovered in flash attention");
+            }
+            if(isinf(S_inv)){
+                GGML_ABORT("inf discovered in flash attention");
+            }
         ggml_vec_scale_f32(DV, VKQ32, S_inv);
 
         // dst indices
@@ -8433,6 +8506,21 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         // permute(0, 2, 1, 3)
         memcpy((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1, VKQ32, nb1);
     }
+    /*
+    // 检查dst中是否有NaN或Inf
+    int64_t total_elements = ggml_nelements(dst);
+    float * dst_data = (float *)dst->data;
+    for (int64_t i = 0; i < total_elements; ++i) {
+        if (isnan(dst_data[i])) {
+            GGML_ABORT("nan discovered in flash attention output");
+        }
+        if(isinf(dst_data[i])){
+            GGML_ABORT("inf discovered in flash attention output");
+
+        }
+    }
+    */
+    GGML_LOG("n_ti_attn = %d\n", n_ti_attn++);
 }
 
 void ggml_compute_forward_flash_attn_ext(

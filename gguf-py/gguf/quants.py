@@ -657,21 +657,21 @@ class IFAIRY(__Quant, qtype=GGMLQuantizationType.F16_I2):
         # 实数编码
         neg_real_mask = (real_values < 0) & real_mask
         pos_real_mask = (real_values >= 0) & real_mask
-        quantized[neg_real_mask] = 0b00  # 负实数
-        quantized[pos_real_mask] = 0b01  # 正实数
+        quantized[neg_real_mask] = 0  # 负实数
+        quantized[pos_real_mask] = 1  # 正实数
         
         # 虚数编码  
         neg_imag_mask = (imag_values < 0) & imag_mask
         pos_imag_mask = (imag_values >= 0) & imag_mask
-        quantized[neg_imag_mask] = 0b10  # 负虚数
-        quantized[pos_imag_mask] = 0b11  # 正虚数
+        quantized[neg_imag_mask] = 2  # 负虚数
+        quantized[pos_imag_mask] = 3  # 正虚数
         
         # 打包2bit数据 (每个字节存储4个值)
         quantized = quantized.reshape((n_blocks, -1, 4))
         packed = np.zeros_like(quantized[..., 0], dtype=np.uint8)
         
         for i in range(4):
-            packed |= (quantized[..., i] & 0b11) << (i * 2)
+            packed |= (quantized[..., i] & 3) << (i * 2)
         
         # 重塑为连续块
         packed = packed.reshape((n_blocks, -1))

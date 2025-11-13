@@ -1558,7 +1558,10 @@ ggml_tensor * llm_graph_context::ifairy_build_attn(
 
     ggml_tensor * cur = build_attn_mha(q, k, v, NULL, kq_mask, NULL, NULL, kq_scale, il);
 
+    //LLAMA_LOG("cur shape after mha: %ld x %ld\n", cur->ne[0], cur->ne[1]);
+
     cur = ggml_reshape_3d(ctx0, cur, cur->ne[0] / n_head_kv, n_head_kv, n_tokens);
+    //LLAMA_LOG("cur shape after mha: %ld x %ld x %ld\n", cur->ne[0], cur->ne[1], cur->ne[2]);
 
     cur = ggml_ifairy_merge(ctx0, cur);
 

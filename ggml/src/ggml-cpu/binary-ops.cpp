@@ -52,7 +52,7 @@ static inline float op_ifairy_mul(float a, float b) {
     float ig = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
     // (ra - i ia) * (rg + i ig) = (ra*rg + ia*ig) + i(ra*ig - ia*rg)
     float r = ra*rg + ia*ig;
-    float i = ra*ig - ia*rg;
+    float i = ia*rg - ra*ig;
     float ret;
     ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(r);
     ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(i);
@@ -67,6 +67,9 @@ static inline void vec_binary_op_contiguous(const int64_t n, dst_t * z, const sr
 
     for (int i = 0; i < n; i++) {
         z[i] = f32_to_dst(op(src0_to_f32(x[i]), src1_to_f32(y[i])));
+        if(op(src0_to_f32(x[i]), src1_to_f32(y[i])) != op(src0_to_f32(x[i]), src1_to_f32(y[i]))){
+            GGML_ABORT("nan discovered in binary op");
+        }
     }
 }
 
