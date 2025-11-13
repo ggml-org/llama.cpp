@@ -900,9 +900,10 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     // Clamp top-k so it never exceeds the KV length
     const int32_t topk_safe = std::max<int32_t>(0, std::min<int32_t>(sparsek_topk, (int32_t)scores->ne[0]));
     if (topk_safe == 0) {
-    cb(base_mask, "sparsek_topk_zero_passthrough", il);
-    return base_mask;
-    }
+        cb(base_mask, "sparsek_topk_zero_passthrough", il);
+        return base_mask;
+   }
+
     ggml_tensor * topk_idx = ggml_top_k(ctx0, scores, topk_safe); // [topk, cols_calc]
     cb(topk_idx, "sparsek_topk_idx", il);
 
@@ -919,12 +920,7 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
 
     // FIX: set_rows must receive tensors with matching ne[2]; use rows3d as 'a'
     ggml_tensor * merged3d = ggml_set_rows(ctx0, rows3d, zeros, topk_idx); // [n_kv,1,cols]
-
-    // Back to 2D, then to 4D mask layout
-    ggml_tensor * merged2d = ggml_reshape_2d(ctx0, merged3d, scores->ne[0], scores->ne[1]); // [n_kv, cols]
-    ggml_tensor * allow    = ggml_reshape_4d(ctx0, merged2d, scores->ne[0], scores->ne[1], 1, 1);
-    cb(allow, "sparsek_allow_topk_only", il);
-
+    
     // 4) Final union with base (0/-INF encoding)
     // We need to tile base_mask columns from n_rows_p to cols_calc = n_rows_p * (heads*streams)
 
@@ -942,26 +938,17 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
         cb(base_mask, "sparsek_broadcast_mismatch_passthrough", il);
         return base_mask;
     }
-
-    // Reshape allow to 3D target [n_kv, n_rows_p, hs] — same elements, different view
-    ggml_tensor * allow3 = ggml_reshape_3d(ctx0, allow, scores->ne[0], base_cols, hs); // [n_kv, n_rows_p, hs]
-
-    // Prepare base as [n_kv, n_rows_p, 1] so we can repeat only the 3rd dim
-    ggml_tensor * base3 = ggml_reshape_3d(ctx0, base2d, base2d->ne[0], base2d->ne[1], 1); // [n_kv, n_rows_p, 1]
-
-    // Repeat base along the 3rd dim to match hs
-    ggml_tensor * base_rep3 = ggml_repeat(ctx0, base3, allow3); // [n_kv, n_rows_p, hs]
-
-    // Flatten back to 2D [n_kv, cols_calc] and then to 4D to match 'allow'
-    ggml_tensor * base_rep2 = ggml_reshape_2d(ctx0, base_rep3, scores->ne[0], cols_calc2);          // [n_kv, cols_calc]
+    ggml_tensor * base_rep2 = ggml_reshape_2d(ctx0, base2d, scores->ne[0], cols_calc2); // [n_kv, cols_calc]
     ggml_tensor * base_rep4 = ggml_reshape_4d(ctx0, base_rep2,
-    base_mask->ne[0], base_mask->ne[1], base_mask->ne[2], base_mask->ne[3]);
-        // === FIX: align final mask shape to base_mask shape ===
-    ggml_tensor *allow2d = ggml_reshape_2d(ctx0, merged3d, scores->ne[0], scores->ne[1]); // [n_kv, cols_calc]
-    ggml_tensor *allow4  = ggml_reshape_4d(ctx0, allow2d,
         base_mask->ne[0], base_mask->ne[1], base_mask->ne[2], base_mask->ne[3]);
 
-    ggml_tensor *final_mask = ggml_add(ctx0, allow4, base_rep4);
+    // Align allow-mask to the same 4D shape as base_mask
+    ggml_tensor * allow2d = ggml_reshape_2d(ctx0, merged3d, scores->ne[0], scores->ne[1]); // [n_kv, cols_calc]
+    ggml_tensor * allow4  = ggml_reshape_4d(ctx0, allow2d,
+        base_mask->ne[0], base_mask->ne[1], base_mask->ne[2], base_mask->ne[3]);
+    cb(allow4, "sparsek_allow_topk_only", il);
+
+    ggml_tensor * final_mask = ggml_add(ctx0, allow4, base_rep4);
     cb(final_mask, "sparsek_final_mask", il);
     return final_mask;
 
@@ -975,14 +962,15 @@ ggml_tensor * llm_graph_context::maybe_apply_sparsek_mask(
         int64_t      n_rows,
         int64_t      n_stream,
         int          il) const {
-    GGML_UNUSED(n_kv); GGML_UNUSED(n_rows); GGML_UNUSED(n_stream);
-    // If disabled, keep base behavior.
-    if (!sparsek_enable && !sparsek_en_local && !sparsek_en_stride) {
-        return base_mask;
-    }
-    // Build dynamic Sparse-K mask and union with base:
+    GGML_UNUSED(n_kv);
+    GGML_UNUSED(n_rows);
+    GGML_UNUSED(n_stream);
+
+    // Delegate all gating (enable/topk/etc.) to build_sparsek_mask.
+    // If SparseK is disabled or misconfigured, it will simply return base_mask.
     return build_sparsek_mask(q, k, base_mask, il);
 }
+
 // ============================================================================
 
 ggml_tensor * llm_graph_context::build_moe_ffn(
