@@ -10,23 +10,23 @@
 #include <optional>
 
 enum parser_type {
-    PARSER_LITERAL = 0,
-    PARSER_SEQUENCE = 1,
-    PARSER_CHOICE = 2,
-    PARSER_REPETITION = 3,
-    PARSER_OPTIONAL = 4,
-    PARSER_ZERO_OR_MORE = 5,
-    PARSER_ONE_OR_MORE = 6,
-    PARSER_NOT = 7,
-    PARSER_ANY = 8,
-    PARSER_CHARS = 9,
-    PARSER_RULE = 10,
-    PARSER_UNTIL = 11,
-    PARSER_SPACE = 12,
-    PARSER_SCHEMA = 13,
-    PARSER_ROOT = 14,
-    PARSER_JSON_STRING = 15,
-    PARSER_ACTION = 16,
+    PARSER_LITERAL,
+    PARSER_SEQUENCE,
+    PARSER_CHOICE,
+    PARSER_REPETITION,
+    PARSER_OPTIONAL,
+    PARSER_ZERO_OR_MORE,
+    PARSER_ONE_OR_MORE,
+    PARSER_NOT,
+    PARSER_ANY,
+    PARSER_CHARS,
+    PARSER_RULE,
+    PARSER_UNTIL,
+    PARSER_SPACE,
+    PARSER_SCHEMA,
+    PARSER_ROOT,
+    PARSER_JSON_STRING,
+    PARSER_ACTION,
 };
 
 class parser_visitor;
@@ -75,6 +75,20 @@ class parser_base {
     virtual void accept(parser_visitor & visitor) = 0;
 };
 
+// Convenience cast functions
+template<typename T>
+static std::shared_ptr<T> cast(const std::shared_ptr<parser_base> & p) {
+    if (p->type() != T::type_value) {
+        return nullptr;
+    }
+    return std::static_pointer_cast<T>(p);
+}
+
+template<typename T>
+static std::shared_ptr<T> cast(const parser & p) {
+    return cast<T>(p.ptr());
+}
+
 // We define our own space function because MSVC's std::isspace()
 // crashes for non-printable characters in Debug builds.
 static bool is_space(const char c) {
@@ -107,9 +121,11 @@ class literal_parser : public parser_base {
     std::string literal_;
 
   public:
+    static constexpr parser_type type_value = PARSER_LITERAL;
+
     literal_parser(const std::string & literal, int id) : parser_base(id), literal_(literal) {}
 
-    parser_type type() const override { return PARSER_LITERAL; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto pos = start;
@@ -147,11 +163,11 @@ class sequence_parser : public parser_base {
     std::vector<parser> parsers_;
 
   public:
+    static constexpr parser_type type_value = PARSER_SEQUENCE;
+
     sequence_parser(std::initializer_list<parser> parsers, int id) : parser_base(id) {
         for (const auto & p : parsers) {
-            if (p->type() == PARSER_SEQUENCE) {
-                // Flatten sequences
-                auto seq = std::static_pointer_cast<sequence_parser>(p.ptr());
+            if (auto seq = cast<sequence_parser>(p)) {
                 for (const auto & embedded : seq->parsers()) {
                     parsers_.push_back(embedded);
                 }
@@ -161,7 +177,7 @@ class sequence_parser : public parser_base {
         }
     }
 
-    parser_type type() const override { return PARSER_SEQUENCE; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto pos = start;
@@ -213,11 +229,11 @@ class choice_parser : public parser_base {
     std::vector<parser> parsers_;
 
   public:
+    static constexpr parser_type type_value = PARSER_CHOICE;
+
     choice_parser(std::initializer_list<parser> parsers, int id) : parser_base(id) {
         for (const auto & p : parsers) {
-            if (p->type() == PARSER_CHOICE) {
-                // Flatten choices
-                auto choice = std::static_pointer_cast<choice_parser>(p.ptr());
+            if (auto choice = cast<choice_parser>(p)) {
                 for (const auto & embedded : choice->parsers()) {
                     parsers_.push_back(embedded);
                 }
@@ -227,7 +243,7 @@ class choice_parser : public parser_base {
         }
     }
 
-    parser_type type() const override { return PARSER_CHOICE; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto pos = start;
@@ -276,10 +292,12 @@ class repetition_parser : public parser_base {
     int max_count_;
 
   public:
+    static constexpr parser_type type_value = PARSER_REPETITION;
+
     repetition_parser(const parser & parser, int min_count, int max_count, int id)
         : parser_base(id), parser_(parser), min_count_(min_count), max_count_(max_count) {}
 
-    parser_type type() const override { return PARSER_REPETITION; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto pos = start;
@@ -340,9 +358,11 @@ class repetition_parser : public parser_base {
 //   S -> A+
 class one_or_more_parser : public repetition_parser {
   public:
+    static constexpr parser_type type_value = PARSER_ONE_OR_MORE;
+
     one_or_more_parser(const parser & p, int id) : repetition_parser(p, 1, -1, id) {}
 
-    parser_type type() const override { return PARSER_ONE_OR_MORE; }
+    parser_type type() const override { return type_value; }
 
     std::string dump() const override {
         return "OneOrMore(" + child()->dump() + ")";
@@ -355,9 +375,11 @@ class one_or_more_parser : public repetition_parser {
 //   S -> A*
 class zero_or_more_parser : public repetition_parser {
   public:
+    static constexpr parser_type type_value = PARSER_ZERO_OR_MORE;
+
     zero_or_more_parser(const parser & p, int id) : repetition_parser(p, 0, -1, id) {}
 
-    parser_type type() const override { return PARSER_ZERO_OR_MORE; }
+    parser_type type() const override { return type_value; }
 
     std::string dump() const override {
         return "ZeroOrMore(" + child()->dump() + ")";
@@ -370,9 +392,11 @@ class zero_or_more_parser : public repetition_parser {
 //   S -> A?
 class optional_parser : public repetition_parser {
   public:
+    static constexpr parser_type type_value = PARSER_OPTIONAL;
+
     optional_parser(const parser & p, int id) : repetition_parser(p, 0, 1, id) {}
 
-    parser_type type() const override { return PARSER_OPTIONAL; }
+    parser_type type() const override { return type_value; }
 
     std::string dump() const override {
         return "Optional(" + child()->dump() + ")";
@@ -387,9 +411,11 @@ class not_parser : public parser_base {
     parser parser_;
 
   public:
+    static constexpr parser_type type_value = PARSER_NOT;
+
     not_parser(const parser & parser, int id) : parser_base(id), parser_(parser) {}
 
-    parser_type type() const override { return PARSER_NOT; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto result = parser_->parse(ctx, start);
@@ -426,9 +452,11 @@ class not_parser : public parser_base {
 //   S -> .
 class any_parser : public parser_base {
   public:
+    static constexpr parser_type type_value = PARSER_ANY;
+
     any_parser(int id) : parser_base(id) {}
 
-    parser_type type() const override { return PARSER_ANY; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         if (start >= ctx.input.size()) {
@@ -452,9 +480,11 @@ class any_parser : public parser_base {
 //   S -> [ \t\n]*
 class space_parser : public parser_base {
   public:
+    static constexpr parser_type type_value = PARSER_SPACE;
+
     space_parser(int id) : parser_base(id) {}
 
-    parser_type type() const override { return PARSER_SPACE; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto pos = start;
@@ -545,7 +575,9 @@ class chars_parser : public parser_base {
         }
     }
 
-    parser_type type() const override { return PARSER_CHARS; }
+    static constexpr parser_type type_value = PARSER_CHARS;
+
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto pos = start;
@@ -610,9 +642,11 @@ class chars_parser : public parser_base {
 class json_string_parser : public parser_base {
 
   public:
+    static constexpr parser_type type_value = PARSER_JSON_STRING;
+
     json_string_parser(int id) : parser_base(id) {}
 
-    parser_type type() const override { return PARSER_JSON_STRING; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto pos = start;
@@ -699,11 +733,13 @@ class until_parser : public parser_base {
     std::default_searcher<std::string::const_iterator> searcher_;
 
   public:
+    static constexpr parser_type type_value = PARSER_UNTIL;
+
     until_parser(const std::string & delimiter, bool consume_spaces, int id)
         : parser_base(id), delimiter_(delimiter), consume_spaces_(consume_spaces), searcher_(delimiter_.begin(), delimiter_.end()) {
     }
 
-    parser_type type() const override { return PARSER_UNTIL; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         parser_result result(PARSER_RESULT_SUCCESS, start, ctx.input.size());
@@ -752,10 +788,12 @@ class schema_parser : public parser_base {
     nlohmann::ordered_json schema_;
 
   public:
+    static constexpr parser_type type_value = PARSER_SCHEMA;
+
     schema_parser(const parser & parser, const std::string & name, const nlohmann::ordered_json & schema, int id)
         : parser_base(id), parser_(parser), name_(name), schema_(schema) {}
 
-    parser_type type() const override { return PARSER_SCHEMA; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         return parser_->parse(ctx, start);
@@ -781,10 +819,12 @@ class rule_parser : public parser_base {
     std::weak_ptr<std::unordered_map<std::string, parser>> rules_;
 
   public:
+    static constexpr parser_type type_value = PARSER_RULE;
+
     rule_parser(const std::string & name, const std::shared_ptr<std::unordered_map<std::string, parser>> & rules, int id)
         : parser_base(id), name_(name), rules_(rules) {}
 
-    parser_type type() const override { return PARSER_RULE; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto rules = rules_.lock();
@@ -820,10 +860,12 @@ class root_parser : public parser_base {
     friend class parser_visitor;
 
   public:
+    static constexpr parser_type type_value = PARSER_ROOT;
+
     root_parser(const parser & root, std::shared_ptr<std::unordered_map<std::string, parser>> rules, int id)
         : parser_base(id), root_(root), rules_(std::move(rules)) {}
 
-    parser_type type() const override { return PARSER_ROOT; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         return root_->parse(ctx, start);
@@ -851,10 +893,12 @@ class action_parser : public parser_base {
     std::function<void(const parser_result &, std::string_view, parser_environment &)> action_;
 
   public:
+    static constexpr parser_type type_value = PARSER_ACTION;
+
     action_parser(const parser & parser, std::function<void(const parser_result &, std::string_view, parser_environment &)> action, int id)
         : parser_base(id), parser_(parser), action_(std::move(action)) {}
 
-    parser_type type() const override { return PARSER_ACTION; }
+    parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto result = parser_->parse(ctx, start);
