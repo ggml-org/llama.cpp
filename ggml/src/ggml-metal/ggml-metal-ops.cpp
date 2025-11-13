@@ -3538,9 +3538,21 @@ int ggml_metal_op_argsort(ggml_metal_op_t ctx, int idx) {
         nth *= 2;
     }
 
+    const int nptg = (ne00 + nth - 1)/nth;
+
     // Metal kernels require the buffer size to be multiple of 16 bytes
     // https://developer.apple.com/documentation/metal/mtlcomputecommandencoder/1443142-setthreadgroupmemorylength
     const size_t smem = GGML_PAD(nth*sizeof(int32_t), 16);
+
+    ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
+    ggml_metal_buffer_id bid_dst  = ggml_metal_get_buffer_id(op);
+
+    ggml_metal_buffer_id bid_tmp = bid_dst;
+    bid_tmp.offs += ggml_nbytes(op);
+
+    if ((int) ceil(std::log(nptg) / std::log(2)) % 2 == 1) {
+        std::swap(bid_dst, bid_tmp);
+    }
 
     ggml_metal_kargs_argsort args = {
         /*.ne00 =*/ ne00,
@@ -3555,14 +3567,51 @@ int ggml_metal_op_argsort(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+    ggml_metal_encoder_set_buffer  (enc, bid_src0, 1);
+    ggml_metal_encoder_set_buffer  (enc, bid_dst,  2);
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-    const int nptg = (ne00 + nth - 1)/nth;
-
     ggml_metal_encoder_dispatch_threadgroups(enc, nptg*ne01, ne02, ne03, nth, 1, 1);
+
+    ggml_metal_pipeline_t pipeline_merge = ggml_metal_library_get_pipeline_argsort_merge(lib, op);
+
+    int len = nth;
+
+    while (len < ne00) {
+        ggml_metal_op_concurrency_reset(ctx);
+
+        ggml_metal_kargs_argsort_merge args_merge = {
+            .ne00 = ne00,
+            .ne01 = ne01,
+            .ne02 = ne02,
+            .ne03 = ne03,
+            .nb00 = nb00,
+            .nb01 = nb01,
+            .nb02 = nb02,
+            .nb03 = nb03,
+            .len  = len,
+        };
+
+        // merges per row
+        const int nm = (ne00 + 2*len - 1) / (2*len);
+
+        const int nth = 512;
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline_merge);
+        ggml_metal_encoder_set_bytes   (enc, &args_merge, sizeof(args_merge), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0, 1);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst,  2);
+        ggml_metal_encoder_set_buffer  (enc, bid_tmp,  3);
+
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, 0, 0);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, nm*ne01, ne02, ne03, nth, 1, 1);
+
+        std::swap(bid_dst, bid_tmp);
+
+        len <<= 1;
+    }
 
     return 1;
 }
