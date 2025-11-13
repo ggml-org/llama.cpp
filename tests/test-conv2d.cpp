@@ -301,9 +301,9 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(960,320,104,152,3,3),
         // std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1920,640,32,32,3,3)
-        // std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
         // std::make_tuple(32,8,24,24,3,3),
-        std::make_tuple(640,640,64,64,3,3),
+        // std::make_tuple(640,640,64,64,3,3),
         // std::make_tuple(320,640,32,32,3,3),
         // std::make_tuple(4,320,96,128,3,3),
         // std::make_tuple(320,4,96,128,3,3),
@@ -673,7 +673,7 @@ int main(void)
         // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
 
 
-        int iterations = 20;
+        int iterations = 0;
 
         double run_time0;
         std::vector<float> im2col_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
@@ -716,15 +716,15 @@ int main(void)
 
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
         // for(int i = 0; i < 26*38; i++) {
-        // for(int i = 0; i < conv2d_data.size(); i++) {
-        //     float diff = fabs(im2col_data[i] - conv2d_data[i]);
-        //     // if(diff > 0.5) {
-        //           printf("(%7.3f, %7.3f, %.2f, %d) \n",
-        //           im2col_data[i], conv2d_data[i],
-        //           diff, i);
-        //         // break;
-        //     // }
-        // }
+        for(int i = 0; i < conv2d_data.size(); i++) {
+            float diff = fabs(im2col_data[i] - conv2d_data[i]);
+            // if(diff > 0.5) {
+                  printf("(%7.3f, %7.3f, %.2f, %d) \n",
+                  im2col_data[i], conv2d_data[i],
+                  diff, i);
+                // break;
+            // }
+        }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);
