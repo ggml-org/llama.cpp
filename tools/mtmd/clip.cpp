@@ -160,13 +160,13 @@ enum patch_merge_type {
 };
 
 struct clip_hparams {
-    int32_t image_size;
-    int32_t patch_size;
-    int32_t n_embd;
-    int32_t n_ff;
-    int32_t projection_dim;
-    int32_t n_head;
-    int32_t n_layer;
+    int32_t image_size = 0;
+    int32_t patch_size = 0;
+    int32_t n_embd = 0;
+    int32_t n_ff = 0;
+    int32_t projection_dim = 0;
+    int32_t n_head = 0;
+    int32_t n_layer = 0;
     // idefics3
     int32_t image_longest_edge = 0;
     int32_t image_min_pixels = -1;
@@ -2683,6 +2683,9 @@ struct clip_model_loader {
                 }
             } else if (is_audio) {
                 get_u32(KEY_A_NUM_MEL_BINS, hparams.n_mel_bins);
+                // some hparams are unused, but still need to set to avoid issues
+                hparams.image_size = 0;
+                hparams.patch_size = 1;
 
             } else {
                 GGML_ASSERT(false && "unknown modality");

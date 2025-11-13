@@ -15,6 +15,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -72,6 +73,30 @@
 
 // For operations which process a row in parallel, this seems like a reasonable default
 #define WEBGPU_ROW_SPLIT_WG_SIZE 64
+
+// Matrix multiplication parameters
+
+// Register tiling parameters
+#define WEBGPU_MUL_MAT_TILE_M    8
+#define WEBGPU_MUL_MAT_TILE_N    8
+#define WEBGPU_MUL_MAT_WG_SIZE_M 8
+#define WEBGPU_MUL_MAT_WG_SIZE_N 8
+#define WEBGPU_MUL_MAT_TILE_K    32
+
+// Subgroup matrix parameters
+// The number of subgroups in the M dimension
+#define WEBGPU_MUL_MAT_SUBGROUP_M        2
+// The number of subgroups in the N dimension
+#define WEBGPU_MUL_MAT_SUBGROUP_N        2
+// The number of subgroup matrices each subgroup accumulates over
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M 4
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N 2
+
+// Matrix-vector multiplication parameters
+#define WEBGPU_MUL_MAT_VEC_WG_SIZE        256
+// Must be multiple of 4 to work with vectorized paths, and must divide mul_mat_vec wg size
+#define WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG 64
+#define WEBGPU_MUL_MAT_VEC_TILE_K         256
 
 /* End Constants */
 
@@ -236,6 +261,10 @@ struct webgpu_context_struct {
     wgpu::Queue    queue;
     wgpu::Limits   limits;
 
+    bool                       supports_subgroup_matrix = false;
+    uint32_t                   subgroup_size;
+    wgpu::SubgroupMatrixConfig subgroup_matrix_config;
+
     // Separate this out from limits since on some Metal systems, the limit returned by
     // querying the limits is higher than the actual allowed maximum.
     uint32_t max_wg_size_x;
@@ -247,6 +276,11 @@ struct webgpu_context_struct {
     webgpu_buf_pool set_rows_error_buf_pool;
 
     webgpu_pipeline memset_pipeline;
+
+    std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> mul_mat_pipelines;  // src0_type, src1_type, vectorized
+    std::map<int, std::map<int, std::map<int, webgpu_pipeline>>>
+        mul_mat_vec_pipelines;                                                       // src0_type, src1_type, vectorized
+
     webgpu_pipeline mul_mat_pipeline[30][2];
     webgpu_pipeline set_rows_pipeline[1][2];  // dst->type, vectorized
     webgpu_pipeline get_rows_pipeline[30];
@@ -321,6 +355,25 @@ struct ggml_backend_webgpu_buffer_context {
 
 /* WebGPU object initializations */
 
+// Process a WGSL shader string, replacing tokens of the form {{KEY}} with
+// the corresponding values provided in `repls`.
+static std::string ggml_webgpu_process_shader_repls(const char *                               src,
+                                                    const std::map<std::string, std::string> & repls) {
+    if (!src) {
+        return std::string();
+    }
+    std::string s = src;
+    for (const auto & kv : repls) {
+        std::string token = "{{" + kv.first + "}}";
+        size_t      pos   = 0;
+        while ((pos = s.find(token, pos)) != std::string::npos) {
+            s.replace(pos, token.length(), kv.second);
+            pos += kv.second.length();
+        }
+    }
+    return s;
+}
+
 static void ggml_webgpu_create_pipeline(wgpu::Device &                           device,
                                         webgpu_pipeline &                        pipeline,
                                         const char *                             shader_code,
@@ -344,6 +397,30 @@ static void ggml_webgpu_create_pipeline(wgpu::Device &                          
         pipeline_desc.compute.constantCount = constants.size();
     }
     pipeline = { device.CreateComputePipeline(&pipeline_desc), label };
+}
+
+static webgpu_pipeline ggml_webgpu_create_pipeline2(wgpu::Device &                           device,
+                                                    const char *                             shader_code,
+                                                    const char *                             label,
+                                                    const std::vector<wgpu::ConstantEntry> & constants = {}) {
+    wgpu::ShaderSourceWGSL shader_source;
+    shader_source.code = shader_code;
+
+    wgpu::ShaderModuleDescriptor shader_desc;
+    shader_desc.nextInChain = &shader_source;
+
+    wgpu::ShaderModule shader_module = device.CreateShaderModule(&shader_desc);
+
+    wgpu::ComputePipelineDescriptor pipeline_desc;
+    pipeline_desc.label              = label;
+    pipeline_desc.compute.module     = shader_module;
+    pipeline_desc.compute.entryPoint = "main";   // Entry point in the WGSL code
+    pipeline_desc.layout             = nullptr;  // nullptr means auto layout
+    if (constants.size() > 0) {
+        pipeline_desc.compute.constants     = constants.data();
+        pipeline_desc.compute.constantCount = constants.size();
+    }
+    return { device.CreateComputePipeline(&pipeline_desc), label };
 }
 
 static void ggml_webgpu_create_buffer(wgpu::Device &    device,
@@ -512,6 +589,7 @@ static webgpu_command ggml_backend_webgpu_build(webgpu_context &                
                                                 std::vector<uint32_t>             params,
                                                 std::vector<wgpu::BindGroupEntry> bind_group_entries,
                                                 uint32_t                          wg_x,
+                                                uint32_t                          wg_y                = 1,
                                                 std::optional<webgpu_pool_bufs>   set_rows_error_bufs = std::nullopt) {
     webgpu_pool_bufs params_bufs = ctx->param_buf_pool.alloc_bufs();
 
@@ -557,7 +635,7 @@ static webgpu_command ggml_backend_webgpu_build(webgpu_context &                
 #endif
     pass.SetPipeline(pipeline.pipeline);
     pass.SetBindGroup(0, bind_group);
-    pass.DispatchWorkgroups(wg_x, 1, 1);
+    pass.DispatchWorkgroups(wg_x, wg_y, 1);
     pass.End();
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
@@ -779,7 +857,7 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
 
     uint32_t wg_x = (threads + max_wg_size - 1) / max_wg_size;
 
-    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, error_bufs);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, 1, error_bufs);
 }
 
 static webgpu_command ggml_webgpu_get_rows(webgpu_context & ctx,
@@ -835,8 +913,8 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type)),
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)),
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
-        (uint32_t) dst->ne[1],                                  // number of rows in result (M)
-        (uint32_t) dst->ne[0],                                  // number of columns in result (N)
+        (uint32_t) dst->ne[0],                                  // number of rows in result (M, transposed)
+        (uint32_t) dst->ne[1],                                  // number of columns in result (N)
         (uint32_t) src0->ne[0],                                 // number of columns in src0/src1 (K)
         (uint32_t) (src0->nb[1] / ggml_type_size(src0->type)),  // stride (elements/blocks) of src0 in dimension 1
         (uint32_t) (src1->nb[1] / ggml_type_size(src1->type)),  // stride (elements/blocks) of src1 in dimension 1
@@ -865,9 +943,67 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  },
     };
 
+    webgpu_pipeline pipeline = ctx->mul_mat_pipeline[src0->type][src1->type];
+
     uint32_t wg_x =
         (dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3] + WEBGPU_MUL_MAT_WG_SIZE - 1) / WEBGPU_MUL_MAT_WG_SIZE;
-    return ggml_backend_webgpu_build(ctx, ctx->mul_mat_pipeline[src0->type][src1->type], params, entries, wg_x);
+    uint32_t wg_y = 1;
+
+    bool use_fast = false;
+    switch (src1->type) {
+        case GGML_TYPE_F16:
+            use_fast = (src0->type == GGML_TYPE_F16);
+            break;
+        case GGML_TYPE_F32:
+            switch (src0->type) {
+                case GGML_TYPE_F32:
+                case GGML_TYPE_F16:
+                case GGML_TYPE_Q4_0:
+                    use_fast = true;
+                    break;
+                default:
+                    break;
+            }
+            break;
+        default:
+            break;
+    }
+
+    if (use_fast) {
+        int vectorized = src0->ne[0] % 4 == 0 && dst->ne[0] % 4 == 0 && dst->ne[1] % 4 == 0;
+        if (dst->ne[1] == 1) {
+            // We don't support vectorized mul_mat_vec for quantized types
+            vectorized       = vectorized && (src0->type < 2);
+            pipeline         = ctx->mul_mat_vec_pipelines[src0->type][src1->type][vectorized];
+            uint32_t batches = dst->ne[2] * dst->ne[3];
+            uint32_t output_groups =
+                (dst->ne[0] + WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG - 1) / WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG;
+            uint32_t total_wg = output_groups * batches;
+            wg_x              = total_wg % ctx->limits.maxComputeWorkgroupsPerDimension;
+            wg_y              = (total_wg + ctx->limits.maxComputeWorkgroupsPerDimension - 1) /
+                   ctx->limits.maxComputeWorkgroupsPerDimension;
+        } else {
+            pipeline = ctx->mul_mat_pipelines[src0->type][src1->type][vectorized];
+            uint32_t wg_m;
+            uint32_t wg_n;
+            if (ctx->supports_subgroup_matrix) {
+                // The total number of subgroups/workgroups needed per matrix.
+                uint32_t wg_m_sg_tile =
+                    WEBGPU_MUL_MAT_SUBGROUP_M * WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M * ctx->subgroup_matrix_config.M;
+                wg_m = (dst->ne[0] + wg_m_sg_tile - 1) / wg_m_sg_tile;
+                uint32_t wg_n_sg_tile =
+                    WEBGPU_MUL_MAT_SUBGROUP_N * WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N * ctx->subgroup_matrix_config.N;
+                wg_n = (dst->ne[1] + wg_n_sg_tile - 1) / wg_n_sg_tile;
+            } else {
+                uint32_t tile_m_s = WEBGPU_MUL_MAT_TILE_M * WEBGPU_MUL_MAT_WG_SIZE_M;
+                uint32_t tile_n_s = WEBGPU_MUL_MAT_TILE_N * WEBGPU_MUL_MAT_WG_SIZE_N;
+                wg_m              = (dst->ne[0] + tile_m_s - 1) / tile_m_s;
+                wg_n              = (dst->ne[1] + tile_n_s - 1) / tile_n_s;
+            }
+            wg_x = wg_m * wg_n * dst->ne[2] * dst->ne[3];
+        }
+    }
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
 }
 
 static webgpu_command ggml_webgpu_binary_op(webgpu_context &  ctx,
@@ -1583,12 +1719,6 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_F32][GGML_TYPE_F32],
-                                wgsl_mul_mat_f32_f32, "mul_mat_f32_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_F16][GGML_TYPE_F16],
-                                wgsl_mul_mat_f16_f16, "mul_mat_f16_f16");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_F16][GGML_TYPE_F32],
-                                wgsl_mul_mat_f16_f32, "mul_mat_f16_f32");
     ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q4_0][GGML_TYPE_F32],
                                 wgsl_mul_mat_q4_0_f32, "mul_mat_q4_0_f32");
     ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q4_1][GGML_TYPE_F32],
@@ -1627,6 +1757,136 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
                                 wgsl_mul_mat_iq4_nl_f32, "mul_mat_iq4_nl_f32");
     ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ4_XS][GGML_TYPE_F32],
                                 wgsl_mul_mat_iq4_xs_f32, "mul_mat_iq4_xs_f32");
+
+    if (webgpu_ctx->supports_subgroup_matrix) {
+        std::map<std::string, std::string> sg_matrix_repls;
+        sg_matrix_repls["WEBGPU_MAX_SUBGROUP_SIZE"] = std::to_string(webgpu_ctx->subgroup_size);
+        sg_matrix_repls["WEBGPU_TILE_K"]            = std::to_string(WEBGPU_MUL_MAT_TILE_K);
+        sg_matrix_repls["WEBGPU_SUBGROUP_M"]        = std::to_string(WEBGPU_MUL_MAT_SUBGROUP_M);
+        sg_matrix_repls["WEBGPU_SUBGROUP_N"]        = std::to_string(WEBGPU_MUL_MAT_SUBGROUP_N);
+        sg_matrix_repls["WEBGPU_SUBGROUP_MATRIX_M"] = std::to_string(WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M);
+        sg_matrix_repls["WEBGPU_SUBGROUP_MATRIX_N"] = std::to_string(WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N);
+        sg_matrix_repls["WEBGPU_SG_MAT_M_SIZE"]     = std::to_string(webgpu_ctx->subgroup_matrix_config.M);
+        sg_matrix_repls["WEBGPU_SG_MAT_N_SIZE"]     = std::to_string(webgpu_ctx->subgroup_matrix_config.N);
+        sg_matrix_repls["WEBGPU_SG_MAT_K_SIZE"]     = std::to_string(webgpu_ctx->subgroup_matrix_config.K);
+
+        std::string proc_mul_mat_subgroup_matrix_f32_f32 =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_subgroup_matrix_f32_f32, sg_matrix_repls);
+        std::string proc_mul_mat_subgroup_matrix_f32_f32_vec =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_subgroup_matrix_f32_f32_vec, sg_matrix_repls);
+        std::string proc_mul_mat_subgroup_matrix_f16_f32 =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_subgroup_matrix_f16_f32, sg_matrix_repls);
+        std::string proc_mul_mat_subgroup_matrix_f16_f32_vec =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_subgroup_matrix_f16_f32_vec, sg_matrix_repls);
+        std::string proc_mul_mat_subgroup_matrix_f16_f16 =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_subgroup_matrix_f16_f16, sg_matrix_repls);
+        std::string proc_mul_mat_subgroup_matrix_f16_f16_vec =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_subgroup_matrix_f16_f16_vec, sg_matrix_repls);
+        std::string proc_mul_mat_subgroup_matrix_q4_0_f32 =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_subgroup_matrix_q4_0_f32, sg_matrix_repls);
+        std::string proc_mul_mat_subgroup_matrix_q4_0_f32_vec =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_subgroup_matrix_q4_0_f32_vec, sg_matrix_repls);
+
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+            webgpu_ctx->device, proc_mul_mat_subgroup_matrix_f32_f32.c_str(), "mul_mat_subgroup_matrix_f32_f32");
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][1] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_subgroup_matrix_f32_f32_vec.c_str(),
+                                         "mul_mat_subgroup_matrix_f32_f32_vec");
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+            webgpu_ctx->device, proc_mul_mat_subgroup_matrix_f16_f32.c_str(), "mul_mat_subgroup_matrix_f16_f32");
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][1] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_subgroup_matrix_f16_f32_vec.c_str(),
+                                         "mul_mat_subgroup_matrix_f16_f32_vec");
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][0] = ggml_webgpu_create_pipeline2(
+            webgpu_ctx->device, proc_mul_mat_subgroup_matrix_f16_f16.c_str(), "mul_mat_subgroup_matrix_f16_f16");
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][1] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_subgroup_matrix_f16_f16_vec.c_str(),
+                                         "mul_mat_subgroup_matrix_f16_f16_vec");
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+            webgpu_ctx->device, proc_mul_mat_subgroup_matrix_q4_0_f32.c_str(), "mul_mat_subgroup_matrix_q4_0_f32");
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][1] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_subgroup_matrix_q4_0_f32_vec.c_str(),
+                                         "mul_mat_subgroup_matrix_q4_0_f32_vec");
+    } else {
+        std::vector<wgpu::ConstantEntry> mul_mat_reg_tile_constants(3);
+        mul_mat_reg_tile_constants[0].key   = "TILE_K";
+        mul_mat_reg_tile_constants[0].value = WEBGPU_MUL_MAT_TILE_K;
+        mul_mat_reg_tile_constants[1].key   = "WORKGROUP_SIZE_M";
+        mul_mat_reg_tile_constants[1].value = WEBGPU_MUL_MAT_WG_SIZE_M;
+        mul_mat_reg_tile_constants[2].key   = "WORKGROUP_SIZE_N";
+        mul_mat_reg_tile_constants[2].value = WEBGPU_MUL_MAT_WG_SIZE_N;
+
+        std::map<std::string, std::string> reg_repls;
+        reg_repls["WEBGPU_TILE_M"] = std::to_string(WEBGPU_MUL_MAT_TILE_M);
+        reg_repls["WEBGPU_TILE_N"] = std::to_string(WEBGPU_MUL_MAT_TILE_N);
+
+        // Process each reg-tile shader with tile replacements.
+        // Keep the processed strings in-scope so .c_str() remains valid.
+        std::string proc_mul_mat_reg_tile_f32_f32 =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_reg_tile_f32_f32, reg_repls);
+        std::string proc_mul_mat_reg_tile_f32_f32_vec =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_reg_tile_f32_f32_vec, reg_repls);
+        std::string proc_mul_mat_reg_tile_f16_f32 =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_reg_tile_f16_f32, reg_repls);
+        std::string proc_mul_mat_reg_tile_f16_f32_vec =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_reg_tile_f16_f32_vec, reg_repls);
+        std::string proc_mul_mat_reg_tile_f16_f16 =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_reg_tile_f16_f16, reg_repls);
+        std::string proc_mul_mat_reg_tile_f16_f16_vec =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_reg_tile_f16_f16_vec, reg_repls);
+        std::string proc_mul_mat_reg_tile_q4_0_f32 =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_reg_tile_q4_0_f32, reg_repls);
+        std::string proc_mul_mat_reg_tile_q4_0_f32_vec =
+            ggml_webgpu_process_shader_repls(wgsl_mul_mat_reg_tile_q4_0_f32_vec, reg_repls);
+
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][0] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_reg_tile_f32_f32.c_str(),
+                                         "mul_mat_reg_tile_f32_f32", mul_mat_reg_tile_constants);
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][1] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_reg_tile_f32_f32_vec.c_str(),
+                                         "mul_mat_reg_tile_f32_f32_vec", mul_mat_reg_tile_constants);
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][0] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_reg_tile_f16_f32.c_str(),
+                                         "mul_mat_reg_tile_f16_f32", mul_mat_reg_tile_constants);
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][1] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_reg_tile_f16_f32_vec.c_str(),
+                                         "mul_mat_reg_tile_f16_f32_vec", mul_mat_reg_tile_constants);
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][0] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_reg_tile_f16_f16.c_str(),
+                                         "mul_mat_reg_tile_f16_f16", mul_mat_reg_tile_constants);
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][1] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_reg_tile_f16_f16_vec.c_str(),
+                                         "mul_mat_reg_tile_f16_f16_vec", mul_mat_reg_tile_constants);
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][0] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_reg_tile_q4_0_f32.c_str(),
+                                         "mul_mat_reg_tile_q4_0_f32", mul_mat_reg_tile_constants);
+        webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][1] =
+            ggml_webgpu_create_pipeline2(webgpu_ctx->device, proc_mul_mat_reg_tile_q4_0_f32_vec.c_str(),
+                                         "mul_mat_reg_tile_q4_0_f32_vec", mul_mat_reg_tile_constants);
+    }
+
+    std::vector<wgpu::ConstantEntry> mul_mat_vec_constants(3);
+    mul_mat_vec_constants[0].key   = "WORKGROUP_SIZE";
+    mul_mat_vec_constants[0].value = WEBGPU_MUL_MAT_VEC_WG_SIZE;
+    mul_mat_vec_constants[1].key   = "TILE_K";
+    mul_mat_vec_constants[1].value = WEBGPU_MUL_MAT_VEC_TILE_K;
+    mul_mat_vec_constants[2].key   = "OUTPUTS_PER_WG";
+    mul_mat_vec_constants[2].value = WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG;
+
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+        webgpu_ctx->device, wgsl_mul_mat_vec_f32_f32, "mul_mat_vec_f32_f32", mul_mat_vec_constants);
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline2(
+        webgpu_ctx->device, wgsl_mul_mat_vec_f32_f32_vec, "mul_mat_vec_f32_f32_vec", mul_mat_vec_constants);
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+        webgpu_ctx->device, wgsl_mul_mat_vec_f16_f32, "mul_mat_vec_f16_f32", mul_mat_vec_constants);
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline2(
+        webgpu_ctx->device, wgsl_mul_mat_vec_f16_f32_vec, "mul_mat_vec_f16_f32_vec", mul_mat_vec_constants);
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][0] = ggml_webgpu_create_pipeline2(
+        webgpu_ctx->device, wgsl_mul_mat_vec_f16_f16, "mul_mat_vec_f16_f16", mul_mat_vec_constants);
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][1] = ggml_webgpu_create_pipeline2(
+        webgpu_ctx->device, wgsl_mul_mat_vec_f16_f16_vec, "mul_mat_vec_f16_f16_vec", mul_mat_vec_constants);
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+        webgpu_ctx->device, wgsl_mul_mat_vec_q4_0_f32, "mul_mat_vec_q4_0_f32", mul_mat_vec_constants);
 }
 
 static void ggml_webgpu_init_set_rows_pipeline(webgpu_context & webgpu_ctx) {
@@ -2124,7 +2384,13 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
 
     webgpu_context ctx = reg_ctx->webgpu_ctx;
 
-    wgpu::RequestAdapterOptions options = {};
+    // TODO: track need for these toggles: https://issues.chromium.org/issues/42251215
+    const char * const          adapterEnabledToggles[] = { "vulkan_enable_f16_on_nvidia", "use_vulkan_memory_model" };
+    wgpu::DawnTogglesDescriptor adapterTogglesDesc;
+    adapterTogglesDesc.enabledToggles     = adapterEnabledToggles;
+    adapterTogglesDesc.enabledToggleCount = 2;
+    wgpu::RequestAdapterOptions options   = {};
+    options.nextInChain                   = &adapterTogglesDesc;
     ctx->instance.WaitAny(ctx->instance.RequestAdapter(
                               &options, wgpu::CallbackMode::AllowSpontaneous,
                               [&ctx](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char * message) {
@@ -2140,12 +2406,46 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     ctx->adapter.GetLimits(&ctx->limits);
     ctx->max_wg_size_x = 288;  // default value
 
-    wgpu::AdapterInfo info{};
+    wgpu::AdapterInfo                            info{};
+    wgpu::AdapterPropertiesSubgroupMatrixConfigs subgroup_matrix_configs{};
+    if (ctx->adapter.HasFeature(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix)) {
+        info.nextInChain = &subgroup_matrix_configs;
+    }
     ctx->adapter.GetInfo(&info);
+
+    wgpu::SupportedFeatures features;
+    ctx->adapter.GetFeatures(&features);
+    // we require f16 support
+    GGML_ASSERT(ctx->adapter.HasFeature(wgpu::FeatureName::ShaderF16));
+
+    // Only support square f16 matrices of size 8 or 16 for now
+    bool valid_subgroup_matrix_config = false;
+    if (ctx->adapter.HasFeature(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix)) {
+        for (size_t i = 0; i < subgroup_matrix_configs.configCount; i++) {
+            const wgpu::SubgroupMatrixConfig config = subgroup_matrix_configs.configs[i];
+            if (config.M == config.N && config.N == config.K && (config.K == 8 || config.K == 16) &&
+                config.componentType == wgpu::SubgroupMatrixComponentType::F16 &&
+                config.resultComponentType == wgpu::SubgroupMatrixComponentType::F16) {
+                ctx->subgroup_matrix_config  = config;
+                valid_subgroup_matrix_config = true;
+                break;
+            }
+        }
+    }
+
+    // For subgroup matrix code to be the most efficient, we would like the subgroup size to be consistent and accurate.
+    // Unfortunately, that is not possible, so we use the maximum subgroup size reported by the adapter.
+    ctx->subgroup_size            = info.subgroupMaxSize;
+    ctx->supports_subgroup_matrix = valid_subgroup_matrix_config;
 
     // Initialize device
     std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16,
                                                          wgpu::FeatureName::ImplicitDeviceSynchronization };
+    if (ctx->supports_subgroup_matrix) {
+        required_features.push_back(wgpu::FeatureName::Subgroups);
+        required_features.push_back(wgpu::FeatureName::ChromiumExperimentalSubgroupMatrix);
+    }
+
 #ifdef GGML_WEBGPU_GPU_PROFILE
     required_features.push_back(wgpu::FeatureName::TimestampQuery);
 #endif

@@ -132,6 +132,11 @@ add_library(llama
             models/graph-context-mamba.cpp
             )
 
+set_target_properties(llama PROPERTIES
+    VERSION ${LLAMA_INSTALL_VERSION}
+    SOVERSION 0
+)
+
 target_include_directories(llama PRIVATE .)
 target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump

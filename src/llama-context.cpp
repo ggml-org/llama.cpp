@@ -114,10 +114,14 @@ llama_context::llama_context(
         }
     }
 
+    // ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
+    cparams.n_ctx = GGML_PAD(cparams.n_ctx, 256);
+
     if (cparams.kv_unified) {
         cparams.n_ctx_seq = cparams.n_ctx;
     } else {
         cparams.n_ctx_seq = cparams.n_ctx / cparams.n_seq_max;
+        cparams.n_ctx_seq = GGML_PAD(cparams.n_ctx_seq, 256);
 
         if (cparams.n_ctx_seq == 0) {
             throw std::runtime_error("n_ctx_seq == 0");
@@ -823,7 +827,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const auto & hparams = model.hparams;
 
-    const int64_t n_embd  = hparams.n_embd;
+    const int64_t n_embd  = hparams.n_embd_inp();
     const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
@@ -992,7 +996,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_vocab = vocab.n_tokens();
-    const int64_t n_embd  = hparams.n_embd;
+    const int64_t n_embd  = hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
     const bool output_all = cparams.embeddings;
@@ -2150,7 +2154,7 @@ void llama_context::opt_epoch_iter(
             batch.logits  [pos_batch]    = true;
         }
 
-        if (!balloc->init(batch, model.vocab, nullptr, model.hparams.n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
+        if (!balloc->init(batch, model.vocab, nullptr, model.hparams.n_embd_inp(), cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
             LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
             return;
         }

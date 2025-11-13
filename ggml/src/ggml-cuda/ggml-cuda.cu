@@ -27,7 +27,6 @@
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
-#include "ggml-cuda/moe-expert-reduce.cuh"
 #include "ggml-cuda/norm.cuh"
 #include "ggml-cuda/opt-step-adamw.cuh"
 #include "ggml-cuda/opt-step-sgd.cuh"
@@ -2528,6 +2527,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_TRUNC:
                     ggml_cuda_op_trunc(ctx, dst);
                     break;
+                case GGML_UNARY_OP_EXPM1:
+                    ggml_cuda_op_expm1(ctx, dst);
+                    break;
+                case GGML_UNARY_OP_SOFTPLUS:
+                    ggml_cuda_op_softplus(ctx, dst);
+                    break;
                 default:
                     return false;
             }
@@ -2993,6 +2998,36 @@ static void update_cuda_graph_executable(ggml_backend_cuda_context * cuda_ctx) {
 }
 #endif
 
+static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
+                                                const ggml_tensor * view,
+                                                const ggml_tensor * set_rows) {
+    // ne3 not tested
+    if (rope->src[0]->ne[3] != 1) {
+        return false;
+    }
+
+    if (set_rows->type != GGML_TYPE_F32 && set_rows->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    if (set_rows->src[1]->type != GGML_TYPE_I64) {
+        return false;
+    }
+
+    // The view should flatten two dims of rope into one dim
+    if (!ggml_is_contiguous(view) || view->ne[0] != rope->ne[0] * rope->ne[1]) {
+        return false;
+    }
+
+    // Only norm/neox shaders have the fusion code
+    const int mode = ((const int32_t *) rope->op_params)[2];
+    if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops, std::initializer_list<enum ggml_unary_op> unary_ops) {
 #ifndef NDEBUG
     const size_t num_unary = std::count(ops.begin(), ops.end(), GGML_OP_UNARY);
@@ -3064,6 +3099,16 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         const ggml_tensor * glu      = cgraph->nodes[node_idx + 2];
 
         if (ggml_cuda_should_fuse_mul_mat(ffn_up, ffn_gate, glu)) {
+            return true;
+        }
+    }
+
+    if (ops.size() == 3 && ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx + 2 })) {
+        const ggml_tensor * rope     = cgraph->nodes[node_idx];
+        const ggml_tensor * view     = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * set_rows = cgraph->nodes[node_idx + 2];
+
+        if (ggml_cuda_should_fuse_rope_set_rows(rope, view, set_rows)) {
             return true;
         }
     }
@@ -3152,8 +3197,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
-
-
 #ifdef GGML_CUDA_DEBUG
                 const int nodes_fused = i - prev_i - 1;
                 prev_i = i;
@@ -3199,29 +3242,13 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         continue;
                     }
 
-                    if (node->op == GGML_OP_MUL) {
-                        int current_node = i + 1;
-                        int num_views    = 0;
-                        int num_adds     = 0;
-                        while (current_node < cgraph->n_nodes && cgraph->nodes[current_node]->op == GGML_OP_VIEW) {
-                            num_views++;
-                            current_node++;
-                        }
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
+                        ggml_tensor * rope = cgraph->nodes[i];
+                        ggml_tensor * set_rows = cgraph->nodes[i + 2];
 
-                        while (current_node < cgraph->n_nodes && cgraph->nodes[current_node]->op == GGML_OP_ADD &&
-                                num_adds < num_views - 1) {
-                            num_adds++;
-                            current_node++;
-                        }
-
-                        if (num_adds == num_views - 1 && num_views > 0) {
-                            ggml_tensor * dst_node = cgraph->nodes[current_node - 1];
-                            if (ggml_cuda_should_use_moe_expert_reduce(cgraph, i, current_node)) {
-                                ggml_cuda_op_moe_expert_reduce(*cuda_ctx, node->src[0], node->src[1], dst_node);
-                                i += num_views + num_adds;
-                                continue;
-                            }
-                        }
+                        ggml_cuda_op_rope_fused(*cuda_ctx, rope, set_rows);
+                        i += 2;
+                        continue;
                     }
 
                     if (node->op == GGML_OP_ADD) {
@@ -3299,6 +3326,13 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                             ggml_tensor * gate_bias_tensor = get_bias_tensor(gate_bias_n, gate_n, bias_op);
 
                             if (!up_bias_tensor || !gate_bias_tensor) {
+                                continue;
+                            }
+
+                            // we don't support repeating adds
+                            if (bias_op == GGML_OP_ADD &&
+                                (!ggml_are_same_shape(gate_bias_n->src[0], gate_bias_n->src[1]) ||
+                                 !ggml_are_same_shape(up_bias_n->src[0], up_bias_n->src[1]))) {
                                 continue;
                             }
 
@@ -3408,6 +3442,10 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         const ggml_tensor * ids  = mm_node->src[2];
 
                         if (bias_op == GGML_OP_ADD_ID && bias_node->src[2] != ids) {
+                            continue;
+                        }
+
+                        if (bias_op == GGML_OP_ADD && !ggml_are_same_shape(bias_node->src[0], bias_node->src[1])) {
                             continue;
                         }
 
@@ -3797,6 +3835,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_EXPM1:
+                case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_ELU:
                 case GGML_UNARY_OP_FLOOR:
                 case GGML_UNARY_OP_CEIL:
