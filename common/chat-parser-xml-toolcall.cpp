@@ -24,12 +24,62 @@ inline bool all_space(const T &str) {
     return std::all_of(str.begin(), str.end(), [](unsigned char ch) { return std::isspace(ch); });
 }
 
+static size_t utf8_truncate_safe(const std::string_view s) {
+    size_t len = s.size();
+    if (len == 0) return 0;
+    size_t i = len;
+    for (size_t back = 0; back < 4 && i > 0; ++back) {
+        --i;
+        unsigned char c = s[i];
+        if ((c & 0x80) == 0) {
+            return len;
+        } else if ((c & 0xC0) == 0xC0) {
+            size_t expected_len = 0;
+            if ((c & 0xE0) == 0xC0) expected_len = 2;
+            else if ((c & 0xF0) == 0xE0) expected_len = 3;
+            else if ((c & 0xF8) == 0xF0) expected_len = 4;
+            else return i;
+            if (len - i >= expected_len) {
+                return len;
+            } else {
+                return i;
+            }
+        }
+    }
+    return len - std::min(len, size_t(3));
+}
+
+inline void utf8_truncate_safe_resize(std::string &s) {
+    s.resize(utf8_truncate_safe(s));
+}
+
+inline std::string_view utf8_truncate_safe_view(const std::string_view s) {
+    return s.substr(0, utf8_truncate_safe(s));
+}
+
+static std::optional<common_chat_msg_parser::find_regex_result> try_find_2_literal_splited_by_spaces(common_chat_msg_parser & builder, const std::string & literal1, const std::string & literal2) {
+    if (literal1.size() == 0) return builder.try_find_literal(literal2);
+    const auto saved_pos = builder.pos();
+    while (auto res = builder.try_find_literal(literal1)) {
+        builder.consume_spaces();
+        const auto match_len = std::min(literal2.size(), builder.input().size() - builder.pos());
+        if (builder.input().compare(builder.pos(), match_len, literal2, 0, match_len) == 0) {
+            if (res->prelude.size() != res->groups[0].begin - saved_pos) {
+                res->prelude = builder.str({saved_pos, res->groups[0].begin});
+            }
+            builder.move_to(builder.pos() + match_len);
+            res->groups[0].end = builder.pos();
+            GGML_ASSERT(res->groups[0].begin != res->groups[0].end);
+            return res;
+        }
+        builder.move_to(res->groups[0].begin + 1);
+    }
+    builder.move_to(saved_pos);
+    return std::nullopt;
+}
+
 /**
  * make a GBNF that accept any strings except those containing any of the forbidden strings.
- *
- * Note: I'm planning to implement a more general grammar that constrains the model’s entire output.
- * This work is still in progress and hasn’t been pushed yet, but it will require functionality to handle multiple strings at once.
- * It is not a overdesign.
  */
 std::string make_gbnf_excluding(std::vector<std::string> forbids) {
     constexpr auto charclass_escape = [](unsigned char c) -> std::string {
@@ -113,6 +163,7 @@ std::string make_gbnf_excluding(std::vector<std::string> forbids) {
 /**
  * Build grammar for xml-style tool call
  * form.scope_start and form.scope_end can be empty.
+ * Requires data.format for model-specific hacks.
  */
 void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, const struct xml_tool_call_format & form) {
     GGML_ASSERT(!form.tool_start.empty());
@@ -130,6 +181,10 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
 
     if (tools.is_array() && !tools.empty()) {
         data.grammar = build_grammar([&](const common_grammar_builder &builder) {
+            auto string_arg_val = form.last_val_end ?
+                    builder.add_rule("string-arg-val", make_gbnf_excluding({form.val_end, *form.last_val_end})) :
+                    builder.add_rule("string-arg-val", make_gbnf_excluding({form.val_end}));
+
             std::vector<std::string> tool_rules;
             for (const auto & tool : tools) {
                 if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
@@ -148,18 +203,21 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                 std::string name = function.at("name");
                 auto parameters = function.at("parameters");
                 builder.resolve_refs(parameters);
+
+                struct parameter_rule {
+                    std::string symbol_name;
+                    bool is_required;
+                };
+                std::vector<parameter_rule> arg_rules;
                 if (!parameters.contains("properties") || !parameters.at("properties").is_object()) {
                     LOG_INF("Skipping invalid function (invalid properties): %s", function.dump(2).c_str());
                     continue;
-                }
-
-                std::string param_rules;
-                if (parameters.contains("properties")) {
+                } else {
                     std::vector<std::string> requiredParameters;
                     if (parameters.contains("required")) {
                         try { parameters.at("required").get_to(requiredParameters); }
                         catch (const std::runtime_error&) {
-                            LOG_INF("Invalid function required parameters: %s", function.at("required").dump(2).c_str());
+                            LOG_INF("Invalid function required parameters, ignoring: %s", function.at("required").dump(2).c_str());
                         }
                     }
                     sort_uniq(requiredParameters);
@@ -170,22 +228,32 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                             quoted_key = gbnf_format_literal(key);
                             quoted_key = quoted_key.substr(1, quoted_key.size() - 2);
                         }
-                        if (!required) param_rules += "( ";
-                        param_rules +=
-                                gbnf_format_literal(form.key_start) + " " +
-                                gbnf_format_literal(quoted_key) + " " +
-                                gbnf_format_literal(key_val_sep) + " ";
-                        if (value.contains("type") && value["type"].is_string() && value["type"] == "string") {
-                            param_rules +=
-                                    "( string-arg-val | " +
-                                    builder.add_schema(name + "-arg-" + key, value) + " ) ";
-                        } else {
-                            param_rules +=
-                                    builder.add_schema(name + "-arg-" + key, value) + " ";
-                        }
-                        param_rules += gbnf_format_literal(form.val_end) + " ";
-                        if (!required) param_rules += ")? ";
+                        arg_rules.push_back(parameter_rule {builder.add_rule("func-" + name + "-kv-" + key,
+                            gbnf_format_literal(form.key_start) + " " +
+                            gbnf_format_literal(quoted_key) + " " +
+                            gbnf_format_literal(key_val_sep) + " " +
+                            ((value.contains("type") && value["type"].is_string() && value["type"] == "string" && (!form.raw_argval || *form.raw_argval)) ?
+                                    (form.raw_argval ?
+                                            string_arg_val :
+                                            "( " + string_arg_val + " | " + builder.add_schema(name + "-arg-" + key, value) + " )"
+                                    ) :
+                                    builder.add_schema(name + "-arg-" + key, value)
+                            )
+                        ), required});
                     }
+                }
+
+                auto next_arg = builder.add_rule(name + "-last-arg-end", form.last_val_end ? gbnf_format_literal(*form.last_val_end) : gbnf_format_literal(form.val_end));
+                auto next_arg_with_sep = next_arg;
+                for (auto i = arg_rules.size() - 1; /* i >= 0 && */ i < arg_rules.size(); --i) {
+                    std::string include_this_arg = arg_rules[i].symbol_name + " " + next_arg_with_sep;
+                    next_arg = builder.add_rule(name + "-arg-after-" + std::to_string(i), arg_rules[i].is_required ?
+                            include_this_arg : "( " + include_this_arg + " ) | " + next_arg
+                    );
+                    include_this_arg = gbnf_format_literal(form.val_end) + " " + include_this_arg;
+                    next_arg_with_sep = builder.add_rule(name + "-arg-after-" + std::to_string(i) + "-with-sep", arg_rules[i].is_required ?
+                            include_this_arg : "( " + include_this_arg + " ) | " + next_arg_with_sep
+                    );
                 }
 
                 std::string quoted_name = name;
@@ -193,16 +261,24 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                     quoted_name = gbnf_format_literal(name);
                     quoted_name = quoted_name.substr(1, quoted_name.size() - 2);
                 }
-                tool_rules.push_back(builder.add_rule(name + "-call",
+                quoted_name = gbnf_format_literal(quoted_name);
+                // Kimi-K2 uses functions.{{ tool_call['function']['name'] }}:{{ loop.index }} as function name
+                if (data.format == COMMON_CHAT_FORMAT_KIMI_K2) {
+                    quoted_name = "\"functions.\" " + quoted_name + " \":\" [0-9]+";
+                }
+                tool_rules.push_back(builder.add_rule(name + "-call", 
                         gbnf_format_literal(form.tool_start) + " " +
-                        gbnf_format_literal(quoted_name) + " " +
+                        quoted_name + " " +
                         gbnf_format_literal(form.tool_sep) + " " +
-                        param_rules + " " +
-                        gbnf_format_literal(form.tool_end)
+                        next_arg
                 ));
             }
-            builder.add_rule("string-arg-val", make_gbnf_excluding({form.val_end}));
-            builder.add_rule("root", gbnf_format_literal(form.scope_start) + " ( " + string_join(tool_rules, " | ") + " ) " + gbnf_format_literal(form.scope_end));
+
+            auto tool_call_once = builder.add_rule("root-tool-call-once", string_join(tool_rules, " | "));
+            auto tool_call_more = builder.add_rule("root-tool-call-more", gbnf_format_literal(form.tool_end) + " " + tool_call_once);
+            auto call_end = builder.add_rule("root-call-end", form.last_tool_end ? gbnf_format_literal(*form.last_tool_end) : gbnf_format_literal(form.tool_end));
+            auto tool_call_multiple_with_end = builder.add_rule("root-tool-call-multiple-with-end", tool_call_once + " " + tool_call_more + "* " + call_end);
+            builder.add_rule("root", gbnf_format_literal(form.scope_start) + " " + tool_call_multiple_with_end  + "? " + gbnf_format_literal(form.scope_end));
         });
 
         // grammar trigger for tool call
@@ -250,20 +326,73 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
         return true;
     };
     // Helper to generate a partial argument JSON
-    constexpr auto gen_partial_json = [partial_json](auto &&set_partial_arg, auto &&arguments, auto &&builder, auto &&function_name) {
-        std::forward<decltype(set_partial_arg)>(set_partial_arg)(std::forward<decltype(builder)>(builder).consume_rest(), "XML_TOOL_CALL_PARTIAL_FLAG");
-        auto tool_str = std::forward<decltype(arguments)>(arguments).dump();
+    constexpr auto gen_partial_json = [partial_json](auto set_partial_arg, auto &arguments, auto &builder, auto &function_name) {
+        auto rest = builder.consume_rest();
+        utf8_truncate_safe_resize(rest);
+        set_partial_arg(rest, "XML_TOOL_CALL_PARTIAL_FLAG");
+        auto tool_str = arguments.dump();
         if (partial_json(tool_str)) {
-            if (std::forward<decltype(builder)>(builder).add_tool_call(std::forward<decltype(function_name)>(function_name), "", tool_str)) {
+            if (builder.add_tool_call(function_name, "", tool_str)) {
                 return;
             }
         }
         LOG_DBG("Failed to parse partial XML-Style tool call, fallback to non-partial: %s\n", tool_str.c_str());
     };
+    // Helper to find a close (because there may be form.last_val_end or form.last_tool_end)
+    constexpr auto try_find_close = [](
+            common_chat_msg_parser & builder,
+            const std::string & end,
+            const std::optional<std::string> & alt_end,
+            const std::string & end_next,
+            const std::optional<std::string> & alt_end_next
+    ) {
+        auto saved_pos = builder.pos();
+        auto tc = builder.try_find_literal(end);
+        auto val_end_size = end.size();
+        if (alt_end) {
+            auto pos_1 = builder.pos();
+            builder.move_to(saved_pos);
+            auto tc2 = try_find_2_literal_splited_by_spaces(builder, *alt_end, end_next);
+            if (alt_end_next) {
+                builder.move_to(saved_pos);
+                auto tc3 = try_find_2_literal_splited_by_spaces(builder, *alt_end, *alt_end_next);
+                if (tc3 && (!tc2 || tc2->prelude.size() > tc3->prelude.size())) {
+                    tc2 = tc3;
+                }
+            }
+            if (tc2 && (!tc || tc->prelude.size() > tc2->prelude.size())) {
+                tc = tc2;
+                tc->groups[0].end = std::min(builder.input().size(), tc->groups[0].begin + alt_end->size());
+                builder.move_to(tc->groups[0].end);
+                val_end_size = alt_end->size();
+            } else {
+                builder.move_to(pos_1);
+            }
+        }
+        return std::make_pair(val_end_size, tc);
+    };
+    // Helper to find a val_end or last_val_end, returns matched pattern size
+    const auto try_find_val_end = [try_find_close, &builder, &form]() {
+        return try_find_close(builder, form.val_end, form.last_val_end, form.tool_end, form.last_tool_end);
+    };
+    // Helper to find a tool_end or last_tool_end, returns matched pattern size
+    const auto try_find_tool_end = [try_find_close, &builder, &form]() {
+        return try_find_close(builder, form.tool_end, form.last_tool_end, form.scope_end, std::nullopt);
+    };
 
     bool recovery = true;
     const auto start_pos = builder.pos();
-    if (!all_space(form.scope_start) && !builder.try_consume_literal(form.scope_start)) return false;
+    if (!all_space(form.scope_start)) {
+        if (auto tc = builder.try_find_literal(form.scope_start)) {
+            if (all_space(tc->prelude)) {
+                if (form.scope_start.size() != tc->groups[0].end - tc->groups[0].begin)
+                    throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.scope_start));
+            } else {
+                builder.move_to(start_pos);
+                return false;
+            }
+        } else return false;
+    }
     while (auto tc = builder.try_find_literal(form.tool_start)) {
         if (!all_space(tc->prelude)) {
             LOG_DBG("XML-Style tool call: Expected %s, but found %s, trying to match next pattern\n",
@@ -277,28 +406,39 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
         // Find tool name
         auto func_name = builder.try_find_literal(all_space(form.tool_sep) ? form.key_start : form.tool_sep);
         if (!func_name) {
-            func_name = builder.try_find_literal(form.tool_end);
+            auto [sz, tc] = try_find_tool_end();
+            func_name = tc;
         }
         if (!func_name) {
             // Partial tool name not supported
             throw common_chat_msg_partial_exception("incomplete tool_call");
         }
         // If the model generate multiple tool call and the first tool call has no argument
-        if (func_name->prelude.find(form.tool_end) != std::string::npos) {
-            builder.move_back(func_name->prelude.size() + form.tool_end.size());
-            func_name = builder.try_find_literal(form.tool_end);
+        if (func_name->prelude.find(form.tool_end) != std::string::npos || (form.last_tool_end ? func_name->prelude.find(*form.last_tool_end) != std::string::npos : false)) {
+            builder.move_to(func_name->groups[0].begin - func_name->prelude.size());
+            auto [sz, tc] = try_find_tool_end();
+            func_name = tc;
         }
 
         // Parse tool name
         builder.move_to(all_space(form.tool_sep) ? func_name->groups[0].begin : func_name->groups[0].end);
         std::string function_name = string_strip(func_name->prelude);
+        // Kimi-K2 uses functions.{{ tool_call['function']['name'] }}:{{ loop.index }} as function name
+        if (builder.syntax().format == COMMON_CHAT_FORMAT_KIMI_K2) {
+            if (string_starts_with(function_name, "functions.")) {
+                static const std::regex re(":\\d+$");
+                if (std::regex_search(function_name, re)) {
+                    function_name = function_name.substr(10, function_name.rfind(":") - 10);
+                }
+            }
+        }
 
         // Argument JSON
         json arguments = json::object();
 
         // Helper to generate a partial argument JSON
-        const auto gen_partial_args = [&](auto &&set_partial_arg) {
-            gen_partial_json(std::forward<decltype(set_partial_arg)>(set_partial_arg), arguments, builder, function_name);
+        const auto gen_partial_args = [&](auto set_partial_arg) {
+            gen_partial_json(set_partial_arg, arguments, builder, function_name);
         };
 
         // Parse all arg_key/arg_value pairs
@@ -323,11 +463,11 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
             // Parse arg_key
             auto key_res = builder.try_find_literal(form.key_val_sep);
             if (!key_res) {
-                gen_partial_args([&](auto &&rest, auto &&needle) {arguments[rest + needle] = "";});
+                gen_partial_args([&](auto &rest, auto &needle) {arguments[rest + needle] = "";});
                 throw common_chat_msg_partial_exception("Expected " + gbnf_format_literal(form.key_val_sep) + " after " + gbnf_format_literal(form.key_start));
             }
             if (key_res->groups[0].end - key_res->groups[0].begin != form.key_val_sep.size()) {
-                gen_partial_args([&](auto &&, auto &&needle) {arguments[key_res->prelude + needle] = "";});
+                gen_partial_args([&](auto &, auto &needle) {arguments[key_res->prelude + needle] = "";});
                 throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.key_val_sep));
             }
             auto &key = key_res->prelude;
@@ -345,11 +485,11 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                         return return_error(builder, start_pos, false);
                     }
                     if (tc->groups[0].end - tc->groups[0].begin != form.key_val_sep2->size()) {
-                        gen_partial_args([&](auto &&, auto &&needle) {arguments[key] = needle;});
+                        gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
                         throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(*form.key_val_sep2));
                     }
                 } else {
-                    gen_partial_args([&](auto &&, auto &&needle) {arguments[key] = needle;});
+                    gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
                     throw common_chat_msg_partial_exception("Expected " + gbnf_format_literal(*form.key_val_sep2) + " after " + gbnf_format_literal(form.key_val_sep));
                 }
             }
@@ -357,26 +497,56 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
 
             // Test if arg_val is a partial JSON
             std::optional<common_json> value_json = std::nullopt;
-            try { value_json = builder.try_consume_json(); }
-            catch (const std::runtime_error&) { builder.move_to(val_start); }
+            if (!form.raw_argval || !*form.raw_argval) {
+                try { value_json = builder.try_consume_json(); }
+                catch (const std::runtime_error&) { builder.move_to(val_start); }
+                // TODO: Delete this when json_partial adds top-level support for null/true/false
+                if (builder.pos() == val_start) {
+                    const static std::regex number_regex(R"([0-9-][0-9]*(\.\d*)?([eE][+-]?\d*)?)");
+                    builder.consume_spaces();
+                    std::string_view sv = utf8_truncate_safe_view(builder.input());
+                    sv.remove_prefix(builder.pos());
+                    std::string rest = "a";
+                    if (sv.size() < 6) rest = sv;
+                    if (string_starts_with("null", rest) || string_starts_with("true", rest) || string_starts_with("false", rest) || std::regex_match(sv.begin(), sv.end(), number_regex)) {
+                        value_json = {123, {"123", "123"}};
+                        builder.consume_rest();
+                    } else {
+                        builder.move_to(val_start);
+                    }
+                }
+            }
 
             // If it is a JSON and followed by </arg_value>, parse as json
             // cannot support streaming because it may be a plain text starting with JSON
             if (value_json) {
-                auto tmp_pos = builder.pos();
+                auto json_end = builder.pos();
                 builder.consume_spaces();
                 if (builder.pos() == builder.input().size()) {
-                    gen_partial_args([&](auto &&, auto &&needle) {arguments[key] = needle;});
+                    if (form.raw_argval && !*form.raw_argval && (value_json->json.is_string() || value_json->json.is_object() || value_json->json.is_array())) {
+                        arguments[key] = value_json->json;
+                        auto json_str = arguments.dump();
+                        if (!value_json->healing_marker.json_dump_marker.empty()) {
+                            GGML_ASSERT(std::string::npos != json_str.rfind(value_json->healing_marker.json_dump_marker));
+                            json_str.resize(json_str.rfind(value_json->healing_marker.json_dump_marker));
+                        } else {
+                            GGML_ASSERT(json_str.back() == '}');
+                            json_str.resize(json_str.size() - 1);
+                        }
+                        builder.add_tool_call(function_name, "", json_str);
+                    } else {
+                        gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
+                    }
                     LOG_DBG("Possible JSON arg_value: %s\n", value_json->json.dump().c_str());
                     throw common_chat_msg_partial_exception("JSON arg_value detected. Waiting for more tokens for validations.");
                 }
-                builder.move_to(tmp_pos);
-                auto tc = builder.try_find_literal(form.val_end);
+                builder.move_to(json_end);
+                auto [val_end_size, tc] = try_find_val_end();
                 if (tc && value_json->healing_marker.marker.empty()) {
-                    if (tc->groups[0].end - tc->groups[0].begin != form.val_end.size()) {
-                        gen_partial_args([&](auto &&, auto &&needle) {arguments[key] = needle;});
+                    if (tc->groups[0].end - tc->groups[0].begin != val_end_size) {
+                        gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
                         LOG_DBG("Possible terminated JSON arg_value: %s\n", value_json->json.dump().c_str());
-                        throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.val_end));
+                        throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.val_end) + (form.last_val_end ? gbnf_format_literal(*form.last_val_end) : ""));
                     }
                     if (all_space(tc->prelude)) {
                         arguments[key] = value_json->json;
@@ -386,18 +556,24 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
 
             // If not, parse as plain text
             if (val_start == builder.pos()) {
-                if (auto value_plain = builder.try_find_literal(form.val_end)) {
-                    if (value_plain->groups[0].end - value_plain->groups[0].begin != form.val_end.size()) {
-                        gen_partial_args([&](auto &&, auto &&needle) {arguments[key] = value_plain->prelude + needle;});
+                if (auto [val_end_size, value_plain] = try_find_val_end(); value_plain) {
+                    auto &value_str = value_plain->prelude;
+                    if (form.trim_raw_argval) value_str = string_strip(value_str);
+                    if (value_plain->groups[0].end - value_plain->groups[0].begin != val_end_size) {
+                        gen_partial_args([&](auto &, auto &needle) {arguments[key] = value_str + needle;});
                         throw common_chat_msg_partial_exception(
                                 "Expected " + gbnf_format_literal(form.val_end) +
                                 " after " + gbnf_format_literal(form.key_val_sep) +
                                 (form.key_val_sep2 ? " " + gbnf_format_literal(*form.key_val_sep2) : "")
                         );
                     }
-                    arguments[key] = value_plain->prelude;
+                    arguments[key] = value_str;
                 } else {
-                    gen_partial_args([&](auto &&rest, auto &&needle) {arguments[key] = rest + needle;});
+                    if (form.trim_raw_argval) {
+                        gen_partial_args([&](auto &rest, auto &needle) {arguments[key] = string_strip(rest) + needle;});
+                    } else {
+                        gen_partial_args([&](auto &rest, auto &needle) {arguments[key] = rest + needle;});
+                    }
                     throw common_chat_msg_partial_exception(
                             "Expected " + gbnf_format_literal(form.val_end) +
                             " after " + gbnf_format_literal(form.key_val_sep) +
@@ -408,7 +584,7 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
         }
 
         // Consume closing tag
-        if (auto tc = builder.try_find_literal(form.tool_end)) {
+        if (auto [tool_end_size, tc] = try_find_tool_end(); tc) {
             if (!all_space(tc->prelude)) {
                 LOG_DBG("Failed to parse XML-Style tool call: Expected %s, but found %s\n",
                         gbnf_format_literal(form.tool_end).c_str(),
@@ -416,7 +592,7 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                 );
                 return return_error(builder, start_pos, recovery);
             }
-            if (tc->groups[0].end - tc->groups[0].begin == form.tool_end.size()) {
+            if (tc->groups[0].end - tc->groups[0].begin == tool_end_size) {
                 // Add the parsed tool call
                 if (!builder.add_tool_call(function_name, "", arguments.dump())) {
                     throw common_chat_msg_partial_exception("Failed to add XML-Style tool call");
@@ -490,50 +666,6 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         str.erase(l, r - l);
         return l;
     };
-    // Escape string literal to regex that match the literal
-    constexpr auto escape_regex = [](const std::string &s) {
-        // Characters that are regex metacharacters in ECMAScript grammar:
-        const std::string meta = R"(\^$.*+?()[]{}|)"; // backslash included
-        std::string out;
-        out.reserve(s.size() * 3 + 2); // rough reserve
-        for (unsigned char uc : s) {
-            // Printable ASCII range we allow to remain unescaped: letters, digits, underscore
-            if ((uc >= '0' && uc <= '9') ||
-                (uc >= 'A' && uc <= 'Z') ||
-                (uc >= 'a' && uc <= 'z') ||
-                uc == '_') {
-                out.push_back(static_cast<char>(uc));
-            } else if (meta.find(static_cast<char>(uc)) != std::string::npos) {
-                // regex metacharacter -> escape with backslash
-                out.push_back('\\');
-                out.push_back(static_cast<char>(uc));
-            } else if (uc >= 0x20 && uc <= 0x7E) {
-                // other printable ASCII (space, punctuation not in meta) -> keep
-                out.push_back(static_cast<char>(uc));
-            } else {
-                switch (uc) {
-                    case '\0': out += "\\0"; break; // NUL
-                    case '\a': out += "\\a"; break; // Bell (0x07)
-                    case '\b': out += "\\b"; break; // Backspace (0x08)
-                    case '\f': out += "\\f"; break; // Formfeed (0x0C)
-                    case '\n': out += "\\n"; break; // Linefeed (0x0A)
-                    case '\r': out += "\\r"; break; // Carriage return (0x0D)
-                    case '\t': out += "\\t"; break; // Horizontal tab (0x09)
-                    case '\v': out += "\\v"; break; // Vertical tab (0x0B)
-                    default: {
-                        // It seems the current partial-regex implementation doesn’t support this form and will silently fail
-                        // TODO: delete this when \xHH is supported by partial-regex
-                        throw std::runtime_error("Cannot escape non-printable or non-ASCII byte for string: " + gbnf_format_literal(s));
-                        // Non-printable or non-ASCII byte: use \xHH
-                        std::ostringstream oss;
-                        oss << "\\x" << std::hex << std::uppercase << std::setw(2) << std::setfill('0') << int(uc);
-                        out += oss.str();
-                    }
-                }
-            }
-        }
-        return out;
-    };
     constexpr auto trim_suffix = [](std::string &content, std::initializer_list<std::string_view> list) {
         auto best_match = content.size();
         for (auto pattern: list) {
@@ -551,13 +683,14 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
     };
     const auto trim_potential_partial_word = [&start_think, &end_think, &form, trim_suffix](std::string &content) {
         return trim_suffix(content, {
-            start_think, end_think, form.scope_start, form.tool_start, form.tool_sep, form.key_start, form.key_val_sep,
-            form.key_val_sep2 ? form.key_val_sep2->c_str() : "", form.val_end, form.tool_end, form.scope_end
+            start_think, end_think, form.scope_start, form.tool_start, form.tool_sep, form.key_start,
+            form.key_val_sep, form.key_val_sep2 ? form.key_val_sep2->c_str() : "",
+            form.val_end, form.last_val_end ? form.last_val_end->c_str() : "",
+            form.tool_end, form.last_tool_end ? form.last_tool_end->c_str() : "",
+            form.scope_end
         });
     };
 
-    const common_regex tool_call_start_regex(escape_regex(form.scope_start) + "\\s*" + escape_regex(form.tool_start));
-    LOG_DBG("Regex for tool start: %s\n", (escape_regex(form.scope_start) + "\\s*" + escape_regex(form.tool_start)).c_str());
 
     // Trim leading spaces without affecting keyword matching
     static const common_regex spaces_regex("\\s*");
@@ -574,7 +707,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
     bool reasoning_unclosed = builder.syntax().thinking_forced_open;
     std::string unclosed_reasoning_content("");
     for (;;) {
-        auto tc = builder.try_find_regex(tool_call_start_regex, std::string::npos, false);
+        auto tc = try_find_2_literal_splited_by_spaces(builder, form.scope_start, form.tool_start);
         std::string content;
         std::string tool_call_start;
 
@@ -584,6 +717,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
             LOG_DBG("Matched tool start: %s\n", gbnf_format_literal(tool_call_start).c_str());
         } else {
             content = builder.consume_rest();
+            utf8_truncate_safe_resize(content);
         }
 
         // Handle unclosed think block

@@ -24,6 +24,13 @@ struct xml_tool_call_format {
     // Set this if there can be dynamic spaces inside key_val_sep.
     // e.g. key_val_sep=</arg_key> key_val_sep2=<arg_value> for GLM4.5
     std::optional<std::string> key_val_sep2 = std::nullopt;
+    // Set true if argval should only be raw string. e.g. Hello "world" hi
+    // Set false if argval should only be json string. e.g. "Hello \"world\" hi"
+    // Defaults to std::nullopt, both will be allowed.
+    std::optional<bool> raw_argval = std::nullopt;
+    std::optional<std::string> last_val_end = std::nullopt;
+    std::optional<std::string> last_tool_end = std::nullopt;
+    bool trim_raw_argval = false;
     bool allow_toolcall_in_think = false; // TODO: UNTESTED!!!
 };
 
@@ -33,5 +40,6 @@ std::string make_gbnf_excluding(std::vector<std::string> forbids);
 /**
  * Build grammar for xml-style tool call
  * form.scope_start and form.scope_end can be empty.
+ * Requires data.format for model-specific hacks.
  */
 void build_grammar_xml_tool_call(common_chat_params & data, const nlohmann::ordered_json & tools, const struct xml_tool_call_format & form);
