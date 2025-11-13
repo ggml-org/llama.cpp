@@ -1816,7 +1816,7 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_minimax_m2(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
-    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_MINIMAX_M2;
@@ -1872,7 +1872,7 @@ static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
-    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
@@ -1921,7 +1921,7 @@ static void common_chat_parse_qwen3_coder_xml(common_chat_msg_parser & builder) 
 
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
-    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_KIMI_K2;
@@ -1979,7 +1979,7 @@ static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_apriel_1_5(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
-    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_APRIEL_1_5;
@@ -2033,7 +2033,7 @@ static void common_chat_parse_apriel_1_5(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_xiaomi_mimo(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
-    data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_XIAOMI_MIMO;
