@@ -396,10 +396,10 @@ static void test_complete_example() {
         auto schema = nlohmann::ordered_json::parse(R"({"type": "object"})");
 
         auto tool_call_args = p.add_rule("tool-call-args",
-            "<args>" << p.capture_tool_call_args(p.schema(p.partial(json), "get_weather", schema)) << "</args>");
+            "<args>" << p.capture_tool_call_args(p.schema(p.succeed(json), "get_weather", schema)) << "</args>");
 
         auto tool_call = p.add_rule("tool-call",
-            "<tool_call>" << p.add_tool_call(tool_call_name << p.partial(tool_call_args)) << "</tool_call>");
+            "<tool_call>" << p.add_tool_call(tool_call_name << p.succeed(tool_call_args)) << "</tool_call>");
 
         return reasoning << p.optional(content) << p.optional(tool_call);
     });
@@ -423,7 +423,7 @@ static void test_complete_example() {
 
     // Test partial input
     {
-        std::string input = R"(<think>I need to call get_weather )";
+        std::string input = R"(<think>I need to call get_weather)";
         parser_environment env = parser_environment();
         parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
 
@@ -477,7 +477,7 @@ static void test_complete_example() {
 
         auto result = parser.parse(ctx);
 
-        assert_equals(true, result.is_partial());
+        assert_equals(true, result.is_need_more_input());
         assert_equals("I need to call get_weather", env.result.reasoning_content);
         assert_equals("get_weather", env.result.tool_calls[0].name);
         assert_equals(R"({"cit)", env.result.tool_calls[0].arguments);
@@ -580,7 +580,7 @@ static void test_actions() {
             auto result = parser.parse(ctx);
 
             assert_equals(true, result.is_need_more_input());
-            assert_equals("hello", env.result.content);
+            assert_equals("hello ", env.result.content);
         }
         {
             parser_environment env;
@@ -755,6 +755,42 @@ static void test_gbnf_generation() {
     }
 }
 
+// Simple tokenize function that splits by space and special chars
+static std::vector<std::string> simple_tokenize(const std::string & input) {
+    std::vector<std::string> result;
+    std::string current;
+
+    for (size_t i = 0; i < input.size(); i++) {
+        switch (input[i]) {
+        case ' ':
+        case '\n':
+        case '\t':
+        case '{':
+        case '}':
+        case ',':
+        case '[':
+        case '"':
+        case ']':
+        case '.':
+        case '<':
+        case '>':
+        case '=':
+        case '/':
+            if (!current.empty()) {
+                result.push_back(current);
+                current.clear();
+            }
+        }
+        current += input[i];
+    }
+
+    if (!current.empty()) {
+        result.push_back(current);
+    }
+
+    return result;
+}
+
 static void example_qwen3_coder() {
     auto parser = build_parser([](parser_builder & p) {
         auto thinking = p.add_rule("thinking",
@@ -780,7 +816,7 @@ static void example_qwen3_coder() {
 
         auto string_arg = p.add_rule("arg-string",
             p.action(arg_start, [&](const parser_result &, std::string_view, parser_environment & env) {
-                env.tool_call_args += "{";
+                env.tool_call_args += "\"";
             })
             << p.action(p.until("</parameter>"), [&](const parser_result &, std::string_view match, parser_environment & env) {
                 // TODO: add a JSON escape helper
@@ -794,9 +830,13 @@ static void example_qwen3_coder() {
 
         auto json_arg = p.add_rule("arg-json",
             arg_start
-            << p.action(p.partial(json), [&](const parser_result &, std::string_view match, parser_environment & env) {
+            << p.action(json, [&](const parser_result &, std::string_view match, parser_environment & env) {
                 // JSON should already be properly formatted
                 env.tool_call_args += std::string(match);
+
+                // This can be streamed by passing p.success(json), but we have
+                // to be mindful of the potential backtracking--it only works
+                // if we only keep the last value...
             })
             << arg_end);
 
@@ -806,7 +846,7 @@ static void example_qwen3_coder() {
                 + p.action(">", [&](const parser_result &, std::string_view, parser_environment & env) {
                     env.tool_call_args += "{";
                 })
-                + p.one_or_more(p.space() + (p.partial(json_arg) | p.partial(string_arg)))
+                + p.one_or_more(p.space() + (json_arg | string_arg))
                 << p.action("</function>", [&](const parser_result &, std::string_view, parser_environment & env) {
                     env.tool_call_args += "}";
                 })));
@@ -815,7 +855,7 @@ static void example_qwen3_coder() {
             "<tool_call>" << p.one_or_more(function) << "</tool_call>");
 
 
-        return p.partial(thinking) + p.optional(p.space() + p.partial(content)) + p.zero_or_more(p.space() + tool_call);
+        return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
     });
 
     std::string input =
@@ -838,13 +878,7 @@ static void example_qwen3_coder() {
         "</function>\n"
         "</tool_call>";
 
-    static const std::regex token_regex(R"(([A-Za-z0-9]+|[^A-Za-z0-9]+))");
-    std::vector<std::string> tokens;
-    std::sregex_iterator it(input.begin(), input.end(), token_regex);
-    std::sregex_iterator end;
-    for (; it != end; ++it) {
-        tokens.push_back(it->str());
-    }
+    std::vector<std::string> tokens = simple_tokenize(input);
 
     common_chat_msg prev;
 
@@ -852,17 +886,47 @@ static void example_qwen3_coder() {
         std::string in = std::accumulate(tokens.begin(), it, std::string());
 
         parser_environment env;
-        parser_context ctx(in, &env, it + 1 == tokens.end());
+        parser_context ctx(in, &env, it == tokens.end() - 1);
 
         auto result = parser.parse(ctx);
-
-        if (result.is_need_more_input()) {
-            continue;
+        if (result.is_fail()) {
+            break;
         }
 
+        /*
+        std::cout << "Input:\n" << in << "\n\n";
+        std::cout << "Reasoning: " << prev.reasoning_content << "\n";
+        std::cout << "Content  : " << prev.content << "\n";
+        if (!prev.tool_calls.empty()) {
+            std::cout << "\n=== Tool Calls ===\n";
+            for (const auto & tc : prev.tool_calls) {
+                std::cout << "ID  : " << tc.id << "\n";
+                std::cout << "Name: " << tc.name << "\n";
+                std::cout << "Args: " << tc.arguments << "\n";
+            }
+        }
+        */
+
+        // This shouldn't emit any runtime errors
         auto diffs = common_chat_msg_diff::compute_diffs(prev, env.result);
         prev = env.result;
 
+        /*
+        std::cout << "----\n";
+        std::cout << "Reasoning: " << prev.reasoning_content << "\n";
+        std::cout << "Content  : " << prev.content << "\n";
+        if (!prev.tool_calls.empty()) {
+            std::cout << "\n=== Tool Calls ===\n";
+            for (const auto & tc : prev.tool_calls) {
+                std::cout << "ID  : " << tc.id << "\n";
+                std::cout << "Name: " << tc.name << "\n";
+                std::cout << "Args: " << tc.arguments << "\n";
+            }
+        }
+        std::cout << "======================\n";
+        */
+
+        /*
         std::cout << "=== Diffs ===\n\n";
         if (!diffs.empty()) {
             for (size_t i = 0; i < diffs.size(); ++i) {
@@ -898,24 +962,6 @@ static void example_qwen3_coder() {
             }
         } else {
             std::cout << "No changes detected.\n";
-        }
-
-        /*
-        if (!env.result.reasoning_content.empty()) {
-            std::cout << "=== Reasoning ===\n";
-            std::cout << env.result.reasoning_content << "\n";
-        }
-        if (!env.result.content.empty()) {
-            std::cout << "\n=== Content ===\n";
-            std::cout << env.result.content << "\n";
-        }
-        if (!env.result.tool_calls.empty()) {
-            std::cout << "\n=== Tool Calls ===\n";
-            for (const auto & tc : env.result.tool_calls) {
-                std::cout << "id: " << tc.id << "\n";
-                std::cout << "name: " << tc.name << "\n";
-                std::cout << "args: " << tc.arguments << "\n";
-            }
         }
         */
     }
@@ -1043,30 +1089,6 @@ struct bench_tool_call {
     nlohmann::ordered_json args;
 };
 
-// Simple tokenize function that splits by space
-static std::vector<std::string> simple_tokenize(const std::string & input) {
-    std::vector<std::string> result;
-    std::string current;
-
-    for (size_t i = 0; i < input.size(); i++) {
-        if (input[i] == ' ') {
-            if (!current.empty()) {
-                result.push_back(current);
-                current.clear();
-            }
-            current += ' ';
-        } else {
-            current += input[i];
-        }
-    }
-
-    if (!current.empty()) {
-        result.push_back(current);
-    }
-
-    return result;
-}
-
 static void benchmark_compare(
     const std::string & reasoning,
     const std::string & content,
@@ -1148,7 +1170,7 @@ int main() {
     test_gbnf_generation();
     std::cout << "All tests passed!\n";
 
-    //example_qwen3_coder();
+    example_qwen3_coder();
 
     std::cout << "\n== Benchmarks ==\n";
     std::string example_reasoning =

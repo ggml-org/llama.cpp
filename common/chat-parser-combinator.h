@@ -30,7 +30,6 @@ enum parser_result_type {
     PARSER_RESULT_FAIL            = 1 << 0,
     PARSER_RESULT_SUCCESS         = 1 << 1,
     PARSER_RESULT_NEED_MORE_INPUT = 1 << 2,
-    PARSER_RESULT_PARTIAL         = 1 << 3,
 };
 
 struct parse_cache_key {
@@ -64,7 +63,6 @@ struct parser_result {
 
     bool is_fail() const { return type == PARSER_RESULT_FAIL; }
     bool is_need_more_input() const { return type == PARSER_RESULT_NEED_MORE_INPUT; }
-    bool is_partial() const { return type == PARSER_RESULT_PARTIAL; }
     bool is_success() const { return type == PARSER_RESULT_SUCCESS; }
 };
 
@@ -214,7 +212,7 @@ class parser_builder {
 
     // Matches all characters until a delimiter is found (delimiter not consumed).
     //   S -> (!delim .)*
-    parser until(const std::string & delimiter, bool consume_spaces = true);
+    parser until(const std::string & delimiter);
 
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}
@@ -243,12 +241,12 @@ class parser_builder {
     // Wraps a parser with a semantic action callback.
     // The callback is invoked on successful parse with the result, matched text, and environment.
     //   S -> A [action]
-    parser action(const parser & p, std::function<void(parser_result &, std::string_view, parser_environment &)> fn, int when = PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
+    parser action(const parser & p, std::function<void(parser_result &, std::string_view, parser_environment &)> fn, int when = PARSER_RESULT_SUCCESS);
 
     // Convenience action wrappers for common patterns
 
-    // Converts PARSER_RESULT_NEED_MORE_INPUT to PARSER_RESULT_PARTIAL
-    parser partial(const parser & p);
+    // Causes a rule to succeed
+    parser succeed(const parser & p, int when = PARSER_RESULT_NEED_MORE_INPUT);
 
     // Appends matched text to env.reasoning_content
     parser append_reasoning(const parser & p);

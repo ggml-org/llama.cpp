@@ -304,7 +304,7 @@ class repetition_parser : public parser_base {
                 continue;
             }
 
-            if (result.is_need_more_input() || result.is_partial()) {
+            if (result.is_need_more_input()) {
                 return parser_result(result.type, start, result.end);
             }
 
@@ -407,7 +407,7 @@ class not_parser : public parser_base {
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
         auto result = parser_->parse(ctx, start);
 
-        if (result.is_success() || result.is_partial()) {
+        if (result.is_success()) {
             // Fail if the underlying parser matches
             return parser_result(PARSER_RESULT_FAIL, start);
         }
@@ -720,15 +720,14 @@ class json_string_parser : public parser_base {
 //   S -> (!delim .)*
 class until_parser : public parser_base {
     std::string delimiter_;
-    bool consume_spaces_;
 
     std::default_searcher<std::string::const_iterator> searcher_;
 
   public:
     static constexpr parser_type type_value = PARSER_UNTIL;
 
-    until_parser(const std::string & delimiter, bool consume_spaces, int id)
-        : parser_base(id), delimiter_(delimiter), consume_spaces_(consume_spaces), searcher_(delimiter_.begin(), delimiter_.end()) {
+    until_parser(const std::string & delimiter, int id)
+        : parser_base(id), delimiter_(delimiter), searcher_(delimiter_.begin(), delimiter_.end()) {
     }
 
     parser_type type() const override { return type_value; }
@@ -741,26 +740,13 @@ class until_parser : public parser_base {
 
         if (it != ctx.input.end()) {
             result.end = std::distance(ctx.input.begin(), it);
-            result.type = PARSER_RESULT_SUCCESS;
         } else {
             // If not found, check if the input ends with a prefix of the delimiter
             size_t max_overlap = std::min(ctx.input.size(), delimiter_.size() - 1);
             for (size_t overlap = max_overlap; overlap > 0; --overlap) {
                 if (std::equal(ctx.input.end() - overlap, ctx.input.end(), delimiter_.begin())) {
                     result.end = ctx.input.size() - overlap;
-                    if (ctx.input_is_complete) {
-                        result.type = PARSER_RESULT_FAIL;
-                    } else {
-                        result.type = PARSER_RESULT_NEED_MORE_INPUT;
-                    }
                 }
-            }
-        }
-
-        if (consume_spaces_) {
-            // Remove trailing spaces
-            while (result.end > start && is_space(ctx.input[result.end - 1])) {
-                result.end--;
             }
         }
 
@@ -1369,8 +1355,8 @@ parser parser_builder::space() {
     return parser(std::make_shared<space_parser>(counter_->next()));
 }
 
-parser parser_builder::until(const std::string & delimiter, bool consume_spaces) {
-    return parser(std::make_shared<until_parser>(delimiter, consume_spaces, counter_->next()));
+parser parser_builder::until(const std::string & delimiter) {
+    return parser(std::make_shared<until_parser>(delimiter, counter_->next()));
 }
 
 parser parser_builder::repeat(const parser & p, int min, int max) {
@@ -1389,10 +1375,10 @@ parser parser_builder::action(const parser & p, std::function<void(parser_result
     return parser(std::make_shared<action_parser>(p, std::move(fn), when, counter_->next()));
 }
 
-parser parser_builder::partial(const parser & p) {
+parser parser_builder::succeed(const parser & p, int when) {
     return action(p, [](parser_result &result, std::string_view, parser_environment &) {
-        result.type = PARSER_RESULT_PARTIAL;
-    }, PARSER_RESULT_NEED_MORE_INPUT);
+        result.type = PARSER_RESULT_SUCCESS;
+    }, when);
 }
 
 parser parser_builder::append_reasoning(const parser & p) {
@@ -1401,7 +1387,7 @@ parser parser_builder::append_reasoning(const parser & p) {
             env.result.reasoning_content += "\n";
         }
         env.result.reasoning_content += matched;
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
+    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
 }
 
 parser parser_builder::append_content(const parser & p) {
@@ -1410,48 +1396,50 @@ parser parser_builder::append_content(const parser & p) {
             env.result.content += "\n";
         }
         env.result.content += matched;
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
+    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
 }
 
 parser parser_builder::capture(const parser & p, const std::string & key, bool unescape_json) {
     return action(p, [key, unescape_json](parser_result &, std::string_view matched, parser_environment & env) {
         std::string value = unescape_json ? unescape_json_string(matched) : std::string(matched);
         env.scratchpad[key] = std::move(value);
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
+    }, PARSER_RESULT_SUCCESS);
 }
 
 parser parser_builder::capture_tool_call_id(const parser & p, bool unescape_json) {
     return action(p, [unescape_json](parser_result &, std::string_view matched, parser_environment & env) {
         env.tool_call_id = unescape_json ? unescape_json_string(matched) : std::string(matched);
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
+    }, PARSER_RESULT_SUCCESS);
 }
 
 parser parser_builder::capture_tool_call_name(const parser & p, bool unescape_json) {
     return action(p, [unescape_json](parser_result &, std::string_view matched, parser_environment & env) {
         env.tool_call_name = unescape_json ? unescape_json_string(matched) : std::string(matched);
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
+    }, PARSER_RESULT_SUCCESS);
 }
 
 parser parser_builder::capture_tool_call_args(const parser & p, bool unescape_json) {
     return action(p, [unescape_json](parser_result &, std::string_view matched, parser_environment & env) {
         env.tool_call_args = unescape_json ? unescape_json_string(matched) : std::string(matched);
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
+    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
 }
 
 parser parser_builder::add_tool_call(const parser & p) {
     return action(p, [](const parser_result &, std::string_view, parser_environment & env) {
-        auto tool_call = common_chat_tool_call{
-            env.tool_call_name,
-            env.tool_call_args,
-            env.tool_call_id
-        };
-        env.result.tool_calls.push_back(tool_call);
+        if (!env.tool_call_name.empty() && !env.tool_call_args.empty()) {
+            auto tool_call = common_chat_tool_call{
+                env.tool_call_name,
+                env.tool_call_args,
+                env.tool_call_id
+            };
+            env.result.tool_calls.push_back(tool_call);
+        }
 
         // Clear the fields to prevent bleeding to next tool call
         env.tool_call_id.clear();
         env.tool_call_name.clear();
         env.tool_call_args.clear();
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_PARTIAL);
+    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
 }
 
 parser parser_builder::json_key(const std::string & name, const parser & p) {
