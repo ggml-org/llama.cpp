@@ -249,8 +249,6 @@
 		{/if}
 
 		{#if config().showToolCalls}
-			{@const toolCalls = parsedToolCalls()}
-			{@const fallbackToolCalls = fallbackToolCallContent()}
 			{#if (toolCalls && toolCalls.length > 0) || fallbackToolCalls}
 				<span class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
 					<span class="inline-flex items-center gap-1">
