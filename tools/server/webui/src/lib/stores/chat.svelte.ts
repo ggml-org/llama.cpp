@@ -1765,20 +1765,6 @@ class ChatStore {
 
 	/**
 	 * Continues generation for an existing assistant message
-	 * Appends new content to the existing message without branching
-	 *
-	 * **Important Implementation Details:**
-	 * - Sends a synthetic "continue" prompt to the API that is NOT persisted to the database
-	 * - This creates intentional divergence: API sees the prompt, database does not
-	 * - The synthetic prompt instructs the model to continue from where it left off
-	 * - Original message content is fetched from database to ensure accuracy after stops/edits
-	 * - New content is appended to the original message in-place (no branching)
-	 *
-	 * **Data Consistency Note:**
-	 * The conversation history in the database will not include the synthetic "continue" prompt.
-	 * This is by design - the prompt is a UI affordance, not part of the conversation content.
-	 * Export/import will preserve the actual conversation without synthetic prompts.
-	 *
 	 * @param messageId - The ID of the assistant message to continue
 	 */
 	async continueAssistantMessage(messageId: string): Promise<void> {
@@ -1828,33 +1814,17 @@ class ChatStore {
 			// Get conversation context up to (but not including) the message to continue
 			const conversationContext = this.activeMessages.slice(0, messageIndex);
 
-			// Add a synthetic "continue" prompt to signal continuation
-			// We check if original content ends with whitespace to preserve it in the instruction
-			const endsWithWhitespace = /\s$/.test(originalContent);
-			const continueInstruction = endsWithWhitespace
-				? 'Continue your response. Start directly without adding extra spacing.'
-				: 'Continue your response from where you left off.';
-
-			const continuePrompt: ApiChatMessageData = {
-				role: 'user',
-				content: continueInstruction
-			};
-
-			// Build context: all previous messages + assistant message + synthetic user prompt
-			// The user prompt is only sent to the API, not saved to the database
 			const contextWithContinue = [
 				...conversationContext.map((msg) => {
 					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
 						return msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
 					}
-
 					return msg as ApiChatMessageData;
 				}),
 				{
 					role: 'assistant' as const,
 					content: originalContent
-				},
-				continuePrompt
+				}
 			];
 
 			let appendedContent = '';
