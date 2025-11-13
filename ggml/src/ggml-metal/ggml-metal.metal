@@ -4558,13 +4558,14 @@ kernel void kernel_argsort_f32_i32(
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
     // bitonic sort
-    int col = tpitg[0];
+    const int col = tpitg[0];
 
-    const int i01 = tgpig[0];
-    const int i02 = tgpig[1];
-    const int i03 = tgpig[2];
+    const int i00 = (tgpig[0]/args.ne01)*ntg.x;
+    const int i01 =  tgpig[0]%args.ne01;
+    const int i02 =  tgpig[1];
+    const int i03 =  tgpig[2];
 
-    device const float  * x_row   = (device const float *) (x + args.nb01*i01 + args.nb02*i02 + args.nb03*i03);
+    device const float * x_row = (device const float *) (x + args.nb00*i00 + args.nb01*i01 + args.nb02*i02 + args.nb03*i03);
 
     // initialize indices
     smem_i32[col] = col;
@@ -4576,16 +4577,16 @@ kernel void kernel_argsort_f32_i32(
             int ixj = col ^ j;
             if (ixj > col) {
                 if ((col & k) == 0) {
-                    if (smem_i32[col] >= args.ne00 ||
-                        (smem_i32[ixj] < args.ne00 && (order == GGML_SORT_ORDER_ASC ?
+                    if (i00 + smem_i32[col] >= args.ne00 ||
+                       (i00 + smem_i32[ixj] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
                             x_row[smem_i32[col]] > x_row[smem_i32[ixj]] :
                             x_row[smem_i32[col]] < x_row[smem_i32[ixj]]))
                     ) {
                         SWAP(smem_i32[col], smem_i32[ixj]);
                     }
                 } else {
-                    if (smem_i32[ixj] >= args.ne00 ||
-                        (smem_i32[col] < args.ne00 && (order == GGML_SORT_ORDER_ASC ?
+                    if (i00 + smem_i32[ixj] >= args.ne00 ||
+                       (i00 + smem_i32[col] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
                             x_row[smem_i32[col]] < x_row[smem_i32[ixj]] :
                             x_row[smem_i32[col]] > x_row[smem_i32[ixj]]))
                     ) {
@@ -4599,10 +4600,10 @@ kernel void kernel_argsort_f32_i32(
     }
 
     // copy the result to dst without the padding
-    if (col < args.ne00) {
-        dst += args.ne00*i01 + args.ne00*args.ne01*i02 + args.ne00*args.ne01*args.ne02*i03;
+    if (i00 + col < args.ne00) {
+        dst += i00 + args.ne00*i01 + args.ne00*args.ne01*i02 + args.ne00*args.ne01*args.ne02*i03;
 
-        dst[col] = smem_i32[col];
+        dst[col] = i00 + smem_i32[col];
     }
 }
 

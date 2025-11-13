@@ -3560,7 +3560,9 @@ int ggml_metal_op_argsort(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
+    const int nptg = (ne00 + nth - 1)/nth;
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, nptg*ne01, ne02, ne03, nth, 1, 1);
 
     return 1;
 }
