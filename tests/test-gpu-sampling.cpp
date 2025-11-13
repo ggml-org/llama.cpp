@@ -89,6 +89,8 @@ struct test_model_context {
         last_batch_info.clear();
         llama_batch batch = llama_batch_init(512, 0, prompts.size());
 
+        int n_tokens_per_prompt = 0;
+
         for (const auto & [seq_id, prompt] : prompts) {
             std::vector<llama_token> tokens;
             tokens.push_back(llama_vocab_bos(vocab));
@@ -97,6 +99,18 @@ struct test_model_context {
             int n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.length(),
                                            prompt_tokens.data(), prompt_tokens.size(),
                                            false, false);
+            //TODO: refactor this function to just handle a single prompt at a time
+            //      to avoid this check and complexity.
+            if (n_tokens_per_prompt == 0) {
+                n_tokens_per_prompt = n_tokens;
+            } else {
+                if (n_tokens != n_tokens_per_prompt) {
+                    fprintf(stderr, "Error: prompts must have the same number of tokens\n");
+                    llama_batch_free(batch);
+                    return false;
+                }
+                n_tokens_per_prompt = n_tokens;
+            }
             if (n_tokens < 0) {
                 fprintf(stderr, "Warning: tokenization failed for seq_id %d\n", seq_id);
                 llama_batch_free(batch);
@@ -218,6 +232,19 @@ struct test_model_context {
         return true;
     }
 
+    void expect_gpu_sample(int32_t batch_idx, llama_token expected_token, const char * expected_piece, const char * label = "") {
+        GGML_ASSERT(ctx != nullptr);
+        const llama_token token = llama_get_sampled_token_ith(ctx, batch_idx);
+        const std::string token_str = token_to_piece(token, false);
+        if (label && label[0] != '\0') {
+            printf("%s sampled id:%d, string:'%s'\n", label, token, token_str.c_str());
+        } else {
+            printf("sampled id:%d, string:'%s'\n", token, token_str.c_str());
+        }
+        GGML_ASSERT(token == expected_token);
+        GGML_ASSERT(token_str == expected_piece);
+    }
+
     std::string token_to_piece(llama_token token, bool special) {
         std::string piece;
         piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
@@ -251,71 +278,74 @@ struct test_model_context {
 static void test_gpu_greedy_sampling(const char * model_path) {
     test_model_context test_ctx;
 
+    const int seq_id = 0;
+
     struct llama_sampler_chain_params gpu_sampler_params = llama_sampler_chain_default_params();
     struct llama_sampler * gpu_sampler_chain = llama_sampler_chain_init(gpu_sampler_params);
 
     llama_sampler_chain_add(gpu_sampler_chain, llama_sampler_gpu_init_greedy());
-    std::vector<llama_sampler_seq_config> gpu_sampler_configs = {{ 0, gpu_sampler_chain }};
+    std::vector<llama_sampler_seq_config> gpu_sampler_configs = {{ seq_id, gpu_sampler_chain }};
 
     if (!test_ctx.setup(model_path, gpu_sampler_configs)) {
         return;
     }
 
-    if (!test_ctx.decode({{0, "Some"}})) {
+    if (!test_ctx.decode({{seq_id, "Some"}})) {
         return;
     }
 
-    int32_t batch_idx = test_ctx.idx_for_seq(0);
-    llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
-    const std::string token_str = test_ctx.token_to_piece(token, false);
-    printf("gpu greedy sampled id:%d, string: %s\n", token, token_str.c_str());
-    GGML_ASSERT(token == 650);
-    GGML_ASSERT(token_str == "one");
+    int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
+
+    test_ctx.expect_gpu_sample(batch_idx, 650, "one", "greedy");
+    test_ctx.expect_gpu_sample(       -1, 650, "one", "greedy");
 
     for (int i = 0; i < 10; i++) {
-        int32_t loop_idx = test_ctx.idx_for_seq(0);
-        llama_token id = llama_get_sampled_token_ith(test_ctx.ctx, loop_idx);
-        printf("Generation step %d: token id:%d, string: %s\n", i, id, test_ctx.token_to_piece(id, false).c_str());
-        test_ctx.decode_token(id, 0);
+        int32_t loop_idx = test_ctx.idx_for_seq(seq_id);
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, loop_idx);
+        printf("Generation step %d: token id:%d, string: %s\n", i, token, test_ctx.token_to_piece(token, false).c_str());
+        test_ctx.decode_token(token, 0);
     }
 }
 
 static void test_gpu_top_k_sampling(const char * model_path) {
     test_model_context test_ctx;
 
+    const int seq_id = 0;
     const int32_t k = 8;
     struct llama_sampler_chain_params gpu_chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * gpu_sampler_chain = llama_sampler_chain_init(gpu_chain_params);
     llama_sampler_chain_add(gpu_sampler_chain, llama_sampler_gpu_init_top_k(k));
-    std::vector<llama_sampler_seq_config> gpu_sampler_configs = {{ 0, gpu_sampler_chain }};
+    std::vector<llama_sampler_seq_config> gpu_sampler_configs = {{ seq_id, gpu_sampler_chain }};
 
     if (!test_ctx.setup(model_path, gpu_sampler_configs)) {
         return;
     }
 
-    if (!test_ctx.decode({{0, "Hello"}})) {
+    if (!test_ctx.decode({{seq_id, "Hello"}})) {
         return;
     }
 
-    float * logits = llama_get_sampled_logits_ith(test_ctx.ctx, 1);
-    uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, 1);
+    int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
+
+    float * logits = llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx);
+    uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
     for (size_t i = 0; i < n_logits; ++i) {
-        printf("  logit[%zu] = %.6f\n", i, logits[i]);
+        printf("top_k logit[%zu] = %.6f\n", i, logits[i]);
     }
 
+    // Sample using CPU sampler for verification that it is possible to do hybrid
+    // sampling, first top_k on the GPU and then dist on the CPU.
     struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * chain = llama_sampler_chain_init(chain_params);
     GGML_ASSERT(chain->iface->apply_ggml != nullptr);
 
     llama_sampler_chain_add(chain, llama_sampler_init_dist(18));
-    llama_sampler_chain_add(chain, llama_sampler_init_greedy());
-
-    llama_token token = llama_sampler_sample(chain, test_ctx.ctx, 1);
+    llama_token token = llama_sampler_sample(chain, test_ctx.ctx, batch_idx);
     const std::string token_str = test_ctx.token_to_piece(token, false);
     GGML_ASSERT(token == 29892);
     GGML_ASSERT(token_str == ",");
 
-    printf("GPU top-k sampling test PASSED\n");
+    printf("GPU top-k hybrid sampling test PASSED\n");
 
     llama_sampler_free(chain);
 }
@@ -342,7 +372,7 @@ static void test_gpu_temp_sampling(const char * model_path) {
         return;
     }
 
-    if (!test_ctx.decode({{0, "Some"}, {1, "Hello"}})) {
+    if (!test_ctx.decode({{0, "Some where over"}, {1, "Once upon a"}})) {
         return;
     }
 
@@ -357,8 +387,8 @@ static void test_gpu_temp_sampling(const char * model_path) {
     llama_token token_0 = llama_sampler_sample(chain_0, test_ctx.ctx, batch_idx_0);
     const std::string token_0_str = test_ctx.token_to_piece(token_0, false);
     printf("Sequence 0 sampled token id:%d, string: '%s'\n", token_0, token_0_str.c_str());
-    GGML_ASSERT(token_0 == 650);
-    GGML_ASSERT(token_0_str == "one");
+    GGML_ASSERT(token_0 == 278);
+    GGML_ASSERT(token_0_str == " the");
 
     // Sample from sequence 1 using CPU sampler
     struct llama_sampler_chain_params chain_params_1 = llama_sampler_chain_default_params();
@@ -368,8 +398,8 @@ static void test_gpu_temp_sampling(const char * model_path) {
     llama_token token_1 = llama_sampler_sample(chain_1, test_ctx.ctx, batch_idx_1);
     const std::string token_1_str = test_ctx.token_to_piece(token_1, false);
     printf("Sequence 1 sampled token id:%d, string: '%s'\n", token_1, token_1_str.c_str());
-    GGML_ASSERT(token_1 == 323);
-    GGML_ASSERT(token_1_str == " T");
+    GGML_ASSERT(token_1 == 931);
+    GGML_ASSERT(token_1_str == " time");
 
     printf("GPU temp sampling test PASSED\n");
 
@@ -460,19 +490,38 @@ static void test_gpu_dist_sampling(const char * model_path) {
         return;
     }
 
-    {
-        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(0));
-        const std::string token_str = test_ctx.token_to_piece(token, false);
-        printf("dist sampled token = %d, string='%s'\n", token, token_str.c_str());
-        GGML_ASSERT(token == 11143);
-        GGML_ASSERT(token_str == " Little");
+    test_ctx.expect_gpu_sample(test_ctx.idx_for_seq(0), 11143, " Little", "greedy");
+    test_ctx.expect_gpu_sample(-1                     , 11143, " Little", "greedy");
+}
+
+static void test_gpu_dist_sampling_and_cpu(const char * model_path) {
+    test_model_context test_ctx;
+
+    const int seq_id = 0;
+    const int32_t seed = 88;
+    struct llama_sampler_chain_params gpu_chain_params = llama_sampler_chain_default_params();
+    struct llama_sampler * gpu_sampler_chain = llama_sampler_chain_init(gpu_chain_params);
+    llama_sampler_chain_add(gpu_sampler_chain, llama_sampler_gpu_init_dist(seed));
+    std::vector<llama_sampler_seq_config> gpu_sampler_configs = {{ seq_id, gpu_sampler_chain }};
+
+    if (!test_ctx.setup(model_path, gpu_sampler_configs)) {
+        return;
     }
 
-    {
-        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, -1);
-        GGML_ASSERT(token != LLAMA_TOKEN_NULL);
-        printf("dist sampled token = %d, string='%s'\n", token, test_ctx.token_to_piece(token, false).c_str());
+    if (!test_ctx.decode({{seq_id, "Hello"}})) {
+        return;
     }
+
+    int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
+
+    // Sample using CPU sampler
+    struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
+    struct llama_sampler * chain = llama_sampler_chain_init(chain_params);
+    llama_sampler_chain_add(chain, llama_sampler_init_dist(18));
+
+    llama_token gpu_token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
+    llama_token cpu_token = llama_sampler_sample(chain, test_ctx.ctx, batch_idx);
+    GGML_ASSERT(gpu_token == cpu_token);
 }
 
 static void test_gpu_logit_bias_sampling(const char * model_path) {
@@ -540,8 +589,10 @@ static void test_gpu_set_sampler(const char * model_path) {
         return;
     }
 
+    int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
+
     // Sample using GPU sampler configured above
-    llama_token gpu_token = llama_get_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(seq_id));
+    llama_token gpu_token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
     const std::string gpu_token_str = test_ctx.token_to_piece(gpu_token, false);
     printf("dist sampled token = %d, string='%s'\n", gpu_token, gpu_token_str.c_str());
 
@@ -599,6 +650,7 @@ static const gpu_test_case GPU_TESTS[] = {
     { "gpu_top_k",           test_gpu_top_k_sampling,          true  },
     { "gpu_multi_sequence",  test_gpu_multi_sequence_sampling, true  },
     { "gpu_dist",            test_gpu_dist_sampling,           true  },
+    { "gpu_dist_and_cpu",    test_gpu_dist_sampling_and_cpu,   true  },
     { "gpu_set_sampler",     test_gpu_set_sampler,             true  },
 };
 
