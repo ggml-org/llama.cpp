@@ -66,6 +66,12 @@ struct parser_result {
     bool is_success() const { return type == PARSER_RESULT_SUCCESS; }
 };
 
+struct parser_action {
+    parser_result & result;
+    parser_environment & env;
+    std::string_view match;
+};
+
 class parse_cache {
     std::unordered_map<parse_cache_key, parser_result> results;
 
@@ -241,7 +247,7 @@ class parser_builder {
     // Wraps a parser with a semantic action callback.
     // The callback is invoked on successful parse with the result, matched text, and environment.
     //   S -> A [action]
-    parser action(const parser & p, std::function<void(parser_result &, std::string_view, parser_environment &)> fn, int when = PARSER_RESULT_SUCCESS);
+    parser action(const parser & p, std::function<void(const parser_action &)> fn, int when = PARSER_RESULT_SUCCESS);
 
     // Convenience action wrappers for common patterns
 

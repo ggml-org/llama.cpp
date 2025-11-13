@@ -495,8 +495,8 @@ static void test_actions() {
         // Test simple action - append matched text to content
         auto parser = build_parser([](parser_builder& p) {
             auto word = p.chars("[a-z]+");
-            return p.action(word, [](const parser_result &, std::string_view matched, parser_environment & env) {
-                env.result.content += std::string(matched);
+            return p.action(word, [](const parser_action & act) {
+                act.env.result.content += std::string(act.match);
             });
         });
 
@@ -510,13 +510,13 @@ static void test_actions() {
     {
         // Test multiple sequential actions - build a sentence
         auto parser = build_parser([](parser_builder& p) {
-            auto greeting = p.action(p.literal("hello"), [](const parser_result &, std::string_view matched, parser_environment & env) {
-                env.result.content += std::string(matched) + " ";
+            auto greeting = p.action(p.literal("hello"), [](const parser_action & act) {
+                act.env.result.content += std::string(act.match) + " ";
             });
 
-            auto name = p.action(p.chars("[A-Z][a-z]+"), [](const parser_result &, std::string_view matched, parser_environment & env) {
-                env.result.content += std::string(matched);
-                env.scratchpad["name"] = std::string(matched);
+            auto name = p.action(p.chars("[A-Z][a-z]+"), [](const parser_action & act) {
+                act.env.result.content += std::string(act.match);
+                act.env.scratchpad["name"] = std::string(act.match);
             });
 
             return greeting + p.literal(" ") + name;
@@ -533,11 +533,11 @@ static void test_actions() {
     {
         // Test using scratchpad for intermediate calculations
         auto parser = build_parser([](parser_builder& p) {
-            auto digit = p.action(p.one("[0-9]"), [](const parser_result &, std::string_view matched, parser_environment & env) {
-                auto it = env.scratchpad.find("sum");
-                int current_sum = it != env.scratchpad.end() ? std::get<int>(it->second) : 0;
-                current_sum += (matched[0] - '0');
-                env.scratchpad["sum"] = current_sum;
+            auto digit = p.action(p.one("[0-9]"), [](const parser_action & act) {
+                auto it = act.env.scratchpad.find("sum");
+                int current_sum = it != act.env.scratchpad.end() ? std::get<int>(it->second) : 0;
+                current_sum += (act.match[0] - '0');
+                act.env.scratchpad["sum"] = current_sum;
             });
 
             return p.one_or_more(digit + p.optional(p.literal("+")));
@@ -553,8 +553,8 @@ static void test_actions() {
     {
         // Test actions don't run when parse fails
         auto parser = build_parser([](parser_builder& p) {
-            return p.action(p.literal("success"), [](const parser_result &, std::string_view, parser_environment & env) {
-                env.result.content = "action_ran";
+            return p.action(p.literal("success"), [](const parser_action & act) {
+                act.env.result.content = "action_ran";
             });
         });
 
@@ -568,8 +568,8 @@ static void test_actions() {
     {
         // Test Actions work with partial parsing
         auto parser = build_parser([](parser_builder& p) {
-            auto content = p.action(p.until("<end>"), [](const parser_result &, std::string_view matched, parser_environment & env) {
-                env.result.content += std::string(matched);
+            auto content = p.action(p.until("<end>"), [](const parser_action & act) {
+                act.env.result.content += std::string(act.match);
             });
             return "<start>" << content << "<end>";
         });
@@ -799,40 +799,40 @@ static void example_qwen3_coder() {
         auto content = p.add_rule("content", p.append_content(p.until("<tool_call>")));
 
         auto arg_start = p.add_rule("arg-start",
-            p.action("<parameter=", [](const parser_result &, std::string_view, parser_environment & env) {
-                if (env.tool_call_args != "{") {
-                    env.tool_call_args += ",";
+            p.action("<parameter=", [](const parser_action & act) {
+                if (act.env.tool_call_args != "{") {
+                    act.env.tool_call_args += ",";
                 }
-                env.tool_call_args += "\"";
+                act.env.tool_call_args += "\"";
             })
-            + p.action(p.chars("[a-zA-Z0-9_]"), [](const parser_result &, std::string_view match, parser_environment & env) {
-                env.tool_call_args += std::string(match);
+            + p.action(p.chars("[a-zA-Z0-9_]"), [](const parser_action & act) {
+                act.env.tool_call_args += std::string(act.match);
             })
-            + p.action(">", [](const parser_result &, std::string_view, parser_environment & env) {
-                env.tool_call_args += "\":";
+            + p.action(">", [](const parser_action & act) {
+                act.env.tool_call_args += "\":";
             }));
 
         auto arg_end = p.add_rule("arg-end", "</parameter>");
 
         auto string_arg = p.add_rule("arg-string",
-            p.action(arg_start, [&](const parser_result &, std::string_view, parser_environment & env) {
-                env.tool_call_args += "\"";
+            p.action(arg_start, [&](const parser_action & act) {
+                act.env.tool_call_args += "\"";
             })
-            << p.action(p.until("</parameter>"), [&](const parser_result &, std::string_view match, parser_environment & env) {
+            << p.action(p.until("</parameter>"), [&](const parser_action & act) {
                 // TODO: add a JSON escape helper
-                env.tool_call_args += std::string(match);
+                act.env.tool_call_args += std::string(act.match);
             })
-            << p.action(arg_end, [&](const parser_result &, std::string_view, parser_environment & env) {
-                env.tool_call_args += "\"";
+            << p.action(arg_end, [&](const parser_action & act) {
+                act.env.tool_call_args += "\"";
             }));
 
         auto json = p.json();
 
         auto json_arg = p.add_rule("arg-json",
             arg_start
-            << p.action(json, [&](const parser_result &, std::string_view match, parser_environment & env) {
+            << p.action(json, [&](const parser_action & act) {
                 // JSON should already be properly formatted
-                env.tool_call_args += std::string(match);
+                act.env.tool_call_args += std::string(act.match);
 
                 // This can be streamed by passing p.success(json), but we have
                 // to be mindful of the potential backtracking--it only works
@@ -843,12 +843,12 @@ static void example_qwen3_coder() {
         auto function = p.add_rule("function", p.add_tool_call(
                 "<function="
                 + p.capture_tool_call_name(p.chars("[a-zA-Z0-9_]"))
-                + p.action(">", [&](const parser_result &, std::string_view, parser_environment & env) {
-                    env.tool_call_args += "{";
+                + p.action(">", [&](const parser_action & act) {
+                    act.env.tool_call_args += "{";
                 })
                 + p.one_or_more(p.space() + (json_arg | string_arg))
-                << p.action("</function>", [&](const parser_result &, std::string_view, parser_environment & env) {
-                    env.tool_call_args += "}";
+                << p.action("</function>", [&](const parser_action & act) {
+                    act.env.tool_call_args += "}";
                 })));
 
         auto tool_call = p.add_rule("tool-call",

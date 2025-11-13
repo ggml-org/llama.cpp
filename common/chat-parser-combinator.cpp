@@ -872,7 +872,7 @@ class root_parser : public parser_base {
 // Wraps a parser with a semantic action callback.
 class action_parser : public parser_base {
     parser parser_;
-    std::function<void(parser_result &, std::string_view, parser_environment &)> action_;
+    std::function<void(const parser_action &)> action_;
     int when_;
 
   public:
@@ -880,7 +880,7 @@ class action_parser : public parser_base {
 
     action_parser(
         const parser & parser,
-        std::function<void(parser_result &, std::string_view, parser_environment &)> action,
+        std::function<void(const parser_action &)> action,
         int when,
         int id
     ) : parser_base(id), parser_(parser), action_(std::move(action)), when_(when) {}
@@ -892,7 +892,11 @@ class action_parser : public parser_base {
 
         if ((result.type & when_) && ctx.env && action_) {
             std::string_view matched = ctx.input.substr(result.start, result.end - result.start);
-            action_(result, matched, *ctx.env);
+            action_({
+                result,
+                *ctx.env,
+                matched,
+            });
         }
 
         return result;
@@ -1371,74 +1375,74 @@ parser parser_builder::schema(const parser & p, const std::string & name, const 
     return parser(std::make_shared<schema_parser>(p, name, schema, counter_->next()));
 }
 
-parser parser_builder::action(const parser & p, std::function<void(parser_result &, std::string_view, parser_environment &)> fn, int when) {
+parser parser_builder::action(const parser & p, std::function<void(const parser_action &)> fn, int when) {
     return parser(std::make_shared<action_parser>(p, std::move(fn), when, counter_->next()));
 }
 
 parser parser_builder::succeed(const parser & p, int when) {
-    return action(p, [](parser_result &result, std::string_view, parser_environment &) {
-        result.type = PARSER_RESULT_SUCCESS;
+    return action(p, [](const parser_action & act) {
+        act.result.type = PARSER_RESULT_SUCCESS;
     }, when);
 }
 
 parser parser_builder::append_reasoning(const parser & p) {
-    return action(p, [](parser_result &, std::string_view matched, parser_environment & env) {
-        if (!env.result.reasoning_content.empty()) {
-            env.result.reasoning_content += "\n";
+    return action(p, [](const parser_action & act) {
+        if (!act.env.result.reasoning_content.empty()) {
+            act.env.result.reasoning_content += "\n";
         }
-        env.result.reasoning_content += matched;
+        act.env.result.reasoning_content += act.match;
     }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
 }
 
 parser parser_builder::append_content(const parser & p) {
-    return action(p, [](parser_result &, std::string_view matched, parser_environment & env) {
-        if (!env.result.content.empty()) {
-            env.result.content += "\n";
+    return action(p, [](const parser_action & act) {
+        if (!act.env.result.content.empty()) {
+            act.env.result.content += "\n";
         }
-        env.result.content += matched;
+        act.env.result.content += act.match;
     }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
 }
 
 parser parser_builder::capture(const parser & p, const std::string & key, bool unescape_json) {
-    return action(p, [key, unescape_json](parser_result &, std::string_view matched, parser_environment & env) {
-        std::string value = unescape_json ? unescape_json_string(matched) : std::string(matched);
-        env.scratchpad[key] = std::move(value);
+    return action(p, [key, unescape_json](const parser_action & act) {
+        std::string value = unescape_json ? unescape_json_string(act.match) : std::string(act.match);
+        act.env.scratchpad[key] = std::move(value);
     }, PARSER_RESULT_SUCCESS);
 }
 
 parser parser_builder::capture_tool_call_id(const parser & p, bool unescape_json) {
-    return action(p, [unescape_json](parser_result &, std::string_view matched, parser_environment & env) {
-        env.tool_call_id = unescape_json ? unescape_json_string(matched) : std::string(matched);
+    return action(p, [unescape_json](const parser_action & act) {
+        act.env.tool_call_id = unescape_json ? unescape_json_string(act.match) : std::string(act.match);
     }, PARSER_RESULT_SUCCESS);
 }
 
 parser parser_builder::capture_tool_call_name(const parser & p, bool unescape_json) {
-    return action(p, [unescape_json](parser_result &, std::string_view matched, parser_environment & env) {
-        env.tool_call_name = unescape_json ? unescape_json_string(matched) : std::string(matched);
+    return action(p, [unescape_json](const parser_action & act) {
+        act.env.tool_call_name = unescape_json ? unescape_json_string(act.match) : std::string(act.match);
     }, PARSER_RESULT_SUCCESS);
 }
 
 parser parser_builder::capture_tool_call_args(const parser & p, bool unescape_json) {
-    return action(p, [unescape_json](parser_result &, std::string_view matched, parser_environment & env) {
-        env.tool_call_args = unescape_json ? unescape_json_string(matched) : std::string(matched);
+    return action(p, [unescape_json](const parser_action & act) {
+        act.env.tool_call_args = unescape_json ? unescape_json_string(act.match) : std::string(act.match);
     }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
 }
 
 parser parser_builder::add_tool_call(const parser & p) {
-    return action(p, [](const parser_result &, std::string_view, parser_environment & env) {
-        if (!env.tool_call_name.empty() && !env.tool_call_args.empty()) {
+    return action(p, [](const parser_action & act) {
+        if (!act.env.tool_call_name.empty() && !act.env.tool_call_args.empty()) {
             auto tool_call = common_chat_tool_call{
-                env.tool_call_name,
-                env.tool_call_args,
-                env.tool_call_id
+                act.env.tool_call_name,
+                act.env.tool_call_args,
+                act.env.tool_call_id
             };
-            env.result.tool_calls.push_back(tool_call);
+            act.env.result.tool_calls.push_back(tool_call);
         }
 
         // Clear the fields to prevent bleeding to next tool call
-        env.tool_call_id.clear();
-        env.tool_call_name.clear();
-        env.tool_call_args.clear();
+        act.env.tool_call_id.clear();
+        act.env.tool_call_name.clear();
+        act.env.tool_call_args.clear();
     }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
 }
 
