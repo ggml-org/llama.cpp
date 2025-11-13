@@ -2992,6 +2992,36 @@ static void update_cuda_graph_executable(ggml_backend_cuda_context * cuda_ctx) {
 }
 #endif
 
+static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
+                                                const ggml_tensor * view,
+                                                const ggml_tensor * set_rows) {
+    // ne3 not tested
+    if (rope->src[0]->ne[3] != 1) {
+        return false;
+    }
+
+    if (set_rows->type != GGML_TYPE_F32 && set_rows->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    if (set_rows->src[1]->type != GGML_TYPE_I64) {
+        return false;
+    }
+
+    // The view should flatten two dims of rope into one dim
+    if (!ggml_is_contiguous(view) || view->ne[0] != rope->ne[0] * rope->ne[1]) {
+        return false;
+    }
+
+    // Only norm/neox shaders have the fusion code
+    const int mode = ((const int32_t *) rope->op_params)[2];
+    if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops, std::initializer_list<enum ggml_unary_op> unary_ops) {
 #ifndef NDEBUG
     const size_t num_unary = std::count(ops.begin(), ops.end(), GGML_OP_UNARY);
@@ -3063,6 +3093,16 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         const ggml_tensor * glu      = cgraph->nodes[node_idx + 2];
 
         if (ggml_cuda_should_fuse_mul_mat(ffn_up, ffn_gate, glu)) {
+            return true;
+        }
+    }
+
+    if (ops.size() == 3 && ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx + 2 })) {
+        const ggml_tensor * rope     = cgraph->nodes[node_idx];
+        const ggml_tensor * view     = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * set_rows = cgraph->nodes[node_idx + 2];
+
+        if (ggml_cuda_should_fuse_rope_set_rows(rope, view, set_rows)) {
             return true;
         }
     }
@@ -3193,6 +3233,15 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         ggml_cuda_op_topk_moe(*cuda_ctx, node->src[0], weights, ids, /*with norm*/ false,
                                               /*delayed_softmax*/ true);
                         i += 5;
+                        continue;
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
+                        ggml_tensor * rope = cgraph->nodes[i];
+                        ggml_tensor * set_rows = cgraph->nodes[i + 2];
+
+                        ggml_cuda_op_rope_fused(*cuda_ctx, rope, set_rows);
+                        i += 2;
                         continue;
                     }
 
