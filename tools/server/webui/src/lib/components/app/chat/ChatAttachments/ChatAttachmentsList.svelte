@@ -171,6 +171,8 @@
 
 	$effect(() => {
 		if (scrollContainer && displayItems.length) {
+			scrollContainer.scrollLeft = 0;
+
 			setTimeout(() => {
 				updateScrollButtons();
 			}, 0);
