@@ -117,8 +117,17 @@ struct llama_sampler * llama_sampler_gpu_init_temp(float temp) {
 
 struct llama_sampler_gpu_top_k_ctx {
     int32_t k;
+
+    // Only required for checking operation support and can be removed later.
+    ggml_backend_dev_t device;
 };
 
+static void llama_sampler_gpu_top_k_init_ggml(
+        struct llama_sampler           * smpl,
+        ggml_backend_buffer_type_t       buft) {
+    auto * ctx_data = (llama_sampler_gpu_top_k_ctx *) smpl->ctx;
+    ctx_data->device = ggml_backend_buft_get_device(buft);
+}
 
 static void llama_sampler_gpu_top_k_apply_ggml(
         struct llama_sampler           * smpl,
@@ -133,14 +142,10 @@ static void llama_sampler_gpu_top_k_apply_ggml(
 
     // top_k is a view of argsort - check if backend supports the underlying argsort operation
     // by checking the source tensor (which is the argsort result)
-    /*
-    if (top_k->src[0] && !ggml_backend_supports_op(ctx_data->backend, top_k->src[0])) {
-        // TODO: Need to figure out how to handle this. It is probably better that we fix the backend
-        // to support all the operations that we need for the GPU samplers.
+    if (ctx_data->device && top_k->src[0] && !ggml_backend_dev_supports_op(ctx_data->device, top_k->src[0])) {
         fprintf(stderr, "Warning: backend does not support argsort operation required for top-k sampling\n");
         fprintf(stderr, "CPU backend will be used instead which defeats the purpose of having GPU samplers\n");
     }
-    */
 
     ggml_data->filtered_ids = top_k;
 
@@ -177,11 +182,12 @@ struct llama_sampler * llama_sampler_gpu_init_top_k(int32_t k) {
         /*.apply_ggml          =*/ llama_sampler_gpu_top_k_apply_ggml,
         /*.accept_ggml         =*/ nullptr,
         /*.set_input_ggml      =*/ nullptr,
-        /*.init_ggml           =*/ nullptr,
+        /*.init_ggml           =*/ llama_sampler_gpu_top_k_init_ggml,
     };
 
     auto * ctx_data = new llama_sampler_gpu_top_k_ctx {
         /*.k       =*/ k,
+        /*.device  =*/ nullptr,
     };
 
     auto * sampler = new llama_sampler {
@@ -211,9 +217,12 @@ struct llama_sampler_gpu_dist_ctx {
           uint32_t seed_cur;
     std::mt19937   rng;
 
-    struct ggml_tensor * uniform;
-    struct ggml_context * ctx;
-    ggml_backend_buffer_t buffer;
+    struct ggml_tensor   * uniform;
+    struct ggml_context  * ctx;
+    ggml_backend_buffer_t  buffer;
+
+    // Only required for checking operation support and can be removed later.
+    ggml_backend_dev_t device;
 };
 
 static void llama_sampler_gpu_dist_init_ggml(
@@ -221,6 +230,7 @@ static void llama_sampler_gpu_dist_init_ggml(
         ggml_backend_buffer_type_t  buft) {
 
     auto * sctx = (llama_sampler_gpu_dist_ctx *) smpl->ctx;
+    sctx->device = ggml_backend_buft_get_device(buft);
     ggml_init_params params = {
         /*.mem_size   =*/ ggml_tensor_overhead(),
         /*.mem_buffer =*/ nullptr,
@@ -260,14 +270,10 @@ static void llama_sampler_gpu_dist_apply_ggml(
     ggml_set_name(probs, "dist_probs");
 
     struct ggml_tensor * cumsum = ggml_cumsum(ctx, probs);
-    /*
-    if (!ggml_backend_supports_op(sctx->backend, cumsum)) {
-        // TODO: Need to figure out how to handle this. It is probably better that we fix the backend
-        // to support all the operations that we need for the GPU samplers.
-        fprintf(stderr, "Warning: backend does not support cumsum operation required for top-k sampling\n");
+    if (sctx->device && !ggml_backend_dev_supports_op(sctx->device, cumsum)) {
+        fprintf(stderr, "Warning: backend does not support cumsum operation required for dist sampling\n");
         fprintf(stderr, "CPU backend will be used instead which defeats the purpose of having GPU samplers\n");
     }
-    */
     ggml_set_name(cumsum, "cumsum");
 
     // Broadcast the random uniform value to match cumsums’s shape
@@ -355,6 +361,7 @@ struct llama_sampler * llama_sampler_gpu_init_dist(uint32_t seed) {
         /*.uniform  =*/ nullptr,
         /*.ctx      =*/ nullptr,
         /*.buffer   =*/ nullptr,
+        /*.device   =*/ nullptr,
     };
 
     auto * sampler = new llama_sampler {
