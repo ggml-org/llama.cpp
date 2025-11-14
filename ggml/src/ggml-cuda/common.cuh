@@ -302,7 +302,6 @@ static bool amd_wmma_available(const int cc) {
     return GGML_CUDA_CC_IS_RDNA4(cc);
 }
 
-// Volta technically had FP16 tensor cores but they work very differently compared to Turing and later.
 static bool turing_mma_available(const int cc) {
     return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_TURING;
 }
