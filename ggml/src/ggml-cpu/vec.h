@@ -44,6 +44,8 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
 void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * GGML_RESTRICT x, size_t bx, ggml_fp16_t * GGML_RESTRICT y, size_t by, int nrc);
 
 void ggml_vec_silu_f32(const int n, float * y, const float * x);
+void ggml_vec_hardswish_f32(const int n, float * y, const float * x);
+void ggml_vec_hardsigmoid_f32(const int n, float * y, const float * x);
 ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const float mean); //it will also center y ( y = y - mean )
 ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float max);
 ggml_float ggml_vec_log_soft_max_f32(const int n, float * y, const float * x, float max);
@@ -844,17 +846,40 @@ inline static void ggml_vec_sigmoid_f16 (const int n, ggml_fp16_t * y, const ggm
         y[i] = GGML_CPU_FP32_TO_FP16(1.f / (1.f + expf(-GGML_CPU_FP16_TO_FP32(x[i]))));
     }
 }
-// TODO: optimize performance
-inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = x[i] * fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
+// ggml_vec_hardswish_f32 is implemented as a non-inline function in vec.cpp
 inline static void ggml_vec_hardswish_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
-    for (int i = 0; i < n; ++i) {
+    float tmp_f32[256];
+    float tmp_f32_out[256];
+    int i = 0;
+    for (; i + 256 <= n; i += 256) {
+        for (int j = 0; j < 256; ++j) {
+            tmp_f32[j] = GGML_CPU_FP16_TO_FP32(x[i + j]);
+        }
+        ggml_vec_hardswish_f32(256, tmp_f32_out, tmp_f32);
+        for (int j = 0; j < 256; ++j) {
+            y[i + j] = GGML_CPU_FP32_TO_FP16(tmp_f32_out[j]);
+        }
+    }
+    for (; i < n; ++i) {
         float v = GGML_CPU_FP16_TO_FP32(x[i]);
         y[i] = GGML_CPU_FP32_TO_FP16(v * fminf(1.0f, fmaxf(0.0f, (v + 3.0f) / 6.0f)));
     }
 }
-inline static void ggml_vec_hardsigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
+// ggml_vec_hardsigmoid_f32 is implemented as a non-inline function in vec.cpp
 inline static void ggml_vec_hardsigmoid_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
-    for (int i = 0; i < n; ++i) {
+    float tmp_f32[256];
+    float tmp_f32_out[256];
+    int i = 0;
+    for (; i + 256 <= n; i += 256) {
+        for (int j = 0; j < 256; ++j) {
+            tmp_f32[j] = GGML_CPU_FP16_TO_FP32(x[i + j]);
+        }
+        ggml_vec_hardsigmoid_f32(256, tmp_f32_out, tmp_f32);
+        for (int j = 0; j < 256; ++j) {
+            y[i + j] = GGML_CPU_FP32_TO_FP16(tmp_f32_out[j]);
+        }
+    }
+    for (; i < n; ++i) {
         y[i] = GGML_CPU_FP32_TO_FP16(fminf(1.0f, fmaxf(0.0f, (GGML_CPU_FP16_TO_FP32(x[i]) + 3.0f) / 6.0f)));
     }
 }

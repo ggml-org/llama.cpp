@@ -3663,14 +3663,47 @@ static void ggml_compute_forward_rms_norm_f32(
 
     GGML_ASSERT(eps >= 0.0f);
 
-    // TODO: optimize
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
                 const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
 
+                // SIMD-optimized sum of squares
                 ggml_float sum = 0.0;
-                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                int64_t i00 = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+                for (; i00 + 15 < ne00; i00 += 16) {
+                    __m512 vx = _mm512_loadu_ps(x + i00);
+                    sum += (ggml_float)_mm512_reduce_add_ps(_mm512_mul_ps(vx, vx));
+                }
+#elif defined(__AVX2__) && defined(__FMA__)
+                for (; i00 + 7 < ne00; i00 += 8) {
+                    __m256 vx = _mm256_loadu_ps(x + i00);
+                    __m256 vsq = _mm256_mul_ps(vx, vx);
+                    __m128 val2 = _mm_add_ps(_mm256_extractf128_ps(vsq, 1),
+                                             _mm256_castps256_ps128(vsq));
+                    val2 = _mm_add_ps(val2, _mm_movehl_ps(val2, val2));
+                    val2 = _mm_add_ss(val2, _mm_movehdup_ps(val2));
+                    sum += (ggml_float)_mm_cvtss_f32(val2);
+                }
+#elif defined(__SSE2__)
+                for (; i00 + 3 < ne00; i00 += 4) {
+                    __m128 vx = _mm_loadu_ps(x + i00);
+                    __m128 vsq = _mm_mul_ps(vx, vx);
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+                    vsq = _mm_add_ps(vsq, _mm_movehl_ps(vsq, vsq));
+                    vsq = _mm_add_ss(vsq, _mm_movehdup_ps(vsq));
+#else
+                    __m128 tmp = _mm_shuffle_ps(vsq, vsq, _MM_SHUFFLE(2, 3, 0, 1));
+                    vsq = _mm_add_ps(vsq, tmp);
+                    tmp = _mm_movehl_ps(tmp, vsq);
+                    vsq = _mm_add_ss(vsq, tmp);
+#endif
+                    sum += (ggml_float)_mm_cvtss_f32(vsq);
+                }
+#endif
+                // Scalar fallback for remaining elements
+                for (; i00 < ne00; i00++) {
                     sum += (ggml_float)(x[i00] * x[i00]);
                 }
 
@@ -3732,7 +3765,6 @@ static void ggml_compute_forward_rms_norm_back_f32(
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
 
-    // TODO: optimize
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
@@ -3744,10 +3776,61 @@ static void ggml_compute_forward_rms_norm_back_f32(
                 const float * dz = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
                 const float * x  = (float *) ((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13);
 
+                // SIMD-optimized sum of squares and dot product
                 ggml_float sum_xx  = 0.0;
                 ggml_float sum_xdz = 0.0;
-
-                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                int64_t i00 = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+                for (; i00 + 15 < ne00; i00 += 16) {
+                    __m512 vx = _mm512_loadu_ps(x + i00);
+                    __m512 vdz = _mm512_loadu_ps(dz + i00);
+                    sum_xx  += (ggml_float)_mm512_reduce_add_ps(_mm512_mul_ps(vx, vx));
+                    sum_xdz += (ggml_float)_mm512_reduce_add_ps(_mm512_mul_ps(vx, vdz));
+                }
+#elif defined(__AVX2__) && defined(__FMA__)
+                for (; i00 + 7 < ne00; i00 += 8) {
+                    __m256 vx = _mm256_loadu_ps(x + i00);
+                    __m256 vdz = _mm256_loadu_ps(dz + i00);
+                    __m256 vsq = _mm256_mul_ps(vx, vx);
+                    __m256 vdot = _mm256_mul_ps(vx, vdz);
+                    __m128 val2_sq = _mm_add_ps(_mm256_extractf128_ps(vsq, 1),
+                                               _mm256_castps256_ps128(vsq));
+                    __m128 val2_dot = _mm_add_ps(_mm256_extractf128_ps(vdot, 1),
+                                                _mm256_castps256_ps128(vdot));
+                    val2_sq = _mm_add_ps(val2_sq, _mm_movehl_ps(val2_sq, val2_sq));
+                    val2_dot = _mm_add_ps(val2_dot, _mm_movehl_ps(val2_dot, val2_dot));
+                    val2_sq = _mm_add_ss(val2_sq, _mm_movehdup_ps(val2_sq));
+                    val2_dot = _mm_add_ss(val2_dot, _mm_movehdup_ps(val2_dot));
+                    sum_xx  += (ggml_float)_mm_cvtss_f32(val2_sq);
+                    sum_xdz += (ggml_float)_mm_cvtss_f32(val2_dot);
+                }
+#elif defined(__SSE2__)
+                for (; i00 + 3 < ne00; i00 += 4) {
+                    __m128 vx = _mm_loadu_ps(x + i00);
+                    __m128 vdz = _mm_loadu_ps(dz + i00);
+                    __m128 vsq = _mm_mul_ps(vx, vx);
+                    __m128 vdot = _mm_mul_ps(vx, vdz);
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+                    vsq = _mm_add_ps(vsq, _mm_movehl_ps(vsq, vsq));
+                    vdot = _mm_add_ps(vdot, _mm_movehl_ps(vdot, vdot));
+                    vsq = _mm_add_ss(vsq, _mm_movehdup_ps(vsq));
+                    vdot = _mm_add_ss(vdot, _mm_movehdup_ps(vdot));
+#else
+                    __m128 tmp = _mm_shuffle_ps(vsq, vsq, _MM_SHUFFLE(2, 3, 0, 1));
+                    vsq = _mm_add_ps(vsq, tmp);
+                    tmp = _mm_movehl_ps(tmp, vsq);
+                    vsq = _mm_add_ss(vsq, tmp);
+                    tmp = _mm_shuffle_ps(vdot, vdot, _MM_SHUFFLE(2, 3, 0, 1));
+                    vdot = _mm_add_ps(vdot, tmp);
+                    tmp = _mm_movehl_ps(tmp, vdot);
+                    vdot = _mm_add_ss(vdot, tmp);
+#endif
+                    sum_xx  += (ggml_float)_mm_cvtss_f32(vsq);
+                    sum_xdz += (ggml_float)_mm_cvtss_f32(vdot);
+                }
+#endif
+                // Scalar fallback for remaining elements
+                for (; i00 < ne00; i00++) {
                     sum_xx  += (ggml_float)(x[i00] * x[i00]);
                     sum_xdz += (ggml_float)(x[i00] * dz[i00]);
                 }
@@ -3904,8 +3987,6 @@ static void ggml_compute_forward_group_norm_f32(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
-    // TODO: optimize
-
     float eps;
     memcpy(&eps, dst->op_params + 1, sizeof(float));
 
@@ -3926,8 +4007,39 @@ static void ggml_compute_forward_group_norm_f32(
                 for (int64_t i01 = 0; i01 < ne01; i01++) {
                     const float * x = (float *)((char *) src0->data + i01 * nb01 + i02 * nb02 + i03 * nb03);
 
+                    // SIMD-optimized sum
                     ggml_float sumr = 0.0;
-                    for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    int64_t i00 = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+                    for (; i00 + 15 < ne00; i00 += 16) {
+                        sumr += (ggml_float)_mm512_reduce_add_ps(_mm512_loadu_ps(x + i00));
+                    }
+#elif defined(__AVX2__) && defined(__FMA__)
+                    for (; i00 + 7 < ne00; i00 += 8) {
+                        __m256 vx = _mm256_loadu_ps(x + i00);
+                        __m128 val2 = _mm_add_ps(_mm256_extractf128_ps(vx, 1),
+                                               _mm256_castps256_ps128(vx));
+                        val2 = _mm_add_ps(val2, _mm_movehl_ps(val2, val2));
+                        val2 = _mm_add_ss(val2, _mm_movehdup_ps(val2));
+                        sumr += (ggml_float)_mm_cvtss_f32(val2);
+                    }
+#elif defined(__SSE2__)
+                    for (; i00 + 3 < ne00; i00 += 4) {
+                        __m128 vx = _mm_loadu_ps(x + i00);
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+                        vx = _mm_add_ps(vx, _mm_movehl_ps(vx, vx));
+                        vx = _mm_add_ss(vx, _mm_movehdup_ps(vx));
+#else
+                        __m128 tmp = _mm_shuffle_ps(vx, vx, _MM_SHUFFLE(2, 3, 0, 1));
+                        vx = _mm_add_ps(vx, tmp);
+                        tmp = _mm_movehl_ps(tmp, vx);
+                        vx = _mm_add_ss(vx, tmp);
+#endif
+                        sumr += (ggml_float)_mm_cvtss_f32(vx);
+                    }
+#endif
+                    // Scalar fallback
+                    for (; i00 < ne00; i00++) {
                         sumr += (ggml_float)x[i00];
                     }
                     sum += sumr;
@@ -3942,8 +4054,51 @@ static void ggml_compute_forward_group_norm_f32(
 
                     float * y = (float *)((char *) dst->data + i01 * nb1 + i02 * nb2 + i03 * nb3);
 
+                    // SIMD-optimized sum of squares after subtracting mean
                     ggml_float sumr = 0.0;
-                    for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    int64_t i00 = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+                    const __m512 vmean512 = _mm512_set1_ps(mean);
+                    for (; i00 + 15 < ne00; i00 += 16) {
+                        __m512 vx = _mm512_loadu_ps(x + i00);
+                        __m512 vdiff = _mm512_sub_ps(vx, vmean512);
+                        _mm512_storeu_ps(y + i00, vdiff);
+                        sumr += (ggml_float)_mm512_reduce_add_ps(_mm512_mul_ps(vdiff, vdiff));
+                    }
+#elif defined(__AVX2__) && defined(__FMA__)
+                    const __m256 vmean256 = _mm256_set1_ps(mean);
+                    for (; i00 + 7 < ne00; i00 += 8) {
+                        __m256 vx = _mm256_loadu_ps(x + i00);
+                        __m256 vdiff = _mm256_sub_ps(vx, vmean256);
+                        _mm256_storeu_ps(y + i00, vdiff);
+                        __m256 vsq = _mm256_mul_ps(vdiff, vdiff);
+                        __m128 val2 = _mm_add_ps(_mm256_extractf128_ps(vsq, 1),
+                                                 _mm256_castps256_ps128(vsq));
+                        val2 = _mm_add_ps(val2, _mm_movehl_ps(val2, val2));
+                        val2 = _mm_add_ss(val2, _mm_movehdup_ps(val2));
+                        sumr += (ggml_float)_mm_cvtss_f32(val2);
+                    }
+#elif defined(__SSE2__)
+                    const __m128 vmean128 = _mm_set1_ps(mean);
+                    for (; i00 + 3 < ne00; i00 += 4) {
+                        __m128 vx = _mm_loadu_ps(x + i00);
+                        __m128 vdiff = _mm_sub_ps(vx, vmean128);
+                        _mm_storeu_ps(y + i00, vdiff);
+                        __m128 vsq = _mm_mul_ps(vdiff, vdiff);
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+                        vsq = _mm_add_ps(vsq, _mm_movehl_ps(vsq, vsq));
+                        vsq = _mm_add_ss(vsq, _mm_movehdup_ps(vsq));
+#else
+                        __m128 tmp = _mm_shuffle_ps(vsq, vsq, _MM_SHUFFLE(2, 3, 0, 1));
+                        vsq = _mm_add_ps(vsq, tmp);
+                        tmp = _mm_movehl_ps(tmp, vsq);
+                        vsq = _mm_add_ss(vsq, tmp);
+#endif
+                        sumr += (ggml_float)_mm_cvtss_f32(vsq);
+                    }
+#endif
+                    // Scalar fallback
+                    for (; i00 < ne00; i00++) {
                         float v = x[i00] - mean;
                         y[i00] = v;
                         sumr += (ggml_float)(v * v);
@@ -4004,14 +4159,47 @@ static void ggml_compute_forward_l2_norm_f32(
 
     GGML_ASSERT(eps >= 0.0f);
 
-    // TODO: optimize
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
                 const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
 
+                // SIMD-optimized sum of squares
                 ggml_float sum = 0.0;
-                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                int64_t i00 = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+                for (; i00 + 15 < ne00; i00 += 16) {
+                    __m512 vx = _mm512_loadu_ps(x + i00);
+                    sum += (ggml_float)_mm512_reduce_add_ps(_mm512_mul_ps(vx, vx));
+                }
+#elif defined(__AVX2__) && defined(__FMA__)
+                for (; i00 + 7 < ne00; i00 += 8) {
+                    __m256 vx = _mm256_loadu_ps(x + i00);
+                    __m256 vsq = _mm256_mul_ps(vx, vx);
+                    __m128 val2 = _mm_add_ps(_mm256_extractf128_ps(vsq, 1),
+                                             _mm256_castps256_ps128(vsq));
+                    val2 = _mm_add_ps(val2, _mm_movehl_ps(val2, val2));
+                    val2 = _mm_add_ss(val2, _mm_movehdup_ps(val2));
+                    sum += (ggml_float)_mm_cvtss_f32(val2);
+                }
+#elif defined(__SSE2__)
+                for (; i00 + 3 < ne00; i00 += 4) {
+                    __m128 vx = _mm_loadu_ps(x + i00);
+                    __m128 vsq = _mm_mul_ps(vx, vx);
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+                    vsq = _mm_add_ps(vsq, _mm_movehl_ps(vsq, vsq));
+                    vsq = _mm_add_ss(vsq, _mm_movehdup_ps(vsq));
+#else
+                    __m128 tmp = _mm_shuffle_ps(vsq, vsq, _MM_SHUFFLE(2, 3, 0, 1));
+                    vsq = _mm_add_ps(vsq, tmp);
+                    tmp = _mm_movehl_ps(tmp, vsq);
+                    vsq = _mm_add_ss(vsq, tmp);
+#endif
+                    sum += (ggml_float)_mm_cvtss_f32(vsq);
+                }
+#endif
+                // Scalar fallback for remaining elements
+                for (; i00 < ne00; i00++) {
                     sum += (ggml_float)(x[i00] * x[i00]);
                 }
 

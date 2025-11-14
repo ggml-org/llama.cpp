@@ -325,9 +325,12 @@ struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
 }
 
 void common_perf_print(const struct llama_context * ctx, const struct common_sampler * gsmpl) {
-    // TODO: measure grammar performance
-
     if (gsmpl) {
+        // Print grammar sampler performance if available
+        if (gsmpl->grmr != nullptr) {
+            llama_perf_sampler_print(gsmpl->grmr);
+        }
+        // Print main sampling chain performance
         llama_perf_sampler_print(gsmpl->chain);
     }
     if (ctx) {
