@@ -186,7 +186,12 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
 #else
     GGML_UNUSED(src);
     GGML_UNUSED(dst);
-    GGML_UNUSED(src_stride);
+    GGML_UNUSED(curR);
+    GGML_UNUSED(curS);
+    GGML_UNUSED(start_k);
+    GGML_UNUSED(end_k);
+    GGML_UNUSED(thread_row);
+    GGML_UNUSED(thread_col);
     GGML_UNUSED(param);
     NO_DEVICE_CODE;
 #endif
@@ -289,7 +294,14 @@ __device__ __forceinline__ unsigned int tileMemcpySwizzleA(
 #else
     GGML_UNUSED(src);
     GGML_UNUSED(dst);
-    GGML_UNUSED(inChannelOffset);
+    GGML_UNUSED(curR);
+    GGML_UNUSED(curS);
+    GGML_UNUSED(start_k);
+    GGML_UNUSED(end_k);
+    GGML_UNUSED(masks);
+    GGML_UNUSED(element_offset);
+    GGML_UNUSED(thread_row);
+    GGML_UNUSED(thread_col);
     GGML_UNUSED(param);
     NO_DEVICE_CODE;
 #endif
@@ -389,7 +401,15 @@ __device__ __forceinline__ unsigned int tileMemcpyLoadA(
     GGML_UNUSED(src);
     GGML_UNUSED(dst_reg);
     GGML_UNUSED(block_k);
-    GGML_UNUSED(inChannelOffset);
+    GGML_UNUSED(curR);
+    GGML_UNUSED(curS);
+    GGML_UNUSED(start_k);
+    GGML_UNUSED(end_k);
+    GGML_UNUSED(masks);
+    GGML_UNUSED(element_offset);
+    GGML_UNUSED(thread_row);
+    GGML_UNUSED(thread_col);
+    GGML_UNUSED(oldC);
     GGML_UNUSED(param);
     NO_DEVICE_CODE;
 #endif
@@ -459,7 +479,12 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     GGML_UNUSED(src);
     GGML_UNUSED(dst_reg);
     GGML_UNUSED(block_k);
-    GGML_UNUSED(src_stride);
+    GGML_UNUSED(curR);
+    GGML_UNUSED(curS);
+    GGML_UNUSED(start_k);
+    GGML_UNUSED(end_k);
+    GGML_UNUSED(thread_row);
+    GGML_UNUSED(thread_col);
     GGML_UNUSED(param);
     NO_DEVICE_CODE;
 #endif
@@ -523,6 +548,8 @@ __device__ __forceinline__ void tileMemcpySwizzleStore(
 #else
     GGML_UNUSED(src_reg);
     GGML_UNUSED(dst);
+    GGML_UNUSED(thread_row);
+    GGML_UNUSED(thread_col);
     NO_DEVICE_CODE;
 #endif
 }
