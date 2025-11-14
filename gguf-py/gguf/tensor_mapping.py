@@ -314,6 +314,10 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.sinks", # openai-moe
         ),
 
+        MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.self_attn.gate_proj", # afmoe
+        ),
+
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
@@ -340,11 +344,12 @@ class TensorNameMap:
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
         ),
 
-        # Post feed-forward norm
+        # Pre feed-forward norm
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
             "layers.{bid}.pre_feedforward_layernorm",       # embeddinggemma
             "model.layers.{bid}.pre_ff_layernorm.weight",
+            "model.layers.{bid}.pre_mlp_layernorm",        # afmoe
         ),
 
         # Post feed-forward norm
@@ -370,6 +375,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate.wg",                   # hunyuan
             "model.layers.{bid}.block_sparse_moe.primary_router", # smallthinker
             "model.layers.{bid}.feed_forward.gate",               # lfm2moe
+            "model.layers.{bid}.mlp.router.gate",               # afmoe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -380,6 +386,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate.e_score_correction",               # deepseek-v3 dots1
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",        # ernie4.5-moe
             "model.layers.{bid}.mlp.gate.expert_bias",                      # bailingmoe2
+            "model.layers.{bid}.mlp.expert_bias",                           # afmoe
             "model.layers.{bid}.feed_forward.expert_bias",                  # lfm2moe
             "model.layers.{bid}.block_sparse_moe.e_score_correction",       # minimax-m2
         ),
