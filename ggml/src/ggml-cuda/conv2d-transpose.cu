@@ -127,7 +127,7 @@ void ggml_cuda_conv_2d_transpose_p0(ggml_backend_cuda_context & ctx, ggml_tensor
     GGML_ASSERT(ggml_is_contiguous(kernel));
     GGML_ASSERT(ggml_is_contiguous(dst));
 
-    const int               total  = (output_w * output_h * channels_out * batches);
+    const int               total  = output_w * output_h * channels_out * batches;
     conv2d_transpose_params params = { input_w, input_h,     output_w,     output_h, kernel_w, kernel_h,
                                        stride,  channels_in, channels_out, batches,  total };
 
