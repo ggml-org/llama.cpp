@@ -4107,6 +4107,9 @@ struct server_context {
                             if (slot.is_processing()) {
                                 send_error(slot, err);
                                 slot.release();
+
+                                llama_memory_seq_rm(llama_get_memory(ctx), slot.id, -1, -1);
+                                slot.prompt.tokens.clear();
                             }
                         }
 
