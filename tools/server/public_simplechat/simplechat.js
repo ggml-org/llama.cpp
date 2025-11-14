@@ -1518,6 +1518,7 @@ class MultiChatUI {
         } else {
             if (content.trim() == "") {
                 this.elInUser.placeholder = "dont forget to enter a message, before submitting to ai"
+                this.chat_show(chatId)
                 return;
             }
             try {
