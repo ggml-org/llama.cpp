@@ -67,24 +67,24 @@ if (Vulkan_FOUND)
 
     # Test all shader extensions
     if (NOT GGML_VULKAN_DISABLE_COOPMAT)
-    test_shader_extension_support(
-        "GL_KHR_cooperative_matrix"
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat.comp"
-        "GGML_VULKAN_COOPMAT_GLSLC_SUPPORT"
-    )
-else()
-    message(STATUS "VK_KHR_cooperative_matrix support disabled by GGML_VULKAN_DISABLE_COOPMAT")
-endif()
+        test_shader_extension_support(
+            "GL_KHR_cooperative_matrix"
+            "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat.comp"
+            "GGML_VULKAN_COOPMAT_GLSLC_SUPPORT"
+        )
+    else()
+        message(STATUS "VK_KHR_cooperative_matrix support disabled by GGML_VULKAN_DISABLE_COOPMAT")
+    endif()
 
-if (NOT GGML_VULKAN_DISABLE_COOPMAT2)
-    test_shader_extension_support(
-        "GL_NV_cooperative_matrix2"
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat2.comp"
-        "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
-    )
-else()
-    message(STATUS "VK_NV_cooperative_matrix2 support disabled by GGML_VULKAN_DISABLE_COOPMAT2")
-endif()
+    if (NOT GGML_VULKAN_DISABLE_COOPMAT2)
+        test_shader_extension_support(
+            "GL_NV_cooperative_matrix2"
+            "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat2.comp"
+            "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
+        )
+    else()
+        message(STATUS "VK_NV_cooperative_matrix2 support disabled by GGML_VULKAN_DISABLE_COOPMAT2")
+    endif()
 
     test_shader_extension_support(
         "GL_EXT_integer_dot_product"
