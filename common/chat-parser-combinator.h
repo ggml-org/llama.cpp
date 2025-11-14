@@ -171,20 +171,20 @@ common_chat_combinator_parser operator+(const char * lhs, const common_chat_comb
 common_chat_combinator_parser operator|(const char * lhs, const common_chat_combinator_parser & rhs);
 common_chat_combinator_parser operator<<(const char * lhs, const common_chat_combinator_parser & rhs);
 
-class common_chat_combinator_parser_id_counter {
+class common_chat_combinator_parser_counter {
     int next_id_;
   public:
-    common_chat_combinator_parser_id_counter(int start) : next_id_(start) {}
+    common_chat_combinator_parser_counter(int start) : next_id_(start) {}
     int next() { return next_id_++; }
 };
 
 class common_chat_combinator_parser_builder {
     std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules_;
-    std::shared_ptr<common_chat_combinator_parser_id_counter> counter_;
+    std::shared_ptr<common_chat_combinator_parser_counter> counter_;
 
   public:
     common_chat_combinator_parser_builder();
-    common_chat_combinator_parser_builder(std::shared_ptr<common_chat_combinator_parser_id_counter> counter);
+    common_chat_combinator_parser_builder(std::shared_ptr<common_chat_combinator_parser_counter> counter);
 
     // Matches an exact literal string.
     //   S -> "hello"
