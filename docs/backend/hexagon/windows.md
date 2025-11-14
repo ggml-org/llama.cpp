@@ -24,11 +24,14 @@ Download Qualcomm's Software Center and install the SDK in default location i.e.
 The rest of the Windows build process assumes that you're running inside PowerShell.
 
 First let's setup the Hexagon SDK:
+
+```
 PS ...> cd C:\Qualcomm\Hexagon_SDK\6.4.0.0\
 PS C:\Qualcomm\Hexagon_SDK\6.4.0.0> .\setup_sdk_env.ps1
 PS C:\Qualcomm\Hexagon_SDK\6.4.0.0> cd c:\...\workspace\llama.cpp
+```
 
-Let's build llama.cpp with CPU, OpenCL, and Hexagon backends via CMake presets:
+Now build llama.cpp with CPU, OpenCL, and Hexagon backends via CMake presets:
 
 ```
 PS ...\workspace\llama.cpp> cp docs/backend/hexagon/CMakeUserPresets.json .
@@ -81,11 +84,12 @@ PS ...\workspace\llama.cpp> cmake --install .\build-snapdragon --prefix pkg-snap
 ## How to Sign Generated Artifacts
 
 Prior to running any of the llama.cpp tools, the generated artifacts have to be signed.
-Copy the assets from \\fringe\morpheus_sandiego_hetai\users\todorb\wos\* to the pkg install i.e. ...\workspace\llama.cpp\pkg-snapdragon\lib\ and then sing the artifacts:
+Copy the assets from _\\fringe\morpheus_sandiego_hetai\users\todorb\wos\*_ to the pkg install i.e. _...\workspace\llama.cpp\pkg-snapdragon\lib\_ and then sing the artifacts:
 
+```
 PS ...\workspace\llama.cpp> cd pkg-snapdragon\lib
 PS ...\workspace\llama.cpp> .\CreateCatalogAndSign.ps1 -catalogName "Test" -srcPath ".\" -certPath ".\"
-
+```
 
 ## Setup Environment
 
