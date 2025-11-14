@@ -24,6 +24,13 @@ typedef struct{
     uint3 S_fastdiv;
     uint3 OHOW_fastdiv;
     int64_t inc_next[3];
+    // unsigned int K;
+    unsigned int inChannelOffset;
+    unsigned int weightKOffset;
+    unsigned int PQ;
+    unsigned int KPQ;
+    unsigned int NKPQ;
+
 } param_t;
 
 
@@ -125,7 +132,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     const unsigned int curS,
     const unsigned int start_k,
     const unsigned int end_k,
-    const unsigned int src_stride,
+    // const unsigned int src_stride,
     param_t param
 ){
 #if __CUDA_ARCH__ >= GGML_CUDA_TURING
@@ -161,7 +168,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
         // apply swizzle to the dst index
-        const unsigned int src_index = thread_row * src_stride + ki;
+        const unsigned int src_index = thread_row * param.weightKOffset  + ki;
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
@@ -195,7 +202,6 @@ __device__ __forceinline__ unsigned int tileMemcpySwizzleA(
     const unsigned int thread_idx,
     const unsigned int start_k,
     const unsigned int end_k,
-    const unsigned int inChannelOffset,
     param_t param
 )
 {
@@ -300,7 +306,7 @@ __device__ __forceinline__ unsigned int tileMemcpyLoadA(
     const unsigned int start_k,
     const unsigned int end_k,
     unsigned int oldC,
-    const unsigned int inChannelOffset,
+    // const unsigned int inChannelOffset,
     param_t param
 ){
 #if __CUDA_ARCH__ >= GGML_CUDA_TURING
@@ -396,7 +402,7 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     const unsigned int block_k,
     const unsigned int start_k,
     const unsigned int end_k,
-    const unsigned int src_stride,
+    // const unsigned int src_stride,
     param_t param
 ){
 #if __CUDA_ARCH__ >= GGML_CUDA_TURING
@@ -426,7 +432,7 @@ __device__ __forceinline__ void tileMemcpyLoadB(
 
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
-        const unsigned int src_index = thread_row * src_stride + ki;
+        const unsigned int src_index = thread_row * param.weightKOffset + ki;
         if (thread_row + blockIdx.x * TILE_ROWS < param.k && curC < end_k){
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[src_index])[0];
         }else{ // read 4 halves
