@@ -82,7 +82,7 @@ class parse_cache {
 };
 
 struct parser_context {
-    std::string_view input;
+    std::string input;
     parse_cache memo;
     bool input_is_complete;
     parser_environment * env;
@@ -90,22 +90,22 @@ struct parser_context {
     parser_context()
         : memo(), input_is_complete(true), env(nullptr) {}
 
-    parser_context(std::string_view input)
+    parser_context(const std::string & input)
         : input(input), memo(), input_is_complete(true), env(nullptr) {}
 
-    parser_context(std::string_view input, bool complete)
+    parser_context(const std::string & input, bool complete)
         : input(input), memo(), input_is_complete(complete), env(nullptr) {}
 
-    parser_context(std::string_view input, parse_cache memo, bool complete = true)
+    parser_context(const std::string & input, parse_cache memo, bool complete = true)
         : input(input), memo(std::move(memo)), input_is_complete(complete), env(nullptr) {}
 
-    parser_context(std::string_view input, parser_environment * environment)
+    parser_context(const std::string & input, parser_environment * environment)
         : input(input), memo(), input_is_complete(true), env(environment) {}
 
-    parser_context(std::string_view input, parser_environment * environment, bool complete)
+    parser_context(const std::string & input, parser_environment * environment, bool complete)
         : input(input), memo(), input_is_complete(complete), env(environment) {}
 
-    parser_context(std::string_view input, parse_cache memo, parser_environment * environment, bool complete = true)
+    parser_context(const std::string & input, parse_cache memo, parser_environment * environment, bool complete = true)
         : input(input), memo(std::move(memo)), input_is_complete(complete), env(environment) {}
 };
 
