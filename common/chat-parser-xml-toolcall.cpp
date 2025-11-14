@@ -269,8 +269,8 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                 tool_rules.push_back(builder.add_rule(name + "-call", 
                         gbnf_format_literal(form.tool_start) + " " +
                         quoted_name + " " +
-                        gbnf_format_literal(form.tool_sep) + " " +
-                        next_arg
+                        gbnf_format_literal(form.tool_sep) +
+                        (arg_rules.empty() ? "" : " " + next_arg)
                 ));
             }
 
