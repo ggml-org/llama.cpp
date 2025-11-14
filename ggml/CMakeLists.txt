@@ -120,6 +120,7 @@ option(GGML_CCACHE "ggml: use ccache if available"                   ON)
 option(GGML_ALL_WARNINGS           "ggml: enable all compiler warnings"                   ON)
 option(GGML_ALL_WARNINGS_3RD_PARTY "ggml: enable all compiler warnings in 3rd party libs" OFF)
 option(GGML_GPROF                  "ggml: enable gprof"                                   OFF)
+option(GGML_GRAPH_PROFILER         "ggml: enable internal Graph and Op profiler"          OFF)
 
 # build
 option(GGML_FATAL_WARNINGS    "ggml: enable -Werror flag"    OFF)
