@@ -2111,9 +2111,6 @@ void llm_graph_context::build_sampling(const llama_model & model, const llm_grap
 
         if (ggml_data.sampled_token != nullptr) {
             res->t_sampled_tokens[seq_id] = ggml_data.sampled_token;
-
-            llama_sampler_accept_ggml(sampler, ctx0, gf, ggml_data.sampled_token);
-
             ggml_build_forward_expand(gf, ggml_data.sampled_token);
         }
 
@@ -2130,6 +2127,16 @@ void llm_graph_context::build_sampling(const llama_model & model, const llm_grap
         if (ggml_data.filtered_ids != nullptr) {
             res->t_sampled_token_ids[seq_id] = ggml_data.filtered_ids;
             ggml_build_forward_expand(gf, ggml_data.filtered_ids);
+        }
+    }
+
+    // Call llama_sampler_accept_ggml after all samplers have been applied.
+    for (const auto & [seq_id, sampler] : samplers) {
+        if (auto it = res->t_sampled_tokens.find(seq_id); it != res->t_sampled_tokens.end()) {
+            ggml_tensor * selected_token = it->second;
+            if (selected_token != nullptr) {
+                llama_sampler_accept_ggml(sampler, ctx0, gf, selected_token);
+            }
         }
     }
 
