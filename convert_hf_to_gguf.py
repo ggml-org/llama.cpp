@@ -7385,38 +7385,11 @@ class JinaCLIPVisionModel(MmprojModel):
             suffix = parts[-1]
             return [(f'v.blk.{layer}.attn_ln.{suffix}', data_torch)]
 
-        # fused qkv
-        if rest == 'attn.qkv.weight':
-            w = data_torch
-            wdim = w.shape[0]
-            if wdim % 3 != 0:
-                logger.warning('mmproj(jinaclip): unexpected qkv weight shape %s for %s', tuple(w.shape), name)
-            d = wdim // 3
-            q, k, v = w[0:d, :], w[d:2 * d, :], w[2 * d:, :]
-            return [
-                (f'v.blk.{layer}.attn_q.weight', q),
-                (f'v.blk.{layer}.attn_k.weight', k),
-                (f'v.blk.{layer}.attn_v.weight', v),
-            ]
-        if rest == 'attn.qkv.bias':
-            b = data_torch
-            bdim = b.shape[0]
-            if bdim % 3 != 0:
-                logger.warning('mmproj(jinaclip): unexpected qkv bias shape %s for %s', tuple(b.shape), name)
-            d = bdim // 3
-            qb, kb, vb = b[0:d], b[d:2 * d], b[2 * d:]
-            return [
-                (f'v.blk.{layer}.attn_q.bias', qb),
-                (f'v.blk.{layer}.attn_k.bias', kb),
-                (f'v.blk.{layer}.attn_v.bias', vb),
-            ]
-        # separate q/v bias (some checkpoints)
         if rest == 'attn.q_bias':
             return [(f'v.blk.{layer}.attn_q.bias', data_torch)]
         if rest == 'attn.v_bias':
             return [(f'v.blk.{layer}.attn_v.bias', data_torch)]
 
-        # separate projections
         if rest.startswith('attn.q_proj.'):
             suffix = parts[-1]
             return [(f'v.blk.{layer}.attn_q.{suffix}', data_torch)]

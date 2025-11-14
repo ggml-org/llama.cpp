@@ -183,7 +183,6 @@ static int run_mmproj_only(common_params & params) {
     if (params.mmproj.path.empty() || params.image.empty()) return -1;
     mtmd_context_params ctx_params = mtmd_context_params_default();
     ctx_params.use_gpu   = params.mmproj_use_gpu;
-    ctx_params.verbosity = (params.verbosity > 0) ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
     mtmd_mmproj_context * mctx = mtmd_mmproj_init(params.mmproj.path.c_str(), ctx_params);
     if (!mctx) {
         LOG_ERR("[ERROR] Failed to load vision mmproj: %s\n", params.mmproj.path.c_str());

@@ -246,7 +246,7 @@ MTMD_API int  mtmd_mmproj_get_image_size (struct mtmd_mmproj_context * ctx);
 MTMD_API int  mtmd_mmproj_get_patch_size (struct mtmd_mmproj_context * ctx);
 MTMD_API int  mtmd_mmproj_get_hidden_size(struct mtmd_mmproj_context * ctx);
 MTMD_API bool mtmd_mmproj_is_jinaclip    (struct mtmd_mmproj_context * ctx);
-// generic support check for projector-only encode path
+// generic support check for projector-only encode
 MTMD_API bool mtmd_mmproj_is_supported   (struct mtmd_mmproj_context * ctx);
 
 // encode a bitmap (RGB) to projector embeddings
