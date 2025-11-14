@@ -2831,8 +2831,16 @@ struct ggml_cplan ggml_graph_plan(
                         const int64_t ne11 = node->src[1]->ne[1]; // H
                         const int64_t ne12 = node->src[1]->ne[2]; // Channels In
 
-                        cur += sizeof(ggml_fp16_t)*ne00*ne01*ne02*ne03;
-                        cur += sizeof(ggml_fp16_t)*ne10*ne11*ne12;
+                        if (node->src[0]->type == GGML_TYPE_F16) {
+                            cur += sizeof(ggml_fp16_t)*ne00*ne01*ne02*ne03;
+                            cur += sizeof(ggml_fp16_t)*ne10*ne11*ne12;
+                        } else if (node->src[0]->type == GGML_TYPE_F32) {
+                            cur += sizeof(float)*ne00*ne01*ne02*ne03;
+                            cur += sizeof(float)*ne10*ne11*ne12;
+                        } else {
+                            GGML_ABORT("fatal error");
+                        }
+
                     } break;
                 case GGML_OP_FLASH_ATTN_EXT:
                     {
