@@ -811,7 +811,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   constexpr unsigned int TILE_COLS_VECTORIZED = BK / 8;
   constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
   constexpr unsigned int A_K_STRID = BM / ROW_STEP;
-  constexpr unsigned int B_K_STRID = BN / ROW_STEP;
+  // constexpr unsigned int B_K_STRID = BN / ROW_STEP;
 
   unsigned int masks_a[A_K_STRID][2];
   int64_t element_offset_a[A_K_STRID];
@@ -1263,9 +1263,9 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         // if (BlocksM * BlocksN < nsm && P.c >= 8 * ksplit && (P.c * P.r * P.s) % (8*ksplit) == 0) {
         if (BlocksM * BlocksN < 2*(unsigned int)nsm){
             int j, max_remaining_waves = -1, candidate = -1;
-            int ks = min(16, nsm / (BlocksM * BlocksN));
+            int ks = min(20, nsm / (BlocksM * BlocksN));
             if (ks < 2 && (BlocksM * BlocksN) % nsm < nsm*4/5)
-                ks = 16;
+                ks = 20;
             for (j = 2; j <= ks; j++){
                const int remainder = (BlocksM * BlocksN * j) % nsm;
               //  if ((P.c * P.r * P.s) % (8*j) == 0){
@@ -1328,7 +1328,20 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
               } else if (j == 16) {
                 launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 16,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
+              } else if (j == 17) {
+                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 17,
+                ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
+              } else if (j == 18) {
+                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 18,
+                ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
+              } else if (j == 19) {
+                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 19,
+                ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
+              } else if (j == 20) {
+                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 20,
+                ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               }
+
               return;
             }
         }
@@ -1395,7 +1408,7 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const uint B  = input->ne[3];   // n_batches
 
 
-    int64_t pp[3];
+    int64_t pp[3] = {0};
     //     const unsigned int K = param.c;
 //   const uint inChannelOffset = param.c * param.w;
 //   const uint weightKOffset = param.c * param.r * param.s;
