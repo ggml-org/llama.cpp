@@ -3193,6 +3193,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
     // flag used to determine whether it is an integrated_gpu
     const bool integrated = ggml_cuda_info().devices[cuda_ctx->device].integrated;
 
+    ggml_cuda_stream_context & stream_ctx = cuda_ctx->stream_context();
     bool                         is_concurrent_event_active = false;
     ggml_cuda_concurrent_event * concurrent_event           = nullptr;
 
@@ -3219,9 +3220,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         if (!use_cuda_graph || cuda_graph_update_required) {
             [[maybe_unused]] int prev_i = 0;
 
-            ggml_cuda_stream_context & stream_ctx = cuda_ctx->stream_context();
-
             if (stream_ctx.concurrent_events.size() > 0) {
+                //Restore the original graph to enable fusion within the streams
                 cgraph->nodes = const_cast<ggml_tensor **>(stream_ctx.original_graph.data());
             }
 
