@@ -13,273 +13,273 @@
 
 struct common_grammar_builder;
 
-struct parser_environment {
+struct common_chat_parse_semantics {
     common_chat_msg result;
 
     std::unordered_map<std::string, std::string> captures;
 };
 
-enum parser_result_type {
-    PARSER_RESULT_FAIL            = 1 << 0,
-    PARSER_RESULT_SUCCESS         = 1 << 1,
-    PARSER_RESULT_NEED_MORE_INPUT = 1 << 2,
+enum common_chat_parse_result_type {
+    COMMON_CHAT_PARSE_RESULT_FAIL            = 1 << 0,
+    COMMON_CHAT_PARSE_RESULT_SUCCESS         = 1 << 1,
+    COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT = 1 << 2,
 };
 
-struct parse_cache_key {
+struct common_chat_parse_cache_key {
     int id;
     size_t start;
 
-    bool operator==(const parse_cache_key & other) const {
+    bool operator==(const common_chat_parse_cache_key & other) const {
         return id == other.id && start == other.start;
     }
 };
 
 template <>
-struct std::hash<parse_cache_key> {
-    std::size_t operator()(const parse_cache_key & k) const {
+struct std::hash<common_chat_parse_cache_key> {
+    std::size_t operator()(const common_chat_parse_cache_key & k) const {
         return std::hash<size_t>{}(((size_t)k.id << 32) | k.start);
     }
 };
 
-struct parser_result {
-    parser_result_type type = PARSER_RESULT_FAIL;
+struct common_chat_parse_result {
+    common_chat_parse_result_type type = COMMON_CHAT_PARSE_RESULT_FAIL;
     size_t start = 0;
     size_t end = 0;
 
-    parser_result() : type(PARSER_RESULT_FAIL) {}
+    common_chat_parse_result() : type(COMMON_CHAT_PARSE_RESULT_FAIL) {}
 
-    parser_result(parser_result_type type, size_t start)
+    common_chat_parse_result(common_chat_parse_result_type type, size_t start)
         : type(type), start(start), end(start) {}
 
-    parser_result(parser_result_type type, size_t start, size_t end)
+    common_chat_parse_result(common_chat_parse_result_type type, size_t start, size_t end)
         : type(type), start(start), end(end) {}
 
-    bool is_fail() const { return type == PARSER_RESULT_FAIL; }
-    bool is_need_more_input() const { return type == PARSER_RESULT_NEED_MORE_INPUT; }
-    bool is_success() const { return type == PARSER_RESULT_SUCCESS; }
+    bool is_fail() const { return type == COMMON_CHAT_PARSE_RESULT_FAIL; }
+    bool is_need_more_input() const { return type == COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT; }
+    bool is_success() const { return type == COMMON_CHAT_PARSE_RESULT_SUCCESS; }
 };
 
-struct parser_action {
-    parser_result & result;
-    parser_environment & env;
+struct common_chat_parse_action {
+    common_chat_parse_result & result;
+    common_chat_parse_semantics & env;
     std::string_view match;
 };
 
-enum parse_event_type {
-    PARSER_EVENT_NODE_START,
-    PARSER_EVENT_NODE_END,
+enum common_chat_parse_event_type {
+    COMMON_CHAT_PARSE_EVENT_NODE_START,
+    COMMON_CHAT_PARSE_EVENT_NODE_END,
 };
 
-struct parse_event {
-    parse_event_type type;
+struct common_chat_parse_event {
+    common_chat_parse_event_type type;
     std::string rule;
     size_t start;
     size_t end;
     std::string_view text;
-    parser_result_type status;
+    common_chat_parse_result_type status;
     int depth;
 
-    bool starting() const { return type == PARSER_EVENT_NODE_START; }
-    bool ending() const { return type == PARSER_EVENT_NODE_END; }
+    bool starting() const { return type == COMMON_CHAT_PARSE_EVENT_NODE_START; }
+    bool ending() const { return type == COMMON_CHAT_PARSE_EVENT_NODE_END; }
 
-    bool success() const { return status == PARSER_RESULT_SUCCESS; }
-    bool partial() const { return status == PARSER_RESULT_NEED_MORE_INPUT; }
-    bool fail() const { return status == PARSER_RESULT_FAIL; }
+    bool success() const { return status == COMMON_CHAT_PARSE_RESULT_SUCCESS; }
+    bool partial() const { return status == COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT; }
+    bool fail() const { return status == COMMON_CHAT_PARSE_RESULT_FAIL; }
 };
 
-using parse_event_handler = std::function<void(const parse_event &, parser_environment &)>;
+using common_chat_parse_event_handler = std::function<void(const common_chat_parse_event &, common_chat_parse_semantics &)>;
 
-class parse_cache {
-    std::unordered_map<parse_cache_key, parser_result> results;
+class common_chat_parse_cache {
+    std::unordered_map<common_chat_parse_cache_key, common_chat_parse_result> results;
 
   public:
-    parser_result set(int id, size_t start, parser_result result);
-    std::optional<parser_result> get(int id, size_t start);
+    common_chat_parse_result set(int id, size_t start, common_chat_parse_result result);
+    std::optional<common_chat_parse_result> get(int id, size_t start);
     void clear();
 };
 
-struct parser_context {
+struct common_chat_parse_context {
     std::string input;
-    parse_cache memo;
+    common_chat_parse_cache cache;
     bool input_is_complete;
-    parser_environment * env;
-    parse_event_handler event_handler;
+    common_chat_parse_semantics * env;
+    common_chat_parse_event_handler event_handler;
     int current_depth;
 
-    parser_context()
-        : memo(), input_is_complete(true), env(nullptr), event_handler(nullptr), current_depth(0) {}
+    common_chat_parse_context()
+        : cache(), input_is_complete(true), env(nullptr), event_handler(nullptr), current_depth(0) {}
 
-    parser_context(const std::string & input)
-        : input(input), memo(), input_is_complete(true), env(nullptr), event_handler(nullptr), current_depth(0) {}
+    common_chat_parse_context(const std::string & input)
+        : input(input), cache(), input_is_complete(true), env(nullptr), event_handler(nullptr), current_depth(0) {}
 
-    parser_context(const std::string & input, bool complete)
-        : input(input), memo(), input_is_complete(complete), env(nullptr), event_handler(nullptr), current_depth(0) {}
+    common_chat_parse_context(const std::string & input, bool complete)
+        : input(input), cache(), input_is_complete(complete), env(nullptr), event_handler(nullptr), current_depth(0) {}
 
-    parser_context(const std::string & input, parse_cache memo, bool complete = true)
-        : input(input), memo(std::move(memo)), input_is_complete(complete), env(nullptr), event_handler(nullptr), current_depth(0) {}
+    common_chat_parse_context(const std::string & input, common_chat_parse_cache memo, bool complete = true)
+        : input(input), cache(std::move(memo)), input_is_complete(complete), env(nullptr), event_handler(nullptr), current_depth(0) {}
 
-    parser_context(const std::string & input, parser_environment * environment)
-        : input(input), memo(), input_is_complete(true), env(environment), event_handler(nullptr), current_depth(0) {}
+    common_chat_parse_context(const std::string & input, common_chat_parse_semantics * environment)
+        : input(input), cache(), input_is_complete(true), env(environment), event_handler(nullptr), current_depth(0) {}
 
-    parser_context(const std::string & input, parser_environment * environment, bool complete)
-        : input(input), memo(), input_is_complete(complete), env(environment), event_handler(nullptr), current_depth(0) {}
+    common_chat_parse_context(const std::string & input, common_chat_parse_semantics * environment, bool complete)
+        : input(input), cache(), input_is_complete(complete), env(environment), event_handler(nullptr), current_depth(0) {}
 
-    parser_context(const std::string & input, parse_cache memo, parser_environment * environment, bool complete = true)
-        : input(input), memo(std::move(memo)), input_is_complete(complete), env(environment), event_handler(nullptr), current_depth(0) {}
+    common_chat_parse_context(const std::string & input, common_chat_parse_cache memo, common_chat_parse_semantics * environment, bool complete = true)
+        : input(input), cache(std::move(memo)), input_is_complete(complete), env(environment), event_handler(nullptr), current_depth(0) {}
 
-    parser_context(const std::string & input, parser_environment * environment, parse_event_handler handler, bool complete = true)
-        : input(input), memo(), input_is_complete(complete), env(environment), event_handler(std::move(handler)), current_depth(0) {}
+    common_chat_parse_context(const std::string & input, common_chat_parse_semantics * environment, common_chat_parse_event_handler handler, bool complete = true)
+        : input(input), cache(), input_is_complete(complete), env(environment), event_handler(std::move(handler)), current_depth(0) {}
 };
 
-class parser_base;
+class common_chat_combinator_parser_base;
 
-class parser {
-    std::shared_ptr<parser_base> ptr_;
+class common_chat_combinator_parser {
+    std::shared_ptr<common_chat_combinator_parser_base> ptr_;
 
   public:
-    parser();
-    parser(std::shared_ptr<parser_base> parser);
-    parser(const parser & other) = default;
-    parser(const std::string & literal);
-    parser(const char * literal);
+    common_chat_combinator_parser();
+    common_chat_combinator_parser(std::shared_ptr<common_chat_combinator_parser_base> parser);
+    common_chat_combinator_parser(const common_chat_combinator_parser & other) = default;
+    common_chat_combinator_parser(const std::string & literal);
+    common_chat_combinator_parser(const char * literal);
 
-    parser & operator=(const parser & other) {
+    common_chat_combinator_parser & operator=(const common_chat_combinator_parser & other) {
         if (this != &other) {
             ptr_ = other.ptr_;
         }
         return *this;
     }
 
-    parser operator~() const;
-    parser operator+(const parser & other) const;
-    parser operator|(const parser & other) const;
-    parser operator<<(const parser & other) const;
+    common_chat_combinator_parser operator~() const;
+    common_chat_combinator_parser operator+(const common_chat_combinator_parser & other) const;
+    common_chat_combinator_parser operator|(const common_chat_combinator_parser & other) const;
+    common_chat_combinator_parser operator<<(const common_chat_combinator_parser & other) const;
 
-    parser_base & operator*() const;
-    parser_base * operator->() const;
+    common_chat_combinator_parser_base & operator*() const;
+    common_chat_combinator_parser_base * operator->() const;
 
-    std::shared_ptr<parser_base> ptr() const { return ptr_; }
+    std::shared_ptr<common_chat_combinator_parser_base> ptr() const { return ptr_; }
 
-    parser_result parse(parser_context & ctx, size_t start = 0) const;
+    common_chat_parse_result parse(common_chat_parse_context & ctx, size_t start = 0) const;
 
     std::string dump() const;
 
     void build_grammar(const common_grammar_builder & builder) const;
 };
 
-parser operator+(const char * lhs, const parser & rhs);
-parser operator|(const char * lhs, const parser & rhs);
-parser operator<<(const char * lhs, const parser & rhs);
+common_chat_combinator_parser operator+(const char * lhs, const common_chat_combinator_parser & rhs);
+common_chat_combinator_parser operator|(const char * lhs, const common_chat_combinator_parser & rhs);
+common_chat_combinator_parser operator<<(const char * lhs, const common_chat_combinator_parser & rhs);
 
-class parser_id_counter {
+class common_chat_combinator_parser_id_counter {
     int next_id_;
   public:
-    parser_id_counter(int start) : next_id_(start) {}
+    common_chat_combinator_parser_id_counter(int start) : next_id_(start) {}
     int next() { return next_id_++; }
 };
 
-class parser_builder {
-    std::shared_ptr<std::unordered_map<std::string, parser>> rules_;
-    std::shared_ptr<parser_id_counter> counter_;
+class common_chat_combinator_parser_builder {
+    std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules_;
+    std::shared_ptr<common_chat_combinator_parser_id_counter> counter_;
 
   public:
-    parser_builder();
-    parser_builder(std::shared_ptr<parser_id_counter> counter);
+    common_chat_combinator_parser_builder();
+    common_chat_combinator_parser_builder(std::shared_ptr<common_chat_combinator_parser_id_counter> counter);
 
     // Matches an exact literal string.
     //   S -> "hello"
-    parser literal(const std::string & literal);
+    common_chat_combinator_parser literal(const std::string & literal);
 
     // Matches a sequence of parsers in order, all must succeed.
     //   S -> A B C
-    parser sequence(std::initializer_list<parser> parsers);
+    common_chat_combinator_parser sequence(std::initializer_list<common_chat_combinator_parser> parsers);
 
     // Matches the first parser that succeeds from a list of alternatives.
     //   S -> A | B | C
-    parser choice(std::initializer_list<parser> parsers);
+    common_chat_combinator_parser choice(std::initializer_list<common_chat_combinator_parser> parsers);
 
     // Matches one or more repetitions of a parser.
     //   S -> A+
-    parser one_or_more(const parser & p);
+    common_chat_combinator_parser one_or_more(const common_chat_combinator_parser & p);
 
     // Matches zero or more repetitions of a parser, always succeeds.
     //   S -> A*
-    parser zero_or_more(const parser & p);
+    common_chat_combinator_parser zero_or_more(const common_chat_combinator_parser & p);
 
     // Matches zero or one occurrence of a parser, always succeeds.
     //   S -> A?
-    parser optional(const parser & p);
+    common_chat_combinator_parser optional(const common_chat_combinator_parser & p);
 
     // Negative lookahead: succeeds if child parser fails, consumes no input.
     //   S -> !A
-    parser peek(const parser & p);
+    common_chat_combinator_parser peek(const common_chat_combinator_parser & p);
 
     // Negative lookahead: succeeds if child parser fails, consumes no input.
     //   S -> !A
-    parser negate(const parser & p);
+    common_chat_combinator_parser negate(const common_chat_combinator_parser & p);
 
     // Matches any single character.
     //   S -> .
-    parser any();
+    common_chat_combinator_parser any();
 
     // Matches between min and max repetitions of characters from a character class.
     //   S -> [a-z]{m,n}
     //
     // Use -1 for max to represent unbounded repetition (equivalent to {m,})
-    parser chars(const std::string & classes, int min = 1, int max = -1);
+    common_chat_combinator_parser chars(const std::string & classes, int min = 1, int max = -1);
 
     // Matches a single character from a character class or range.
     //   S -> [a-z] or S -> [^0-9]
     //
     // Equivalent to chars(classes, 1, 1)
-    parser one(const std::string & classes);
+    common_chat_combinator_parser one(const std::string & classes);
 
     // References a named rule for recursive or reusable grammar definitions.
     //   expr -> term | expr "+" term
-    parser rule(const std::string & name);
+    common_chat_combinator_parser rule(const std::string & name);
 
     // Matches zero or more whitespace characters (space, tab, newline).
     //   S -> [ \t\n]*
-    parser space();
+    common_chat_combinator_parser space();
 
     // Matches all characters until a delimiter is found (delimiter not consumed).
     //   S -> (!delim .)*
-    parser until(const std::string & delimiter);
-    parser until_one_of(const std::vector<std::string> & delimiters);
+    common_chat_combinator_parser until(const std::string & delimiter);
+    common_chat_combinator_parser until_one_of(const std::vector<std::string> & delimiters);
 
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}
     // Use -1 for max to represent unbounded repetition (equivalent to {m,})
-    parser repeat(const parser & p, int min, int max);
+    common_chat_combinator_parser repeat(const common_chat_combinator_parser & p, int min, int max);
 
     // Matches exactly n repetitions of a parser.
     //   S -> A{n}
-    parser repeat(const parser & p, int n);
+    common_chat_combinator_parser repeat(const common_chat_combinator_parser & p, int n);
 
     // Creates a complete JSON parser supporting objects, arrays, strings, numbers, booleans, and null.
     //   value -> object | array | string | number | true | false | null
-    parser json();
+    common_chat_combinator_parser json();
 
     // Specialized single-pass JSON string parser with escape sequence handling
-    parser json_string();
+    common_chat_combinator_parser json_string();
 
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
-    parser schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema);
+    common_chat_combinator_parser schema(const common_chat_combinator_parser & p, const std::string & name, const nlohmann::ordered_json & schema);
 
     // Wraps a parser with a semantic action callback.
     // The callback is invoked on successful parse with the result, matched text, and environment.
     //   S -> A [action]
-    parser action(const parser & p, std::function<void(const parser_action &)> fn, int when = PARSER_RESULT_SUCCESS);
+    common_chat_combinator_parser action(const common_chat_combinator_parser & p, std::function<void(const common_chat_parse_action &)> fn, int when = COMMON_CHAT_PARSE_RESULT_SUCCESS);
 
     // Captures matched text to env.captures[key]
-    parser capture(const std::string & key, const parser & p);
+    common_chat_combinator_parser capture(const std::string & key, const common_chat_combinator_parser & p);
 
-    parser add_rule(const std::string & name, const parser & p);
+    common_chat_combinator_parser add_rule(const std::string & name, const common_chat_combinator_parser & p);
 
-    void assign_ids(parser & p);
+    void assign_ids(common_chat_combinator_parser & p);
 
-    std::shared_ptr<std::unordered_map<std::string, parser>> rules() const { return rules_; }
+    std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules() const { return rules_; }
 };
 
-parser build_parser(const std::function<parser(parser_builder&)> & fn);
+common_chat_combinator_parser build_combinator_parser(const std::function<common_chat_combinator_parser(common_chat_combinator_parser_builder&)> & fn);

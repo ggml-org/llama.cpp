@@ -33,150 +33,150 @@ static void assert_equals(const char * expected, const std::string & actual) {
 static void test_partial_parsing() {
     {
         // Test literal
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.literal("hello");
         });
 
-        parser_context ctx;
-        parser_result result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result result;
 
-        ctx = parser_context("hello");
+        ctx = common_chat_parse_context("hello");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
     }
     {
         // Test char class
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.one("a-z");
         });
 
-        parser_context ctx;
-        parser_result result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result result;
 
-        ctx = parser_context("a");
+        ctx = common_chat_parse_context("a");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context("A");
+        ctx = common_chat_parse_context("A");
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
 
-        parser = build_parser([](parser_builder& p) {
+        parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.one("a-z-");
         });
 
-        ctx = parser_context("f");
+        ctx = common_chat_parse_context("f");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context("-");
+        ctx = common_chat_parse_context("-");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context("A");
+        ctx = common_chat_parse_context("A");
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
     {
         // Test sequences and literals
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.literal("<think>") + p.literal("</think>");
         });
 
         // Partial matches
-        auto ctx = parser_context("<thi", false);
+        auto ctx = common_chat_parse_context("<thi", false);
         auto result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
-        ctx = parser_context("<think>", false);
+        ctx = common_chat_parse_context("<think>", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
-        ctx = parser_context("<think></", false);
+        ctx = common_chat_parse_context("<think></", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
         // Full match
-        ctx = parser_context("<think></think>", true);
+        ctx = common_chat_parse_context("<think></think>", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
         // No match, since it does not adhere to the grammar
-        ctx = parser_context("<think>I am parser", false);
+        ctx = common_chat_parse_context("<think>I am parser", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
     {
         // Test choices
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.literal("<think>") | p.literal("<reasoning>");
         });
 
         // Partial matches
-        auto ctx = parser_context("<thi", false);
+        auto ctx = common_chat_parse_context("<thi", false);
         auto result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
-        ctx = parser_context("<reas", false);
+        ctx = common_chat_parse_context("<reas", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
         // Full match
-        ctx = parser_context("<think>", true);
+        ctx = common_chat_parse_context("<think>", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context("<reasoning>", true);
+        ctx = common_chat_parse_context("<reasoning>", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
         // No match
-        ctx = parser_context("<thought>", true);
+        ctx = common_chat_parse_context("<thought>", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
     {
         // Test zero_or_more
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.zero_or_more(p.literal("ab"));
         });
 
         // Partial matches
-        auto ctx = parser_context("a", false);
+        auto ctx = common_chat_parse_context("a", false);
         auto result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
-        ctx = parser_context("aba", false);
+        ctx = common_chat_parse_context("aba", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
         // Full match
-        ctx = parser_context("ab", true);
+        ctx = common_chat_parse_context("ab", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
     }
     {
         // Test one_or_more
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.one_or_more(p.literal("ab"));
         });
 
         // Partial matches
-        auto ctx = parser_context("a", false);
+        auto ctx = common_chat_parse_context("a", false);
         auto result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
-        ctx = parser_context("aba", false);
+        ctx = common_chat_parse_context("aba", false);
         result = parser.parse(ctx);
         assert_equals(true, result.is_need_more_input());
 
         // Full match
-        ctx = parser_context("ab", true);
+        ctx = common_chat_parse_context("ab", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
         // No match
-        ctx = parser_context("cd", true);
+        ctx = common_chat_parse_context("cd", true);
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
@@ -185,59 +185,59 @@ static void test_partial_parsing() {
 static void test_one() {
     {
         // Test common escape sequences
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.one("[\\n\\t\\\\]");
         });
 
-        parser_context ctx;
-        parser_result result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result result;
 
-        ctx = parser_context("\n");
+        ctx = common_chat_parse_context("\n");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context("\t");
+        ctx = common_chat_parse_context("\t");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context("\\");
+        ctx = common_chat_parse_context("\\");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context(" ");
+        ctx = common_chat_parse_context(" ");
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
     {
         // Test escaped dash (literal dash, not a range)
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.one("[a\\-z]");
         });
 
-        parser_context ctx;
-        parser_result result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result result;
 
-        ctx = parser_context("a");
+        ctx = common_chat_parse_context("a");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context("-");
+        ctx = common_chat_parse_context("-");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
-        ctx = parser_context("z");
+        ctx = common_chat_parse_context("z");
         result = parser.parse(ctx);
         assert_equals(true, result.is_success());
 
         // Should NOT match 'b' since \- is a literal dash, not a range
-        ctx = parser_context("b");
+        ctx = common_chat_parse_context("b");
         result = parser.parse(ctx);
         assert_equals(true, result.is_fail());
     }
 }
 
 static void test_recursive_references() {
-    auto value_parser = build_parser([](parser_builder& p) {
+    auto value_parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
         p.add_rule("number", p.one_or_more(p.one("0-9")));
         p.add_rule("list", p.sequence({
             p.literal("["),
@@ -247,73 +247,73 @@ static void test_recursive_references() {
         return p.add_rule("value", p.rule("number") | p.rule("list"));
     });
 
-    parser_context ctx;
-    parser_result result;
+    common_chat_parse_context ctx;
+    common_chat_parse_result result;
 
     // Test simple number
-    ctx = parser_context("1", true);
+    ctx = common_chat_parse_context("1", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_success());
 
     // Test simple list
-    ctx = parser_context("[1]", true);
+    ctx = common_chat_parse_context("[1]", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_success());
 
     // Test nested list
-    ctx = parser_context("[[2]]", true);
+    ctx = common_chat_parse_context("[[2]]", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_success());
 
     // Test deeply nested list
-    ctx = parser_context("[[[3]]]", true);
+    ctx = common_chat_parse_context("[[[3]]]", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_success());
 
     // Test partial match
-    ctx = parser_context("[[", false);
+    ctx = common_chat_parse_context("[[", false);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_need_more_input());
 
     // Test no match
-    ctx = parser_context("[a]", true);
+    ctx = common_chat_parse_context("[a]", true);
     result = value_parser.parse(ctx);
     assert_equals(true, result.is_fail());
 }
 
 static void test_optional() {
     // Test optional with a match
-    auto parser = build_parser([](parser_builder& p) {
+    auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
         return p.literal("hello") + p.optional(p.literal(" world"));
     });
 
     // Full match with optional part present
-    auto ctx = parser_context("hello world");
+    auto ctx = common_chat_parse_context("hello world");
     auto result = parser.parse(ctx);
     assert_equals(true, result.is_success());
     assert_equals((size_t)11, result.end);
 
     // Full match with optional part absent
-    ctx = parser_context("hello", true);
+    ctx = common_chat_parse_context("hello", true);
     result = parser.parse(ctx);
     assert_equals(true, result.is_success());
     assert_equals((size_t)5, result.end);
 
     // Partial match - waiting for more input to determine if optional matches
-    ctx = parser_context("hello ", false);
+    ctx = common_chat_parse_context("hello ", false);
     result = parser.parse(ctx);
     assert_equals(true, result.is_need_more_input());
 }
 
 static void test_json_parser() {
-    auto json = build_parser([](parser_builder & p) {
+    auto json = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
         return p.json();
     });
 
     {
         // Test parsing a simple JSON object
         std::string input = R"({"name": "test", "value": 42, "flag": true})";
-        parser_context ctx(input);
+        common_chat_parse_context ctx(input);
 
         auto result = json.parse(ctx);
 
@@ -323,7 +323,7 @@ static void test_json_parser() {
     {
         // Test parsing a JSON array with mixed types
         std::string input = R"([1, "hello", true, null, 3.14])";
-        parser_context ctx(input);
+        common_chat_parse_context ctx(input);
 
         auto result = json.parse(ctx);
 
@@ -333,7 +333,7 @@ static void test_json_parser() {
     {
         // Test parsing nested JSON with objects and arrays
         std::string input = R"({"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], "count": 2, "metadata": {"version": "1.0", "tags": ["admin", "user"]}})";
-        parser_context ctx(input);
+        common_chat_parse_context ctx(input);
 
         auto result = json.parse(ctx);
 
@@ -343,7 +343,7 @@ static void test_json_parser() {
     {
         // Test partial parsing - incomplete object
         std::string input = R"({"name": "test", "value": )";
-        parser_context ctx(input, false);
+        common_chat_parse_context ctx(input, false);
 
         auto result = json.parse(ctx);
 
@@ -352,7 +352,7 @@ static void test_json_parser() {
     {
         // Test partial parsing - incomplete array
         std::string input = R"([1, 2, 3, )";
-        parser_context ctx(input, false);
+        common_chat_parse_context ctx(input, false);
 
         auto result = json.parse(ctx);
 
@@ -361,7 +361,7 @@ static void test_json_parser() {
     {
         // Test partial parsing - incomplete nested structure
         std::string input = R"({"data": {"nested": )";
-        parser_context ctx(input, false);
+        common_chat_parse_context ctx(input, false);
 
         auto result = json.parse(ctx);
 
@@ -372,15 +372,15 @@ static void test_json_parser() {
 static void test_actions() {
     {
         // Test simple action - append matched text to content
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             auto word = p.chars("[a-z]+");
-            return p.action(word, [](const parser_action & act) {
+            return p.action(word, [](const common_chat_parse_action & act) {
                 act.env.result.content += std::string(act.match);
             });
         });
 
-        parser_environment env;
-        parser_context ctx("hello", &env);
+        common_chat_parse_semantics env;
+        common_chat_parse_context ctx("hello", &env);
         auto result = parser.parse(ctx);
 
         assert_equals(true, result.is_success());
@@ -388,12 +388,12 @@ static void test_actions() {
     }
     {
         // Test multiple sequential actions - build a sentence
-        auto parser = build_parser([](parser_builder& p) {
-            auto greeting = p.action(p.literal("hello"), [](const parser_action & act) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
+            auto greeting = p.action(p.literal("hello"), [](const common_chat_parse_action & act) {
                 act.env.result.content += std::string(act.match) + " ";
             });
 
-            auto name = p.action(p.chars("[A-Z][a-z]+"), [](const parser_action & act) {
+            auto name = p.action(p.chars("[A-Z][a-z]+"), [](const common_chat_parse_action & act) {
                 act.env.result.content += std::string(act.match);
                 act.env.captures["name"] = std::string(act.match);
             });
@@ -401,8 +401,8 @@ static void test_actions() {
             return greeting + p.literal(" ") + name;
         });
 
-        parser_environment env;
-        parser_context ctx("hello Alice", &env);
+        common_chat_parse_semantics env;
+        common_chat_parse_context ctx("hello Alice", &env);
         auto result = parser.parse(ctx);
 
         assert_equals(true, result.is_success());
@@ -411,14 +411,14 @@ static void test_actions() {
     }
     {
         // Test actions don't run when parse fails
-        auto parser = build_parser([](parser_builder& p) {
-            return p.action(p.literal("success"), [](const parser_action & act) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
+            return p.action(p.literal("success"), [](const common_chat_parse_action & act) {
                 act.env.result.content = "action_ran";
             });
         });
 
-        parser_environment env;
-        parser_context ctx("failure", &env);
+        common_chat_parse_semantics env;
+        common_chat_parse_context ctx("failure", &env);
         auto result = parser.parse(ctx);
 
         assert_equals(true, result.is_fail());
@@ -426,32 +426,32 @@ static void test_actions() {
     }
     {
         // Test Actions work with partial parsing
-        auto parser = build_parser([](parser_builder& p) {
-            auto content = p.action(p.until("<end>"), [](const parser_action & act) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
+            auto content = p.action(p.until("<end>"), [](const common_chat_parse_action & act) {
                 act.env.result.content += std::string(act.match);
             });
             return "<start>" << content << "<end>";
         });
 
         {
-            parser_environment env;
-            parser_context ctx("<start>hello ", &env, false);
+            common_chat_parse_semantics env;
+            common_chat_parse_context ctx("<start>hello ", &env, false);
             auto result = parser.parse(ctx);
 
             assert_equals(true, result.is_need_more_input());
             assert_equals("hello ", env.result.content);
         }
         {
-            parser_environment env;
-            parser_context ctx("<start>hello world", &env, false);
+            common_chat_parse_semantics env;
+            common_chat_parse_context ctx("<start>hello world", &env, false);
             auto result = parser.parse(ctx);
 
             assert_equals(true, result.is_need_more_input());
             assert_equals("hello world", env.result.content);
         }
         {
-            parser_environment env;
-            parser_context ctx("<start>hello world<end>", &env, true);
+            common_chat_parse_semantics env;
+            common_chat_parse_context ctx("<start>hello world<end>", &env, true);
             auto result = parser.parse(ctx);
 
             assert_equals(true, result.is_success());
@@ -463,14 +463,14 @@ static void test_actions() {
 static void test_sax_events() {
     {
         // Test basic event firing
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.add_rule("greeting", p.literal("hello"));
         });
 
-        parser_environment env;
-        std::vector<parse_event> events;
+        common_chat_parse_semantics env;
+        std::vector<common_chat_parse_event> events;
 
-        parser_context ctx("hello", &env, [&](const parse_event& evt, parser_environment&) {
+        common_chat_parse_context ctx("hello", &env, [&](const common_chat_parse_event& evt, common_chat_parse_semantics&) {
             events.push_back(evt);
         });
 
@@ -478,17 +478,17 @@ static void test_sax_events() {
 
         assert_equals(true, result.is_success());
         assert_equals((size_t)2, events.size());
-        assert_equals(PARSER_EVENT_NODE_START, events[0].type);
+        assert_equals(COMMON_CHAT_PARSE_EVENT_NODE_START, events[0].type);
         assert_equals("greeting", events[0].rule);
         assert_equals((size_t)0, events[0].start);
         assert_equals(0, events[0].depth);
 
-        assert_equals(PARSER_EVENT_NODE_END, events[1].type);
+        assert_equals(COMMON_CHAT_PARSE_EVENT_NODE_END, events[1].type);
         assert_equals("greeting", events[1].rule);
         assert_equals((size_t)0, events[1].start);
         assert_equals((size_t)5, events[1].end);
         assert_equals("hello", std::string(events[1].text));
-        assert_equals(PARSER_RESULT_SUCCESS, events[1].status);
+        assert_equals(COMMON_CHAT_PARSE_RESULT_SUCCESS, events[1].status);
         assert_equals(0, events[1].depth);
     }
 }
@@ -496,7 +496,7 @@ static void test_sax_events() {
 static void test_gbnf_generation() {
     {
         // Test literal
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.literal("hello");
         });
 
@@ -509,7 +509,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test char class
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.one("[a-z]");
         });
 
@@ -521,7 +521,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test sequence
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.literal("hello") + p.literal(" ") + p.literal("world");
         });
 
@@ -533,7 +533,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test choice
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.literal("cat") | p.literal("dog");
         });
 
@@ -545,7 +545,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test one_or_more
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.one_or_more(p.one("[0-9]"));
         });
 
@@ -557,7 +557,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test zero_or_more
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.zero_or_more(p.one("[a-z]"));
         });
 
@@ -569,7 +569,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test optional
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.literal("hello") + p.optional(p.literal(" world"));
         });
 
@@ -581,7 +581,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test until
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.until("</tag>");
         });
 
@@ -594,7 +594,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test complex expression with parentheses
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.one_or_more(p.literal("a") | p.literal("b"));
         });
 
@@ -606,7 +606,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test rule references
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             auto digit = p.add_rule("digit", p.one("[0-9]"));
             return p.one_or_more(digit);
         });
@@ -621,7 +621,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test escaping in literals
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.literal("hello\nworld\t!");
         });
 
@@ -633,7 +633,7 @@ static void test_gbnf_generation() {
     }
     {
         // Test operator<< (whitespace insertion)
-        auto parser = build_parser([](parser_builder& p) {
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.literal("hello") << p.literal("world");
         });
 
@@ -684,7 +684,7 @@ static std::vector<std::string> simple_tokenize(const std::string & input) {
 }
 
 static void example_qwen3_coder() {
-    auto parser = build_parser([](parser_builder & p) {
+    auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
         auto thinking = p.add_rule("raw-reasoning",
             "<think>" << p.add_rule("reasoning-content", p.until("</think>")) << "</think>");
 
@@ -713,7 +713,7 @@ static void example_qwen3_coder() {
         return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
     });
 
-    auto handler = [&](const parse_event & ev, parser_environment & env) {
+    auto handler = [&](const common_chat_parse_event & ev, common_chat_parse_semantics & env) {
         if (ev.rule == "reasoning-content" && ev.ending()) {
             env.result.reasoning_content = ev.text;
         }
@@ -783,8 +783,8 @@ static void example_qwen3_coder() {
     for (auto it = tokens.begin(); it != tokens.end(); it++) {
         std::string in = std::accumulate(tokens.begin(), it, std::string());
 
-        parser_environment env;
-        parser_context ctx(in, &env, it == tokens.end() - 1);
+        common_chat_parse_semantics env;
+        common_chat_parse_context ctx(in, &env, it == tokens.end() - 1);
         ctx.event_handler = handler;
 
         auto parse_result = parser.parse(ctx);
@@ -825,8 +825,8 @@ static void example_qwen3_coder() {
     }
 }
 
-static parser create_command_r7b_parser() {
-    auto parser = build_parser([](parser_builder & p) {
+static common_chat_combinator_parser create_command_r7b_parser() {
+    auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
         auto thinking = p.add_rule("thinking",
             "<|START_THINKING|>" << p.add_rule("reasoning-content", p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
 
@@ -866,11 +866,11 @@ static parser create_command_r7b_parser() {
     return parser;
 }
 
-static void test_command_r7b_parser(const parser & p, const std::string & input, bool partial, bool print_results = false) {
-    parser_environment env;
-    parser_context ctx(input, &env, !partial);
+static void test_command_r7b_parser(const common_chat_combinator_parser & p, const std::string & input, bool partial, bool print_results = false) {
+    common_chat_parse_semantics env;
+    common_chat_parse_context ctx(input, &env, !partial);
 
-    ctx.event_handler = [&](const parse_event & ev, parser_environment & env) {
+    ctx.event_handler = [&](const common_chat_parse_event & ev, common_chat_parse_semantics & env) {
         if (ev.rule == "reasoning-content" && ev.ending()) {
             env.result.reasoning_content = ev.text;
         }
