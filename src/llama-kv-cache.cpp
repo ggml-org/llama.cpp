@@ -1315,7 +1315,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         static const bool SPARSEK_EN_STRIDE = [](){ if (const char* s=getenv("LLAMA_SPARSEK_ENABLE_STRIDE")) return atoi(s)!=0; return true; }();
 
 
-        if (!SPARSEK_ENABLE && (SPARSEK_EN_LOCAL || SPARSEK_EN_STRIDE)) {
+        if (!SPARSEK_ENABLE || (!SPARSEK_EN_LOCAL && !SPARSEK_EN_STRIDE)) {
             for (uint32_t s = 0; s < n_stream; ++s) {
                 for (uint32_t ii = 0; ii < n_tps; ++ii) {
                     const uint32_t i = s*n_tps + ii;
