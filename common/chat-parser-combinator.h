@@ -259,9 +259,15 @@ class common_chat_combinator_parser_builder {
     // Creates a complete JSON parser supporting objects, arrays, strings, numbers, booleans, and null.
     //   value -> object | array | string | number | true | false | null
     common_chat_combinator_parser json();
+    common_chat_combinator_parser json_object();
+    common_chat_combinator_parser json_string();
+    common_chat_combinator_parser json_array();
+    common_chat_combinator_parser json_number();
+    common_chat_combinator_parser json_bool();
+    common_chat_combinator_parser json_null();
 
     // Specialized single-pass JSON string parser with escape sequence handling
-    common_chat_combinator_parser json_string();
+    common_chat_combinator_parser json_string_unqouted();
 
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
@@ -281,7 +287,15 @@ class common_chat_combinator_parser_builder {
     //   S -> Trigger(A)
     common_chat_combinator_parser trigger(const common_chat_combinator_parser & p);
 
+    // Adds a named rule and returns a rule reference.
     common_chat_combinator_parser add_rule(const std::string & name, const common_chat_combinator_parser & p);
+
+    // Adds a named rule using a function. This handles recursive grammars by
+    // inserting a placeholder rule before invoking the builder, allowing the
+    // builder to reference the rule being defined. Use this when the rule
+    // definition needs to call back to itself (directly or indirectly).
+    //   add_rule("json", [&]() { return json_object() | json_array() | ... })
+    common_chat_combinator_parser add_rule(const std::string & name, const std::function<common_chat_combinator_parser()> & builder);
 
     void assign_ids(common_chat_combinator_parser & p);
 

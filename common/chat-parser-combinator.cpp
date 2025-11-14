@@ -1306,7 +1306,10 @@ class reachability_visitor : public parser_visitor {
     void visit(zero_or_more_parser & p) override { p.child()->accept(*this); }
     void visit(optional_parser & p) override { p.child()->accept(*this); }
     void visit(repetition_parser & p) override { p.child()->accept(*this); }
-    void visit(schema_parser & p) override { p.child()->accept(*this); }
+    void visit(schema_parser & p) override {
+        // Schema parsers are opaque - don't traverse their children
+        // The schema system will handle rule generation via builder_.add_schema()
+    }
     void visit(action_parser & p) override { p.child()->accept(*this); }
     void visit(trigger_parser & p) override { p.child()->accept(*this); }
 
@@ -1763,7 +1766,7 @@ common_chat_combinator_parser common_chat_combinator_parser_builder::one(const s
     return chars(classes, 1, 1);
 }
 
-common_chat_combinator_parser common_chat_combinator_parser_builder::json_string() {
+common_chat_combinator_parser common_chat_combinator_parser_builder::json_string_unqouted() {
     return common_chat_combinator_parser(std::make_shared<json_string_parser>(counter_->next()));
 }
 
@@ -1815,6 +1818,17 @@ common_chat_combinator_parser common_chat_combinator_parser_builder::add_rule(co
     return rule(name);
 }
 
+common_chat_combinator_parser common_chat_combinator_parser_builder::add_rule(const std::string & name, const std::function<common_chat_combinator_parser()> & builder) {
+    if (rules_->find(name) != rules_->end()) {
+        return rule(name);
+    }
+
+    (*rules_)[name] = literal(""); // Placeholder
+    auto parser = builder();
+    (*rules_)[name] = parser;
+    return rule(name);
+}
+
 void common_chat_combinator_parser_builder::assign_ids(common_chat_combinator_parser & p) {
     if (p.ptr()) {
         p.ptr()->assign_id(counter_);
@@ -1834,74 +1848,61 @@ common_chat_combinator_parser build_combinator_parser(const std::function<common
     return root;
 }
 
-static common_chat_combinator_parser json_parser(std::shared_ptr<common_chat_combinator_parser_counter> counter) {
-    common_chat_combinator_parser_builder builder(std::move(counter));
+common_chat_combinator_parser common_chat_combinator_parser_builder::json_number() {
+    return add_rule("json-number", [this]() {
+        auto digit1_9 = chars("[1-9]", 1, 1);
+        auto digits = chars("[0-9]");
+        auto int_part = literal("0") | (digit1_9 + chars("[0-9]", 0, -1));
+        auto frac = literal(".") + digits;
+        auto exp = (literal("e") | literal("E")) + optional(chars("[+\\-]", 1, 1)) + digits;
+        return optional(literal("-")) + int_part + optional(frac) + optional(exp);
+    });
+}
 
-    // Whitespace: space, tab, newline, carriage return
-    auto ws = builder.space();
+common_chat_combinator_parser common_chat_combinator_parser_builder::json_string() {
+    return add_rule("json-string", [this]() {
+        return literal("\"") + json_string_unqouted() + literal("\"");
+    });
+}
 
-    // Number components
-    auto digit1_9 = builder.chars("[1-9]", 1, 1);
-    auto digits = builder.chars("[0-9]");
+common_chat_combinator_parser common_chat_combinator_parser_builder::json_bool() {
+    return add_rule("json-bool", [this]() {
+        return literal("true") | literal("false");
+    });
+}
 
-    // Integer part: 0 or non-zero digit followed by more digits
-    auto int_part = builder.literal("0") | (digit1_9 + builder.chars("[0-9]", 0, -1));
+common_chat_combinator_parser common_chat_combinator_parser_builder::json_null() {
+    return add_rule("json-null", [this]() {
+        return literal("null");
+    });
+}
 
-    // Optional fractional part
-    auto frac = builder.literal(".") + digits;
+common_chat_combinator_parser common_chat_combinator_parser_builder::json_object() {
+    return add_rule("json-object", [this]() {
+        auto ws = space();
+        auto member = json_string() + ws + literal(":") + ws + json();
+        auto members = member + zero_or_more(ws + literal(",") + ws + member);
+        return (literal("{") + ws + literal("}")) |
+               (literal("{") + ws + members + ws + literal("}"));
+    });
+}
 
-    // Optional exponent part
-    auto exp = (builder.literal("e") | builder.literal("E")) + builder.optional(builder.chars("[+\\-]", 1, 1)) + digits;
-
-    // Complete number
-    auto number = builder.optional(builder.literal("-")) + int_part + builder.optional(frac) + builder.optional(exp);
-
-    builder.add_rule("json_number", number);
-
-    // String: specialized single-pass parser (content only, wrapped with quotes)
-    auto string = builder.literal("\"") + builder.json_string() + builder.literal("\"");
-
-    builder.add_rule("json_string", string);
-
-    // Literals
-    auto true_lit = builder.literal("true");
-    auto false_lit = builder.literal("false");
-    auto null_lit = builder.literal("null");
-
-    // Object: { "key": value, ... }
-    auto member = builder.rule("json_string") + ws + builder.literal(":") + ws + builder.rule("json_value");
-    auto members = member + builder.zero_or_more(ws + builder.literal(",") + ws + member);
-
-    // Empty object or object with members
-    auto object = (builder.literal("{") + ws + builder.literal("}")) |
-                  (builder.literal("{") + ws + members + ws + builder.literal("}"));
-
-    builder.add_rule("json_object", object);
-
-    // Array: [ value, ... ]
-    auto elements = builder.rule("json_value") + builder.zero_or_more(ws + builder.literal(",") + ws + builder.rule("json_value"));
-
-    // Empty array or array with elements
-    auto array = (builder.literal("[") + ws + builder.literal("]")) |
-                 (builder.literal("[") + ws + elements + ws + builder.literal("]"));
-
-    builder.add_rule("json_array", array);
-
-    // Value - uses forward references for recursive structures
-    auto root = builder.add_rule("json_value",
-        builder.rule("json_object") |
-        builder.rule("json_array") |
-        builder.rule("json_string") |
-        builder.rule("json_number") |
-        true_lit |
-        false_lit |
-        null_lit
-    );
-
-    // Wrap in root_parser to own the rules
-    return common_chat_combinator_parser(std::make_shared<root_parser>(root, builder.rules(), -1));
+common_chat_combinator_parser common_chat_combinator_parser_builder::json_array() {
+    return add_rule("json-array", [this]() {
+        auto ws = space();
+        auto elements = json() + zero_or_more(ws + literal(",") + ws + json());
+        return (literal("[") + ws + literal("]")) |
+               (literal("[") + ws + elements + ws + literal("]"));
+    });
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::json() {
-    return json_parser(counter_);
+    return add_rule("json-value", [this]() {
+        return json_object() |
+               json_array() |
+               json_string() |
+               json_number() |
+               json_bool() |
+               json_null();
+    });
 }
