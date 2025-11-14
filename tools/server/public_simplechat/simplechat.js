@@ -1347,6 +1347,19 @@ class MultiChatUI {
     }
 
     /**
+     * Remove the specified ChatMessage block in ui, without needing to show full chat session again.
+     * @param {number} uniqIdChatMsg
+     */
+    ui_chatmessage_delete(uniqIdChatMsg) {
+        let index = this.simpleChats[this.curChatId].delete(uniqIdChatMsg)
+        if (index >= 0) {
+            let el = document.querySelector(`[CMUniqId="${uniqIdChatMsg}"`)
+            console.log(el)
+            el?.remove()
+        }
+    }
+
+    /**
      * Setup the needed callbacks wrt UI, curChatId to defaultChatId and
      * optionally switch to specified defaultChatId.
      * @param {string} defaultChatId
@@ -1442,15 +1455,7 @@ class MultiChatUI {
 
         this.elPopoverChatMsgDelBtn.addEventListener('click', (ev) => {
             console.log(`DBUG:MCUI:ChatMsgPO:Del:${this.curChatId}:${this.uniqIdChatMsgPO}`)
-            let index = this.simpleChats[this.curChatId].delete(this.uniqIdChatMsgPO)
-            if (index >= 0) {
-                this.chat_show(this.curChatId)
-                let msg = this.simpleChats[this.curChatId].xchat[index]
-                if (msg) {
-                    let el = document.querySelector(`[CMUniqId="${msg.uniqId}"`)
-                    this.scroll_el_into_view(el)
-                }
-            }
+            this.ui_chatmessage_delete(this.uniqIdChatMsgPO)
         })
 
         this.elPopoverChatMsgCopyBtn.addEventListener('click', (ev) => {
