@@ -4,6 +4,7 @@
 #include "llama-vocab.h"
 #include "llama-grammar.h"
 
+#include <array>
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
