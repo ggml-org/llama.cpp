@@ -51,7 +51,7 @@ def get_from_web(url: str, tag: str, inContentType: str, inHeaders: dict[str, st
             statusMsg = response.msg or ""
             contentType = response.getheader('Content-Type') or inContentType
             print(f"DBUG:FM:GFW:Resp:{response.status}:{response.msg}")
-            debug.dump({ 'url': req.full_url, 'headers': req.headers, 'ctype': contentType }, { 'cdata': contentData })
+            debug.dump({ 'op': 'FileMagic.GetFromWeb', 'url': req.full_url, 'req.headers': req.headers, 'resp.headers': response.headers, 'ctype': contentType }, { 'cdata': contentData })
         return Response(True, statusCode, statusMsg, contentType, contentData)
     except Exception as exc:
         return Response(False, 502, f"WARN:{tag}:Failed:{exc}")

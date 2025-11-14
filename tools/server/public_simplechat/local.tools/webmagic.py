@@ -214,7 +214,7 @@ def handle_htmltext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
         ph.send_header('Access-Control-Allow-Origin', '*')
         ph.end_headers()
         ph.wfile.write(textHtml.get_stripped_text().encode('utf-8'))
-        debug.dump({ 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textHtml.text, 'StrippedText': textHtml.get_stripped_text() })
+        debug.dump({ 'op': 'WebMagic.HtmlText', 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textHtml.text, 'StrippedText': textHtml.get_stripped_text() })
     except Exception as exc:
         ph.send_error(502, f"WARN:HtmlText:Failed:{exc}")
 
