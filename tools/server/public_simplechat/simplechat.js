@@ -666,7 +666,7 @@ class SimpleChat {
      * Get xchat index corresponding to given chat message uniqId.
      * @param {number} uniqId
      */
-    get_chatmessage(uniqId) {
+    get_chatmessage_index(uniqId) {
         return this.xchat.findIndex((msg)=>{
             if (msg.uniqId == uniqId) {
                 return true
@@ -677,13 +677,15 @@ class SimpleChat {
 
     /**
      * Delete a chat message in place using chat message uniqId.
+     * Returns index of the chatmessage deleted wrt xchat.
      * @param {number} uniqId
      */
     delete(uniqId) {
-        let index = this.get_chatmessage(uniqId);
+        let index = this.get_chatmessage_index(uniqId);
         if (index >= 0) {
             this.xchat.splice(index, 1)
         }
+        return index
     }
 
     /**
@@ -1089,6 +1091,17 @@ class MultiChatUI {
     }
 
     /**
+     * Scroll the given element into view.
+     * @param {HTMLElement|null} el
+     */
+    scroll_el_into_view(el) {
+        if (!el) {
+            return
+        }
+        /** @type{HTMLElement} */(el).scrollIntoView(false); // Stupid ts-check js-doc intersection ???
+    }
+
+    /**
      * Reset/Setup Tool Call UI parts as needed
      * @param {ChatMessageEx} ar
      * @param {boolean} bAuto - allows caller to explicitly control whether auto triggering should be setup.
@@ -1223,6 +1236,7 @@ class MultiChatUI {
             console.log(`DBUG:MCUI:ChatMessageMLeave:${msg.uniqId}`)
         })
         elParent?.append(secMain)
+        secMain.setAttribute("CMUniqId", String(msg.uniqId))
         this.elLastChatMessage = secMain;
         // Create role para
         let entry = ui.el_create_append_p(`${msg.ns.role}`, secMain);
@@ -1321,7 +1335,7 @@ class MultiChatUI {
             this.show_message(this.elDivChat, x, iFromLast, nextMsg)
         }
         if (this.elLastChatMessage != null) {
-            /** @type{HTMLElement} */(this.elLastChatMessage).scrollIntoView(false); // Stupid ts-check js-doc intersection ???
+            this.scroll_el_into_view(this.elLastChatMessage)
         } else {
             if (bClear) {
                 this.elDivChat.innerHTML = usage_note(this.me.chatProps.iRecentUserMsgCnt-1);
@@ -1428,14 +1442,21 @@ class MultiChatUI {
 
         this.elPopoverChatMsgDelBtn.addEventListener('click', (ev) => {
             console.log(`DBUG:MCUI:ChatMsgPO:Del:${this.curChatId}:${this.uniqIdChatMsgPO}`)
-            this.simpleChats[this.curChatId].delete(this.uniqIdChatMsgPO)
-            this.chat_show(this.curChatId)
+            let index = this.simpleChats[this.curChatId].delete(this.uniqIdChatMsgPO)
+            if (index >= 0) {
+                this.chat_show(this.curChatId)
+                let msg = this.simpleChats[this.curChatId].xchat[index]
+                if (msg) {
+                    let el = document.querySelector(`[CMUniqId="${msg.uniqId}"`)
+                    this.scroll_el_into_view(el)
+                }
+            }
         })
 
         this.elPopoverChatMsgCopyBtn.addEventListener('click', (ev) => {
             console.log(`DBUG:MCUI:ChatMsgPO:Copy:${this.curChatId}:${this.uniqIdChatMsgPO}`)
             let chatSession = this.simpleChats[this.curChatId]
-            let index = chatSession.get_chatmessage(this.uniqIdChatMsgPO)
+            let index = chatSession.get_chatmessage_index(this.uniqIdChatMsgPO)
             let chat = chatSession.xchat[index]
             if (!chat.ns.has_content()) {
                 return
