@@ -219,6 +219,7 @@ class parser_builder {
     // Matches all characters until a delimiter is found (delimiter not consumed).
     //   S -> (!delim .)*
     parser until(const std::string & delimiter);
+    parser until_one_of(const std::vector<std::string> & delimiters);
 
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}

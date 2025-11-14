@@ -138,7 +138,13 @@ class aho_corasick_matcher {
       build_fail_links();
     }
 
-    size_t search(std::string_view sv, size_t start = 0) {
+    struct search_result {
+        size_t pos;
+        bool found;
+        bool is_partial;
+    };
+
+    search_result search(std::string_view sv, size_t start = 0) {
       size_t current = 0;
 
       for (auto i = start; i < sv.size(); ++i) {
@@ -160,14 +166,14 @@ class aho_corasick_matcher {
               for (const auto & len : trie[current].word_lengths) {
                   pos = std::min(pos, i - len + 1);
               }
-              return pos;
+              return search_result{pos, true, false};
           }
       }
 
       if (trie[current].depth > 0) {
-          return sv.size() - trie[current].depth;
+          return search_result{sv.size() - trie[current].depth, true, true};
       }
-      return sv.size();
+      return search_result{sv.size(), false, false};
     }
 
     struct prefix_and_next {
@@ -916,30 +922,32 @@ class json_string_parser : public parser_base {
 // Matches all characters until a delimiter is found (delimiter not consumed).
 //   S -> (!delim .)*
 class until_parser : public parser_base {
-    std::string delimiter_;
-
+    std::vector<std::string> delimiters_;
     aho_corasick_matcher matcher_;
 
   public:
     static constexpr parser_type type_value = PARSER_UNTIL;
 
+    until_parser(const std::vector<std::string> & delimiters, int id)
+        : parser_base(id), delimiters_(delimiters), matcher_(delimiters) {}
+
     until_parser(const std::string & delimiter, int id)
-        : parser_base(id), delimiter_(delimiter), matcher_({delimiter}) {
-    }
+        : until_parser(std::vector<std::string>{delimiter}, id) {}
 
     parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
-        return parser_result(PARSER_RESULT_SUCCESS, start, matcher_.search(ctx.input, start));
+        auto search_result = matcher_.search(ctx.input, start);
+        return parser_result(PARSER_RESULT_SUCCESS, start, search_result.pos);
     }
 
     std::string dump() const override {
-        return "Until(" + delimiter_ + ")";
+        return "Until(" + string_join(delimiters_, " | ") + ")";
     }
 
     void accept(parser_visitor & visitor) override;
 
-    const std::string & delimiter() const { return delimiter_; }
+    std::vector<std::string> delimiters() const { return delimiters_; }
 };
 
 // Wraps a parser with JSON schema metadata for grammar generation.
@@ -1257,7 +1265,7 @@ class gbnf_visitor : public parser_visitor {
 
     void visit(until_parser & p) override {
         // Generate pattern that matches prefixes but prevents full delimiter match
-        current_result_ = gbnf_excluding_pattern({p.delimiter()});
+        current_result_ = gbnf_excluding_pattern(p.delimiters());
     }
 
     void visit(not_parser &) override {
@@ -1505,6 +1513,10 @@ parser parser_builder::space() {
 
 parser parser_builder::until(const std::string & delimiter) {
     return parser(std::make_shared<until_parser>(delimiter, counter_->next()));
+}
+
+parser parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
+    return parser(std::make_shared<until_parser>(delimiters, counter_->next()));
 }
 
 parser parser_builder::repeat(const parser & p, int min, int max) {

@@ -793,66 +793,110 @@ static std::vector<std::string> simple_tokenize(const std::string & input) {
 
 static void example_qwen3_coder() {
     auto parser = build_parser([](parser_builder & p) {
+        // ===== Actions =====
+
+        auto start_arg = [&](const parser_action & act) {
+            if (act.env.tool_call_args != "{") {
+                act.env.tool_call_args += ",";
+            }
+            act.env.tool_call_args += "\"";
+        };
+
+        auto close_string_arg = [&](const parser_action & act) {
+            if (act.env.scratchpad.find("in-string-arg") != act.env.scratchpad.end()) {
+                act.env.tool_call_args += "\"";
+                act.env.scratchpad.erase("in-string-arg");
+            }
+        };
+
+        auto append_arg_name = [](const parser_action & act) {
+            act.env.tool_call_args += std::string(act.match);
+        };
+
+        auto append_arg_colon = [](const parser_action & act) {
+            act.env.tool_call_args += "\":";
+        };
+
+        auto open_function_args = [&](const parser_action & act) {
+            act.env.tool_call_args += "{";
+        };
+
+        auto close_function_args = [&](const parser_action & act) {
+            close_string_arg(act);
+            act.env.tool_call_args += "}";
+        };
+
+        auto open_string_arg = [&](const parser_action & act) {
+            act.env.tool_call_args += "\"";
+            act.env.scratchpad["in-string-arg"] = true;
+        };
+
+        auto append_string_content = [&](const parser_action & act) {
+            // TODO: add a JSON escape helper
+            act.env.tool_call_args += std::string(act.match);
+        };
+
+        auto append_json_arg = [&](const parser_action & act) {
+            // JSON should already be properly formatted
+            act.env.tool_call_args += std::string(act.match);
+
+            // This can be streamed by passing p.success(json), but we have
+            // to be mindful of the potential backtracking--it only works
+            // if we only keep the last value...
+        };
+
+        // ===== Grammar Rules =====
+
         auto thinking = p.add_rule("thinking",
             "<think>" << p.append_reasoning(p.until("</think>")) << "</think>");
 
         auto content = p.add_rule("content", p.append_content(p.until("<tool_call>")));
 
         auto arg_start = p.add_rule("arg-start",
-            p.action("<parameter=", [](const parser_action & act) {
-                if (act.env.tool_call_args != "{") {
-                    act.env.tool_call_args += ",";
-                }
-                act.env.tool_call_args += "\"";
-            })
-            + p.action(p.chars("[a-zA-Z0-9_]"), [](const parser_action & act) {
-                act.env.tool_call_args += std::string(act.match);
-            })
-            + p.action(">", [](const parser_action & act) {
-                act.env.tool_call_args += "\":";
+            p.action("<parameter=", [&](const parser_action & act) {
+                close_string_arg(act);
+                start_arg(act);
             }));
 
-        auto arg_end = p.add_rule("arg-end", "</parameter>");
+        auto arg_name = p.add_rule("arg-name",
+            p.action(p.chars("[a-zA-Z0-9_]"), append_arg_name)
+            + p.action(">", append_arg_colon));
+
+        auto arg_end = p.add_rule("arg-end",
+                "</parameter>" + p.choice({
+                    arg_start,
+                    p.action("</function>", close_function_args)
+                }));
+
+        // Consume string argument until either another parameter or the
+        // function closing tag follows.
+        auto string_arg_content = p.add_rule("arg-string-content",
+            p.until_one_of({
+                "</parameter><parameter=",
+                "</parameter></function>"
+            }));
 
         auto string_arg = p.add_rule("arg-string",
-            p.action(arg_start, [&](const parser_action & act) {
-                act.env.tool_call_args += "\"";
-            })
-            << p.action(p.until("</parameter>"), [&](const parser_action & act) {
-                // TODO: add a JSON escape helper
-                act.env.tool_call_args += std::string(act.match);
-            })
-            << p.action(arg_end, [&](const parser_action & act) {
-                act.env.tool_call_args += "\"";
-            }));
+            p.action(arg_name, open_string_arg)
+            << p.action(string_arg_content, append_string_content)
+            << arg_end);
 
         auto json = p.json();
 
         auto json_arg = p.add_rule("arg-json",
-            arg_start
-            << p.action(json, [&](const parser_action & act) {
-                // JSON should already be properly formatted
-                act.env.tool_call_args += std::string(act.match);
-
-                // This can be streamed by passing p.success(json), but we have
-                // to be mindful of the potential backtracking--it only works
-                // if we only keep the last value...
-            })
+            arg_name
+            << p.action(json, append_json_arg)
             << arg_end);
 
         auto function = p.add_rule("function", p.add_tool_call(
                 "<function="
                 + p.capture_tool_call_name(p.chars("[a-zA-Z0-9_]"))
-                + p.action(">", [&](const parser_action & act) {
-                    act.env.tool_call_args += "{";
-                })
-                + p.one_or_more(p.space() + (json_arg | string_arg))
-                << p.action("</function>", [&](const parser_action & act) {
-                    act.env.tool_call_args += "}";
-                })));
+                + p.action(">", open_function_args)
+                + arg_start
+                + p.one_or_more(json_arg | string_arg)));
 
         auto tool_call = p.add_rule("tool-call",
-            "<tool_call>" << p.one_or_more(function) << "</tool_call>");
+            "<tool_call>" + p.one_or_more(function) + "</tool_call>");
 
 
         return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
@@ -864,18 +908,19 @@ static void example_qwen3_coder() {
         "and check access time within the last 30 days. I'll need to use the search_files function.</think>"
         "Based on your requirements, I'll search for log files over 100MB that haven't been "
         "accessed in the last month. This will help identify candidates for cleanup or archival.\n\n"
-        "<tool_call>\n"
-        "<function=search_files>\n"
-        "<parameter=path>/var/log</parameter>\n"
-        "<parameter=pattern>*.log</parameter>\n"
-        "<parameter=min_size_mb>100</parameter>\n"
-        "<parameter=max_depth>5</parameter>\n"
-        "<parameter=include_hidden>false</parameter>\n"
-        "<parameter=modified_days_ago>30</parameter>\n"
-        "<parameter=case_sensitive>true</parameter>\n"
-        "<parameter=sort_by>size</parameter>\n"
-        "<parameter=filters>{\"exclude_patterns\": [\"*temp*\", \"*cache*\"], \"file_types\": [\"regular\"]}</parameter>\n"
-        "</function>\n"
+        "<tool_call>"
+        "<function=search_files>"
+        "<parameter=path>/var/log</parameter>"
+        "<parameter=pattern>*.log</parameter>"
+        "<parameter=pattern2>searching for </parameter> blah</parameter>"
+        "<parameter=min_size_mb>100</parameter>"
+        "<parameter=max_depth>5</parameter>"
+        "<parameter=include_hidden>false</parameter>"
+        "<parameter=modified_days_ago>30</parameter>"
+        "<parameter=case_sensitive>true</parameter>"
+        "<parameter=sort_by>size</parameter>"
+        "<parameter=filters>{\"exclude_patterns\": [\"*temp*\", \"*cache*\"], \"file_types\": [\"regular\"]}</parameter>"
+        "</function>"
         "</tool_call>";
 
     std::vector<std::string> tokens = simple_tokenize(input);
@@ -889,12 +934,11 @@ static void example_qwen3_coder() {
         parser_context ctx(in, &env, it == tokens.end() - 1);
 
         auto result = parser.parse(ctx);
-        if (result.is_fail()) {
-            break;
-        }
+        assert_equals(false, result.is_fail());
 
+        std::cout << "=================================\n";
+        std::cout << in << "\n\n";
         /*
-        std::cout << "Input:\n" << in << "\n\n";
         std::cout << "Reasoning: " << prev.reasoning_content << "\n";
         std::cout << "Content  : " << prev.content << "\n";
         if (!prev.tool_calls.empty()) {
@@ -911,20 +955,17 @@ static void example_qwen3_coder() {
         auto diffs = common_chat_msg_diff::compute_diffs(prev, env.result);
         prev = env.result;
 
-        /*
         std::cout << "----\n";
         std::cout << "Reasoning: " << prev.reasoning_content << "\n";
         std::cout << "Content  : " << prev.content << "\n";
         if (!prev.tool_calls.empty()) {
-            std::cout << "\n=== Tool Calls ===\n";
+            std::cout << "\n-- tool calls --\n";
             for (const auto & tc : prev.tool_calls) {
-                std::cout << "ID  : " << tc.id << "\n";
-                std::cout << "Name: " << tc.name << "\n";
-                std::cout << "Args: " << tc.arguments << "\n";
+                std::cout << "  ID  : " << tc.id << "\n";
+                std::cout << "  Name: " << tc.name << "\n";
+                std::cout << "  Args: " << tc.arguments << "\n\n";
             }
         }
-        std::cout << "======================\n";
-        */
 
         /*
         std::cout << "=== Diffs ===\n\n";
@@ -1171,6 +1212,7 @@ int main() {
     std::cout << "All tests passed!\n";
 
     example_qwen3_coder();
+    return 0;
 
     std::cout << "\n== Benchmarks ==\n";
     std::string example_reasoning =
