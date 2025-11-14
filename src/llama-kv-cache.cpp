@@ -1307,44 +1307,63 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     }
 
     {
-        // --- SparseK env (read once per process) ---
-        static const bool SPARSEK_ENABLE    = [](){ if (const char* s=getenv("LLAMA_SPARSEK_ENABLE")) return atoi(s)!=0; return false; }();
-        static const int  SPARSEK_WIN_LOCAL = [](){ if (const char* s=getenv("LLAMA_SPARSEK_WIN"))    return std::max(0, atoi(s)); return 64; }();
-        static const int  SPARSEK_STRIDE    = [](){ if (const char* s=getenv("LLAMA_SPARSEK_STRIDE")) return std::max(0, atoi(s)); return 128; }();
-        static const bool SPARSEK_EN_LOCAL  = [](){ if (const char* s=getenv("LLAMA_SPARSEK_ENABLE_LOCAL"))  return atoi(s)!=0; return true; }();
-        static const bool SPARSEK_EN_STRIDE = [](){ if (const char* s=getenv("LLAMA_SPARSEK_ENABLE_STRIDE")) return atoi(s)!=0; return true; }();
+    // --- SparseK env (read once per process) ---
+    static const bool SPARSEK_ENABLE    = [](){
+        if (const char * s = getenv("LLAMA_SPARSEK_ENABLE")) return atoi(s) != 0;
+        return false;
+    }();
+    static const int  SPARSEK_WIN_LOCAL = [](){
+        if (const char * s = getenv("LLAMA_SPARSEK_WIN")) return std::max(0, atoi(s));
+        return 64;
+    }();
+    static const int  SPARSEK_STRIDE    = [](){
+        if (const char * s = getenv("LLAMA_SPARSEK_STRIDE")) return std::max(0, atoi(s));
+        return 128;
+    }();
+    static const bool SPARSEK_EN_LOCAL  = [](){
+        if (const char * s = getenv("LLAMA_SPARSEK_ENABLE_LOCAL")) return atoi(s) != 0;
+        return true;
+    }();
+    static const bool SPARSEK_EN_STRIDE = [](){
+        if (const char * s = getenv("LLAMA_SPARSEK_ENABLE_STRIDE")) return atoi(s) != 0;
+        return true;
+    }();
 
+    if (!SPARSEK_ENABLE || (!SPARSEK_EN_LOCAL && !SPARSEK_EN_STRIDE)) {
+        // do nothing – keep original KQ mask
+    } else {
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            for (uint32_t ii = 0; ii < n_tps; ++ii) {
+                const uint32_t i = s*n_tps + ii;
+                const uint64_t idst =
+                    n_kv*(/*h=*/0*n_stream*n_tps_pad + s*n_tps_pad + ii);
+                float * row = data + idst;
+                std::vector<uint8_t> allow(n_kv, 0);
 
-        if (!SPARSEK_ENABLE || (!SPARSEK_EN_LOCAL && !SPARSEK_EN_STRIDE)) {
-            for (uint32_t s = 0; s < n_stream; ++s) {
-                for (uint32_t ii = 0; ii < n_tps; ++ii) {
-                    const uint32_t i = s*n_tps + ii;
-                    const uint64_t idst = n_kv*(/*h=*/0*n_stream*n_tps_pad + s*n_tps_pad + ii);
-                    float * row = data + idst;
+                if (SPARSEK_EN_LOCAL && SPARSEK_WIN_LOCAL > 0) {
+                    const int j0 = std::max<int>(0, int(i) - SPARSEK_WIN_LOCAL);
+                    const int j1 = std::min<int>(int(n_kv) - 1, int(i) + SPARSEK_WIN_LOCAL);
+                    for (int j = j0; j <= j1; ++j) allow[j] = 1;
+                }
 
-                    std::vector<uint8_t> allow(n_kv, 0);
-
-                    if (SPARSEK_EN_LOCAL && SPARSEK_WIN_LOCAL > 0) {
-                        const int j0 = std::max<int>(0, int(i) - SPARSEK_WIN_LOCAL);
-                        const int j1 = std::min<int>(int(n_kv)-1, int(i) + SPARSEK_WIN_LOCAL);
-                        for (int j = j0; j <= j1; ++j) allow[j] = 1;
+                if (SPARSEK_EN_STRIDE && SPARSEK_STRIDE > 0) {
+                    for (int j = int(i); j >= 0; j -= SPARSEK_STRIDE) allow[j] = 1;
+                    if (!causal_attn) {
+                        for (int j = int(i); j < int(n_kv); j += SPARSEK_STRIDE) allow[j] = 1;
                     }
+                }
 
-                   if (SPARSEK_EN_STRIDE && SPARSEK_STRIDE > 0) {
-                        for (int j = int(i); j >= 0; j -= SPARSEK_STRIDE) allow[j] = 1;
-                        if (!causal_attn) {
-                            for (int j = int(i); j < int(n_kv); j += SPARSEK_STRIDE) allow[j] = 1;
-                        }
-                    }
-
-                    for (int64_t j = 0; j < n_kv; ++j) {
-                        if (!allow[j]) row[j] = -INFINITY;
-                        else if (std::isinf(row[j]) && row[j] < 0.0f) row[j] = 0.0f;
+                for (int64_t j = 0; j < n_kv; ++j) {
+                    if (!allow[j]) {
+                        row[j] = -INFINITY;
+                    } else if (std::isinf(row[j]) && row[j] < 0.0f) {
+                        row[j] = 0.0f;
                     }
                 }
             }
         }
     }
+}
 // ===== end SparseK =====
 
 }
