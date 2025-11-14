@@ -1,0 +1,99 @@
+#include "tests.h"
+
+class test_json_parser : public compound_test {
+public:
+    test_json_parser() : compound_test("test_json_parser") {
+        // Test parsing a simple JSON object
+        add_test([](test_harness h) {
+            auto json = build_parser([](parser_builder & p) {
+                return p.json();
+            });
+
+            std::string input = R"({"name": "test", "value": 42, "flag": true})";
+            parser_context ctx(input);
+
+            auto result = json.parse(ctx);
+
+            h.assert_equals("result_is_success", true, result.is_success());
+            h.assert_equals("result_end", input.size(), result.end);
+        }, "simple JSON object parsing");
+        
+        // Test parsing a JSON array with mixed types
+        add_test([](test_harness h) {
+            auto json = build_parser([](parser_builder & p) {
+                return p.json();
+            });
+
+            std::string input = R"([1, "hello", true, null, 3.14])";
+            parser_context ctx(input);
+
+            auto result = json.parse(ctx);
+
+            h.assert_equals("result_is_success", true, result.is_success());
+            h.assert_equals("result_end", input.size(), result.end);
+        }, "JSON array with mixed types");
+        
+        // Test parsing nested JSON with objects and arrays
+        add_test([](test_harness h) {
+            auto json = build_parser([](parser_builder & p) {
+                return p.json();
+            });
+
+            std::string input = R"({"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], "count": 2, "metadata": {"version": "1.0", "tags": ["admin", "user"]}})";
+            parser_context ctx(input);
+
+            auto result = json.parse(ctx);
+
+            h.assert_equals("result_is_success", true, result.is_success());
+            h.assert_equals("result_end", input.size(), result.end);
+        }, "nested JSON with objects and arrays");
+        
+        // Test partial parsing - incomplete object
+        add_test([](test_harness h) {
+            auto json = build_parser([](parser_builder & p) {
+                return p.json();
+            });
+
+            std::string input = R"({"name": "test", "value": )";
+            parser_context ctx(input, false);
+
+            auto result = json.parse(ctx);
+
+            h.assert_equals("result_is_need_more_input", true, result.is_need_more_input());
+        }, "partial parsing - incomplete object");
+        
+        // Test partial parsing - incomplete array
+        add_test([](test_harness h) {
+            auto json = build_parser([](parser_builder & p) {
+                return p.json();
+            });
+
+            std::string input = R"([1, 2, 3, )";
+            parser_context ctx(input, false);
+
+            auto result = json.parse(ctx);
+
+            h.assert_equals("result_is_need_more_input", true, result.is_need_more_input());
+        }, "partial parsing - incomplete array");
+        
+        // Test partial parsing - incomplete nested structure
+        add_test([](test_harness h) {
+            auto json = build_parser([](parser_builder & p) {
+                return p.json();
+            });
+
+            std::string input = R"({"data": {"nested": )";
+            parser_context ctx(input, false);
+
+            auto result = json.parse(ctx);
+
+            h.assert_equals("result_is_need_more_input", true, result.is_need_more_input());
+        }, "partial parsing - incomplete nested structure");
+    }
+
+    // Provide a convenient way to run all tests
+    void run_all_tests() {
+        run_all();
+        summary();
+    }
+};

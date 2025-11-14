@@ -181,6 +181,18 @@ endif()
 
 llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-parser-combinator.cpp)
+
+# Combinator tests (modular)
+file(GLOB_RECURSE COMBINATOR_TEST_SOURCES
+    combinator/*.cpp
+    combinator/*.hpp
+)
+add_executable(test-combinator ${COMBINATOR_TEST_SOURCES})
+target_link_libraries(test-combinator PRIVATE common)
+install(TARGETS test-combinator RUNTIME)
+add_test(NAME test-combinator COMMAND test-combinator)
+set_property(TEST test-combinator PROPERTY LABELS main)
+
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
