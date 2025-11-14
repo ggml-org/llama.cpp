@@ -7,6 +7,10 @@ if (MINGW)
     add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
 endif()
 
+if (NOT LLAMA_HTTPLIB)
+    message(FATAL_ERROR "LLAMA_HTTPLIB is OFF, cannot build llama-server. Hint: to skip building server, set -DLLAMA_BUILD_SERVER=OFF")
+endif()
+
 set(TARGET_SRCS
     server.cpp
     utils.hpp
