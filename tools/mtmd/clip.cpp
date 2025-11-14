@@ -2372,15 +2372,15 @@ private:
     }
 
     ggml_tensor * build_ffn(
-                            ggml_tensor * cur,
-                            ggml_tensor * up,
-                            ggml_tensor * up_b,
-                            ggml_tensor * gate,
-                            ggml_tensor * gate_b,
-                            ggml_tensor * down,
-                            ggml_tensor * down_b,
-                            ffn_op_type type_op,
-                            int il) const {
+            ggml_tensor * cur,
+            ggml_tensor * up,
+            ggml_tensor * up_b,
+            ggml_tensor * gate,
+            ggml_tensor * gate_b,
+            ggml_tensor * down,
+            ggml_tensor * down_b,
+            ffn_op_type type_op,
+            int il) const {
 
         ggml_tensor * tmp = up ? ggml_mul_mat(ctx0, up, cur) : cur;
         cb(tmp, "ffn_up", il);
@@ -2467,14 +2467,14 @@ private:
     }
 
     ggml_tensor * build_attn(
-                            ggml_tensor * wo,
-                             ggml_tensor * wo_b,
-                             ggml_tensor * q_cur,
-                             ggml_tensor * k_cur,
-                             ggml_tensor * v_cur,
-                             ggml_tensor * kq_mask,
-                             float kq_scale,
-                             int il) const {
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * q_cur,
+            ggml_tensor * k_cur,
+            ggml_tensor * v_cur,
+            ggml_tensor * kq_mask,
+            float kq_scale,
+            int il) const {
         // these nodes are added to the graph together so that they are not reordered
         // by doing so, the number of splits in the graph is reduced
         ggml_build_forward_expand(gf, q_cur);
