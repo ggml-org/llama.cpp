@@ -28,6 +28,7 @@ enum parser_type {
     ROOT,
     JSON_STRING,
     ACTION,
+    TRIGGER,
 };
 
 class parser_visitor;
@@ -1179,6 +1180,38 @@ class action_parser : public common_chat_combinator_parser_base {
     const common_chat_combinator_parser & child() const { return parser_; }
 };
 
+// Annotate nodes for use when generating lazy GBNF grammar rules. When built
+// with lazy = true, only grammar rules reachable from trigger nodes are
+// emitted.
+class trigger_parser : public common_chat_combinator_parser_base {
+    common_chat_combinator_parser parser_;
+
+  public:
+    static constexpr parser_type type_value = TRIGGER;
+
+    trigger_parser(const common_chat_combinator_parser & parser, int id)
+        : common_chat_combinator_parser_base(id), parser_(parser) {}
+
+    parser_type type() const override { return type_value; }
+
+    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
+        return parser_->parse(ctx, start);
+    }
+
+    void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) override {
+        common_chat_combinator_parser_base::assign_id(counter);
+        parser_->assign_id(counter);
+    }
+
+    std::string dump() const override {
+        return "Trigger(" + parser_->dump() + ")";
+    }
+
+    void accept(parser_visitor & visitor) override;
+
+    const common_chat_combinator_parser & child() const { return parser_; }
+};
+
 // Base visitor class for parser tree traversal
 class parser_visitor {
   public:
@@ -1202,6 +1235,7 @@ class parser_visitor {
     virtual void visit(rule_parser & p) = 0;
     virtual void visit(root_parser & p) = 0;
     virtual void visit(action_parser & p) = 0;
+    virtual void visit(trigger_parser & p) = 0;
 };
 
 // Escape special characters for GBNF literals
@@ -1430,6 +1464,10 @@ class gbnf_visitor : public parser_visitor {
         // Actions are transparent for grammar generation - just visit child
         p.child()->accept(*this);
     }
+
+    void visit(trigger_parser & p) override {
+        p.child()->accept(*this);
+    }
 };
 
 // Implement accept() methods for all parser classes
@@ -1451,6 +1489,7 @@ void schema_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void rule_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void root_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void action_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void trigger_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 
 common_chat_parse_result common_chat_parse_cache::set(int id, size_t start, common_chat_parse_result result) {
     if (id == -1) {
@@ -1624,6 +1663,10 @@ common_chat_combinator_parser common_chat_combinator_parser_builder::capture(con
         std::string value = std::string(act.match);
         act.env.captures[key] = std::move(value);
     }, COMMON_CHAT_PARSE_RESULT_SUCCESS);
+}
+
+common_chat_combinator_parser common_chat_combinator_parser_builder::trigger(const common_chat_combinator_parser & p) {
+    return common_chat_combinator_parser(std::make_shared<trigger_parser>(p, counter_->next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::add_rule(const std::string & name, const common_chat_combinator_parser & p) {

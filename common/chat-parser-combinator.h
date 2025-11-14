@@ -275,6 +275,12 @@ class common_chat_combinator_parser_builder {
     // Captures matched text to env.captures[key]
     common_chat_combinator_parser capture(const std::string & key, const common_chat_combinator_parser & p);
 
+    // Mark a node as a trigger for GBNF grammar generartion. This is used for
+    // lazy grammar evaluation by only producing GBNF grammar rules that are
+    // reachable from trigger nodes.
+    //   S -> Trigger(A)
+    common_chat_combinator_parser trigger(const common_chat_combinator_parser & p);
+
     common_chat_combinator_parser add_rule(const std::string & name, const common_chat_combinator_parser & p);
 
     void assign_ids(common_chat_combinator_parser & p);
