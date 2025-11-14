@@ -1,3 +1,4 @@
+#include "ggml.h"
 #include "models.h"
 
 llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_graph_params & params) :
@@ -18,10 +19,10 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     ggml_tensor * causal_mask =
-        ggml_tri(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens, ubatch.n_seq_tokens), 1.0f,
+        ggml_tri(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens, ubatch.n_seq_tokens), 1.0f),
                  GGML_TRI_TYPE_LOWER);
     ggml_tensor * identity = ggml_diag(
-        ctx0, ggml_scale_bias_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens), 0.0f, 1.0f));
+        ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens), 1.0f));
 
     ggml_build_forward_expand(gf, causal_mask);
     ggml_build_forward_expand(gf, identity);
@@ -214,7 +215,7 @@ ggml_tensor * llm_build_qwen3next::delta_net_unified(ggml_context * ctx,
     ggml_tensor * attn_lower = ggml_mul(ctx, attn, causal_mask);
     ggml_tensor * lhs        = ggml_sub(ctx, ggml_repeat(ctx, identity, attn_lower), attn_lower);
 
-    ggml_tensor * lin_solve = ggml_solve_tri(ctx, lhs, attn);
+    ggml_tensor * lin_solve = ggml_solve_tri(ctx, lhs, attn, true, true, false);
     attn                    = ggml_mul(ctx, lin_solve, causal_mask);
     attn                    = ggml_add(ctx, attn, identity);
 
