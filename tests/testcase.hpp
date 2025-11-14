@@ -47,7 +47,7 @@ class test_case {
             errors++;
             std::cerr << "[" << get_name() << "] error during execution:\n" << e.what() << "\n";
         }
-        
+
         if (is_success()) {
             if (!omit_success_msg) {
                 std::cerr << "[" << get_name() << "] PASSED" << '\n';

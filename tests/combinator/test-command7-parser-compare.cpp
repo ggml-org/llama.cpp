@@ -38,15 +38,15 @@ class parser test_command7_parser_compare::create_command_r7b_parser() {
 
         return p.optional(thinking) << p.add_rule("content", tool_calls | response);
     });
-    
+
     // Check if
     build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
     return parser;
 }
-    
+
 // command7_parser_compare_test implementation
 test_command7_parser_compare::test_command7_parser_compare() :
-    benchmark_test(std::vector<std::unique_ptr<test_case>>()), 
+    benchmark_test(std::vector<std::unique_ptr<test_case>>()),
     parser(create_command_r7b_parser()),
     reasoning("To plan an effective trip to Japan that includes both historical sites and modern attractions within a "
             "budget of $4000 for a two-week stay, we need to:\n\n"

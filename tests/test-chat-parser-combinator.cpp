@@ -30,6 +30,6 @@ int main() {
 
     test_command7_parser_compare command7_compare_test;
     command7_compare_test.run_comparison(100);
-    
+
     return 0;
 }

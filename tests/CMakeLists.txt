@@ -190,7 +190,7 @@ file(GLOB_RECURSE COMBINATOR_TEST_SOURCES
 add_executable(test-chat-parser-combinator ${COMBINATOR_TEST_SOURCES})
 target_link_libraries(test-chat-parser-combinator PRIVATE common)
 install(TARGETS test-chat-parser-combinator RUNTIME)
-add_test(NAME test-chat-parser-combinator COMMAND test-combinator)
+add_test(NAME test-chat-parser-combinator COMMAND test-parser-combinator)
 set_property(TEST test-chat-parser-combinator PROPERTY LABELS main)
 
 llama_build_and_test(test-chat-template.cpp)

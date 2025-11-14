@@ -86,8 +86,6 @@ public:
 
 class test_example_qwen3_coder : public uses_simple_tokenizer, public compound_test {
 private:
-    // Simple tokenize function that splits by space and special chars
-    
     class parser parser;
 public:
     test_example_qwen3_coder();
