@@ -54,9 +54,9 @@ struct common_chat_parse_result {
     common_chat_parse_result(common_chat_parse_result_type type, size_t start, size_t end)
         : type(type), start(start), end(end) {}
 
-    bool is_fail() const { return type == COMMON_CHAT_PARSE_RESULT_FAIL; }
-    bool is_need_more_input() const { return type == COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT; }
-    bool is_success() const { return type == COMMON_CHAT_PARSE_RESULT_SUCCESS; }
+    bool fail() const { return type == COMMON_CHAT_PARSE_RESULT_FAIL; }
+    bool need_more_input() const { return type == COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT; }
+    bool success() const { return type == COMMON_CHAT_PARSE_RESULT_SUCCESS; }
 };
 
 struct common_chat_parse_action {
@@ -83,7 +83,7 @@ struct common_chat_parse_event {
     bool ending() const { return type == COMMON_CHAT_PARSE_EVENT_NODE_END; }
 
     bool success() const { return status == COMMON_CHAT_PARSE_RESULT_SUCCESS; }
-    bool partial() const { return status == COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT; }
+    bool need_more_input() const { return status == COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT; }
     bool fail() const { return status == COMMON_CHAT_PARSE_RESULT_FAIL; }
 };
 

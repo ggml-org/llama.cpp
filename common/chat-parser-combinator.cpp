@@ -383,7 +383,7 @@ class sequence_parser : public common_chat_combinator_parser_base {
         auto pos = start;
         for (const auto & p : parsers_) {
             auto result = p->parse(ctx, pos);
-            if (!result.is_success()) {
+            if (!result.success()) {
                 return common_chat_parse_result(result.type, start, result.end);
             }
 
@@ -440,7 +440,7 @@ class choice_parser : public common_chat_combinator_parser_base {
         auto pos = start;
         for (const auto & p : parsers_) {
             auto result = p->parse(ctx, pos);
-            if (!result.is_fail()) {
+            if (!result.fail()) {
                 return result;
             }
         }
@@ -497,7 +497,7 @@ class repetition_parser : public common_chat_combinator_parser_base {
 
             auto result = parser_->parse(ctx, pos);
 
-            if (result.is_success()) {
+            if (result.success()) {
                 // Prevent infinite loop on empty matches
                 if (result.end == pos) {
                     break;
@@ -507,7 +507,7 @@ class repetition_parser : public common_chat_combinator_parser_base {
                 continue;
             }
 
-            if (result.is_need_more_input()) {
+            if (result.need_more_input()) {
                 return common_chat_parse_result(result.type, start, result.end);
             }
 
@@ -609,10 +609,10 @@ class and_parser : public common_chat_combinator_parser_base {
 
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
         auto result = parser_->parse(ctx, start);
-        if (result.is_success()) {
+        if (result.success()) {
             return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start);
         }
-        if (result.is_need_more_input()) {
+        if (result.need_more_input()) {
             return result;
         }
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start);
@@ -647,12 +647,12 @@ class not_parser : public common_chat_combinator_parser_base {
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
         auto result = parser_->parse(ctx, start);
 
-        if (result.is_success()) {
+        if (result.success()) {
             // Fail if the underlying parser matches
             return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
         }
 
-        if (result.is_need_more_input()) {
+        if (result.need_more_input()) {
             // Propagate - need to know what child would match before negating
             return result;
         }

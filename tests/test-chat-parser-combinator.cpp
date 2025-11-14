@@ -42,7 +42,7 @@ static void test_partial_parsing() {
 
         ctx = common_chat_parse_context("hello");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
     }
     {
         // Test char class
@@ -55,11 +55,11 @@ static void test_partial_parsing() {
 
         ctx = common_chat_parse_context("a");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         ctx = common_chat_parse_context("A");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_fail());
+        assert_equals(true, result.fail());
 
         parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
             return p.one("a-z-");
@@ -67,15 +67,15 @@ static void test_partial_parsing() {
 
         ctx = common_chat_parse_context("f");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         ctx = common_chat_parse_context("-");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         ctx = common_chat_parse_context("A");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_fail());
+        assert_equals(true, result.fail());
     }
     {
         // Test sequences and literals
@@ -86,25 +86,25 @@ static void test_partial_parsing() {
         // Partial matches
         auto ctx = common_chat_parse_context("<thi", false);
         auto result = parser.parse(ctx);
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
 
         ctx = common_chat_parse_context("<think>", false);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
 
         ctx = common_chat_parse_context("<think></", false);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
 
         // Full match
         ctx = common_chat_parse_context("<think></think>", true);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         // No match, since it does not adhere to the grammar
         ctx = common_chat_parse_context("<think>I am parser", false);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_fail());
+        assert_equals(true, result.fail());
     }
     {
         // Test choices
@@ -115,25 +115,25 @@ static void test_partial_parsing() {
         // Partial matches
         auto ctx = common_chat_parse_context("<thi", false);
         auto result = parser.parse(ctx);
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
 
         ctx = common_chat_parse_context("<reas", false);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
 
         // Full match
         ctx = common_chat_parse_context("<think>", true);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         ctx = common_chat_parse_context("<reasoning>", true);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         // No match
         ctx = common_chat_parse_context("<thought>", true);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_fail());
+        assert_equals(true, result.fail());
     }
     {
         // Test zero_or_more
@@ -144,16 +144,16 @@ static void test_partial_parsing() {
         // Partial matches
         auto ctx = common_chat_parse_context("a", false);
         auto result = parser.parse(ctx);
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
 
         ctx = common_chat_parse_context("aba", false);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
 
         // Full match
         ctx = common_chat_parse_context("ab", true);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
     }
     {
         // Test one_or_more
@@ -164,21 +164,21 @@ static void test_partial_parsing() {
         // Partial matches
         auto ctx = common_chat_parse_context("a", false);
         auto result = parser.parse(ctx);
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
 
         ctx = common_chat_parse_context("aba", false);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
 
         // Full match
         ctx = common_chat_parse_context("ab", true);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         // No match
         ctx = common_chat_parse_context("cd", true);
         result = parser.parse(ctx);
-        assert_equals(true, result.is_fail());
+        assert_equals(true, result.fail());
     }
 }
 
@@ -194,19 +194,19 @@ static void test_one() {
 
         ctx = common_chat_parse_context("\n");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         ctx = common_chat_parse_context("\t");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         ctx = common_chat_parse_context("\\");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         ctx = common_chat_parse_context(" ");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_fail());
+        assert_equals(true, result.fail());
     }
     {
         // Test escaped dash (literal dash, not a range)
@@ -219,20 +219,20 @@ static void test_one() {
 
         ctx = common_chat_parse_context("a");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         ctx = common_chat_parse_context("-");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         ctx = common_chat_parse_context("z");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
 
         // Should NOT match 'b' since \- is a literal dash, not a range
         ctx = common_chat_parse_context("b");
         result = parser.parse(ctx);
-        assert_equals(true, result.is_fail());
+        assert_equals(true, result.fail());
     }
 }
 
@@ -253,32 +253,32 @@ static void test_recursive_references() {
     // Test simple number
     ctx = common_chat_parse_context("1", true);
     result = value_parser.parse(ctx);
-    assert_equals(true, result.is_success());
+    assert_equals(true, result.success());
 
     // Test simple list
     ctx = common_chat_parse_context("[1]", true);
     result = value_parser.parse(ctx);
-    assert_equals(true, result.is_success());
+    assert_equals(true, result.success());
 
     // Test nested list
     ctx = common_chat_parse_context("[[2]]", true);
     result = value_parser.parse(ctx);
-    assert_equals(true, result.is_success());
+    assert_equals(true, result.success());
 
     // Test deeply nested list
     ctx = common_chat_parse_context("[[[3]]]", true);
     result = value_parser.parse(ctx);
-    assert_equals(true, result.is_success());
+    assert_equals(true, result.success());
 
     // Test partial match
     ctx = common_chat_parse_context("[[", false);
     result = value_parser.parse(ctx);
-    assert_equals(true, result.is_need_more_input());
+    assert_equals(true, result.need_more_input());
 
     // Test no match
     ctx = common_chat_parse_context("[a]", true);
     result = value_parser.parse(ctx);
-    assert_equals(true, result.is_fail());
+    assert_equals(true, result.fail());
 }
 
 static void test_optional() {
@@ -290,19 +290,19 @@ static void test_optional() {
     // Full match with optional part present
     auto ctx = common_chat_parse_context("hello world");
     auto result = parser.parse(ctx);
-    assert_equals(true, result.is_success());
+    assert_equals(true, result.success());
     assert_equals((size_t)11, result.end);
 
     // Full match with optional part absent
     ctx = common_chat_parse_context("hello", true);
     result = parser.parse(ctx);
-    assert_equals(true, result.is_success());
+    assert_equals(true, result.success());
     assert_equals((size_t)5, result.end);
 
     // Partial match - waiting for more input to determine if optional matches
     ctx = common_chat_parse_context("hello ", false);
     result = parser.parse(ctx);
-    assert_equals(true, result.is_need_more_input());
+    assert_equals(true, result.need_more_input());
 }
 
 static void test_json_parser() {
@@ -317,7 +317,7 @@ static void test_json_parser() {
 
         auto result = json.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
         assert_equals(input.size(), result.end);
     }
     {
@@ -327,7 +327,7 @@ static void test_json_parser() {
 
         auto result = json.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
         assert_equals(input.size(), result.end);
     }
     {
@@ -337,7 +337,7 @@ static void test_json_parser() {
 
         auto result = json.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
         assert_equals(input.size(), result.end);
     }
     {
@@ -347,7 +347,7 @@ static void test_json_parser() {
 
         auto result = json.parse(ctx);
 
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
     }
     {
         // Test partial parsing - incomplete array
@@ -356,7 +356,7 @@ static void test_json_parser() {
 
         auto result = json.parse(ctx);
 
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
     }
     {
         // Test partial parsing - incomplete nested structure
@@ -365,7 +365,7 @@ static void test_json_parser() {
 
         auto result = json.parse(ctx);
 
-        assert_equals(true, result.is_need_more_input());
+        assert_equals(true, result.need_more_input());
     }
 }
 
@@ -383,7 +383,7 @@ static void test_actions() {
         common_chat_parse_context ctx("hello", &env);
         auto result = parser.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
         assert_equals("hello", env.result.content);
     }
     {
@@ -405,7 +405,7 @@ static void test_actions() {
         common_chat_parse_context ctx("hello Alice", &env);
         auto result = parser.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
         assert_equals("hello Alice", env.result.content);
         assert_equals("Alice", env.captures["name"]);
     }
@@ -421,7 +421,7 @@ static void test_actions() {
         common_chat_parse_context ctx("failure", &env);
         auto result = parser.parse(ctx);
 
-        assert_equals(true, result.is_fail());
+        assert_equals(true, result.fail());
         assert_equals("", env.result.content);  // Action should not have run
     }
     {
@@ -438,7 +438,7 @@ static void test_actions() {
             common_chat_parse_context ctx("<start>hello ", &env, false);
             auto result = parser.parse(ctx);
 
-            assert_equals(true, result.is_need_more_input());
+            assert_equals(true, result.need_more_input());
             assert_equals("hello ", env.result.content);
         }
         {
@@ -446,7 +446,7 @@ static void test_actions() {
             common_chat_parse_context ctx("<start>hello world", &env, false);
             auto result = parser.parse(ctx);
 
-            assert_equals(true, result.is_need_more_input());
+            assert_equals(true, result.need_more_input());
             assert_equals("hello world", env.result.content);
         }
         {
@@ -454,7 +454,7 @@ static void test_actions() {
             common_chat_parse_context ctx("<start>hello world<end>", &env, true);
             auto result = parser.parse(ctx);
 
-            assert_equals(true, result.is_success());
+            assert_equals(true, result.success());
             assert_equals("hello world", env.result.content);
         }
     }
@@ -476,7 +476,7 @@ static void test_sax_events() {
 
         auto result = parser.parse(ctx);
 
-        assert_equals(true, result.is_success());
+        assert_equals(true, result.success());
         assert_equals((size_t)2, events.size());
         assert_equals(COMMON_CHAT_PARSE_EVENT_NODE_START, events[0].type);
         assert_equals("greeting", events[0].rule);
@@ -749,7 +749,7 @@ static void example_qwen3_coder() {
             tc.arguments += "\"";
         }
 
-        if (ev.rule == "arg-json-content" && ev.ending() && (ev.success() || ev.partial())) {
+        if (ev.rule == "arg-json-content" && ev.ending() && (ev.success() || ev.need_more_input())) {
             auto & tc = env.result.tool_calls.back();
             tc.arguments += std::string(ev.text);
         }
@@ -788,7 +788,7 @@ static void example_qwen3_coder() {
         ctx.event_handler = handler;
 
         auto parse_result = parser.parse(ctx);
-        assert_equals(false, parse_result.is_fail());
+        assert_equals(false, parse_result.fail());
 
         std::cout << "=================================\n";
         std::cout << in << "\n\n";
@@ -893,7 +893,7 @@ static void test_command_r7b_parser(const common_chat_combinator_parser & p, con
             tc.name = nlohmann::json::parse(ev.text).get<std::string>();
         }
 
-        if (ev.rule == "tool-args-value" && ev.ending() && (ev.success() || ev.partial())) {
+        if (ev.rule == "tool-args-value" && ev.ending() && (ev.success() || ev.need_more_input())) {
             auto & tc = env.result.tool_calls.back();
             tc.arguments = ev.text;
         }
