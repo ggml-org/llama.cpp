@@ -4431,7 +4431,7 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
     SRV_DBG("response: %s\n", res.body.c_str());
 }
 
-static void res_error(httplib::Response & res, const json & error_data) {
+static void res_err(httplib::Response & res, const json & error_data) {
     json final_response {{"error", error_data}};
     res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
     res.status = json_value(error_data, "code", 500);
@@ -4524,7 +4524,7 @@ int main(int argc, char ** argv) {
         try {
             json formatted_error = format_error_response(message, ERROR_TYPE_SERVER);
             LOG_WRN("got exception: %s\n", formatted_error.dump().c_str());
-            res_error(res, formatted_error);
+            res_err(res, formatted_error);
         } catch (const std::exception & e) {
             LOG_ERR("got another exception: %s | while hanlding exception: %s\n", e.what(), message.c_str());
         }
@@ -4532,9 +4532,9 @@ int main(int argc, char ** argv) {
 
     svr->set_error_handler([](const httplib::Request &, httplib::Response & res) {
         if (res.status == 404) {
-            res_error(res, format_error_response("File Not Found", ERROR_TYPE_NOT_FOUND));
+            res_err(res, format_error_response("File Not Found", ERROR_TYPE_NOT_FOUND));
         }
-        // for other error codes, we skip processing here because it's already done by res_error()
+        // for other error codes, we skip processing here because it's already done by res_err()
     });
 
     // set timeouts and change hostname and port
@@ -4591,7 +4591,7 @@ int main(int argc, char ** argv) {
         }
 
         // API key is invalid or not provided
-        res_error(res, format_error_response("Invalid API Key", ERROR_TYPE_AUTHENTICATION));
+        res_err(res, format_error_response("Invalid API Key", ERROR_TYPE_AUTHENTICATION));
 
         LOG_WRN("Unauthorized: Invalid API Key\n");
 
@@ -4609,7 +4609,7 @@ int main(int argc, char ** argv) {
                 // allow the models endpoint to be accessed during loading
                 return true;
             } else {
-                res_error(res, format_error_response("Loading model", ERROR_TYPE_UNAVAILABLE));
+                res_err(res, format_error_response("Loading model", ERROR_TYPE_UNAVAILABLE));
             }
             return false;
         }
@@ -4648,7 +4648,7 @@ int main(int argc, char ** argv) {
 
     const auto handle_slots = [&](const httplib::Request & req, httplib::Response & res) {
         if (!params.endpoint_slots) {
-            res_error(res, format_error_response("This server does not support slots endpoint. Start it with `--slots`", ERROR_TYPE_NOT_SUPPORTED));
+            res_err(res, format_error_response("This server does not support slots endpoint. Start it with `--slots`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
 
@@ -4666,7 +4666,7 @@ int main(int argc, char ** argv) {
         ctx_server.queue_results.remove_waiting_task_id(task_id);
 
         if (result->is_error()) {
-            res_error(res, result->to_json());
+            res_err(res, result->to_json());
             return;
         }
 
@@ -4677,7 +4677,7 @@ int main(int argc, char ** argv) {
         // optionally return "fail_on_no_slot" error
         if (req.has_param("fail_on_no_slot")) {
             if (res_task->n_idle_slots == 0) {
-                res_error(res, format_error_response("no slot available", ERROR_TYPE_UNAVAILABLE));
+                res_err(res, format_error_response("no slot available", ERROR_TYPE_UNAVAILABLE));
                 return;
             }
         }
@@ -4687,7 +4687,7 @@ int main(int argc, char ** argv) {
 
     const auto handle_metrics = [&](const httplib::Request &, httplib::Response & res) {
         if (!params.endpoint_metrics) {
-            res_error(res, format_error_response("This server does not support metrics endpoint. Start it with `--metrics`", ERROR_TYPE_NOT_SUPPORTED));
+            res_err(res, format_error_response("This server does not support metrics endpoint. Start it with `--metrics`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
 
@@ -4705,7 +4705,7 @@ int main(int argc, char ** argv) {
         ctx_server.queue_results.remove_waiting_task_id(task_id);
 
         if (result->is_error()) {
-            res_error(res, result->to_json());
+            res_err(res, result->to_json());
             return;
         }
 
@@ -4790,7 +4790,7 @@ int main(int argc, char ** argv) {
         json request_data = json::parse(req.body);
         std::string filename = request_data.at("filename");
         if (!fs_validate_filename(filename)) {
-            res_error(res, format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
         std::string filepath = params.slot_save_path + filename;
@@ -4811,7 +4811,7 @@ int main(int argc, char ** argv) {
         ctx_server.queue_results.remove_waiting_task_id(task_id);
 
         if (result->is_error()) {
-            res_error(res, result->to_json());
+            res_err(res, result->to_json());
             return;
         }
 
@@ -4822,7 +4822,7 @@ int main(int argc, char ** argv) {
         json request_data = json::parse(req.body);
         std::string filename = request_data.at("filename");
         if (!fs_validate_filename(filename)) {
-            res_error(res, format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
         std::string filepath = params.slot_save_path + filename;
@@ -4843,7 +4843,7 @@ int main(int argc, char ** argv) {
         ctx_server.queue_results.remove_waiting_task_id(task_id);
 
         if (result->is_error()) {
-            res_error(res, result->to_json());
+            res_err(res, result->to_json());
             return;
         }
 
@@ -4866,7 +4866,7 @@ int main(int argc, char ** argv) {
         ctx_server.queue_results.remove_waiting_task_id(task_id);
 
         if (result->is_error()) {
-            res_error(res, result->to_json());
+            res_err(res, result->to_json());
             return;
         }
 
@@ -4876,7 +4876,7 @@ int main(int argc, char ** argv) {
 
     const auto handle_slots_action = [&params, &handle_slots_save, &handle_slots_restore, &handle_slots_erase](const httplib::Request & req, httplib::Response & res) {
         if (params.slot_save_path.empty()) {
-            res_error(res, format_error_response("This server does not support slots action. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
+            res_err(res, format_error_response("This server does not support slots action. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
 
@@ -4886,7 +4886,7 @@ int main(int argc, char ** argv) {
         try {
             id_slot = std::stoi(id_slot_str);
         } catch (const std::exception &) {
-            res_error(res, format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("Invalid slot ID", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
 
@@ -4899,7 +4899,7 @@ int main(int argc, char ** argv) {
         } else if (action == "erase") {
             handle_slots_erase(req, res, id_slot);
         } else {
-            res_error(res, format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
         }
     };
 
@@ -4947,7 +4947,7 @@ int main(int argc, char ** argv) {
 
     const auto handle_props_change = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
         if (!ctx_server.params_base.endpoint_props) {
-            res_error(res, format_error_response("This server does not support changing global properties. Start it with `--props`", ERROR_TYPE_NOT_SUPPORTED));
+            res_err(res, format_error_response("This server does not support changing global properties. Start it with `--props`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
 
@@ -5044,7 +5044,7 @@ int main(int argc, char ** argv) {
 
             rd->post_tasks(std::move(tasks));
         } catch (const std::exception & e) {
-            res_error(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
             return;
         }
 
@@ -5056,7 +5056,7 @@ int main(int argc, char ** argv) {
             if (all_results.is_terminated) {
                 return; // connection is closed
             } else if (all_results.error) {
-                res_error(res, all_results.error->to_json());
+                res_err(res, all_results.error->to_json());
                 return;
             } else {
                 json arr = json::array();
@@ -5076,7 +5076,7 @@ int main(int argc, char ** argv) {
             if (first_result == nullptr) {
                 return; // connection is closed
             } else if (first_result->is_error()) {
-                res_error(res, first_result->to_json());
+                res_err(res, first_result->to_json());
                 return;
             } else {
                 GGML_ASSERT(
@@ -5183,7 +5183,7 @@ int main(int argc, char ** argv) {
             err += "middle token is missing. ";
         }
         if (!err.empty()) {
-            res_error(res, format_error_response(string_format("Infill is not supported by this model: %s", err.c_str()), ERROR_TYPE_NOT_SUPPORTED));
+            res_err(res, format_error_response(string_format("Infill is not supported by this model: %s", err.c_str()), ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
 
@@ -5192,20 +5192,20 @@ int main(int argc, char ** argv) {
         // validate input
         if (data.contains("prompt") && !data.at("prompt").is_string()) {
             // prompt is optional
-            res_error(res, format_error_response("\"prompt\" must be a string", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("\"prompt\" must be a string", ERROR_TYPE_INVALID_REQUEST));
         }
 
         if (!data.contains("input_prefix")) {
-            res_error(res, format_error_response("\"input_prefix\" is required", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("\"input_prefix\" is required", ERROR_TYPE_INVALID_REQUEST));
         }
 
         if (!data.contains("input_suffix")) {
-            res_error(res, format_error_response("\"input_suffix\" is required", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("\"input_suffix\" is required", ERROR_TYPE_INVALID_REQUEST));
         }
 
         if (data.contains("input_extra") && !data.at("input_extra").is_array()) {
             // input_extra is optional
-            res_error(res, format_error_response("\"input_extra\" must be an array of {\"filename\": string, \"text\": string}", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("\"input_extra\" must be an array of {\"filename\": string, \"text\": string}", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
 
@@ -5213,12 +5213,12 @@ int main(int argc, char ** argv) {
         for (const auto & chunk : input_extra) {
             // { "text": string, "filename": string }
             if (!chunk.contains("text") || !chunk.at("text").is_string()) {
-                res_error(res, format_error_response("extra_context chunk must contain a \"text\" field with a string value", ERROR_TYPE_INVALID_REQUEST));
+                res_err(res, format_error_response("extra_context chunk must contain a \"text\" field with a string value", ERROR_TYPE_INVALID_REQUEST));
                 return;
             }
             // filename is optional
             if (chunk.contains("filename") && !chunk.at("filename").is_string()) {
-                res_error(res, format_error_response("extra_context chunk's \"filename\" field must be a string", ERROR_TYPE_INVALID_REQUEST));
+                res_err(res, format_error_response("extra_context chunk's \"filename\" field must be a string", ERROR_TYPE_INVALID_REQUEST));
                 return;
             }
         }
@@ -5380,12 +5380,12 @@ int main(int argc, char ** argv) {
 
     const auto handle_embeddings_impl = [&ctx_server](const httplib::Request & req, httplib::Response & res, oaicompat_type oaicompat) {
         if (!ctx_server.params_base.embedding) {
-            res_error(res, format_error_response("This server does not support embeddings. Start it with `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
+            res_err(res, format_error_response("This server does not support embeddings. Start it with `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
 
         if (oaicompat != OAICOMPAT_TYPE_NONE && llama_pooling_type(ctx_server.ctx) == LLAMA_POOLING_TYPE_NONE) {
-            res_error(res, format_error_response("Pooling type 'none' is not OAI compatible. Please use a different pooling type", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("Pooling type 'none' is not OAI compatible. Please use a different pooling type", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
 
@@ -5399,7 +5399,7 @@ int main(int argc, char ** argv) {
             oaicompat = OAICOMPAT_TYPE_NONE; // "content" field is not OAI compatible
             prompt = body.at("content");
         } else {
-            res_error(res, format_error_response("\"input\" or \"content\" must be provided", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("\"input\" or \"content\" must be provided", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
 
@@ -5409,7 +5409,7 @@ int main(int argc, char ** argv) {
             if (format == "base64") {
                 use_base64 = true;
             } else if (format != "float") {
-                res_error(res, format_error_response("The format to return the embeddings in. Can be either float or base64", ERROR_TYPE_INVALID_REQUEST));
+                res_err(res, format_error_response("The format to return the embeddings in. Can be either float or base64", ERROR_TYPE_INVALID_REQUEST));
                 return;
             }
         }
@@ -5418,7 +5418,7 @@ int main(int argc, char ** argv) {
         for (const auto & tokens : tokenized_prompts) {
             // this check is necessary for models that do not add BOS token to the input
             if (tokens.empty()) {
-                res_error(res, format_error_response("Input content cannot be empty", ERROR_TYPE_INVALID_REQUEST));
+                res_err(res, format_error_response("Input content cannot be empty", ERROR_TYPE_INVALID_REQUEST));
                 return;
             }
         }
@@ -5459,7 +5459,7 @@ int main(int argc, char ** argv) {
         if (all_results.is_terminated) {
             return; // connection is closed
         } else if (all_results.error) {
-            res_error(res, all_results.error->to_json());
+            res_err(res, all_results.error->to_json());
             return;
         } else {
             for (auto & res : all_results.results) {
@@ -5485,7 +5485,7 @@ int main(int argc, char ** argv) {
 
     const auto handle_rerank = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
         if (!ctx_server.params_base.embedding || ctx_server.params_base.pooling_type != LLAMA_POOLING_TYPE_RANK) {
-            res_error(res, format_error_response("This server does not support reranking. Start it with `--reranking`", ERROR_TYPE_NOT_SUPPORTED));
+            res_err(res, format_error_response("This server does not support reranking. Start it with `--reranking`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
 
@@ -5500,18 +5500,18 @@ int main(int argc, char ** argv) {
         if (body.count("query") == 1) {
             query = body.at("query");
             if (!query.is_string()) {
-                res_error(res, format_error_response("\"query\" must be a string", ERROR_TYPE_INVALID_REQUEST));
+                res_err(res, format_error_response("\"query\" must be a string", ERROR_TYPE_INVALID_REQUEST));
                 return;
             }
         } else {
-            res_error(res, format_error_response("\"query\" must be provided", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("\"query\" must be provided", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
 
         std::vector<std::string> documents = json_value(body, "documents",
                                              json_value(body, "texts", std::vector<std::string>()));
         if (documents.empty()) {
-            res_error(res, format_error_response("\"documents\" must be a non-empty string array", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("\"documents\" must be a non-empty string array", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
 
@@ -5541,7 +5541,7 @@ int main(int argc, char ** argv) {
         if (all_results.is_terminated) {
             return; // connection is closed
         } else if (all_results.error) {
-            res_error(res, all_results.error->to_json());
+            res_err(res, all_results.error->to_json());
             return;
         } else {
             for (auto & res : all_results.results) {
@@ -5594,7 +5594,7 @@ int main(int argc, char ** argv) {
     const auto handle_lora_adapters_apply = [&](const httplib::Request & req, httplib::Response & res) {
         const json body = json::parse(req.body);
         if (!body.is_array()) {
-            res_error(res, format_error_response("Request body must be an array", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("Request body must be an array", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
 
@@ -5612,7 +5612,7 @@ int main(int argc, char ** argv) {
         ctx_server.queue_results.remove_waiting_task_id(task_id);
 
         if (result->is_error()) {
-            res_error(res, result->to_json());
+            res_err(res, result->to_json());
             return;
         }
 
