@@ -10,20 +10,13 @@
 #include <string>
 #include <string_view>
 #include <functional>
-#include <variant>
 
 struct common_grammar_builder;
 
 struct parser_environment {
     common_chat_msg result;
 
-    // Tool call fields for building tool calls
-    std::string tool_call_id;
-    std::string tool_call_name;
-    std::string tool_call_args;
-
-    // Scratch pad for any custom logic
-    std::unordered_map<std::string, std::variant<int, double, std::string>> scratchpad;
+    std::unordered_map<std::string, std::string> captures;
 };
 
 enum parser_result_type {
@@ -72,6 +65,30 @@ struct parser_action {
     std::string_view match;
 };
 
+enum parse_event_type {
+    PARSER_EVENT_NODE_START,
+    PARSER_EVENT_NODE_END,
+};
+
+struct parse_event {
+    parse_event_type type;
+    std::string rule;
+    size_t start;
+    size_t end;
+    std::string_view text;
+    parser_result_type status;
+    int depth;
+
+    bool starting() const { return type == PARSER_EVENT_NODE_START; }
+    bool ending() const { return type == PARSER_EVENT_NODE_END; }
+
+    bool success() const { return status == PARSER_RESULT_SUCCESS; }
+    bool partial() const { return status == PARSER_RESULT_NEED_MORE_INPUT; }
+    bool fail() const { return status == PARSER_RESULT_FAIL; }
+};
+
+using parse_event_handler = std::function<void(const parse_event &, parser_environment &)>;
+
 class parse_cache {
     std::unordered_map<parse_cache_key, parser_result> results;
 
@@ -86,27 +103,32 @@ struct parser_context {
     parse_cache memo;
     bool input_is_complete;
     parser_environment * env;
+    parse_event_handler event_handler;
+    int current_depth;
 
     parser_context()
-        : memo(), input_is_complete(true), env(nullptr) {}
+        : memo(), input_is_complete(true), env(nullptr), event_handler(nullptr), current_depth(0) {}
 
     parser_context(const std::string & input)
-        : input(input), memo(), input_is_complete(true), env(nullptr) {}
+        : input(input), memo(), input_is_complete(true), env(nullptr), event_handler(nullptr), current_depth(0) {}
 
     parser_context(const std::string & input, bool complete)
-        : input(input), memo(), input_is_complete(complete), env(nullptr) {}
+        : input(input), memo(), input_is_complete(complete), env(nullptr), event_handler(nullptr), current_depth(0) {}
 
     parser_context(const std::string & input, parse_cache memo, bool complete = true)
-        : input(input), memo(std::move(memo)), input_is_complete(complete), env(nullptr) {}
+        : input(input), memo(std::move(memo)), input_is_complete(complete), env(nullptr), event_handler(nullptr), current_depth(0) {}
 
     parser_context(const std::string & input, parser_environment * environment)
-        : input(input), memo(), input_is_complete(true), env(environment) {}
+        : input(input), memo(), input_is_complete(true), env(environment), event_handler(nullptr), current_depth(0) {}
 
     parser_context(const std::string & input, parser_environment * environment, bool complete)
-        : input(input), memo(), input_is_complete(complete), env(environment) {}
+        : input(input), memo(), input_is_complete(complete), env(environment), event_handler(nullptr), current_depth(0) {}
 
     parser_context(const std::string & input, parse_cache memo, parser_environment * environment, bool complete = true)
-        : input(input), memo(std::move(memo)), input_is_complete(complete), env(environment) {}
+        : input(input), memo(std::move(memo)), input_is_complete(complete), env(environment), event_handler(nullptr), current_depth(0) {}
+
+    parser_context(const std::string & input, parser_environment * environment, parse_event_handler handler, bool complete = true)
+        : input(input), memo(), input_is_complete(complete), env(environment), event_handler(std::move(handler)), current_depth(0) {}
 };
 
 class parser_base;
@@ -190,6 +212,10 @@ class parser_builder {
 
     // Negative lookahead: succeeds if child parser fails, consumes no input.
     //   S -> !A
+    parser peek(const parser & p);
+
+    // Negative lookahead: succeeds if child parser fails, consumes no input.
+    //   S -> !A
     parser negate(const parser & p);
 
     // Matches any single character.
@@ -237,10 +263,6 @@ class parser_builder {
     // Specialized single-pass JSON string parser with escape sequence handling
     parser json_string();
 
-    // TODO: improve convenience functions to allow users to build specific JSON fields
-    parser json_key(const std::string & name, const parser & p);
-    parser json_string(const parser & p);
-
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
     parser schema(const parser & p, const std::string & name, const nlohmann::ordered_json & schema);
@@ -250,36 +272,8 @@ class parser_builder {
     //   S -> A [action]
     parser action(const parser & p, std::function<void(const parser_action &)> fn, int when = PARSER_RESULT_SUCCESS);
 
-    // Convenience action wrappers for common patterns
-
-    // Causes a rule to succeed
-    parser succeed(const parser & p, int when = PARSER_RESULT_NEED_MORE_INPUT);
-
-    // Appends matched text to env.reasoning_content
-    parser append_reasoning(const parser & p);
-
-    // Appends matched text to env.content
-    parser append_content(const parser & p);
-
-    // Captures matched text to env.scratchpad[key]
-    // If unescape_json is true, the matched text is unescaped as a JSON string
-    parser capture(const parser & p, const std::string & key, bool unescape_json = false);
-
-    // Captures matched text to env.tool_call_id
-    // If unescape_json is true, the matched text is unescaped as a JSON string
-    parser capture_tool_call_id(const parser & p, bool unescape_json = false);
-
-    // Captures matched text to env.tool_call_name
-    // If unescape_json is true, the matched text is unescaped as a JSON string
-    parser capture_tool_call_name(const parser & p, bool unescape_json = false);
-
-    // Captures matched text to env.tool_call_args
-    // If unescape_json is true, the matched text is unescaped as a JSON string
-    parser capture_tool_call_args(const parser & p, bool unescape_json = false);
-
-    // Adds a tool call to env.tool_calls using env.tool_call_{id,name,args}
-    // Clears the tool call fields after adding
-    parser add_tool_call(const parser & p);
+    // Captures matched text to env.captures[key]
+    parser capture(const std::string & key, const parser & p);
 
     parser add_rule(const std::string & name, const parser & p);
 

@@ -18,6 +18,7 @@ enum parser_type {
     PARSER_OPTIONAL,
     PARSER_ZERO_OR_MORE,
     PARSER_ONE_OR_MORE,
+    PARSER_AND,
     PARSER_NOT,
     PARSER_ANY,
     PARSER_CHARS,
@@ -595,6 +596,43 @@ class optional_parser : public repetition_parser {
     void accept(parser_visitor & visitor) override;
 };
 
+// Positive lookahead: succeeds if child parser succeeds, consumes no input.
+//   S -> &A
+class and_parser : public parser_base {
+    parser parser_;
+
+  public:
+    static constexpr parser_type type_value = PARSER_AND;
+
+    and_parser(const parser & parser, int id) : parser_base(id), parser_(parser) {}
+
+    parser_type type() const override { return type_value; }
+
+    parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
+        auto result = parser_->parse(ctx, start);
+        if (result.is_success()) {
+            return parser_result(PARSER_RESULT_SUCCESS, start);
+        }
+        if (result.is_need_more_input()) {
+            return result;
+        }
+        return parser_result(PARSER_RESULT_SUCCESS, start);
+    }
+
+    void assign_id(std::shared_ptr<parser_id_counter> counter) override {
+        parser_base::assign_id(counter);
+        parser_->assign_id(counter);
+    }
+
+    std::string dump() const override {
+        return "And(" + parser_->dump() + ")";
+    }
+
+    void accept(parser_visitor & visitor) override;
+
+    const parser & child() const { return parser_; }
+};
+
 // Negative lookahead: succeeds if child parser fails, consumes no input.
 //   S -> !A
 class not_parser : public parser_base {
@@ -1009,7 +1047,44 @@ class rule_parser : public parser_base {
             return parser_result(PARSER_RESULT_FAIL, start);
         }
 
-        return it->second->parse(ctx, start);
+        // Fire NODE_START event
+        if (ctx.event_handler && ctx.env) {
+            ctx.event_handler(parse_event{
+                PARSER_EVENT_NODE_START,
+                name_,
+                start,
+                start,
+                "",
+                PARSER_RESULT_FAIL,
+                ctx.current_depth
+            }, *ctx.env);
+            ctx.current_depth++;
+        }
+
+        // Parse the referenced rule
+        auto result = it->second->parse(ctx, start);
+
+        // Fire NODE_END event
+        if (ctx.event_handler && ctx.env) {
+            ctx.current_depth--;
+            std::string_view text = ctx.input;
+            if (result.start < ctx.input.size()) {
+                text = text.substr(result.start, result.end - result.start);
+            } else {
+                text = "";
+            }
+            ctx.event_handler(parse_event{
+                PARSER_EVENT_NODE_END,
+                name_,
+                result.start,
+                result.end,
+                text,
+                result.type,
+                ctx.current_depth
+            }, *ctx.env);
+        }
+
+        return result;
     }
 
     std::string dump() const override {
@@ -1118,6 +1193,7 @@ class parser_visitor {
     virtual void visit(optional_parser & p) = 0;
     virtual void visit(repetition_parser & p) = 0;
     virtual void visit(until_parser & p) = 0;
+    virtual void visit(and_parser & p) = 0;
     virtual void visit(not_parser & p) = 0;
     virtual void visit(any_parser & p) = 0;
     virtual void visit(space_parser & p) = 0;
@@ -1268,6 +1344,10 @@ class gbnf_visitor : public parser_visitor {
         current_result_ = gbnf_excluding_pattern(p.delimiters());
     }
 
+    void visit(and_parser &) override {
+        current_result_ = "";
+    }
+
     void visit(not_parser &) override {
         // NOT is tricky in GBNF - for now, emit error
         LOG_ERR("NOT operator not directly supported in GBNF generation\n");
@@ -1362,6 +1442,7 @@ void zero_or_more_parser::accept(parser_visitor & visitor) { visitor.visit(*this
 void optional_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void repetition_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void until_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void and_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void not_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void any_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void space_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
@@ -1483,6 +1564,10 @@ parser parser_builder::optional(const parser & p) {
     return parser(std::make_shared<optional_parser>(p, counter_->next()));
 }
 
+parser parser_builder::peek(const parser & p) {
+    return parser(std::make_shared<and_parser>(p, counter_->next()));
+}
+
 parser parser_builder::negate(const parser & p) {
     return parser(std::make_shared<not_parser>(p, counter_->next()));
 }
@@ -1535,80 +1620,11 @@ parser parser_builder::action(const parser & p, std::function<void(const parser_
     return parser(std::make_shared<action_parser>(p, std::move(fn), when, counter_->next()));
 }
 
-parser parser_builder::succeed(const parser & p, int when) {
-    return action(p, [](const parser_action & act) {
-        act.result.type = PARSER_RESULT_SUCCESS;
-    }, when);
-}
-
-parser parser_builder::append_reasoning(const parser & p) {
-    return action(p, [](const parser_action & act) {
-        if (!act.env.result.reasoning_content.empty()) {
-            act.env.result.reasoning_content += "\n";
-        }
-        act.env.result.reasoning_content += act.match;
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
-}
-
-parser parser_builder::append_content(const parser & p) {
-    return action(p, [](const parser_action & act) {
-        if (!act.env.result.content.empty()) {
-            act.env.result.content += "\n";
-        }
-        act.env.result.content += act.match;
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
-}
-
-parser parser_builder::capture(const parser & p, const std::string & key, bool unescape_json) {
-    return action(p, [key, unescape_json](const parser_action & act) {
-        std::string value = unescape_json ? unescape_json_string(act.match) : std::string(act.match);
-        act.env.scratchpad[key] = std::move(value);
+parser parser_builder::capture(const std::string & key, const parser & p) {
+    return action(p, [key](const parser_action & act) {
+        std::string value = std::string(act.match);
+        act.env.captures[key] = std::move(value);
     }, PARSER_RESULT_SUCCESS);
-}
-
-parser parser_builder::capture_tool_call_id(const parser & p, bool unescape_json) {
-    return action(p, [unescape_json](const parser_action & act) {
-        act.env.tool_call_id = unescape_json ? unescape_json_string(act.match) : std::string(act.match);
-    }, PARSER_RESULT_SUCCESS);
-}
-
-parser parser_builder::capture_tool_call_name(const parser & p, bool unescape_json) {
-    return action(p, [unescape_json](const parser_action & act) {
-        act.env.tool_call_name = unescape_json ? unescape_json_string(act.match) : std::string(act.match);
-    }, PARSER_RESULT_SUCCESS);
-}
-
-parser parser_builder::capture_tool_call_args(const parser & p, bool unescape_json) {
-    return action(p, [unescape_json](const parser_action & act) {
-        act.env.tool_call_args = unescape_json ? unescape_json_string(act.match) : std::string(act.match);
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
-}
-
-parser parser_builder::add_tool_call(const parser & p) {
-    return action(p, [](const parser_action & act) {
-        if (!act.env.tool_call_name.empty() && !act.env.tool_call_args.empty()) {
-            auto tool_call = common_chat_tool_call{
-                act.env.tool_call_name,
-                act.env.tool_call_args,
-                act.env.tool_call_id
-            };
-            act.env.result.tool_calls.push_back(tool_call);
-        }
-
-        // Clear the fields to prevent bleeding to next tool call
-        act.env.tool_call_id.clear();
-        act.env.tool_call_name.clear();
-        act.env.tool_call_args.clear();
-    }, PARSER_RESULT_SUCCESS | PARSER_RESULT_NEED_MORE_INPUT);
-}
-
-parser parser_builder::json_key(const std::string & name, const parser & p) {
-    return literal("\"" + name + "\"") << literal(":") << p;
-}
-
-parser parser_builder::json_string(const parser & p) {
-    auto quote = literal("\"");
-    return quote + p + quote;
 }
 
 parser parser_builder::add_rule(const std::string & name, const parser & p) {

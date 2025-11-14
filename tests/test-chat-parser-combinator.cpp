@@ -369,127 +369,6 @@ static void test_json_parser() {
     }
 }
 
-static void test_complete_example() {
-    // Parser for a fictitious model that outputs:
-    //
-    //   <think>
-    //   ... reasoning content ...
-    //   </think>
-    //   ... content ...
-    //   <tool_call>
-    //   <name>tool_name</name>
-    //   <args>{ ... json args ... }</args>
-    //   </tool_call>
-    //
-    auto parser = build_parser([](parser_builder & p) {
-        auto reasoning = p.add_rule("reasoning",
-            "<think>" << p.append_reasoning(p.until("</think>")) << "</think>");
-
-        auto content = p.add_rule("content",
-            p.append_content(p.until("<tool_call>")));
-
-        auto json = p.json();
-
-        auto tool_call_name = p.add_rule("tool-call-name",
-            "<name>" << p.capture_tool_call_name(p.until("</name>")) << "</name>");
-
-        auto schema = nlohmann::ordered_json::parse(R"({"type": "object"})");
-
-        auto tool_call_args = p.add_rule("tool-call-args",
-            "<args>" << p.capture_tool_call_args(p.schema(p.succeed(json), "get_weather", schema)) << "</args>");
-
-        auto tool_call = p.add_rule("tool-call",
-            "<tool_call>" << p.add_tool_call(tool_call_name << p.succeed(tool_call_args)) << "</tool_call>");
-
-        return reasoning << p.optional(content) << p.optional(tool_call);
-    });
-
-    // Test complete input
-    {
-        std::string input = R"(<think>I need to call get_weather with city = New York</think><tool_call><name>get_weather</name><args>{"city": "New York"}</args></tool_call>)";
-        parser_environment env;
-        parser_context ctx(input, &env);
-
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_success());
-        assert_equals(input.size(), result.end);
-        assert_equals("I need to call get_weather with city = New York", env.result.reasoning_content);
-        assert_equals((size_t)1, env.result.tool_calls.size());
-        assert_equals("", env.result.tool_calls[0].id);
-        assert_equals("get_weather", env.result.tool_calls[0].name);
-        assert_equals(R"({"city": "New York"})", env.result.tool_calls[0].arguments);
-    }
-
-    // Test partial input
-    {
-        std::string input = R"(<think>I need to call get_weather)";
-        parser_environment env = parser_environment();
-        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
-
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_need_more_input());
-        assert_equals("I need to call get_weather", env.result.reasoning_content);
-    }
-    {
-        std::string input = R"(<think>I need to call </thi get_weather</th)";
-        parser_environment env = parser_environment();
-        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
-
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_need_more_input());
-    }
-    {
-        std::string input = R"(<think>I need to call get_weather</th)";
-        parser_environment env = parser_environment();
-        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
-
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_need_more_input());
-    }
-    {
-        std::string input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather)";
-        parser_environment env = parser_environment();
-        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
-
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_need_more_input());
-        assert_equals("I need to call get_weather", env.result.reasoning_content);
-    }
-    {
-        std::string input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather</na)";
-        parser_environment env = parser_environment();
-        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
-
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_need_more_input());
-        assert_equals("I need to call get_weather", env.result.reasoning_content);
-    }
-    {
-        std::string input = R"(<think>I need to call get_weather</think><tool_call><name>get_weather</name><args>{"cit)";
-        parser_environment env = parser_environment();
-        parser_context ctx = parser_context(input, &env, /* .is_input_complete = */ false);
-
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_need_more_input());
-        assert_equals("I need to call get_weather", env.result.reasoning_content);
-        assert_equals("get_weather", env.result.tool_calls[0].name);
-        assert_equals(R"({"cit)", env.result.tool_calls[0].arguments);
-    }
-
-    auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
-        parser.build_grammar(builder);
-    });
-
-    std::cout << "Grammar:\n" << gbnf << "\n";
-}
-
 static void test_actions() {
     {
         // Test simple action - append matched text to content
@@ -516,7 +395,7 @@ static void test_actions() {
 
             auto name = p.action(p.chars("[A-Z][a-z]+"), [](const parser_action & act) {
                 act.env.result.content += std::string(act.match);
-                act.env.scratchpad["name"] = std::string(act.match);
+                act.env.captures["name"] = std::string(act.match);
             });
 
             return greeting + p.literal(" ") + name;
@@ -528,27 +407,7 @@ static void test_actions() {
 
         assert_equals(true, result.is_success());
         assert_equals("hello Alice", env.result.content);
-        assert_equals("Alice", std::get<std::string>(env.scratchpad["name"]));
-    }
-    {
-        // Test using scratchpad for intermediate calculations
-        auto parser = build_parser([](parser_builder& p) {
-            auto digit = p.action(p.one("[0-9]"), [](const parser_action & act) {
-                auto it = act.env.scratchpad.find("sum");
-                int current_sum = it != act.env.scratchpad.end() ? std::get<int>(it->second) : 0;
-                current_sum += (act.match[0] - '0');
-                act.env.scratchpad["sum"] = current_sum;
-            });
-
-            return p.one_or_more(digit + p.optional(p.literal("+")));
-        });
-
-        parser_environment env;
-        parser_context ctx("1+2+3+4", &env);
-        auto result = parser.parse(ctx);
-
-        assert_equals(true, result.is_success());
-        assert_equals(10, std::get<int>(env.scratchpad["sum"]));  // 1+2+3+4 = 10
+        assert_equals("Alice", env.captures["name"]);
     }
     {
         // Test actions don't run when parse fails
@@ -598,6 +457,39 @@ static void test_actions() {
             assert_equals(true, result.is_success());
             assert_equals("hello world", env.result.content);
         }
+    }
+}
+
+static void test_sax_events() {
+    {
+        // Test basic event firing
+        auto parser = build_parser([](parser_builder& p) {
+            return p.add_rule("greeting", p.literal("hello"));
+        });
+
+        parser_environment env;
+        std::vector<parse_event> events;
+
+        parser_context ctx("hello", &env, [&](const parse_event& evt, parser_environment&) {
+            events.push_back(evt);
+        });
+
+        auto result = parser.parse(ctx);
+
+        assert_equals(true, result.is_success());
+        assert_equals((size_t)2, events.size());
+        assert_equals(PARSER_EVENT_NODE_START, events[0].type);
+        assert_equals("greeting", events[0].rule);
+        assert_equals((size_t)0, events[0].start);
+        assert_equals(0, events[0].depth);
+
+        assert_equals(PARSER_EVENT_NODE_END, events[1].type);
+        assert_equals("greeting", events[1].rule);
+        assert_equals((size_t)0, events[1].start);
+        assert_equals((size_t)5, events[1].end);
+        assert_equals("hello", std::string(events[1].text));
+        assert_equals(PARSER_RESULT_SUCCESS, events[1].status);
+        assert_equals(0, events[1].depth);
     }
 }
 
@@ -793,114 +685,75 @@ static std::vector<std::string> simple_tokenize(const std::string & input) {
 
 static void example_qwen3_coder() {
     auto parser = build_parser([](parser_builder & p) {
-        // ===== Actions =====
+        auto thinking = p.add_rule("raw-reasoning",
+            "<think>" << p.add_rule("reasoning-content", p.until("</think>")) << "</think>");
 
-        auto start_arg = [&](const parser_action & act) {
-            if (act.env.tool_call_args != "{") {
-                act.env.tool_call_args += ",";
-            }
-            act.env.tool_call_args += "\"";
-        };
+        auto content = p.add_rule("content", p.until("<tool_call>"));
 
-        auto close_string_arg = [&](const parser_action & act) {
-            if (act.env.scratchpad.find("in-string-arg") != act.env.scratchpad.end()) {
-                act.env.tool_call_args += "\"";
-                act.env.scratchpad.erase("in-string-arg");
-            }
-        };
+        auto arg_name = p.add_rule("arg-start", "<parameter=" + p.capture("arg-name", p.chars("[a-zA-Z0-9_]")) + ">");
+        auto arg_end = p.add_rule("arg-end", "</parameter>" + p.peek(p.literal("<parameter=") | "</function>"));
 
-        auto append_arg_name = [](const parser_action & act) {
-            act.env.tool_call_args += std::string(act.match);
-        };
-
-        auto append_arg_colon = [](const parser_action & act) {
-            act.env.tool_call_args += "\":";
-        };
-
-        auto open_function_args = [&](const parser_action & act) {
-            act.env.tool_call_args += "{";
-        };
-
-        auto close_function_args = [&](const parser_action & act) {
-            close_string_arg(act);
-            act.env.tool_call_args += "}";
-        };
-
-        auto open_string_arg = [&](const parser_action & act) {
-            act.env.tool_call_args += "\"";
-            act.env.scratchpad["in-string-arg"] = true;
-        };
-
-        auto append_string_content = [&](const parser_action & act) {
-            // TODO: add a JSON escape helper
-            act.env.tool_call_args += std::string(act.match);
-        };
-
-        auto append_json_arg = [&](const parser_action & act) {
-            // JSON should already be properly formatted
-            act.env.tool_call_args += std::string(act.match);
-
-            // This can be streamed by passing p.success(json), but we have
-            // to be mindful of the potential backtracking--it only works
-            // if we only keep the last value...
-        };
-
-        // ===== Grammar Rules =====
-
-        auto thinking = p.add_rule("thinking",
-            "<think>" << p.append_reasoning(p.until("</think>")) << "</think>");
-
-        auto content = p.add_rule("content", p.append_content(p.until("<tool_call>")));
-
-        auto arg_start = p.add_rule("arg-start",
-            p.action("<parameter=", [&](const parser_action & act) {
-                close_string_arg(act);
-                start_arg(act);
-            }));
-
-        auto arg_name = p.add_rule("arg-name",
-            p.action(p.chars("[a-zA-Z0-9_]"), append_arg_name)
-            + p.action(">", append_arg_colon));
-
-        auto arg_end = p.add_rule("arg-end",
-                "</parameter>" + p.choice({
-                    arg_start,
-                    p.action("</function>", close_function_args)
-                }));
-
-        // Consume string argument until either another parameter or the
-        // function closing tag follows.
         auto string_arg_content = p.add_rule("arg-string-content",
-            p.until_one_of({
-                "</parameter><parameter=",
-                "</parameter></function>"
-            }));
+            p.until_one_of({"</parameter><parameter=", "</parameter></function>"}));
 
-        auto string_arg = p.add_rule("arg-string",
-            p.action(arg_name, open_string_arg)
-            << p.action(string_arg_content, append_string_content)
-            << arg_end);
+        auto string_arg = p.add_rule("arg-string", arg_name + string_arg_content + arg_end);
 
         auto json = p.json();
 
-        auto json_arg = p.add_rule("arg-json",
-            arg_name
-            << p.action(json, append_json_arg)
-            << arg_end);
+        auto json_arg = p.add_rule("arg-json", arg_name + p.add_rule("arg-json-content", json) + arg_end);
 
-        auto function = p.add_rule("function", p.add_tool_call(
-                "<function="
-                + p.capture_tool_call_name(p.chars("[a-zA-Z0-9_]"))
-                + p.action(">", open_function_args)
-                + arg_start
-                + p.one_or_more(json_arg | string_arg)));
+        auto function = p.add_rule("function",
+                p.add_rule("function-start", "<function=" + p.capture("tool-name", p.chars("[a-zA-Z0-9_]")) + ">")
+                + p.one_or_more(json_arg | string_arg)
+                + "</function>");
 
         auto tool_call = p.add_rule("tool-call",
             "<tool_call>" + p.one_or_more(function) + "</tool_call>");
 
-
         return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
     });
+
+    auto handler = [&](const parse_event & ev, parser_environment & env) {
+        if (ev.rule == "reasoning-content" && ev.ending()) {
+            env.result.reasoning_content = ev.text;
+        }
+
+        if (ev.rule == "content" && ev.ending()) {
+            env.result.content = ev.text;
+        }
+
+        if (ev.rule == "function-start" && ev.ending() && ev.success()) {
+            env.result.tool_calls.emplace_back();
+            auto & tc = env.result.tool_calls.back();
+            tc.name = env.captures["tool-name"];
+        }
+
+        if (ev.rule == "arg-start" && ev.ending() && ev.success()) {
+            auto & tc = env.result.tool_calls.back();
+            auto name = env.captures["arg-name"];
+            if (tc.arguments.empty()) {
+                tc.arguments += "{";
+            } else {
+                tc.arguments += ", ";
+            }
+            tc.arguments += "\"" + name + "\": ";
+        }
+
+        if (ev.rule == "arg-string-content" && ev.ending() && ev.success()) {
+            auto & tc = env.result.tool_calls.back();
+            tc.arguments += "\"" + std::string(ev.text);
+        }
+
+        if (ev.rule == "arg-string" && ev.ending() && ev.success()) {
+            auto & tc = env.result.tool_calls.back();
+            tc.arguments += "\"";
+        }
+
+        if (ev.rule == "arg-json-content" && ev.ending() && (ev.success() || ev.partial())) {
+            auto & tc = env.result.tool_calls.back();
+            tc.arguments += std::string(ev.text);
+        }
+    };
 
     std::string input =
         "<think>The user wants to find large log files that haven't been accessed recently. "
@@ -932,9 +785,10 @@ static void example_qwen3_coder() {
 
         parser_environment env;
         parser_context ctx(in, &env, it == tokens.end() - 1);
+        ctx.event_handler = handler;
 
-        auto result = parser.parse(ctx);
-        assert_equals(false, result.is_fail());
+        auto parse_result = parser.parse(ctx);
+        assert_equals(false, parse_result.is_fail());
 
         std::cout << "=================================\n";
         std::cout << in << "\n\n";
@@ -955,6 +809,7 @@ static void example_qwen3_coder() {
         auto diffs = common_chat_msg_diff::compute_diffs(prev, env.result);
         prev = env.result;
 
+#if 0
         std::cout << "----\n";
         std::cout << "Reasoning: " << prev.reasoning_content << "\n";
         std::cout << "Content  : " << prev.content << "\n";
@@ -966,77 +821,40 @@ static void example_qwen3_coder() {
                 std::cout << "  Args: " << tc.arguments << "\n\n";
             }
         }
-
-        /*
-        std::cout << "=== Diffs ===\n\n";
-        if (!diffs.empty()) {
-            for (size_t i = 0; i < diffs.size(); ++i) {
-                const auto& diff = diffs[i];
-
-                std::cout << "Diff #" << (i + 1) << "\n";
-
-                if (!diff.reasoning_content_delta.empty()) {
-                    std::cout << "  [Reasoning Content]: " << diff.reasoning_content_delta << "\n";
-                }
-
-                if (!diff.content_delta.empty()) {
-                    std::cout << "  [Content]: " << diff.content_delta << "\n";
-                }
-
-                if (diff.tool_call_index != std::string::npos) {
-                    std::cout << "  [Tool Call #" << diff.tool_call_index << "]" << "\n";
-
-                    if (!diff.tool_call_delta.id.empty()) {
-                        std::cout << "    ID: " << diff.tool_call_delta.id << "\n";
-                    }
-
-                    if (!diff.tool_call_delta.name.empty()) {
-                        std::cout << "    Name: " << diff.tool_call_delta.name << "\n";
-                    }
-
-                    if (!diff.tool_call_delta.arguments.empty()) {
-                        std::cout << "    Arguments: " << diff.tool_call_delta.arguments << "\n";
-                    }
-                }
-
-                std::cout << "\n";
-            }
-        } else {
-            std::cout << "No changes detected.\n";
-        }
-        */
+#endif
     }
 }
 
 static parser create_command_r7b_parser() {
     auto parser = build_parser([](parser_builder & p) {
         auto thinking = p.add_rule("thinking",
-            "<|START_THINKING|>" << p.append_reasoning(p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
+            "<|START_THINKING|>" << p.add_rule("reasoning-content", p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
 
         auto response = p.add_rule("response",
-            "<|START_RESPONSE|>" << p.append_content(p.until("<|END_RESPONSE|>")) << "<|END_RESPONSE|>");
+            "<|START_RESPONSE|>" << p.add_rule("content", p.until("<|END_RESPONSE|>")) << "<|END_RESPONSE|>");
 
         auto json = p.add_rule("json", p.json());
 
         auto tool_call_id = p.add_rule("tool-call-id",
-            p.json_key("tool_call_id", "\"" + p.capture_tool_call_id(p.json_string(), /* unescape_json = */ true) + "\""));
+            "\"tool_call_id\"" << (":" << p.add_rule("tool-call-id-value", "\"" + p.json_string() + "\"")));
 
         auto tool_call_name = p.add_rule("tool-name",
-            p.json_key("tool_name", "\"" + p.capture_tool_call_name(p.json_string(), /* unescape_json = */ true) + "\""));
+            "\"tool_name\"" << (":" << p.add_rule("tool-name-value", "\"" + p.json_string() + "\"")));
 
-        auto tool_call_args = p.add_rule("tool-args", p.json_key("parameters", p.capture_tool_call_args(json)));
+        auto tool_call_args = p.add_rule("tool-args",
+            "\"parameters\"" << (":" << p.add_rule("tool-args-value", json)));
 
         auto tool_call_fields = p.add_rule("tool-call-fields", tool_call_id | tool_call_name | tool_call_args);
 
         auto tool_call = p.add_rule("tool-call",
-            "{" << p.add_tool_call(tool_call_fields << p.zero_or_more(p.literal(",") << tool_call_fields)) << "}");
+            "{" << tool_call_fields << p.zero_or_more(p.literal(",") << tool_call_fields) << "}");
 
         auto tool_calls = p.add_rule("tool-calls",
             "<|START_ACTION|>"
             << ("[" << tool_call << p.zero_or_more(p.literal(",") << tool_call) << "]")
             << "<|END_ACTION|>");
 
-        return p.optional(thinking) << p.add_rule("content", tool_calls | response);
+        return p.optional(thinking) << (tool_calls | response);
     });
 
     auto grammar = build_grammar([&](const common_grammar_builder & builder) {
@@ -1051,6 +869,36 @@ static parser create_command_r7b_parser() {
 static void test_command_r7b_parser(const parser & p, const std::string & input, bool partial, bool print_results = false) {
     parser_environment env;
     parser_context ctx(input, &env, !partial);
+
+    ctx.event_handler = [&](const parse_event & ev, parser_environment & env) {
+        if (ev.rule == "reasoning-content" && ev.ending()) {
+            env.result.reasoning_content = ev.text;
+        }
+
+        if (ev.rule == "content" && ev.ending()) {
+            env.result.content = ev.text;
+        }
+
+        if (ev.rule == "tool-call" && ev.starting()) {
+            env.result.tool_calls.emplace_back();
+        }
+
+        if (ev.rule == "tool-call-id-value" && ev.ending() && ev.success()) {
+            auto & tc = env.result.tool_calls.back();
+            tc.id = ev.text;
+        }
+
+        if (ev.rule == "tool-name-value" && ev.ending() && ev.success()) {
+            auto & tc = env.result.tool_calls.back();
+            tc.name = ev.text;
+        }
+
+        if (ev.rule == "tool-args-value" && ev.ending() && (ev.success() || ev.partial())) {
+            auto & tc = env.result.tool_calls.back();
+            tc.arguments = ev.text;
+        }
+    };
+
     p.parse(ctx);
 
     if (print_results) {
@@ -1206,13 +1054,13 @@ int main() {
     test_recursive_references();
     test_optional();
     test_json_parser();
-    test_complete_example();
     test_actions();
+    test_sax_events();
     test_gbnf_generation();
     std::cout << "All tests passed!\n";
 
     example_qwen3_coder();
-    return 0;
+    //return 0;
 
     std::cout << "\n== Benchmarks ==\n";
     std::string example_reasoning =
