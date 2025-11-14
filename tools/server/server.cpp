@@ -3591,13 +3591,13 @@ struct server_context {
         // next, batch any pending prompts without exceeding n_batch
         if (params_base.cont_batching || batch.n_tokens == 0) {
             for (auto & slot : slots) {
+                if (!slot.is_processing()) {
+                    continue;
+                }
+
                 // check if we can batch this slot with the previous one
-                if (slot.is_processing()) {
-                    if (!slot_batched) {
-                        slot_batched = &slot;
-                    } else if (!slot_batched->can_batch_with(slot)) {
-                        continue;
-                    }
+                if (slot_batched && !slot_batched->can_batch_with(slot)) {
+                    continue;
                 }
 
                 // this slot still has a prompt to be processed
@@ -4026,6 +4026,10 @@ struct server_context {
                                     (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
                         }
                     }
+                }
+
+                if (!slot_batched) {
+                    slot_batched = &slot;
                 }
 
                 if (batch.n_tokens >= n_batch) {
