@@ -21,9 +21,61 @@
 .role-user {
     background-color: lightgray;
 }
+.role-tool {
+    background-color: lightyellow;
+}
 .role-trim {
     background-color: lightpink;
 }
+
+#UsageNote {
+    margin: 0.0vmin;
+}
+
+.chat-message {
+    border-style: solid;
+    border-color: grey;
+    border-width: thin;
+    border-radius: 2px;
+    display: flex;
+}
+.chat-message-role {
+    border-style: dotted;
+    border-color: black;
+    border-width: thin;
+    border-radius: 4px;
+    writing-mode: vertical-lr;
+    padding-inline: 1vmin;
+}
+.chat-message-reasoning {
+    border-block-style: dashed;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    hyphens: auto;
+}
+.chat-message-toolcall {
+    border-style: solid;
+    border-color: grey;
+    border-width: thin;
+    border-radius: 2px;
+}
+.chat-message-toolcall-arg {
+    border-style: solid;
+    border-color: grey;
+    border-width: thin;
+    border-radius: 2px;
+}
+.chat-message-content {
+    overflow-wrap: break-word;
+    word-break: break-word;
+    hyphens: auto;
+}
+.chat-message-content-live {
+    overflow-wrap: break-word;
+    word-break: break-word;
+    hyphens: auto;
+}
+
 
 .gridx2 {
     display: grid;
@@ -47,7 +99,7 @@
     min-height: 40vh;
 }
 button {
-    min-width: 8vw;
+    padding-inline: 2vmin;
 }
 
 .sameline {
@@ -66,14 +118,42 @@ button {
     padding-inline-start: 2vw;
 }
 
+
+.DivObjPropsInfoL0 {
+    margin: 0%;
+}
+[class^=SectionObjPropsInfoL] {
+    margin-left: 2vmin;
+}
+
+
 * {
     margin: 0.6vmin;
 }
 
+
 @media print {
+
 
     #fullbody {
         height: auto;
     }
+
+    .chat-message {
+        border-style: solid;
+        border-color: grey;
+        border-width: thin;
+        border-radius: 2px;
+        display:inherit;
+    }
+    .chat-message-role {
+        border-style: dotted;
+        border-color: black;
+        border-width: thin;
+        border-radius: 4px;
+        writing-mode:inherit;
+        padding-inline: 1vmin;
+    }
+
 
 }
