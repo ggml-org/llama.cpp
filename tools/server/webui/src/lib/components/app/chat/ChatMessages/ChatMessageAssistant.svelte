@@ -235,7 +235,9 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
-			{onContinue}
+			onContinue={currentConfig.enableContinueGeneration && !thinkingContent
+				? onContinue
+				: undefined}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}
