@@ -232,7 +232,13 @@
 	onsubmit={handleSubmit}
 	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {className}"
 >
-	<ChatAttachmentsList bind:uploadedFiles {onFileRemove} class="mb-3 px-5 pt-5" />
+	<ChatAttachmentsList
+		bind:uploadedFiles
+		{onFileRemove}
+		limitToSingleRow
+		class="py-5"
+		style="scroll-padding: 1rem;"
+	/>
 
 	<div
 		class="flex-column relative min-h-[48px] items-center rounded-3xl px-5 py-3 shadow-sm transition-all focus-within:shadow-md"

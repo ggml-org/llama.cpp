@@ -153,7 +153,7 @@
 <Dialog.Root bind:open>
 	<Dialog.Content class="grid max-h-[90vh] max-w-5xl overflow-hidden !p-10 sm:w-auto sm:max-w-6xl">
 		<Dialog.Header class="flex-shrink-0">
-			<div class="flex items-center justify-between">
+			<div class="flex items-center justify-between gap-6">
 				<div class="flex items-center gap-3">
 					{#if IconComponent}
 						<IconComponent class="h-5 w-5 text-muted-foreground" />
