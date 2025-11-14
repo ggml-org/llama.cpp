@@ -4492,10 +4492,10 @@ struct test_conv_transpose_2d : public test_case {
     const std::array<int64_t, 4> ne_kernel;
     const int stride;
     // Types
-    const ggml_type type_kernel;
+    const ggml_type kernel_type;
 
     std::string vars() override {
-        return VARS_TO_STR4(type_kernel, ne_input, ne_kernel, stride);
+        return VARS_TO_STR4(kernel_type, ne_input, ne_kernel, stride);
     }
 
     double max_nmse_err() override {
@@ -4506,14 +4506,14 @@ struct test_conv_transpose_2d : public test_case {
         std::array<int64_t, 4> ne_input = {10, 10, 3, 1}, // [input_width, input_height, input_channels, 1]
         std::array<int64_t, 4> ne_kernel = {3, 3, 3, 1}, // [kernel_width, kernel_height, input_channels, 1]
         int stride = 1,
-        ggml_type type_kernel = GGML_TYPE_F16
-    ) : ne_input(ne_input), ne_kernel(ne_kernel), stride(stride), type_kernel(type_kernel) {}
+        ggml_type kernel_type = GGML_TYPE_F16
+    ) : ne_input(ne_input), ne_kernel(ne_kernel), stride(stride), kernel_type(kernel_type) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
         ggml_set_name(input, "input");
 
-        ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
+        ggml_tensor * kernel = ggml_new_tensor(ctx, kernel_type, 4, ne_kernel.data());
         ggml_set_name(kernel, "kernel");
 
         ggml_tensor * out = ggml_conv_transpose_2d_p0(ctx, kernel, input, stride);
