@@ -76,10 +76,10 @@
 	});
 </script>
 
-<div class="chat-processing-info-container" class:visible={showSlotsInfo}>
+<div class="chat-processing-info-container pointer-events-none" class:visible={showSlotsInfo}>
 	<div class="chat-processing-info-content">
 		{#each processingDetails as detail (detail)}
-			<span class="chat-processing-info-detail">{detail}</span>
+			<span class="chat-processing-info-detail pointer-events-auto">{detail}</span>
 		{/each}
 	</div>
 </div>
@@ -92,7 +92,6 @@
 		padding: 1.5rem 1rem;
 		opacity: 0;
 		transform: translateY(50%);
-		pointer-events: none;
 		transition:
 			opacity 300ms ease-out,
 			transform 300ms ease-out;
@@ -100,7 +99,6 @@
 
 	.chat-processing-info-container.visible {
 		opacity: 1;
-		pointer-events: auto;
 		transform: translateY(0);
 	}
 
