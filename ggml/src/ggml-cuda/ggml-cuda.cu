@@ -3196,6 +3196,23 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
     bool                         is_concurrent_event_active = false;
     ggml_cuda_concurrent_event * concurrent_event           = nullptr;
 
+    const auto try_launch_concurrent_event = [&](const ggml_tensor * node) {
+        if (stream_ctx.concurrent_events.find(node) != stream_ctx.concurrent_events.end()) {
+            concurrent_event = &stream_ctx.concurrent_events[node];
+
+            GGML_LOG_DEBUG("Launching %d streams at %s\n", concurrent_event->n_streams, node->name);
+
+            cudaStream_t main_stream = cuda_ctx->stream();  // this should be stream 0
+            GGML_ASSERT(cuda_ctx->curr_stream_no == 0);
+            CUDA_CHECK(cudaEventRecord(concurrent_event->fork_event, main_stream));
+
+            for (int i = 1; i <= concurrent_event->n_streams; ++i) {
+                cudaStream_t stream = cuda_ctx->stream(cuda_ctx->device, i);
+                CUDA_CHECK(cudaStreamWaitEvent(stream, concurrent_event->fork_event));
+            }
+        }
+    };
+
     while (!graph_evaluated_or_captured) {
         // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
         // With the use of CUDA graphs, the execution will be performed by the graph launch.
@@ -3216,6 +3233,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     if (node == concurrent_event->join_node) {
                         cuda_ctx->curr_stream_no = 0;
                         for (int i = 1; i <= concurrent_event->n_streams; ++i) {
+                            // Wait on join events of forked streams in the main stream 
                             CUDA_CHECK(cudaEventRecord(concurrent_event->per_stream_events[i - 1],
                                                        cuda_ctx->stream(cuda_ctx->device, i)));
                             CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), concurrent_event->per_stream_events[i - 1]));
@@ -3234,24 +3252,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 
                     //the previous node was fused
                     const ggml_tensor * prev_node = cgraph->nodes[i - 1];
-                    if (stream_ctx.concurrent_events.find(prev_node) != stream_ctx.concurrent_events.end()) {
-                        concurrent_event = &stream_ctx.concurrent_events[prev_node];
-
-                        GGML_LOG_DEBUG("Launching %d streams at %s\n", concurrent_event->n_streams, prev_node->name);
-
-                        cudaStream_t main_stream = cuda_ctx->stream();  // this should be stream 0
-                        GGML_ASSERT(cuda_ctx->curr_stream_no == 0);
-                        CUDA_CHECK(cudaEventRecord(concurrent_event->fork_event, main_stream));
-
-                        for (int i = 1; i <= concurrent_event->n_streams; ++i) {
-                            cudaStream_t stream = cuda_ctx->stream(cuda_ctx->device, i);
-                            CUDA_CHECK(cudaStreamWaitEvent(stream, concurrent_event->fork_event));
-                        }
-
-                        is_concurrent_event_active = true;
-                        cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
-                        GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
-                    }
+                    try_launch_concurrent_event(prev_node);
                 }
                 prev_i = i;
 
@@ -3569,25 +3570,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 GGML_ASSERT(ok);
 
                 if (!is_concurrent_event_active) {
-                    //const ggml_tensor * adjusted_node = node;
-                    // the forking node may have been fused, e.g (RMS_NORM_MUL + MUL + ADD),
-                    // we can safely use the previous node to check if it can be forked
-                    if (stream_ctx.concurrent_events.find(node) != stream_ctx.concurrent_events.end()) {
-                        concurrent_event = &stream_ctx.concurrent_events[node];
-
-                        GGML_LOG_DEBUG("Launching %d streams at %s\n", concurrent_event->n_streams, node->name);
-
-                        cudaStream_t main_stream = cuda_ctx->stream();  // this should be stream 0
-                        GGML_ASSERT(cuda_ctx->curr_stream_no == 0);
-                        CUDA_CHECK(cudaEventRecord(concurrent_event->fork_event, main_stream));
-
-                        for (int i = 1; i <= concurrent_event->n_streams; ++i) {
-                            cudaStream_t stream = cuda_ctx->stream(cuda_ctx->device, i);
-                            CUDA_CHECK(cudaStreamWaitEvent(stream, concurrent_event->fork_event));
-                        }
-
-                        is_concurrent_event_active = true;
-                    }
+                    try_launch_concurrent_event(node);
                }
             }
         }
