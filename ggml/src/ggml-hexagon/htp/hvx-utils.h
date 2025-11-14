@@ -12,6 +12,15 @@
 #define VLEN_FP32   (VLEN / SIZEOF_FP32)
 #define VLEN_FP16   (VLEN / SIZEOF_FP16)
 
+typedef union {
+    HVX_Vector v;
+    uint8_t    b[VLEN];
+    uint16_t   h[VLEN_FP16];
+    uint32_t   w[VLEN_FP32];
+    __fp16     fp16[VLEN_FP16];
+    float      fp32[VLEN_FP32];
+} HVX_VectorAlias;
+
 static inline HVX_Vector hvx_vec_splat_fp32(float i) {
     union {
         float   f;
@@ -243,19 +252,16 @@ static __attribute__((always_inline)) int32_t is_in_one_chunk(void * addr, uint3
 }
 
 static void hvx_vec_dump_fp16_n(char * pref, HVX_Vector v, uint32_t n) {
-    union {
-        HVX_Vector v;
-        __fp16 d[64];
-    } u = { .v = v };
+    HVX_VectorAlias u = { .v = v };
 
     const uint32_t n0 = n / 16;
     const uint32_t n1 = n % 16;
     int            i  = 0;
     for (; i < n0; i++) {
-        htp_dump_fp16_line(pref, u.d + (16 * i), 16);
+        htp_dump_fp16_line(pref, u.fp16 + (16 * i), 16);
     }
     if (n1) {
-        htp_dump_fp16_line(pref, u.d + (16 * i), n1);
+        htp_dump_fp16_line(pref, u.fp16 + (16 * i), n1);
     }
 }
 
