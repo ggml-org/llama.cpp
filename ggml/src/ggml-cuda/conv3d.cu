@@ -1,36 +1,29 @@
-// conv3d.cu -- CUDA backend for GGML_OP_CONV_3D
-//
-// CUDA implementation of 3D convolution for GGML.
-// - 1 thread per output voxel (ox,oy,oz) × output-channel × batch.
-// - Input X is float, output Y is float, kernel K may be float or half.
-// - Indexing uses GGML nb[] byte-strides and fused dimensions to match
-//   the CPU implementation (so CUDA output numerically matches CPU).
+// CUDA Conv3D (GGML_OP_CONV_3D)
+// One thread per output element; X/Y are float, K is float|half. nb[]-stride indexing.
 
 #include "conv3d.cuh"
 #include "convert.cuh"
 
-// per-file block size for Conv3D kernels
+// kernel block size
 #define CUDA_CONV3D_BLOCK_SIZE 256
 
 struct conv3d_params {
-    int64_t IW, IH, ID; // input width, height, depth
-    int64_t OW, OH, OD; // output width, height, depth
-    int64_t KW, KH, KD; // kernel width, height, depth
-    int64_t ST_X, ST_Y, ST_Z; // strides
-    int64_t PD_X, PD_Y, PD_Z; // padding
+    int64_t IW, IH, ID; // input dims
+    int64_t OW, OH, OD; // output dims
+    int64_t KW, KH, KD; // kernel dims
+    int64_t ST_X, ST_Y, ST_Z; // stride
+    int64_t PD_X, PD_Y, PD_Z; // pad
     int64_t DL_X, DL_Y, DL_Z; // dilation
-    int64_t IC, OC; // input channels, output channels
-    int64_t B; // batch size
-    int64_t TOTAL; // total output elements = B * OC * OD * OH * OW
+    int64_t IC, OC; // channels
+    int64_t B; // batch
+    int64_t TOTAL; // B * OC * OD * OH * OW
 
-    // GGML byte strides for input (src1), kernel (src0), output (dst)
-    int64_t input_nb[4];
-    int64_t kernel_nb[4];
-    int64_t dst_nb[4];
+    int64_t input_nb[4];  // src1 nb[]
+    int64_t kernel_nb[4]; // src0 nb[]
+    int64_t dst_nb[4];    // dst nb[]
 };
 
-// Unpack a linear index into (batch, oc, oz, oy, ox) using the ordering:
-// TOTAL = B * OC * OD * OH * OW, with ox fastest-changing, then oy, oz, oc, b.
+// Unpack idx -> (b, oc, oz, oy, ox) with ox fastest
 static inline __device__ void conv3d_unpack_index(
         int64_t idx,
         const conv3d_params & p,
@@ -49,13 +42,7 @@ static inline __device__ void conv3d_unpack_index(
     b  = idx / p.OC;
 }
 
-// Indexing now uses GGML nb[] byte strides and fused dimension ordering:
-// Input  (X): [W, H, D, C*N]   fused dim: b*C + ic
-// Kernel (K): [KW, KH, KD, C*OC] fused dim: oc*C + ic
-// Output (Y): [OW, OH, OD, OC*N] fused dim: b*OC + oc
-// TODO: consider shared-memory tiling / channel blocking
-// to improve performance for large IC/OC and 3D volumes,
-// similar to future conv2d optimizations.
+// nb[]-stride addressing with fused dims
 
 template<typename TK>
 static __global__ void conv3d_kernel(
@@ -77,16 +64,10 @@ static __global__ void conv3d_kernel(
 
     float sum = 0.0f;
 
-    // After unpack: b=batch index, oc_idx=output-channel index (0..OC-1),
-    // oz/oy/ox are spatial output coordinates (z,y,x) for this thread.
-    // cn_idx = fused input channel index = b * IC + ic
-    // kch_idx = fused kernel channel index = oc_idx * IC + ic
-    // ocn_idx = fused output channel-batch index = b * OC + oc_idx
     for (int64_t ic = 0; ic < c; ++ic) {
         for (int64_t kz = 0; kz < params.KD; ++kz) {
             for (int64_t ky = 0; ky < params.KH; ++ky) {
                 for (int64_t kx = 0; kx < params.KW; ++kx) {
-                    // Mirror CPU formulas: sz = oz * s2 + kz * d2 - p2, etc.
                     const int64_t sz = oz * params.ST_Z + kz * params.DL_Z - params.PD_Z;
                     const int64_t sy = oy * params.ST_Y + ky * params.DL_Y - params.PD_Y;
                     const int64_t sx = ox * params.ST_X + kx * params.DL_X - params.PD_X;
@@ -95,11 +76,9 @@ static __global__ void conv3d_kernel(
                         continue;
                     }
 
-                    // Fused indices per GGML layout
                     const int64_t cn_idx  = b * params.IC + ic;        // input fused
                     const int64_t kch_idx = oc_idx * params.IC + ic;   // kernel fused
 
-                    // Byte offsets using nb[] (divide by sizeof(T) for element index)
                     const int64_t x_offset = sx * params.input_nb[0]
                                            + sy * params.input_nb[1]
                                            + sz * params.input_nb[2]
@@ -117,7 +96,6 @@ static __global__ void conv3d_kernel(
             }
         }
     }
-    // Store to Y at fused index b*OC + oc_idx with spatial (ox, oy, oz)
     const int64_t ocn_idx = b * params.OC + oc_idx;
     const int64_t y_offset = ox * params.dst_nb[0]
                            + oy * params.dst_nb[1]
@@ -126,7 +104,7 @@ static __global__ void conv3d_kernel(
     Y[y_offset / (int64_t)sizeof(float)] = sum;
 }
 
-// Thin wrappers mirroring conv2d.cu style
+// f32 kernel
 static void conv3d_cuda_f32(
         const float * X_D,
         const float * K_D,
@@ -141,6 +119,7 @@ static void conv3d_cuda_f32(
     CUDA_CHECK(cudaGetLastError());
 }
 
+// f16 kernel
 static void conv3d_cuda_f16(
         const float * X_D,
         const half  * K_D,
@@ -162,11 +141,9 @@ void ggml_cuda_op_conv3d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(ggml_is_contiguous(kernel));
     GGML_ASSERT(kernel->type == GGML_TYPE_F16 || kernel->type == GGML_TYPE_F32);
 
-    // CPU implementation assumes input/output are F32 and kernel may be F16/F32.
     GGML_ASSERT(input->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type   == GGML_TYPE_F32);
 
-    // op params follow CPU ordering used by ggml_conv_3d_direct / ggml_compute_forward_conv_3d
     const int32_t * p = (const int32_t *) dst->op_params;
     const int32_t s0 = p[0];
     const int32_t s1 = p[1];
@@ -201,18 +178,15 @@ void ggml_cuda_op_conv3d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     params.IC = (int64_t) c; params.OC = (int64_t) oc;
     params.B  = (int64_t) n;
     params.TOTAL = params.B * params.OC * params.OD * params.OH * params.OW;
-    // Copy GGML byte strides
     for (int i = 0; i < 4; ++i) {
         params.input_nb[i]  = input->nb[i];
         params.kernel_nb[i] = kernel->nb[i];
         params.dst_nb[i]    = dst->nb[i];
     }
 
-    // Sanity checks matching CPU expectations for fused dims:
     GGML_ASSERT(kernel->ne[3] == params.IC * params.OC);
     GGML_ASSERT(input->ne[3]  == params.IC * params.B);
 
-    // obtain stream
     cudaStream_t st = ctx.stream();
 
     const float * X_D = (const float *) input->data;
@@ -225,7 +199,7 @@ void ggml_cuda_op_conv3d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         const half * K_D = (const half *) kernel->data;
         conv3d_cuda_f16(X_D, K_D, Y_D, params, (int64_t) c, (int64_t) n, (int64_t) oc, st);
     } else {
-        GGML_ASSERT(false && "ggml_cuda_op_conv3d: unsupported kernel type");
+        GGML_ASSERT(false && "unsupported kernel type");
     }
 }
 
