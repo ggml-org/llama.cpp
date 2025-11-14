@@ -3596,7 +3596,7 @@ int ggml_metal_op_argsort(ggml_metal_op_t ctx, int idx) {
         // merges per row
         const int nm = (ne00 + 2*len - 1) / (2*len);
 
-        const int nth = 512;
+        const int nth = std::min(512, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_merge));
 
         ggml_metal_encoder_set_pipeline(enc, pipeline_merge);
         ggml_metal_encoder_set_bytes   (enc, &args_merge, sizeof(args_merge), 0);

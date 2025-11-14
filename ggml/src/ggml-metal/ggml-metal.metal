@@ -4612,9 +4612,9 @@ template [[host_name("kernel_argsort_f32_i32_desc")]] kernel argsort_t kernel_ar
 
 typedef void (argsort_merge_t)(
         constant   ggml_metal_kargs_argsort_merge & args,
-        device   const char    * src0,
-        device   const int32_t * tmp,
-        device         int32_t * dst,
+        device const char    * src0,
+        device const int32_t * tmp,
+        device       int32_t * dst,
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]);
@@ -4622,9 +4622,9 @@ typedef void (argsort_merge_t)(
 template<ggml_sort_order order>
 kernel void kernel_argsort_merge_f32_i32(
         constant   ggml_metal_kargs_argsort_merge & args,
-        device   const char    * src0,
-        device   const int32_t * tmp,
-        device         int32_t * dst,
+        device const char    * src0,
+        device const int32_t * tmp,
+        device       int32_t * dst,
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
@@ -4659,8 +4659,8 @@ kernel void kernel_argsort_merge_f32_i32(
 
     for (int k = tpitg.x; k < (int) total; k += ntg.x) {
         // find partition (i,j) such that i+j = k
-        int low  = k > (int) len1 ? k - len1 : 0;
-        int high = MIN((int) k, len0);
+        int low  = k > len1 ? k - len1 : 0;
+        int high = MIN(k, len0);
 
         while (low < high) {
             const int mid = (low + high) >> 1;
@@ -4687,7 +4687,7 @@ kernel void kernel_argsort_merge_f32_i32(
         }
 
         const int i = low;
-        const int j = (int)k - i;
+        const int j = k - i;
 
         int32_t out_idx;
 
@@ -4713,8 +4713,6 @@ kernel void kernel_argsort_merge_f32_i32(
 
 template [[host_name("kernel_argsort_merge_f32_i32_asc")]]  kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_ASC>;
 template [[host_name("kernel_argsort_merge_f32_i32_desc")]] kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_DESC>;
-
-// ------------------------------------------------------------
 
 kernel void kernel_leaky_relu_f32(
         constant     ggml_metal_kargs_leaky_relu & args,
