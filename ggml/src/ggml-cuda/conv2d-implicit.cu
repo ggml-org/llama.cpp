@@ -870,13 +870,28 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
   prepareIteratorA<BM, BK, A_K_STRID, ROW_STEP>(thread_idx, masks_a, element_offset_a, param);
 
+  // for(int kk =0; kk < A_K_STRID; kk++){
+  //     if(element_offset_a[kk] >= 327680)
+  //         printf("%d, %d, %d, %d, %d, %lld \n",
+  //         threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y, blockIdx.z,
+  //               element_offset_a[kk]);
+  // }
+
+  // if(threadIdx.x == 64 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+  //     printf("A[");
+  //     for(int kk =0; kk < A_K_STRID; kk++)
+  //        printf("%f,", element_offset_a[kk]);
+  //     printf("]\n");
+  // }
+
+
   // prefetch the first block tile of A,B into shared memory
 
   const half* A_block_gmem = input;
   const half* B_block_gmem = kernel + block_n * BN * weightKOffset;
 
-  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, 0, 0, masks_a, element_offset_a,
-                                        thread_idx, start_k, end_k, inChannelOffset, param);
+  unsigned int curC = tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, 0, 0, masks_a, element_offset_a,
+                                                          thread_idx, start_k, end_k, inChannelOffset, param);
   tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, 0, 0, start_k, end_k, weightKOffset, param);
 
   int offset_direction = 1;
@@ -907,6 +922,18 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
       if (next_idx == 2) {
         ++block_k;
       }
+
+      // if(threadIdx.x == 64 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+          // printf("B %d,%d,%d [", s, r, block_k);
+      // for(int kk =0; kk < A_K_STRID; kk++){
+      //     if(element_offset_a[kk] >= 327680)
+      //        printf("%d, %d, %d, %d, %d, %lld, %d, %d, %d %d, %lld\n", 
+      //         threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y, blockIdx.z,
+      //              element_offset_a[kk], r, s, block_k, next_idx, param.inc_next[next_idx]);
+      // }
+            // threadIdx.x == 64 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+            // printf("%f,", element_offset_a[kk]);
+          // printf("]\n");
       // if(block_k == num_block_tiles_k)
       //   break;
 
@@ -916,11 +943,12 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
     // if (block_k != num_block_tiles_k){
     if (block_krs != num_block_tiles_krs){
-      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, r, s,
+      curC = tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, r, s,
                                              masks_a, element_offset_a, thread_idx, block_k * BK,
-                                            start_k, end_k, inChannelOffset, param);
+                                            start_k, end_k, curC, inChannelOffset, param);
       tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, r, s, block_k * BK, start_k, end_k, weightKOffset, param);
     }
+
     half* A_warp_tile = A_block_smem + A_warp_tile_offset;
     half* B_warp_tile = B_block_smem + B_warp_tile_offset;
 
@@ -982,6 +1010,10 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     // B_block_smem = &shmem[BM * BK];
 
   // }  // iter block_k
+
+  // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+  //   printf(" %u, %f\n", blockIdx.z, __half2float(acc_register_[0][0][0]));
+  // }
 
     // reuse smem
     half *smemoutput = shmem;
@@ -1116,15 +1148,6 @@ static void launch_conv2d_implicit_split_kernel(ggml_backend_cuda_context & ctx,
         conv2d_implicit_kernel<half, BM, BN, BK,
             WM, WN, WK, ksplit, NUM_THREADS><<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_H.get(), P);
 
-        int64_t inc[3];
-        // next S
-        inc[0] = int64_t(P.c) * P.d_w;
-        // next R
-        inc[1] = int64_t(P.w * P.c) * P.d_h - (P.s - 1) * P.c * P.d_w;
-        // next C
-        inc[2] = BK - int64_t(P.r - 1) * P.w * P.c * P.d_h - int64_t(P.s - 1) * P.c * P.d_w ;
-        memcpy(P.inc_next, inc, sizeof(int64_t)*3);
-
         const unsigned int nrows = P.n * P.k * P.Oh * P.Ow;
         const unsigned int blockx = (nrows + 511) / 512;
         const dim3 block_nums(blockx, 1, 1);
@@ -1138,6 +1161,15 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0) {
 
         int id = ggml_cuda_get_device();
+
+        int64_t inc[3];
+        // next S
+        inc[0] = int64_t(P.c) * P.d_w;
+        // next R
+        inc[1] = int64_t(P.w * P.c) * P.d_h - (P.s - 1) * P.c * P.d_w;
+        // next C
+        inc[2] = - int64_t(P.r - 1) * P.w * P.c * P.d_h - int64_t(P.s - 1) * P.c * P.d_w ;
+        memcpy(P.inc_next, inc, sizeof(int64_t)*3);
 
         int64_t ne = P.c * P.h * P.w * P.n;
         int64_t ne00 = P.c;
@@ -1294,15 +1326,6 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
               return;
             }
         }
-
-        int64_t inc[3];
-        // next S
-        inc[0] = int64_t(P.c) * P.d_w;
-        // next R
-        inc[1] = int64_t(P.w * P.c) * P.d_h - (P.s - 1) * P.c * P.d_w;
-        // next C
-        inc[2] =  BK_dim - int64_t(P.r - 1) * P.w * P.c * P.d_h - int64_t(P.s - 1) * P.c * P.d_w ;
-        memcpy(P.inc_next, inc, sizeof(int64_t)*3);
 
         cudaFuncSetAttribute(conv2d_implicit_kernel<float, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 0, NumThreads>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
