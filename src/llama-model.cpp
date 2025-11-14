@@ -838,15 +838,14 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_MODERN_BERT:
             {
-
                 hparams.swa_type = LLAMA_SWA_TYPE_SYMMETRIC;
-                hparams.set_swa_pattern(3);
-
-                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,         hparams.rope_freq_base_train_swa);
-                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,   hparams.n_swa);
-                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
-                ml.get_key(LLM_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
-                ml.get_key(LLM_KV_POOLING_TYPE,               hparams.pooling_type, false);
+                
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,             hparams.rope_freq_base_train_swa);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,       hparams.n_swa);
+                ml.get_key(LLM_KV_ATTENTION_DENSE_EVERY_N_LAYERS, hparams.n_swa_pattern);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,        hparams.f_norm_eps);
+                ml.get_key(LLM_KV_ATTENTION_CAUSAL,               hparams.causal_attn);
+                ml.get_key(LLM_KV_POOLING_TYPE,                   hparams.pooling_type, false);
 
                 switch (hparams.n_layer) {
                     case 12:
@@ -8318,7 +8317,6 @@ struct llm_build_modern_bert : public llm_graph_context {
             ggml_tensor * Vcur = nullptr;
 
             const float rope_theta = (il % 3 == 0) ? rope_theta_global : rope_theta_local;
-
 
             // attention layer norm
             if (model.layers[il].attn_norm) {

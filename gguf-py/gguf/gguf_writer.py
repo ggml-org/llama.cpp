@@ -850,6 +850,9 @@ class GGUFWriter:
 
     def add_sliding_window(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
+    
+    def add_dense_every_n_layers(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.DENSE_EVERY_N_LAYERS.format(arch=self.arch), value)
 
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
