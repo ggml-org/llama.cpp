@@ -42,7 +42,12 @@ template<typename dst_t, typename src_t>
     } else if constexpr(std::is_same_v<src_t, float2> && std::is_same_v<dst_t, half2>) {
         return __float22half2_rn(x);
     } else if constexpr(std::is_same_v<src_t, float2> && std::is_same_v<dst_t, nv_bfloat162>) {
+        // bypass compile error on cuda 12.0.1
+#if defined(__CUDACC__)
+        return {x.x, x.y};
+#else
         return __float22bfloat162_rn(x);
+#endif
     } else if constexpr(std::is_same_v<dst_t, int32_t>) {
         return int32_t(x);
     } else {
