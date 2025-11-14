@@ -4146,6 +4146,120 @@ template [[host_name("kernel_im2col_f16")]] kernel im2col_t kernel_im2col<half>;
 //template [[host_name("kernel_im2col_ext_f32")]] kernel im2col_ext_t kernel_im2col_ext<float>;
 //template [[host_name("kernel_im2col_ext_f16")]] kernel im2col_ext_t kernel_im2col_ext<half>;
 
+template <typename TK>
+kernel void kernel_conv_2d(
+        constant ggml_metal_kargs_conv_2d & args,
+        device const char * weights,
+        device const char * src,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        uint3    tgpg[[threadgroups_per_grid]],
+        uint3   tpitg[[thread_position_in_threadgroup]],
+        uint3     ntg[[threads_per_threadgroup]]) {
+
+    const uint threads_per_tg = ntg.x * ntg.y * ntg.z;
+    const uint tg_index = (tgpig.z * tgpg.y + tgpig.y) * tgpg.x + tgpig.x;
+    const uint local_thread = tpitg.z * (ntg.x * ntg.y) + tpitg.y * ntg.x + tpitg.x;
+    const uint thread_index = tg_index * threads_per_tg + local_thread;
+    const uint64_t total_threads = (uint64_t) threads_per_tg * tgpg.x * tgpg.y * tgpg.z;
+    const uint64_t total_outputs = (uint64_t) args.N * args.OC * args.OH * args.OW;
+
+    for (uint64_t index = thread_index; index < total_outputs; index += total_threads) {
+        uint64_t tmp = index;
+
+        const int32_t ow = tmp % args.OW; tmp /= args.OW;
+        const int32_t oh = tmp % args.OH; tmp /= args.OH;
+        const int32_t oc = tmp % args.OC; tmp /= args.OC;
+        const int32_t  n = tmp;
+
+        float acc = 0.0f;
+
+        const int32_t base_x = ow*args.s0 - args.p0;
+        const int32_t base_y = oh*args.s1 - args.p1;
+
+        int32_t ky_start = 0;
+        if (base_y < 0) {
+            ky_start = (-base_y + args.d1 - 1)/args.d1;
+        }
+        int32_t ky_end = args.KH;
+        const int32_t y_max = args.IH - 1 - base_y;
+        if (y_max < 0) {
+            ky_end = ky_start;
+        } else if (base_y + (args.KH - 1)*args.d1 >= args.IH) {
+            ky_end = min(ky_end, y_max/args.d1 + 1);
+        }
+
+        int32_t kx_start = 0;
+        if (base_x < 0) {
+            kx_start = (-base_x + args.d0 - 1)/args.d0;
+        }
+        int32_t kx_end = args.KW;
+        const int32_t x_max = args.IW - 1 - base_x;
+        if (x_max < 0) {
+            kx_end = kx_start;
+        } else if (base_x + (args.KW - 1)*args.d0 >= args.IW) {
+            kx_end = min(kx_end, x_max/args.d0 + 1);
+        }
+
+        if (ky_start < ky_end && kx_start < kx_end) {
+            const uint64_t src_base_n = (uint64_t) n  * args.nb13;
+            const uint64_t w_base_oc  = (uint64_t) oc * args.nb03;
+
+            for (int32_t ic = 0; ic < args.IC; ++ic) {
+                const uint64_t src_base_nc = src_base_n + (uint64_t) ic * args.nb12;
+                const uint64_t w_base_ocic = w_base_oc  + (uint64_t) ic * args.nb02;
+
+                for (int32_t ky = ky_start; ky < ky_end; ++ky) {
+                    const int32_t iy = base_y + ky*args.d1;
+                    const uint64_t src_base_row = src_base_nc + (uint64_t) iy * args.nb11;
+                    const uint64_t w_base_row   = w_base_ocic + (uint64_t) ky * args.nb01;
+
+                    for (int32_t kx = kx_start; kx < kx_end; ++kx) {
+                        const int32_t ix = base_x + kx*args.d0;
+                        const uint64_t src_offs = src_base_row + (uint64_t) ix * args.nb10;
+                        const uint64_t w_offs   = w_base_row   + (uint64_t) kx * args.nb00;
+
+                        const float x = *(device const float *)(src + src_offs);
+                        const float w = (float) (*(device const TK *)(weights + w_offs));
+
+                        acc += x * w;
+                    }
+                }
+            }
+        }
+
+        const uint64_t dst_offs =
+            (uint64_t) n  * args.nb3 +
+            (uint64_t) oc * args.nb2 +
+            (uint64_t) oh * args.nb1 +
+            (uint64_t) ow * args.nb0;
+
+        *(device float *)(dst + dst_offs) = acc;
+    }
+}
+
+template [[host_name("kernel_conv_2d_f32_f32")]]
+kernel void kernel_conv_2d<float>(
+        constant ggml_metal_kargs_conv_2d & args,
+        device const char * weights,
+        device const char * src,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        uint3    tgpg[[threadgroups_per_grid]],
+        uint3   tpitg[[thread_position_in_threadgroup]],
+        uint3     ntg[[threads_per_threadgroup]]);
+
+template [[host_name("kernel_conv_2d_f16_f32")]]
+kernel void kernel_conv_2d<half>(
+        constant ggml_metal_kargs_conv_2d & args,
+        device const char * weights,
+        device const char * src,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        uint3    tgpg[[threadgroups_per_grid]],
+        uint3   tpitg[[thread_position_in_threadgroup]],
+        uint3     ntg[[threads_per_threadgroup]]);
+
 typedef void (conv_transpose_1d_t)(
         constant ggml_metal_kargs_conv_transpose_1d & args,
         device const float * src0,
@@ -4427,68 +4541,178 @@ kernel void kernel_timestep_embedding_f32(
 // bitonic sort implementation following the CUDA kernels as reference
 typedef void (argsort_t)(
         constant   ggml_metal_kargs_argsort & args,
-        device  const float * x,
+        device   const char * src0,
         device      int32_t * dst,
-        threadgroup int32_t * shared_values [[threadgroup(0)]],
-        uint3 tgpig[[threadgroup_position_in_grid]],
-        uint3 tpitg[[thread_position_in_threadgroup]]);
+        threadgroup int32_t * smem_i32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]);
 
 template<ggml_sort_order order>
 kernel void kernel_argsort_f32_i32(
         constant   ggml_metal_kargs_argsort & args,
-        device const float  * x,
+        device   const char * src0,
         device      int32_t * dst,
-        threadgroup int32_t * shared_values [[threadgroup(0)]],
-        uint3 tgpig[[threadgroup_position_in_grid]],
-        uint3 tpitg[[thread_position_in_threadgroup]]) {
+        threadgroup int32_t * smem_i32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
     // bitonic sort
-    int col = tpitg[0];
-    int row = tgpig[1];
+    const int col = tpitg[0];
 
-    if (col >= args.ncols_pad) return;
+    const int i00 = (tgpig[0]/args.ne01)*ntg.x;
+    const int i01 =  tgpig[0]%args.ne01;
+    const int i02 =  tgpig[1];
+    const int i03 =  tgpig[2];
 
-    device const float   * x_row   = x + row * args.ncols;
-    threadgroup int32_t  * dst_row = shared_values;
+    device const float * x_row = (device const float *) (src0 + args.nb01*i01 + args.nb02*i02 + args.nb03*i03);
 
     // initialize indices
-    dst_row[col] = col;
+    smem_i32[col] = i00 + col;
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (int k = 2; k <= args.ncols_pad; k *= 2) {
+    for (int k = 2; k <= ntg.x; k *= 2) {
         for (int j = k / 2; j > 0; j /= 2) {
             int ixj = col ^ j;
             if (ixj > col) {
                 if ((col & k) == 0) {
-                    if (dst_row[col] >= args.ncols ||
-                        (dst_row[ixj] < args.ncols && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]]))
+                    if (smem_i32[col] >= args.ne00 ||
+                       (smem_i32[ixj] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
+                            x_row[smem_i32[col]] > x_row[smem_i32[ixj]] :
+                            x_row[smem_i32[col]] < x_row[smem_i32[ixj]]))
                     ) {
-                        SWAP(dst_row[col], dst_row[ixj]);
+                        SWAP(smem_i32[col], smem_i32[ixj]);
                     }
                 } else {
-                    if (dst_row[ixj] >= args.ncols ||
-                        (dst_row[col] < args.ncols && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]]))
+                    if (smem_i32[ixj] >= args.ne00 ||
+                       (smem_i32[col] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
+                            x_row[smem_i32[col]] < x_row[smem_i32[ixj]] :
+                            x_row[smem_i32[col]] > x_row[smem_i32[ixj]]))
                     ) {
-                        SWAP(dst_row[col], dst_row[ixj]);
+                        SWAP(smem_i32[col], smem_i32[ixj]);
                     }
                 }
             }
+
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
     }
 
     // copy the result to dst without the padding
-    if (col < args.ncols) {
-        dst[row * args.ncols + col] = dst_row[col];
+    if (i00 + col < args.ne00) {
+        dst += i00 + args.ne00*i01 + args.ne00*args.ne01*i02 + args.ne00*args.ne01*args.ne02*i03;
+
+        dst[col] = smem_i32[col];
     }
 }
 
 template [[host_name("kernel_argsort_f32_i32_asc")]]  kernel argsort_t kernel_argsort_f32_i32<GGML_SORT_ORDER_ASC>;
 template [[host_name("kernel_argsort_f32_i32_desc")]] kernel argsort_t kernel_argsort_f32_i32<GGML_SORT_ORDER_DESC>;
+
+typedef void (argsort_merge_t)(
+        constant   ggml_metal_kargs_argsort_merge & args,
+        device const char    * src0,
+        device const int32_t * tmp,
+        device       int32_t * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]);
+
+template<ggml_sort_order order>
+kernel void kernel_argsort_merge_f32_i32(
+        constant   ggml_metal_kargs_argsort_merge & args,
+        device const char    * src0,
+        device const int32_t * tmp,
+        device       int32_t * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    int im  = tgpig[0] / args.ne01;
+    int i01 = tgpig[0] % args.ne01;
+    int i02 = tgpig[1];
+    int i03 = tgpig[2];
+
+    const int start = im * (2*args.len);
+
+    const int len0 = MIN(args.len, MAX(0, args.ne00 - (int)(start)));
+    const int len1 = MIN(args.len, MAX(0, args.ne00 - (int)(start + args.len)));
+
+    const int total = len0 + len1;
+
+    device const int32_t * tmp0 = tmp + start
+        + i01*args.ne00
+        + i02*args.ne00*args.ne01
+        + i03*args.ne00*args.ne01*args.ne02;
+
+    device const int32_t * tmp1 = tmp0 + args.len;
+
+    dst += start
+        + i01*args.ne00
+        + i02*args.ne00*args.ne01
+        + i03*args.ne00*args.ne01*args.ne02;
+
+    device const float * src0_row = (device const float *)(src0
+        + args.nb01*i01
+        + args.nb02*i02
+        + args.nb03*i03);
+
+    for (int k = tpitg.x; k < (int) total; k += ntg.x) {
+        // find partition (i,j) such that i+j = k
+        int low  = k > len1 ? k - len1 : 0;
+        int high = MIN(k, len0);
+
+        while (low < high) {
+            const int mid = (low + high) >> 1;
+
+            const int32_t idx0 = tmp0[mid];
+            const int32_t idx1 = tmp1[k - mid - 1];
+
+            const float val0 = src0_row[idx0];
+            const float val1 = src0_row[idx1];
+
+            if (order == GGML_SORT_ORDER_ASC) {
+                if (val0 <= val1) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            } else {
+                if (val0 >= val1) {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+        }
+
+        const int i = low;
+        const int j = k - i;
+
+        int32_t out_idx;
+
+        if (i >= len0) {
+            out_idx = tmp1[j];
+        } else if (j >= len1) {
+            out_idx = tmp0[i];
+        } else {
+            const int32_t idx0 = tmp0[i];
+            const int32_t idx1 = tmp1[j];
+
+            const float val0 = src0_row[idx0];
+            const float val1 = src0_row[idx1];
+
+            out_idx = (order == GGML_SORT_ORDER_ASC)
+                ? (val0 <= val1 ? idx0 : idx1)
+                : (val0 >= val1 ? idx0 : idx1);
+        }
+
+        dst[k] = out_idx;
+    }
+}
+
+template [[host_name("kernel_argsort_merge_f32_i32_asc")]]  kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_ASC>;
+template [[host_name("kernel_argsort_merge_f32_i32_desc")]] kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_DESC>;
 
 kernel void kernel_leaky_relu_f32(
         constant     ggml_metal_kargs_leaky_relu & args,
