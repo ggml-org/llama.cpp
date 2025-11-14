@@ -437,8 +437,8 @@ private:
                                                     ggml_tensor             * causal_mask,
                                                     ggml_tensor             * identity,
                                                     int                       il);
-    ggml_tensor * build_layer_ffn(                  ggml_tensor             * cur, 
-                                                    const llama_model       & model,  
+    ggml_tensor * build_layer_ffn(                  ggml_tensor             * cur,
+                                                    const llama_model       & model,
                                                     int                       il);
     ggml_tensor * delta_net_unified(                ggml_context            * ctx,
                                                     ggml_tensor             * q,
@@ -452,8 +452,8 @@ private:
                                                     bool                      use_qk_l2norm,
                                                     float                     eps_norm,
                                                     int                       il);
-    ggml_tensor * build_q3n_norm(                   ggml_tensor             * input, 
-                                                    ggml_tensor             * weights, 
+    ggml_tensor * build_q3n_norm(                   ggml_tensor             * input,
+                                                    ggml_tensor             * weights,
                                                     int                       layer);
 
     ggml_tensor * build_q3n_gated_norm(             ggml_tensor             * input,

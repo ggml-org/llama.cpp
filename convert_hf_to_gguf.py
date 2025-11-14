@@ -4196,6 +4196,7 @@ class Qwen3MoeModel(Qwen2MoeModel):
 
         super().set_vocab()
 
+
 @ModelBase.register("Qwen3NextForCausalLM")
 class Qwen3NextModel(Qwen3MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
