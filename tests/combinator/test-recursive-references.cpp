@@ -1,120 +1,99 @@
 #include "tests.h"
 
-class test_recursive_references : public compound_test {
-public:
-    test_recursive_references() : compound_test("test_recursive_references") {
-        // Test simple number
-        add_test([](test_harness h) {
-            auto value_parser = build_parser([](parser_builder& p) {
+test_recursive_references::test_recursive_references() : compound_test("test_recursive_references") {
+    // Test simple number
+    add_test(
+        [](test_harness h) {
+            auto value_parser = build_parser([](parser_builder & p) {
                 p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({
-                    p.literal("["),
-                    p.rule("value"),
-                    p.literal("]")
-                }));
+                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
                 return p.add_rule("value", p.rule("number") | p.rule("list"));
             });
-            
-            parser_context ctx("1", true);
-            auto result = value_parser.parse(ctx);
-            
-            h.assert_equals("result_is_success", true, result.is_success());
-        }, "simple_number");
-        
-        // Test simple list
-        add_test([](test_harness h) {
-            auto value_parser = build_parser([](parser_builder& p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({
-                    p.literal("["),
-                    p.rule("value"),
-                    p.literal("]")
-                }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
-            
-            parser_context ctx("[1]", true);
-            auto result = value_parser.parse(ctx);
-            
-            h.assert_equals("result_is_success", true, result.is_success());
-        }, "simple_list");
-        
-        // Test nested list
-        add_test([](test_harness h) {
-            auto value_parser = build_parser([](parser_builder& p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({
-                    p.literal("["),
-                    p.rule("value"),
-                    p.literal("]")
-                }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
-            
-            parser_context ctx("[[2]]", true);
-            auto result = value_parser.parse(ctx);
-            
-            h.assert_equals("result_is_success", true, result.is_success());
-        }, "nested_list");
-        
-        // Test deeply nested list
-        add_test([](test_harness h) {
-            auto value_parser = build_parser([](parser_builder& p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({
-                    p.literal("["),
-                    p.rule("value"),
-                    p.literal("]")
-                }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
-            
-            parser_context ctx("[[[3]]]", true);
-            auto result = value_parser.parse(ctx);
-            
-            h.assert_equals("result_is_success", true, result.is_success());
-        }, "deeply_nested_list");
-        
-        // Test partial match
-        add_test([](test_harness h) {
-            auto value_parser = build_parser([](parser_builder& p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({
-                    p.literal("["),
-                    p.rule("value"),
-                    p.literal("]")
-                }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
-            
-            parser_context ctx("[[", false);
-            auto result = value_parser.parse(ctx);
-            
-            h.assert_equals("result_is_need_more_input", true, result.is_need_more_input());
-        }, "partial_match");
-        
-        // Test no match
-        add_test([](test_harness h) {
-            auto value_parser = build_parser([](parser_builder& p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({
-                    p.literal("["),
-                    p.rule("value"),
-                    p.literal("]")
-                }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
-            
-            parser_context ctx("[a]", true);
-            auto result = value_parser.parse(ctx);
-            
-            h.assert_equals("result_is_fail", true, result.is_fail());
-        }, "no_match");
-    }
 
-    // Provide a convenient way to run all tests
-    void run_all_tests() {
-        run_all();
-        summary();
-    }
-};
+            parser_context ctx("1", true);
+            auto           result = value_parser.parse(ctx);
+
+            h.assert_equals("result_is_success", true, result.is_success());
+        },
+        "simple_number");
+
+    // Test simple list
+    add_test(
+        [](test_harness h) {
+            auto value_parser = build_parser([](parser_builder & p) {
+                p.add_rule("number", p.one_or_more(p.one("0-9")));
+                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+                return p.add_rule("value", p.rule("number") | p.rule("list"));
+            });
+
+            parser_context ctx("[1]", true);
+            auto           result = value_parser.parse(ctx);
+
+            h.assert_equals("result_is_success", true, result.is_success());
+        },
+        "simple_list");
+
+    // Test nested list
+    add_test(
+        [](test_harness h) {
+            auto value_parser = build_parser([](parser_builder & p) {
+                p.add_rule("number", p.one_or_more(p.one("0-9")));
+                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+                return p.add_rule("value", p.rule("number") | p.rule("list"));
+            });
+
+            parser_context ctx("[[2]]", true);
+            auto           result = value_parser.parse(ctx);
+
+            h.assert_equals("result_is_success", true, result.is_success());
+        },
+        "nested_list");
+
+    // Test deeply nested list
+    add_test(
+        [](test_harness h) {
+            auto value_parser = build_parser([](parser_builder & p) {
+                p.add_rule("number", p.one_or_more(p.one("0-9")));
+                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+                return p.add_rule("value", p.rule("number") | p.rule("list"));
+            });
+
+            parser_context ctx("[[[3]]]", true);
+            auto           result = value_parser.parse(ctx);
+
+            h.assert_equals("result_is_success", true, result.is_success());
+        },
+        "deeply_nested_list");
+
+    // Test partial match
+    add_test(
+        [](test_harness h) {
+            auto value_parser = build_parser([](parser_builder & p) {
+                p.add_rule("number", p.one_or_more(p.one("0-9")));
+                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+                return p.add_rule("value", p.rule("number") | p.rule("list"));
+            });
+
+            parser_context ctx("[[", false);
+            auto           result = value_parser.parse(ctx);
+
+            h.assert_equals("result_is_need_more_input", true, result.is_need_more_input());
+        },
+        "partial_match");
+
+    // Test no match
+    add_test(
+        [](test_harness h) {
+            auto value_parser = build_parser([](parser_builder & p) {
+                p.add_rule("number", p.one_or_more(p.one("0-9")));
+                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+                return p.add_rule("value", p.rule("number") | p.rule("list"));
+            });
+
+            parser_context ctx("[a]", true);
+            auto           result = value_parser.parse(ctx);
+
+            h.assert_equals("result_is_fail", true, result.is_fail());
+        },
+        "no_match");
+}
