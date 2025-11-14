@@ -793,9 +793,27 @@ typedef struct {
 } ggml_metal_kargs_leaky_relu;
 
 typedef struct {
-    int64_t  ncols;
-    int64_t  ncols_pad;
+    int64_t  ne00;
+    int64_t  ne01;
+    int64_t  ne02;
+    int64_t  ne03;
+    uint64_t nb00;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
 } ggml_metal_kargs_argsort;
+
+typedef struct {
+    int64_t  ne00;
+    int64_t  ne01;
+    int64_t  ne02;
+    int64_t  ne03;
+    uint64_t nb00;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    int32_t  len;
+} ggml_metal_kargs_argsort_merge;
 
 typedef struct {
     int64_t  ne0;
