@@ -1348,13 +1348,35 @@ class MultiChatUI {
     }
 
     /**
+     * Add a chatmsg to specified chat session,
+     * and update the chat session ui.
+     *
+     * @param {string} chatId
+     * @param {ChatMessageEx} msg
+     */
+    chatmsg_add_show(chatId, msg) {
+        let chat = this.simpleChats[chatId];
+        if (!chat) {
+            return
+        }
+        let lastMsg = chat.xchat[chat.xchat.length-1]
+        chat.add(msg)
+        if (lastMsg) {
+            this.ui_chatmessage_delete(chatId, lastMsg.uniqId, false)
+            this.show_message(this.elDivChat, lastMsg, 1, msg)
+        }
+        this.show_message(this.elDivChat, msg, 0, undefined)
+    }
+
+    /**
      * Remove the specified ChatMessage block in ui, without needing to show full chat session again.
      * @param {string} curChatId
      * @param {number} uniqIdChatMsg
+     * @param {boolean} bUpdateUI
      */
-    ui_chatmessage_delete(curChatId, uniqIdChatMsg) {
+    ui_chatmessage_delete(curChatId, uniqIdChatMsg, bUpdateUI=true) {
         let index = this.simpleChats[curChatId].delete(uniqIdChatMsg)
-        if ((index >= 0) && (curChatId == this.curChatId)) {
+        if ((index >= 0) && (curChatId == this.curChatId) && bUpdateUI) {
             let el = document.querySelector(`[CMUniqId="${uniqIdChatMsg}"]`)
             el?.remove()
             if (index >= (this.simpleChats[curChatId].xchat.length-1)) {
@@ -1587,14 +1609,12 @@ class MultiChatUI {
         }
         let toolResult = await chat.handle_toolcall(toolCallId, toolname, this.elInToolArgs.value)
         if (toolResult !== undefined) {
-            chat.add(new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
-            this.chat_show(chat.chatId)
+            this.chatmsg_add_show(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
             this.ui_reset_userinput(false)
         } else {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
                 this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
-                chat.add(new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
-                this.chat_show(chat.chatId)
+                this.chatmsg_add_show(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
                 this.ui_reset_userinput(false)
             }, this.me.tools.toolCallResponseTimeoutMS)
         }

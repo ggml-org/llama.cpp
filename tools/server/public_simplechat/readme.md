@@ -762,10 +762,15 @@ sliding window based drop off or even before they kick in, this can help in many
 
 * MultiChatUI
   * chat_show takes care of showing or clearing tool call edit / trigger as well as tool response
-    edit / submit. Also show the currently active tool call and its response before it is submit
+    edit / submit. Also show the currently active tool call and its response before it is submitted
     was previously only shown in the edit / trigger and edit / submit ui elements, now instead it
     also shows as part of the chat session message blocks, so that user can delete or copy these
     if needed using the same mechanism as other messages in the chat session.
+  * use a delete msg helper, which takes care of deleting the msg from chat session as well as
+    efficiently update ui to any extent by removing the corresponding element directly from existing
+    chat session ui without recreating the full chat session ui.
+  * a helper to add a message into specified chat session, as well as show/update in the chat session
+    ui by appending the chat message, instead of recreating the full chat session ui.
 
 
 #### ToDo
