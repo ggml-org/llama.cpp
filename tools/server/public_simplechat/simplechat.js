@@ -1092,7 +1092,7 @@ class MultiChatUI {
 
     /**
      * Scroll the given element into view.
-     * @param {HTMLElement|null} el
+     * @param {Element|null} el
      */
     scroll_el_into_view(el) {
         if (!el) {
