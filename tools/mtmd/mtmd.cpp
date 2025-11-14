@@ -435,10 +435,13 @@ struct mtmd_mmproj_context {
 };
 
 mtmd_mmproj_context * mtmd_mmproj_init(const char * mmproj_fname,
-                                        const struct mtmd_context_params ctx_params) {
-    clip_context_params clip_params;
-    clip_params.use_gpu   = ctx_params.use_gpu;
-    clip_params.verbosity = ctx_params.verbosity;
+                                       const struct mtmd_context_params ctx_params) {
+    clip_context_params clip_params {
+        /* use_gpu           */ ctx_params.use_gpu,
+        /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
+        /* image_min_tokens  */ ctx_params.image_min_tokens,
+        /* image_max_tokens  */ ctx_params.image_max_tokens,
+    };
     auto res = clip_init(mmproj_fname, clip_params);
     if (!res.ctx_v) {
         return nullptr;

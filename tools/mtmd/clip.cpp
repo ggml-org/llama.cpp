@@ -489,7 +489,6 @@ ggml_tensor * clip_graph::build_norm(
         cur = ggml_add(ctx0, cur, mb);
         cb(cur, "norm_b", il);
     }
-
     return cur;
 }
 
