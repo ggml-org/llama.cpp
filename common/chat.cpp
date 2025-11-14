@@ -1939,6 +1939,10 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         "<|im_middle|>",
     };
 
+    data.additional_stops.insert(data.additional_stops.end(), {
+        "<|im_end|>",
+        "<|im_middle|>"
+    });
     // build grammar for tool call
     static const xml_tool_call_format form = ([]() {
         xml_tool_call_format form {};
@@ -2317,7 +2321,7 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_glm_4_5(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
-    data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     std::string prompt = apply(tmpl, inputs);
 
