@@ -9,7 +9,7 @@ llama.cpp is a large-scale C/C++ project for efficient LLM (Large Language Model
 - **Size**: ~200k+ lines of code across 1000+ files
 - **Architecture**: Modular design with main library (`libllama`) and 40+ executable tools/examples
 - **Core dependency**: ggml tensor library (vendored in `ggml/` directory)
-- **Backends supported**: CPU (AVX/NEON optimized), CUDA, Metal, Vulkan, SYCL, ROCm, MUSA
+- **Backends supported**: CPU (AVX/NEON/RVV optimized), CUDA, Metal, Vulkan, SYCL, ROCm, MUSA
 - **License**: MIT
 
 ## Build Instructions
