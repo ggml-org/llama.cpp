@@ -1625,6 +1625,7 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
     auto * ctx = new llama_sampler_grammar;
 
     if (grammar_str != nullptr && grammar_str[0] != '\0') {
+        std::string trigger_pattern;
         llama_grammar * grammar = nullptr;
         // TODO: remove trigger_words support.
         if (trigger_words != nullptr && num_trigger_words > 0) {
