@@ -6098,6 +6098,54 @@ class Gemma3NModel(Gemma3Model):
         return super().modify_tensors(data_torch, name, bid)
 
 
+# Note: HF checkpoints use architecture "Gemma3ForCausalLM" since a separate
+# model implementation is not needed for Transformers.  To convert to GGUF,
+# change the architecture in config.json to "Rnj1ForCausalLM".
+@ModelBase.register("Rnj1ForCausalLM")
+class Rnj1Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.RNJ1
+    norm_shift = 1.0  # Gemma3RMSNorm adds 1.0 to the norm value
+
+    def set_gguf_parameters(self):
+        hparams = self.hparams
+        block_count = hparams["num_hidden_layers"]
+
+        # some default values are not specified in the hparams
+        self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 32768))
+        self.gguf_writer.add_embedding_length(hparams["hidden_size"])
+        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
+        self.gguf_writer.add_head_count(hparams.get("num_attention_heads", 8))
+        self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("rms_norm_eps", 1e-6))
+        self.gguf_writer.add_key_length(hparams.get("head_dim", 128))
+        self.gguf_writer.add_value_length(hparams.get("head_dim", 128))
+        self.gguf_writer.add_file_type(self.ftype)
+        self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 10_000.0)) # for global layers
+        assert hparams.get("attn_logit_softcapping") is None
+        self.gguf_writer.add_head_count_kv(hparams.get("num_key_value_heads", 4))
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+            self.gguf_writer.add_rope_scaling_yarn_ext_factor(rope_scaling["extrapolation_factor"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_fast(rope_scaling["beta_fast"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_slow(rope_scaling["beta_slow"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        if "language_model." in name:
+            name = name.replace("language_model.", "")
+
+        # ref code in Gemma3RMSNorm
+        # output = output * (1.0 + self.weight.float())
+        if name.endswith("norm.weight"):
+            data_torch = data_torch + self.norm_shift
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+
 @ModelBase.register("Starcoder2ForCausalLM")
 class StarCoder2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER2

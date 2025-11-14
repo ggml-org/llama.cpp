@@ -1335,6 +1335,17 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 hparams.f_attention_scale = 1.0f / std::sqrt(float(hparams.n_embd_head_k));
 
             } break;
+        case LLM_ARCH_RNJ1:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                switch (hparams.n_layer) {
+                    case 32: type = LLM_TYPE_8B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+
+                hparams.f_attention_scale = 1.0f / std::sqrt(float(hparams.n_embd_head_k));
+            } break;
         case LLM_ARCH_STARCODER2:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
@@ -3899,6 +3910,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
                     }
                 } break;
+            case LLM_ARCH_RNJ1:
             case LLM_ARCH_GEMMA3:
             case LLM_ARCH_GEMMA_EMBEDDING:
                 {
@@ -7310,6 +7322,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_gemma_embedding>(*this, params);
             } break;
+        case LLM_ARCH_RNJ1:
+            {
+                llm = std::make_unique<llm_build_rnj1>(*this, params);
+            } break;
         case LLM_ARCH_STARCODER2:
             {
                 llm = std::make_unique<llm_build_starcoder2>(*this, params);
@@ -7767,6 +7783,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GEMMA3:
         case LLM_ARCH_GEMMA3N:
         case LLM_ARCH_GEMMA_EMBEDDING:
+        case LLM_ARCH_RNJ1:
         case LLM_ARCH_STARCODER2:
         case LLM_ARCH_OPENELM:
         case LLM_ARCH_GPTNEOX:
