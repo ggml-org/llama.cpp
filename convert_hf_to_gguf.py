@@ -5877,17 +5877,13 @@ class XLMRobertaModel(BertModel):
         if lora_names := hparams.get("lora_adaptations"):
             self._lora_names = lora_names
 
-        try:
-            text_cfg = hparams.get("text_config", {}) if isinstance(hparams.get("text_config", {}), dict) else {}
-            pe_type = (text_cfg.get("position_embedding_type") or hparams.get("position_embedding_type") or "").lower()
-            rope_base = text_cfg.get("rotary_emb_base", hparams.get("rotary_emb_base"))
-            name_path = (hparams.get("_name_or_path") or "").lower()
-            is_vx = ("jina" in name_path and ("v2" in name_path or "v3" in name_path))
-            is_v3 = (pe_type == "rotary" or rope_base is not None) and is_vx
-            if (is_v3) or self._lora_names:
-                self.model_arch = gguf.MODEL_ARCH.JINA_BERT_V3
-        except Exception:
-            pass
+        pe_type = (hparams.get("position_embedding_type") or "").lower()
+        rope_base = hparams.get("rotary_emb_base")
+        name_path = (hparams.get("_name_or_path") or "").lower()
+        is_vx = ("jina" in name_path and ("v2" in name_path or "v3" in name_path))
+        is_v3 = (pe_type == "rotary" or rope_base is not None) and is_vx
+        if is_v3 or self._lora_names:
+            self.model_arch = gguf.MODEL_ARCH.JINA_BERT_V3
 
         super().__init__(dir_model, ftype, fname_out, hparams=hparams, **kwargs)
         self._xlmroberta_tokenizer_init()
