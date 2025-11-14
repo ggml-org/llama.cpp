@@ -603,6 +603,8 @@ int main() {
     run("test_prefer_already_allocated_memory", test_prefer_already_allocated_memory);
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
+#ifndef GGML_NO_REALLOC
     run("test_reallocation", test_reallocation);
+#endif
     return 0;
 }
