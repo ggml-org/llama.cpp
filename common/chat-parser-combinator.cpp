@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <deque>
 #include <memory>
 #include <optional>
 
@@ -113,6 +114,202 @@ static std::string unescape_json_string(std::string_view str) {
         // If parsing fails, return original string
     }
     return std::string(str);
+}
+
+// Aho-Corasick automation for matching multiple literals.
+// This is used in until_parser and to build a GBNF exclusion grammar by
+// exploiting its trie structure.
+class aho_corasick_matcher {
+    struct node {
+        size_t fail = 0;
+        size_t depth = 0;
+        std::map<unsigned char, size_t> children;
+        std::vector<size_t> word_lengths;
+    };
+
+    std::vector<node> trie;
+
+  public:
+    aho_corasick_matcher(const std::vector<std::string> & words) {
+      create_node(); // root node
+      for (const auto & w : words) {
+          insert(w);
+      }
+      build_fail_links();
+    }
+
+    size_t search(std::string_view sv, size_t start = 0) {
+      size_t current = 0;
+
+      for (auto i = start; i < sv.size(); ++i) {
+          // Aho-Corasick transition
+          while (current != 0 && trie[current].children.find(sv[i]) == trie[current].children.end()) {
+              current = trie[current].fail;
+          }
+
+          auto it = trie[current].children.find(sv[i]);
+          if (it != trie[current].children.end()) {
+              current = it->second;
+          } else {
+              current = 0;
+          }
+
+          if (!trie[current].word_lengths.empty()) {
+              // Return back the longest word
+              size_t pos = sv.size();
+              for (const auto & len : trie[current].word_lengths) {
+                  pos = std::min(pos, i - len + 1);
+              }
+              return pos;
+          }
+      }
+
+      if (trie[current].depth > 0) {
+          return sv.size() - trie[current].depth;
+      }
+      return sv.size();
+    }
+
+    struct prefix_and_next {
+        std::string prefix;
+        std::string next_chars;
+    };
+
+    std::vector<prefix_and_next> collect_prefix_and_next() {
+        std::string prefix;
+        std::vector<prefix_and_next> result;
+        collect_prefix_and_next(0, prefix, result);
+        return result;
+    }
+
+  private:
+    void collect_prefix_and_next(size_t index, std::string & prefix, std::vector<prefix_and_next> & out) {
+        if (trie[index].word_lengths.empty()) {
+            if (!trie[index].children.empty()) {
+                std::string chars;
+                chars.reserve(trie[index].children.size());
+                for (const auto & p : trie[index].children) {
+                    chars.push_back(p.first);
+                }
+                out.emplace_back(prefix_and_next{prefix, chars});
+            }
+        }
+
+        for (const auto & p : trie[index].children) {
+            unsigned char ch = p.first;
+            int child = p.second;
+            prefix.push_back(ch);
+            collect_prefix_and_next(child, prefix, out);
+            prefix.pop_back();
+        }
+    }
+
+    size_t create_node() {
+        size_t index = trie.size();
+        trie.emplace_back();
+        return index;
+    }
+
+    void insert(const std::string & word) {
+        size_t current = 0;
+        for (unsigned char ch : word) {
+            auto it = trie[current].children.find(ch);
+            if (it == trie[current].children.end()) {
+                size_t child = create_node();
+                trie[child].depth = trie[current].depth + 1;
+                trie[current].children[ch] = child;
+                current = child;
+            } else {
+                current = it->second;
+            }
+        }
+        trie[current].word_lengths.push_back(word.length());
+    }
+
+    void build_fail_links() {
+        std::deque<size_t> queue;
+
+        size_t root = 0;
+        trie[root].fail = 0;
+        for (const auto & it : trie[root].children) {
+            size_t child = it.second;
+            trie[child].fail = 0;
+            queue.push_back(child);
+        }
+
+        while (!queue.empty()) {
+            size_t current = queue.front();
+            queue.pop_front();
+
+            for (const auto & p : trie[current].children) {
+                unsigned char ch = p.first;
+                size_t child = p.second;
+                queue.push_back(child);
+
+                auto fail = trie[current].fail;
+                while (fail != 0 && trie[fail].children.find(p.first) == trie[fail].children.end()) {
+                    fail = trie[fail].fail;
+                }
+
+                auto fail_it = trie[fail].children.find(ch);
+                trie[child].fail = fail_it != trie[fail].children.end() ? fail_it->second : 0;
+            }
+        }
+    }
+};
+
+// Generate an excluding pattern, with customized escaping
+static std::string generic_excluding_pattern(
+        const std::vector<std::string> & strings,
+        const std::function<std::string(const std::string &)> & literal,
+        const std::function<std::string(char c)> & escape_char_class,
+        bool pad = false) {
+
+    // Use the aho_corasick_matcher to grab an exhaustive list of prefixes and
+    // potential next characters. We can use this to build an exclusion for
+    // multiple strings.
+    aho_corasick_matcher matcher(strings);
+    auto pieces = matcher.collect_prefix_and_next();
+
+    std::string pattern;
+    for (size_t i = 0; i < pieces.size(); ++i) {
+        if (i > 0) {
+            pattern += pad ? " | " : "|";
+        }
+
+        const auto & pre = pieces[i].prefix;
+        const auto & chars = pieces[i].next_chars;
+
+        std::string cls;
+        cls.reserve(chars.size());
+        for (const auto & ch : chars) {
+            cls += escape_char_class(ch);
+        }
+
+        if (!pre.empty()) {
+            pattern += literal(pre) + (pad ? " [^" : "[^") + cls + "]";
+        } else {
+            pattern += "[^" + cls + "]";
+        }
+    }
+
+    return "(" + pattern + ")*";
+}
+
+// Escape a single character for use in regex character classes
+static std::string regex_escape_char_class(char c) {
+    switch (c) {
+        case '\\': return "\\\\";
+        case ']':  return "\\]";
+        case '-':  return "\\-";
+        case '^':  return "\\^";
+        default:   return std::string(1, c);
+    }
+}
+
+// Create a regex excluding pattern
+static std::string regex_excluding_pattern(const std::vector<std::string> & strings) {
+    return generic_excluding_pattern(strings, regex_escape, regex_escape_char_class);
 }
 
 // Matches an exact literal string.
@@ -721,36 +918,19 @@ class json_string_parser : public parser_base {
 class until_parser : public parser_base {
     std::string delimiter_;
 
-    std::default_searcher<std::string::const_iterator> searcher_;
+    aho_corasick_matcher matcher_;
 
   public:
     static constexpr parser_type type_value = PARSER_UNTIL;
 
     until_parser(const std::string & delimiter, int id)
-        : parser_base(id), delimiter_(delimiter), searcher_(delimiter_.begin(), delimiter_.end()) {
+        : parser_base(id), delimiter_(delimiter), matcher_({delimiter}) {
     }
 
     parser_type type() const override { return type_value; }
 
     parser_result parse_uncached(parser_context & ctx, size_t start = 0) override {
-        parser_result result(PARSER_RESULT_SUCCESS, start, ctx.input.size());
-
-        // Search for the delimiter
-        const auto it = std::search(ctx.input.begin() + start, ctx.input.end(), searcher_);
-
-        if (it != ctx.input.end()) {
-            result.end = std::distance(ctx.input.begin(), it);
-        } else {
-            // If not found, check if the input ends with a prefix of the delimiter
-            size_t max_overlap = std::min(ctx.input.size(), delimiter_.size() - 1);
-            for (size_t overlap = max_overlap; overlap > 0; --overlap) {
-                if (std::equal(ctx.input.end() - overlap, ctx.input.end(), delimiter_.begin())) {
-                    result.end = ctx.input.size() - overlap;
-                }
-            }
-        }
-
-        return result;
+        return parser_result(PARSER_RESULT_SUCCESS, start, matcher_.search(ctx.input, start));
     }
 
     std::string dump() const override {
@@ -891,7 +1071,8 @@ class action_parser : public parser_base {
         auto result = parser_->parse(ctx, start);
 
         if ((result.type & when_) && ctx.env && action_) {
-            std::string_view matched = ctx.input.substr(result.start, result.end - result.start);
+            std::string_view matched = ctx.input;
+            matched = matched.substr(result.start, result.end - result.start);
             action_({
                 result,
                 *ctx.env,
@@ -915,7 +1096,6 @@ class action_parser : public parser_base {
 
     const parser & child() const { return parser_; }
 };
-
 
 // Base visitor class for parser tree traversal
 class parser_visitor {
@@ -941,6 +1121,37 @@ class parser_visitor {
     virtual void visit(action_parser & p) = 0;
 };
 
+// Escape special characters for GBNF literals
+static std::string gbnf_literal(const std::string & s) {
+    std::string escaped;
+    for (char c : s) {
+        switch (c) {
+            case '\n': escaped += "\\n"; break;
+            case '\t': escaped += "\\t"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\\': escaped += "\\\\"; break;
+            case '"':  escaped += "\\\""; break;
+            default:   escaped += c; break;
+        }
+    }
+    return "\"" + escaped + "\"";
+}
+
+// Escape a single character for use in gbnf character classes
+static std::string gbnf_escape_char_class(char c) {
+    switch (c) {
+        case '\n': return "\\n";
+        case '\t': return "\\t";
+        case '\r': return "\\r";
+        default:   return regex_escape_char_class(c); // these too
+    }
+}
+
+// Create a GBNF excluding pattern
+static std::string gbnf_excluding_pattern(const std::vector<std::string> & strings) {
+    return generic_excluding_pattern(strings, gbnf_literal, gbnf_escape_char_class, true);
+}
+
 class gbnf_visitor : public parser_visitor {
     const common_grammar_builder & builder_;
     std::unordered_map<std::string, std::string> rule_name_mapping_;
@@ -952,73 +1163,6 @@ class gbnf_visitor : public parser_visitor {
     const std::string& result() const { return current_result_; }
 
   private:
-    // Escape special characters for GBNF literals
-    static std::string escape_literal(const std::string & s) {
-        std::string escaped;
-        for (char c : s) {
-            switch (c) {
-                case '\n': escaped += "\\n"; break;
-                case '\t': escaped += "\\t"; break;
-                case '\r': escaped += "\\r"; break;
-                case '\\': escaped += "\\\\"; break;
-                case '"':  escaped += "\\\""; break;
-                default:   escaped += c; break;
-            }
-        }
-        return escaped;
-    }
-
-    // Escape a single character for use in character classes
-    static std::string escape_char_class(char c) {
-        switch (c) {
-            case '\n': return "\\n";
-            case '\t': return "\\t";
-            case '\r': return "\\r";
-            case '\\': return "\\\\";
-            case ']':  return "\\]";
-            case '-':  return "\\-";
-            case '^':  return "\\^";
-            default:   return std::string(1, c);
-        }
-    }
-
-    // Generate pattern for until() that matches prefixes but prevents full delimiter match
-    // For "</tag>" generates: ( [^<] | "<" [^/] | "</" [^t] | "</t" [^a] | "</ta" [^g] )*
-    static std::string generate_until_pattern(const std::string & delimiter) {
-        if (delimiter.empty()) {
-            return ".*";  // Match everything if delimiter is empty
-        }
-
-        if (delimiter.length() == 1) {
-            // Simple case: just negate the single character
-            return "[^" + escape_char_class(delimiter[0]) + "]";
-        }
-
-        std::vector<std::string> alternatives;
-
-        // First alternative: match any character that's not the start of the delimiter
-        alternatives.push_back("[^" + escape_char_class(delimiter[0]) + "]");
-
-        // For each prefix, match the prefix followed by a char that's not the next delimiter char
-        for (size_t i = 1; i < delimiter.length(); ++i) {
-            std::string prefix = "\"" + escape_literal(delimiter.substr(0, i)) + "\"";
-            std::string next_char_negated = "[^" + escape_char_class(delimiter[i]) + "]";
-            alternatives.push_back(prefix + " " + next_char_negated);
-        }
-
-        // Combine alternatives with |
-        std::string result = "(";
-        for (size_t i = 0; i < alternatives.size(); ++i) {
-            if (i > 0) {
-                result += " | ";
-            }
-            result += alternatives[i];
-        }
-        result += ")";
-
-        return result;
-    }
-
     // Check if expression needs parentheses
     static bool needs_parens(parser_type type) {
         return type == PARSER_CHOICE || type == PARSER_SEQUENCE;
@@ -1026,7 +1170,7 @@ class gbnf_visitor : public parser_visitor {
 
   public:
     void visit(literal_parser & p) override {
-        current_result_ = "\"" + escape_literal(p.literal()) + "\"";
+        current_result_ = gbnf_literal(p.literal());
     }
 
     void visit(sequence_parser & p) override {
@@ -1113,7 +1257,7 @@ class gbnf_visitor : public parser_visitor {
 
     void visit(until_parser & p) override {
         // Generate pattern that matches prefixes but prevents full delimiter match
-        current_result_ = generate_until_pattern(p.delimiter()) + "*";
+        current_result_ = gbnf_excluding_pattern({p.delimiter()});
     }
 
     void visit(not_parser &) override {
