@@ -811,7 +811,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   constexpr unsigned int B_K_STRID = BN / ROW_STEP;
 
   unsigned int masks_a[A_K_STRID][2];
-  unsigned int element_offset_a[A_K_STRID];
+  int64_t element_offset_a[A_K_STRID];
 
   // calculate block/warp indices
   const unsigned int block_m = blockIdx.y;
@@ -867,6 +867,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   float4 B_gmem_cache_reg[4];
 
 
+
   prepareIteratorA<BM, BK, A_K_STRID, ROW_STEP>(thread_idx, masks_a, element_offset_a, param);
 
   // prefetch the first block tile of A,B into shared memory
@@ -874,7 +875,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   const half* A_block_gmem = input;
   const half* B_block_gmem = kernel + block_n * BN * weightKOffset;
 
-  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, 0, 0, masks_a, element_offset_a, thread_idx, start_k, end_k, inChannelOffset, param);
+  tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, 0, 0, masks_a, element_offset_a,
+                                        thread_idx, start_k, end_k, inChannelOffset, param);
   tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, 0, 0, start_k, end_k, weightKOffset, param);
 
   int offset_direction = 1;
@@ -899,6 +901,9 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
           next_idx = 2;
         }
       }
+
+      add_byte_offset<A_K_STRID>(element_offset_a, param.inc_next[next_idx]);
+
       if (next_idx == 2) {
         ++block_k;
       }
@@ -911,7 +916,9 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
     // if (block_k != num_block_tiles_k){
     if (block_krs != num_block_tiles_krs){
-      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, r, s, block_k * BK, start_k, end_k, inChannelOffset, param);
+      tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, r, s,
+                                             masks_a, element_offset_a, thread_idx, block_k * BK,
+                                            start_k, end_k, inChannelOffset, param);
       tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, r, s, block_k * BK, start_k, end_k, weightKOffset, param);
     }
     half* A_warp_tile = A_block_smem + A_warp_tile_offset;
@@ -1096,7 +1103,7 @@ template<const int BM, const int BN, const int BK,
 static void launch_conv2d_implicit_split_kernel(ggml_backend_cuda_context & ctx, const half *X_H, const half *K_H, float *Y_D,
                     const unsigned int BlocksM, const unsigned int BlocksN,
                     const unsigned int shmem_bytes,
-                    const param_t P, cudaStream_t st){
+                    param_t P, cudaStream_t st){
 
         int id = ggml_cuda_get_device();
 
@@ -1109,6 +1116,15 @@ static void launch_conv2d_implicit_split_kernel(ggml_backend_cuda_context & ctx,
         conv2d_implicit_kernel<half, BM, BN, BK,
             WM, WN, WK, ksplit, NUM_THREADS><<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_H.get(), P);
 
+        int64_t inc[3];
+        // next S
+        inc[0] = int64_t(P.c) * P.d_w;
+        // next R
+        inc[1] = int64_t(P.w * P.c) * P.d_h - (P.s - 1) * P.c * P.d_w;
+        // next C
+        inc[2] = BK - int64_t(P.r - 1) * P.w * P.c * P.d_h - int64_t(P.s - 1) * P.c * P.d_w ;
+        memcpy(P.inc_next, inc, sizeof(int64_t)*3);
+
         const unsigned int nrows = P.n * P.k * P.Oh * P.Ow;
         const unsigned int blockx = (nrows + 511) / 512;
         const dim3 block_nums(blockx, 1, 1);
@@ -1116,7 +1132,7 @@ static void launch_conv2d_implicit_split_kernel(ggml_backend_cuda_context & ctx,
         reduce_f32<half, float><<<block_nums, block_dims, 0, st>>>(Y_H.get(), Y_D, nrows, ksplit);
 }
 
-static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const float * X_D, const half * K_D, float * Y_D, int cc, const param_t P, cudaStream_t st) {
+static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const float * X_D, const half * K_D, float * Y_D, int cc, param_t P, cudaStream_t st) {
 
     // if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0 && (P.r > 1 || P.s > 1)) {
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0) {
@@ -1279,6 +1295,15 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
             }
         }
 
+        int64_t inc[3];
+        // next S
+        inc[0] = int64_t(P.c) * P.d_w;
+        // next R
+        inc[1] = int64_t(P.w * P.c) * P.d_h - (P.s - 1) * P.c * P.d_w;
+        // next C
+        inc[2] =  BK_dim - int64_t(P.r - 1) * P.w * P.c * P.d_h - int64_t(P.s - 1) * P.c * P.d_w ;
+        memcpy(P.inc_next, inc, sizeof(int64_t)*3);
+
         cudaFuncSetAttribute(conv2d_implicit_kernel<float, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 0, NumThreads>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
         dim3 gridDim(BlocksN, BlocksM);
@@ -1339,6 +1364,8 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
 
     const uint OC = kernel->ne[3];  // ouptut_chanles
     const uint B  = input->ne[3];   // n_batches
+
+
 
     param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW,
                       init_fastdiv_values(KW*IC),

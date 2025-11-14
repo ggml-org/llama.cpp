@@ -23,6 +23,7 @@ typedef struct{
     uint3 RS_fastdiv;
     uint3 S_fastdiv;
     uint3 OHOW_fastdiv;
+    int64_t inc_next[3];
 } param_t;
 
 
@@ -38,13 +39,21 @@ __host__ __device__ void clear_mask(unsigned int masks_[][2], bool clear = true)
     }
 }
 
+template<const unsigned int K_STRID>
+__host__ __device__ void add_byte_offset(int64_t element_offset[], const int64_t offset){
+#pragma unroll
+    for (int s = 0; s < K_STRID; ++s) {
+       element_offset[s] += offset;
+    }
+}
+
 template<const unsigned int TILE_ROWS,
          const unsigned int TILE_COLS,
          const unsigned int A_K_STRID,
          const unsigned int ROW_STEP>
 __device__ void prepareIteratorA(const int thread_idx,
                                  unsigned int masks[][2],
-                                 unsigned int element_offset[],
+                                 int64_t element_offset[],
                                  const param_t param){
     int offset_n[A_K_STRID];
     int offset_p[A_K_STRID];
@@ -176,8 +185,8 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
     half* dst,
     const unsigned int curR,
     const unsigned int curS,
-    unsigned int masks[][2],
-    unsigned int element_offset[],
+    const unsigned int masks[][2],
+    const int64_t element_offset[],
     const unsigned int thread_idx,
     const unsigned int start_k,
     const unsigned int end_k,
@@ -208,52 +217,52 @@ __device__ __forceinline__ void tileMemcpySwizzleA(
     unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
     const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
 
-    const unsigned int ki = start_k+thread_col*8;
+    // const unsigned int ki = start_k+thread_col*8;
     const unsigned int chw = param.c * param.h * param.w;
     // const unsigned int curR = fastdiv(ki,                                 param.SC_fastdiv); // channel offset
     // const unsigned int curS = fastdiv(fastmodulo(ki,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
     // const unsigned int curC = fastmodulo(fastmodulo(ki, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    const unsigned int curC =  ki;
-    // #pragma unroll
-    // for (unsigned int i = 0; i < NUM_ITERS; i++){
-    //      bool valid = (masks[i][0] & (1u << curR)) && (masks[i][1] & (1u << curS));
-    //     // apply swizzle to the dst index
-    //     unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
-    //     dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
-    //     dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-    //     if (valid && ki < end_k){
-    //         if(element_offset[i]+curC >= 327680 || element_offset[i]+curC < 0)
-    //            printf("%d, %d, %d, %d, %d, %d, %d, %d, %d \n", threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y,
-    //                i, element_offset[i], curR, curS, curC);
-    //         dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[element_offset[i]+curC])[0];
-    //     } else{
-    //         dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
-    //     }
-    //     thread_row += ROW_STEP;
-    // }
+    const unsigned int curC = start_k+thread_col*8;
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
-        unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
-        unsigned int n = fastdiv(gemm_i, param.OHOW_fastdiv);
-        unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
-        int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
-        int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
-        // unsigned int inOffset = n * param.c * param.h * param.w;
-        int curH = posh_ori + curR * param.d_h; // input h
-        int curW = posw_ori + curS * param.d_w; // input w
+         bool valid = (masks[i][0] & (1u << curR)) && (masks[i][1] & (1u << curS));
         // apply swizzle to the dst index
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-        if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
-            curR < param.r && curS < param.s && curC < param.c && n < param.n && ki < end_k){
-            const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
-            dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[n * chw + inOffsetTmp])[0];
+        if (valid && curC < end_k){
+            if(element_offset[i] >= 327680 || element_offset[i] < 0)
+               printf("%d, %d, %d, %d, %d, %d, %d, %d, %d \n", threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y,
+                   i, element_offset[i], curR, curS, curC);
+            dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[element_offset[i]])[0];
         } else{
             dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
         }
         thread_row += ROW_STEP;
     }
+    // #pragma unroll
+    // for (unsigned int i = 0; i < NUM_ITERS; i++){
+    //     unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
+    //     unsigned int n = fastdiv(gemm_i, param.OHOW_fastdiv);
+    //     unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
+    //     int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
+    //     int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
+    //     // unsigned int inOffset = n * param.c * param.h * param.w;
+    //     int curH = posh_ori + curR * param.d_h; // input h
+    //     int curW = posw_ori + curS * param.d_w; // input w
+    //     // apply swizzle to the dst index
+    //     unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
+    //     dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
+    //     dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
+    //     if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
+    //         curR < param.r && curS < param.s && curC < param.c && n < param.n && ki < end_k){
+    //         const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
+    //         dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[n * chw + inOffsetTmp])[0];
+    //     } else{
+    //         dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
+    //     }
+    //     thread_row += ROW_STEP;
+    // }
 #else
     GGML_UNUSED(src);
     GGML_UNUSED(dst);
@@ -272,6 +281,9 @@ __device__ __forceinline__ void tileMemcpyLoadA(
     float4 (&dst_reg)[ELEMENTS_PER_THREAD],
     const unsigned int curR,
     const unsigned int curS,
+    const unsigned int masks[][2],
+    const int64_t element_offset[],
+    const unsigned int thread_idx,
     const unsigned int block_k,
     const unsigned int start_k,
     const unsigned int end_k,
@@ -285,45 +297,52 @@ __device__ __forceinline__ void tileMemcpyLoadA(
     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
 
     // flatten out 2d grid of threads into in order of increasing threadIdx.x
-    const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
-
     // assign each thread a row/column in the tile, calculate how many iterations we need
     // to cover the whole tile
     constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
-    unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
+    // unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
     const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
 
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
 
-    const unsigned int ki = start_k+block_k+thread_col*8;
-    const unsigned int chw = param.c * param.h * param.w;
+    // const unsigned int ki = start_k+block_k+thread_col*8;
+    // const unsigned int chw = param.c * param.h * param.w;
 
     // const unsigned int curR = fastdiv(ki,                                 param.SC_fastdiv); // channel offset
     // const unsigned int curS = fastdiv(fastmodulo(ki,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
     // const unsigned int curC = fastmodulo(fastmodulo(ki, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    const unsigned int curC = ki;
+    const unsigned int curC = start_k+block_k+thread_col*8;;
 
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
-        unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
-        unsigned int n = fastdiv(gemm_i, param.OHOW_fastdiv);
-        unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
-        int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
-        int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
-        // unsigned int inOffset = n * param.c * param.h * param.w;
-        int curH = posh_ori + curR * param.d_h; // input h
-        int curW = posw_ori + curS * param.d_w; // input w
-        if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
-            curR < param.r && curS < param.s && curC < param.c && n < param.n && ki < end_k){
-            const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
-            dst_reg[i] = reinterpret_cast<const float4 *>(&src[n * chw + inOffsetTmp])[0];
+         bool valid = (masks[i][0] & (1u << curR)) && (masks[i][1] & (1u << curS));
+        if (valid && curC < end_k) {
+            dst_reg[i] = reinterpret_cast<const float4 *>(&src[element_offset[i]])[0];
         } else{
             dst_reg[i] = make_float4(0.f, 0.f, 0.f, 0.f);
         }
-        thread_row += ROW_STEP;
     }
+    // #pragma unroll
+    // for (unsigned int i = 0; i < NUM_ITERS; i++){
+    //     unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
+    //     unsigned int n = fastdiv(gemm_i, param.OHOW_fastdiv);
+    //     unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
+    //     int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
+    //     int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
+    //     // unsigned int inOffset = n * param.c * param.h * param.w;
+    //     int curH = posh_ori + curR * param.d_h; // input h
+    //     int curW = posw_ori + curS * param.d_w; // input w
+    //     if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
+    //         curR < param.r && curS < param.s && curC < param.c && n < param.n && ki < end_k){
+    //         const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
+    //         dst_reg[i] = reinterpret_cast<const float4 *>(&src[n * chw + inOffsetTmp])[0];
+    //     } else{
+    //         dst_reg[i] = make_float4(0.f, 0.f, 0.f, 0.f);
+    //     }
+    //     thread_row += ROW_STEP;
+    // }
 #else
     GGML_UNUSED(src);
     GGML_UNUSED(dst_reg);
