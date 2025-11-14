@@ -1212,12 +1212,13 @@ class MultiChatUI {
      */
     show_message(elParent, msg, iFromLast, nextMsg) {
         // Handle ToolTemp
-        if (msg.ns.role === Roles.ToolTemp) {
-            if (iFromLast == 0) {
+        if (iFromLast == 0) {
+            if (msg.ns.role === Roles.ToolTemp) {
                 this.elInUser.value = msg.ns.getContent();
-                this.elInUser.dataset.role = Roles.ToolTemp
+            } else {
+                this.elInUser.value = "";
             }
-            return
+            this.elInUser.dataset.role = msg.ns.role
         }
         // Create main section
         let secMain = document.createElement('section')
@@ -1274,7 +1275,7 @@ class MultiChatUI {
             img.src = msg.ns.image_url
             secContents?.append(img)
         }
-        // Handle tool call ui, if reqd
+        // Handle tool call edit/trigger ui, if reqd
         let bTC = false
         let bAuto = false
         if (msg.ns.role === Roles.Assistant) {
@@ -1290,8 +1291,8 @@ class MultiChatUI {
                 this.ui_reset_toolcall_as_needed(msg, bAuto);
             }
         }
-        // Handle tool call non ui
-        if (msg.ns.tool_calls && !bTC) {
+        // Handle tool call message show
+        if (msg.ns.tool_calls) {
             for (const tc of msg.ns.tool_calls) {
                 this.show_message_toolcall(secContents, tc)
             }
@@ -1322,8 +1323,8 @@ class MultiChatUI {
         let chat = this.simpleChats[this.curChatId];
         if (bClear) {
             this.elDivChat.replaceChildren();
-            this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         }
+        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
         let chatToShow = chat.recent_chat(this.me.chatProps.iRecentUserMsgCnt);
         for(const [i, x] of chatToShow.entries()) {
@@ -1348,14 +1349,19 @@ class MultiChatUI {
 
     /**
      * Remove the specified ChatMessage block in ui, without needing to show full chat session again.
+     * @param {string} curChatId
      * @param {number} uniqIdChatMsg
      */
-    ui_chatmessage_delete(uniqIdChatMsg) {
-        let index = this.simpleChats[this.curChatId].delete(uniqIdChatMsg)
-        if (index >= 0) {
-            let el = document.querySelector(`[CMUniqId="${uniqIdChatMsg}"`)
-            console.log(el)
+    ui_chatmessage_delete(curChatId, uniqIdChatMsg) {
+        let index = this.simpleChats[curChatId].delete(uniqIdChatMsg)
+        if ((index >= 0) && (curChatId == this.curChatId)) {
+            let el = document.querySelector(`[CMUniqId="${uniqIdChatMsg}"]`)
             el?.remove()
+            if (index >= (this.simpleChats[curChatId].xchat.length-1)) {
+                // so that tool call edit/trigger control etal can be controlled suitably
+                // from a single place - need to add that centrally controlled logic flor still.
+                this.chat_show(curChatId)
+            }
         }
     }
 
@@ -1455,7 +1461,7 @@ class MultiChatUI {
 
         this.elPopoverChatMsgDelBtn.addEventListener('click', (ev) => {
             console.log(`DBUG:MCUI:ChatMsgPO:Del:${this.curChatId}:${this.uniqIdChatMsgPO}`)
-            this.ui_chatmessage_delete(this.uniqIdChatMsgPO)
+            this.ui_chatmessage_delete(this.curChatId, this.uniqIdChatMsgPO)
         })
 
         this.elPopoverChatMsgCopyBtn.addEventListener('click', (ev) => {

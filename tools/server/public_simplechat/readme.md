@@ -760,6 +760,13 @@ sliding window based drop off or even before they kick in, this can help in many
     * have a del button, which allows one to delete the currently in focus chat message.
     * have a copy button, which allows one to copy the textual content into system clipboard.
 
+* MultiChatUI
+  * chat_show takes care of showing or clearing tool call edit / trigger as well as tool response
+    edit / submit. Also show the currently active tool call and its response before it is submit
+    was previously only shown in the edit / trigger and edit / submit ui elements, now instead it
+    also shows as part of the chat session message blocks, so that user can delete or copy these
+    if needed using the same mechanism as other messages in the chat session.
+
 
 #### ToDo
 
