@@ -421,7 +421,46 @@ struct llm_build_qwen3vl : public llm_graph_context {
 struct llm_build_qwen3vlmoe : public llm_graph_context {
     llm_build_qwen3vlmoe(const llama_model & model, const llm_graph_params & params);
 };
+struct llm_build_qwen3next : public llm_graph_context_mamba {
+    llm_build_qwen3next(const llama_model & model, const llm_graph_params & params);
+private:
+    ggml_tensor * build_qwen3next_attention_layer(  ggml_tensor             * cur,
+                                                    ggml_tensor             * inp_pos,
+                                                    llm_graph_input_attn_kv * inp_attn,
+                                                    const llama_model       & model,
+                                                    int64_t                   n_embd_head,
+                                                    int                       il);
+    ggml_tensor * build_qwen3next_linear_attn_layer(llm_graph_input_rs      * inp,
+                                                    ggml_tensor             * cur,
+                                                    const llama_model       & model,
+                                                    const llama_ubatch      & ubatch,
+                                                    ggml_tensor             * causal_mask,
+                                                    ggml_tensor             * identity,
+                                                    int                       il);
+    ggml_tensor * build_layer_ffn(                  ggml_tensor             * cur, 
+                                                    const llama_model       & model,  
+                                                    int                       il);
+    ggml_tensor * delta_net_unified(                ggml_context            * ctx,
+                                                    ggml_tensor             * q,
+                                                    ggml_tensor             * k,
+                                                    ggml_tensor             * v,
+                                                    ggml_tensor             * g,
+                                                    ggml_tensor             * beta,
+                                                    ggml_tensor             * state,
+                                                    ggml_tensor             * causal_mask,
+                                                    ggml_tensor             * identity,
+                                                    bool                      use_qk_l2norm,
+                                                    float                     eps_norm,
+                                                    int                       il);
+    ggml_tensor * build_q3n_norm(                   ggml_tensor             * input, 
+                                                    ggml_tensor             * weights, 
+                                                    int                       layer);
 
+    ggml_tensor * build_q3n_gated_norm(             ggml_tensor             * input,
+                                                    ggml_tensor             * weights,
+                                                    ggml_tensor             * gate,
+                                                    int                       layer);
+};
 
 struct llm_build_qwen : public llm_graph_context {
     llm_build_qwen(const llama_model & model, const llm_graph_params & params);
