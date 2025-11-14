@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Native Windows 11 arm64 builds require the following tools:
+Native Windows 11 arm64 builds has the following tools dependencies:
 - MS Visual Studio 2022 or later (Community Edition or Pro)
   - MSVC arm64 standard and runtime libraries
 - LLVM core libraries and Clang compiler (winget)
@@ -28,19 +28,18 @@ First let's setup the Hexagon SDK:
 ```
 PS ...> cd C:\Qualcomm\Hexagon_SDK\6.4.0.0\
 PS C:\Qualcomm\Hexagon_SDK\6.4.0.0> .\setup_sdk_env.ps1
-PS C:\Qualcomm\Hexagon_SDK\6.4.0.0> cd c:\...\workspace\llama.cpp
 ```
 
-Now build llama.cpp with CPU, OpenCL, and Hexagon backends via CMake presets:
+Now build llama.cpp with CPU and Hexagon backends via CMake presets:
 
 ```
+PS ...> cd c:\...\workspace\llama.cpp
 PS ...\workspace\llama.cpp> cp docs/backend/hexagon/CMakeUserPresets.json .
 
 PS ...\workspace\llama.cpp> cmake --preset arm64-windows-snapdragon-release -B build-snapdragon
 -- The C compiler identification is Clang 21.1.1 with GNU-like command-line
 -- The CXX compiler identification is Clang 21.1.1 with GNU-like command-line
 ...
--- Including OpenCL backend
 -- Including Hexagon backend
 ...
 -- Build files have been written to: /workspace/llama.cpp/build-snapdragon
@@ -58,7 +57,7 @@ PS ...\workspace\llama.cpp> cmake --build build-snapdragon
 ...
 ```
 
-To generate an installable "package" simply use cmake --install:
+To generate an installable "package" simply run cmake --install:
 
 ```
 PS ...\workspace\llama.cpp> cmake --install .\build-snapdragon --prefix pkg-snapdragon
@@ -84,7 +83,7 @@ PS ...\workspace\llama.cpp> cmake --install .\build-snapdragon --prefix pkg-snap
 ## How to Sign Generated Artifacts
 
 Prior to running any of the llama.cpp tools, the generated artifacts have to be signed.
-Copy the assets from _\\fringe\morpheus_sandiego_hetai\users\todorb\wos\*_ to the pkg install i.e. _...\workspace\llama.cpp\pkg-snapdragon\lib\_ and then sing the artifacts:
+Copy the assets from \\fringe\morpheus_sandiego_hetai\users\todorb\wos\* to the pkg install i.e. ...\workspace\llama.cpp\pkg-snapdragon\lib\ and then sing the artifacts:
 
 ```
 PS ...\workspace\llama.cpp> cd pkg-snapdragon\lib
