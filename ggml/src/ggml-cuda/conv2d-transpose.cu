@@ -17,9 +17,9 @@ struct conv2d_transpose_params {
     const int total;
 };
 
-template <typename T>
+template <typename kernel_t>
 static __global__ void conv2d_transpose_kernel(const float * __restrict__ input,
-                                               const T * __restrict__ kernel,
+                                               const kernel_t * __restrict__ kernel,
                                                float * __restrict__ output,
                                                const int in_w,
                                                const int in_h,
@@ -72,8 +72,8 @@ static __global__ void conv2d_transpose_kernel(const float * __restrict__ input,
                 const int kernel_idx =
                     (kernel_h * kernel_w * c_out) * c_in_idx + (kernel_h * kernel_w) * c_idx + (kernel_w) *kh + kw;
 
-                float input_val = input[input_idx];
-                T     kern_val  = kernel[kernel_idx];
+                float    input_val = input[input_idx];
+                kernel_t kern_val  = kernel[kernel_idx];
 
                 accumulator += input_val * ggml_cuda_cast<float>(kern_val);
             }
@@ -83,33 +83,18 @@ static __global__ void conv2d_transpose_kernel(const float * __restrict__ input,
     output[(out_w * out_h * c_out) * n_idx + (out_w * out_h) * c_idx + (out_w) *out_y_idx + out_x_idx] = accumulator;
 }
 
-template <typename T>
+template <typename kernel_t>
 static void conv2d_transpose_cuda(const float *                   input,
-                                  const T *                       kernel,
+                                  const kernel_t *                kernel,
                                   float *                         output,
                                   const conv2d_transpose_params & params,
                                   cudaStream_t                    st) {
     const int blocks = (params.total + CUDA_CONV2D_TRANSPOSE_BLOCK_SIZE - 1) / CUDA_CONV2D_TRANSPOSE_BLOCK_SIZE;
-    conv2d_transpose_kernel<T><<<blocks, CUDA_CONV2D_TRANSPOSE_BLOCK_SIZE, 0, st>>>(
+    conv2d_transpose_kernel<kernel_t><<<blocks, CUDA_CONV2D_TRANSPOSE_BLOCK_SIZE, 0, st>>>(
         input, kernel, output, params.in_w, params.in_h, params.out_w, params.out_h, params.kernel_w, params.kernel_h,
         params.stride, params.c_in, params.c_out, params.batches);
 }
 
-static void conv2d_transpose_cuda_f16(const float *                   input,
-                                      const half *                    kernel,
-                                      float *                         output,
-                                      const conv2d_transpose_params & params,
-                                      cudaStream_t                    st) {
-    conv2d_transpose_cuda<half>(input, kernel, output, params, st);
-}
-
-static void conv2d_transpose_cuda_f32(const float *                   input,
-                                      const float *                   kernel,
-                                      float *                         output,
-                                      const conv2d_transpose_params & params,
-                                      cudaStream_t                    st) {
-    conv2d_transpose_cuda<float>(input, kernel, output, params, st);
-}
 //input is (W, H, C_in, N), Kernel is (W, H, C_out, C_in)
 void ggml_cuda_conv_2d_transpose_p0(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * kernel = dst->src[0];
@@ -142,13 +127,13 @@ void ggml_cuda_conv_2d_transpose_p0(ggml_backend_cuda_context & ctx, ggml_tensor
     GGML_ASSERT(ggml_is_contiguous(kernel));
     GGML_ASSERT(ggml_is_contiguous(dst));
 
-    const int total  = (output_w * output_h * channels_out * batches);
+    const int               total  = (output_w * output_h * channels_out * batches);
     conv2d_transpose_params params = { input_w, input_h,     output_w,     output_h, kernel_w, kernel_h,
                                        stride,  channels_in, channels_out, batches,  total };
 
     if (kernel->type == GGML_TYPE_F16) {
-        conv2d_transpose_cuda_f16(input_data, (const half *) kernel_data, output_data, params, st);
+        conv2d_transpose_cuda<half>(input_data, (const half *) kernel_data, output_data, params, st);
     } else {
-        conv2d_transpose_cuda_f32(input_data, (const float *) kernel_data, output_data, params, st);
+        conv2d_transpose_cuda<float>(input_data, (const float *) kernel_data, output_data, params, st);
     }
 }
