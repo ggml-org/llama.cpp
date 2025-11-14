@@ -885,12 +885,12 @@ static void test_command_r7b_parser(const parser & p, const std::string & input,
 
         if (ev.rule == "tool-call-id-value" && ev.ending() && ev.success()) {
             auto & tc = env.result.tool_calls.back();
-            tc.id = ev.text;
+            tc.id = nlohmann::json::parse(ev.text).get<std::string>();
         }
 
         if (ev.rule == "tool-name-value" && ev.ending() && ev.success()) {
             auto & tc = env.result.tool_calls.back();
-            tc.name = ev.text;
+            tc.name = nlohmann::json::parse(ev.text).get<std::string>();
         }
 
         if (ev.rule == "tool-args-value" && ev.ending() && (ev.success() || ev.partial())) {
