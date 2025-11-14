@@ -822,6 +822,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   const unsigned int warp_m = threadIdx.y;
   const unsigned int warp_n = threadIdx.x / 32;
   const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
+  unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
+  const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
 
   // double buffering
   extern __shared__ half shmem[];
@@ -871,7 +873,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
 
 
-  prepareIteratorA<BM, BK, A_K_STRID, ROW_STEP>(thread_idx, masks_a, element_offset_a, param);
+  prepareIteratorA<BM, BK, A_K_STRID, ROW_STEP>(thread_row, masks_a, element_offset_a, param);
 
   // for(int kk =0; kk < A_K_STRID; kk++){
   //     if(element_offset_a[kk] >= 327680)
@@ -894,8 +896,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   const half* B_block_gmem = kernel + block_n * BN * param.weightKOffset;
 
   unsigned int curC = tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, 0, 0, masks_a, element_offset_a,
-                                                          thread_idx, start_k, end_k, param);
-  tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, 0, 0, start_k, end_k, param);
+                                                        thread_row, thread_col, start_k, end_k, param);
+  tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, 0, 0, start_k, end_k, thread_row, thread_col, param);
 
   int offset_direction = 1;
   unsigned int block_k = 0;
@@ -947,9 +949,10 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     // if (block_k != num_block_tiles_k){
     if (block_krs != num_block_tiles_krs){
       curC = tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, r, s,
-                                             masks_a, element_offset_a, thread_idx, block_k * BK,
+                                             masks_a, element_offset_a, thread_row, thread_col, block_k * BK,
                                             start_k, end_k, curC, param);
-      tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, r, s, block_k * BK, start_k, end_k, param);
+      tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, r, s, block_k * BK,
+                                     start_k, end_k, thread_row, thread_col, param);
     }
 
     half* A_warp_tile = A_block_smem + A_warp_tile_offset;
@@ -1002,8 +1005,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
       B_block_smem = B_block_smem + BUFFER_SIZE * offset_direction;
       offset_direction = -1 * offset_direction;
 
-      tileMemcpySwizzleStore<BM, NUM_THREADS, 4>(A_gmem_cache_reg, A_block_smem);
-      tileMemcpySwizzleStore<BN, NUM_THREADS, 4>(B_gmem_cache_reg, B_block_smem);
+      tileMemcpySwizzleStore<BM, NUM_THREADS, 4>(A_gmem_cache_reg, A_block_smem, thread_row, thread_col);
+      tileMemcpySwizzleStore<BN, NUM_THREADS, 4>(B_gmem_cache_reg, B_block_smem, thread_row, thread_col);
     }
 
     block_krs++;
@@ -1413,7 +1416,8 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
                       IC*KW*KH,
                       OW*OH,
                       OC*OW*OH,
-                      B*OC*OW*OH};
+                      B*OC*OW*OH,
+                      IC*IW*IH};
 
     if (kernel->type == GGML_TYPE_F16) {
         conv2d_implicit_cuda_f16(ctx, X_D, (half *) K_D, Y_D, cc, params, st);
