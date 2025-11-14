@@ -493,6 +493,73 @@ static void test_sax_events() {
     }
 }
 
+static void test_triggers() {
+    {
+        // Test basic trigger functionality with lazy mode
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
+            auto greeting = p.trigger(p.literal("hello"));
+            auto farewell = p.trigger(p.literal("goodbye"));
+            return greeting | farewell;
+        });
+
+        // Non-lazy mode: triggers are transparent
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder, false);
+        });
+
+        assert_equals(true, gbnf.find("root ::= \"hello\" | \"goodbye\"") != std::string::npos);
+
+        // Lazy mode: triggers create synthetic rules
+        auto gbnf_lazy = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder, true);
+        });
+
+        // Should have trigger-1 and trigger-2 synthetic rules
+        assert_equals(true, gbnf_lazy.find("trigger-1 ::= \"hello\"") != std::string::npos);
+        assert_equals(true, gbnf_lazy.find("trigger-2 ::= \"goodbye\"") != std::string::npos);
+        // Root should be alternation of triggers
+        assert_equals(true, gbnf_lazy.find("root ::= trigger-1 | trigger-2") != std::string::npos);
+    }
+    {
+        // Test that only reachable rules from triggers are generated
+        auto parser = build_combinator_parser([](common_chat_combinator_parser_builder& p) {
+            // Add multiple rules
+            auto digit = p.add_rule("digit", p.one("[0-9]"));
+            auto letter = p.add_rule("letter", p.one("[a-z]"));
+            auto word = p.add_rule("word", p.one_or_more(letter));
+            auto number = p.add_rule("number", p.one_or_more(digit));
+
+            // Only trigger the word path, not the number path
+            auto triggered_word = p.trigger(word);
+            return triggered_word;
+        });
+
+        // Non-lazy mode: all rules generated
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder, false);
+        });
+
+        assert_equals(true, gbnf.find("digit ::=") != std::string::npos);
+        assert_equals(true, gbnf.find("letter ::=") != std::string::npos);
+        assert_equals(true, gbnf.find("word ::=") != std::string::npos);
+        assert_equals(true, gbnf.find("number ::=") != std::string::npos);
+
+        // Lazy mode: only rules reachable from trigger
+        auto gbnf_lazy = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder, true);
+        });
+
+        // Should have letter and word (reachable from trigger)
+        assert_equals(true, gbnf_lazy.find("letter ::=") != std::string::npos);
+        assert_equals(true, gbnf_lazy.find("word ::=") != std::string::npos);
+        // Should NOT have digit and number (not reachable from trigger)
+        assert_equals(true, gbnf_lazy.find("digit ::=") == std::string::npos);
+        assert_equals(true, gbnf_lazy.find("number ::=") == std::string::npos);
+        // Should have trigger-1 synthetic rule
+        assert_equals(true, gbnf_lazy.find("trigger-1 ::=") != std::string::npos);
+    }
+}
+
 static void test_gbnf_generation() {
     {
         // Test literal
@@ -1056,6 +1123,7 @@ int main() {
     test_json_parser();
     test_actions();
     test_sax_events();
+    test_triggers();
     test_gbnf_generation();
     std::cout << "All tests passed!\n";
 

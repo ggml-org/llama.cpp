@@ -8,6 +8,7 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <unordered_set>
 
 enum parser_type {
     LITERAL,
@@ -1269,13 +1270,81 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
     return generic_excluding_pattern(strings, gbnf_literal, gbnf_escape_char_class, true);
 }
 
+// Visitor for collecting reachable rules from a subtree
+class reachability_visitor : public parser_visitor {
+    std::unordered_set<std::string> & reachable_rules_;
+    std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules_;
+
+  public:
+    reachability_visitor(
+        std::unordered_set<std::string> & reachable_rules,
+        std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules
+    ) : reachable_rules_(reachable_rules), rules_(rules) {}
+
+    void visit(literal_parser &) override {}
+    void visit(any_parser &) override {}
+    void visit(space_parser &) override {}
+    void visit(json_string_parser &) override {}
+    void visit(chars_parser &) override {}
+    void visit(until_parser &) override {}
+    void visit(and_parser & p) override { p.child()->accept(*this); }
+    void visit(not_parser & p) override { p.child()->accept(*this); }
+
+    void visit(sequence_parser & p) override {
+        for (const auto & child : p.parsers()) {
+            child->accept(*this);
+        }
+    }
+
+    void visit(choice_parser & p) override {
+        for (const auto & child : p.parsers()) {
+            child->accept(*this);
+        }
+    }
+
+    void visit(one_or_more_parser & p) override { p.child()->accept(*this); }
+    void visit(zero_or_more_parser & p) override { p.child()->accept(*this); }
+    void visit(optional_parser & p) override { p.child()->accept(*this); }
+    void visit(repetition_parser & p) override { p.child()->accept(*this); }
+    void visit(schema_parser & p) override { p.child()->accept(*this); }
+    void visit(action_parser & p) override { p.child()->accept(*this); }
+    void visit(trigger_parser & p) override { p.child()->accept(*this); }
+
+    void visit(rule_parser & p) override {
+        const std::string & name = p.name();
+        // If we've already processed this rule, skip to avoid infinite recursion
+        if (reachable_rules_.find(name) != reachable_rules_.end()) {
+            return;
+        }
+        reachable_rules_.insert(name);
+
+        // Recursively visit the rule's definition
+        if (rules_) {
+            auto it = rules_->find(name);
+            if (it != rules_->end()) {
+                it->second->accept(*this);
+            }
+        }
+    }
+
+    void visit(root_parser & p) override {
+        p.root()->accept(*this);
+    }
+};
+
 class gbnf_visitor : public parser_visitor {
     const common_grammar_builder & builder_;
     std::unordered_map<std::string, std::string> rule_name_mapping_;
     std::string current_result_;
+    bool lazy_;
+    std::vector<std::string> trigger_names_;
+    std::unordered_set<std::string> reachable_rules_;
+    int trigger_counter_;
+    std::vector<std::shared_ptr<common_chat_combinator_parser_base>> triggers_;
 
   public:
-    gbnf_visitor(const common_grammar_builder & builder) : builder_(builder) {}
+    gbnf_visitor(const common_grammar_builder & builder, bool lazy = false)
+        : builder_(builder), lazy_(lazy), trigger_counter_(0) {}
 
     const std::string& result() const { return current_result_; }
 
@@ -1283,6 +1352,18 @@ class gbnf_visitor : public parser_visitor {
     // Check if expression needs parentheses
     static bool needs_parens(parser_type type) {
         return type == CHOICE || type == SEQUENCE;
+    }
+
+    // Collect all reachable rules from the given triggers
+    void collect_reachable_rules(
+        const std::vector<std::shared_ptr<common_chat_combinator_parser_base>> & triggers,
+        std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules
+    ) {
+        reachable_rules_.clear();
+        reachability_visitor visitor(reachable_rules_, rules);
+        for (const auto & trigger : triggers) {
+            trigger->accept(visitor);
+        }
     }
 
   public:
@@ -1445,10 +1526,48 @@ class gbnf_visitor : public parser_visitor {
     }
 
     void visit(root_parser & p) override {
-        // Generate named rules first
         auto rules = p.rules();
+
+        if (!lazy_) {
+            // Non-lazy mode: generate all rules eagerly
+            if (rules) {
+                for (const auto & [name, rule] : *rules) {
+                    rule->accept(*this);
+                    auto rule_body = current_result_;
+                    auto canonical_name = builder_.add_rule(name, rule_body);
+                    rule_name_mapping_[name] = canonical_name;
+                }
+            }
+
+            // Return root body for composition
+            p.root()->accept(*this);
+            return;
+        }
+
+        // Lazy mode: only generate rules reachable from triggers
+
+        // First pass: traverse root to collect triggers and generate synthetic rules
+        // (visit(trigger_parser) will populate triggers_ and trigger_names_)
+        p.root()->accept(*this);
+
+        // Check if we found any triggers
+        if (triggers_.empty()) {
+            LOG_ERR("Lazy grammar generation enabled but no trigger nodes found\n");
+            current_result_ = "";
+            return;
+        }
+
+        // Second pass: collect all rules reachable from triggers
+        collect_reachable_rules(triggers_, rules);
+
+        // Third pass: generate only reachable rules
         if (rules) {
             for (const auto & [name, rule] : *rules) {
+                // Skip rules that aren't reachable
+                if (reachable_rules_.find(name) == reachable_rules_.end()) {
+                    continue;
+                }
+
                 rule->accept(*this);
                 auto rule_body = current_result_;
                 auto canonical_name = builder_.add_rule(name, rule_body);
@@ -1456,8 +1575,8 @@ class gbnf_visitor : public parser_visitor {
             }
         }
 
-        // Return root body for composition
-        p.root()->accept(*this);
+        // Generate root as alternation of trigger rules
+        current_result_ = string_join(trigger_names_, " | ");
     }
 
     void visit(action_parser & p) override {
@@ -1466,7 +1585,29 @@ class gbnf_visitor : public parser_visitor {
     }
 
     void visit(trigger_parser & p) override {
+        if (!lazy_) {
+            // Non-lazy mode: transparent pass-through
+            p.child()->accept(*this);
+            return;
+        }
+
+        // Lazy mode: create synthetic rule for this trigger
+        ++trigger_counter_;
+        std::string trigger_name = "trigger-" + std::to_string(trigger_counter_);
+
+        // Visit child to generate its grammar
         p.child()->accept(*this);
+        std::string child_grammar = current_result_;
+
+        // Add synthetic rule
+        builder_.add_rule(trigger_name, child_grammar);
+        trigger_names_.push_back(trigger_name);
+
+        // Store trigger for reachability analysis
+        triggers_.push_back(p.child().ptr());
+
+        // Return the trigger rule reference
+        current_result_ = trigger_name;
     }
 };
 
@@ -1561,8 +1702,8 @@ std::string common_chat_combinator_parser::dump() const {
     return ptr_->dump();
 }
 
-void common_chat_combinator_parser::build_grammar(const common_grammar_builder & builder) const {
-    gbnf_visitor visitor(builder);
+void common_chat_combinator_parser::build_grammar(const common_grammar_builder & builder, bool lazy) const {
+    gbnf_visitor visitor(builder, lazy);
     ptr_->accept(visitor);
     auto result = visitor.result();
     if (!result.empty()) {

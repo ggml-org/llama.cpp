@@ -164,7 +164,7 @@ class common_chat_combinator_parser {
 
     std::string dump() const;
 
-    void build_grammar(const common_grammar_builder & builder) const;
+    void build_grammar(const common_grammar_builder & builder, bool lazy = false) const;
 };
 
 common_chat_combinator_parser operator+(const char * lhs, const common_chat_combinator_parser & rhs);
