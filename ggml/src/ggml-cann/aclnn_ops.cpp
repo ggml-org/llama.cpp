@@ -2790,7 +2790,6 @@ void ggml_cann_count_equal(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
 
     GGML_CANN_CALL_ACLNN_OP(ctx, InplaceEqTensor, acl_self.get(), acl_other.get());
 
-    // TODO
     ggml_cann_sum(ctx, dst);
 }
 

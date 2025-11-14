@@ -44,46 +44,19 @@
  */
 aclDataType ggml_cann_type_mapping(ggml_type type);
 
-// Deleter for aclTensor.
-struct acl_tensor_deleter {
-    void operator()(aclTensor * ptr) const noexcept {
-        if (ptr != nullptr) {
-            ACL_CHECK(aclDestroyTensor(ptr));
+// Deleter for acl objects.
+template <typename T, aclError (*DestroyFunc)(const T *)> struct acl_deleter {
+    void operator()(T * ptr) const noexcept {
+        if (ptr) {
+            ACL_CHECK(DestroyFunc(ptr));
         }
     }
 };
 
-// Deleter for aclIntArray.
-struct acl_int_array_deleter {
-    void operator()(aclIntArray * ptr) const noexcept {
-        if (ptr != nullptr) {
-            ACL_CHECK(aclDestroyIntArray(ptr));
-        }
-    }
-};
-
-// Deleter for aclScalar.
-struct acl_scalar_deleter {
-    void operator()(aclScalar * ptr) const noexcept {
-        if (ptr != nullptr) {
-            ACL_CHECK(aclDestroyScalar(ptr));
-        }
-    }
-};
-
-// Deleter for aclTensorList.
-struct acl_tensor_list_deleter {
-    void operator()(aclTensorList * ptr) const noexcept {
-        if (ptr != nullptr) {
-            ACL_CHECK(aclDestroyTensorList(ptr));
-        }
-    }
-};
-
-using acl_tensor_ptr      = std::unique_ptr<aclTensor, acl_tensor_deleter>;
-using acl_int_array_ptr   = std::unique_ptr<aclIntArray, acl_int_array_deleter>;
-using acl_scalar_ptr      = std::unique_ptr<aclScalar, acl_scalar_deleter>;
-using acl_tensor_list_ptr = std::unique_ptr<aclTensorList, acl_tensor_list_deleter>;
+using acl_tensor_ptr      = std::unique_ptr<aclTensor, acl_deleter<aclTensor, aclDestroyTensor>>;
+using acl_int_array_ptr   = std::unique_ptr<aclIntArray, acl_deleter<aclIntArray, aclDestroyIntArray>>;
+using acl_scalar_ptr      = std::unique_ptr<aclScalar, acl_deleter<aclScalar, aclDestroyScalar>>;
+using acl_tensor_list_ptr = std::unique_ptr<aclTensorList, acl_deleter<aclTensorList, aclDestroyTensorList>>;
 
 /**
  * @brief   Creates an ACL tensor from a ggml_tensor with optional shape.
