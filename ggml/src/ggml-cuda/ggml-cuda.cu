@@ -4142,7 +4142,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             if (op->type         != GGML_TYPE_F32) {
                 return false;
             }
-            
+
             return true;
         } break;
         case GGML_OP_IM2COL:
