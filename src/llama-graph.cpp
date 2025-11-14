@@ -464,10 +464,16 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
 }
 
 void llm_graph_input_sampling::set_input(const llama_ubatch * ubatch) {
+      set_input(ubatch, nullptr);
+  }
+
+
+void llm_graph_input_sampling::set_input(const llama_ubatch * ubatch, llama_context * ctx) {
     GGML_UNUSED(ubatch);
+    GGML_UNUSED(ctx);
     for (const auto & [seq_id, sampler] : samplers) {
         if (sampler->iface->set_input_ggml) {
-            sampler->iface->set_input_ggml(sampler);
+            sampler->iface->set_input_ggml(sampler, ctx);
         }
     }
 }
@@ -527,9 +533,9 @@ void llm_graph_result::reset() {
     gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
 }
 
-void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
+void llm_graph_result::set_inputs(const llama_ubatch * ubatch, llama_context * ctx) {
     for (auto & input : inputs) {
-        input->set_input(ubatch);
+        input->set_input(ubatch, ctx);
     }
 }
 
@@ -2057,11 +2063,14 @@ void llm_graph_context::build_sampling(const llama_model & model, const llm_grap
 
     std::unordered_map<llama_seq_id, int32_t> seq_to_logit_row;
     int32_t logit_row_idx = 0;
+    std::unordered_map<llama_seq_id, int32_t> batch_info;
 
     for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
         if (ubatch.output[i]) {
             llama_seq_id seq_id = ubatch.seq_id[i][0];
             seq_to_logit_row[seq_id] = logit_row_idx;
+            batch_info[seq_id] = i;
+            printf("seq %d : batch idx %d\n", seq_id, i);
             logit_row_idx++;
         }
     }
@@ -2105,6 +2114,7 @@ void llm_graph_context::build_sampling(const llama_model & model, const llm_grap
             /*.probs          =*/ nullptr,
             /*.sampled_token  =*/ nullptr,
             /*.filtered_ids   =*/ nullptr,
+            /*.batch_idx      =*/ batch_info.at(it->first),
         };
 
         llama_sampler_apply_ggml(sampler, ctx0, gf, &ggml_data);

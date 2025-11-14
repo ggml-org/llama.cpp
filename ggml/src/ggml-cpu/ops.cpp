@@ -9227,6 +9227,82 @@ void ggml_compute_forward_add_rel_pos(
     }
 }
 
+// ggml_compute_forward_penalties
+
+static void ggml_compute_forward_penalties_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * logits_t    = dst->src[0];
+    const ggml_tensor * history_t   = dst->src[1];
+    const ggml_tensor * n_history_t = dst->src[2];
+
+    GGML_ASSERT(logits_t->type    == GGML_TYPE_F32);
+    GGML_ASSERT(history_t->type   == GGML_TYPE_I32);
+    GGML_ASSERT(n_history_t->type == GGML_TYPE_I32);
+
+    const float repeat  = ggml_get_op_params_f32(dst, 0);
+    const float freq    = ggml_get_op_params_f32(dst, 1);
+    const float present = ggml_get_op_params_f32(dst, 2);
+
+    const int32_t n_vocab = logits_t->ne[0];
+    const int32_t last_n  = history_t->ne[0];
+
+    // Copy logits to dst first
+    if (params->ith == 0) {
+        memcpy((char *) dst->data, (char *) logits_t->data, ggml_nbytes(dst));
+    }
+    ggml_barrier(params->threadpool);
+
+    float         * dst_data     = (float *)    dst->data;
+    const int32_t * history_data = (int32_t *)  history_t->data;
+    const int32_t   n_history    = *(int32_t *) n_history_t->data;
+
+    const int32_t actual_size = (n_history < 0) ? 0 : ((n_history > last_n) ? last_n : n_history);
+
+    if (params->ith == 0) {
+        int32_t * token_count = (int32_t *) calloc(n_vocab, sizeof(int32_t));
+        for (int32_t i = 0; i < actual_size; i++) {
+            int32_t token = history_data[i];
+            if (token >= 0 && token < n_vocab) {
+                token_count[token]++;
+            }
+        }
+
+        for (int32_t token = 0; token < n_vocab; token++) {
+            int32_t count = token_count[token];
+            if (count > 0) {
+                if (repeat != 1.0f) {
+                    if (dst_data[token] > 0.0f) {
+                        dst_data[token] /= repeat;
+                    } else {
+                        dst_data[token] *= repeat;
+                    }
+                }
+                float penalty = (freq * count) + (present > 0 ? present : 0.0f);
+                dst_data[token] -= penalty;
+            }
+        }
+
+        free(token_count);
+    }
+}
+
+void ggml_compute_forward_penalties(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * logits = dst->src[0];
+
+    switch (logits->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_penalties_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_rwkv_wkv6
 
 static void ggml_compute_forward_rwkv_wkv6_f32(

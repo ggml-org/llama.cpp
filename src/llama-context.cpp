@@ -942,7 +942,16 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     {
         //const auto t_start_us = ggml_time_us();
 
-        res->set_inputs(&ubatch);
+        // Passing in the llama_context is done to enable gpu/device samplers
+        // to be able to call llama_get_sampled_token_ith to get previous tokens
+        // if needed.
+        res->set_inputs(&ubatch, this);
+
+        // Clear sampled tokens after setting inputs to allow gpu/device
+        // samplers to access the previous sampled tokens if needed. This way
+        // the don't have to copy the sampled tokens to host memory.
+        sampled_tokens_map.clear();
+        sampled_token_ids_map.clear();
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
@@ -1171,10 +1180,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
-    sampled_tokens_map.clear();
     sampled_probs_map.clear();
     sampled_logits_map.clear();
-    sampled_token_ids_map.clear();
     output_swaps.clear();
 
     bool did_optimize = false;
@@ -2417,7 +2424,7 @@ void llama_context::opt_epoch_iter(
             ggml_opt_prepare_alloc(opt_ctx, ctx_compute_opt, gf, res->get_tokens(), res->get_logits());
             ggml_opt_alloc(opt_ctx, train);
 
-            res->set_inputs(&ubatch);
+            res->set_inputs(&ubatch, this);
             {
                 struct ggml_tensor * labels = ggml_opt_labels(opt_ctx);
                 GGML_ASSERT(labels->ne[1] == n_ubatch);

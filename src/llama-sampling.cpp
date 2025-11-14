@@ -390,9 +390,9 @@ void llama_sampler_accept_ggml(
     }
 }
 
-void llama_sampler_set_input_ggml(struct llama_sampler * smpl) {
+void llama_sampler_set_input_ggml(struct llama_sampler * smpl, struct llama_context * ctx) {
     if (smpl->iface->set_input_ggml) {
-        smpl->iface->set_input_ggml(smpl);
+        smpl->iface->set_input_ggml(smpl, ctx);
     }
 }
 
@@ -603,12 +603,12 @@ static void llama_sampler_chain_accept_ggml(
     }
 }
 
-static void llama_sampler_chain_set_input_ggml(struct llama_sampler * smpl) {
+static void llama_sampler_chain_set_input_ggml(struct llama_sampler * smpl, struct llama_context * ctx) {
     auto * chain = (llama_sampler_chain *) smpl->ctx;
 
     for (auto * smpl : chain->samplers) {
         if (smpl->iface->set_input_ggml) {
-            smpl->iface->set_input_ggml(smpl);
+            smpl->iface->set_input_ggml(smpl, ctx);
         }
     }
 }

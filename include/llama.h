@@ -215,6 +215,7 @@ extern "C" {
         struct ggml_tensor * probs;
         struct ggml_tensor * sampled_token;
         struct ggml_tensor * filtered_ids;
+        int32_t              batch_idx;
     };
 
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
@@ -1184,7 +1185,11 @@ extern "C" {
                                                struct ggml_cgraph   * gf,
                                                struct ggml_tensor   * selected_token);
 
-        void                   (*set_input_ggml)(struct llama_sampler * smpl);
+        // llama_context is passed so samplers can reuse the already synchronized token
+        // data (copied async during llama_context::decode), including the most recent
+        // token. This avoids duplicate GPU→CPU transfers for samplers that track token
+        // history, such as frequency/presence penalties.
+        void                   (*set_input_ggml)(struct llama_sampler * smpl, struct llama_context * ctx);
 
         void                   (*init_ggml)(struct llama_sampler      * smpl,
                                             ggml_backend_buffer_type_t  buft);
@@ -1212,7 +1217,11 @@ extern "C" {
     LLAMA_API void                   llama_sampler_free  (      struct llama_sampler           * smpl);
     LLAMA_API void                   llama_sampler_init_ggml(struct llama_sampler      * smpl,
                                                              ggml_backend_buffer_type_t  buft);
-    LLAMA_API void                   llama_sampler_set_input_ggml(struct llama_sampler * smpl);
+    // llama_context is passed so samplers can reuse the already synchronized token
+    // data (copied async during llama_context::decode), including the most recent
+    // token. This avoids duplicate GPU→CPU transfers for samplers that track token
+    // history, such as frequency/presence penalties.
+    LLAMA_API void                   llama_sampler_set_input_ggml(struct llama_sampler * smpl, struct llama_context * ctx);
     LLAMA_API void                   llama_sampler_apply_ggml(  struct llama_sampler           * smpl,
                                                                 struct ggml_context            * ctx,
                                                                 struct ggml_cgraph             * gf,
@@ -1325,10 +1334,10 @@ extern "C" {
 
     /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
     LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
-                             int32_t   penalty_last_n,   // last n tokens to penalize (0 = disable penalty, -1 = context size)
-                               float   penalty_repeat,   // 1.0 = disabled
-                               float   penalty_freq,     // 0.0 = disabled
-                               float   penalty_present); // 0.0 = disabled
+                             int32_t   last_n,   // last n tokens to penalize (0 = disable penalty, -1 = context size)
+                               float   repeat,   // 1.0 = disabled
+                               float   freq,     // 0.0 = disabled
+                               float   present); // 0.0 = disabled
 
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
     LLAMA_API struct llama_sampler * llama_sampler_init_dry(
@@ -1391,6 +1400,13 @@ extern "C" {
     LLAMA_API struct llama_sampler * llama_sampler_gpu_init_logit_bias(int32_t   n_vocab,
                                                                  int32_t   n_logit_bias,
                                                   const llama_logit_bias * logit_bias);
+
+    LLAMA_API struct llama_sampler * llama_sampler_gpu_init_penalties(
+            int32_t n_vocab,
+            int32_t last_n,
+            float   repeat,
+            float   freq,
+            float   resent);
 
     /// @details Sample and accept a token from the idx-th output of the last evaluation
     //

@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <chrono>
 #include <random>
+#include <unordered_map>
+#include <vector>
 
 static void llama_sampler_gpu_greedy_apply_ggml(
         struct llama_sampler           * smpl,
@@ -249,7 +251,9 @@ static void llama_sampler_gpu_dist_init_ggml(
     sctx->buffer = ggml_backend_alloc_ctx_tensors_from_buft(sctx->ctx, buft);
 }
 
-static void llama_sampler_gpu_dist_set_input_ggml(struct llama_sampler * smpl) {
+static void llama_sampler_gpu_dist_set_input_ggml(struct llama_sampler * smpl,
+        llama_context * ctx) {
+    GGML_UNUSED(ctx);
     auto * sctx = (llama_sampler_gpu_dist_ctx *) smpl->ctx;
     GGML_ASSERT(sctx->uniform != nullptr);
 
@@ -406,7 +410,9 @@ static void llama_sampler_gpu_logit_bias_init_ggml(
     sctx->buffer = ggml_backend_alloc_ctx_tensors_from_buft(sctx->ctx, buft);
 }
 
-static void llama_sampler_gpu_logit_bias_set_input_ggml(struct llama_sampler * smpl) {
+static void llama_sampler_gpu_logit_bias_set_input_ggml(struct llama_sampler * smpl,
+        llama_context * ctx) {
+    GGML_UNUSED(ctx);
     auto * sctx = (llama_sampler_gpu_logit_bias_ctx *) smpl->ctx;
     if (sctx->logit_bias.empty()) {
         return;
@@ -487,6 +493,208 @@ struct llama_sampler * llama_sampler_gpu_init_logit_bias(int32_t   n_vocab,
     auto * sampler = new llama_sampler {
         /*.iface =*/ &iface,
         /*.ctx   =*/ ctx_data,
+    };
+
+    return sampler;
+}
+
+struct llama_sampler_gpu_penalties_ctx {
+    const int32_t n_vocab;
+    const int32_t last_n;
+    const float   repeat;
+    const float   freq;
+    const float   present;
+
+    struct ggml_tensor    * history_t;  // I32 [last_n]
+    struct ggml_tensor    * n_history_t;   // I32 [1]
+    struct ggml_context   * ctx;
+    ggml_backend_buffer_t   buffer;
+
+    ggml_backend_dev_t device = nullptr;
+
+    // CPU-side history tracking
+    std::vector<int32_t> cpu_history;  // Circular buffer
+    int32_t history_pos = 0;            // Current write position in circular buffer
+    int32_t history_count = 0;          // Number of valid tokens (0 to last_n)
+    int32_t batch_idx = -1;
+    int32_t prev_batch_idx = -1;
+};
+
+static void llama_sampler_gpu_penalties_init_ggml(
+        struct llama_sampler           * smpl,
+        ggml_backend_buffer_type_t       buft) {
+
+    auto * sctx = (llama_sampler_gpu_penalties_ctx *) smpl->ctx;
+
+    if ((sctx->last_n == 0) ||
+        (sctx->freq == 0.0f && sctx->present == 0.0f)) {
+        return;
+    }
+
+    ggml_init_params params = {
+        /*.mem_size   =*/ 2 * ggml_tensor_overhead() + sctx->last_n * sizeof(int32_t) + sizeof(int32_t),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    sctx->ctx = ggml_init(params);
+
+    sctx->history_t = ggml_new_tensor_1d(sctx->ctx, GGML_TYPE_I32, sctx->last_n);
+    ggml_set_name(sctx->history_t, "penalties.token_history");
+    ggml_set_input(sctx->history_t);
+    ggml_set_output(sctx->history_t);
+
+    sctx->n_history_t = ggml_new_tensor_1d(sctx->ctx, GGML_TYPE_I32, 1);
+    ggml_set_name(sctx->n_history_t, "penalties.history_size");
+    ggml_set_input(sctx->n_history_t);
+    ggml_set_output(sctx->history_t);
+
+    sctx->buffer = ggml_backend_alloc_ctx_tensors_from_buft(sctx->ctx, buft);
+
+    // Initialize history_size to 0
+    int32_t init_size = 0;
+    ggml_backend_tensor_set(sctx->n_history_t, &init_size, 0, sizeof(int32_t));
+
+    // Initialize token_history to -1
+    std::vector<int32_t> init_history(sctx->last_n, -1);
+    ggml_backend_tensor_set(sctx->history_t, init_history.data(), 0, ggml_nbytes(sctx->history_t));
+
+    // Initialize CPU-side history buffer
+    sctx->cpu_history.resize(sctx->last_n, -1);
+    sctx->history_pos = 0;
+    sctx->history_count = 0;
+
+    sctx->device = ggml_backend_buft_get_device(buft);
+}
+
+static void llama_sampler_gpu_penalties_set_input_ggml(struct llama_sampler * smpl,
+        llama_context * ctx) {
+    auto * sctx = (llama_sampler_gpu_penalties_ctx *) smpl->ctx;
+
+    llama_token token = llama_get_sampled_token_ith(ctx, sctx->prev_batch_idx);
+    sctx->prev_batch_idx = sctx->batch_idx;
+
+    // Update CPU-side circular buffer if we have a valid token
+    if (token >= 0 && token != LLAMA_TOKEN_NULL) {
+        sctx->cpu_history[sctx->history_pos] = token;
+        sctx->history_pos = (sctx->history_pos + 1) % sctx->last_n;
+
+        // Increment count up to last_n
+        if (sctx->history_count < sctx->last_n) {
+            sctx->history_count++;
+        }
+    }
+
+    // Copy CPU history to GPU tensor
+    ggml_backend_tensor_set(sctx->history_t, sctx->cpu_history.data(), 0, sctx->cpu_history.size() * sizeof(int32_t));
+    ggml_backend_tensor_set(sctx->n_history_t, &sctx->history_count, 0, sizeof(int32_t));
+}
+
+static void llama_sampler_gpu_penalties_apply_ggml(
+        struct llama_sampler           * smpl,
+        struct ggml_context            * ctx,
+        struct ggml_cgraph             * gf,
+        struct llama_sampler_ggml_data * ggml_data) {
+    auto * sctx = (llama_sampler_gpu_penalties_ctx *) smpl->ctx;
+
+    if ((sctx->last_n == 0) ||
+        (sctx->repeat == 1.0f && sctx->freq == 0.0f && sctx->present == 0.0f)) {
+        return;
+    }
+
+    if (sctx->history_t == nullptr || sctx->n_history_t == nullptr) {
+        return;
+    }
+
+    // Apply penalties using the ggml_penalties operation
+    struct ggml_tensor * penalized_logits = ggml_penalties(
+        ctx,
+        ggml_data->logits,
+        sctx->history_t,
+        sctx->n_history_t,
+        sctx->repeat,
+        sctx->freq,
+        sctx->present
+    );
+
+    ggml_set_name(penalized_logits, "penalties.penalized_logits");
+    ggml_build_forward_expand(gf, penalized_logits);
+
+    // Update the logits pointer to the penalized version
+    ggml_data->logits = penalized_logits;
+}
+
+static void llama_sampler_gpu_penalties_accept_ggml(
+        struct llama_sampler  * smpl,
+        struct ggml_context   * ctx,
+        struct ggml_cgraph    * gf,
+        struct ggml_tensor    * selected_token) {
+    GGML_UNUSED(smpl);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(gf);
+    GGML_UNUSED(selected_token);
+
+    // No-op: Token history is managed in set_input_ggml by reading
+    // the sampled token from the context (already on CPU via async sync)
+}
+
+static void llama_sampler_gpu_penalties_free(struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_gpu_penalties_ctx *) smpl->ctx;
+    ggml_backend_buffer_free(sctx->buffer);
+    ggml_free(sctx->ctx);
+    delete sctx;
+}
+
+static const char * llama_sampler_gpu_penalties_name(const struct llama_sampler *) {
+    return "gpu-penalties";
+}
+
+static struct llama_sampler * llama_sampler_gpu_penalties_clone(const struct llama_sampler * smpl) {
+    const auto * sctx = (const llama_sampler_gpu_penalties_ctx *) smpl->ctx;
+    return llama_sampler_gpu_init_penalties(sctx->n_vocab, sctx->last_n, sctx->repeat, sctx->freq, sctx->present);
+}
+
+static struct llama_sampler_i llama_sampler_gpu_penalties_i = {
+    /* .name                = */ llama_sampler_gpu_penalties_name,
+    /* .accept              = */ nullptr,
+    /* .apply               = */ nullptr,
+    /* .reset               = */ nullptr,
+    /* .clone               = */ llama_sampler_gpu_penalties_clone,
+    /* .free                = */ llama_sampler_gpu_penalties_free,
+    /* .apply_ggml          = */ llama_sampler_gpu_penalties_apply_ggml,
+    /* .accept_ggml         = */ llama_sampler_gpu_penalties_accept_ggml,
+    /* .set_input_ggml      = */ llama_sampler_gpu_penalties_set_input_ggml,
+    /* .init_ggml           = */ llama_sampler_gpu_penalties_init_ggml,
+};
+
+struct llama_sampler * llama_sampler_gpu_init_penalties(
+        int32_t n_vocab,
+        int32_t last_n,
+        float   repeat,
+        float   freq,
+        float   present) {
+    last_n = std::max(last_n, 0);
+
+    auto * sctx = new llama_sampler_gpu_penalties_ctx {
+        /* .n_vocab               =*/ n_vocab,
+        /* .last_n                =*/ last_n,
+        /* .repeat                =*/ repeat,
+        /* .freq                  =*/ freq,
+        /* .present               =*/ present,
+        /* .token_history_t       =*/ nullptr,
+        /* .history_size_t        =*/ nullptr,
+        /* .ctx                   =*/ nullptr,
+        /* .buffer                =*/ nullptr,
+        /* .device                =*/ nullptr,
+        /* .cpu_history           =*/ {},
+        /* .history_pos           =*/ 0,
+        /* .history_count         =*/ 0,
+        /* .batch_idx             =*/ -1,
+        /* .prev_batch_idx        =*/ -1,
+    };
+
+    auto * sampler = new llama_sampler {
+        /* .iface = */ &llama_sampler_gpu_penalties_i,
+        /* .ctx   = */ sctx,
     };
 
     return sampler;

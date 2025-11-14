@@ -571,6 +571,54 @@ static void test_gpu_logit_bias_sampling(const char * model_path) {
     GGML_ASSERT(gpu_token == bias_token);
 }
 
+static void test_gpu_penalties_sampling(const char * model_path) {
+    test_model_context test_ctx;
+
+    // Setup model first to get vocab size
+    if (!test_ctx.setup_model(model_path)) {
+        return;
+    }
+    int seq_id = 0;
+
+    int32_t n_vocab = llama_vocab_n_tokens(test_ctx.vocab);
+    int32_t last_n  = 5;
+    float   repeat  = 1.2f;  // 0 = disabled.
+    float   freq    = 2.0f;
+    float   present = 1.0f;
+    struct llama_sampler_chain_params gpu_chain_params = llama_sampler_chain_default_params();
+    struct llama_sampler * gpu_sampler_chain = llama_sampler_chain_init(gpu_chain_params);
+    llama_sampler_chain_add(gpu_sampler_chain,
+            llama_sampler_gpu_init_penalties(n_vocab, last_n, repeat, freq, present));
+    llama_sampler_chain_add(gpu_sampler_chain, llama_sampler_gpu_init_dist(88));
+
+    std::vector<llama_sampler_seq_config> gpu_sampler_configs = {
+        { seq_id, gpu_sampler_chain },
+    };
+
+    if (!test_ctx.setup(model_path, gpu_sampler_configs)) {
+        return;
+    }
+
+    if (!test_ctx.decode({{seq_id, "Some where over"}})) {
+        return;
+    }
+
+    int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
+    llama_token gpu_token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
+    const std::string gpu_token_str = test_ctx.token_to_piece(gpu_token, false);
+    printf("penalties sampled token = %d, string='%s'\n", gpu_token, gpu_token_str.c_str());
+
+    for (int i = 0; i < 10; i++) {
+        int32_t loop_idx = test_ctx.idx_for_seq(seq_id);
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, loop_idx);
+        printf("Generation step %d: token id:%d, string: %s\n", i, token, test_ctx.token_to_piece(token, false).c_str());
+        // use the same token for all decoding steps to test penalties effect
+        test_ctx.decode_token(token, 0);
+    }
+
+    printf("GPU penalty sampling test PASSED\n");
+}
+
 static void test_gpu_set_sampler(const char * model_path) {
     test_model_context test_ctx;
 
@@ -649,8 +697,9 @@ static const gpu_test_case GPU_TESTS[] = {
     { "gpu_temp",            test_gpu_temp_sampling,           true  },
     { "gpu_top_k",           test_gpu_top_k_sampling,          false },
     { "gpu_multi_sequence",  test_gpu_multi_sequence_sampling, false },
-    { "gpu_dist",            test_gpu_dist_sampling,           false  },
-    { "gpu_dist_and_cpu",    test_gpu_dist_sampling_and_cpu,   false  },
+    { "gpu_dist",            test_gpu_dist_sampling,           false },
+    { "gpu_dist_and_cpu",    test_gpu_dist_sampling_and_cpu,   false },
+    { "gpu_penalties",       test_gpu_penalties_sampling,      false },
     { "gpu_set_sampler",     test_gpu_set_sampler,             true  },
 };
 

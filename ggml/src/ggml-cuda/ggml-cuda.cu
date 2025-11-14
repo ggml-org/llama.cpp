@@ -33,6 +33,7 @@
 #include "ggml-cuda/opt-step-sgd.cuh"
 #include "ggml-cuda/out-prod.cuh"
 #include "ggml-cuda/pad.cuh"
+#include "ggml-cuda/penalties.cuh"
 #include "ggml-cuda/pool2d.cuh"
 #include "ggml-cuda/quantize.cuh"
 #include "ggml-cuda/rope.cuh"
@@ -2562,6 +2563,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     return false;
             }
             break;
+        case GGML_OP_PENALTIES:
+            ggml_cuda_op_penalties(ctx, dst);
+            break;
         case GGML_OP_NORM:
             ggml_cuda_op_norm(ctx, dst);
             break;
@@ -3864,6 +3868,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     return false;
             }
             break;
+        case GGML_OP_PENALTIES:
+            return true;
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {

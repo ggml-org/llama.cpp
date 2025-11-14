@@ -88,6 +88,15 @@ public:
 
     virtual void set_input(const llama_ubatch * ubatch) = 0;
 
+    // llama_context is passed to allow samplers access to already synchronized
+    // token data (copied async during llama_contex::decode). This avoids
+    // duplicate GPU->CPU transfers for samplers that need to track token history
+    // (e.g., penalties).
+    virtual void set_input(const llama_ubatch* ubatch, llama_context* ctx) {
+        GGML_UNUSED(ctx);
+        set_input(ubatch);
+    }
+
     // return true if the resulting input tensors using the provided graph parameters would be
     //   the same as the previous input tensors that we have currently stored in the object
     virtual bool can_reuse(const llm_graph_params & params) {
@@ -386,7 +395,8 @@ public:
 
 class llm_graph_input_sampling : public llm_graph_input_i {
 public:
-    llm_graph_input_sampling(int32_t n_vocab, bool sorted, std::unordered_map<llama_seq_id, llama_sampler*> samplers) :
+    llm_graph_input_sampling(int32_t n_vocab, bool sorted,
+            std::unordered_map<llama_seq_id, llama_sampler*> samplers) :
         n_vocab(n_vocab), sorted_value(sorted), samplers(samplers) {
 
         sampler_versions.reserve(samplers.size());
@@ -397,6 +407,7 @@ public:
     virtual ~llm_graph_input_sampling() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
+    void set_input(const llama_ubatch* ubatch, llama_context * ctx) override;
     bool can_reuse(const llm_graph_params & params) override;
 
     int32_t       n_vocab;
@@ -530,7 +541,7 @@ public:
 
     void reset();
 
-    void set_inputs(const llama_ubatch * ubatch);
+    void set_inputs(const llama_ubatch * ubatch, llama_context * ctx = nullptr);
 
     // try to update the existing graph result using the new graph parameters in order to reuse it
     // this can only be done if we determine that the resulting graph using the new graph parameters
