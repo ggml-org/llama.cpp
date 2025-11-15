@@ -5431,6 +5431,7 @@ struct test_pad : public test_case {
     }
 };
 
+// GGML_OP_PAD (with extension)
 struct test_pad_ext : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
