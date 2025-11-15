@@ -87,13 +87,22 @@ struct common_log_entry {
 
         if (level != GGML_LOG_LEVEL_NONE && level != GGML_LOG_LEVEL_CONT && prefix) {
             if (timestamp) {
-                // [M.s.ms.us]
-                fprintf(fcur, "%s%d.%02d.%03d.%03d%s ",
+                // Format: YYYY-MM-DD HH:MM:SS.mmm
+                auto time_point = std::chrono::system_clock::time_point(std::chrono::microseconds(timestamp));
+                auto time_t = std::chrono::system_clock::to_time_t(time_point);
+                auto tm = *std::localtime(&time_t);
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::microseconds(timestamp)) % 1000;
+                
+                fprintf(fcur, "%s%04d-%02d-%02d %02d:%02d:%02d.%03d%s ",
                         g_col[COMMON_LOG_COL_BLUE],
-                        (int) (timestamp / 1000000 / 60),
-                        (int) (timestamp / 1000000 % 60),
-                        (int) (timestamp / 1000 % 1000),
-                        (int) (timestamp % 1000),
+                        tm.tm_year + 1900,
+                        tm.tm_mon + 1,
+                        tm.tm_mday,
+                        tm.tm_hour,
+                        tm.tm_min,
+                        tm.tm_sec,
+                        (int) ms.count(),
                         g_col[COMMON_LOG_COL_DEFAULT]);
             }
 
@@ -126,7 +135,6 @@ struct common_log {
         prefix = false;
         timestamps = false;
         running = false;
-        t_start = t_us();
 
         // initial message size - will be expanded if longer messages arrive
         entries.resize(capacity);
@@ -157,8 +165,6 @@ private:
     bool prefix;
     bool timestamps;
     bool running;
-
-    int64_t t_start;
 
     // ring buffer of entries
     std::vector<common_log_entry> entries;
@@ -216,7 +222,7 @@ public:
         entry.prefix = prefix;
         entry.timestamp = 0;
         if (timestamps) {
-            entry.timestamp = t_us() - t_start;
+            entry.timestamp = t_us();
         }
         entry.is_end = false;
 

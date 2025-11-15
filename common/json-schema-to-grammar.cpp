@@ -998,11 +998,23 @@ std::string json_schema_to_grammar(const json & schema, bool force_gbnf) {
 #else
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
-    return build_grammar([&](const common_grammar_builder & callbacks) {
+    std::string grammar = build_grammar([&](const common_grammar_builder & callbacks) {
         auto copy = schema;
         callbacks.resolve_refs(copy);
         callbacks.add_schema("", copy);
     });
+    
+    // Always allow optional thinking tags before the schema
+    // Replace "root ::= " with "json-schema ::= " and prepend thinking wrapper
+    std::string root_prefix = "root ::= ";
+    size_t root_pos = grammar.find(root_prefix);
+    if (root_pos != std::string::npos) {
+        grammar.replace(root_pos, root_prefix.length(), "json-schema ::= ");
+        // Prepend the thinking wrapper rule - model can optionally write <think>...</think>
+        grammar = "root ::= (\"<think>\" [^<]+ \"</think>\" [\\n]*)? json-schema\n" + grammar;
+    }
+    
+    return grammar;
 }
 
 std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options) {
