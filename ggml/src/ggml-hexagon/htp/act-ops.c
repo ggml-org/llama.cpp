@@ -106,20 +106,16 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
     t1 = HAP_perf_get_qtimer_count();
 
     int is_aligned = 1;
-    int opt_path   = 0;
     if (!htp_is_aligned((void *) src0->data, VLEN) || !htp_is_aligned((void *) dst->data, VLEN)) {
         is_aligned = 0;
         FARF(HIGH, "swiglu-f32: unaligned addresses in elementwise op, possibly slower execution\n");
-    }
-    if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
-        opt_path = 1;
     }
 
     const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
     const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
     uint8_t * restrict data_dst        = (uint8_t *) dst->data;
 
-    bool src1_valid = src1->ne[0];
+    const bool src1_valid = src1->ne[0];
     if (!src1_valid) {
         data_src1     = data_src0;
         src1_row_size = src0_row_size;
@@ -129,10 +125,9 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
     uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_row_size);
     uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_row_size);
 
-    const int32_t swapped = op_params[1];
-
-    const int nc = (src1_valid) ? ne0 : ne0 / 2;
-
+    const int32_t swapped  = op_params[1];
+    const bool    opt_path = ((1 == is_aligned) && !(nb01 & (VLEN - 1)));
+    const int     nc       = (src1_valid) ? ne0 : ne0 / 2;
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
         const float * restrict src0 = (float *) (data_src0 + (ir * src0_row_size));
         const float * restrict src1 = (float *) (data_src1 + (ir * src1_row_size));
@@ -147,7 +142,7 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
             src1 += swapped ? 0 : nc;
         }
 
-        if (1 == opt_path) {
+        if (opt_path) {
             hvx_fast_sigmoid_f32((const uint8_t *) src0, (uint8_t *) src0_spad_data, nc);
             hvx_mul_mul_f32_opt((const uint8_t *) src0, (const uint8_t *) src0_spad_data, (const uint8_t *) src1,
                                 (uint8_t *) dst, nc);
