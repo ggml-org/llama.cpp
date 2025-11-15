@@ -974,9 +974,8 @@ struct ggml_cuda_graph {
 };
 
 struct ggml_cuda_concurrent_event {
-    std::vector<cudaEvent_t> per_stream_events;
+    std::vector<cudaEvent_t> join_events;
     cudaEvent_t              fork_event;
-    cudaEvent_t              join_event;
 
     int                                          n_streams = 0;
     std::unordered_map<const ggml_tensor *, int> stream_mapping;
@@ -986,14 +985,13 @@ struct ggml_cuda_concurrent_event {
     ggml_cuda_concurrent_event() = default;
 
     explicit ggml_cuda_concurrent_event(int n_streams) : n_streams(n_streams) {
-        per_stream_events.resize(n_streams);
+        join_events.resize(n_streams);
 
-        for (size_t i = 0; i < per_stream_events.size(); ++i) {
-            CUDA_CHECK(cudaEventCreateWithFlags(&per_stream_events[i], cudaEventDisableTiming));
+        for (size_t i = 0; i < join_events.size(); ++i) {
+            CUDA_CHECK(cudaEventCreateWithFlags(&join_events[i], cudaEventDisableTiming));
         }
 
         CUDA_CHECK(cudaEventCreateWithFlags(&fork_event, cudaEventDisableTiming));
-        CUDA_CHECK(cudaEventCreateWithFlags(&join_event, cudaEventDisableTiming));
     }
 };
 

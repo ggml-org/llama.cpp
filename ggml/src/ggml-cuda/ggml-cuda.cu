@@ -3233,10 +3233,10 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     if (node == concurrent_event->join_node) {
                         cuda_ctx->curr_stream_no = 0;
                         for (int i = 1; i <= concurrent_event->n_streams; ++i) {
-                            // Wait on join events of forked streams in the main stream 
-                            CUDA_CHECK(cudaEventRecord(concurrent_event->per_stream_events[i - 1],
+                            // Wait on join events of forked streams in the main stream
+                            CUDA_CHECK(cudaEventRecord(concurrent_event->join_events[i - 1],
                                                        cuda_ctx->stream(cuda_ctx->device, i)));
-                            CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), concurrent_event->per_stream_events[i - 1]));
+                            CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), concurrent_event->join_events[i - 1]));
                         }
 
                         is_concurrent_event_active = false;
