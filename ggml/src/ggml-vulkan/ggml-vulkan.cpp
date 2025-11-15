@@ -521,6 +521,7 @@ struct vk_device_struct {
     bool subgroup_shuffle;
     bool subgroup_ballot;
     bool subgroup_clustered;
+    bool subgroup_vote;
     bool multi_add;
     bool shader_int64;
     bool buffer_device_address;
@@ -4187,6 +4188,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->subgroup_ballot = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                   (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBallot);
+
+        device->subgroup_vote = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eVote);
 
         const bool force_disable_f16 = getenv("GGML_VK_DISABLE_F16") != nullptr;
 
@@ -13572,8 +13576,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 default:
                     return false;
                 }
-                if (!coopmat2 && !device->subgroup_shuffle) {
-                    // scalar FA uses subgroupShuffle
+                if (!coopmat2 && !(device->subgroup_shuffle && device->subgroup_vote)) {
+                    // scalar/coopmat1 FA uses subgroupShuffle/subgroupAll
                     return false;
                 }
                 return true;
