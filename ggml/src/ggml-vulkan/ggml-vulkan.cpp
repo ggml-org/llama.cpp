@@ -32,6 +32,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <memory>
 #include <limits>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <memory>
 #include <mutex>
@@ -824,6 +825,12 @@ struct vk_mat_mat_push_constants {
     uint32_t ne02; uint32_t ne12; uint32_t broadcast2; uint32_t broadcast3;
     uint32_t padded_N;
 };
+
+#define MAT_VEC_FUSION_FLAGS_BIAS0 0x1
+#define MAT_VEC_FUSION_FLAGS_BIAS1 0x2
+#define MAT_VEC_FUSION_FLAGS_SCALE0 0x4
+#define MAT_VEC_FUSION_FLAGS_SCALE1 0x8
+
 struct vk_mat_vec_push_constants {
     uint32_t ncols;
     uint32_t stride_a;
@@ -832,8 +839,7 @@ struct vk_mat_vec_push_constants {
     uint32_t batch_stride_a;
     uint32_t batch_stride_b;
     uint32_t batch_stride_d;
-    uint32_t enable_bias;
-    uint32_t enable_scale;
+    uint32_t fusion_flags;
     uint32_t ne02;
     uint32_t ne12;
     uint32_t broadcast2;
@@ -847,7 +853,7 @@ struct vk_mat_vec_p021_push_constants {
     uint32_t nchannels_y;
     uint32_t b_offset;
     uint32_t d_offset;
-    uint32_t enable_bias;
+    uint32_t fusion_flags;
 };
 
 struct vk_mat_vec_nc_push_constants {
@@ -863,7 +869,7 @@ struct vk_mat_vec_nc_push_constants {
     uint32_t nb03;
     uint32_t nb13;
     uint32_t nb23;
-    uint32_t enable_bias;
+    uint32_t fusion_flags;
 };
 
 struct vk_mat_mat_id_push_constants {
@@ -881,8 +887,7 @@ struct vk_mat_vec_id_push_constants {
     uint32_t batch_stride_a;
     uint32_t batch_stride_b;
     uint32_t batch_stride_d;
-    uint32_t enable_bias;
-    uint32_t enable_scale;
+    uint32_t fusion_flags;
     uint32_t nei0;
     uint32_t ne11;
 };
@@ -3465,8 +3470,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     const uint32_t force_subgroup_size = use_subgroups ? subgroup_size : 0;
     const uint32_t force_subgroup_size16 = use_subgroups16 ? subgroup_size16 : 0;
-    static constexpr uint32_t mul_mat_vec_num_bindings = 4;
-    static constexpr uint32_t mul_mat_vec_id_num_bindings = 5;
+    static constexpr uint32_t mul_mat_vec_num_bindings = 5;
+    static constexpr uint32_t mul_mat_vec_id_num_bindings = 6;
 
     for (uint32_t w = 0; w < DMMV_WG_SIZE_COUNT; ++w) {
         const uint32_t wg_size_subgroup   = (w == DMMV_WG_SIZE_SUBGROUP) ? subgroup_size : (subgroup_size * 4);
@@ -6871,21 +6876,31 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
         groups_x = CEIL_DIV(groups_x, groups_z);
     }
 
-    uint32_t enable_bias = ctx->num_additional_fused_ops > 0;
+    uint32_t fusion_flags = 0;
 
-    vk_subbuffer d_B = d_D;
-
-    if (enable_bias) {
+    vk_subbuffer d_F0 = d_D;
+    if (ctx->num_additional_fused_ops > 0) {
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
         const ggml_tensor * bias = add->src[0] == dst ? add->src[1] : add->src[0];
 
-        d_B = ggml_vk_tensor_subbuffer(ctx, bias);
+        d_F0 = ggml_vk_tensor_subbuffer(ctx, bias);
+        fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS0;
+    }
+
+    vk_subbuffer d_F1 = d_D;
+    if (ctx->num_additional_fused_ops == 2) {
+        const ggml_tensor * add = cgraph->nodes[node_idx + 2];
+        const ggml_tensor * bias = add->src[0] == cgraph->nodes[node_idx + 1] ? add->src[1] : add->src[0];
+
+        d_F1 = ggml_vk_tensor_subbuffer(ctx, bias);
+        fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS1;
     }
 
     // compute
     const vk_mat_vec_push_constants pc = {
         (uint32_t)ne00, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)ne01,
-        stride_batch_x, stride_batch_y, stride_batch_d, enable_bias, 0,
+        stride_batch_x, stride_batch_y, stride_batch_d,
+        fusion_flags,
         (uint32_t)ne02, (uint32_t)ne12, (uint32_t)r2, (uint32_t)r3,
     };
     ggml_vk_dispatch_pipeline(ctx, subctx, dmmv,
@@ -6893,7 +6908,8 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
                                 d_X,
                                 d_Y,
                                 d_D,
-                                d_B,
+                                d_F0,
+                                d_F1,
                               },
                               pc, { groups_x, (uint32_t)(ne12 * ne13), groups_z });
 
@@ -6946,22 +6962,31 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
     vk_subbuffer d_Qx = ggml_vk_tensor_subbuffer(ctx, src0);
     vk_subbuffer d_Qy = ggml_vk_tensor_subbuffer(ctx, src1, true);
 
-    vk_subbuffer d_B = d_D;
+    vk_subbuffer d_F0 = d_D;
 
-    uint32_t enable_bias = ctx->num_additional_fused_ops > 0;
+    uint32_t fusion_flags = 0;
 
-    if (enable_bias) {
+    if (ctx->num_additional_fused_ops > 0) {
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
         const ggml_tensor * bias = add->src[0] == dst ? add->src[1] : add->src[0];
 
-        d_B = ggml_vk_tensor_subbuffer(ctx, bias);
+        d_F0 = ggml_vk_tensor_subbuffer(ctx, bias);
+        fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS0;
+    }
+
+    vk_subbuffer d_F1 = d_D;
+    if (ctx->num_additional_fused_ops > 1) {
+        const ggml_tensor * bias = cgraph->nodes[node_idx + 2]->src[1];
+
+        d_F1 = ggml_vk_tensor_subbuffer(ctx, bias);
+        fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS1;
     }
 
     // compute
 
     vk_mat_vec_p021_push_constants pc = {
         (uint32_t)ne00, (uint32_t)ne01, (uint32_t)ne02, (uint32_t)ne12,
-        0, 0, enable_bias
+        0, 0, fusion_flags
     };
 
     init_pushconst_tensor_offsets(ctx, pc, src0, src1, nullptr, nullptr, cgraph->nodes[node_idx + ctx->num_additional_fused_ops]);
@@ -6977,7 +7002,8 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
             d_Qx,
             d_Qy,
             d_D,
-            d_B,
+            d_F0,
+            d_F1,
         }, pc, { 1, (uint32_t)ne01, workgroups_z });
 }
 
@@ -7029,15 +7055,24 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
     vk_subbuffer d_D = ggml_vk_tensor_subbuffer(ctx, cgraph->nodes[node_idx + ctx->num_additional_fused_ops], true);
     vk_subbuffer d_Qx = ggml_vk_tensor_subbuffer(ctx, src0);
     vk_subbuffer d_Qy = ggml_vk_tensor_subbuffer(ctx, src1, true);
-    vk_subbuffer d_B = d_D;
+    vk_subbuffer d_F0 = d_D;
 
-    uint32_t enable_bias = ctx->num_additional_fused_ops > 0;
+    uint32_t fusion_flags = 0;
 
-    if (enable_bias) {
+    if (ctx->num_additional_fused_ops > 0) {
         const ggml_tensor * add = cgraph->nodes[node_idx + 1];
         const ggml_tensor * bias = add->src[0] == dst ? add->src[1] : add->src[0];
 
-        d_B = ggml_vk_tensor_subbuffer(ctx, bias);
+        d_F0 = ggml_vk_tensor_subbuffer(ctx, bias);
+        fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS0;
+    }
+
+    vk_subbuffer d_F1 = d_D;
+    if (ctx->num_additional_fused_ops > 1) {
+        const ggml_tensor * bias = cgraph->nodes[node_idx + 2]->src[1];
+
+        d_F1 = ggml_vk_tensor_subbuffer(ctx, bias);
+        fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS1;
     }
 
     // compute
@@ -7046,7 +7081,7 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
         row_stride_x, channel_stride_x, channel_stride_y,
         (uint32_t)(ne12 / ne02), (uint32_t)ne12,
         0, 0,
-        nb03, nb13, nb23, enable_bias
+        nb03, nb13, nb23, fusion_flags
     };
 
     init_pushconst_tensor_offsets(ctx, pc, src0, src1, nullptr, nullptr, cgraph->nodes[node_idx + ctx->num_additional_fused_ops]);
@@ -7056,7 +7091,8 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
             d_Qx,
             d_Qy,
             d_D,
-            d_B,
+            d_F0,
+            d_F1,
         }, pc, { (uint32_t)ne03, (uint32_t)ne01, (uint32_t)ne12 });
 }
 
@@ -7477,7 +7513,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     vk_subbuffer d_Qx = ggml_vk_tensor_subbuffer(ctx, src0);
     vk_subbuffer d_Qy = ggml_vk_tensor_subbuffer(ctx, src1);
     vk_subbuffer d_ids = ggml_vk_tensor_subbuffer(ctx, ids);
-    vk_subbuffer d_B = d_D;
+    vk_subbuffer d_F0 = d_D;
     vk_subbuffer d_X, d_Y;
 
     if (qx_needs_dequant) {
@@ -7530,30 +7566,34 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
         groups_x = CEIL_DIV(groups_x, groups_z);
     }
 
-    uint32_t enable_bias = 0;
-    uint32_t enable_scale = 0;
+    uint32_t fusion_flags = 0;
+
     if (ctx->num_additional_fused_ops > 0) {
+        const ggml_tensor * bias = cgraph->nodes[node_idx + 1]->src[1];
+
+        d_F0 = ggml_vk_tensor_subbuffer(ctx, bias);
+
         if (cgraph->nodes[node_idx + 1]->op == GGML_OP_MUL) {
-            enable_scale = 1;
+            fusion_flags |= MAT_VEC_FUSION_FLAGS_SCALE0;
         } else {
             GGML_ASSERT(cgraph->nodes[node_idx + 1]->op == GGML_OP_ADD_ID);
-            enable_bias = 1;
+            fusion_flags |= MAT_VEC_FUSION_FLAGS_BIAS0;
         }
     }
 
-    if (enable_bias || enable_scale) {
-        const ggml_tensor * bias = cgraph->nodes[node_idx + 1]->src[1];
+    vk_subbuffer d_F1 = d_D;
+    if (ctx->num_additional_fused_ops > 1) {
+        const ggml_tensor * scale = cgraph->nodes[node_idx + 2]->src[1];
 
-        d_B = ggml_vk_tensor_subbuffer(ctx, bias);
+        d_F1 = ggml_vk_tensor_subbuffer(ctx, scale);
+        fusion_flags |= MAT_VEC_FUSION_FLAGS_SCALE1;
     }
 
     // compute
     const vk_mat_vec_id_push_constants pc = {
         (uint32_t)ne00, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)ne01,
         (uint32_t)(ne00 * ne01), stride_batch_y, (uint32_t)(ne20 * ne21),
-
-        enable_bias, enable_scale,
-
+        fusion_flags,
         (uint32_t)nei0, (uint32_t)ne11,
     };
     ggml_vk_dispatch_pipeline(ctx, subctx, dmmv,
@@ -7561,7 +7601,8 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
             d_X,
             d_Y,
             d_D,
-            d_B,
+            d_F0,
+            d_F1,
             d_ids,
         },
         pc, { groups_x, (uint32_t)nei0, groups_z });
@@ -12305,10 +12346,7 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
             return false;
         }
     }
-    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_MUL_MAT && ops.begin()[1] == GGML_OP_ADD) {
-        // additional constraints specific to this fusion
-        const ggml_tensor *mul = cgraph->nodes[node_idx];
-        const ggml_tensor *add = cgraph->nodes[node_idx + 1];
+    auto const &mm_add_ok = [&](const ggml_tensor *mul, const ggml_tensor *add) {
         const ggml_tensor *bias = add->src[0] == mul ? add->src[1] : add->src[0];
 
         // mat-vec only
@@ -12328,8 +12366,60 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
         if (get_misalign_bytes(ctx, bias) != 0) {
             return false;
         }
+        return true;
+    };
+
+    if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_MUL_MAT && ops.begin()[1] == GGML_OP_ADD) {
+        // additional constraints specific to this fusion
+        const ggml_tensor *mul = cgraph->nodes[node_idx];
+        const ggml_tensor *add = cgraph->nodes[node_idx + 1];
+
+        if (!mm_add_ok(mul, add)) {
+            return false;
+        }
+        if (ops.size() == 3) {
+            if (ops.begin()[2] != GGML_OP_ADD) {
+                return false;
+            }
+            if (!mm_add_ok(add, cgraph->nodes[node_idx + 2])) {
+                return false;
+            }
+        }
     }
-    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_MUL_MAT_ID && ops.begin()[1] == GGML_OP_ADD_ID) {
+
+    auto const &mmid_mul_ok = [&](const ggml_tensor *mmid, const ggml_tensor *mul) {
+        const ggml_tensor *scale = mul->src[1];
+
+        if (mmid != mul->src[0]) {
+            return false;
+        }
+        // mat-vec only
+        if (!ggml_vk_use_mul_mat_vec_id(cgraph, node_idx)) {
+            return false;
+        }
+        // shaders assume the types match
+        if (mmid->type != scale->type) {
+            return false;
+        }
+        // shaders assume the bias is contiguous
+        if (!ggml_is_contiguous(scale)) {
+            return false;
+        }
+        // unaligned bias isn't handled
+        if (get_misalign_bytes(ctx, scale) != 0) {
+            return false;
+        }
+        // shader only indexes by expert index
+        if (scale->ne[0] != 1 ||
+            scale->ne[1] != mul->ne[1] ||
+            scale->ne[2] != 1 ||
+            scale->ne[3] != 1) {
+            return false;
+        }
+        return true;
+    };
+
+    if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_MUL_MAT_ID && ops.begin()[1] == GGML_OP_ADD_ID) {
         // additional constraints specific to this fusion
         const ggml_tensor *mul = cgraph->nodes[node_idx];
         const ggml_tensor *add = cgraph->nodes[node_idx + 1];
@@ -12358,38 +12448,22 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
         if (get_misalign_bytes(ctx, bias) != 0) {
             return false;
         }
+
+        if (ops.size() == 3) {
+            if (ops.begin()[2] != GGML_OP_MUL) {
+                return false;
+            }
+            const ggml_tensor *mul = cgraph->nodes[node_idx + 2];
+            return mmid_mul_ok(add, mul);
+        }
     }
 
     if (ops.size() == 2 && ops.begin()[0] == GGML_OP_MUL_MAT_ID && ops.begin()[1] == GGML_OP_MUL) {
         // additional constraints specific to this fusion
         const ggml_tensor *mmid = cgraph->nodes[node_idx];
         const ggml_tensor *mul = cgraph->nodes[node_idx + 1];
-        const ggml_tensor *scale = mul->src[1];
 
-        if (mmid != mul->src[0]) {
-            return false;
-        }
-        // mat-vec only
-        if (!ggml_vk_use_mul_mat_vec_id(cgraph, node_idx)) {
-            return false;
-        }
-        // shaders assume the types match
-        if (mmid->type != scale->type) {
-            return false;
-        }
-        // shaders assume the bias is contiguous
-        if (!ggml_is_contiguous(scale)) {
-            return false;
-        }
-        // unaligned bias isn't handled
-        if (get_misalign_bytes(ctx, scale) != 0) {
-            return false;
-        }
-        // shader only indexes by expert index
-        if (scale->ne[0] != 1 ||
-            scale->ne[1] != mul->ne[1] ||
-            scale->ne[2] != 1 ||
-            scale->ne[3] != 1) {
+        if (!mmid_mul_ok(mmid, mul)) {
             return false;
         }
     }
@@ -12704,8 +12778,12 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             uint32_t num_adds = ggml_vk_fuse_multi_add(ctx, cgraph, i);
             if (num_adds) {
                 ctx->num_additional_fused_ops = num_adds - 1;
+            } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD, GGML_OP_ADD })) {
+                ctx->num_additional_fused_ops = 2;
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
                 ctx->num_additional_fused_ops = 1;
+            } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID, GGML_OP_MUL })) {
+                ctx->num_additional_fused_ops = 2;
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID })) {
                 ctx->num_additional_fused_ops = 1;
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_MUL })) {
@@ -12872,6 +12950,8 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
 
     std::vector<ggml_tensor *> new_order;
     std::vector<bool> used(graph->n_nodes, false);
+    std::set<ggml_tensor *> used_node_set;
+
     int first_unused = 0;
     while (first_unused < graph->n_nodes) {
         std::vector<int> current_set;
@@ -12894,6 +12974,7 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
             if (match_pattern(pattern, first_unused)) {
                 for (size_t j = 0; j < pattern.size(); ++j) {
                     new_order.push_back(graph->nodes[first_unused + j]);
+                    used_node_set.insert(graph->nodes[first_unused + j]);
                     used[first_unused + j] = true;
                 }
                 while (first_unused < graph->n_nodes && used[first_unused]) {
@@ -12997,6 +13078,36 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
                         used[set_rows_idx] = true;
                     }
                 }
+                // Look for MUL_MAT_ID + ADD_ID + MUL
+                if (j > 0 &&
+                    graph->nodes[j]->op == GGML_OP_ADD_ID &&
+                    graph->nodes[j-1]->op == GGML_OP_MUL_MAT_ID) {
+                    for (int k = j + 1; k < std::min(j + 15, graph->n_nodes); ++k) {
+                        if (graph->nodes[k]->op == GGML_OP_MUL &&
+                            graph->nodes[k]->src[0] == graph->nodes[j] &&
+                            // src1 must either be weights or already processed
+                            (graph->nodes[k]->src[1]->op == GGML_OP_NONE || used_node_set.find(graph->nodes[k]->src[1]) != used_node_set.end())) {
+                            current_set.push_back(k);
+                            used[k] = true;
+                            break;
+                        }
+                    }
+                }
+                // Look for MUL_MAT + ADD + ADD
+                if (j > 0 &&
+                    graph->nodes[j]->op == GGML_OP_ADD &&
+                    graph->nodes[j-1]->op == GGML_OP_MUL_MAT) {
+                    for (int k = j + 1; k < std::min(j + 15, graph->n_nodes); ++k) {
+                        if (graph->nodes[k]->op == GGML_OP_ADD &&
+                            graph->nodes[k]->src[0] == graph->nodes[j] &&
+                            // src1 must either be weights or already processed
+                            (graph->nodes[k]->src[1]->op == GGML_OP_NONE || used_node_set.find(graph->nodes[k]->src[1]) != used_node_set.end())) {
+                            current_set.push_back(k);
+                            used[k] = true;
+                            break;
+                        }
+                    }
+                }
             }
         }
         // Second pass grabs view nodes.
@@ -13029,6 +13140,7 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
         // Push the current set into new_order
         for (auto c : current_set) {
             new_order.push_back(graph->nodes[c]);
+            used_node_set.insert(graph->nodes[c]);
             used[c] = true;
         }
         while (first_unused < graph->n_nodes && used[first_unused]) {

@@ -5002,17 +5002,19 @@ struct test_mul_mat_vec_fusion : public test_case {
     const bool b;        // broadcast b matrix (only for use_id)
     const bool with_bias;
     const bool with_gate;
+    std::array<int64_t, 2> batch_dims;
 
     test_mul_mat_vec_fusion(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
-                        bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false, bool with_bias = false, bool with_gate = true)
-    : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b), with_bias(with_bias), with_gate(with_gate) {
+                        bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false, bool with_bias = false, bool with_gate = true,
+                        std::array<int64_t, 2> batch_dims = {4, 2})
+    : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b), with_bias(with_bias), with_gate(with_gate), batch_dims(batch_dims) {
         if (use_id) {
             GGML_ASSERT(n_used <= n_mats);
         }
     }
 
     std::string vars() override {
-        return VARS_TO_STR11(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate);
+        return VARS_TO_STR12(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, batch_dims);
     }
 
     std::string op_desc(ggml_tensor * t) override {
@@ -5038,8 +5040,8 @@ struct test_mul_mat_vec_fusion : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         if (!use_id) {
-            const int              channels = 4;
-            const int              samples  = 2;
+            const int              channels = batch_dims[0];
+            const int              samples  = batch_dims[1];
             std::array<int64_t, 4> ne       = { k, m, channels, samples };
             std::array<int64_t, 4> ne0      = { k, n, channels, samples };
 
@@ -5062,6 +5064,11 @@ struct test_mul_mat_vec_fusion : public test_case {
             }
 
             ggml_tensor * out = with_gate ? build_gate(ctx, ffn_gate, ffn_up) : ffn_up;
+
+            std::array<int64_t, 4> bias2_ne   = { out->ne[0], 1, channels, samples };
+            ggml_tensor * bias2 = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, bias2_ne.data());
+            out = ggml_add(ctx, out, bias2);
+
             ggml_set_name(out, "out");
             return out;
         } else {
@@ -5089,6 +5096,11 @@ struct test_mul_mat_vec_fusion : public test_case {
             }
 
             ggml_tensor * out = with_gate ? build_gate(ctx, ffn_gate, ffn_up) : ffn_up;
+
+            std::array<int64_t, 4> scale_ne { 1, out->ne[1], out->ne[2], out->ne[3] };
+            ggml_tensor * scale = ggml_new_tensor(ctx, out->type, 4, scale_ne.data());
+            out = ggml_mul(ctx, out, scale);
+
             ggml_set_name(out, "out");
             return out;
         }
@@ -7645,6 +7657,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                             }
                             test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
                                 use_id, 16, 8, b, with_bias, with_gate));
+                            test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
+                                use_id, 16, 8, b, with_bias, with_gate, {1, 1}));
                         }
                     }
                 }
