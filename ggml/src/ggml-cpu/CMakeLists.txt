@@ -223,8 +223,15 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 set(FEAT_INPUT_FILE "/dev/null")
             endif()
 
+            # specify Android cross compile target
+            if("${GGML_CPU_NAME}" MATCHES ".*android.*")
+                set(ANDROID_TARGET_FLAG "--target=aarch64-linux-android${ANDROID_API_LEVEL}")
+            else()
+                set(ANDROID_TARGET_FLAG "")
+            endif()
+
             execute_process(
-                COMMAND ${CMAKE_C_COMPILER} ${ARCH_FLAGS} -dM -E -
+                COMMAND ${CMAKE_C_COMPILER} ${ARCH_FLAGS} ${ANDROID_TARGET_FLAG} -dM -E -
                 INPUT_FILE ${FEAT_INPUT_FILE}
                 OUTPUT_VARIABLE ARM_FEATURE
                 RESULT_VARIABLE ARM_FEATURE_RESULT
