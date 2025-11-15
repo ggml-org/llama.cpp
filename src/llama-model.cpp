@@ -2438,13 +2438,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         split_sum += splits[i];
         splits[i] = split_sum;
     }
-    if (split_sum > 0.0f) {
-        for (size_t i = 0; i < n_devices(); ++i) {
-            splits[i] /= split_sum;
-        }
-    } else {
-        LLAMA_LOG_WARN("load_tensors: no available GPU memory detected, falling back to CPU\n");
+    for (size_t i = 0; i < n_devices(); ++i) {
+        splits[i] /= split_sum;
     }
+
     ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (cpu_dev == nullptr) {
         throw std::runtime_error(format("%s: no CPU backend found", __func__));
