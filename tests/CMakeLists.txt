@@ -180,7 +180,19 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 endif()
 
 llama_build_and_test(test-chat-parser.cpp)
-llama_build_and_test(test-chat-parser-combinator.cpp)
+
+# Combinator tests (modular)
+file(GLOB_RECURSE COMBINATOR_TEST_SOURCES
+    combinator/*.cpp
+    combinator/*.hpp
+    test-chat-parser-combinator.cpp
+)
+add_executable(test-chat-parser-combinator ${COMBINATOR_TEST_SOURCES})
+target_link_libraries(test-chat-parser-combinator PRIVATE common)
+install(TARGETS test-chat-parser-combinator RUNTIME)
+add_test(NAME test-chat-parser-combinator COMMAND test-chat-parser-combinator)
+set_property(TEST test-chat-parser-combinator PROPERTY LABELS main)
+
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)

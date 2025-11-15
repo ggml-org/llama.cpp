@@ -1,4 +1,5 @@
 *
+!combinator
 !*.*
 *.o
 ggml-common.h
