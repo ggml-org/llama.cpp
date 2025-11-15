@@ -656,10 +656,12 @@ struct vk_device_struct {
     vk_pipeline pipeline_gelu_quick[2];
     vk_pipeline pipeline_silu[2];
     vk_pipeline pipeline_relu[2];
+    vk_pipeline pipeline_neg[2];
     vk_pipeline pipeline_tanh[2];
     vk_pipeline pipeline_sigmoid[2];
     vk_pipeline pipeline_hardsigmoid[2];
     vk_pipeline pipeline_hardswish[2];
+    vk_pipeline pipeline_abs[2];
 
     vk_pipeline pipeline_geglu[2];
     vk_pipeline pipeline_reglu[2];
@@ -3804,10 +3806,12 @@ static void ggml_vk_load_shaders(vk_device& device) {
     CREATE_UNARY(gelu_quick)
     CREATE_UNARY(silu)
     CREATE_UNARY(relu)
+    CREATE_UNARY(neg)
     CREATE_UNARY(tanh)
     CREATE_UNARY(sigmoid)
     CREATE_UNARY(hardsigmoid)
     CREATE_UNARY(hardswish)
+    CREATE_UNARY(abs)
 #undef CREATE_UNARY
 
 #define CREATE_UNARY_RTE(name)  \
@@ -8170,6 +8174,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 return ctx->device->pipeline_gelu_quick[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_RELU:
                 return ctx->device->pipeline_relu[dst->type == GGML_TYPE_F16];
+            case GGML_UNARY_OP_NEG:
+                return ctx->device->pipeline_neg[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_TANH:
                 return ctx->device->pipeline_tanh[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_SIGMOID:
@@ -8178,6 +8184,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 return ctx->device->pipeline_hardsigmoid[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_HARDSWISH:
                 return ctx->device->pipeline_hardswish[dst->type == GGML_TYPE_F16];
+            case GGML_UNARY_OP_ABS:
+                return ctx->device->pipeline_abs[dst->type == GGML_TYPE_F16];
             default:
                 break;
         }
@@ -11106,10 +11114,12 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_GELU_ERF:
         case GGML_UNARY_OP_GELU_QUICK:
         case GGML_UNARY_OP_RELU:
+        case GGML_UNARY_OP_NEG:
         case GGML_UNARY_OP_TANH:
         case GGML_UNARY_OP_SIGMOID:
         case GGML_UNARY_OP_HARDSIGMOID:
         case GGML_UNARY_OP_HARDSWISH:
+        case GGML_UNARY_OP_ABS:
             break;
         default:
             return false;
@@ -11436,10 +11446,12 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_GELU_ERF:
         case GGML_UNARY_OP_GELU_QUICK:
         case GGML_UNARY_OP_RELU:
+        case GGML_UNARY_OP_NEG:
         case GGML_UNARY_OP_TANH:
         case GGML_UNARY_OP_SIGMOID:
         case GGML_UNARY_OP_HARDSIGMOID:
         case GGML_UNARY_OP_HARDSWISH:
+        case GGML_UNARY_OP_ABS:
             ggml_vk_unary(ctx, compute_ctx, src0, node);
             break;
         default:
@@ -11706,10 +11718,12 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
         case GGML_UNARY_OP_GELU_ERF:
         case GGML_UNARY_OP_GELU_QUICK:
         case GGML_UNARY_OP_RELU:
+        case GGML_UNARY_OP_NEG:
         case GGML_UNARY_OP_TANH:
         case GGML_UNARY_OP_SIGMOID:
         case GGML_UNARY_OP_HARDSIGMOID:
         case GGML_UNARY_OP_HARDSWISH:
+        case GGML_UNARY_OP_ABS:
             buf = tensor->buffer;
             break;
         default:
@@ -13235,10 +13249,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_RELU:
+                case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_SIGMOID:
                 case GGML_UNARY_OP_HARDSIGMOID:
                 case GGML_UNARY_OP_HARDSWISH:
+                case GGML_UNARY_OP_ABS:
                     return ggml_is_contiguous(op->src[0]) &&
                            (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                            (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
@@ -14116,6 +14132,9 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             case GGML_UNARY_OP_RELU:
                 tensor_clone = ggml_relu(ggml_ctx, src_clone[0]);
                 break;
+            case GGML_UNARY_OP_NEG:
+                tensor_clone = ggml_neg(ggml_ctx, src_clone[0]);
+                break;
             case GGML_UNARY_OP_TANH:
                 tensor_clone = ggml_tanh(ggml_ctx, src_clone[0]);
                 break;
@@ -14127,6 +14146,9 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
                 break;
             case GGML_UNARY_OP_HARDSWISH:
                 tensor_clone = ggml_hardswish(ggml_ctx, src_clone[0]);
+                break;
+            case GGML_UNARY_OP_ABS:
+                tensor_clone = ggml_abs(ggml_ctx, src_clone[0]);
                 break;
             default:
                 std::cerr << "Missing vk_check_results OP: " << ggml_op_name(tensor->op) << std::endl;
