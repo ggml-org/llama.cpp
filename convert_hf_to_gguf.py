@@ -5137,17 +5137,7 @@ class Plamo3Model(PlamoTokenizerMixin, TextModel):
             results.append((self.map_tensor_name(name_gate), gate_proj_weight))
             results.append((self.map_tensor_name(name_up), up_proj_weight))
         else:
-            mapped = self.map_tensor_name(name)
-            if mapped.endswith(("ffn_gate.weight", "ffn_up.weight")):
-                n_embd = self.hparams["hidden_size"]
-                n_ff = self.hparams["intermediate_size"]
-                if bid is None or bid == 0:
-                    logger.info("plamo3 map %s -> %s raw shape %s", name, mapped, tuple(data_torch.shape))
-                if data_torch.shape == (n_ff, n_embd):
-                    data_torch = data_torch.transpose(0, 1).contiguous()
-                elif data_torch.shape != (n_embd, n_ff):
-                    raise ValueError(f"Unexpected FFN tensor shape {mapped}: {tuple(data_torch.shape)}")
-            results.append((mapped, data_torch))
+            results.append((self.map_tensor_name(name), data_torch))
 
         return results
 
