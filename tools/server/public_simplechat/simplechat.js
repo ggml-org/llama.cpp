@@ -833,46 +833,50 @@ class SimpleChat {
      * @param {HTMLDivElement} elDiv
      */
     async handle_response_multipart(resp, apiEP, elDiv) {
-        let elP = ui.el_create_append_p("", elDiv);
-        elP.classList.add("chat-message-content-live")
         if (!resp.body) {
             throw Error("ERRR:SimpleChat:SC:HandleResponseMultiPart:No body...");
         }
-        let tdUtf8 = new TextDecoder("utf-8");
-        let rr = resp.body.getReader();
-        this.latestResponse.clear()
-        this.latestResponse.ns.role = Roles.Assistant
-        let xLines = new du.NewLines();
-        while(true) {
-            let { value: cur,  done: done } = await rr.read();
-            if (cur) {
-                let curBody = tdUtf8.decode(cur, {stream: true});
-                console.debug("DBUG:SC:PART:Str:", curBody);
-                xLines.add_append(curBody);
-            }
+        let elP = ui.el_create_append_p("", elDiv);
+        elP.classList.add("chat-message-content-live")
+        try {
+            let tdUtf8 = new TextDecoder("utf-8");
+            let rr = resp.body.getReader();
+            this.latestResponse.clear()
+            this.latestResponse.ns.role = Roles.Assistant
+            let xLines = new du.NewLines();
             while(true) {
-                let curLine = xLines.shift(!done);
-                if (curLine == undefined) {
+                let { value: cur,  done: done } = await rr.read();
+                if (cur) {
+                    let curBody = tdUtf8.decode(cur, {stream: true});
+                    console.debug("DBUG:SC:PART:Str:", curBody);
+                    xLines.add_append(curBody);
+                }
+                while(true) {
+                    let curLine = xLines.shift(!done);
+                    if (curLine == undefined) {
+                        break;
+                    }
+                    if (curLine.trim() == "") {
+                        continue;
+                    }
+                    if (curLine.startsWith("data:")) {
+                        curLine = curLine.substring(5);
+                    }
+                    if (curLine.trim() === "[DONE]") {
+                        break;
+                    }
+                    let curJson = JSON.parse(curLine);
+                    console.debug("DBUG:SC:PART:Json:", curJson);
+                    this.latestResponse.update_stream(curJson, apiEP);
+                }
+                elP.innerText = this.latestResponse.content_equiv()
+                elP.scrollIntoView(false);
+                if (done) {
                     break;
                 }
-                if (curLine.trim() == "") {
-                    continue;
-                }
-                if (curLine.startsWith("data:")) {
-                    curLine = curLine.substring(5);
-                }
-                if (curLine.trim() === "[DONE]") {
-                    break;
-                }
-                let curJson = JSON.parse(curLine);
-                console.debug("DBUG:SC:PART:Json:", curJson);
-                this.latestResponse.update_stream(curJson, apiEP);
             }
-            elP.innerText = this.latestResponse.content_equiv()
-            elP.scrollIntoView(false);
-            if (done) {
-                break;
-            }
+        } finally {
+            elP.remove()
         }
         console.debug("DBUG:SC:PART:Full:", this.latestResponse.content_equiv());
         return ChatMessageEx.newFrom(this.latestResponse);
@@ -1352,8 +1356,13 @@ class MultiChatUI {
      * @param {number} uniqIdChatMsg
      */
     chatmsg_ui_remove(uniqIdChatMsg) {
-        let el = document.querySelector(`[CMUniqId="${uniqIdChatMsg}"]`)
-        el?.remove()
+        while (true) {
+            let el = document.querySelector (`[CMUniqId="${uniqIdChatMsg}"]`)
+            if (!el) {
+                return
+            }
+            el?.remove()
+        }
     }
 
     /**
