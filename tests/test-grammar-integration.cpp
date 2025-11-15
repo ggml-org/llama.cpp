@@ -46,7 +46,14 @@ static bool match_string(const std::string & input, llama_grammar * grammar) {
         }
     }
 
-    return std::any_of(stacks_cur.begin(), stacks_cur.end(), [](auto stack) { return stack.empty(); });
+    for (const auto & stack : stacks_cur) {
+        if (stack.empty()) {
+            // An empty stack means that the grammar has been completed
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static void test(const std::string & test_desc, const std::string & grammar_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
