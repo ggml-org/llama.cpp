@@ -1348,6 +1348,30 @@ class MultiChatUI {
     }
 
     /**
+     * Adjust and update chat session ui wrt the last two messages
+     * in specified chat session, if current.
+     *
+     * The last but one chat message needs to be already in the chat session ui.
+     * The last chat message shouldnt be already in the chat session ui.
+     *
+     * @param {string} chatId
+     */
+    chatmsg_ui_updateprev_appendlast(chatId) {
+        let chat = this.simpleChats[chatId];
+        if (chat.chatId != this.curChatId) {
+            return false
+        }
+        let prevLastMsg = chat.xchat[chat.xchat.length-2]
+        let msg = chat.xchat[chat.xchat.length-1]
+        if (prevLastMsg) {
+            this.ui_chatmessage_delete(chat.chatId, prevLastMsg.uniqId, false)
+            this.show_message(this.elDivChat, prevLastMsg, 1, msg)
+        }
+        this.show_message(this.elDivChat, msg, 0, undefined)
+        return true
+    }
+
+    /**
      * Add a chatmsg to specified chat session.
      * Update the chat session ui, if current.
      *
@@ -1360,16 +1384,7 @@ class MultiChatUI {
             return { added: false, shown: false }
         }
         chat.add(msg)
-        if (chatId != this.curChatId) {
-            return { added: true, shown: false }
-        }
-        let prevLastMsg = chat.xchat[chat.xchat.length-2]
-        if (prevLastMsg) {
-            this.ui_chatmessage_delete(chatId, prevLastMsg.uniqId, false)
-            this.show_message(this.elDivChat, prevLastMsg, 1, msg)
-        }
-        this.show_message(this.elDivChat, msg, 0, undefined)
-        return { added: true, shown: true }
+        return { added: true, shown: this.chatmsg_ui_updateprev_appendlast(chat.chatId) }
     }
 
     /**
@@ -1574,7 +1589,7 @@ class MultiChatUI {
         if (this.elInUser.dataset.placeholder) {
             this.elInUser.placeholder = this.elInUser.dataset.placeholder;
         }
-        this.chat_show(chat.chatId);
+        this.chatmsg_ui_updateprev_appendlast(chat.chatId)
 
         this.elInUser.dataset.role = ""
         this.elInUser.value = "working...";
@@ -1583,7 +1598,7 @@ class MultiChatUI {
         try {
             let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, this.elDivChat)
             if (chatId == this.curChatId) {
-                this.chat_show(chatId);
+                this.chatmsg_ui_updateprev_appendlast(chatId);
                 if ((theResp.trimmedContent) && (theResp.trimmedContent.length > 0)) {
                     let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmedContent}`, this.elDivChat);
                     p.className="role-trim";
