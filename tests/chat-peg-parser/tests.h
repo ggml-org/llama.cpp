@@ -3,7 +3,7 @@
 // Common includes for all test files
 #include "../testcase.hpp"
 #include <nlohmann/json.hpp>
-#include "chat-peg-parser.h"
+#include "../common/chat-peg-parser.h"
 #include <memory>
 
 // Test class declarations

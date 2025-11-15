@@ -1,73 +1,89 @@
 llama_add_compile_flags()
 
+# Helper function: parse test arguments and set default values
+function(_llama_parse_test_args target_or_source)
+    include(CMakeParseArguments)
+    set(options)
+    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
+    set(multiValueArgs ARGS SOURCES)
+    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    # Set default values
+    if (NOT DEFINED LLAMA_TEST_LABEL)
+        set(LLAMA_TEST_LABEL "main" PARENT_SCOPE)
+    endif()
+    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
+        set(LLAMA_TEST_WORKING_DIRECTORY "." PARENT_SCOPE)
+    endif()
+    
+    # Set test name and target
+    if (DEFINED LLAMA_TEST_NAME)
+        set(TEST_NAME ${LLAMA_TEST_NAME} PARENT_SCOPE)
+        set(TEST_TARGET ${LLAMA_TEST_NAME} PARENT_SCOPE)
+    else()
+        get_filename_component(TEST_NAME ${target_or_source} NAME_WE PARENT_SCOPE)
+        set(TEST_TARGET ${TEST_NAME} PARENT_SCOPE)
+    endif()
+    
+    # Set LLAMA_TEST_SOURCES in parent scope
+    set(LLAMA_TEST_SOURCES "${LLAMA_TEST_SOURCES}" PARENT_SCOPE)
+endfunction()
+
+# Helper function: build executable with optional additional sources
+function(_llama_build_executable target main_source additional_sources)
+    if (additional_sources)
+        add_executable(${target} ${main_source} ${additional_sources})
+    else()
+        add_executable(${target} ${main_source})
+    endif()
+    target_link_libraries(${target} PRIVATE common)
+    install(TARGETS ${target} RUNTIME)
+endfunction()
+
+# Helper function: create test and set properties
+function(_llama_create_test test_name test_target command_type)
+    if (command_type STREQUAL "TARGET")
+        add_test(
+            NAME ${test_name}
+            WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
+            COMMAND $<TARGET_FILE:${test_target}>
+            ${LLAMA_TEST_ARGS})
+    else()
+        add_test(
+            NAME ${test_name}
+            WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
+            COMMAND ${test_target}
+            ${LLAMA_TEST_ARGS})
+    endif()
+    
+    set_property(TEST ${test_name} PROPERTY LABELS ${LLAMA_TEST_LABEL})
+endfunction()
+
 function(llama_build source)
+    include(CMakeParseArguments)
+    set(options)
+    set(oneValueArgs)
+    set(multiValueArgs SOURCES)
+    cmake_parse_arguments(LLAMA_BUILD "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
     if (DEFINED LLAMA_TEST_NAME)
         set(TEST_TARGET ${LLAMA_TEST_NAME})
     else()
         get_filename_component(TEST_TARGET ${source} NAME_WE)
     endif()
 
-    add_executable(${TEST_TARGET} ${source})
-    target_link_libraries(${TEST_TARGET} PRIVATE common)
-    install(TARGETS ${TEST_TARGET} RUNTIME)
+    _llama_build_executable(${TEST_TARGET} ${source} "${LLAMA_BUILD_SOURCES}")
 endfunction()
 
 function(llama_test target)
-    include(CMakeParseArguments)
-    set(options)
-    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
-    set(multiValueArgs ARGS)
-    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    if (NOT DEFINED LLAMA_TEST_LABEL)
-        set(LLAMA_TEST_LABEL "main")
-    endif()
-    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
-        set(LLAMA_TEST_WORKING_DIRECTORY .)
-    endif()
-    if (DEFINED LLAMA_TEST_NAME)
-        set(TEST_NAME ${LLAMA_TEST_NAME})
-    else()
-        set(TEST_NAME ${target})
-    endif()
-
+    _llama_parse_test_args(${target} ${ARGN})
     set(TEST_TARGET ${target})
-
-    add_test(
-        NAME ${TEST_NAME}
-        WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND $<TARGET_FILE:${TEST_TARGET}>
-        ${LLAMA_TEST_ARGS})
-
-    set_property(TEST ${TEST_NAME} PROPERTY LABELS ${LLAMA_TEST_LABEL})
+    _llama_create_test(${TEST_NAME} ${TEST_TARGET} "TARGET")
 endfunction()
 
 function(llama_test_cmd target)
-    include(CMakeParseArguments)
-    set(options)
-    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
-    set(multiValueArgs ARGS)
-    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    if (NOT DEFINED LLAMA_TEST_LABEL)
-        set(LLAMA_TEST_LABEL "main")
-    endif()
-    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
-        set(LLAMA_TEST_WORKING_DIRECTORY .)
-    endif()
-    if (DEFINED LLAMA_TEST_NAME)
-        set(TEST_NAME ${LLAMA_TEST_NAME})
-    else()
-        set(TEST_NAME ${target})
-    endif()
-
-    add_test(
-        NAME ${TEST_NAME}
-        WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND ${target}
-        ${LLAMA_TEST_ARGS})
-
-    set_property(TEST ${TEST_NAME} PROPERTY LABELS ${LLAMA_TEST_LABEL})
+    _llama_parse_test_args(${target} ${ARGN})
+    _llama_create_test(${TEST_NAME} ${target} "COMMAND")
 endfunction()
 
 # Builds and runs a test source file.
@@ -76,36 +92,23 @@ endfunction()
 # - LABEL: label for the test (defaults to main)
 # - ARGS: arguments to pass to the test executable
 # - WORKING_DIRECTORY
+# - SOURCES: additional source files to build with the main source
 function(llama_build_and_test source)
-    include(CMakeParseArguments)
-    set(options)
-    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
-    set(multiValueArgs ARGS)
-    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    if (NOT DEFINED LLAMA_TEST_LABEL)
-        set(LLAMA_TEST_LABEL "main")
-    endif()
-    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
-        set(LLAMA_TEST_WORKING_DIRECTORY .)
-    endif()
-    if (DEFINED LLAMA_TEST_NAME)
-        set(TEST_TARGET ${LLAMA_TEST_NAME})
+    _llama_parse_test_args(${source} ${ARGN})
+    
+    # Build executable with sources
+    set(all_sources ${source})
+    if (LLAMA_TEST_SOURCES)
+        list(APPEND all_sources ${LLAMA_TEST_SOURCES})
     else()
-        get_filename_component(TEST_TARGET ${source} NAME_WE)
+        # Only include get-model.cpp if no additional sources are provided
+        list(APPEND all_sources get-model.cpp)
     endif()
-
-    add_executable(${TEST_TARGET} ${source} get-model.cpp)
+    add_executable(${TEST_TARGET} ${all_sources})
     install(TARGETS ${TEST_TARGET} RUNTIME)
     target_link_libraries(${TEST_TARGET} PRIVATE common)
 
-    add_test(
-        NAME ${TEST_TARGET}
-        WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND $<TARGET_FILE:${TEST_TARGET}>
-        ${LLAMA_TEST_ARGS})
-
-    set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
+    _llama_create_test(${TEST_TARGET} ${TEST_TARGET} "TARGET")
 endfunction()
 
 # build test-tokenizer-0 target once and add many tests
@@ -182,26 +185,21 @@ endif()
 llama_build_and_test(test-chat-parser.cpp)
 
 # Chat PEG parser tests (modular)
-file(GLOB_RECURSE CHAT_PEG_PARSER_TEST_SOURCES
-    chat-peg-parser/simple_tokenizer.cpp
-    chat-peg-parser/benchmark.cpp
-    chat-peg-parser/test-actions.cpp
-    chat-peg-parser/test-command7-parser-compare.cpp
-    chat-peg-parser/test-example-qwen3-coder.cpp
-    chat-peg-parser/test-gbnf-generation.cpp
-    chat-peg-parser/test-json-parser.cpp
-    chat-peg-parser/test-one.cpp
-    chat-peg-parser/test-optional.cpp
-    chat-peg-parser/test-partial-parsing.cpp
-    chat-peg-parser/test-recursive-references.cpp
-    chat-peg-parser/tests.h
-    test-chat-peg-parser.cpp
+llama_build_and_test(test-chat-peg-parser.cpp
+    SOURCES
+        chat-peg-parser/simple_tokenizer.cpp
+        chat-peg-parser/benchmark.cpp
+        chat-peg-parser/test-actions.cpp
+        chat-peg-parser/test-command7-parser-compare.cpp
+        chat-peg-parser/test-example-qwen3-coder.cpp
+        chat-peg-parser/test-gbnf-generation.cpp
+        chat-peg-parser/test-json-parser.cpp
+        chat-peg-parser/test-one.cpp
+        chat-peg-parser/test-optional.cpp
+        chat-peg-parser/test-partial-parsing.cpp
+        chat-peg-parser/test-recursive-references.cpp
+        chat-peg-parser/tests.h
 )
-add_executable(test-chat-peg-parser ${CHAT_PEG_PARSER_TEST_SOURCES})
-target_link_libraries(test-chat-peg-parser PRIVATE common)
-install(TARGETS test-chat-peg-parser RUNTIME)
-add_test(NAME test-chat-peg-parser COMMAND test-chat-peg-parser)
-set_property(TEST test-chat-peg-parser PROPERTY LABELS main)
 
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
