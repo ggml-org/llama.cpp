@@ -5,7 +5,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test literal
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("hello"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello"); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -17,7 +17,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test char class
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("[a-z]"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a-z]"); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -28,8 +28,8 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test sequence
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser(
-                [](common_chat_combinator_parser_builder & p) { return p.literal("hello") + p.literal(" ") + p.literal("world"); });
+            auto parser = build_peg_parser(
+                [](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.literal(" ") + p.literal("world"); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -41,7 +41,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test choice
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("cat") | p.literal("dog"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("cat") | p.literal("dog"); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -52,7 +52,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test one_or_more
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one_or_more(p.one("[0-9]")); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.one("[0-9]")); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -63,7 +63,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test zero_or_more
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.zero_or_more(p.one("[a-z]")); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.one("[a-z]")); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -75,7 +75,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     add_test(
         [](test_harness h) {
             auto parser =
-                build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
+                build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -87,7 +87,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test until
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.until("</tag>"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.until("</tag>"); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -104,7 +104,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     add_test(
         [](test_harness h) {
             auto parser =
-                build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one_or_more(p.literal("a") | p.literal("b")); });
+                build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("a") | p.literal("b")); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -115,7 +115,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test rule references
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
                 auto digit = p.add_rule("digit", p.one("[0-9]"));
                 return p.one_or_more(digit);
             });
@@ -131,7 +131,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test escaping in literals
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("hello\nworld\t!"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello\nworld\t!"); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
@@ -142,7 +142,7 @@ test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generati
     // Test operator<< (whitespace insertion)
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("hello") << p.literal("world"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") << p.literal("world"); });
 
             auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 

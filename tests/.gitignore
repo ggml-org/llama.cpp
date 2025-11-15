@@ -1,5 +1,5 @@
 *
-!combinator
+!chat-peg-parser
 !*.*
 *.o
 ggml-common.h

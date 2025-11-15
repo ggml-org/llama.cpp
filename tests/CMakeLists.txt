@@ -181,17 +181,27 @@ endif()
 
 llama_build_and_test(test-chat-parser.cpp)
 
-# Combinator tests (modular)
-file(GLOB_RECURSE COMBINATOR_TEST_SOURCES
-    combinator/*.cpp
-    combinator/*.hpp
-    test-chat-parser-combinator.cpp
+# Chat PEG parser tests (modular)
+file(GLOB_RECURSE CHAT_PEG_PARSER_TEST_SOURCES
+    chat-peg-parser/simple_tokenizer.cpp
+    chat-peg-parser/benchmark.cpp
+    chat-peg-parser/test-actions.cpp
+    chat-peg-parser/test-command7-parser-compare.cpp
+    chat-peg-parser/test-example-qwen3-coder.cpp
+    chat-peg-parser/test-gbnf-generation.cpp
+    chat-peg-parser/test-json-parser.cpp
+    chat-peg-parser/test-one.cpp
+    chat-peg-parser/test-optional.cpp
+    chat-peg-parser/test-partial-parsing.cpp
+    chat-peg-parser/test-recursive-references.cpp
+    chat-peg-parser/tests.h
+    test-chat-peg-parser.cpp
 )
-add_executable(test-chat-parser-combinator ${COMBINATOR_TEST_SOURCES})
-target_link_libraries(test-chat-parser-combinator PRIVATE common)
-install(TARGETS test-chat-parser-combinator RUNTIME)
-add_test(NAME test-chat-parser-combinator COMMAND test-chat-parser-combinator)
-set_property(TEST test-chat-parser-combinator PROPERTY LABELS main)
+add_executable(test-chat-peg-parser ${CHAT_PEG_PARSER_TEST_SOURCES})
+target_link_libraries(test-chat-peg-parser PRIVATE common)
+install(TARGETS test-chat-peg-parser RUNTIME)
+add_test(NAME test-chat-peg-parser COMMAND test-chat-peg-parser)
+set_property(TEST test-chat-peg-parser PROPERTY LABELS main)
 
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)

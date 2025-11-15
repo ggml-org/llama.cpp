@@ -6,8 +6,8 @@
 #include <iostream>
 #include <memory>
 
-class common_chat_combinator_parser test_command7_parser_compare::create_command_r7b_parser() {
-    auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
+class common_chat_peg_parser test_command7_parser_compare::create_command_r7b_parser() {
+    auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.add_rule("thinking",
             "<|START_THINKING|>" << p.add_rule("reasoning-content", p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
 
@@ -186,7 +186,7 @@ void test_command7_parser_compare::run_comparison(int iterations) {
     std::cout << "Current common_chat_combinator_parser performance: " << t2 << "us (" << (float) t2 / iterations << "us per iteration)\n";
 }
 
-void test_command7_parser_compare::test_command_r7b_parser(const class common_chat_combinator_parser & p,
+void test_command7_parser_compare::test_command_r7b_parser(const class common_chat_peg_parser & p,
                                                            const std::string &  input,
                                                            bool                 need_more_input,
                                                            bool                 print_results) {

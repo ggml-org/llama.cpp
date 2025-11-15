@@ -48,10 +48,10 @@ add_library(${TARGET} STATIC
     arg.cpp
     arg.h
     base64.hpp
-    chat-parser-combinator.cpp
-    chat-parser-combinator.h
     chat-parser.cpp
     chat-parser.h
+    chat-peg-parser.cpp
+    chat-peg-parser.h
     chat.cpp
     chat.h
     common.cpp

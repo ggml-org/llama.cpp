@@ -4,7 +4,7 @@
 #include <string>
 
 test_example_qwen3_coder::test_example_qwen3_coder() : compound_test("sample_qwen3_coder_test") {
-    parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
+    parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.add_rule("raw-reasoning",
             "<think>" << p.add_rule("reasoning-content", p.until("</think>")) << "</think>");
 

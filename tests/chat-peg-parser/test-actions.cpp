@@ -4,7 +4,7 @@ test_actions::test_actions() : compound_test("test_actions") {
     // Test simple action - append matched text to content
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
                 auto word = p.chars("[a-z]+");
                 return p.action(word,
                                 [](const common_chat_parse_action & act) { act.env.result.content += std::string(act.match); });
@@ -22,7 +22,7 @@ test_actions::test_actions() : compound_test("test_actions") {
     // Test multiple sequential actions - build a sentence
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
                 auto greeting = p.action(p.literal("hello"), [](const common_chat_parse_action & act) {
                     act.env.result.content += std::string(act.match) + " ";
                 });
@@ -48,7 +48,7 @@ test_actions::test_actions() : compound_test("test_actions") {
     // Test actions don't run when parse fails
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
                 return p.action(p.literal("success"),
                                 [](const common_chat_parse_action & act) { act.env.result.content = "action_ran"; });
             });
@@ -65,7 +65,7 @@ test_actions::test_actions() : compound_test("test_actions") {
     // Test Actions work with partial parsing
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) {
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
                 auto content = p.action(p.until("<end>"), [](const common_chat_parse_action & act) {
                     act.env.result.content += std::string(act.match);
                 });

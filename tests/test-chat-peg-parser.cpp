@@ -1,4 +1,4 @@
-#include "combinator/tests.h"
+#include "chat-peg-parser/tests.h"
 
 int main() {
     test_partial_parsing partial_parsing_test;

@@ -3,7 +3,7 @@
 // Common includes for all test files
 #include "../testcase.hpp"
 #include <nlohmann/json.hpp>
-#include "chat-parser-combinator.h"
+#include "chat-peg-parser.h"
 #include <memory>
 
 // Test class declarations
@@ -63,7 +63,7 @@ public:
 
 class test_command7_parser_compare : public uses_simple_tokenizer, public benchmark_test {
 private:
-    class common_chat_combinator_parser parser;
+    class common_chat_peg_parser parser;
     common_chat_parse_event_handler handler;
 
     std::string reasoning;
@@ -71,9 +71,9 @@ private:
     std::vector<bench_tool_call> tool_calls;
     std::vector<std::string> tokens;
     // Helper methods
-    static class common_chat_combinator_parser create_command_r7b_parser();
+    static class common_chat_peg_parser create_command_r7b_parser();
     static common_chat_parse_event_handler create_command_r7b_event_handler();
-    static void test_command_r7b_parser(const class common_chat_combinator_parser & p, const std::string & input, bool need_more_input, bool print_results = false);
+    static void test_command_r7b_parser(const class common_chat_peg_parser & p, const std::string & input, bool need_more_input, bool print_results = false);
     static void test_command_r7b_legacy_parser(const std::string & input, bool need_more_input, bool print_results = false);
 public:
     test_command7_parser_compare();
@@ -82,7 +82,7 @@ public:
 
 class test_example_qwen3_coder : public uses_simple_tokenizer, public compound_test {
 private:
-    class common_chat_combinator_parser parser;
+    class common_chat_peg_parser parser;
 public:
     test_example_qwen3_coder();
 };

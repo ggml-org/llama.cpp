@@ -4,7 +4,7 @@ test_one::test_one() : compound_test("test_one") {
     // Test common escape sequences - newline
     add_test(
         [](test_harness h) {
-            auto common_chat_combinator_parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -18,7 +18,7 @@ test_one::test_one() : compound_test("test_one") {
     // Test common escape sequences - tab
     add_test(
         [](test_harness h) {
-            auto common_chat_combinator_parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -32,7 +32,7 @@ test_one::test_one() : compound_test("test_one") {
     // Test common escape sequences - backslash
     add_test(
         [](test_harness h) {
-            auto common_chat_combinator_parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -46,7 +46,7 @@ test_one::test_one() : compound_test("test_one") {
     // Test common escape sequences - space (should ())
     add_test(
         [](test_harness h) {
-            auto common_chat_combinator_parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -60,7 +60,7 @@ test_one::test_one() : compound_test("test_one") {
     // Test escaped dash - 'a' should succeed
     add_test(
         [](test_harness h) {
-            auto common_chat_combinator_parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("[a\\-z]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -74,7 +74,7 @@ test_one::test_one() : compound_test("test_one") {
     // Test escaped dash - '-' should succeed (literal dash)
     add_test(
         [](test_harness h) {
-            auto common_chat_combinator_parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("[a\\-z]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -88,7 +88,7 @@ test_one::test_one() : compound_test("test_one") {
     // Test escaped dash - 'z' should succeed
     add_test(
         [](test_harness h) {
-            auto common_chat_combinator_parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("[a\\-z]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -102,7 +102,7 @@ test_one::test_one() : compound_test("test_one") {
     // Test escaped dash - 'b' should NOT match (since \- is literal dash, not range)
     add_test(
         [](test_harness h) {
-            auto common_chat_combinator_parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("[a\\-z]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;

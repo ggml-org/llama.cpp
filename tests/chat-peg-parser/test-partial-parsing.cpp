@@ -4,7 +4,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Literals - Basic Success
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("hello"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -18,7 +18,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Char Classes - Basic Lowercase Success
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("a-z"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -32,7 +32,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Char Classes - Uppercase Fail
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("a-z"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -46,7 +46,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Char Classes with Dash - Lowercase Success
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("a-z-"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z-"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -60,7 +60,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Char Classes with Dash - Literal Dash Success
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("a-z-"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z-"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -74,7 +74,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Char Classes with Dash - Uppercase Fail
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one("a-z-"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z-"); });
 
             common_chat_parse_context ctx;
             common_chat_parse_result  result;
@@ -88,7 +88,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Sequences - Partial Match 1
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
 
             auto ctx    = common_chat_parse_context("<thi", false);
             auto result = parser.parse(ctx);
@@ -99,7 +99,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Sequences - Partial Match 2
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("begin") + p.literal("end"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("begin") + p.literal("end"); });
 
             auto ctx    = common_chat_parse_context("begin", false);
             auto result = parser.parse(ctx);
@@ -110,7 +110,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Sequences - Partial Match 3
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
 
             auto ctx    = common_chat_parse_context("<think></", false);
             auto result = parser.parse(ctx);
@@ -121,7 +121,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Sequences - Full Match
     add_test(
         [](test_harness h) {
-            auto common_chat_combinator_parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("hello") + p.literal("world"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.literal("world"); });
 
             auto ctx    = common_chat_parse_context("helloworld", true);
             auto result = common_chat_combinator_parser.parse(ctx);
@@ -132,7 +132,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Sequences - No Match
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
 
             auto ctx    = common_chat_parse_context("<think>I am common_chat_combinator_parser", false);
             auto result = parser.parse(ctx);
@@ -143,7 +143,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Choices - Partial Match 1
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("option1") | p.literal("option2"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("option1") | p.literal("option2"); });
 
             auto ctx    = common_chat_parse_context("opt", false);
             auto result = parser.parse(ctx);
@@ -155,7 +155,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     add_test(
         [](test_harness h) {
             auto parser =
-                build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("choice_a") | p.literal("choice_b"); });
+                build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("choice_a") | p.literal("choice_b"); });
 
             auto ctx    = common_chat_parse_context("choice", false);
             auto result = parser.parse(ctx);
@@ -166,7 +166,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Choices - Full Match 1
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("first") | p.literal("second"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("first") | p.literal("second"); });
 
             auto ctx    = common_chat_parse_context("first", true);
             auto result = parser.parse(ctx);
@@ -177,7 +177,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Choices - Full Match 2
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("alpha") | p.literal("beta"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("alpha") | p.literal("beta"); });
 
             auto ctx    = common_chat_parse_context("beta", true);
             auto result = parser.parse(ctx);
@@ -188,7 +188,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Choices - No Match
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("good") | p.literal("better"); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("good") | p.literal("better"); });
 
             auto ctx    = common_chat_parse_context("best", true);
             auto result = parser.parse(ctx);
@@ -199,7 +199,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Zero or More - Partial Match 1
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.zero_or_more(p.literal("ab")); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.literal("ab")); });
 
             auto ctx    = common_chat_parse_context("a", false);
             auto result = parser.parse(ctx);
@@ -210,7 +210,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Zero or More - Partial Match 2
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.zero_or_more(p.literal("xy")); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.literal("xy")); });
 
             auto ctx    = common_chat_parse_context("xyx", false);
             auto result = parser.parse(ctx);
@@ -221,7 +221,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // Zero or More - Full Match
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.zero_or_more(p.literal("test")); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.literal("test")); });
 
             auto ctx    = common_chat_parse_context("test", true);
             auto result = parser.parse(ctx);
@@ -232,7 +232,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // One or More - Partial Match 1
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one_or_more(p.literal("repeat")); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("repeat")); });
 
             auto ctx    = common_chat_parse_context("rep", false);
             auto result = parser.parse(ctx);
@@ -243,7 +243,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // One or More - Partial Match 2
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one_or_more(p.literal("ab")); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("ab")); });
 
             auto ctx    = common_chat_parse_context("aba", false);
             auto result = parser.parse(ctx);
@@ -254,7 +254,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // One or More - Full Match
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one_or_more(p.literal("single")); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("single")); });
 
             auto ctx    = common_chat_parse_context("single", true);
             auto result = parser.parse(ctx);
@@ -265,7 +265,7 @@ test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsi
     // One or More - No Match
     add_test(
         [](test_harness h) {
-            auto parser = build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.one_or_more(p.literal("()")); });
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("()")); });
 
             auto ctx    = common_chat_parse_context("success", true);
             auto result = parser.parse(ctx);

@@ -5,7 +5,7 @@ test_optional::test_optional() : compound_test("test_optional") {
     add_test(
         [](test_harness h) {
             auto parser =
-                build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
+                build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
 
             auto ctx    = common_chat_parse_context("hello world");
             auto result = parser.parse(ctx);
@@ -19,7 +19,7 @@ test_optional::test_optional() : compound_test("test_optional") {
     add_test(
         [](test_harness h) {
             auto parser =
-                build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
+                build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
 
             auto ctx    = common_chat_parse_context("hello", true);
             auto result = parser.parse(ctx);
@@ -33,7 +33,7 @@ test_optional::test_optional() : compound_test("test_optional") {
     add_test(
         [](test_harness h) {
             auto parser =
-                build_combinator_parser([](common_chat_combinator_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
+                build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
 
             auto ctx    = common_chat_parse_context("hello ", false);
             auto result = parser.parse(ctx);
