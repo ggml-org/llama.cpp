@@ -571,7 +571,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     // rope_freq_base (optional)
     hparams.rope_freq_base_train = 10000.0f;
     ml.get_key(LLM_KV_ROPE_FREQ_BASE, hparams.rope_freq_base_train, false);
-    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+    const bool has_rope_freq_base_swa =
+        ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
 
     std::string rope_scaling("linear");
     ml.get_key(LLM_KV_ROPE_SCALING_TYPE, rope_scaling, false);
@@ -587,7 +588,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
     // by default assume that the sliding-window layers use the same scaling type as the non-sliding-window layers
-    hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+    if (!has_rope_freq_base_swa) {
+        hparams.rope_freq_base_train_swa = hparams.rope_freq_base_train;
+    }
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
 
     ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
@@ -7033,6 +7036,7 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: rope type        = %d\n",     __func__, hparams.rope_type);
         LLAMA_LOG_INFO("%s: rope scaling     = %s\n",     __func__, rope_scaling_type.c_str());
         LLAMA_LOG_INFO("%s: freq_base_train  = %.1f\n",   __func__, hparams.rope_freq_base_train);
+        LLAMA_LOG_INFO("%s: freq_base_train_swa = %.1f\n", __func__, hparams.rope_freq_base_train_swa);
         LLAMA_LOG_INFO("%s: freq_scale_train = %g\n",     __func__, hparams.rope_freq_scale_train);
         LLAMA_LOG_INFO("%s: n_ctx_orig_yarn  = %u\n",     __func__, hparams.n_ctx_orig_yarn);
         LLAMA_LOG_INFO("%s: rope_yarn_log_mul= %.4f\n",   __func__, hparams.rope_yarn_log_mul);

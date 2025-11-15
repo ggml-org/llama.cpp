@@ -5100,6 +5100,8 @@ class Plamo3Model(PlamoTokenizerMixin, TextModel):
             data_torch = data_torch + 1.0
         elif name.endswith(".post_mlp_norm.weight"):
             data_torch = data_torch + 1.0 / (5**1.5)
+        elif name.endswith((".mixer.q_norm.weight", ".mixer.k_norm.weight")):
+            data_torch = data_torch + 1.0
         elif name.endswith(".norm.weight"):
             data_torch = data_torch + 1.0
 
@@ -5128,7 +5130,7 @@ class Plamo3Model(PlamoTokenizerMixin, TextModel):
                 elif chunk.shape != (n_embd, n_ff):
                     raise ValueError(f"Unexpected gate/up chunk shape {tuple(chunk.shape)}")
                 # processed.append(chunk.contiguous())
-                processed.append(chunk.contiguous().transpose(0, 1))
+                processed.append(chunk.transpose(0, 1).contiguous())
 
             gate_proj_weight, up_proj_weight = processed
 
