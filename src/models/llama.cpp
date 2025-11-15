@@ -14,6 +14,12 @@ llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_para
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
+    // (optional) temperature tuning
+    ggml_tensor * inp_attn_scale = nullptr;
+    if (hparams.f_attn_temp_scale != 0.0f) {
+        inp_attn_scale = build_inp_attn_scale();
+    }
+
     auto * inp_attn = build_attn_inp_kv();
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
@@ -72,6 +78,12 @@ llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_para
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
+
+            if (inp_attn_scale) {
+                // apply llama 4 temperature scaling
+                Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
+                cb(Qcur, "Qcur_attn_temp_scaled", il);
+            }
 
             if (hparams.use_kq_norm) {
                 // Llama4TextL2Norm

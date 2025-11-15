@@ -628,6 +628,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_LLAMA:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE, hparams.f_attn_temp_scale, false);
+
+                // TODO: maybe add n_attn_temp_floor_scale as a separate KV?
+                if (hparams.f_attn_temp_scale != 0.0f) {
+                    hparams.n_attn_temp_floor_scale = hparams.n_ctx_orig_yarn;
+                    if (hparams.n_attn_temp_floor_scale == 0) {
+                        throw std::runtime_error("invalid n_ctx_orig_yarn for attention temperature scaling");
+                    }
+                }
 
                 if (hparams.n_expert == 8) {
                     switch (hparams.n_layer) {
@@ -664,8 +673,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.swa_type             = LLAMA_SWA_TYPE_NONE;
                     hparams.n_no_rope_layer_step = hparams.n_layer; // always use rope
                 } else {
-                    hparams.swa_type      = LLAMA_SWA_TYPE_CHUNKED;
-                    hparams.n_swa         = 8192;
+                    hparams.swa_type                = LLAMA_SWA_TYPE_CHUNKED;
+                    hparams.n_swa                   = 8192;
+                    hparams.n_attn_temp_floor_scale = 8192;
+                    hparams.f_attn_temp_scale       = 0.1f;
                     hparams.set_swa_pattern(4);   // pattern: 3 chunked - 1 full
                 }
 

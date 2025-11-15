@@ -2814,6 +2814,19 @@ class Llama4VisionModel(MmprojModel):
 class Mistral3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
 
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        rope_params = self.hparams.get("rope_parameters")
+        if rope_params is not None and rope_params.get("rope_type") == "yarn":
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_params["factor"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_fast(rope_params["beta_fast"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_slow(rope_params["beta_slow"])
+            self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1 * rope_params["mscale_all_dim"]) # TODO: is this correct?
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_params["original_max_position_embeddings"])
+            if "llama_4_scaling_beta" in rope_params:
+                self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         name = name.replace("language_model.", "")
         if "multi_modal_projector" in name or "vision_tower" in name:
