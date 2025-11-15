@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <optional>
 
 struct common_chat_templates;
 
@@ -159,6 +160,26 @@ struct common_chat_syntax {
     bool                     parse_tool_calls      = true;
 };
 
+struct common_chat_stream_state {
+    common_chat_stream_state() = default;
+    explicit common_chat_stream_state(const common_chat_syntax & syntax) { init(syntax); }
+
+    void init(const common_chat_syntax & syntax);
+
+    std::string apply_reasoning_prefix(const std::string & text) const;
+
+    std::optional<std::string> consume_reasoning_prefix();
+
+    bool has_reasoning_prefix() const { return !reasoning_prefix_.empty(); }
+    bool reasoning_prefix_pending() const { return has_reasoning_prefix() && !reasoning_prefix_streamed_; }
+    const std::string & reasoning_prefix() const { return reasoning_prefix_; }
+    void mark_reasoning_prefix_streamed() { reasoning_prefix_streamed_ = true; }
+
+private:
+    std::string reasoning_prefix_;
+    bool reasoning_prefix_streamed_ = false;
+};
+
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
 bool common_chat_verify_template(const std::string & tmpl, bool use_jinja);
 
@@ -200,6 +221,11 @@ const char*               common_chat_format_name(common_chat_format format);
 const char*               common_reasoning_format_name(common_reasoning_format format);
 common_reasoning_format   common_reasoning_format_from_name(const std::string & format);
 common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+common_chat_msg           common_chat_parse_stream(
+    const std::string & input,
+    bool is_partial,
+    common_chat_stream_state & stream_state,
+    const common_chat_syntax & syntax);
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
 
