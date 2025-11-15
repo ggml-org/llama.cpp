@@ -95,6 +95,8 @@ class ServerProcess:
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
+    local_media_max_size_mb: int | None = None
+    allowed_local_media_path: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -215,6 +217,10 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
+        if self.local_media_max_size_mb:
+            server_args.extend(["--local-media-max-size-mb", self.local_media_max_size_mb])
+        if self.allowed_local_media_path:
+            server_args.extend(["--allowed-local-media-path", self.allowed_local_media_path])
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
