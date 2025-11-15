@@ -637,6 +637,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_DEEPSEEK_V3_1: return "DeepSeek V3.1";
         case COMMON_CHAT_FORMAT_HERMES_2_PRO: return "Hermes 2 Pro";
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
+        case COMMON_CHAT_FORMAT_QWEN3: return "Qwen3";
         case COMMON_CHAT_FORMAT_GRANITE: return "Granite";
         case COMMON_CHAT_FORMAT_GPT_OSS: return "GPT-OSS";
         case COMMON_CHAT_FORMAT_SEED_OSS: return "Seed-OSS";
@@ -1301,6 +1302,124 @@ static void common_chat_parse_command_r7b(common_chat_msg_parser & builder) {
         builder.add_content(builder.consume_rest());
     }
 }
+
+
+static common_chat_params common_chat_params_init_qwen3(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+
+    json additional_context = {
+        {"enable_thinking", inputs.enable_thinking},
+    };
+
+    data.prompt = apply(tmpl, inputs);
+    data.format = COMMON_CHAT_FORMAT_QWEN3;
+    // if (string_ends_with(data.prompt, "<think>\n")) {
+    //     if (!inputs.enable_thinking) {
+    //         data.prompt += "</think>";
+    //     } else {
+    //         data.thinking_forced_open = true;
+    //     }
+    // }
+
+    if (!inputs.tools.is_null()) {
+        // (content)?(<tool_call>{"name": "foo", "arguments": {"a": 1}}</tool_call>)*
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> tool_rules;
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string name = function.at("name");
+                auto parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+
+                std::vector<std::string> fragments;
+                fragments.push_back(" space \"<tool_call>\\n<function=" + name + ">\\n\"");
+
+                const auto & properties = parameters.at("properties");
+                std::vector<std::string> required;
+                if (parameters.contains("required")) {
+                    required = parameters.at("required");
+                }
+                
+                for (const auto & [param_name, param_value] : properties.items()) {
+                    const auto optional = std::find(required.begin(), required.end(), param_name) == required.end();
+                    if (optional) {
+                        fragments.push_back("(");
+                    }
+                    fragments.push_back("\"<parameter=" + param_name + ">\\n\" ");
+                    fragments.push_back(builder.add_schema(name + "-parameter-" + param_name, param_value));
+                    fragments.push_back("\"\\n</parameter>\\n\"");
+                    if (optional) {
+                        fragments.push_back(")? ");
+                    }
+                }
+                fragments.push_back("\"</function>\\n</tool_call>\"");
+
+                tool_rules.push_back(builder.add_rule(
+                    name + "-function-tag",
+                    string_join(fragments, " ")));
+            });
+            auto tool_call = tool_rules.size() == 1 ? tool_rules[0] : builder.add_rule("tool_call", string_join(tool_rules, " | "));
+            builder.add_rule("root",
+                std::string(data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
+                (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
+                "<tool_call>"
+            });
+            // data.grammar_triggers.push_back({
+            //     COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+            //     // If thinking_forced_open, then we capture the </think> tag in the grammar,
+            //     // (important for required tool choice) and in the trigger's first capture (decides what is sent to the grammar)
+            //     std::string(data.thinking_forced_open ? "[\\s\\S]*?(</think>\\s*)" : "(?:<think>[\\s\\S]*?</think>\\s*)?") + (
+            //         "\\s*(<tool_call>\\n<function=)" // + string_join(tool_names, "|") + ")>\n)"
+            //     ),
+            // });
+            data.preserved_tokens = {
+                "<think>",
+                "</think>",
+                "<tool_call>",
+                "</tool_call>",
+            };
+        });
+    }
+
+    return data;
+}
+
+static void common_chat_parse_qwen3(common_chat_msg_parser & builder) {
+    builder.try_parse_reasoning("<think>", "</think>");
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    static const common_regex function_open("\\s*<tool_call>\n<function=([a-zA-Z0-9_]+)>\n");
+    static const common_regex function_close("</function>\n</tool_call>");
+    static const common_regex parameter_open("<parameter=([a-zA-Z0-9_]+)>\n");
+    static const common_regex parameter_close("</parameter>\n");
+
+    while (auto block_open_match = builder.try_find_regex(function_open)) {
+        const auto function_name = builder.str(block_open_match->groups[1]);
+        json arguments = json::object();
+        while (true) {
+            builder.consume_spaces();
+            if (auto param_open_match = builder.try_consume_regex(parameter_open)) {
+                const auto parameter_name = builder.str(param_open_match->groups[1]);
+                const auto parameter_value = builder.consume_json();
+                arguments[parameter_name] = parameter_value.json;
+                builder.consume_spaces();
+                builder.consume_regex(parameter_close);
+            } else {
+                break;
+            }
+        }
+        builder.consume_regex(function_close);
+        builder.consume_spaces();
+        builder.add_tool_call(function_name, "", arguments.dump(2));
+    }
+    builder.add_content(builder.consume_rest());
+}   
 
 static void expect_tool_parameters(const std::string & name, const json & parameters, const std::vector<std::string> & expected_properties) {
     if (!parameters.is_object() || !parameters.contains("type") || parameters.at("type") != "object" || !parameters.contains("properties") || !parameters.contains("required")) {
@@ -2927,9 +3046,14 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_granite(tmpl, params);
     }
 
-    // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)
     if (src.find("<tool_call>") != std::string::npos && params.json_schema.is_null()) {
-        return common_chat_params_init_hermes_2_pro(tmpl, params);
+        if (src.find("<parameter=") != std::string::npos && params.json_schema.is_null()) {
+            // Qwen3-Coder
+            return common_chat_params_init_qwen3(tmpl, params);
+        } else {
+            // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)
+            return common_chat_params_init_hermes_2_pro(tmpl, params);
+        }
     }
 
     // GPT-OSS
@@ -3120,6 +3244,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_COMMAND_R7B:
             common_chat_parse_command_r7b(builder);
+            break;
+        case COMMON_CHAT_FORMAT_QWEN3:
+            common_chat_parse_qwen3(builder);
             break;
         case COMMON_CHAT_FORMAT_GRANITE:
             common_chat_parse_granite(builder);
