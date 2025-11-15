@@ -7840,12 +7840,6 @@ class Glm4MoeModel(TextModel):
         special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"]) # 151329
         special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
 
-        # Patch broken chat template
-        if isinstance(special_vocab.chat_template, str) and "visible_text(m.content).endswith" in special_vocab.chat_template:
-            special_vocab.chat_template = special_vocab.chat_template.replace(
-                """{{ visible_text(m.content) }}\n{{- '/nothink' if (enable_thinking is defined and not enable_thinking and not visible_text(m.content).endswith("/nothink")) else '' -}}""",
-                """{% set content = visible_text(m.content) %}{{ content }}\n{{- '/nothink' if (enable_thinking is defined and not enable_thinking and not content.endswith("/nothink")) else '' -}}""")
-
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
@@ -9394,16 +9388,6 @@ class HunYuanModel(TextModel):
 @ModelBase.register("SmolLM3ForCausalLM")
 class SmolLM3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.SMOLLM3
-
-    def set_vocab(self):
-        super().set_vocab()
-        # remove unsupported array slicing in chat template
-        # ref: https://huggingface.co/ggml-org/SmolLM3-3B-GGUF/discussions/1
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
-        if tokenizer.chat_template is not None:
-            chat_template = tokenizer.chat_template.replace("[:]", "")
-            self.gguf_writer.add_chat_template(chat_template)
 
 
 @ModelBase.register("GptOssForCausalLM")
