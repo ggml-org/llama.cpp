@@ -1348,6 +1348,15 @@ class MultiChatUI {
     }
 
     /**
+     * Remove the specified chat message's ui block from the current chat session ui.
+     * @param {number} uniqIdChatMsg
+     */
+    chatmsg_ui_remove(uniqIdChatMsg) {
+        let el = document.querySelector(`[CMUniqId="${uniqIdChatMsg}"]`)
+        el?.remove()
+    }
+
+    /**
      * Adjust and update chat session ui wrt the last two messages
      * in specified chat session, if current.
      *
@@ -1364,7 +1373,7 @@ class MultiChatUI {
         let prevLastMsg = chat.xchat[chat.xchat.length-2]
         let msg = chat.xchat[chat.xchat.length-1]
         if (prevLastMsg) {
-            this.ui_chatmessage_delete(chat.chatId, prevLastMsg.uniqId, false)
+            this.chatmsg_ui_remove(prevLastMsg.uniqId)
             this.show_message(this.elDivChat, prevLastMsg, 1, msg)
         }
         this.show_message(this.elDivChat, msg, 0, undefined)
@@ -1378,7 +1387,7 @@ class MultiChatUI {
      * @param {string} chatId
      * @param {ChatMessageEx} msg
      */
-    chatmsg_add_show(chatId, msg) {
+    chatmsg_add_uishow(chatId, msg) {
         let chat = this.simpleChats[chatId];
         if (!chat) {
             return { added: false, shown: false }
@@ -1393,11 +1402,10 @@ class MultiChatUI {
      * @param {number} uniqIdChatMsg
      * @param {boolean} bUpdateUI
      */
-    ui_chatmessage_delete(curChatId, uniqIdChatMsg, bUpdateUI=true) {
+    chatmsg_del_uiupdate(curChatId, uniqIdChatMsg, bUpdateUI=true) {
         let index = this.simpleChats[curChatId].delete(uniqIdChatMsg)
         if ((index >= 0) && (curChatId == this.curChatId) && bUpdateUI) {
-            let el = document.querySelector(`[CMUniqId="${uniqIdChatMsg}"]`)
-            el?.remove()
+            this.chatmsg_ui_remove(uniqIdChatMsg)
             if (index >= (this.simpleChats[curChatId].xchat.length-1)) {
                 // so that tool call edit/trigger control etal can be controlled suitably
                 // from a single place - need to add that centrally controlled logic flor still.
@@ -1463,7 +1471,7 @@ class MultiChatUI {
                     limitedData = data.slice(0, this.me.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
                 }
             }
-            if (this.chatmsg_add_show(cid, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, tcid, name, limitedData))).shown) {
+            if (this.chatmsg_add_uishow(cid, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, tcid, name, limitedData))).shown) {
                 if (this.me.tools.autoSecs > 0) {
                     this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
                         this.elBtnUser.click()
@@ -1501,7 +1509,7 @@ class MultiChatUI {
 
         this.elPopoverChatMsgDelBtn.addEventListener('click', (ev) => {
             console.log(`DBUG:MCUI:ChatMsgPO:Del:${this.curChatId}:${this.uniqIdChatMsgPO}`)
-            this.ui_chatmessage_delete(this.curChatId, this.uniqIdChatMsgPO)
+            this.chatmsg_del_uiupdate(this.curChatId, this.uniqIdChatMsgPO)
         })
 
         this.elPopoverChatMsgCopyBtn.addEventListener('click', (ev) => {
@@ -1627,12 +1635,12 @@ class MultiChatUI {
         }
         let toolResult = await chat.handle_toolcall(toolCallId, toolname, this.elInToolArgs.value)
         if (toolResult !== undefined) {
-            this.chatmsg_add_show(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
+            this.chatmsg_add_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
             this.ui_reset_userinput(false)
         } else {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
                 this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
-                this.chatmsg_add_show(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
+                this.chatmsg_add_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
                 this.ui_reset_userinput(false)
             }, this.me.tools.toolCallResponseTimeoutMS)
         }
