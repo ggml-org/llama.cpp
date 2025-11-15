@@ -38,6 +38,13 @@ struct common_sampler;
 
 struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params);
 
+// Create a GPU sampler chain from common sampling parameters
+// Returns a llama_sampler chain configured with GPU samplers based on the parameters
+// This chain can be used per-sequence for GPU-based sampling
+// Note: Only samplers that have GPU equivalents will be added to the chain
+// The returned sampler should be freed with llama_sampler_free()
+struct llama_sampler * common_sampler_gpu_init(const struct llama_model * model, const struct common_params_sampling & params);
+
 void common_sampler_free(struct common_sampler * gsmpl);
 
 // if accept_grammar is true, the token is accepted both by the sampling chain and the grammar

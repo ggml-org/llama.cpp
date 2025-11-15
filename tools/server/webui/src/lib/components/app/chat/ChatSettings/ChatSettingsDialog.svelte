@@ -152,7 +152,17 @@
 					key: 'samplers',
 					label: 'Samplers',
 					type: 'input'
-				}
+				},
+				{
+					key: 'gpu_sampling',
+					label: 'GPU sampling',
+					type: 'checkbox'
+				},
+				{
+					key: 'gpu_dist',
+					label: 'GPU dist sampling',
+					type: 'checkbox'
+				},
 			]
 		},
 		{
@@ -272,6 +282,10 @@
 
 	function handleConfigChange(key: string, value: string | boolean) {
 		localConfig[key] = value;
+
+		if (key === 'gpu_sampling' && value === false) {
+			localConfig.gpu_dist = false;
+		}
 	}
 
 	function handleClose() {

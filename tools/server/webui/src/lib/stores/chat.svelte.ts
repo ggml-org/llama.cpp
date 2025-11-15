@@ -297,6 +297,12 @@ class ChatStore {
 		if (currentConfig.samplers) {
 			apiOptions.samplers = currentConfig.samplers;
 		}
+		if (currentConfig.gpu_sampling !== undefined) {
+			apiOptions.gpu_sampling = Boolean(currentConfig.gpu_sampling);
+		}
+		if (currentConfig.gpu_dist !== undefined) {
+			apiOptions.gpu_dist = Boolean(currentConfig.gpu_dist);
+		}
 		if (currentConfig.custom) {
 			apiOptions.custom = currentConfig.custom;
 		}

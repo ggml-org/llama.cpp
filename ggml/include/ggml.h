@@ -562,6 +562,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_PENALTIES,
+
         GGML_OP_COUNT,
     };
 
@@ -1007,6 +1009,10 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_cumsum(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
     // sums along rows, with input shape [a,b,c,d] return shape [1,b,c,d]
     GGML_API struct ggml_tensor * ggml_sum_rows(
             struct ggml_context * ctx,
@@ -1323,6 +1329,22 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    // Sampler penalties - applies repeat, frequency, and presence penalties to
+    // logits based on token history.
+    //
+    // logits:        F32 [n_vocab]   - input logits to penalize
+    // token_history: I32 [n_history] - history of sampled tokens
+    // history_size:  I32 [1]         - actual number of tokens in history
+    // Returns:       F32 [n_vocab]   - penalized logits
+    GGML_API struct ggml_tensor * ggml_penalties(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * logits,
+            struct ggml_tensor  * history,
+            struct ggml_tensor  * n_history,
+            float                 repeat,
+            float                 freq,
+            float                 present);
 
     GGML_API struct ggml_tensor * ggml_swiglu_oai(
             struct ggml_context * ctx,

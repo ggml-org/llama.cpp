@@ -135,6 +135,7 @@ int main(int argc, char ** argv) {
 
     std::vector<common_chat_msg> chat_msgs;
 
+
     // load the model and apply lora adapter, if any
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
     common_init_result llama_init = common_init_from_params(params);
@@ -146,6 +147,9 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: error: unable to load model\n", __func__);
         return 1;
     }
+
+    // Configure GPU Sampler
+    llama_set_ggml_sampler(ctx, 0, common_sampler_gpu_init(model, sparams));
 
     auto * mem = llama_get_memory(ctx);
 

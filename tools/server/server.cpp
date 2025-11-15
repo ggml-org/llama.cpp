@@ -197,6 +197,8 @@ struct slot_params {
                 {"speculative.p_min",         speculative.p_min},
                 {"timings_per_token",         timings_per_token},
                 {"post_sampling_probs",       post_sampling_probs},
+                {"gpu_sampling",              sampling.gpu_sampling},
+                {"gpu_dist",                  sampling.gpu_dist},
                 {"lora",                      lora},
             };
         }
@@ -255,6 +257,8 @@ struct slot_params {
             {"speculative.p_min",         speculative.p_min},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
+            {"gpu_sampling",              sampling.gpu_sampling},
+            {"gpu_dist",                  sampling.gpu_dist},
             {"lora",                      lora},
         };
     }
@@ -356,6 +360,11 @@ struct server_task {
         params.sampling.n_probs            = json_value(data, "n_probs",             defaults.sampling.n_probs);
         params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);
         params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
+
+        const bool request_gpu_sampling    = json_value(data, "gpu_sampling",        defaults.sampling.gpu_sampling);
+        const bool request_gpu_dist        = json_value(data, "gpu_dist",            defaults.sampling.gpu_dist);
+        params.sampling.gpu_sampling       = defaults.sampling.gpu_sampling && request_gpu_sampling;
+        params.sampling.gpu_dist           = params.sampling.gpu_sampling && request_gpu_dist;
 
         params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
         params.speculative.n_max = json_value(data, "speculative.n_max", defaults.speculative.n_max);
@@ -1703,6 +1712,7 @@ struct server_slot {
     json json_schema;
 
     struct common_sampler * smpl = nullptr;
+    llama_sampler * gpu_sampler = nullptr;
 
     llama_token sampled;
 
@@ -1747,6 +1757,13 @@ struct server_slot {
         // clear speculative decoding stats
         n_draft_total = 0;
         n_draft_accepted = 0;
+
+        if (gpu_sampler != nullptr) {
+            if (ctx != nullptr) {
+                llama_set_ggml_sampler(ctx, id, nullptr);
+            }
+            gpu_sampler = nullptr;
+        }
 
         task.reset();
         task_prev.reset();
@@ -2370,6 +2387,13 @@ struct server_context {
             common_sampler_free(slot.smpl);
             slot.smpl = nullptr;
 
+            if (slot.gpu_sampler != nullptr) {
+                if (ctx != nullptr) {
+                    llama_set_ggml_sampler(ctx, slot.id, nullptr);
+                }
+                slot.gpu_sampler = nullptr;
+            }
+
             llama_free(slot.ctx_dft);
             slot.ctx_dft = nullptr;
 
@@ -2831,6 +2855,11 @@ struct server_context {
             SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl).c_str());
         }
 
+        if (!configure_slot_gpu_sampler(slot, task.params.sampling)) {
+            send_error(task, "Failed to configure GPU samplers", ERROR_TYPE_SERVER);
+            return false;
+        }
+
         // initialize draft batch
         // TODO: rework speculative decoding [TAG_SERVER_SPEC_REWORK]
         if (slot.ctx_dft) {
@@ -2854,6 +2883,31 @@ struct server_context {
         // clear the entire KV cache
         llama_memory_clear(llama_get_memory(ctx), true);
         clean_kv_cache = false;
+    }
+
+    bool configure_slot_gpu_sampler(server_slot & slot, const common_params_sampling & sampling) {
+        if (!sampling.gpu_sampling) {
+            if (slot.gpu_sampler != nullptr) {
+                llama_set_ggml_sampler(ctx, slot.id, nullptr);
+                slot.gpu_sampler = nullptr;
+            }
+            return true;
+        }
+
+        llama_sampler * gpu_chain = common_sampler_gpu_init(model, sampling);
+        if (gpu_chain == nullptr) {
+            SLT_ERR(slot, "%s", "failed to initialize GPU sampler\n");
+            return false;
+        }
+
+        if (slot.gpu_sampler != nullptr) {
+            llama_set_ggml_sampler(ctx, slot.id, nullptr);
+            slot.gpu_sampler = nullptr;
+        }
+
+        slot.gpu_sampler = gpu_chain;
+        llama_set_ggml_sampler(ctx, slot.id, gpu_chain);
+        return true;
     }
 
     bool process_token(completion_token_output & result, server_slot & slot) {

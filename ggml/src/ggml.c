@@ -1021,9 +1021,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+    "PENALTIES",
 };
 
-static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
+static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1129,9 +1130,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+    "penalties(x,hist,size)",
 };
 
-static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
+static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -2988,6 +2990,37 @@ struct ggml_tensor * ggml_swiglu_oai(
     struct ggml_tensor * result = ggml_glu_impl(ctx, a, b, GGML_GLU_OP_SWIGLU_OAI, false);
     ggml_set_op_params_f32(result, 2, alpha);
     ggml_set_op_params_f32(result, 3, limit);
+
+    return result;
+}
+
+// ggml_penalties
+
+struct ggml_tensor * ggml_penalties(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * logits,
+        struct ggml_tensor  * history,
+        struct ggml_tensor  * n_history,
+        float                 repeat,
+        float                 freq,
+        float                 present) {
+    GGML_ASSERT(logits->type    == GGML_TYPE_F32);
+    GGML_ASSERT(history->type   == GGML_TYPE_I32);
+    GGML_ASSERT(n_history->type == GGML_TYPE_I32);
+    GGML_ASSERT(ggml_is_vector(logits));
+    GGML_ASSERT(ggml_is_vector(history));
+    GGML_ASSERT(ggml_is_scalar(n_history));
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, logits);
+
+    ggml_set_op_params_f32(result, 0, repeat);
+    ggml_set_op_params_f32(result, 1, freq);
+    ggml_set_op_params_f32(result, 2, present);
+
+    result->op     = GGML_OP_PENALTIES;
+    result->src[0] = logits;
+    result->src[1] = history;
+    result->src[2] = n_history;
 
     return result;
 }

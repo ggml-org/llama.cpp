@@ -206,6 +206,18 @@ llama_build_and_test(test-backend-ops.cpp)
 llama_build_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_build_and_test(test-autorelease.cpp        LABEL "model")
 
+llama_build_and_test(test-gpu-sampling.cpp       LABEL "model")
+target_include_directories(test-gpu-sampling PRIVATE ${PROJECT_SOURCE_DIR}/src)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-greedy       ARGS --test gpu_greedy)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-temp         ARGS --test gpu_temp)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-top_k        ARGS --test gpu_top_k)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-dist         ARGS --test gpu_dist)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-dist-and-cpu ARGS --test gpu_dist_and_cpu)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-logit-bias   ARGS --test gpu_logit_bias)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-mul_seq      ARGS --test gpu_multi_sequence)
+llama_test(test-gpu-sampling NAME test-gpu-sampling-set-sampler  ARGS --test gpu_set_sampler)
+
+
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
     llama_build_and_test(test-barrier.cpp)

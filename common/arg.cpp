@@ -1502,6 +1502,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
+        {"--gpu-sampling"},
+        "enable GPU sampling (default: disabled)",
+        [](common_params & params) {
+            params.sampling.gpu_sampling = true;
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"--gpu-dist"},
+        "perform final sampling on GPU (default: disabled)",
+        [](common_params & params) {
+            params.sampling.gpu_dist = true;
+            params.sampling.gpu_sampling = true;
+        }
+    ).set_sparam());
+    add_opt(common_arg(
         {"--pooling"}, "{none,mean,cls,last,rank}",
         "pooling type for embeddings, use model default if unspecified",
         [](common_params & params, const std::string & value) {

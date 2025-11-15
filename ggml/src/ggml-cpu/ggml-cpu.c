@@ -1974,6 +1974,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_glu(params, tensor);
             } break;
+        case GGML_OP_PENALTIES:
+            {
+                ggml_compute_forward_penalties(params, tensor);
+            } break;
         case GGML_OP_GET_REL_POS:
             {
                 ggml_compute_forward_get_rel_pos(params, tensor);
@@ -2236,6 +2240,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                     GGML_ABORT("fatal error");
             }
             break;
+        case GGML_OP_PENALTIES:
+            {
+                n_tasks = 1; // Single-threaded for now
+            } break;
         case GGML_OP_SILU_BACK:
         case GGML_OP_MUL:
         case GGML_OP_DIV:

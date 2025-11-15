@@ -188,6 +188,10 @@ struct common_params_sampling {
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
 
+    // GPU sampling flags
+    bool    gpu_sampling        = false; // enable GPU sampling
+    bool    gpu_dist            = false; // GPU performs final sampling (dist)
+
     // print the parameters into a string
     std::string print() const;
 };
@@ -512,6 +516,9 @@ struct common_params {
     bool has_speculative() const {
         return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
     }
+
+    struct llama_sampler_seq_config * gpu_samplers = NULL;
+    size_t                            n_gpu_samplers = 0;
 };
 
 // call once at the start of a program if it uses libcommon
