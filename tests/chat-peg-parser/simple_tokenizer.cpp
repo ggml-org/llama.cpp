@@ -1,6 +1,6 @@
 #include "tests.h"
 
-std::vector<std::string> uses_simple_tokenizer::simple_tokenize(const std::string & input) {
+std::vector<std::string> simple_tokenize(const std::string & input) {
     std::vector<std::string> result;
     std::string              current;
 

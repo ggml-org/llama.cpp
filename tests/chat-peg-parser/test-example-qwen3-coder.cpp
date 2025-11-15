@@ -3,8 +3,8 @@
 #include <numeric>
 #include <string>
 
-test_example_qwen3_coder::test_example_qwen3_coder() : compound_test("sample_qwen3_coder_test") {
-    parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+void test_example_qwen3_coder(testing &t) {
+    auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.add_rule("raw-reasoning",
             "<think>" << p.add_rule("reasoning-content", p.until("</think>")) << "</think>");
 
@@ -75,7 +75,7 @@ test_example_qwen3_coder::test_example_qwen3_coder() : compound_test("sample_qwe
         }
     };
 
-    add_test([&](test_harness h) {
+    t.test("accumulation_test", [&](testing &t) {
         std::string input =
             "<think>The user wants to find large log files that haven't been accessed recently. "
             "I should search for files with .log extension, filter by size (over 100MB), "
@@ -111,11 +111,11 @@ test_example_qwen3_coder::test_example_qwen3_coder() : compound_test("sample_qwe
             ctx.event_handler = handler;
 
             auto result = parser.parse(ctx);
-            h.assert_equals(std::string("should_not_fail_token_") + std::to_string(token_cnt), false, result.fail());
+            t.assert_equal(std::string("should_not_fail_token_") + std::to_string(token_cnt), false, result.fail());
 
             // This shouldn't emit any runtime errors
             auto diffs = common_chat_msg_diff::compute_diffs(prev, env.result);
             prev       = env.result;
         }
-    }, "accumulation_test");
+    });
 }

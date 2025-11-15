@@ -1,99 +1,87 @@
 #include "tests.h"
 
-test_recursive_references::test_recursive_references() : compound_test("test_recursive_references") {
+void test_recursive_references(testing &t) {
     // Test simple number
-    add_test(
-        [](test_harness h) {
-            auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
+    t.test("simple_number", [](testing &t) {
+        auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+            p.add_rule("number", p.one_or_more(p.one("0-9")));
+            p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+            return p.add_rule("value", p.rule("number") | p.rule("list"));
+        });
 
-            common_chat_parse_context ctx("1", true);
-            auto           result = value_parser.parse(ctx);
+        common_chat_parse_context ctx("1", true);
+        auto           result = value_parser.parse(ctx);
 
-            h.assert_equals("result_is_success", true, result.success());
-        },
-        "simple_number");
+        t.assert_equal("result_is_success", true, result.success());
+    });
 
     // Test simple list
-    add_test(
-        [](test_harness h) {
-            auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
+    t.test("simple_list", [](testing &t) {
+        auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+            p.add_rule("number", p.one_or_more(p.one("0-9")));
+            p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+            return p.add_rule("value", p.rule("number") | p.rule("list"));
+        });
 
-            common_chat_parse_context ctx("[1]", true);
-            auto           result = value_parser.parse(ctx);
+        common_chat_parse_context ctx("[1]", true);
+        auto           result = value_parser.parse(ctx);
 
-            h.assert_equals("result_is_success", true, result.success());
-        },
-        "simple_list");
+        t.assert_equal("result_is_success", true, result.success());
+    });
 
     // Test nested list
-    add_test(
-        [](test_harness h) {
-            auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
+    t.test("nested_list", [](testing &t) {
+        auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+            p.add_rule("number", p.one_or_more(p.one("0-9")));
+            p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+            return p.add_rule("value", p.rule("number") | p.rule("list"));
+        });
 
-            common_chat_parse_context ctx("[[2]]", true);
-            auto           result = value_parser.parse(ctx);
+        common_chat_parse_context ctx("[[2]]", true);
+        auto           result = value_parser.parse(ctx);
 
-            h.assert_equals("result_is_success", true, result.success());
-        },
-        "nested_list");
+        t.assert_equal("result_is_success", true, result.success());
+    });
 
     // Test deeply nested list
-    add_test(
-        [](test_harness h) {
-            auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
+    t.test("deeply_nested_list", [](testing &t) {
+        auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+            p.add_rule("number", p.one_or_more(p.one("0-9")));
+            p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+            return p.add_rule("value", p.rule("number") | p.rule("list"));
+        });
 
-            common_chat_parse_context ctx("[[[3]]]", true);
-            auto           result = value_parser.parse(ctx);
+        common_chat_parse_context ctx("[[[3]]]", true);
+        auto           result = value_parser.parse(ctx);
 
-            h.assert_equals("result_is_success", true, result.success());
-        },
-        "deeply_nested_list");
+        t.assert_equal("result_is_success", true, result.success());
+    });
 
     // Test need_more_input match
-    add_test(
-        [](test_harness h) {
-            auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
+    t.test("need_more_input_match", [](testing &t) {
+        auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+            p.add_rule("number", p.one_or_more(p.one("0-9")));
+            p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+            return p.add_rule("value", p.rule("number") | p.rule("list"));
+        });
 
-            common_chat_parse_context ctx("[[", false);
-            auto           result = value_parser.parse(ctx);
+        common_chat_parse_context ctx("[[", false);
+        auto           result = value_parser.parse(ctx);
 
-            h.assert_equals("result_is_need_more_input", true, result.need_more_input());
-        },
-        "need_more_input_match");
+        t.assert_equal("result_is_need_more_input", true, result.need_more_input());
+    });
 
     // Test no match
-    add_test(
-        [](test_harness h) {
-            auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-                p.add_rule("number", p.one_or_more(p.one("0-9")));
-                p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
-                return p.add_rule("value", p.rule("number") | p.rule("list"));
-            });
+    t.test("no_match", [](testing &t) {
+        auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+            p.add_rule("number", p.one_or_more(p.one("0-9")));
+            p.add_rule("list", p.sequence({ p.literal("["), p.rule("value"), p.literal("]") }));
+            return p.add_rule("value", p.rule("number") | p.rule("list"));
+        });
 
-            common_chat_parse_context ctx("[a]", true);
-            auto           result = value_parser.parse(ctx);
+        common_chat_parse_context ctx("[a]", true);
+        auto           result = value_parser.parse(ctx);
 
-            h.assert_equals("result_is_fail", true, result.fail());
-        },
-        "no_match");
+        t.assert_equal("result_is_fail", true, result.fail());
+    });
 }

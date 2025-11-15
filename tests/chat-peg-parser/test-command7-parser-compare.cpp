@@ -1,12 +1,13 @@
-#include "chat-parser.h"
+#include "../common/chat-parser.h"
 #include "json-schema-to-grammar.h"
-
 #include "tests.h"
 
 #include <iostream>
-#include <memory>
+#include <vector>
+#include <string>
+#include <numeric>
 
-class common_chat_peg_parser test_command7_parser_compare::create_command_r7b_parser() {
+static common_chat_peg_parser create_command_r7b_parser() {
     auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.add_rule("thinking",
             "<|START_THINKING|>" << p.add_rule("reasoning-content", p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
@@ -43,7 +44,7 @@ class common_chat_peg_parser test_command7_parser_compare::create_command_r7b_pa
     return parser;
 }
 
-common_chat_parse_event_handler test_command7_parser_compare::create_command_r7b_event_handler() {
+static common_chat_parse_event_handler create_command_r7b_event_handler() {
     return [](const common_chat_parse_event & ev, common_chat_parse_semantics & env) {
         if (ev.rule == "reasoning-content" && ev.ending()) {
             env.result.reasoning_content = ev.text;
@@ -74,122 +75,10 @@ common_chat_parse_event_handler test_command7_parser_compare::create_command_r7b
     };
 }
 
-// command7_parser_compare_test implementation
-test_command7_parser_compare::test_command7_parser_compare() :
-    benchmark_test(std::vector<std::unique_ptr<test_case>>()),
-    parser(create_command_r7b_parser()),
-    handler(create_command_r7b_event_handler()),
-    reasoning("To plan an effective trip to Japan that includes both historical sites and modern attractions within a "
-            "budget of $4000 for a two-week stay, we need to:\n\n"
-            "1. Identify key historical sites and modern attractions in Japan.\n"
-            "2. Find affordable accommodation options that provide a balance between comfort and cost.\n"
-            "3. Determine the best modes of transportation for getting around Japan.\n"
-            "4. Create a day-by-day itinerary that ensures the user gets to see a variety of attractions without "
-            "overspending.\n"
-            "5. Provide a detailed cost breakdown that includes accommodation, transportation, meals, and entry fees "
-            "to attractions."),
-    content("For a two-week trip to Japan with a $4,000 budget, I recommend planning an itinerary that balances "
-            "historical sites with modern attractions. The destination will be Japan, with a duration of 14 days.\n\n"
-            "Given your interests in both historical sites and modern attractions, you'll want to focus on cities like "
-            "Kyoto for its temples and traditional culture, Tokyo for its cutting-edge technology and entertainment "
-            "districts, and possibly Hiroshima or Nara for additional historical significance.\n\n"
-            "For accommodation, I suggest looking for affordable options such as budget hotels, hostels, or "
-            "guesthouses that offer good value without sacrificing too much comfort. Japan has excellent mid-range "
-            "accommodation options that can keep your lodging costs manageable.\n\n"
-            "Transportation should prioritize efficiency—consider getting a JR Rail Pass for intercity travel, which "
-            "allows unlimited rides on most JR trains including the Shinkansen (bullet train). Within cities, use "
-            "local trains and subways, which are both affordable and highly reliable.\n\n"
-            "For meals, embrace local cuisine by eating at neighborhood restaurants, ramen shops, and izakayas rather "
-            "than touristy establishments. This will give you an authentic experience while keeping costs "
-            "reasonable—you can enjoy excellent meals for $10-20 per person at local spots.\n\n"),
-    tool_calls({
-            { "call_0", "plan_trip", nlohmann::json::parse(R"({
-            "destination": "Japan",
-            "duration": 14,
-            "budget": 4000,
-            "interests": ["historical sites", "modern attractions"],
-            "accommodation_preferences": "affordable",
-            "transportation_preferences": "efficient",
-            "meal_preferences": "local cuisine"
-        })") }
-        })
-    {
-    // Build response
-    if (!reasoning.empty()) {
-        auto tokenized = simple_tokenize(reasoning);
-        tokens.emplace_back("<|START_THINKING|>");
-        tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
-        tokens.emplace_back("<|END_THINKING|>");
-    }
-
-    if (!content.empty()) {
-        auto tokenized = simple_tokenize(content);
-        tokens.emplace_back("<|START_RESPONSE|>");
-        tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
-        tokens.emplace_back("<|END_RESPONSE|>");
-    }
-
-    if (!tool_calls.empty()) {
-        tokens.emplace_back("<|START_ACTION|>");
-
-        auto json = nlohmann::json::array();
-        for (const auto & tc : tool_calls) {
-            auto tc_json            = nlohmann::json::object();
-            tc_json["tool_call_id"] = tc.id;
-            tc_json["tool_name"]    = tc.name;
-            tc_json["parameters"]   = tc.args;
-            json.push_back(tc_json);
-        }
-
-        auto tokenized = simple_tokenize(json.dump(-1, ' ', true));
-        tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
-
-        tokens.emplace_back("<|END_ACTION|>");
-    }
-
-    test_case legacy = test_case([this](test_harness h) {
-        bool no_error = true;
-        try {
-            std::string input = std::accumulate(tokens.begin(), tokens.end(), std::string());
-            test_command_r7b_legacy_parser(input, false, false);
-        } catch (std::exception &e) {
-            no_error = false;
-            std::cerr << "Error during legacy run: " << e.what() << "\n";
-        }
-        h.assert_equals("no_errors", true, no_error);
-    }, "legacy_parse");
-
-    test_case current = test_case([this](test_harness h) {
-        bool no_error = true;
-        try {
-            std::string input = std::accumulate(tokens.begin(), tokens.end(), std::string());
-            test_command_r7b_parser(parser, input, false, false);
-        } catch (std::exception &e) {
-            no_error = false;
-            std::cerr << "Error during legacy run: " << e.what() << "\n";
-        }
-        h.assert_equals("no_errors", true, no_error);
-    }, "current_parse");
-    legacy.set_omit_success_msg(true);
-    current.set_omit_success_msg(true);
-
-    cases.push_back(std::make_unique<test_case>(legacy));
-    cases.push_back(std::make_unique<test_case>(current));
-}
-
-void test_command7_parser_compare::run_comparison(int iterations) {
-    long long t1 = run_benchmark(0, iterations);
-    long long t2 = run_benchmark(1, iterations);
-
-    std::cout << "=== Command7 common_chat_combinator_parser comparison benchmark (" << iterations << " iterations) ===\n";
-    std::cout << "Legacy  common_chat_combinator_parser performance: " << t1 << "us (" << (float) t1 / iterations << "us per iteration)\n";
-    std::cout << "Current common_chat_combinator_parser performance: " << t2 << "us (" << (float) t2 / iterations << "us per iteration)\n";
-}
-
-void test_command7_parser_compare::test_command_r7b_parser(const class common_chat_peg_parser & p,
-                                                           const std::string &  input,
-                                                           bool                 need_more_input,
-                                                           bool                 print_results) {
+static void test_command_r7b_parser(const common_chat_peg_parser & p,
+                           const std::string &  input,
+                           bool                 need_more_input,
+                           bool                 print_results) {
     common_chat_parse_semantics env;
     common_chat_parse_context     ctx(input, &env, !need_more_input);
     p.parse(ctx);
@@ -209,9 +98,9 @@ void test_command7_parser_compare::test_command_r7b_parser(const class common_ch
     }
 }
 
-void test_command7_parser_compare::test_command_r7b_legacy_parser(const std::string & input,
-                                                                  bool                need_more_input,
-                                                                  bool                print_results) {
+static void test_command_r7b_legacy_parser(const std::string & input,
+                                  bool                need_more_input,
+                                  bool                print_results) {
     // Original common_chat_combinator_parser taken from chat.cpp
     common_chat_msg_parser builder(input,
                                    /* .is_partial = */ need_more_input,
@@ -266,4 +155,116 @@ void test_command7_parser_compare::test_command_r7b_legacy_parser(const std::str
             std::cout << "args: " << tc.arguments << "\n";
         }
     }
+}
+
+void test_command7_parser_compare(testing &t) {
+    // Setup data
+    auto parser = create_command_r7b_parser();
+    auto handler = create_command_r7b_event_handler();
+    
+    std::string reasoning = "To plan an effective trip to Japan that includes both historical sites and modern attractions within a "
+            "budget of $4000 for a two-week stay, we need to:\n\n"
+            "1. Identify key historical sites and modern attractions in Japan.\n"
+            "2. Find affordable accommodation options that provide a balance between comfort and cost.\n"
+            "3. Determine the best modes of transportation for getting around Japan.\n"
+            "4. Create a day-by-day itinerary that ensures the user gets to see a variety of attractions without "
+            "overspending.\n"
+            "5. Provide a detailed cost breakdown that includes accommodation, transportation, meals, and entry fees "
+            "to attractions.";
+            
+    std::string content = "For a two-week trip to Japan with a $4,000 budget, I recommend planning an itinerary that balances "
+            "historical sites with modern attractions. The destination will be Japan, with a duration of 14 days.\n\n"
+            "Given your interests in both historical sites and modern attractions, you'll want to focus on cities like "
+            "Kyoto for its temples and traditional culture, Tokyo for its cutting-edge technology and entertainment "
+            "districts, and possibly Hiroshima or Nara for additional historical significance.\n\n"
+            "For accommodation, I suggest looking for affordable options such as budget hotels, hostels, or "
+            "guesthouses that offer good value without sacrificing too much comfort. Japan has excellent mid-range "
+            "accommodation options that can keep your lodging costs manageable.\n\n"
+            "Transportation should prioritize efficiency—consider getting a JR Rail Pass for intercity travel, which "
+            "allows unlimited rides on most JR trains including the Shinkansen (bullet train). Within cities, use "
+            "local trains and subways, which are both affordable and highly reliable.\n\n"
+            "For meals, embrace local cuisine by eating at neighborhood restaurants, ramen shops, and izakayas rather "
+            "than touristy establishments. This will give you an authentic experience while keeping costs "
+            "reasonable—you can enjoy excellent meals for $10-20 per person at local spots.\n\n";
+    
+    std::vector<std::tuple<std::string, std::string, nlohmann::json>> tool_calls = {
+        { "call_0", "plan_trip", nlohmann::json::parse(R"({
+            "destination": "Japan",
+            "duration": 14,
+            "budget": 4000,
+            "interests": ["historical sites", "modern attractions"],
+            "accommodation_preferences": "affordable",
+            "transportation_preferences": "efficient",
+            "meal_preferences": "local cuisine"
+        })") }
+    };
+    
+    std::vector<std::string> tokens;
+    
+    // Build tokens
+    if (!reasoning.empty()) {
+        auto tokenized = simple_tokenize(reasoning);
+        tokens.emplace_back("<|START_THINKING|>");
+        tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
+        tokens.emplace_back("<|END_THINKING|>");
+    }
+
+    if (!content.empty()) {
+        auto tokenized = simple_tokenize(content);
+        tokens.emplace_back("<|START_RESPONSE|>");
+        tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
+        tokens.emplace_back("<|END_RESPONSE|>");
+    }
+
+    if (!tool_calls.empty()) {
+        tokens.emplace_back("<|START_ACTION|>");
+
+        auto json = nlohmann::json::array();
+        for (const auto & tc : tool_calls) {
+            auto tc_json            = nlohmann::json::object();
+            tc_json["tool_call_id"] = std::get<0>(tc);
+            tc_json["tool_name"]    = std::get<1>(tc);
+            tc_json["parameters"]   = std::get<2>(tc);
+            json.push_back(tc_json);
+        }
+
+        auto tokenized = simple_tokenize(json.dump(-1, ' ', true));
+        tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
+
+        tokens.emplace_back("<|END_ACTION|>");
+    }
+    
+    std::string input = std::accumulate(tokens.begin(), tokens.end(), std::string());
+    
+    // Run tests
+    t.test("legacy_parse", [&](testing & t) {
+        bool no_error = true;
+        try {
+            test_command_r7b_legacy_parser(input, false, false);
+        } catch (std::exception &e) {
+            no_error = false;
+            std::cerr << "Error during legacy run: " << e.what() << "\n";
+        }
+        t.assert_equal("no_errors", true, no_error);
+    });
+    
+    t.test("current_parse", [&](testing & t) {
+        bool no_error = true;
+        try {
+            test_command_r7b_parser(parser, input, false, false);
+        } catch (std::exception &e) {
+            no_error = false;
+            std::cerr << "Error during current run: " << e.what() << "\n";
+        }
+        t.assert_equal("no_errors", true, no_error);
+    });
+    
+    // Run benchmarks
+    t.bench("legacy_parse_benchmark", [&]() {
+        test_command_r7b_legacy_parser(input, false, false);
+    }, 1000);
+    
+    t.bench("current_parse_benchmark", [&]() {
+        test_command_r7b_parser(parser, input, false, false);
+    }, 1000);
 }

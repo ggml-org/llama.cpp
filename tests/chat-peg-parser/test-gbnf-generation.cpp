@@ -1,154 +1,129 @@
 #include "json-schema-to-grammar.h"
 #include "tests.h"
 
-test_gbnf_generation::test_gbnf_generation() : compound_test("test_gbnf_generation") {
+void test_gbnf_generation(testing &t) {
     // Test literal
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello"); });
+    t.test("literal grammar generation", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello"); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            h.assert_equals("has_root_hello", true, gbnf.find("root ::= \"hello\"") != std::string::npos);
-            h.assert_equals("has_space", true, gbnf.find("space ::=") != std::string::npos);
-        },
-        "literal grammar generation");
+        t.assert_equal("has_root_hello", true, gbnf.find("root ::= \"hello\"") != std::string::npos);
+        t.assert_equal("has_space", true, gbnf.find("space ::=") != std::string::npos);
+    });
 
     // Test char class
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a-z]"); });
+    t.test("char class grammar", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a-z]"); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            h.assert_equals("has_char_class", true, gbnf.find("root ::= [a-z]") != std::string::npos);
-        },
-        "char class grammar");
+        t.assert_equal("has_char_class", true, gbnf.find("root ::= [a-z]") != std::string::npos);
+    });
 
     // Test sequence
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser(
-                [](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.literal(" ") + p.literal("world"); });
+    t.test("sequence grammar", [](testing &t) {
+        auto parser = build_peg_parser(
+            [](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.literal(" ") + p.literal("world"); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            h.assert_equals("has_proper_sequence", true,
-                            gbnf.find("root ::= \"hello\" \" \" \"world\"") != std::string::npos);
-        },
-        "sequence grammar");
+        t.assert_equal("has_proper_sequence", true,
+                        gbnf.find("root ::= \"hello\" \" \" \"world\"") != std::string::npos);
+    });
 
     // Test choice
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("cat") | p.literal("dog"); });
+    t.test("choice grammar", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("cat") | p.literal("dog"); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            h.assert_equals("has_proper_choice", true, gbnf.find("root ::= \"cat\" | \"dog\"") != std::string::npos);
-        },
-        "choice grammar");
+        t.assert_equal("has_proper_choice", true, gbnf.find("root ::= \"cat\" | \"dog\"") != std::string::npos);
+    });
 
     // Test one_or_more
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.one("[0-9]")); });
+    t.test("one_or_more grammar", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.one("[0-9]")); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            h.assert_equals("has_proper_one_or_more", true, gbnf.find("root ::= [0-9]+") != std::string::npos);
-        },
-        "one_or_more grammar");
+        t.assert_equal("has_proper_one_or_more", true, gbnf.find("root ::= [0-9]+") != std::string::npos);
+    });
 
     // Test zero_or_more
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.one("[a-z]")); });
+    t.test("zero_or_more grammar", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.one("[a-z]")); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            h.assert_equals("has_proper_zero_or_more", true, gbnf.find("root ::= [a-z]*") != std::string::npos);
-        },
-        "zero_or_more grammar");
+        t.assert_equal("has_proper_zero_or_more", true, gbnf.find("root ::= [a-z]*") != std::string::npos);
+    });
 
     // Test optional
-    add_test(
-        [](test_harness h) {
-            auto parser =
-                build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
+    t.test("optional grammar", [](testing &t) {
+        auto parser =
+            build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.optional(p.literal(" world")); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            h.assert_equals("has_proper_optional", true,
-                            gbnf.find("root ::= \"hello\" \" world\"?") != std::string::npos);
-        },
-        "optional grammar");
+        t.assert_equal("has_proper_optional", true,
+                        gbnf.find("root ::= \"hello\" \" world\"?") != std::string::npos);
+    });
 
     // Test until
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.until("</tag>"); });
+    t.test("until grammar", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.until("</tag>"); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            // Should generate pattern that prevents matching the full delimiter
-            h.assert_equals(
-                "has_proper_until", true,
-                gbnf.find(
-                    "root ::= ([^<] | \"<\" [^/] | \"</\" [^t] | \"</t\" [^a] | \"</ta\" [^g] | \"</tag\" [^>])*") !=
-                    std::string::npos);
-        },
-        "until grammar");
+        // Should generate pattern that prevents matching the full delimiter
+        t.assert_equal("has_proper_until", true,
+            gbnf.find(
+                "root ::= ([^<] | \"<\" [^/] | \"</\" [^t] | \"</t\" [^a] | \"</ta\" [^g] | \"</tag\" [^>])*") !=
+                std::string::npos);
+    });
 
     // Test complex expression with parentheses
-    add_test(
-        [](test_harness h) {
-            auto parser =
-                build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("a") | p.literal("b")); });
+    t.test("complex expressions with parentheses", [](testing &t) {
+        auto parser =
+            build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("a") | p.literal("b")); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            h.assert_equals("has_proper_complex", true, gbnf.find("root ::= (\"a\" | \"b\")+") != std::string::npos);
-        },
-        "complex expressions with parentheses");
+        t.assert_equal("has_proper_complex", true, gbnf.find("root ::= (\"a\" | \"b\")+") != std::string::npos);
+    });
 
     // Test rule references
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-                auto digit = p.add_rule("digit", p.one("[0-9]"));
-                return p.one_or_more(digit);
-            });
+    t.test("rule references", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+            auto digit = p.add_rule("digit", p.one("[0-9]"));
+            return p.one_or_more(digit);
+        });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            // Should have digit rule defined and referenced
-            h.assert_equals("has_digit_rule", true, gbnf.find("digit ::= [0-9]") != std::string::npos);
-            h.assert_equals("has_root_digit_ref", true, gbnf.find("root ::= digit+") != std::string::npos);
-        },
-        "rule references");
+        // Should have digit rule defined and referenced
+        t.assert_equal("has_digit_rule", true, gbnf.find("digit ::= [0-9]") != std::string::npos);
+        t.assert_equal("has_root_digit_ref", true, gbnf.find("root ::= digit+") != std::string::npos);
+    });
 
     // Test escaping in literals
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello\nworld\t!"); });
+    t.test("escaping in literals", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello\nworld\t!"); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            h.assert_equals("has_escaping", true, gbnf.find("root ::= \"hello\\nworld\\t!\"") != std::string::npos);
-        },
-        "escaping in literals");
+        t.assert_equal("has_escaping", true, gbnf.find("root ::= \"hello\\nworld\\t!\"") != std::string::npos);
+    });
 
     // Test operator<< (whitespace insertion)
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") << p.literal("world"); });
+    t.test("operator<< (whitespace insertion)", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") << p.literal("world"); });
 
-            auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
 
-            // Should inline the whitespace pattern
-            h.assert_equals("has_inlined_hello", true, gbnf.find("\"hello\"") != std::string::npos);
-            h.assert_equals("has_inlined_world", true, gbnf.find("\"world\"") != std::string::npos);
-        },
-        "operator<< (whitespace insertion)");
+        // Should inline the whitespace pattern
+        t.assert_equal("has_inlined_hello", true, gbnf.find("\"hello\"") != std::string::npos);
+        t.assert_equal("has_inlined_world", true, gbnf.find("\"world\"") != std::string::npos);
+    });
 }

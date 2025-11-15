@@ -1,275 +1,230 @@
 #include "tests.h"
+#include "test_harness.h"
 
-test_partial_parsing::test_partial_parsing() : compound_test("test_partial_parsing") {
+void test_partial_parsing(testing &t) {
     // Literals - Basic Success
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello"); });
+    t.test("literal_success", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("hello");
-            result = parser.parse(ctx);
-            h.assert_equals("literal_success", true, result.success());
-        },
-        "literal_success");
+        ctx    = common_chat_parse_context("hello");
+        result = parser.parse(ctx);
+        t.assert_equal("literal_success", true, result.success());
+    });
 
     // Char Classes - Basic Lowercase Success
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z"); });
+    t.test("char_class_lowercase_success", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("a");
-            result = parser.parse(ctx);
-            h.assert_equals("char_class_lowercase_success", true, result.success());
-        },
-        "char_class_lowercase_success");
+        ctx    = common_chat_parse_context("a");
+        result = parser.parse(ctx);
+        t.assert_equal("char_class_lowercase_success", true, result.success());
+    });
 
     // Char Classes - Uppercase Fail
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z"); });
+    t.test("char_class_uppercase_fail", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("A");
-            result = parser.parse(ctx);
-            h.assert_equals("char_class_uppercase_fail", true, result.fail());
-        },
-        "char_class_uppercase_fail");
+        ctx    = common_chat_parse_context("A");
+        result = parser.parse(ctx);
+        t.assert_equal("char_class_uppercase_fail", true, result.fail());
+    });
 
     // Char Classes with Dash - Lowercase Success
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z-"); });
+    t.test("char_class_with_dash_lowercase", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z-"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("f");
-            result = parser.parse(ctx);
-            h.assert_equals("char_class_with_dash_lowercase", true, result.success());
-        },
-        "char_class_with_dash_lowercase");
+        ctx    = common_chat_parse_context("f");
+        result = parser.parse(ctx);
+        t.assert_equal("char_class_with_dash_lowercase", true, result.success());
+    });
 
     // Char Classes with Dash - Literal Dash Success
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z-"); });
+    t.test("char_class_with_dash_literal_dash", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z-"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("-");
-            result = parser.parse(ctx);
-            h.assert_equals("char_class_with_dash_literal_dash", true, result.success());
-        },
-        "char_class_with_dash_literal_dash");
+        ctx    = common_chat_parse_context("-");
+        result = parser.parse(ctx);
+        t.assert_equal("char_class_with_dash_literal_dash", true, result.success());
+    });
 
     // Char Classes with Dash - Uppercase Fail
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z-"); });
+    t.test("char_class_with_dash_uppercase_fail", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("a-z-"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("A");
-            result = parser.parse(ctx);
-            h.assert_equals("char_class_with_dash_uppercase_fail", true, result.fail());
-        },
-        "char_class_with_dash_uppercase_fail");
+        ctx    = common_chat_parse_context("A");
+        result = parser.parse(ctx);
+        t.assert_equal("char_class_with_dash_uppercase_fail", true, result.fail());
+    });
 
     // Sequences - Partial Match 1
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
+    t.test("sequence_partial_match_1", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
 
-            auto ctx    = common_chat_parse_context("<thi", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("sequence_partial_match_1", true, result.need_more_input());
-        },
-        "sequence_partial_match_1");
+        auto ctx    = common_chat_parse_context("<thi", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("sequence_partial_match_1", true, result.need_more_input());
+    });
 
     // Sequences - Partial Match 2
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("begin") + p.literal("end"); });
+    t.test("sequence_partial_match_2", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("begin") + p.literal("end"); });
 
-            auto ctx    = common_chat_parse_context("begin", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("sequence_partial_match_2", true, result.need_more_input());
-        },
-        "sequence_partial_match_2");
+        auto ctx    = common_chat_parse_context("begin", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("sequence_partial_match_2", true, result.need_more_input());
+    });
 
     // Sequences - Partial Match 3
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
+    t.test("sequence_partial_match_3", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
 
-            auto ctx    = common_chat_parse_context("<think></", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("sequence_partial_match_3", true, result.need_more_input());
-        },
-        "sequence_partial_match_3");
+        auto ctx    = common_chat_parse_context("<think></", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("sequence_partial_match_3", true, result.need_more_input());
+    });
 
     // Sequences - Full Match
-    add_test(
-        [](test_harness h) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.literal("world"); });
+    t.test("sequence_full_match", [&](testing & t) {
+        auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("hello") + p.literal("world"); });
 
-            auto ctx    = common_chat_parse_context("helloworld", true);
-            auto result = common_chat_combinator_parser.parse(ctx);
-            h.assert_equals("sequence_full_match", true, result.success());
-        },
-        "sequence_full_match");
+        auto ctx    = common_chat_parse_context("helloworld", true);
+        auto result = common_chat_combinator_parser.parse(ctx);
+        t.assert_equal("sequence_full_match", true, result.success());
+    });
 
     // Sequences - No Match
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
+    t.test("sequence_no_match", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("<think>") + p.literal("</think>"); });
 
-            auto ctx    = common_chat_parse_context("<think>I am common_chat_combinator_parser", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("sequence_no_match", true, result.fail());
-        },
-        "sequence_no_match");
+        auto ctx    = common_chat_parse_context("<think>I am common_chat_combinator_parser", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("sequence_no_match", true, result.fail());
+    });
 
     // Choices - Partial Match 1
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("option1") | p.literal("option2"); });
+    t.test("choices_partial_match_1", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("option1") | p.literal("option2"); });
 
-            auto ctx    = common_chat_parse_context("opt", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("choices_partial_match_1", true, result.need_more_input());
-        },
-        "choices_partial_match_1");
+        auto ctx    = common_chat_parse_context("opt", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("choices_partial_match_1", true, result.need_more_input());
+    });
 
     // Choices - Partial Match 2
-    add_test(
-        [](test_harness h) {
-            auto parser =
-                build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("choice_a") | p.literal("choice_b"); });
+    t.test("choices_partial_match_2", [&](testing & t) {
+        auto parser =
+            build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("choice_a") | p.literal("choice_b"); });
 
-            auto ctx    = common_chat_parse_context("choice", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("choices_partial_match_2", true, result.need_more_input());
-        },
-        "choices_partial_match_2");
+        auto ctx    = common_chat_parse_context("choice", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("choices_partial_match_2", true, result.need_more_input());
+    });
 
     // Choices - Full Match 1
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("first") | p.literal("second"); });
+    t.test("choices_full_match_1", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("first") | p.literal("second"); });
 
-            auto ctx    = common_chat_parse_context("first", true);
-            auto result = parser.parse(ctx);
-            h.assert_equals("choices_full_match_1", true, result.success());
-        },
-        "choices_full_match_1");
+        auto ctx    = common_chat_parse_context("first", true);
+        auto result = parser.parse(ctx);
+        t.assert_equal("choices_full_match_1", true, result.success());
+    });
 
     // Choices - Full Match 2
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("alpha") | p.literal("beta"); });
+    t.test("choices_full_match_2", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("alpha") | p.literal("beta"); });
 
-            auto ctx    = common_chat_parse_context("beta", true);
-            auto result = parser.parse(ctx);
-            h.assert_equals("choices_full_match_2", true, result.success());
-        },
-        "choices_full_match_2");
+        auto ctx    = common_chat_parse_context("beta", true);
+        auto result = parser.parse(ctx);
+        t.assert_equal("choices_full_match_2", true, result.success());
+    });
 
     // Choices - No Match
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("good") | p.literal("better"); });
+    t.test("choices_no_match", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.literal("good") | p.literal("better"); });
 
-            auto ctx    = common_chat_parse_context("best", true);
-            auto result = parser.parse(ctx);
-            h.assert_equals("choices_no_match", true, result.fail());
-        },
-        "choices_no_match");
+        auto ctx    = common_chat_parse_context("best", true);
+        auto result = parser.parse(ctx);
+        t.assert_equal("choices_no_match", true, result.fail());
+    });
 
     // Zero or More - Partial Match 1
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.literal("ab")); });
+    t.test("zero_or_more_partial_match_1", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.literal("ab")); });
 
-            auto ctx    = common_chat_parse_context("a", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("zero_or_more_partial_match_1", true, result.need_more_input());
-        },
-        "zero_or_more_partial_match_1");
+        auto ctx    = common_chat_parse_context("a", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("zero_or_more_partial_match_1", true, result.need_more_input());
+    });
 
     // Zero or More - Partial Match 2
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.literal("xy")); });
+    t.test("zero_or_more_partial_match_2", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.literal("xy")); });
 
-            auto ctx    = common_chat_parse_context("xyx", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("zero_or_more_partial_match_2", true, result.need_more_input());
-        },
-        "zero_or_more_partial_match_2");
+        auto ctx    = common_chat_parse_context("xyx", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("zero_or_more_partial_match_2", true, result.need_more_input());
+    });
 
     // Zero or More - Full Match
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.literal("test")); });
+    t.test("zero_or_more_full_match", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.zero_or_more(p.literal("test")); });
 
-            auto ctx    = common_chat_parse_context("test", true);
-            auto result = parser.parse(ctx);
-            h.assert_equals("zero_or_more_full_match", true, result.success());
-        },
-        "zero_or_more_full_match");
+        auto ctx    = common_chat_parse_context("test", true);
+        auto result = parser.parse(ctx);
+        t.assert_equal("zero_or_more_full_match", true, result.success());
+    });
 
     // One or More - Partial Match 1
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("repeat")); });
+    t.test("one_or_more_partial_match_1", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("repeat")); });
 
-            auto ctx    = common_chat_parse_context("rep", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("one_or_more_partial_match_1", true, result.need_more_input());
-        },
-        "one_or_more_partial_match_1");
+        auto ctx    = common_chat_parse_context("rep", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("one_or_more_partial_match_1", true, result.need_more_input());
+    });
 
     // One or More - Partial Match 2
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("ab")); });
+    t.test("one_or_more_partial_match_2", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("ab")); });
 
-            auto ctx    = common_chat_parse_context("aba", false);
-            auto result = parser.parse(ctx);
-            h.assert_equals("one_or_more_partial_match_2", true, result.need_more_input());
-        },
-        "one_or_more_partial_match_2");
+        auto ctx    = common_chat_parse_context("aba", false);
+        auto result = parser.parse(ctx);
+        t.assert_equal("one_or_more_partial_match_2", true, result.need_more_input());
+    });
 
     // One or More - Full Match
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("single")); });
+    t.test("one_or_more_full_match", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("single")); });
 
-            auto ctx    = common_chat_parse_context("single", true);
-            auto result = parser.parse(ctx);
-            h.assert_equals("one_or_more_full_match", true, result.success());
-        },
-        "one_or_more_full_match");
+        auto ctx    = common_chat_parse_context("single", true);
+        auto result = parser.parse(ctx);
+        t.assert_equal("one_or_more_full_match", true, result.success());
+    });
 
     // One or More - No Match
-    add_test(
-        [](test_harness h) {
-            auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("()")); });
+    t.test("one_or_more_no_match", [&](testing & t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one_or_more(p.literal("()")); });
 
-            auto ctx    = common_chat_parse_context("success", true);
-            auto result = parser.parse(ctx);
-            h.assert_equals("one_or_more_no_match", true, result.fail());
-        },
-        "one_or_more_no_match");
+        auto ctx    = common_chat_parse_context("success", true);
+        auto result = parser.parse(ctx);
+        t.assert_equal("one_or_more_no_match", true, result.fail());
+    });
 }

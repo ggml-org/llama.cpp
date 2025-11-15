@@ -1,115 +1,99 @@
 #include "tests.h"
 
-test_one::test_one() : compound_test("test_one") {
+void test_one(testing &t) {
     // Test common escape sequences - newline
-    add_test(
-        [](test_harness h) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+    t.test("escape_sequence_newline", [](testing &t) {
+        auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("\n");
-            result = common_chat_combinator_parser.parse(ctx);
-            h.assert_equals("escape_sequence_newline", true, result.success());
-        },
-        "escape_sequence_newline");
+        ctx    = common_chat_parse_context("\n");
+        result = common_chat_combinator_parser.parse(ctx);
+        t.assert_equal("escape_sequence_newline", true, result.success());
+    });
 
     // Test common escape sequences - tab
-    add_test(
-        [](test_harness h) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+    t.test("escape_sequence_tab", [](testing &t) {
+        auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("\t");
-            result = common_chat_combinator_parser.parse(ctx);
-            h.assert_equals("escape_sequence_tab", true, result.success());
-        },
-        "escape_sequence_tab");
+        ctx    = common_chat_parse_context("\t");
+        result = common_chat_combinator_parser.parse(ctx);
+        t.assert_equal("escape_sequence_tab", true, result.success());
+    });
 
     // Test common escape sequences - backslash
-    add_test(
-        [](test_harness h) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+    t.test("escape_sequence_backslash", [](testing &t) {
+        auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("\\");
-            result = common_chat_combinator_parser.parse(ctx);
-            h.assert_equals("escape_sequence_backslash", true, result.success());
-        },
-        "escape_sequence_backslash");
+        ctx    = common_chat_parse_context("\\");
+        result = common_chat_combinator_parser.parse(ctx);
+        t.assert_equal("escape_sequence_backslash", true, result.success());
+    });
 
     // Test common escape sequences - space (should ())
-    add_test(
-        [](test_harness h) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+    t.test("escape_sequence_space_fail", [](testing &t) {
+        auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context(" ");
-            result = common_chat_combinator_parser.parse(ctx);
-            h.assert_equals("escape_sequence_space_fail", true, result.fail());
-        },
-        "escape_sequence_space_fail");
+        ctx    = common_chat_parse_context(" ");
+        result = common_chat_combinator_parser.parse(ctx);
+        t.assert_equal("escape_sequence_space_fail", true, result.fail());
+    });
 
     // Test escaped dash - 'a' should succeed
-    add_test(
-        [](test_harness h) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
+    t.test("escaped_dash_a", [](testing &t) {
+        auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("a");
-            result = common_chat_combinator_parser.parse(ctx);
-            h.assert_equals("escaped_dash_a", true, result.success());
-        },
-        "escaped_dash_a");
+        ctx    = common_chat_parse_context("a");
+        result = common_chat_combinator_parser.parse(ctx);
+        t.assert_equal("escaped_dash_a", true, result.success());
+    });
 
     // Test escaped dash - '-' should succeed (literal dash)
-    add_test(
-        [](test_harness h) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
+    t.test("escaped_dash_literal", [](testing &t) {
+        auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("-");
-            result = common_chat_combinator_parser.parse(ctx);
-            h.assert_equals("escaped_dash_literal", true, result.success());
-        },
-        "escaped_dash_literal");
+        ctx    = common_chat_parse_context("-");
+        result = common_chat_combinator_parser.parse(ctx);
+        t.assert_equal("escaped_dash_literal", true, result.success());
+    });
 
     // Test escaped dash - 'z' should succeed
-    add_test(
-        [](test_harness h) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
+    t.test("escaped_dash_z", [](testing &t) {
+        auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("z");
-            result = common_chat_combinator_parser.parse(ctx);
-            h.assert_equals("escaped_dash_z", true, result.success());
-        },
-        "escaped_dash_z");
+        ctx    = common_chat_parse_context("z");
+        result = common_chat_combinator_parser.parse(ctx);
+        t.assert_equal("escaped_dash_z", true, result.success());
+    });
 
     // Test escaped dash - 'b' should NOT match (since \- is literal dash, not range)
-    add_test(
-        [](test_harness h) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
+    t.test("escaped_dash_b_fail", [](testing &t) {
+        auto common_chat_combinator_parser = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.one("[a\\-z]"); });
 
-            common_chat_parse_context ctx;
-            common_chat_parse_result  result;
+        common_chat_parse_context ctx;
+        common_chat_parse_result  result;
 
-            ctx    = common_chat_parse_context("b");
-            result = common_chat_combinator_parser.parse(ctx);
-            h.assert_equals("escaped_dash_b_fail", true, result.fail());
-        },
-        "escaped_dash_b_fail");
+        ctx    = common_chat_parse_context("b");
+        result = common_chat_combinator_parser.parse(ctx);
+        t.assert_equal("escaped_dash_b_fail", true, result.fail());
+    });
 }

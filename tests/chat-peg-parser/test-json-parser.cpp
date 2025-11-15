@@ -1,91 +1,79 @@
 #include "tests.h"
 
-test_json_parser::test_json_parser() : compound_test("test_json_parser") {
+void test_json_parser(testing &t) {
     // Test parsing a simple JSON object
-    add_test(
-        [](test_harness h) {
-            auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
+    t.test("simple JSON object parsing", [](testing &t) {
+        auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
 
-            std::string    input = R"({"name": "test", "value": 42, "flag": true})";
-            common_chat_parse_context ctx(input);
+        std::string    input = R"({"name": "test", "value": 42, "flag": true})";
+        common_chat_parse_context ctx(input);
 
-            auto result = json.parse(ctx);
+        auto result = json.parse(ctx);
 
-            h.assert_equals("result_is_success", true, result.success());
-            h.assert_equals("result_end", input.size(), result.end);
-        },
-        "simple JSON object parsing");
+        t.assert_equal("result_is_success", true, result.success());
+        t.assert_equal("result_end", input.size(), result.end);
+    });
 
     // Test parsing a JSON array with mixed types
-    add_test(
-        [](test_harness h) {
-            auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
+    t.test("JSON array with mixed types", [](testing &t) {
+        auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
 
-            std::string    input = R"([1, "hello", true, null, 3.14])";
-            common_chat_parse_context ctx(input);
+        std::string    input = R"([1, "hello", true, null, 3.14])";
+        common_chat_parse_context ctx(input);
 
-            auto result = json.parse(ctx);
+        auto result = json.parse(ctx);
 
-            h.assert_equals("result_is_success", true, result.success());
-            h.assert_equals("result_end", input.size(), result.end);
-        },
-        "JSON array with mixed types");
+        t.assert_equal("result_is_success", true, result.success());
+        t.assert_equal("result_end", input.size(), result.end);
+    });
 
     // Test parsing nested JSON with objects and arrays
-    add_test(
-        [](test_harness h) {
-            auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
+    t.test("nested JSON with objects and arrays", [](testing &t) {
+        auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
 
-            std::string input =
-                R"({"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], "count": 2, "metadata": {"version": "1.0", "tags": ["admin", "user"]}})";
-            common_chat_parse_context ctx(input);
+        std::string input =
+            R"({"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}], "count": 2, "metadata": {"version": "1.0", "tags": ["admin", "user"]}})";
+        common_chat_parse_context ctx(input);
 
-            auto result = json.parse(ctx);
+        auto result = json.parse(ctx);
 
-            h.assert_equals("result_is_success", true, result.success());
-            h.assert_equals("result_end", input.size(), result.end);
-        },
-        "nested JSON with objects and arrays");
+        t.assert_equal("result_is_success", true, result.success());
+        t.assert_equal("result_end", input.size(), result.end);
+    });
 
     // Test need_more_input() parsing - incomplete object
-    add_test(
-        [](test_harness h) {
-            auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
+    t.test("need_more_input() parsing - incomplete object", [](testing &t) {
+        auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
 
-            std::string    input = R"({"name": "test", "value": )";
-            common_chat_parse_context ctx(input, false);
+        std::string    input = R"({"name": "test", "value": )";
+        common_chat_parse_context ctx(input, false);
 
-            auto result = json.parse(ctx);
+        auto result = json.parse(ctx);
 
-            h.assert_equals("result_is_need_more_input", true, result.need_more_input());
-        },
-        "need_more_input() parsing - incomplete object");
+        t.assert_equal("result_is_need_more_input", true, result.need_more_input());
+    });
 
     // Test need_more_input() parsing - incomplete array
-    add_test(
-        [](test_harness h) {
-            auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
+    t.test("need_more_input() parsing - incomplete array", [](testing &t) {
+        auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
 
-            std::string    input = R"([1, 2, 3, )";
-            common_chat_parse_context ctx(input, false);
+        std::string    input = R"([1, 2, 3, )";
+        common_chat_parse_context ctx(input, false);
 
-            auto result = json.parse(ctx);
+        auto result = json.parse(ctx);
 
-            h.assert_equals("result_is_need_more_input", true, result.need_more_input());
-        },
-        "need_more_input() parsing - incomplete array");
+        t.assert_equal("result_is_need_more_input", true, result.need_more_input());
+    });
 
     // Test need_more_input() parsing - incomplete nested structure
-    add_test(
-        [](test_harness h) {
-            auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
+    t.test("need_more_input() parsing - incomplete nested structure", [](testing &t) {
+        auto json = build_peg_parser([](common_chat_peg_parser_builder & p) { return p.json(); });
 
-            std::string    input = R"({"data": {"nested": )";
-            common_chat_parse_context ctx(input, false);
+        std::string    input = R"({"data": {"nested": )";
+        common_chat_parse_context ctx(input, false);
 
-            auto result = json.parse(ctx);
+        auto result = json.parse(ctx);
 
-            h.assert_equals("result_is_need_more_input", true, result.need_more_input());
-        },
-        "need_more_input() parsing - incomplete nested structure");
+        t.assert_equal("result_is_need_more_input", true, result.need_more_input());
+    });
 }
