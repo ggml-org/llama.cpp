@@ -34,6 +34,15 @@ enum parser_type {
     TRIGGER,
 };
 
+const char * common_chat_parse_result_type_name(common_chat_parse_result_type type) {
+    switch (type) {
+    case COMMON_CHAT_PARSE_RESULT_FAIL:            return "fail";
+    case COMMON_CHAT_PARSE_RESULT_SUCCESS:         return "success";
+    case COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT: return "need_more_input";
+    default:                                       return "unknown";
+    }
+}
+
 class parser_visitor;
 
 class common_chat_peg_parser_base {
@@ -963,12 +972,13 @@ class space_parser : public common_chat_peg_parser_base {
 
 // Matches between min and max repetitions of characters from a character class.
 //   S -> [a-z]{m,n}
+// Supports Unicode codepoint ranges and escape sequences: \xXX \uXXXX \UXXXXXXXX
 class chars_parser : public common_chat_peg_parser_base {
     struct char_range {
-        int start;
-        int end;
+        uint32_t start;
+        uint32_t end;
 
-        bool contains(char c) const { return (int)c >= start && int(c) <= end; }
+        bool contains(uint32_t codepoint) const { return codepoint >= start && codepoint <= end; }
     };
 
     std::string pattern_;
@@ -996,7 +1006,8 @@ class chars_parser : public common_chat_peg_parser_base {
             content = content.substr(1);
         }
 
-        auto parse_char = [&](size_t pos) -> std::pair<char, size_t> {
+        // Parse a character or escape sequence, returning codepoint and bytes consumed
+        auto parse_char = [&](size_t pos) -> std::pair<uint32_t, size_t> {
             if (content[pos] == '\\' && pos + 1 < content.length()) {
                 char next = content[pos + 1];
                 switch (next) {
@@ -1007,10 +1018,72 @@ class chars_parser : public common_chat_peg_parser_base {
                     case ']':  return {']', 2};
                     case '-':  return {'-', 2};
                     case '[':  return {'[', 2};
+
+                    // \xXX - 8-bit hex escape
+                    case 'x': {
+                        if (pos + 3 < content.length() &&
+                            is_hex_digit(content[pos + 2]) &&
+                            is_hex_digit(content[pos + 3])) {
+                            uint32_t value = 0;
+                            for (int i = 0; i < 2; i++) {
+                                char c = content[pos + 2 + i];
+                                value = value * 16 + (c >= 'a' ? c - 'a' + 10 :
+                                                     c >= 'A' ? c - 'A' + 10 :
+                                                     c - '0');
+                            }
+                            return {value, 4};  // \xXX
+                        }
+                        return {next, 2};  // Invalid escape, treat as literal 'x'
+                    }
+
+                    // \uXXXX - 16-bit hex escape
+                    case 'u': {
+                        if (pos + 5 < content.length() &&
+                            is_hex_digit(content[pos + 2]) &&
+                            is_hex_digit(content[pos + 3]) &&
+                            is_hex_digit(content[pos + 4]) &&
+                            is_hex_digit(content[pos + 5])) {
+                            uint32_t value = 0;
+                            for (int i = 0; i < 4; i++) {
+                                char c = content[pos + 2 + i];
+                                value = value * 16 + (c >= 'a' ? c - 'a' + 10 :
+                                                     c >= 'A' ? c - 'A' + 10 :
+                                                     c - '0');
+                            }
+                            return {value, 6};  // \uXXXX
+                        }
+                        return {next, 2};  // Invalid escape, treat as literal 'u'
+                    }
+
+                    // \UXXXXXXXX - 32-bit hex escape
+                    case 'U': {
+                        if (pos + 9 < content.length()) {
+                            bool all_hex = true;
+                            for (int i = 0; i < 8; i++) {
+                                if (!is_hex_digit(content[pos + 2 + i])) {
+                                    all_hex = false;
+                                    break;
+                                }
+                            }
+                            if (all_hex) {
+                                uint32_t value = 0;
+                                for (int i = 0; i < 8; i++) {
+                                    char c = content[pos + 2 + i];
+                                    value = value * 16 + (c >= 'a' ? c - 'a' + 10 :
+                                                         c >= 'A' ? c - 'A' + 10 :
+                                                         c - '0');
+                                }
+                                return {value, 10};  // \UXXXXXXXX
+                            }
+                        }
+                        return {next, 2};  // Invalid escape, treat as literal 'U'
+                    }
+
                     default:   return {next, 2}; // Treat as literal escaped character
                 }
             }
-            return {content[pos], 1};
+            // Regular character - return as codepoint
+            return {static_cast<uint32_t>(static_cast<unsigned char>(content[pos])), 1};
         };
 
         size_t i = 0;
@@ -1039,13 +1112,34 @@ class chars_parser : public common_chat_peg_parser_base {
 
         // Try to match up to max_count times (or unlimited if max_count is -1)
         while (max_count_ == -1 || match_count < max_count_) {
-            if (pos >= ctx.input.size()) {
-                break;
+            // Parse UTF-8 codepoint from input
+            auto result = parse_utf8_codepoint(ctx.input, pos, ctx.input_is_complete);
+
+            if (result.status == utf8_parse_result::NEED_MORE) {
+                // Incomplete UTF-8 sequence at current position
+                if (match_count >= min_count_) {
+                    // We have enough matches, succeed with what we have
+                    // End position is at pos (before the incomplete sequence)
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+                }
+                // Not enough matches yet, need more input
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
             }
 
+            if (result.status == utf8_parse_result::INVALID) {
+                // Malformed UTF-8 in input
+                if (match_count >= min_count_) {
+                    // We have enough matches, succeed up to here
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+                }
+                // Not enough matches, fail
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+            }
+
+            // Check if this codepoint matches our character class
             bool matches = false;
             for (const auto & range : ranges_) {
-                if (range.contains(ctx.input[pos])) {
+                if (range.contains(result.codepoint)) {
                     matches = true;
                     break;
                 }
@@ -1057,9 +1151,10 @@ class chars_parser : public common_chat_peg_parser_base {
             }
 
             if (matches) {
-                ++pos;
+                pos += result.bytes_consumed;
                 ++match_count;
             } else {
+                // Character doesn't match, stop matching
                 break;
             }
         }
