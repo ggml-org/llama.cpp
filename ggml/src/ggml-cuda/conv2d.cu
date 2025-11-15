@@ -11,7 +11,6 @@ struct conv_params {
     const int64_t IC, OC;
     const int64_t B;
     const int64_t TOTAL;
-    const int64_t CIRCULAR;
 };
 
 struct kernel_bounds {
@@ -27,24 +26,12 @@ __device__ __forceinline__ int64_t min64(int64_t a, int64_t b) {
     return (a < b) ? a : b;
 }
 
-__device__ __forceinline__ int wrap_coord(int coord, int size) {
-    return (coord % size + size) % size;
-}
-
 __device__ __forceinline__ kernel_bounds calculate_kernel_bounds(int64_t out_x, int64_t out_y, const conv_params & P) {
     kernel_bounds bounds;
-    if (P.CIRCULAR) {
-        bounds.y_min = 0;
-        bounds.y_max = P.KH;
-        bounds.x_min = 0;
-        bounds.x_max = P.KW;
-    }
-    else {
-        bounds.y_min = max64(0, (P.PD_Y - out_y * P.ST_Y + P.DL_Y - 1) / P.DL_Y);
-        bounds.y_max = min64(P.KH, (P.IH + P.PD_Y - out_y * P.ST_Y + P.DL_Y - 1) / P.DL_Y);
-        bounds.x_min = max64(0, (P.PD_X - out_x * P.ST_X + P.DL_X - 1) / P.DL_X);
-        bounds.x_max = min64(P.KW, (P.IW + P.PD_X - out_x * P.ST_X + P.DL_X - 1) / P.DL_X);
-    }
+    bounds.y_min = max64(0, (P.PD_Y - out_y * P.ST_Y + P.DL_Y - 1) / P.DL_Y);
+    bounds.y_max = min64(P.KH, (P.IH + P.PD_Y - out_y * P.ST_Y + P.DL_Y - 1) / P.DL_Y);
+    bounds.x_min = max64(0, (P.PD_X - out_x * P.ST_X + P.DL_X - 1) / P.DL_X);
+    bounds.x_max = min64(P.KW, (P.IW + P.PD_X - out_x * P.ST_X + P.DL_X - 1) / P.DL_X);
     return bounds;
 }
 
@@ -97,37 +84,19 @@ static __global__ void conv2d_kernel(const float * __restrict__ input,
     Layout::unpack_indices(global_idx, P, n, c_out, out_y, out_x);
 
     float acc = 0.0f;
-    if (P.CIRCULAR == 0) {
-        for (int64_t c_in = 0; c_in < P.IC; ++c_in) {
-            kernel_bounds bounds = calculate_kernel_bounds(out_x, out_y, P);
 
-            for (int64_t ky = bounds.y_min; ky < bounds.y_max; ++ky) {
-                const int64_t in_y = calculate_input_coord(out_y, ky, P.ST_Y, P.DL_Y, P.PD_Y);
+    for (int64_t c_in = 0; c_in < P.IC; ++c_in) {
+        kernel_bounds bounds = calculate_kernel_bounds(out_x, out_y, P);
 
-                for (int64_t kx = bounds.x_min; kx < bounds.x_max; ++kx) {
-                    const int64_t in_x = calculate_input_coord(out_x, kx, P.ST_X, P.DL_X, P.PD_X);
+        for (int64_t ky = bounds.y_min; ky < bounds.y_max; ++ky) {
+            const int64_t in_y = calculate_input_coord(out_y, ky, P.ST_Y, P.DL_Y, P.PD_Y);
 
-                    const float input_val = input[Layout::input_index(n, c_in, in_y, in_x, P)];
-                    const T kernel_val = kernel[Layout::kernel_index(c_out, c_in, ky, kx, P)];
-                    acc += (input_val * ggml_cuda_cast<float>(kernel_val));
-                }
-            }
-        }
-    }
-    else {
-        for (int64_t c_in = 0; c_in < P.IC; ++c_in) {
-            kernel_bounds bounds = calculate_kernel_bounds(out_x, out_y, P);
+            for (int64_t kx = bounds.x_min; kx < bounds.x_max; ++kx) {
+                const int64_t in_x = calculate_input_coord(out_x, kx, P.ST_X, P.DL_X, P.PD_X);
 
-            for (int64_t ky = bounds.y_min; ky < bounds.y_max; ++ky) {
-                const int64_t in_y = wrap_coord(calculate_input_coord(out_y, ky, P.ST_Y, P.DL_Y, P.PD_Y), P.IH);
-
-                for (int64_t kx = bounds.x_min; kx < bounds.x_max; ++kx) {
-                    const int64_t in_x = wrap_coord(calculate_input_coord(out_x, kx, P.ST_X, P.DL_X, P.PD_X), P.IW);
-
-                    const float input_val = input[Layout::input_index(n, c_in, in_y, in_x, P)];
-                    const T kernel_val = kernel[Layout::kernel_index(c_out, c_in, ky, kx, P)];
-                    acc += (input_val * ggml_cuda_cast<float>(kernel_val));
-                }
+                const float input_val = input[Layout::input_index(n, c_in, in_y, in_x, P)];
+                const T kernel_val = kernel[Layout::kernel_index(c_out, c_in, ky, kx, P)];
+                acc += (input_val * ggml_cuda_cast<float>(kernel_val));
             }
         }
     }
@@ -172,7 +141,6 @@ void ggml_cuda_op_conv2d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int       PD_Y = p[3];  // padding_y
     const int       DL_X = p[4];  // dilation_x
     const int       DL_Y = p[5];  // dilation_y
-    const int   CIRCULAR = p[6];
 
     // No cwhn
     GGML_ASSERT(p[6] == false);
@@ -188,7 +156,7 @@ void ggml_cuda_op_conv2d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int B  = input->ne[3];   // n_batches
 
     const int64_t total  = B * OC * OH * OW;
-    conv_params   params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, total, CIRCULAR };
+    conv_params   params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, total };
 
     if (kernel->type == GGML_TYPE_F16) {
         conv2d_cuda_f16(X_D, (half *) K_D, Y_D, params, st);

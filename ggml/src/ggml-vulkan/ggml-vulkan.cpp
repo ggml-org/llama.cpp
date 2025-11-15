@@ -1282,8 +1282,6 @@ struct vk_op_conv2d_push_constants {
     // init_fastdiv_values constants for dividing by OW, OW*OH
     uint32_t OWmp;   uint32_t OWL;
     uint32_t OWOHmp; uint32_t OWOHL;
-
-    uint32_t circular;
 };
 
 template <> void init_pushconst_fastdiv(vk_op_conv2d_push_constants &p) {
@@ -1326,8 +1324,6 @@ struct vk_op_conv_transpose_2d_push_constants {
     // init_fastdiv_values constants for dividing by OW, OW*OH
     uint32_t OWmp;   uint32_t OWL;
     uint32_t OWOHmp; uint32_t OWOHL;
-
-    uint32_t circular;
 };
 
 template <> void init_pushconst_fastdiv(vk_op_conv_transpose_2d_push_constants &p) {
@@ -1352,7 +1348,6 @@ struct vk_op_conv2d_dw_push_constants {
     int32_t pad_y;
     int32_t dilation_x;
     int32_t dilation_y;
-    uint32_t circular;
 };
 
 struct vk_op_upscale_push_constants {
@@ -10228,8 +10223,6 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context & subctx, 
     p.nb2 = static_cast<uint32_t>(nb2 / nb0);
     p.nb3 = static_cast<uint32_t>(nb3 / nb0);
 
-    p.circular = static_cast<uint32_t>(dst->op_params[6]);
-
     GGML_ASSERT(ne03 == ne2);
     GGML_ASSERT(ne02 == ne12);
 
@@ -10279,8 +10272,6 @@ static void ggml_vk_conv_transpose_2d(ggml_backend_vk_context * ctx, vk_context 
     p.nb2 = static_cast<uint32_t>(nb2 / nb0);
     p.nb3 = static_cast<uint32_t>(nb3 / nb0);
 
-    p.circular = static_cast<uint32_t>(dst->op_params[1]);
-
     GGML_ASSERT(ne02 == ne2);
     GGML_ASSERT(ne03 == ne12);
 
@@ -10304,7 +10295,6 @@ static void ggml_vk_conv_2d_dw(ggml_backend_vk_context * ctx, vk_context& subctx
     p.pad_y = dst->op_params[3];
     p.dilation_x = dst->op_params[4];
     p.dilation_y = dst->op_params[5];
-    p.circular = dst->op_params[6];
 
     GGML_ASSERT(src0->ne[3] == p.channels);
     GGML_ASSERT(src1->ne[3] == p.batches);
