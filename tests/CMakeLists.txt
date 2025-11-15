@@ -187,7 +187,6 @@ llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(
     test-chat-peg-parser.cpp
     chat-peg-parser/simple_tokenizer.cpp
-    chat-peg-parser/benchmark.cpp
     chat-peg-parser/test-actions.cpp
     chat-peg-parser/test-command7-parser-compare.cpp
     chat-peg-parser/test-example-qwen3-coder.cpp
@@ -197,6 +196,7 @@ llama_build_and_test(
     chat-peg-parser/test-optional.cpp
     chat-peg-parser/test-partial-parsing.cpp
     chat-peg-parser/test-recursive-references.cpp
+    chat-peg-parser/test_harness.h
     chat-peg-parser/tests.h
 )
 llama_build_and_test(test-chat-template.cpp)
