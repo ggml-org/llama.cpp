@@ -1348,8 +1348,8 @@ class MultiChatUI {
     }
 
     /**
-     * Add a chatmsg to specified chat session,
-     * and update the chat session ui.
+     * Add a chatmsg to specified chat session.
+     * Update the chat session ui, if current.
      *
      * @param {string} chatId
      * @param {ChatMessageEx} msg
@@ -1357,15 +1357,19 @@ class MultiChatUI {
     chatmsg_add_show(chatId, msg) {
         let chat = this.simpleChats[chatId];
         if (!chat) {
-            return
+            return { added: false, shown: false }
         }
-        let lastMsg = chat.xchat[chat.xchat.length-1]
         chat.add(msg)
-        if (lastMsg) {
-            this.ui_chatmessage_delete(chatId, lastMsg.uniqId, false)
-            this.show_message(this.elDivChat, lastMsg, 1, msg)
+        if (chatId != this.curChatId) {
+            return { added: true, shown: false }
+        }
+        let prevLastMsg = chat.xchat[chat.xchat.length-2]
+        if (prevLastMsg) {
+            this.ui_chatmessage_delete(chatId, prevLastMsg.uniqId, false)
+            this.show_message(this.elDivChat, prevLastMsg, 1, msg)
         }
         this.show_message(this.elDivChat, msg, 0, undefined)
+        return { added: true, shown: true }
     }
 
     /**
@@ -1444,8 +1448,7 @@ class MultiChatUI {
                     limitedData = data.slice(0, this.me.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
                 }
             }
-            chat.add(new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, tcid, name, limitedData)))
-            if (this.chat_show(cid)) {
+            if (this.chatmsg_add_show(cid, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, tcid, name, limitedData))).shown) {
                 if (this.me.tools.autoSecs > 0) {
                     this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
                         this.elBtnUser.click()
