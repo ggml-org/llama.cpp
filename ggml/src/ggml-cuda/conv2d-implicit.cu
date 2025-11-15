@@ -831,6 +831,15 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   half* B_block_smem = &shmem[BM * BK];
   constexpr int BUFFER_SIZE = BM * BK + BK * BN;
 
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+  half* SA1 = A_block_smem;
+  half* SB1 = B_block_smem;
+  half* SA2 = &shmem[BUFFER_SIZE];
+  half* SB2 = SA2 + BM * BK;
+#else
+  float4 A_gmem_cache_reg[4];
+  float4 B_gmem_cache_reg[4];
+#endif
   // declare register storage
   // ptx instructions expect uint32_t registers, where each uint32_t is 2 halfs packed together
   uint32_t acc_register[mma_tiles_per_warp_m][mma_tiles_per_warp_n][2];
@@ -868,9 +877,6 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   static_assert(BN == 256);
   static_assert(BK == 32);
   static_assert(NUM_THREADS == 256);
-  float4 A_gmem_cache_reg[4];
-  float4 B_gmem_cache_reg[4];
-
 
 
   prepareIteratorA<BM, BK, A_K_STRID, ROW_STEP>(thread_row, masks_a, element_offset_a, param);
@@ -898,7 +904,9 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   unsigned int curC = tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, 0, 0, masks_a, element_offset_a,
                                                         thread_row, thread_col, start_k, end_k, param);
   tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, 0, 0, start_k, end_k, thread_row, thread_col, param);
-
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+  asm volatile("cp.async.commit_group;\n" ::);
+#endif
   int offset_direction = 1;
   unsigned int block_k = 0;
   unsigned int block_krs = 1;
@@ -906,6 +914,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   int s = 0;
   int r = 0;
   while (block_k < num_block_tiles_k){
+    asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
     __syncthreads();
 
       // moves to the next tile
@@ -948,15 +957,29 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
     // if (block_k != num_block_tiles_k){
     if (block_krs != num_block_tiles_krs){
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+      curC = tileMemcpyAsyncLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, SA2, r, s,
+                                             masks_a, element_offset_a, thread_row, thread_col, block_k * BK,
+                                            start_k, end_k, curC, param);
+      tileMemcpyAsyncLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, SB2, r, s, block_k * BK,
+                                     start_k, end_k, thread_row, thread_col, param);
+      asm volatile("cp.async.commit_group;\n" ::);
+#else
       curC = tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, r, s,
                                              masks_a, element_offset_a, thread_row, thread_col, block_k * BK,
                                             start_k, end_k, curC, param);
       tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, r, s, block_k * BK,
                                      start_k, end_k, thread_row, thread_col, param);
+#endif
     }
 
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+    half* A_warp_tile = SA1 + A_warp_tile_offset;
+    half* B_warp_tile = SB1 + B_warp_tile_offset;
+#else
     half* A_warp_tile = A_block_smem + A_warp_tile_offset;
     half* B_warp_tile = B_block_smem + B_warp_tile_offset;
+#endif
 
     ldmatrix_a<mma_tiles_per_warp_m, mma_tiles_per_warp_k, BK>(A_warp_tile, A_register_);
     ldmatrix_b<mma_tiles_per_warp_k, mma_tiles_per_warp_n, BK>(B_warp_tile, B_register_);
@@ -998,8 +1021,11 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     }
 
     // if (block_k != num_block_tiles_k)
-    if (block_krs != num_block_tiles_krs)
-    {
+    if (block_krs != num_block_tiles_krs) {
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+      half *tmp = SA1; SA1 = SA2; SA2 = tmp;
+      tmp = SB1; SB1 = SB2; SB2 = tmp;
+#else
       // switch smem buffers each iteration
       A_block_smem = A_block_smem + BUFFER_SIZE * offset_direction;
       B_block_smem = B_block_smem + BUFFER_SIZE * offset_direction;
@@ -1007,15 +1033,56 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
       tileMemcpySwizzleStore<BM, NUM_THREADS, 4>(A_gmem_cache_reg, A_block_smem, thread_row, thread_col);
       tileMemcpySwizzleStore<BN, NUM_THREADS, 4>(B_gmem_cache_reg, B_block_smem, thread_row, thread_col);
+#endif
     }
-
     block_krs++;
-
   }
-    // A_block_smem = shmem;
-    // B_block_smem = &shmem[BM * BK];
 
-  // }  // iter block_k
+
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+    asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
+    __syncthreads();
+    half* A_warp_tile = SA2 + A_warp_tile_offset;
+    half* B_warp_tile = SB2 + B_warp_tile_offset;
+    ldmatrix_a<mma_tiles_per_warp_m, mma_tiles_per_warp_k, BK>(A_warp_tile, A_register_);
+    ldmatrix_b<mma_tiles_per_warp_k, mma_tiles_per_warp_n, BK>(B_warp_tile, B_register_);
+    // outer product between mma tiles
+#pragma unroll
+    for (unsigned int mma_k = 0; mma_k < mma_tiles_per_warp_k; mma_k++){
+#pragma unroll
+      for (unsigned int mma_n = 0; mma_n < mma_tiles_per_warp_n; mma_n++){
+#pragma unroll
+        for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++){
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_RUBIN
+          asm volatile (
+            "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 "
+            "{%0, %1}, "
+            "{%2, %3, %4, %5}, "
+            "{%6, %7}, "
+            "{%8, %9};"
+            : "=r"(acc_register[mma_m][mma_n][0]), "=r"(acc_register[mma_m][mma_n][1])
+            : "r"(A_register[mma_m][mma_k][0]), "r"(A_register[mma_m][mma_k][1]),"r"(A_register[mma_m][mma_k][2]), "r"(A_register[mma_m][mma_k][3]),
+              "r"(B_register[mma_k][mma_n][0]), "r"(B_register[mma_k][mma_n][1])
+              "r"(acc_register[mma_m][mma_n][0]), "r"(acc_register[mma_m][mma_n][1])
+          );
+#else
+          asm volatile (
+            "mma.sync.aligned.m16n8k8.row.col.f16.f16.f16.f16 "
+            "{%0, %1}, "
+            "{%2, %3}, "
+            "{%4}, "
+            "{%5, %6};"
+            : "=r"(acc_register[mma_m][mma_n][0]), "=r"(acc_register[mma_m][mma_n][1])
+            : "r"(A_register[mma_m][mma_k][0]), "r"(A_register[mma_m][mma_k][1]),
+              "r"(B_register[mma_k][mma_n])
+              "r"(acc_register[mma_m][mma_n][0]), "r"(acc_register[mma_m][mma_n][1])
+          );
+#endif
+        }
+      }
+    }
+#endif
+
 
   // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
   //   printf(" %u, %f\n", blockIdx.z, __half2float(acc_register_[0][0][0]));
