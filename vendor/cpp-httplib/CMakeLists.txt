@@ -22,7 +22,28 @@ target_compile_definitions(${TARGET} PRIVATE
     CPPHTTPLIB_TCP_NODELAY=1
 )
 
-if (LLAMA_OPENSSL)
+if (LLAMA_BUILD_BORINGSSL)
+    set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BorginSSL git repository")
+    set(BORINGSSL_VERSION "0.20251002.0" CACHE STRING "BoringSSL version")
+
+    message(STATUS "Fetching BoringSSL version ${BORINGSSL_VERSION}")
+
+    include(FetchContent)
+    FetchContent_Declare(
+        boringssl
+        GIT_REPOSITORY ${BORINGSSL_GIT}
+        GIT_TAG        ${BORINGSSL_VERSION}
+    )
+
+    set(SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
+    FetchContent_MakeAvailable(boringssl)
+    set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
+
+    set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
+    target_link_libraries(${TARGET} PUBLIC ssl crypto)
+
+elseif (LLAMA_OPENSSL)
     find_package(OpenSSL)
     if (OpenSSL_FOUND)
         include(CheckCSourceCompiles)
@@ -44,17 +65,20 @@ if (LLAMA_OPENSSL)
         set(CMAKE_REQUIRED_INCLUDES ${SAVED_CMAKE_REQUIRED_INCLUDES})
         if (OPENSSL_VERSION_SUPPORTED)
             message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
-            target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT)
+            set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
             target_link_libraries(${TARGET} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
-            if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-                target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
-                find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-                find_library(SECURITY_FRAMEWORK Security REQUIRED)
-                target_link_libraries(${TARGET} PUBLIC ${CORE_FOUNDATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
-            endif()
         endif()
     else()
         message(STATUS "OpenSSL not found, SSL support disabled")
     endif()
 endif()
 
+if (CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT) # used in server.cpp
+    if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        target_compile_definitions(${TARGET} PRIVATE CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+        find_library(CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+        find_library(SECURITY_FRAMEWORK Security REQUIRED)
+        target_link_libraries(${TARGET} PUBLIC ${CORE_FOUNDATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
+    endif()
+endif()
