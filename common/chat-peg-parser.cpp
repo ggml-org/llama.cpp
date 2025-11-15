@@ -11,6 +11,8 @@
 #include <unordered_set>
 
 enum parser_type {
+    START,
+    END,
     LITERAL,
     SEQUENCE,
     CHOICE,
@@ -100,6 +102,152 @@ static bool is_space(const char c) {
 
 static bool is_hex_digit(const char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+// UTF-8 parsing utilities for streaming-aware unicode support
+struct utf8_parse_result {
+    uint32_t codepoint;      // Decoded codepoint (only valid if status == SUCCESS)
+    size_t bytes_consumed;   // How many bytes this codepoint uses (1-4)
+    enum status_t { SUCCESS, NEED_MORE, INVALID } status;
+
+    utf8_parse_result(status_t s, uint32_t cp = 0, size_t bytes = 0)
+        : codepoint(cp), bytes_consumed(bytes), status(s) {}
+};
+
+// Determine the expected length of a UTF-8 sequence from its first byte
+// Returns 0 for invalid first bytes
+static size_t utf8_sequence_length(unsigned char first_byte) {
+    // Lookup table based on high 4 bits
+    // 0xxx xxxx = 1 byte  (ASCII)
+    // 110x xxxx = 2 bytes
+    // 1110 xxxx = 3 bytes
+    // 1111 0xxx = 4 bytes (only 0xF0-0xF7, not 0xF8-0xFF)
+    static const size_t lookup[] = {
+        1, 1, 1, 1, 1, 1, 1, 1,  // 0000-0111 (0x00-0x7F)
+        0, 0, 0, 0,              // 1000-1011 (continuation bytes 0x80-0xBF, invalid as first byte)
+        2, 2,                    // 1100-1101 (0xC0-0xDF)
+        3,                       // 1110      (0xE0-0xEF)
+        4                        // 1111      (0xF0-0xFF, but need to check 0xF8-0xFF separately)
+    };
+    size_t len = lookup[first_byte >> 4];
+
+    // Additional validation for invalid first bytes:
+    // - 0xC0-0xC1: would create overlong 2-byte sequences
+    // - 0xF8-0xFF: invalid 5+ byte sequences
+    if (first_byte >= 0xF8 || (first_byte >= 0xC0 && first_byte <= 0xC1)) {
+        return 0;  // Invalid
+    }
+
+    return len;
+}
+
+// Parse a single UTF-8 codepoint from input, with streaming support
+// Returns SUCCESS if a complete, valid codepoint is parsed
+// Returns NEED_MORE if the sequence is incomplete and input_is_complete is false
+// Returns INVALID if the UTF-8 encoding is malformed
+static utf8_parse_result parse_utf8_codepoint(
+    std::string_view input,
+    size_t offset,
+    bool input_is_complete
+) {
+    if (offset >= input.size()) {
+        if (input_is_complete) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        return utf8_parse_result(utf8_parse_result::NEED_MORE);
+    }
+
+    const unsigned char first = static_cast<unsigned char>(input[offset]);
+
+    // ASCII fast path (most common case)
+    if (first < 0x80) {
+        return utf8_parse_result(utf8_parse_result::SUCCESS, first, 1);
+    }
+
+    // Invalid first byte (continuation byte 10xxxxxx as first byte, or 0xF8-0xFF)
+    if ((first & 0xC0) == 0x80) {
+        return utf8_parse_result(utf8_parse_result::INVALID);
+    }
+
+    size_t seq_len = utf8_sequence_length(first);
+    if (seq_len == 0) {
+        // Invalid first byte (e.g., 0xF8-0xFF)
+        return utf8_parse_result(utf8_parse_result::INVALID);
+    }
+
+    size_t available = input.size() - offset;
+
+    // Check if we have enough bytes for the complete sequence
+    if (available < seq_len) {
+        if (input_is_complete) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        return utf8_parse_result(utf8_parse_result::NEED_MORE);
+    }
+
+    uint32_t codepoint = 0;
+
+    // Decode based on sequence length
+    if (seq_len == 2) {
+        // 110xxxxx 10xxxxxx
+        if ((first & 0xE0) != 0xC0) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        const unsigned char second = static_cast<unsigned char>(input[offset + 1]);
+        if ((second & 0xC0) != 0x80) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        codepoint = ((first & 0x1F) << 6) | (second & 0x3F);
+        // Check for overlong encoding
+        if (codepoint < 0x80) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+    } else if (seq_len == 3) {
+        // 1110xxxx 10xxxxxx 10xxxxxx
+        if ((first & 0xF0) != 0xE0) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        const unsigned char second = static_cast<unsigned char>(input[offset + 1]);
+        const unsigned char third = static_cast<unsigned char>(input[offset + 2]);
+        if ((second & 0xC0) != 0x80 || (third & 0xC0) != 0x80) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        codepoint = ((first & 0x0F) << 12) | ((second & 0x3F) << 6) | (third & 0x3F);
+        // Check for overlong encoding
+        if (codepoint < 0x800) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        // Check for surrogate pairs (0xD800-0xDFFF are invalid in UTF-8)
+        if (codepoint >= 0xD800 && codepoint <= 0xDFFF) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+    } else if (seq_len == 4) {
+        // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+        if ((first & 0xF8) != 0xF0) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        const unsigned char second = static_cast<unsigned char>(input[offset + 1]);
+        const unsigned char third = static_cast<unsigned char>(input[offset + 2]);
+        const unsigned char fourth = static_cast<unsigned char>(input[offset + 3]);
+        if ((second & 0xC0) != 0x80 || (third & 0xC0) != 0x80 || (fourth & 0xC0) != 0x80) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        codepoint = ((first & 0x07) << 18) | ((second & 0x3F) << 12) |
+                    ((third & 0x3F) << 6) | (fourth & 0x3F);
+        // Check for overlong encoding
+        if (codepoint < 0x10000) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+        // Check for valid Unicode range (max is 0x10FFFF)
+        if (codepoint > 0x10FFFF) {
+            return utf8_parse_result(utf8_parse_result::INVALID);
+        }
+    } else {
+        // Invalid sequence length
+        return utf8_parse_result(utf8_parse_result::INVALID);
+    }
+
+    return utf8_parse_result(utf8_parse_result::SUCCESS, codepoint, seq_len);
 }
 
 // Unescapes a JSON string (without the surrounding quotes)
@@ -360,6 +508,36 @@ class root_parser : public common_chat_peg_parser_base {
 
     std::unordered_map<std::string, common_chat_peg_parser> & rules() { return rules_; }
     const std::unordered_map<std::string, common_chat_peg_parser> & rules() const { return rules_; }
+};
+
+// Matches the start of the input
+//   S -> ^
+class start_parser : public common_chat_peg_parser_base {
+  public:
+    static constexpr parser_type type_value = START;
+    start_parser(int id) : common_chat_peg_parser_base(id) {}
+    parser_type type() const override { return type_value; }
+    void accept(parser_visitor & visitor) override;
+    std::string dump() const override { return "Start"; }
+
+    common_chat_parse_result parse_uncached(common_chat_parse_context &, size_t start = 0) override {
+        return common_chat_parse_result(start == 0 ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL, start);
+    }
+};
+
+// Matches the end of the input
+//   S -> $
+class end_parser : public common_chat_peg_parser_base {
+  public:
+    static constexpr parser_type type_value = END;
+    end_parser(int id) : common_chat_peg_parser_base(id) {}
+    parser_type type() const override { return type_value; }
+    void accept(parser_visitor & visitor) override;
+    std::string dump() const override { return "End"; }
+
+    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
+        return common_chat_parse_result(start >= ctx.input.size() ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL, start);
+    }
 };
 
 // Matches an exact literal string.
@@ -730,13 +908,19 @@ class any_parser : public common_chat_peg_parser_base {
     parser_type type() const override { return type_value; }
 
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        if (start >= ctx.input.size()) {
-            if (ctx.input_is_complete) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-            }
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start);
+        // Parse a single UTF-8 codepoint (not just a single byte)
+        auto result = parse_utf8_codepoint(ctx.input, start, ctx.input_is_complete);
+
+        if (result.status == utf8_parse_result::NEED_MORE) {
+            // Incomplete UTF-8 sequence: end position is at start (before incomplete bytes)
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, start);
         }
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, start + 1);
+        if (result.status == utf8_parse_result::INVALID) {
+            // Malformed UTF-8
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+        }
+        // Success: advance by full codepoint (1-4 bytes)
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, start + result.bytes_consumed);
     }
 
     std::string dump() const override {
@@ -1225,6 +1409,8 @@ class parser_visitor {
   public:
     virtual ~parser_visitor() = default;
 
+    virtual void visit(start_parser & p) = 0;
+    virtual void visit(end_parser & p) = 0;
     virtual void visit(literal_parser & p) = 0;
     virtual void visit(sequence_parser & p) = 0;
     virtual void visit(choice_parser & p) = 0;
@@ -1288,6 +1474,8 @@ class reachability_visitor : public parser_visitor {
         const std::unordered_map<std::string, common_chat_peg_parser> & rules
     ) : reachable_rules_(reachable_rules), rules_(rules) {}
 
+    void visit(start_parser &) override {}
+    void visit(end_parser &) override {}
     void visit(literal_parser &) override {}
     void visit(any_parser &) override {}
     void visit(space_parser &) override {}
@@ -1375,6 +1563,14 @@ class gbnf_visitor : public parser_visitor {
     }
 
   public:
+    void visit(start_parser &) override {
+        current_result_ = "";
+    }
+
+    void visit(end_parser &) override {
+        current_result_ = "";
+    }
+
     void visit(literal_parser & p) override {
         current_result_ = gbnf_literal(p.literal());
     }
@@ -1616,6 +1812,8 @@ class gbnf_visitor : public parser_visitor {
 };
 
 // Implement accept() methods for all parser classes
+void start_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void end_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void literal_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void sequence_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void choice_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
@@ -1718,6 +1916,14 @@ void common_chat_peg_parser::build_grammar(const common_grammar_builder & builde
 common_chat_peg_parser_builder::common_chat_peg_parser_builder()
     : root_(std::make_shared<root_parser>(0)) // root parser has id 0
     , counter_(1) {}
+
+common_chat_peg_parser common_chat_peg_parser_builder::start() {
+    return common_chat_peg_parser(std::make_shared<start_parser>(counter_.next()));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::end() {
+    return common_chat_peg_parser(std::make_shared<end_parser>(counter_.next()));
+}
 
 common_chat_peg_parser common_chat_peg_parser_builder::literal(const std::string & literal) {
     return common_chat_peg_parser(std::make_shared<literal_parser>(literal, counter_.next()));

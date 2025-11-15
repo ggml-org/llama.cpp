@@ -185,6 +185,14 @@ class common_chat_peg_parser_builder {
   public:
     common_chat_peg_parser_builder();
 
+    // Matches the start of the input.
+    //   S -> ^
+    common_chat_peg_parser start();
+
+    // Matches the end of the input.
+    //   S -> $
+    common_chat_peg_parser end();
+
     // Matches an exact literal string.
     //   S -> "hello"
     common_chat_peg_parser literal(const std::string & literal);
