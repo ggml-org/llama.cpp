@@ -1,0 +1,106 @@
+#include "models.h"
+
+llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_params & params) :
+    llm_graph_context(params) {
+    const int64_t head_dim_q = hparams.n_embd_head_k;
+    const int64_t head_dim_v = hparams.n_embd_head_v;
+
+    ggml_tensor * inpL = build_inp_embd(model.tok_embd);
+    ggml_tensor * inp_pos = build_inp_pos();
+
+    llm_graph_input_attn_kv_iswa * inp_attn_iswa = nullptr;
+    llm_graph_input_attn_kv * inp_attn = nullptr;
+
+    if (hparams.is_swa_any()) {
+        inp_attn_iswa = build_attn_inp_kv_iswa();
+    } else {
+        inp_attn = build_attn_inp_kv();
+    }
+
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    for (int il = 0; il < n_layer; ++il) {
+        ggml_tensor * residual = inpL;
+
+        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+
+        ggml_tensor * cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+
+        ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
+
+        const int32_t n_head    = hparams.n_head(il);
+        const int32_t n_head_kv = hparams.n_head_kv(il);
+
+        const int64_t q_offset = 0;
+        const int64_t k_offset = head_dim_q * n_head;
+        const int64_t v_offset = k_offset + head_dim_q * n_head_kv;
+
+        ggml_tensor * Qcur = ggml_view_3d(ctx0, qkv, head_dim_q, n_head, n_tokens,
+                head_dim_q * sizeof(float), qkv->nb[1], q_offset * ggml_element_size(qkv));
+        ggml_tensor * Kcur = ggml_view_3d(ctx0, qkv, head_dim_q, n_head_kv, n_tokens,
+                head_dim_q * sizeof(float), qkv->nb[1], k_offset * ggml_element_size(qkv));
+        ggml_tensor * Vcur = ggml_view_3d(ctx0, qkv, head_dim_v, n_head_kv, n_tokens,
+                head_dim_v * sizeof(float), qkv->nb[1], v_offset * ggml_element_size(qkv));
+
+        Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
+        Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
+
+        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                ext_factor, attn_factor, beta_fast, beta_slow);
+        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                ext_factor, attn_factor, beta_fast, beta_slow);
+
+        const float attn_scale = 1.0f / sqrtf(float(head_dim_q));
+
+        if (inp_attn_iswa) {
+            cur = build_attn(inp_attn_iswa,
+                    model.layers[il].wo, NULL,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, attn_scale, il);
+        } else {
+            cur = build_attn(inp_attn,
+                    model.layers[il].wo, NULL,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, attn_scale, il);
+        }
+
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
+            residual = ggml_get_rows(ctx0, residual, inp_out_ids);
+        }
+
+        cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
+        cur = ggml_add(ctx0, cur, residual);
+        residual = cur;
+
+        cur = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+
+        ggml_tensor * ffn_up   = build_lora_mm(model.layers[il].ffn_up,   cur);
+        ggml_tensor * ffn_gate = build_lora_mm(model.layers[il].ffn_gate, cur);
+        ggml_tensor * ffn_act  = ggml_swiglu_split(ctx0, ffn_gate, ffn_up);
+
+        cur = build_lora_mm(model.layers[il].ffn_down, ffn_act);
+        cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
+
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
+            residual = ggml_get_rows(ctx0, residual, inp_out_ids);
+        }
+
+        cur = ggml_add(ctx0, cur, residual);
+        cur = build_cvec(cur, il);
+        inpL = cur;
+    }
+
+    ggml_tensor * cur = inpL;
+
+    cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+    res->t_embd = cur;
+
+    cur = build_lora_mm(model.output, cur);
+    res->t_logits = cur;
+
+    ggml_build_forward_expand(gf, cur);
+}
