@@ -43,7 +43,7 @@ struct ggml_cgraph * build_graph_1(const test_model&);
 void load_model(test_model & model, int ic, int oc, int iw, int ih, int kw = 3, int kh = 3, bool use_gpu = false ) {
     // create data
     int KW = kw, KH = kh, IC = ic, OC = oc;
-    int IW = iw, IH = ih, N = 2;
+    int IW = iw, IH = ih, N = 1;
     // srand(time(NULL));
 
     // printf(" input: IC = %d, OC = %d, IW = %d, IH = %d \n ", IC, OC, IW, IH);
@@ -53,6 +53,8 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, int kw = 3, 
     for (int i = 0; i < KW * KH * IC * OC; i++) {
         // adata[i] = 2.f;
         // adata[i] = (float)(i%KW)-1.f;
+        // adata[i] = (float)((i+1)%KW+1)/10.0;
+        // adata[i] = (float)(i%100);
         // adata[i] = (rand() % 255) / 255.0;
         float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
         adata[i] = r;
@@ -176,19 +178,19 @@ struct ggml_cgraph * build_graph_0(const test_model& model) {
 
     struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
 
-    // int s0 = 1;
-    // int s1 = 1;
-    // int p0 = 1;
-    // int p1 = 1;
-    // int d0 = 1;
-    // int d1 = 1;
+    int s0 = 1;
+    int s1 = 1;
+    int p0 = 1;
+    int p1 = 1;
+    int d0 = 1;
+    int d1 = 1;
 
-    int s0 = 3;
-    int s1 = 5;
-    int p0 = 5;
-    int p1 = 5;
-    int d0 = 2;
-    int d1 = 4;
+    // int s0 = 3;
+    // int s1 = 5;
+    // int p0 = 5;
+    // int p1 = 5;
+    // int d0 = 2;
+    // int d1 = 4;
 
     // recalculate for avoid fragmentation
     struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
@@ -222,20 +224,20 @@ struct ggml_cgraph * build_graph_1(const test_model& model) {
 
     struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
 
-    // int s0 = 1;
-    // int s1 = 1;
-    // int p0 = 1;
-    // int p1 = 1;
-    // int d0 = 1;
-    // int d1 = 1;
+    int s0 = 1;
+    int s1 = 1;
+    int p0 = 1;
+    int p1 = 1;
+    int d0 = 1;
+    int d1 = 1;
 
 
-    int s0 = 3;
-    int s1 = 5;
-    int p0 = 5;
-    int p1 = 5;
-    int d0 = 2;
-    int d1 = 4;
+    // int s0 = 3;
+    // int s1 = 5;
+    // int p0 = 5;
+    // int p1 = 5;
+    // int d0 = 2;
+    // int d1 = 4;
 
 
     // recalculate for avoid fragmentation
@@ -318,7 +320,21 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1920,640,32,32,3,3)
         // std::make_tuple(1280,1280,16,16,3,3),
-        std::make_tuple(32,12,141,133,3,3),
+        // std::make_tuple(32,12,141,133,3,3),
+        // std::make_tuple(32,6,141,133,3,3),
+        // std::make_tuple(32,12,141,121,3,3),
+        // std::make_tuple(32,9,141,121,3,3),
+        // std::make_tuple(320,8,16,16,3,3),  //working
+        // std::make_tuple(320,9,16,16,3,3),  //working
+        // std::make_tuple(320,12,16,16,3,3),  //working
+        //  std::make_tuple(256,12,16,16,3,3),  //working
+        // std::make_tuple(32,12,16,16,3,3),  //not working
+        // std::make_tuple(48,12,16,16,3,3),  // not working
+        std::make_tuple(96,12,16,16,3,3),  //not working
+        // std::make_tuple(64,12,16,16,3,3),  //working
+        // std::make_tuple(64,12,141,133,3,3),  //working
+        // std::make_tuple(32,12,141,133,3,3),  //working
+        // std::make_tuple(1280,1280,16,16,3,3),
         // std::make_tuple(32,8,24,24,3,3),
         // std::make_tuple(640,640,64,64,3,3),
         // std::make_tuple(320,640,32,32,3,3),
@@ -730,18 +746,19 @@ int main(void)
                 run_time0, mem_size0/1024.0f/1024.0f,
                 run_time1, mem_size1/1024.0f/1024.0f);
 
-
+       // int i = 2048;
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
         // for(int i = 0; i < 26*38; i++) {
-        for(int i = 0; i < conv2d_data.size(); i++) {
-            float diff = fabs(im2col_data[i] - conv2d_data[i]);
-            if(diff > 0.5) {
-                  printf("(%7.3f, %7.3f, %.2f, %d) \n",
-                  im2col_data[i], conv2d_data[i],
-                  diff, i);
-                break;
-            }
-        }
+        // for(int i = 0; i < conv2d_data.size(); i++) {
+        //     float diff = fabs(im2col_data[i] - conv2d_data[i]);
+        //     // if(diff > 0.5) {
+        //     // if(diff > 2.0) {
+        //           printf("(%7.3f, %7.3f, %.2f, %d) \n",
+        //           im2col_data[i], conv2d_data[i],
+        //           diff, i);
+        //         // break;
+        //     // }
+        // }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);

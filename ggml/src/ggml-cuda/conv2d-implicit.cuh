@@ -476,7 +476,7 @@ __device__ __forceinline__ unsigned int tileMemcpyAsyncLoadA(
     #pragma unroll
     for (unsigned int i = 0; i < NUM_ITERS; i++){
          bool valid = (masks[i][0] & (1u << curR)) && (masks[i][1] & (1u << curS));
-        //  if(threadIdx.x == 3 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 1){
+        //  if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 1){
         //    printf(" %u, %u, %u, %u, %u, %lld, %d\n", i, curR, curS, oldC, curC, element_offset[i], valid?1:0);
         //  }
         unsigned int dst_index = iter_idx;

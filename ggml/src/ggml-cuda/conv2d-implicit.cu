@@ -956,10 +956,10 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
       // if(block_k == num_block_tiles_k)
       //   break;
 
-      // if(thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-      //   printf(" s = %d, r = %d, block_k = %d, next_idx = %d , %d,  %d, %d \n", s, r, block_k, next_idx, 
-      //     block_krs, num_block_tiles_k, num_block_tiles_krs);
-      // }
+      if(thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
+        printf(" s = %d, r = %d, block_k = %d, next_idx = %d , %d,  %d, %d \n", s, r, block_k, next_idx, 
+          block_krs, num_block_tiles_k, num_block_tiles_krs);
+      }
 
     // if (block_k != num_block_tiles_k){
     if (block_krs != num_block_tiles_krs){
@@ -1024,7 +1024,46 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 #endif
         }
       }
+
+     
+      // if(threadIdx.x >= 8 && threadIdx.x < 12 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+      //   printf("A %d, %d, %d: %f, %f \n", block_krs, mma_k, threadIdx.x,
+      //     __half2float(A_register_[1][mma_k][0]),
+      //     __half2float(A_register_[1][mma_k][1]));
+      // }
+      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+      //   printf("B  %d, %d, %d: %f, %f\n", block_krs, mma_k, threadIdx.x,
+      //     __half2float(B_register_[mma_k][1][0]),
+      //     __half2float(B_register_[mma_k][1][1]));
+      // }
+      // if(threadIdx.x == 8 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+      //   printf("C %d, %d, %d: %f, %f, %f, %f\n", block_krs, mma_k, threadIdx.x,
+      //     __half2float(acc_register_[1][1][0]),
+      //     __half2float(acc_register_[1][1][1]),
+      //     __half2float(acc_register_[1][1][2]),
+      //     __half2float(acc_register_[1][1][3]));
+      // }
+
+      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+      //   printf("A %d, %d, (%d, %d) %d: %f, %f \n", block_krs, mma_k, r, s, threadIdx.x,
+      //     __half2float(A_register_[0][mma_k][0]),
+      //     __half2float(A_register_[0][mma_k][1]));
+      // }
+      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+      //   printf("B  %d, %d, (%d, %d) %d: %f, %f\n", block_krs, mma_k, r, s, threadIdx.x,
+      //     __half2float(B_register_[mma_k][0][0]),
+      //     __half2float(B_register_[mma_k][0][1]));
+      // }
+      // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+      //   printf("C %d, %d, (%d, %d) %d: %f, %f, %f, %f\n", block_krs, mma_k, r, s, threadIdx.x,
+      //     __half2float(acc_register_[0][0][0]),
+      //     __half2float(acc_register_[0][0][1]),
+      //     __half2float(acc_register_[0][0][2]),
+      //     __half2float(acc_register_[0][0][3]));
+      // }
+
     }
+
 
     // if (block_k != num_block_tiles_k)
     if (block_krs != num_block_tiles_krs) {
@@ -1086,13 +1125,41 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 #endif
         }
       }
+      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+      //   printf("A %d, %d, (%d, %d) %d: %f, %f \n", block_krs, mma_k, r, s, threadIdx.x,
+      //     __half2float(A_register_[0][mma_k][0]),
+      //     __half2float(A_register_[0][mma_k][1]));
+      // }
+      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+      //   printf("B  %d, %d, (%d, %d) %d: %f, %f\n", block_krs, mma_k, r, s, threadIdx.x,
+      //     __half2float(B_register_[mma_k][0][0]),
+      //     __half2float(B_register_[mma_k][0][1]));
+      // }
+      // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+      //   printf("C %d, %d, (%d, %d) %d: %f, %f, %f, %f\n", block_krs, mma_k, r, s, threadIdx.x,
+      //     __half2float(acc_register_[0][0][0]),
+      //     __half2float(acc_register_[0][0][1]),
+      //     __half2float(acc_register_[0][0][2]),
+      //     __half2float(acc_register_[0][0][3]));
+      // }
     }
 #endif
 
 
-  // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-  //   printf(" %u, %f\n", blockIdx.z, __half2float(acc_register_[0][0][0]));
+  // if(threadIdx.x == 8 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+  //   printf(" %u, %f, %f, %f, %f\n", blockIdx.z, 
+  //     __half2float(acc_register_[1][1][0]),
+  //     __half2float(acc_register_[1][1][1]),
+  //     __half2float(acc_register_[1][1][2]),
+  //     __half2float(acc_register_[1][1][3]));
   // }
+  if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+    printf(" %u, %f, %f, %f, %f\n", blockIdx.z, 
+      __half2float(acc_register_[0][1][0]),
+      __half2float(acc_register_[0][1][1]),
+      __half2float(acc_register_[0][1][2]),
+      __half2float(acc_register_[0][1][3]));
+  }
 
     // reuse smem
     half *smemoutput = shmem;
@@ -1145,10 +1212,14 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                 half (&res_)[2] = reinterpret_cast<half(&)[2]>(dst_ptr);
                 if (n < param.n && row < param.k && col < param.PQ) {
                   const uint outOffset = ((ksplit > 0) ? z * param.NKPQ : 0) + n * param.KPQ + row * param.PQ + col;
+                  // if(row == 8 && col == 18)
+                  //    printf("A %u, %u, %f \n", outOffset, z, ggml_cuda_cast<float>(res_[0]));
                   output[outOffset] = ggml_cuda_cast<T>(res_[0]);
                 }
                 if (n < param.n && row+1 < param.k && col < param.PQ) {
                   const uint outOffset = ((ksplit > 0) ? z * param.NKPQ : 0) + n * param.KPQ + (row+1) * param.PQ + col;
+                  // if(row+1 == 8 && col == 17)
+                  //    printf("B %u, %u, %f \n", outOffset, z, ggml_cuda_cast<float>(res_[0]));
                   output[outOffset] = ggml_cuda_cast<T>(res_[1]);
                 }
             }
@@ -1353,9 +1424,10 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
                   }
                }
             }
-
+            candidate = -1;
             if(candidate != -1){
               j = candidate;
+              printf("choosing %d \n", j);
               if (j == 2) {
                 launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 2,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
