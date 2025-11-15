@@ -914,7 +914,9 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   int s = 0;
   int r = 0;
   while (block_k < num_block_tiles_k){
+  #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
+  #endif
     __syncthreads();
 
       // moves to the next tile
