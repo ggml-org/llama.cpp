@@ -913,13 +913,16 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   // for (unsigned int block_k = 1; block_k <= num_block_tiles_k; block_k++){
   int s = 0;
   int r = 0;
-  while (block_k < num_block_tiles_k){
-  #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+  while (block_krs < num_block_tiles_krs) {
+
     asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
-  #endif
+#else
+  while (block_k < num_block_tiles_k) {
+#endif
     __syncthreads();
 
-      // moves to the next tile
+      // moves to the next channel block tile
       int next_idx = 0;
       ++s;
       if (s == param.s) {
@@ -954,7 +957,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
       //   break;
 
       // if(thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-      //   printf(" s = %d, r = %d, block_k = %d, next_idx = %d , %d %d \n", s, r, block_k, next_idx, block_krs, num_block_tiles_k);
+      //   printf(" s = %d, r = %d, block_k = %d, next_idx = %d , %d,  %d, %d \n", s, r, block_k, next_idx, 
+      //     block_krs, num_block_tiles_k, num_block_tiles_krs);
       // }
 
     // if (block_k != num_block_tiles_k){
@@ -1044,8 +1048,8 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
     __syncthreads();
-    half* A_warp_tile = SA2 + A_warp_tile_offset;
-    half* B_warp_tile = SB2 + B_warp_tile_offset;
+    half* A_warp_tile = SA1 + A_warp_tile_offset;
+    half* B_warp_tile = SB1 + B_warp_tile_offset;
     ldmatrix_a<mma_tiles_per_warp_m, mma_tiles_per_warp_k, BK>(A_warp_tile, A_register_);
     ldmatrix_b<mma_tiles_per_warp_k, mma_tiles_per_warp_n, BK>(B_warp_tile, B_register_);
     // outer product between mma tiles

@@ -5826,7 +5826,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for (uint32_t s0 : { 1, 3 }) {
         for (uint32_t p1 : { 2, 5 }) {
-            for (uint32_t Cin : { 1, 25 }) {
+            for (uint32_t Cin : { 1, 25, 32 }) {
                 for (uint32_t Cout : { 1, 12 }) {
                     for (uint32_t KH : { 1, 2, 3, 11 }) {
                         for (uint32_t KW : { 1, 2, 3, 11 }) {
@@ -5854,6 +5854,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
     test_cases.emplace_back(new test_conv_2d( { 24, 24, 128, 1 }, { 3, 3, 128, 8},
             GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d( { 24, 24, 128, 3 }, { 3, 3, 128, 8},
+            GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false));
+
 
 
     // sycl backend will limit task global_range < MAX_INT
