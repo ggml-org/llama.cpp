@@ -72,12 +72,6 @@
 		}
 	}
 
-	function handleScroll() {
-		if (isOpen) {
-			updateMenuPosition();
-		}
-	}
-
 	async function handleSelect(value: string | undefined) {
 		if (!value) return;
 
@@ -259,7 +253,7 @@
 	}
 </script>
 
-<svelte:window onresize={handleResize} onscroll={handleScroll} />
+<svelte:window onresize={handleResize} />
 
 <svelte:document onpointerdown={handlePointerDown} onkeydown={handleKeydown} />
 
