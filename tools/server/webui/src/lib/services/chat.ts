@@ -103,6 +103,7 @@ export class ChatService {
 				}
 			})
 			.filter((msg) => {
+				// Filter out empty system messages
 				if (msg.role === 'system') {
 					const content = typeof msg.content === 'string' ? msg.content : '';
 
@@ -112,10 +113,8 @@ export class ChatService {
 				return true;
 			});
 
-		const processedMessages = this.injectSystemMessage(normalizedMessages);
-
 		const requestBody: ApiChatCompletionRequest = {
-			messages: processedMessages.map((msg: ApiChatMessageData) => ({
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
 				content: msg.content
 			})),

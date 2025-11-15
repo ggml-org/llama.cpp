@@ -4,6 +4,7 @@
 	import { isIMEComposing } from '$lib/utils/is-ime-composing';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
+	import ChatMessageSystem from './ChatMessageSystem.svelte';
 
 	interface Props {
 		class?: string;
@@ -110,7 +111,7 @@
 	}
 
 	function handleSaveEdit() {
-		if (message.role === 'user') {
+		if (message.role === 'user' || message.role === 'system') {
 			onEditWithBranching?.(message, editedContent.trim());
 		} else {
 			onEditWithReplacement?.(message, editedContent.trim(), shouldBranchAfterEdit);
@@ -125,7 +126,28 @@
 	}
 </script>
 
-{#if message.role === 'user'}
+{#if message.role === 'system'}
+	<ChatMessageSystem
+		bind:textareaElement
+		class={className}
+		{deletionInfo}
+		{editedContent}
+		{isEditing}
+		{message}
+		onCancelEdit={handleCancelEdit}
+		onConfirmDelete={handleConfirmDelete}
+		onCopy={handleCopy}
+		onDelete={handleDelete}
+		onEdit={handleEdit}
+		onEditKeydown={handleEditKeydown}
+		onEditedContentChange={handleEditedContentChange}
+		{onNavigateToSibling}
+		onSaveEdit={handleSaveEdit}
+		onShowDeleteDialogChange={handleShowDeleteDialogChange}
+		{showDeleteDialog}
+		{siblingInfo}
+	/>
+{:else if message.role === 'user'}
 	<ChatMessageUser
 		bind:textareaElement
 		class={className}

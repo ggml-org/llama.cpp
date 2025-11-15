@@ -9,6 +9,7 @@
 		editAssistantMessage,
 		regenerateMessageWithBranching
 	} from '$lib/stores/chat.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { getMessageSiblings } from '$lib/utils/branching';
 
 	interface Props {
@@ -20,6 +21,7 @@
 	let { class: className, messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
+	const currentConfig = config();
 
 	function refreshAllMessages() {
 		const conversation = activeConversation();
@@ -47,7 +49,12 @@
 			return [];
 		}
 
-		return messages.map((message) => {
+		// Filter out system messages if showSystemMessage is false
+		const filteredMessages = currentConfig.showSystemMessage
+			? messages
+			: messages.filter((msg) => msg.type !== 'system');
+
+		return filteredMessages.map((message) => {
 			const siblingInfo = getMessageSiblings(allConversationMessages, message.id);
 
 			return {
