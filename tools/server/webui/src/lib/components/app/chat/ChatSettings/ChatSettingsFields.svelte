@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RotateCcw } from '@lucide/svelte';
+	import { RotateCcw, FlaskConical } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
@@ -55,8 +55,12 @@
 			})()}
 
 			<div class="flex items-center gap-2">
-				<Label for={field.key} class="text-sm font-medium">
+				<Label for={field.key} class="flex items-center gap-1.5 text-sm font-medium">
 					{field.label}
+
+					{#if field.isExperimental}
+						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+					{/if}
 				</Label>
 				{#if isCustomRealTime}
 					<ParameterSourceIndicator />
@@ -97,8 +101,12 @@
 				</p>
 			{/if}
 		{:else if field.type === 'textarea'}
-			<Label for={field.key} class="block text-sm font-medium">
+			<Label for={field.key} class="block flex items-center gap-1.5 text-sm font-medium">
 				{field.label}
+
+				{#if field.isExperimental}
+					<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+				{/if}
 			</Label>
 
 			<Textarea
@@ -129,8 +137,12 @@
 			})()}
 
 			<div class="flex items-center gap-2">
-				<Label for={field.key} class="text-sm font-medium">
+				<Label for={field.key} class="flex items-center gap-1.5 text-sm font-medium">
 					{field.label}
+
+					{#if field.isExperimental}
+						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+					{/if}
 				</Label>
 				{#if isCustomRealTime}
 					<ParameterSourceIndicator />
@@ -214,9 +226,13 @@
 						for={field.key}
 						class="cursor-pointer text-sm leading-none font-medium {isDisabled
 							? 'text-muted-foreground'
-							: ''}"
+							: ''} flex items-center gap-1.5"
 					>
 						{field.label}
+
+						{#if field.isExperimental}
+							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+						{/if}
 					</label>
 
 					{#if field.help || SETTING_CONFIG_INFO[field.key]}
