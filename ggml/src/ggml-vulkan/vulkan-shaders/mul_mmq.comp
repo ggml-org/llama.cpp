@@ -198,11 +198,21 @@ void main() {
     uint pos_b_ib = (batch_idx * p.batch_stride_b + ic * BN * p.stride_b + start_k) / BK;
 #endif
 
+#if defined(DATA_A_Q2_K)
+    ACC_TYPE_VEC2 sums[WMITER * TM * WNITER * TN/2];
+
+    [[unroll]] for (uint i = 0; i < WMITER*TM*WNITER*TN/2; i++) {
+        sums[i] = ACC_TYPE_VEC2(0.0f);
+    }
+
+#else
     ACC_TYPE sums[WMITER * TM * WNITER * TN];
 
     [[unroll]] for (uint i = 0; i < WMITER*TM*WNITER*TN; i++) {
         sums[i] = ACC_TYPE(0.0f);
     }
+#endif
+
 
     for (uint block = start_k; block < end_k; block += BK * BK_STEP) {
         [[unroll]] for (uint l = 0; loadc_a + l < BM; l += loadstride_a) {
@@ -254,10 +264,15 @@ void main() {
                     block_b_to_registers(ib);
 
                     [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
-                        [[unroll]] for (uint cr = 0; cr < TM; cr++) {
-                            const uint cache_a_idx = wsir * TM + cr;
-                            const uint sums_idx = (wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr;
 
+                    #if defined(DATA_A_Q2_K)
+                        [[unroll]] for (uint cr = 0; cr < TM / 2; cr++) {
+                            const uint sums_idx = (wsic * TN + cc) * (WMITER * TM / 2) + wsir * TM / 2 + cr;
+                    #else
+                        [[unroll]] for (uint cr = 0; cr < TM; cr++) {
+                            const uint sums_idx = (wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr;
+                    #endif
+                            const uint cache_a_idx = wsir * TM + cr;
                             sums[sums_idx] += mmq_dot_product(cache_a_idx);
                         }
                     }
@@ -287,6 +302,26 @@ void main() {
 
                 const u16vec2 row_idx = row_ids[row_i - ic * BN];
 #endif // MUL_MAT_ID
+            #if defined(DATA_A_Q2_K)
+                [[unroll]] for (uint cr = 0; cr < TM / 2; cr++) {
+                    const uint sums_idx = (wsic * TN + cc) * WMITER * (TM / 2) + wsir * (TM / 2) + cr;
+#ifdef MUL_MAT_ID
+                    if (dr_warp + 2 * cr < p.M) {
+                        data_d[row_idx.y * p.batch_stride_d + row_idx.x * p.stride_d + dr_warp + 2 * cr] = D_TYPE(sums[sums_idx].x);
+                    }
+                    if (dr_warp + 2 * cr + 1 < p.M) {
+                        data_d[row_idx.y * p.batch_stride_d + row_idx.x * p.stride_d + dr_warp + 2 * cr + 1] = D_TYPE(sums[sums_idx].y);
+                    }
+#else
+                    if (dr_warp + 2 * cr < p.M && dc_warp + cc < p.N) {
+                        data_d[offsets + (dc_warp + cc) * p.stride_d + dr_warp + 2 * cr] = D_TYPE(sums[sums_idx].x);
+                    }
+                    if (dr_warp + 2 * cr + 1 < p.M && dc_warp + cc < p.N) {
+                        data_d[offsets + (dc_warp + cc) * p.stride_d + dr_warp + 2 * cr + 1] = D_TYPE(sums[sums_idx].y);
+                    }
+#endif // MUL_MAT_ID
+                }
+            #else
                 [[unroll]] for (uint cr = 0; cr < TM; cr++) {
                     const uint sums_idx = (wsic * TN + cc) * WMITER * TM + wsir * TM + cr;
 #ifdef MUL_MAT_ID
@@ -299,6 +334,7 @@ void main() {
                     }
 #endif // MUL_MAT_ID
                 }
+            #endif
             }
         }
     }
