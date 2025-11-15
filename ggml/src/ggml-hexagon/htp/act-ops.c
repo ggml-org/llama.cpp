@@ -116,18 +116,22 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
     uint8_t * restrict data_dst        = (uint8_t *) dst->data;
 
     const bool src1_valid = src1->ne[0];
+    const int  nc         = (src1_valid) ? ne0 : ne0 / 2;
     if (!src1_valid) {
-        data_src1     = data_src0;
-        src1_row_size = src0_row_size;
+        const int32_t swapped = op_params[1];
+        data_src1             = data_src0;
+        src1_row_size         = src0_row_size;
+
+        const size_t nc_in_bytes = nc * SIZEOF_FP32;
+        data_src0 += swapped ? nc_in_bytes : 0;
+        data_src1 += swapped ? 0 : nc_in_bytes;
     }
 
     uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_row_size);
     uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_row_size);
     uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_row_size);
 
-    const int32_t swapped  = op_params[1];
-    const bool    opt_path = ((1 == is_aligned) && !(nb01 & (VLEN - 1)));
-    const int     nc       = (src1_valid) ? ne0 : ne0 / 2;
+    const bool opt_path = ((1 == is_aligned) && !(nb01 & (VLEN - 1)));
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
         const float * restrict src0 = (float *) (data_src0 + (ir * src0_row_size));
         const float * restrict src1 = (float *) (data_src1 + (ir * src1_row_size));
@@ -135,11 +139,6 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
 
         if (ir + 1 < src0_end_row) {
             htp_l2fetch(src0 + src0_row_size, 1, src0_row_size, src0_row_size);
-        }
-
-        if (!src1_valid) {
-            src0 += swapped ? nc : 0;
-            src1 += swapped ? 0 : nc;
         }
 
         if (opt_path) {
