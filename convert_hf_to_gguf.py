@@ -514,6 +514,7 @@ class ModelBase:
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid # unused
 
         return [(self.map_tensor_name(name), data_torch)]
 
@@ -1874,6 +1875,7 @@ class GPTNeoXModel(TextModel):
         self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_eps"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid # unused
 
         n_head = self.hparams.get("n_head", self.hparams.get("num_attention_heads"))
         n_embed = self.hparams.get("hidden_size", self.hparams.get("n_embed"))
@@ -5129,7 +5131,6 @@ class Plamo3Model(PlamoTokenizerMixin, TextModel):
                     chunk = chunk.transpose(0, 1)
                 elif chunk.shape != (n_embd, n_ff):
                     raise ValueError(f"Unexpected gate/up chunk shape {tuple(chunk.shape)}")
-                # processed.append(chunk.contiguous())
                 processed.append(chunk.transpose(0, 1).contiguous())
 
             gate_proj_weight, up_proj_weight = processed
