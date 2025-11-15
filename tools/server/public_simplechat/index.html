@@ -11,12 +11,13 @@
         <script type="importmap">
             {
                 "imports": {
+                    "simplechat": "./simplechat.js",
                     "datautils": "./datautils.mjs",
                     "ui": "./ui.mjs"
                 }
             }
         </script>
-        <script src="simplechat.js" type="module" defer></script>
+        <script src="main.js" type="module" defer></script>
         <link rel="stylesheet" href="simplechat.css" />
     </head>
     <body>
@@ -24,7 +25,10 @@
 
             <div class="sameline" id="heading">
                 <p class="heading flex-grow" > <b> SimpleChat </b> </p>
-                <button id="settings">Settings</button>
+                <div>
+                <button id="clearchat">&#x1F9F9; ClearChat</button>
+                <button id="settings">&#x2699; Settings</button>
+                </div>
             </div>
 
             <div id="sessions-div" class="sameline"></div>
@@ -38,6 +42,19 @@
             <hr>
             <div id="chat-div">
                 <p> You need to have javascript enabled.</p>
+            </div>
+
+            <hr>
+            <div id="tool-div">
+                <div>
+                <div class="sameline">
+                    <textarea id="toolname-in" class="flex-grow" rows="1" placeholder="name of tool to run"></textarea>
+                    <button id="tool-btn">run tool</button>
+                </div>
+                </div>
+                <div class="sameline">
+                <textarea id="toolargs-in" class="flex-grow" rows="2" placeholder="arguments to pass to the specified tool"></textarea>
+                </div>
             </div>
 
             <hr>

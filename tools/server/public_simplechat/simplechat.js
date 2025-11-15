@@ -1,21 +1,39 @@
 // @ts-check
-// A simple completions and chat/completions test related web front end logic
+// Core classes which provide a simple implementation of handshake with ai server's completions and chat/completions endpoints
+// as well as related web front end logic for basic usage and testing.
 // by Humans for All
 
 import * as du from "./datautils.mjs";
 import * as ui from "./ui.mjs"
+import * as mTools from "./tools.mjs"
+
+const ROLES_TEMP_ENDSWITH = ".TEMP"
 
 class Roles {
     static System = "system";
     static User = "user";
     static Assistant = "assistant";
+    static Tool = "tool";
+
+    // List of roles for messages that shouldnt be sent to the ai server.
+    // Ensure all these end with .TEMP
+
+    /** Used to identify tool call response, which has not yet been accepted and submitted by users */
+    static ToolTemp = `TOOL${ROLES_TEMP_ENDSWITH}`;
+    /**
+     * Used to maintain errors that wont be normally communicated back to ai server
+     * like error got during handshake with ai server or so.
+     */
+    static ErrorTemp = `ERROR${ROLES_TEMP_ENDSWITH}`;
 }
+
 
 class ApiEP {
     static Type = {
         Chat: "chat",
         Completion: "completion",
     }
+    /** @type {Object<string, string>} */
     static UrlSuffix = {
         'chat': `/chat/completions`,
         'completion': `/completions`,
@@ -36,24 +54,370 @@ class ApiEP {
 }
 
 
-let gUsageMsg = `
-    <p class="role-system">Usage</p>
+/**
+ * @typedef {{id: string, type: string, function: {name: string, arguments: string}}} NSToolCall
+ */
+
+class NSChatMessage {
+    /**
+     * Represents a Message as seen in the http server Chat handshake
+     * @param {string} role
+     * @param {string|undefined} content
+     * @param {string|undefined} reasoning_content
+     * @param {Array<NSToolCall>|undefined} tool_calls
+     * @param {string|undefined} tool_call_id - toolcall response - the tool / function call id
+     * @param {string|undefined} name - toolcall response - the tool / function call name
+     */
+    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined, tool_call_id=undefined, name=undefined) {
+        this.role = role;
+        this.content = content;
+        this.reasoning_content = reasoning_content
+        this.tool_calls = structuredClone(tool_calls)
+        this.tool_call_id = tool_call_id
+        this.name = name
+    }
+
+    /**
+     * @param {string} role
+     * @param {string} tool_call_id
+     * @param {string} name
+     * @param {string} content
+     */
+    static new_tool_response(role, tool_call_id, name, content) {
+        return new NSChatMessage(role, content, undefined, undefined, tool_call_id, name)
+    }
+
+    getContent() {
+        if (this.content) {
+            return this.content
+        }
+        return ""
+    }
+
+    /** Returns trimmed reasoning content, else empty string */
+    getReasoningContent() {
+        if (this.reasoning_content) {
+            return this.reasoning_content.trim()
+        }
+        return ""
+    }
+
+    /**
+     * Get the function wrt tool calls index
+     * @param {number} funcIndex
+     */
+    getFunc(funcIndex) {
+        if (this.has_toolcalls()) {
+            if (this.tool_calls) {
+                return this.tool_calls[funcIndex]
+            }
+        }
+        return undefined
+    }
+
+    /**
+     * Get the function name wrt tool calls index
+     * @param {number} funcIndex
+     */
+    getFuncName(funcIndex) {
+        if (this.has_toolcalls()) {
+            if (this.tool_calls) {
+                return this.tool_calls[funcIndex].function.name
+            }
+        }
+        return ""
+    }
+
+    /**
+     * Get the function args wrt tool calls index
+     * @param {number} funcIndex
+     */
+    getFuncArgs(funcIndex) {
+        if (this.has_toolcalls()) {
+            if (this.tool_calls) {
+                return this.tool_calls[funcIndex].function.arguments
+            }
+        }
+        return ""
+    }
+
+    /**
+     * Append to the content, if already exists
+     * Else create the content.
+     * @param {string} content
+     */
+    content_adj(content="") {
+        if (this.content == undefined) {
+            this.content = content
+        } else {
+            this.content += content
+        }
+    }
+
+    /**
+     * Append to the reasoningContent, if already exists
+     * Else create the reasoningContent.
+     * @param {string} reasoningContent
+     */
+    reasoning_content_adj(reasoningContent="") {
+        if (this.reasoning_content == undefined) {
+            this.reasoning_content = reasoningContent
+        } else {
+            this.reasoning_content += reasoningContent
+        }
+    }
+
+    /**
+     * Add/Push a new tool call.
+     * If the underlying tool_calls is undefined, create it first.
+     * @param {NSToolCall} toolCall
+     */
+    tool_calls_push(toolCall) {
+        if (this.tool_calls == undefined) {
+            this.tool_calls = []
+        }
+        this.tool_calls.push(toolCall)
+    }
+
+    /**
+     * Check if this NSChatMessage has any content or not.
+     */
+    has_content() {
+        if (this.content) {
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Check if this NSChatMessage has any non empty reasoning content or not.
+     */
+    has_reasoning() {
+        if (this.reasoning_content) {
+            if (this.reasoning_content.trim().length == 0) {
+                return false
+            }
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Check if this NSChatMessage has atleast one tool call or not.
+     */
+    has_toolcalls() {
+        if (this.tool_calls) {
+            if (this.tool_calls.length == 0) {
+                return false
+            }
+            return true
+        }
+        return false
+    }
+
+    has_role_temp() {
+        if (this.role.endsWith(ROLES_TEMP_ENDSWITH)) {
+            return true;
+        }
+        return false;
+    }
+
+    has_toolresponse() {
+        if (this.tool_call_id) {
+            return true
+        }
+        return false
+    }
+
+}
+
+
+class ChatMessageEx {
+
+    /**
+     * Represent a Message in the Chat.
+     * @param {NSChatMessage|undefined} nsChatMsg - will create a default NSChatMessage instance, if undefined
+     * @param {string|undefined} trimmedContent
+     */
+    constructor(nsChatMsg=undefined, trimmedContent=undefined) {
+        if (nsChatMsg) {
+            this.ns = nsChatMsg
+        } else {
+            this.ns = new NSChatMessage()
+        }
+        this.trimmedContent = trimmedContent;
+    }
+
+    /**
+     * Create a new instance from an existing instance
+     * @param {ChatMessageEx} old
+     */
+    static newFrom(old) {
+        return new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.ns.tool_call_id, old.ns.name), old.trimmedContent)
+    }
+
+    clear() {
+        this.ns = new NSChatMessage()
+        this.trimmedContent = undefined;
+    }
+
+    /**
+     * Set extra members into the ns object
+     * @param {string | number} key
+     * @param {any} value
+     */
+    ns_set_extra(key, value) {
+        // @ts-ignore
+        this.ns[key] = value
+    }
+
+    /**
+     * Remove specified key and its value from ns object
+     * @param {string | number} key
+     */
+    ns_delete(key) {
+        // @ts-ignore
+        delete(this.ns[key])
+    }
+
+    /**
+     * Update based on the drip by drip data got from network in streaming mode.
+     * Tries to support both Chat and Completion endpoints
+     * @param {any} nwo
+     * @param {string} apiEP
+     */
+    update_stream(nwo, apiEP) {
+        console.debug(nwo, apiEP)
+        if (apiEP == ApiEP.Type.Chat) {
+            if (nwo["choices"][0]["finish_reason"] === null) {
+                let content = nwo["choices"][0]["delta"]["content"];
+                if (content !== undefined) {
+                    if (content !== null) {
+                        this.ns.content_adj(content);
+                    } else {
+                        this.ns.role = nwo["choices"][0]["delta"]["role"];
+                    }
+                } else {
+                    let toolCalls = nwo["choices"][0]["delta"]["tool_calls"];
+                    let reasoningContent = nwo["choices"][0]["delta"]["reasoning_content"];
+                    if (toolCalls !== undefined) {
+                        if (toolCalls[0]["function"]["name"] !== undefined) {
+                            this.ns.tool_calls_push(toolCalls[0]);
+                            /*
+                            this.ns.tool_calls[0].function.name = toolCalls[0]["function"]["name"];
+                            this.ns.tool_calls[0].id = toolCalls[0]["id"];
+                            this.ns.tool_calls[0].type = toolCalls[0]["type"];
+                            this.ns.tool_calls[0].function.arguments = toolCalls[0]["function"]["arguments"]
+                            */
+                        } else {
+                            let toolCallArg = toolCalls[0]["function"]["arguments"];
+                            if (toolCallArg !== undefined) {
+                                if (this.ns.tool_calls) {
+                                    this.ns.tool_calls[0].function.arguments += toolCallArg;
+                                } else {
+                                    console.error(`ERRR:ChatMessageEx:UpdateStream:ToolCallsMissing, but TC arg [${toolCallArg}] needs appending...`)
+                                }
+                            }
+                        }
+                    }
+                    if (reasoningContent !== undefined) {
+                        this.ns.reasoning_content_adj(reasoningContent)
+                    }
+                }
+            }
+        } else {
+            try {
+                this.ns.content_adj(nwo["choices"][0]["text"]);
+            } catch {
+                this.ns.content_adj(nwo["content"]);
+            }
+        }
+    }
+
+    /**
+     * Update based on the data got from network in oneshot mode
+     * @param {any} nwo
+     * @param {string} apiEP
+     */
+    update_oneshot(nwo, apiEP) {
+        if (apiEP == ApiEP.Type.Chat) {
+            let curContent = nwo["choices"][0]["message"]["content"];
+            if (curContent != undefined) {
+                if (curContent != null) {
+                    this.ns.content = curContent;
+                }
+            }
+            let curRC = nwo["choices"][0]["message"]["reasoning_content"];
+            if (curRC != undefined) {
+                this.ns.reasoning_content = curRC;
+            }
+            let curTCs = nwo["choices"][0]["message"]["tool_calls"];
+            if (curTCs != undefined) {
+                this.ns.tool_calls = curTCs;
+            }
+        } else {
+            try {
+                this.ns.content = nwo["choices"][0]["text"];
+            } catch {
+                this.ns.content = nwo["content"];
+            }
+        }
+    }
+
+    /**
+     * Collate all the different parts of a chat message into a single string object.
+     *
+     * This currently includes reasoning, content and toolcall parts.
+     */
+    content_equiv() {
+        let reasoning = ""
+        let content = ""
+        let toolcall = ""
+        if (this.ns.has_reasoning()) {
+            reasoning = `!!!Reasoning: ${this.ns.getReasoningContent()} !!!\n\n`;
+        }
+        if (this.ns.has_content()) {
+            content = this.ns.getContent();
+        }
+        if (this.ns.has_toolcalls()) {
+            toolcall = `\n\n<tool_call>\n<tool_name>${this.ns.getFuncName(0)}</tool_name>\n<tool_args>${this.ns.getFuncArgs(0)}</tool_args>\n</tool_call>\n`;
+        }
+        return `${reasoning} ${content} ${toolcall}`;
+    }
+
+}
+
+
+/**
+ * @param {number} iRecentUserMsgCnt
+ */
+function usage_note(iRecentUserMsgCnt) {
+    let sUsageNote = `
+    <details>
+    <summary id="UsageNote" class="role-system">Usage Note</summary>
     <ul class="ul1">
-    <li> System prompt above, to try control ai response characteristics.</li>
+    <li> System prompt above, helps control ai response characteristics.</li>
         <ul class="ul2">
         <li> Completion mode - no system prompt normally.</li>
         </ul>
     <li> Use shift+enter for inserting enter/newline.</li>
-    <li> Enter your query to ai assistant below.</li>
-    <li> Default ContextWindow = [System, Last Query+Resp, Cur Query].</li>
+    <li> Enter your query/response to ai assistant in text area provided below.</li>
+    <li> settings-tools-enabled should be true to enable tool calling.</li>
+        <ul class="ul2">
+        <li> If ai assistant requests a tool call, verify same before triggering.</li>
+        <li> submit tool response placed into user query/response text area</li>
+        </ul>
+    <li> ContextWindow = [System, Last[${iRecentUserMsgCnt}] User Query/Resp, Cur Query].</li>
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
         </ul>
     </ul>
-`;
+    </details>`;
+    return sUsageNote;
+}
 
 
-/** @typedef {{role: string, content: string}[]} ChatMessages */
+/** @typedef {ChatMessageEx[]} ChatMessages */
 
 /** @typedef {{iLastSys: number, xchat: ChatMessages}} SimpleChatODS */
 
@@ -61,8 +425,9 @@ class SimpleChat {
 
     /**
      * @param {string} chatId
+     * @param {Me} me
      */
-    constructor(chatId) {
+    constructor(chatId, me) {
         this.chatId = chatId;
         /**
          * Maintain in a form suitable for common LLM web service chat/completions' messages entry
@@ -70,12 +435,14 @@ class SimpleChat {
          */
         this.xchat = [];
         this.iLastSys = -1;
-        this.latestResponse = "";
+        this.latestResponse = new ChatMessageEx();
+        this.me = me;
     }
 
     clear() {
         this.xchat = [];
         this.iLastSys = -1;
+        this.latestResponse = new ChatMessageEx();
     }
 
     ods_key() {
@@ -96,16 +463,19 @@ class SimpleChat {
         /** @type {SimpleChatODS} */
         let ods = JSON.parse(sods);
         this.iLastSys = ods.iLastSys;
-        this.xchat = ods.xchat;
+        this.xchat = [];
+        for (const cur of ods.xchat) {
+            this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.ns.tool_call_id, cur.ns.name), cur.trimmedContent))
+        }
     }
 
     /**
      * Recent chat messages.
-     * If iRecentUserMsgCnt < 0
-     *   Then return the full chat history
-     * Else
-     *   Return chat messages from latest going back till the last/latest system prompt.
-     *   While keeping track that the number of user queries/messages doesnt exceed iRecentUserMsgCnt.
+     *
+     * If iRecentUserMsgCnt < 0, Then return the full chat history
+     *
+     * Else Return chat messages from latest going back till the last/latest system prompt.
+     * While keeping track that the number of user queries/messages doesnt exceed iRecentUserMsgCnt.
      * @param {number} iRecentUserMsgCnt
      */
     recent_chat(iRecentUserMsgCnt) {
@@ -115,11 +485,11 @@ class SimpleChat {
         if (iRecentUserMsgCnt == 0) {
             console.warn("WARN:SimpleChat:SC:RecentChat:iRecentUsermsgCnt of 0 means no user message/query sent");
         }
-        /** @type{ChatMessages} */
+        /** @type {ChatMessages} */
         let rchat = [];
         let sysMsg = this.get_system_latest();
-        if (sysMsg.length != 0) {
-            rchat.push({role: Roles.System, content: sysMsg});
+        if (sysMsg.ns.getContent().length != 0) {
+            rchat.push(sysMsg)
         }
         let iUserCnt = 0;
         let iStart = this.xchat.length;
@@ -128,41 +498,69 @@ class SimpleChat {
                 break;
             }
             let msg = this.xchat[i];
-            if (msg.role == Roles.User) {
+            if (msg.ns.role == Roles.User) {
                 iStart = i;
                 iUserCnt += 1;
             }
         }
         for(let i = iStart; i < this.xchat.length; i++) {
             let msg = this.xchat[i];
-            if (msg.role == Roles.System) {
+            if (msg.ns.role == Roles.System) {
                 continue;
             }
-            rchat.push({role: msg.role, content: msg.content});
+            rchat.push(msg)
         }
         return rchat;
     }
 
+
     /**
-     * Collate the latest response from the server/ai-model, as it is becoming available.
-     * This is mainly useful for the stream mode.
-     * @param {string} content
+     * Return recent chat messages in the format,
+     * which can be directly sent to the ai server.
+     * @param {number} iRecentUserMsgCnt - look at recent_chat for semantic
      */
-    append_response(content) {
-        this.latestResponse += content;
+    recent_chat_ns(iRecentUserMsgCnt) {
+        let xchat = this.recent_chat(iRecentUserMsgCnt);
+        let chat = [];
+        for (const msg of xchat) {
+            if (msg.ns.has_role_temp()) {
+                // Skip Temp Role messages
+                // ex: tool response which has not yet been accepted by user
+                // In future need to check that non accepted tool response is the last message
+                // and not something in between, which shouldnt occur normally.
+                continue
+            }
+            let tmsg = ChatMessageEx.newFrom(msg);
+            if (!tmsg.ns.has_toolcalls()) {
+                tmsg.ns_delete("tool_calls")
+            }
+            if (tmsg.ns.getReasoningContent() === "") {
+                tmsg.ns_delete("reasoning_content")
+            }
+            chat.push(tmsg.ns);
+        }
+        return chat
     }
 
     /**
-     * Add an entry into xchat
-     * @param {string} role
-     * @param {string|undefined|null} content
+     * Add an entry into xchat.
+     * If the last message in chat history is a ToolTemp message, discard it
+     * as the runtime logic is asking for adding new message instead of promoting the tooltemp message.
+     *
+     * NOTE: A new copy is created and added into xchat.
+     * Also update iLastSys system prompt index tracker
+     * @param {ChatMessageEx} chatMsg
      */
-    add(role, content) {
-        if ((content == undefined) || (content == null) || (content == "")) {
-            return false;
+    add(chatMsg) {
+        if (this.xchat.length > 0) {
+            let lastIndex = this.xchat.length - 1;
+            if (this.xchat[lastIndex].ns.role == Roles.ToolTemp) {
+                console.debug("DBUG:SimpleChat:Add:Discarding prev ToolTemp message...")
+                this.xchat.pop()
+            }
         }
-        this.xchat.push( {role: role, content: content} );
-        if (role == Roles.System) {
+        this.xchat.push(ChatMessageEx.newFrom(chatMsg));
+        if (chatMsg.ns.role == Roles.System) {
             this.iLastSys = this.xchat.length - 1;
         }
         this.save();
@@ -170,42 +568,36 @@ class SimpleChat {
     }
 
     /**
-     * Show the contents in the specified div
-     * @param {HTMLDivElement} div
-     * @param {boolean} bClear
+     * Check if the last message in the chat history is a ToolTemp role based one.
+     * If so, then
+     * * update that to a regular Tool role based message.
+     * * also update the content of that message to what is passed.
+     * @param {string} content
      */
-    show(div, bClear=true) {
-        if (bClear) {
-            div.replaceChildren();
+    promote_tooltemp(content) {
+        let lastIndex = this.xchat.length - 1;
+        if (lastIndex < 0) {
+            console.error("DBUG:SimpleChat:PromoteToolTemp:No chat messages including ToolTemp")
+            return
         }
-        let last = undefined;
-        for(const x of this.recent_chat(gMe.iRecentUserMsgCnt)) {
-            let entry = ui.el_create_append_p(`${x.role}: ${x.content}`, div);
-            entry.className = `role-${x.role}`;
-            last = entry;
+        if (this.xchat[lastIndex].ns.role != Roles.ToolTemp) {
+            console.error("DBUG:SimpleChat:PromoteToolTemp:LastChatMsg not ToolTemp")
+            return
         }
-        if (last !== undefined) {
-            last.scrollIntoView(false);
-        } else {
-            if (bClear) {
-                div.innerHTML = gUsageMsg;
-                gMe.setup_load(div, this);
-                gMe.show_info(div);
-            }
-        }
-        return last;
+        this.xchat[lastIndex].ns.role = Roles.Tool;
+        this.xchat[lastIndex].ns.content = content;
     }
 
     /**
      * Setup the fetch headers.
-     * It picks the headers from gMe.headers.
+     * It picks the headers from this.me.headers.
      * It inserts Authorization only if its non-empty.
      * @param {string} apiEP
      */
     fetch_headers(apiEP) {
         let headers = new Headers();
-        for(let k in gMe.headers) {
-            let v = gMe.headers[k];
+        for(let k in this.me.headers) {
+            let v = this.me.headers[k];
             if ((k == "Authorization") && (v.trim() == "")) {
                 continue;
             }
@@ -219,14 +611,17 @@ class SimpleChat {
      * The needed fields/options are picked from a global object.
      * Add optional stream flag, if required.
      * Convert the json into string.
-     * @param {Object} obj
+     * @param {Object<string, any>} obj
      */
     request_jsonstr_extend(obj) {
-        for(let k in gMe.apiRequestOptions) {
-            obj[k] = gMe.apiRequestOptions[k];
+        for(let k in this.me.apiRequestOptions) {
+            obj[k] = this.me.apiRequestOptions[k];
         }
-        if (gMe.bStream) {
+        if (this.me.chatProps.stream) {
             obj["stream"] = true;
+        }
+        if (this.me.tools.enabled) {
+            obj["tools"] = this.me.toolsMgr.meta();
         }
         return JSON.stringify(obj);
     }
@@ -236,7 +631,7 @@ class SimpleChat {
      */
     request_messages_jsonstr() {
         let req = {
-            messages: this.recent_chat(gMe.iRecentUserMsgCnt),
+            messages: this.recent_chat_ns(this.me.chatProps.iRecentUserMsgCnt),
         }
         return this.request_jsonstr_extend(req);
     }
@@ -248,15 +643,15 @@ class SimpleChat {
     request_prompt_jsonstr(bInsertStandardRolePrefix) {
         let prompt = "";
         let iCnt = 0;
-        for(const chat of this.recent_chat(gMe.iRecentUserMsgCnt)) {
+        for(const msg of this.recent_chat(this.me.chatProps.iRecentUserMsgCnt)) {
             iCnt += 1;
             if (iCnt > 1) {
                 prompt += "\n";
             }
             if (bInsertStandardRolePrefix) {
-                prompt += `${chat.role}: `;
+                prompt += `${msg.ns.role}: `;
             }
-            prompt += `${chat.content}`;
+            prompt += `${msg.ns.content}`;
         }
         let req = {
             prompt: prompt,
@@ -272,77 +667,14 @@ class SimpleChat {
         if (apiEP == ApiEP.Type.Chat) {
             return this.request_messages_jsonstr();
         } else {
-            return this.request_prompt_jsonstr(gMe.bCompletionInsertStandardRolePrefix);
+            return this.request_prompt_jsonstr(this.me.chatProps.bCompletionInsertStandardRolePrefix);
         }
     }
 
-    /**
-     * Extract the ai-model/assistant's response from the http response got.
-     * Optionally trim the message wrt any garbage at the end.
-     * @param {any} respBody
-     * @param {string} apiEP
-     */
-    response_extract(respBody, apiEP) {
-        let assistant = "";
-        if (apiEP == ApiEP.Type.Chat) {
-            assistant = respBody["choices"][0]["message"]["content"];
-        } else {
-            try {
-                assistant = respBody["choices"][0]["text"];
-            } catch {
-                assistant = respBody["content"];
-            }
-        }
-        return assistant;
-    }
-
-    /**
-     * Extract the ai-model/assistant's response from the http response got in streaming mode.
-     * @param {any} respBody
-     * @param {string} apiEP
-     */
-    response_extract_stream(respBody, apiEP) {
-        let assistant = "";
-        if (apiEP == ApiEP.Type.Chat) {
-            if (respBody["choices"][0]["finish_reason"] !== "stop") {
-                assistant = respBody["choices"][0]["delta"]["content"];
-            }
-        } else {
-            try {
-                assistant = respBody["choices"][0]["text"];
-            } catch {
-                assistant = respBody["content"];
-            }
-        }
-        return assistant;
-    }
-
-    /**
-     * Allow setting of system prompt, but only at begining.
-     * @param {string} sysPrompt
-     * @param {string} msgTag
-     */
-    add_system_begin(sysPrompt, msgTag) {
-        if (this.xchat.length == 0) {
-            if (sysPrompt.length > 0) {
-                return this.add(Roles.System, sysPrompt);
-            }
-        } else {
-            if (sysPrompt.length > 0) {
-                if (this.xchat[0].role !== Roles.System) {
-                    console.error(`ERRR:SimpleChat:SC:${msgTag}:You need to specify system prompt before any user query, ignoring...`);
-                } else {
-                    if (this.xchat[0].content !== sysPrompt) {
-                        console.error(`ERRR:SimpleChat:SC:${msgTag}:You cant change system prompt, mid way through, ignoring...`);
-                    }
-                }
-            }
-        }
-        return false;
-    }
 
     /**
      * Allow setting of system prompt, at any time.
+     * Updates the system prompt, if one was never set or if the newly passed is different from the last set system prompt.
      * @param {string} sysPrompt
      * @param {string} msgTag
      */
@@ -352,25 +684,24 @@ class SimpleChat {
         }
 
         if (this.iLastSys < 0) {
-            return this.add(Roles.System, sysPrompt);
+            return this.add(new ChatMessageEx(new NSChatMessage(Roles.System, sysPrompt)));
         }
 
-        let lastSys = this.xchat[this.iLastSys].content;
+        let lastSys = this.xchat[this.iLastSys].ns.content;
         if (lastSys !== sysPrompt) {
-            return this.add(Roles.System, sysPrompt);
+            return this.add(new ChatMessageEx(new NSChatMessage(Roles.System, sysPrompt)));
         }
         return false;
     }
 
     /**
-     * Retrieve the latest system prompt.
+     * Retrieve the latest system prompt related chat message entry.
      */
     get_system_latest() {
         if (this.iLastSys == -1) {
-            return "";
+            return new ChatMessageEx(new NSChatMessage(Roles.System));
         }
-        let sysPrompt = this.xchat[this.iLastSys].content;
-        return sysPrompt;
+        return this.xchat[this.iLastSys];
     }
 
 
@@ -382,12 +713,14 @@ class SimpleChat {
      */
     async handle_response_multipart(resp, apiEP, elDiv) {
         let elP = ui.el_create_append_p("", elDiv);
+        elP.classList.add("chat-message-content-live")
         if (!resp.body) {
             throw Error("ERRR:SimpleChat:SC:HandleResponseMultiPart:No body...");
         }
         let tdUtf8 = new TextDecoder("utf-8");
         let rr = resp.body.getReader();
-        this.latestResponse = "";
+        this.latestResponse.clear()
+        this.latestResponse.ns.role = Roles.Assistant
         let xLines = new du.NewLines();
         while(true) {
             let { value: cur,  done: done } = await rr.read();
@@ -412,16 +745,16 @@ class SimpleChat {
                 }
                 let curJson = JSON.parse(curLine);
                 console.debug("DBUG:SC:PART:Json:", curJson);
-                this.append_response(this.response_extract_stream(curJson, apiEP));
+                this.latestResponse.update_stream(curJson, apiEP);
             }
-            elP.innerText = this.latestResponse;
+            elP.innerText = this.latestResponse.content_equiv()
             elP.scrollIntoView(false);
             if (done) {
                 break;
             }
         }
-        console.debug("DBUG:SC:PART:Full:", this.latestResponse);
-        return this.latestResponse;
+        console.debug("DBUG:SC:PART:Full:", this.latestResponse.content_equiv());
+        return ChatMessageEx.newFrom(this.latestResponse);
     }
 
     /**
@@ -432,41 +765,99 @@ class SimpleChat {
     async handle_response_oneshot(resp, apiEP) {
         let respBody = await resp.json();
         console.debug(`DBUG:SimpleChat:SC:${this.chatId}:HandleUserSubmit:RespBody:${JSON.stringify(respBody)}`);
-        return this.response_extract(respBody, apiEP);
+        let cm = new ChatMessageEx(new NSChatMessage(Roles.Assistant))
+        cm.update_oneshot(respBody, apiEP)
+        return cm
     }
 
     /**
      * Handle the response from the server be it in oneshot or multipart/stream mode.
      * Also take care of the optional garbage trimming.
+     * TODO: Need to handle tool calling and related flow, including how to show
+     * the assistant's request for tool calling and the response from tool.
      * @param {Response} resp
      * @param {string} apiEP
      * @param {HTMLDivElement} elDiv
      */
     async handle_response(resp, apiEP, elDiv) {
-        let theResp = {
-            assistant: "",
-            trimmed: "",
-        }
-        if (gMe.bStream) {
+        let theResp = null;
+        if (this.me.chatProps.stream) {
             try {
-                theResp.assistant = await this.handle_response_multipart(resp, apiEP, elDiv);
-                this.latestResponse = "";
+                theResp = await this.handle_response_multipart(resp, apiEP, elDiv);
+                this.latestResponse.clear();
             } catch (error) {
-                theResp.assistant = this.latestResponse;
-                this.add(Roles.Assistant, theResp.assistant);
-                this.latestResponse = "";
+                theResp = this.latestResponse;
+                theResp.ns.role = Roles.Assistant;
+                this.add(theResp);
+                this.latestResponse.clear();
                 throw error;
             }
         } else {
-            theResp.assistant = await this.handle_response_oneshot(resp, apiEP);
+            theResp = await this.handle_response_oneshot(resp, apiEP);
         }
-        if (gMe.bTrimGarbage) {
-            let origMsg = theResp.assistant;
-            theResp.assistant = du.trim_garbage_at_end(origMsg);
-            theResp.trimmed = origMsg.substring(theResp.assistant.length);
+        if (this.me.chatProps.bTrimGarbage) {
+            let origMsg = theResp.ns.content;
+            if (origMsg) {
+                theResp.ns.content = du.trim_garbage_at_end(origMsg);
+                theResp.trimmedContent = origMsg.substring(theResp.ns.content.length);
+            }
         }
-        this.add(Roles.Assistant, theResp.assistant);
+        theResp.ns.role = Roles.Assistant;
+        this.add(theResp);
         return theResp;
+    }
+
+    /**
+     * Handle the chat handshake with the ai server
+     * @param {string} baseURL
+     * @param {string} apiEP
+     * @param {HTMLDivElement} elDivChat - used to show chat response as it is being generated/recieved in streaming mode
+     */
+    async handle_chat_hs(baseURL, apiEP, elDivChat) {
+        class ChatHSError extends Error {
+            constructor(/** @type {string} */message) {
+                super(message);
+                this.name = 'ChatHSError'
+            }
+        }
+
+        let theUrl = ApiEP.Url(baseURL, apiEP);
+        let theBody = this.request_jsonstr(apiEP);
+        console.debug(`DBUG:SimpleChat:${this.chatId}:HandleChatHS:${theUrl}:ReqBody:${theBody}`);
+
+        let theHeaders = this.fetch_headers(apiEP);
+        let resp = await fetch(theUrl, {
+            method: "POST",
+            headers: theHeaders,
+            body: theBody,
+        });
+
+        if (resp.status >= 300) {
+            let respBody = await resp.text();
+            throw new ChatHSError(`HandleChatHS:GotResponse:NotOk:${resp.status}:${resp.statusText}:${respBody}`);
+        }
+
+        return this.handle_response(resp, apiEP, elDivChat);
+    }
+
+    /**
+     * Call the requested tool/function.
+     * Returns undefined, if the call was placed successfully
+     * Else some appropriate error message will be returned.
+     * @param {string} toolcallid
+     * @param {string} toolname
+     * @param {string} toolargs
+     */
+    async handle_toolcall(toolcallid, toolname, toolargs) {
+        if (toolname === "") {
+            return "Tool/Function call name not specified"
+        }
+        try {
+            return await this.me.toolsMgr.tool_call(this.chatId, toolcallid, toolname, toolargs)
+        } catch (/** @type {any} */error) {
+            this.me.toolsMgr.toolcallpending_found_cleared(this.chatId, toolcallid, 'SC:HandleToolCall:Exc')
+            return `Tool/Function call raised an exception:${error.name}:${error.message}`
+        }
     }
 
 }
@@ -474,11 +865,43 @@ class SimpleChat {
 
 class MultiChatUI {
 
-    constructor() {
+    /**
+     * @param {Me} me
+     */
+    constructor(me) {
+        this.me = me
         /** @type {Object<string, SimpleChat>} */
         this.simpleChats = {};
         /** @type {string} */
         this.curChatId = "";
+
+        this.TimePeriods = {
+            ToolCallAutoSecsTimeUnit: 1000
+        }
+
+        this.timers = {
+            /**
+             * Used to identify Delay with getting response from a tool call.
+             * @type {number | undefined}
+             */
+            toolcallResponseTimeout: undefined,
+            /**
+             * Used to auto trigger tool call, after a set time, if enabled.
+             * @type {number | undefined}
+             */
+            toolcallTriggerClick: undefined,
+            /**
+             * Used to auto submit tool call response, after a set time, if enabled.
+             * @type {number | undefined}
+             */
+            toolcallResponseSubmitClick: undefined
+        }
+
+        /**
+         * Used for tracking presence of any chat message in show related logics
+         * @type {HTMLElement | null}
+         */
+        this.elLastChatMessage = null
 
         // the ui elements
         this.elInSystem = /** @type{HTMLInputElement} */(document.getElementById("system-in"));
@@ -488,6 +911,13 @@ class MultiChatUI {
         this.elDivHeading = /** @type{HTMLSelectElement} */(document.getElementById("heading"));
         this.elDivSessions = /** @type{HTMLDivElement} */(document.getElementById("sessions-div"));
         this.elBtnSettings = /** @type{HTMLButtonElement} */(document.getElementById("settings"));
+        this.elBtnClearChat = /** @type{HTMLButtonElement} */(document.getElementById("clearchat"));
+        this.elDivTool = /** @type{HTMLDivElement} */(document.getElementById("tool-div"));
+        this.elBtnTool = /** @type{HTMLButtonElement} */(document.getElementById("tool-btn"));
+        this.elInToolName = /** @type{HTMLInputElement} */(document.getElementById("toolname-in"));
+        this.elInToolArgs = /** @type{HTMLInputElement} */(document.getElementById("toolargs-in"));
+
+        this.elInUser.dataset.placeholder = this.elInUser.placeholder
 
         this.validate_element(this.elInSystem, "system-in");
         this.validate_element(this.elDivChat, "chat-div");
@@ -495,6 +925,10 @@ class MultiChatUI {
         this.validate_element(this.elDivHeading, "heading");
         this.validate_element(this.elDivChat, "sessions-div");
         this.validate_element(this.elBtnSettings, "settings");
+        this.validate_element(this.elDivTool, "tool-div");
+        this.validate_element(this.elInToolName, "toolname-in");
+        this.validate_element(this.elInToolArgs, "toolargs-in");
+        this.validate_element(this.elBtnTool, "tool-btn");
     }
 
     /**
@@ -506,20 +940,206 @@ class MultiChatUI {
         if (el == null) {
             throw Error(`ERRR:SimpleChat:MCUI:${msgTag} element missing in html...`);
         } else {
+            // @ts-ignore
             console.debug(`INFO:SimpleChat:MCUI:${msgTag} Id[${el.id}] Name[${el["name"]}]`);
         }
     }
 
     /**
+     * Reset/Setup Tool Call UI parts as needed
+     * @param {ChatMessageEx} ar
+     * @param {boolean} bAuto - allows caller to explicitly control whether auto triggering should be setup.
+     */
+    ui_reset_toolcall_as_needed(ar, bAuto = false) {
+        if (ar.ns.has_toolcalls()) {
+            this.elDivTool.hidden = false
+            this.elInToolName.value = ar.ns.getFuncName(0)
+            this.elInToolName.dataset.tool_call_id = ar.ns.getFunc(0)?.id
+            this.elInToolArgs.value = `${ar.ns.getFunc(0)?.function.arguments}`
+            this.elBtnTool.disabled = false
+            if ((this.me.tools.autoSecs > 0) && (bAuto)) {
+                this.timers.toolcallTriggerClick = setTimeout(()=>{
+                    this.elBtnTool.click()
+                }, this.me.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
+            }
+        } else {
+            this.elDivTool.hidden = true
+            this.elInToolName.value = ""
+            this.elInToolName.dataset.tool_call_id = ""
+            this.elInToolArgs.value = ""
+            this.elBtnTool.disabled = true
+        }
+    }
+
+    /**
      * Reset user input ui.
-     * * clear user input
+     * * clear user input (if requested, default true)
      * * enable user input
      * * set focus to user input
+     * @param {boolean} [bClearElInUser=true]
      */
-    ui_reset_userinput() {
-        this.elInUser.value = "";
+    ui_reset_userinput(bClearElInUser=true) {
+        if (bClearElInUser) {
+            this.elInUser.value = "";
+        }
         this.elInUser.disabled = false;
         this.elInUser.focus();
+    }
+
+    /**
+     * Show the passed function / tool call details in specified parent element.
+     * @param {HTMLElement} elParent
+     * @param {NSToolCall} tc
+     */
+    show_message_toolcall(elParent, tc) {
+        let secTC = document.createElement('section')
+        secTC.classList.add('chat-message-toolcall')
+        elParent.append(secTC)
+        ui.el_create_append_p(`name: ${tc.function.name}`, secTC);
+        let entry = ui.el_create_append_p(`id: ${tc.id}`, secTC);
+        try {
+            let oArgs = JSON.parse(tc.function.arguments)
+            for (const k in oArgs) {
+                entry = ui.el_create_append_p(`arg: ${k}`, secTC);
+                let secArg = document.createElement('section')
+                secArg.classList.add('chat-message-toolcall-arg')
+                secTC.append(secArg)
+                secArg.innerText = oArgs[k]
+            }
+        } catch(exc) {
+            ui.el_create_append_p(`WARN:ShowMsgTCARGS: ${exc}`, secTC);
+            ui.el_create_append_p(`args: ${tc.function.arguments}`, secTC);
+        }
+    }
+
+    /**
+     * Handles showing a chat message in UI.
+     *
+     * If handling message belonging to role
+     * * ToolTemp, updates user query input element, if its the last message.
+     * * Assistant which contains a tool req, shows tool call ui if needed. ie
+     *   * if it is the last message OR
+     *   * if it is the last but one message and there is a ToolTemp message next
+     * @param {HTMLElement | undefined} elParent
+     * @param {ChatMessageEx} msg
+     * @param {number} iFromLast
+     * @param {ChatMessageEx | undefined} nextMsg
+     */
+    show_message(elParent, msg, iFromLast, nextMsg) {
+        // Handle ToolTemp
+        if (msg.ns.role === Roles.ToolTemp) {
+            if (iFromLast == 0) {
+                this.elInUser.value = msg.ns.getContent();
+                this.elInUser.dataset.role = Roles.ToolTemp
+            }
+            return
+        }
+        // Create main section
+        let secMain = document.createElement('section')
+        secMain.classList.add(`role-${msg.ns.role}`)
+        secMain.classList.add('chat-message')
+        elParent?.append(secMain)
+        this.elLastChatMessage = secMain;
+        // Create role para
+        let entry = ui.el_create_append_p(`${msg.ns.role}`, secMain);
+        entry.className = `chat-message-role`;
+        // Create content section
+        let secContents = document.createElement('section')
+        secContents.classList.add('chat-message-contents')
+        secMain.append(secContents)
+        // Add the content
+        //entry = ui.el_create_append_p(`${msg.content_equiv()}`, secContents);
+        let showList = []
+        if (msg.ns.has_reasoning()) {
+            showList.push(['reasoning', `!!!Reasoning: ${msg.ns.getReasoningContent()} !!!\n\n`])
+        }
+        if (msg.ns.has_toolresponse()) {
+            if (msg.ns.tool_call_id) {
+                showList.push(['toolcallid', `tool-call-id: ${msg.ns.tool_call_id}`])
+            }
+            if (msg.ns.name) {
+                showList.push(['toolname', `tool-name: ${msg.ns.name}`])
+            }
+        }
+        if (msg.ns.getContent().trim().length > 0) {
+            showList.push(['content', msg.ns.getContent().trim()])
+        }
+        for (const [name, content] of showList) {
+            if (content.length > 0) {
+                entry = ui.el_create_append_p(`${content}`, secContents);
+                entry.classList.add(`chat-message-${name}`)
+            }
+        }
+        // Handle tool call ui, if reqd
+        let bTC = false
+        let bAuto = false
+        if (msg.ns.role === Roles.Assistant) {
+            if (iFromLast == 0) {
+                bTC = true
+                bAuto = true
+            } else if ((iFromLast == 1) && (nextMsg != undefined)) {
+                if (nextMsg.ns.role == Roles.ToolTemp) {
+                    bTC = true
+                }
+            }
+            if (bTC) {
+                this.ui_reset_toolcall_as_needed(msg, bAuto);
+            }
+        }
+        // Handle tool call non ui
+        if (msg.ns.tool_calls && !bTC) {
+            for (const tc of msg.ns.tool_calls) {
+                this.show_message_toolcall(secContents, tc)
+            }
+        }
+    }
+
+    /**
+     * Refresh UI wrt given chatId, provided it matches the currently selected chatId
+     *
+     * Show the chat contents in elDivChat.
+     * Also update
+     * * the user query input box, with ToolTemp role message, if last one.
+     * * the tool call trigger ui, with Tool role message, if last one.
+     *
+     * If requested to clear prev stuff and inturn no chat content then show
+     * * usage info
+     * * option to load prev saved chat if any
+     * * as well as settings/info.
+     *
+     * @param {string} chatId
+     * @param {boolean} bClear
+     * @param {boolean} bShowInfoAll
+     */
+    chat_show(chatId, bClear=true, bShowInfoAll=false) {
+        if (chatId != this.curChatId) {
+            return false
+        }
+        let chat = this.simpleChats[this.curChatId];
+        if (bClear) {
+            this.elDivChat.replaceChildren();
+            this.ui_reset_toolcall_as_needed(new ChatMessageEx());
+        }
+        this.elLastChatMessage = null
+        let chatToShow = chat.recent_chat(this.me.chatProps.iRecentUserMsgCnt);
+        for(const [i, x] of chatToShow.entries()) {
+            let iFromLast = (chatToShow.length - 1)-i
+            let nextMsg = undefined
+            if (iFromLast == 1) {
+                nextMsg = chatToShow[i+1]
+            }
+            this.show_message(this.elDivChat, x, iFromLast, nextMsg)
+        }
+        if (this.elLastChatMessage != null) {
+            /** @type{HTMLElement} */(this.elLastChatMessage).scrollIntoView(false); // Stupid ts-check js-doc intersection ???
+        } else {
+            if (bClear) {
+                this.elDivChat.innerHTML = usage_note(this.me.chatProps.iRecentUserMsgCnt-1);
+                this.me.setup_load(this.elDivChat, chat);
+                this.me.show_info(this.elDivChat, bShowInfoAll);
+            }
+        }
+        return true
     }
 
     /**
@@ -535,22 +1155,60 @@ class MultiChatUI {
             this.handle_session_switch(this.curChatId);
         }
 
+        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
+
         this.elBtnSettings.addEventListener("click", (ev)=>{
             this.elDivChat.replaceChildren();
-            gMe.show_settings(this.elDivChat);
+            this.me.show_settings(this.elDivChat);
+        });
+        this.elBtnClearChat.addEventListener("click", (ev)=>{
+            this.simpleChats[this.curChatId].clear()
+            this.chat_show(this.curChatId)
         });
 
         this.elBtnUser.addEventListener("click", (ev)=>{
+            clearTimeout(this.timers.toolcallResponseSubmitClick)
+            this.timers.toolcallResponseSubmitClick = undefined
             if (this.elInUser.disabled) {
                 return;
             }
-            this.handle_user_submit(this.curChatId, gMe.apiEP).catch((/** @type{Error} */reason)=>{
+            this.handle_user_submit(this.curChatId, this.me.chatProps.apiEP).catch((/** @type{Error} */reason)=>{
                 let msg = `ERRR:SimpleChat\nMCUI:HandleUserSubmit:${this.curChatId}\n${reason.name}:${reason.message}`;
                 console.error(msg.replace("\n", ":"));
                 alert(msg);
-                this.ui_reset_userinput();
             });
         });
+
+        this.elBtnTool.addEventListener("click", (ev)=>{
+            clearTimeout(this.timers.toolcallTriggerClick)
+            this.timers.toolcallTriggerClick = undefined
+            if (this.elDivTool.hidden) {
+                return;
+            }
+            this.handle_tool_run(this.curChatId);
+        })
+
+        // Handle messages from tools web workers
+        this.me.toolsMgr.workers_cb((cid, tcid, name, data)=>{
+            clearTimeout(this.timers.toolcallResponseTimeout)
+            this.timers.toolcallResponseTimeout = undefined
+            let chat = this.simpleChats[cid];
+            let limitedData = data
+            if (this.me.tools.iResultMaxDataLength > 0) {
+                if (data.length > this.me.tools.iResultMaxDataLength) {
+                    limitedData = data.slice(0, this.me.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
+                }
+            }
+            chat.add(new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, tcid, name, limitedData)))
+            if (this.chat_show(cid)) {
+                if (this.me.tools.autoSecs > 0) {
+                    this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
+                        this.elBtnUser.click()
+                    }, this.me.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
+                }
+            }
+            this.ui_reset_userinput(false)
+        })
 
         this.elInUser.addEventListener("keyup", (ev)=> {
             // allow user to insert enter into their message using shift+enter.
@@ -571,7 +1229,7 @@ class MultiChatUI {
                 this.elInSystem.value = value.substring(0,value.length-1);
                 let chat = this.simpleChats[this.curChatId];
                 chat.add_system_anytime(this.elInSystem.value, this.curChatId);
-                chat.show(this.elDivChat);
+                this.chat_show(chat.chatId)
                 ev.preventDefault();
             }
         });
@@ -584,7 +1242,7 @@ class MultiChatUI {
      * @param {boolean} bSwitchSession
      */
     new_chat_session(chatId, bSwitchSession=false) {
-        this.simpleChats[chatId] = new SimpleChat(chatId);
+        this.simpleChats[chatId] = new SimpleChat(chatId, this.me);
         if (bSwitchSession) {
             this.handle_session_switch(chatId);
         }
@@ -593,6 +1251,17 @@ class MultiChatUI {
 
     /**
      * Handle user query submit request, wrt specified chat session.
+     *
+     * NOTE: Currently the user query entry area is used for
+     * * showing and allowing edits by user wrt tool call results
+     *   ie before they submit tool result to ai engine on server
+     * * as well as for user to enter their own queries.
+     *
+     * Based on the presence of predefined dataset attribute (role)
+     * wrt input element with value of Roles.ToolTemp,
+     * the logic will treat it has a tool result and if not then as a
+     * normal user query.
+     *
      * @param {string} chatId
      * @param {string} apiEP
      */
@@ -604,43 +1273,76 @@ class MultiChatUI {
         // So if user wants to simulate a multi-chat based completion query,
         // they will have to enter the full thing, as a suitable multiline
         // user input/query.
-        if ((apiEP == ApiEP.Type.Completion) && (gMe.bCompletionFreshChatAlways)) {
+        if ((apiEP == ApiEP.Type.Completion) && (this.me.chatProps.bCompletionFreshChatAlways)) {
             chat.clear();
         }
+
+        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
 
         chat.add_system_anytime(this.elInSystem.value, chatId);
 
         let content = this.elInUser.value;
-        if (!chat.add(Roles.User, content)) {
-            console.debug(`WARN:SimpleChat:MCUI:${chatId}:HandleUserSubmit:Ignoring empty user input...`);
-            return;
+        if (this.elInUser.dataset.role == Roles.ToolTemp) {
+            chat.promote_tooltemp(content)
+        } else {
+            if (content.trim() == "") {
+                this.elInUser.placeholder = "dont forget to enter a message, before submitting to ai"
+                return;
+            }
+            chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content)))
         }
-        chat.show(this.elDivChat);
+        if (this.elInUser.dataset.placeholder) {
+            this.elInUser.placeholder = this.elInUser.dataset.placeholder;
+        }
+        this.chat_show(chat.chatId);
 
-        let theUrl = ApiEP.Url(gMe.baseURL, apiEP);
-        let theBody = chat.request_jsonstr(apiEP);
-
+        this.elInUser.dataset.role = ""
         this.elInUser.value = "working...";
         this.elInUser.disabled = true;
-        console.debug(`DBUG:SimpleChat:MCUI:${chatId}:HandleUserSubmit:${theUrl}:ReqBody:${theBody}`);
-        let theHeaders = chat.fetch_headers(apiEP);
-        let resp = await fetch(theUrl, {
-            method: "POST",
-            headers: theHeaders,
-            body: theBody,
-        });
 
-        let theResp = await chat.handle_response(resp, apiEP, this.elDivChat);
-        if (chatId == this.curChatId) {
-            chat.show(this.elDivChat);
-            if (theResp.trimmed.length > 0) {
-                let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmed}`, this.elDivChat);
-                p.className="role-trim";
+        try {
+            let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, this.elDivChat)
+            if (chatId == this.curChatId) {
+                this.chat_show(chatId);
+                if ((theResp.trimmedContent) && (theResp.trimmedContent.length > 0)) {
+                    let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmedContent}`, this.elDivChat);
+                    p.className="role-trim";
+                }
+            } else {
+                console.debug(`DBUG:SimpleChat:MCUI:HandleUserSubmit:ChatId has changed:[${chatId}] [${this.curChatId}]`);
             }
-        } else {
-            console.debug(`DBUG:SimpleChat:MCUI:HandleUserSubmit:ChatId has changed:[${chatId}] [${this.curChatId}]`);
+        } finally {
+            this.ui_reset_userinput();
         }
-        this.ui_reset_userinput();
+    }
+
+    /**
+     * Handle running of specified tool call if any, for the specified chat session.
+     * Also sets up a timeout, so that user gets control back to interact with the ai model.
+     * @param {string} chatId
+     */
+    async handle_tool_run(chatId) {
+        let chat = this.simpleChats[chatId];
+        this.elInUser.value = "toolcall in progress...";
+        this.elInUser.disabled = true;
+        let toolname = this.elInToolName.value.trim()
+        let toolCallId = this.elInToolName.dataset.tool_call_id;
+        if (toolCallId === undefined) {
+            toolCallId = "??? ToolCallId Missing ???"
+        }
+        let toolResult = await chat.handle_toolcall(toolCallId, toolname, this.elInToolArgs.value)
+        if (toolResult !== undefined) {
+            chat.add(new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
+            this.chat_show(chat.chatId)
+            this.ui_reset_userinput(false)
+        } else {
+            this.timers.toolcallResponseTimeout = setTimeout(() => {
+                this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
+                chat.add(new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
+                this.chat_show(chat.chatId)
+                this.ui_reset_userinput(false)
+            }, this.me.tools.toolCallResponseTimeoutMS)
+        }
     }
 
     /**
@@ -682,6 +1384,11 @@ class MultiChatUI {
         }
     }
 
+    /**
+     * Create session button and append to specified Div element.
+     * @param {HTMLDivElement} elDiv
+     * @param {string} cid
+     */
     create_session_btn(elDiv, cid) {
         let btn = ui.el_create_button(cid, (ev)=>{
             let target = /** @type{HTMLButtonElement} */(ev.target);
@@ -703,55 +1410,111 @@ class MultiChatUI {
      * @param {string} chatId
      */
     async handle_session_switch(chatId) {
+        if (this.elInUser.dataset.placeholder) {
+            this.elInUser.placeholder = this.elInUser.dataset.placeholder;
+        }
         let chat = this.simpleChats[chatId];
         if (chat == undefined) {
             console.error(`ERRR:SimpleChat:MCUI:HandleSessionSwitch:${chatId} missing...`);
             return;
         }
-        this.elInSystem.value = chat.get_system_latest();
+        this.elInSystem.value = chat.get_system_latest().ns.getContent();
         this.elInUser.value = "";
-        chat.show(this.elDivChat);
-        this.elInUser.focus();
         this.curChatId = chatId;
+        this.chat_show(chatId, true, true);
+        this.elInUser.focus();
         console.log(`INFO:SimpleChat:MCUI:HandleSessionSwitch:${chatId} entered...`);
     }
 
 }
 
 
-class Me {
+/**
+ * Few web search engine url template strings.
+ * The SEARCHWORDS keyword will get replaced by the actual user specified search words at runtime.
+ */
+const SearchURLS = {
+    duckduckgo: {
+        'template': "https://duckduckgo.com/html/?q=SEARCHWORDS",
+        'drop': [ { 'tag': 'div', 'id': "header" } ]
+    },
+    bing: {
+        'template': "https://www.bing.com/search?q=SEARCHWORDS", // doesnt seem to like google chrome clients in particular
+    },
+    brave: {
+        'template': "https://search.brave.com/search?q=SEARCHWORDS",
+    },
+    google: {
+        'template': "https://www.google.com/search?q=SEARCHWORDS", // doesnt seem to like any client in general
+    },
+}
+
+
+export class Me {
 
     constructor() {
         this.baseURL = "http://127.0.0.1:8080";
         this.defaultChatIds = [ "Default", "Other" ];
-        this.multiChat = new MultiChatUI();
-        this.bStream = true;
-        this.bCompletionFreshChatAlways = true;
-        this.bCompletionInsertStandardRolePrefix = false;
-        this.bTrimGarbage = true;
-        this.iRecentUserMsgCnt = 2;
+        this.multiChat = new MultiChatUI(this);
+        this.tools = {
+            enabled: true,
+            proxyUrl: "http://127.0.0.1:3128",
+            proxyAuthInsecure: "NeverSecure",
+            searchUrl: SearchURLS.duckduckgo.template,
+            searchDrops: SearchURLS.duckduckgo.drop,
+            toolNames: /** @type {Array<string>} */([]),
+            /**
+             * Control the length of the tool call result data returned to ai after tool call.
+             * A value of 0 is treated as unlimited data.
+             */
+            iResultMaxDataLength: 1024*128,
+            /**
+             * Control how many milliseconds to wait for tool call to respond, before generating a timed out
+             * error response and giving control back to end user.
+             */
+            toolCallResponseTimeoutMS: 20000,
+            /**
+             * Control how many seconds to wait before auto triggering tool call or its response submission.
+             * A value of 0 is treated as auto triggering disable.
+             */
+            autoSecs: 0
+        };
+        this.chatProps = {
+            apiEP: ApiEP.Type.Chat,
+            stream: true,
+            iRecentUserMsgCnt: 5,
+            bCompletionFreshChatAlways: true,
+            bCompletionInsertStandardRolePrefix: false,
+            bTrimGarbage: true,
+        };
+        /** @type {Object<string, number>} */
         this.sRecentUserMsgCnt = {
             "Full": -1,
             "Last0": 1,
             "Last1": 2,
             "Last2": 3,
             "Last4": 5,
+            "Last9": 10,
         };
-        this.apiEP = ApiEP.Type.Chat;
+        /** @type {Object<string, string>} */
         this.headers = {
             "Content-Type": "application/json",
             "Authorization": "", // Authorization: Bearer OPENAI_API_KEY
         }
-        // Add needed fields wrt json object to be sent wrt LLM web services completions endpoint.
+        /**
+         * Add needed fields wrt json object to be sent wrt LLM web services completions endpoint.
+         * @type {Object<string, any>}
+         */
         this.apiRequestOptions = {
             "model": "gpt-3.5-turbo",
             "temperature": 0.7,
-            "max_tokens": 1024,
-            "n_predict": 1024,
-            "cache_prompt": false,
+            "max_tokens": 2048,
+            "n_predict": 2048,
+            "cache_prompt": true,
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
+        this.toolsMgr = new mTools.ToolsManager()
     }
 
     /**
@@ -779,8 +1542,8 @@ class Me {
             console.log("DBUG:SimpleChat:SC:Load", chat);
             chat.load();
             queueMicrotask(()=>{
-                chat.show(div);
-                this.multiChat.elInSystem.value = chat.get_system_latest();
+                this.multiChat.chat_show(chat.chatId, true, true);
+                this.multiChat.elInSystem.value = chat.get_system_latest().ns.getContent();
             });
         });
         div.appendChild(btn);
@@ -792,68 +1555,17 @@ class Me {
      * @param {boolean} bAll
      */
     show_info(elDiv, bAll=false) {
-
-        let p = ui.el_create_append_p("Settings (devel-tools-console document[gMe])", elDiv);
-        p.className = "role-system";
-
-        if (bAll) {
-
-            ui.el_create_append_p(`baseURL:${this.baseURL}`, elDiv);
-
-            ui.el_create_append_p(`Authorization:${this.headers["Authorization"]}`, elDiv);
-
-            ui.el_create_append_p(`bStream:${this.bStream}`, elDiv);
-
-            ui.el_create_append_p(`bTrimGarbage:${this.bTrimGarbage}`, elDiv);
-
-            ui.el_create_append_p(`ApiEndPoint:${this.apiEP}`, elDiv);
-
-            ui.el_create_append_p(`iRecentUserMsgCnt:${this.iRecentUserMsgCnt}`, elDiv);
-
-            ui.el_create_append_p(`bCompletionFreshChatAlways:${this.bCompletionFreshChatAlways}`, elDiv);
-
-            ui.el_create_append_p(`bCompletionInsertStandardRolePrefix:${this.bCompletionInsertStandardRolePrefix}`, elDiv);
-
+        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "chatProps"];
+        if (!bAll) {
+            props = [ "baseURL", "modelInfo", "tools", "chatProps" ];
         }
-
-        ui.el_create_append_p(`apiRequestOptions:${JSON.stringify(this.apiRequestOptions, null, " - ")}`, elDiv);
-        ui.el_create_append_p(`headers:${JSON.stringify(this.headers, null, " - ")}`, elDiv);
-
-    }
-
-    /**
-     * Auto create ui input elements for fields in apiRequestOptions
-     * Currently supports text and number field types.
-     * @param {HTMLDivElement} elDiv
-     */
-    show_settings_apirequestoptions(elDiv) {
-        let typeDict = {
-            "string": "text",
-            "number": "number",
-        };
-        let fs = document.createElement("fieldset");
-        let legend = document.createElement("legend");
-        legend.innerText = "ApiRequestOptions";
-        fs.appendChild(legend);
-        elDiv.appendChild(fs);
-        for(const k in this.apiRequestOptions) {
-            let val = this.apiRequestOptions[k];
-            let type = typeof(val);
-            if (((type == "string") || (type == "number"))) {
-                let inp = ui.el_creatediv_input(`Set${k}`, k, typeDict[type], this.apiRequestOptions[k], (val)=>{
-                    if (type == "number") {
-                        val = Number(val);
-                    }
-                    this.apiRequestOptions[k] = val;
-                });
-                fs.appendChild(inp.div);
-            } else if (type == "boolean") {
-                let bbtn = ui.el_creatediv_boolbutton(`Set{k}`, k, {true: "true", false: "false"}, val, (userVal)=>{
-                    this.apiRequestOptions[k] = userVal;
-                });
-                fs.appendChild(bbtn.div);
+        fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
+            this.modelInfo = {
+                modelPath: json["model_path"],
+                ctxSize: json["default_generation_settings"]["n_ctx"]
             }
-        }
+            ui.ui_show_obj_props_info(elDiv, this, props, "Settings/Info (devel-tools-console document[gMe])", "", { legend: 'role-system' })
+        }).catch(err=>console.log(`WARN:ShowInfo:${err}`))
     }
 
     /**
@@ -861,69 +1573,29 @@ class Me {
      * @param {HTMLDivElement} elDiv
      */
     show_settings(elDiv) {
-
-        let inp = ui.el_creatediv_input("SetBaseURL", "BaseURL", "text", this.baseURL, (val)=>{
-            this.baseURL = val;
-        });
-        elDiv.appendChild(inp.div);
-
-        inp = ui.el_creatediv_input("SetAuthorization", "Authorization", "text", this.headers["Authorization"], (val)=>{
-            this.headers["Authorization"] = val;
-        });
-        inp.el.placeholder = "Bearer OPENAI_API_KEY";
-        elDiv.appendChild(inp.div);
-
-        let bb = ui.el_creatediv_boolbutton("SetStream", "Stream", {true: "[+] yes stream", false: "[-] do oneshot"}, this.bStream, (val)=>{
-            this.bStream = val;
-        });
-        elDiv.appendChild(bb.div);
-
-        bb = ui.el_creatediv_boolbutton("SetTrimGarbage", "TrimGarbage", {true: "[+] yes trim", false: "[-] dont trim"}, this.bTrimGarbage, (val)=>{
-            this.bTrimGarbage = val;
-        });
-        elDiv.appendChild(bb.div);
-
-        this.show_settings_apirequestoptions(elDiv);
-
-        let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
-            this.apiEP = ApiEP.Type[val];
-        });
-        elDiv.appendChild(sel.div);
-
-        sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.iRecentUserMsgCnt, (val)=>{
-            this.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
-        });
-        elDiv.appendChild(sel.div);
-
-        bb = ui.el_creatediv_boolbutton("SetCompletionFreshChatAlways", "CompletionFreshChatAlways", {true: "[+] yes fresh", false: "[-] no, with history"}, this.bCompletionFreshChatAlways, (val)=>{
-            this.bCompletionFreshChatAlways = val;
-        });
-        elDiv.appendChild(bb.div);
-
-        bb = ui.el_creatediv_boolbutton("SetCompletionInsertStandardRolePrefix", "CompletionInsertStandardRolePrefix", {true: "[+] yes insert", false: "[-] dont insert"}, this.bCompletionInsertStandardRolePrefix, (val)=>{
-            this.bCompletionInsertStandardRolePrefix = val;
-        });
-        elDiv.appendChild(bb.div);
-
+        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "chatProps"], "Settings", (prop, elProp)=>{
+            if (prop == "headers:Authorization") {
+                // @ts-ignore
+                elProp.placeholder = "Bearer OPENAI_API_KEY";
+            }
+            if (prop.startsWith("tools:toolName")) {
+                /** @type {HTMLInputElement} */(elProp).disabled = true
+            }
+        }, [":chatProps:apiEP", ":chatProps:iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
+            if (propWithPath == ":chatProps:apiEP") {
+                let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.chatProps.apiEP, (val)=>{
+                    // @ts-ignore
+                    this.chatProps.apiEP = ApiEP.Type[val];
+                });
+                elParent.appendChild(sel.div);
+            }
+            if (propWithPath == ":chatProps:iRecentUserMsgCnt") {
+                let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.chatProps.iRecentUserMsgCnt, (val)=>{
+                    this.chatProps.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
+                });
+                elParent.appendChild(sel.div);
+            }
+        })
     }
 
 }
-
-
-/** @type {Me} */
-let gMe;
-
-function startme() {
-    console.log("INFO:SimpleChat:StartMe:Starting...");
-    gMe = new Me();
-    gMe.debug_disable();
-    document["gMe"] = gMe;
-    document["du"] = du;
-    for (let cid of gMe.defaultChatIds) {
-        gMe.multiChat.new_chat_session(cid);
-    }
-    gMe.multiChat.setup_ui(gMe.defaultChatIds[0], true);
-    gMe.multiChat.show_sessions();
-}
-
-document.addEventListener("DOMContentLoaded", startme);
