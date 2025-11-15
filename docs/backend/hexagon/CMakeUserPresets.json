@@ -33,6 +33,10 @@
         "cacheVariables": {
             "CMAKE_C_FLAGS":   "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -fno-finite-math-only -flto -D_GNU_SOURCE",
             "CMAKE_CXX_FLAGS": "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -fno-finite-math-only -flto -D_GNU_SOURCE",
+            "CMAKE_C_FLAGS_RELEASE":          "-O3 -DNDEBUG",
+            "CMAKE_CXX_FLAGS_RELEASE":        "-O3 -DNDEBUG",
+            "CMAKE_C_FLAGS_RELWITHDEBINFO":   "-O3 -DNDEBUG -g",
+            "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O3 -DNDEBUG -g",
             "HEXAGON_SDK_ROOT": "$env{HEXAGON_SDK_ROOT}",
             "PREBUILT_LIB_DIR": "windows_aarch64",
             "GGML_OPENMP":      "OFF",
