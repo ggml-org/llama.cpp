@@ -1386,6 +1386,9 @@ class MultiChatUI {
             this.show_message(this.elDivChat, prevLastMsg, 1, msg)
         }
         this.show_message(this.elDivChat, msg, 0, undefined)
+        if (this.elLastChatMessage != null) {
+            this.scroll_el_into_view(this.elLastChatMessage)
+        }
         return true
     }
 
