@@ -107,7 +107,7 @@ struct testing {
         }, "bench");
 
         auto avg_elapsed = duration.count() / iterations;
-        auto avg_elapsed_s = std::chrono::duration_cast<std::chrono::duration<double>>(duration).count();
+        auto avg_elapsed_s = std::chrono::duration_cast<std::chrono::duration<double>>(duration).count() / iterations;
         auto rate = (avg_elapsed_s > 0.0) ? (1.0 / avg_elapsed_s) : 0.0;
 
         print_result("END BENCH", name,
