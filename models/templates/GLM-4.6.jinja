@@ -71,11 +71,8 @@ For each function call, output the function name and arguments within the follow
     {%- set tc = tc.function %}
 {%- endif %}
 {{ '\n<tool_call>' + tc.name }}
-{% set _args = tc.arguments %}
-{%- if _args is not mapping -%}
-    {%- set _args = {} %}
-{%- endif -%}
-{% for k, v in _args | items %}
+{% set _args = tc.arguments or {} %}
+{% for k, v in _args.items() %}
 <arg_key>{{ k }}</arg_key>
 <arg_value>{{ v | tojson(ensure_ascii=False) if v is not string else v }}</arg_value>
 {% endfor %}
