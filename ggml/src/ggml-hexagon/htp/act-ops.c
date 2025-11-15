@@ -116,7 +116,7 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
     uint8_t * restrict data_dst        = (uint8_t *) dst->data;
 
     const bool src1_valid = src1->ne[0];
-    const int  nc         = (src1_valid) ? ne0 : ne0 / 2;
+    const int  nc         = (src1_valid) ? ne00 : ne00 / 2;
     if (!src1_valid) {
         const int32_t swapped = op_params[1];
         data_src1             = data_src0;
