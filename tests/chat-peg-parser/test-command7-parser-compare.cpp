@@ -161,7 +161,7 @@ void test_command7_parser_compare(testing &t) {
     // Setup data
     auto parser = create_command_r7b_parser();
     auto handler = create_command_r7b_event_handler();
-    
+
     std::string reasoning = "To plan an effective trip to Japan that includes both historical sites and modern attractions within a "
             "budget of $4000 for a two-week stay, we need to:\n\n"
             "1. Identify key historical sites and modern attractions in Japan.\n"
@@ -171,7 +171,7 @@ void test_command7_parser_compare(testing &t) {
             "overspending.\n"
             "5. Provide a detailed cost breakdown that includes accommodation, transportation, meals, and entry fees "
             "to attractions.";
-            
+
     std::string content = "For a two-week trip to Japan with a $4,000 budget, I recommend planning an itinerary that balances "
             "historical sites with modern attractions. The destination will be Japan, with a duration of 14 days.\n\n"
             "Given your interests in both historical sites and modern attractions, you'll want to focus on cities like "
@@ -186,7 +186,7 @@ void test_command7_parser_compare(testing &t) {
             "For meals, embrace local cuisine by eating at neighborhood restaurants, ramen shops, and izakayas rather "
             "than touristy establishments. This will give you an authentic experience while keeping costs "
             "reasonable—you can enjoy excellent meals for $10-20 per person at local spots.\n\n";
-    
+
     std::vector<std::tuple<std::string, std::string, nlohmann::json>> tool_calls = {
         { "call_0", "plan_trip", nlohmann::json::parse(R"({
             "destination": "Japan",
@@ -198,9 +198,9 @@ void test_command7_parser_compare(testing &t) {
             "meal_preferences": "local cuisine"
         })") }
     };
-    
+
     std::vector<std::string> tokens;
-    
+
     // Build tokens
     if (!reasoning.empty()) {
         auto tokenized = simple_tokenize(reasoning);
@@ -233,9 +233,9 @@ void test_command7_parser_compare(testing &t) {
 
         tokens.emplace_back("<|END_ACTION|>");
     }
-    
+
     std::string input = std::accumulate(tokens.begin(), tokens.end(), std::string());
-    
+
     // Run tests
     t.test("legacy_parse", [&](testing & t) {
         bool no_error = true;
@@ -247,7 +247,7 @@ void test_command7_parser_compare(testing &t) {
         }
         t.assert_equal("no_errors", true, no_error);
     });
-    
+
     t.test("current_parse", [&](testing & t) {
         bool no_error = true;
         try {
@@ -258,12 +258,12 @@ void test_command7_parser_compare(testing &t) {
         }
         t.assert_equal("no_errors", true, no_error);
     });
-    
+
     // Run benchmarks
     t.bench("legacy_parse_benchmark", [&]() {
         test_command_r7b_legacy_parser(input, false, false);
     }, 1000);
-    
+
     t.bench("current_parse_benchmark", [&]() {
         test_command_r7b_parser(parser, input, false, false);
     }, 1000);
