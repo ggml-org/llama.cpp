@@ -68,9 +68,9 @@ class common_chat_combinator_parser_base {
     // Actual parsing implementation (to be overridden by subclasses)
     virtual common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) = 0;
 
-    virtual void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) {
+    virtual void assign_id(common_chat_combinator_parser_counter & counter) {
         if (id_ == -1) {
-            id_ = counter->next();
+            id_ = counter.next();
         }
     }
 
@@ -320,6 +320,48 @@ static std::string regex_excluding_pattern(const std::vector<std::string> & stri
     return generic_excluding_pattern(strings, regex_escape, regex_escape_char_class);
 }
 
+// Container for the root parser and all named rules in the grammar.
+// Manages ownership of rule registry to enable recursive grammar definitions.
+class root_parser : public common_chat_combinator_parser_base {
+    common_chat_combinator_parser root_;
+    std::unordered_map<std::string, common_chat_combinator_parser> rules_;
+
+  public:
+    static constexpr parser_type type_value = ROOT;
+
+    root_parser(int id) : common_chat_combinator_parser_base(id) {}
+
+    parser_type type() const override { return type_value; }
+
+    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
+        return root_->parse(ctx, start);
+    }
+
+    void assign_id(common_chat_combinator_parser_counter & counter) override {
+        common_chat_combinator_parser_base::assign_id(counter);
+        root_->assign_id(counter);
+    }
+
+    std::string dump() const override {
+        return root_->dump();
+    }
+
+    void accept(parser_visitor & visitor) override;
+
+    void add_rule(const std::string & name, const common_chat_combinator_parser & parser) {
+        rules_[name] = parser;
+    }
+
+    void set_root(const common_chat_combinator_parser & parser) {
+        root_ = parser;
+    }
+
+    const common_chat_combinator_parser & root() const { return root_; }
+
+    std::unordered_map<std::string, common_chat_combinator_parser> & rules() { return rules_; }
+    const std::unordered_map<std::string, common_chat_combinator_parser> & rules() const { return rules_; }
+};
+
 // Matches an exact literal string.
 //   S -> "hello"
 class literal_parser : public common_chat_combinator_parser_base {
@@ -395,7 +437,7 @@ class sequence_parser : public common_chat_combinator_parser_base {
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
     }
 
-    void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) override {
+    void assign_id(common_chat_combinator_parser_counter & counter) override {
         common_chat_combinator_parser_base::assign_id(counter);
         for (auto & p : parsers_) {
             p->assign_id(counter);
@@ -450,7 +492,7 @@ class choice_parser : public common_chat_combinator_parser_base {
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
     }
 
-    void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) override {
+    void assign_id(common_chat_combinator_parser_counter & counter) override {
         common_chat_combinator_parser_base::assign_id(counter);
         for (auto & p : parsers_) {
             p->assign_id(counter);
@@ -525,7 +567,7 @@ class repetition_parser : public common_chat_combinator_parser_base {
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
     }
 
-    void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) override {
+    void assign_id(common_chat_combinator_parser_counter & counter) override {
         common_chat_combinator_parser_base::assign_id(counter);
         parser_->assign_id(counter);
     }
@@ -620,7 +662,7 @@ class and_parser : public common_chat_combinator_parser_base {
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start);
     }
 
-    void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) override {
+    void assign_id(common_chat_combinator_parser_counter & counter) override {
         common_chat_combinator_parser_base::assign_id(counter);
         parser_->assign_id(counter);
     }
@@ -663,7 +705,7 @@ class not_parser : public common_chat_combinator_parser_base {
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start);
     }
 
-    void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) override {
+    void assign_id(common_chat_combinator_parser_counter & counter) override {
         common_chat_combinator_parser_base::assign_id(counter);
         parser_->assign_id(counter);
     }
@@ -1025,25 +1067,26 @@ class schema_parser : public common_chat_combinator_parser_base {
 //   expr -> term | expr "+" term
 class rule_parser : public common_chat_combinator_parser_base {
     std::string name_;
-    std::weak_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules_;
+    std::weak_ptr<root_parser> root_;
 
   public:
     static constexpr parser_type type_value = RULE;
 
-    rule_parser(const std::string & name, const std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> & rules, int id)
-        : common_chat_combinator_parser_base(id), name_(name), rules_(rules) {}
+    rule_parser(const std::string & name, const std::weak_ptr<root_parser> & root, int id)
+        : common_chat_combinator_parser_base(id), name_(name), root_(root) {}
 
     parser_type type() const override { return type_value; }
 
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto rules = rules_.lock();
-        if (!rules) {
-            LOG_ERR("rule_parser::parse called with expired rule registry\n");
+        auto root = root_.lock();
+        if (!root) {
+            LOG_ERR("rule_parser::parse called with expired root parser\n");
             return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
         }
 
-        auto it = rules->find(name_);
-        if (it == rules->end()) {
+        auto & rules = root->rules();
+        auto it = rules.find(name_);
+        if (it == rules.end()) {
             LOG_ERR("rule_parser::parse rule '%s' not found in registry\n", name_.c_str());
             return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
         }
@@ -1097,42 +1140,6 @@ class rule_parser : public common_chat_combinator_parser_base {
     const std::string & name() const { return name_; }
 };
 
-// Container for the root parser and all named rules in the grammar.
-// Manages ownership of rule registry to enable recursive grammar definitions.
-class root_parser : public common_chat_combinator_parser_base {
-    common_chat_combinator_parser root_;
-    std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules_;
-
-    friend class parser_visitor;
-
-  public:
-    static constexpr parser_type type_value = ROOT;
-
-    root_parser(const common_chat_combinator_parser & root, std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules, int id)
-        : common_chat_combinator_parser_base(id), root_(root), rules_(std::move(rules)) {}
-
-    parser_type type() const override { return type_value; }
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        return root_->parse(ctx, start);
-    }
-
-    void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) override {
-        common_chat_combinator_parser_base::assign_id(counter);
-        root_->assign_id(counter);
-    }
-
-    std::string dump() const override {
-        return root_->dump();
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const common_chat_combinator_parser & root() const { return root_; }
-
-    std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules() const { return rules_; }
-};
-
 // Wraps a parser with a semantic action callback.
 class action_parser : public common_chat_combinator_parser_base {
     common_chat_combinator_parser parser_;
@@ -1167,7 +1174,7 @@ class action_parser : public common_chat_combinator_parser_base {
         return result;
     }
 
-    void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) override {
+    void assign_id(common_chat_combinator_parser_counter & counter) override {
         common_chat_combinator_parser_base::assign_id(counter);
         parser_->assign_id(counter);
     }
@@ -1199,7 +1206,7 @@ class trigger_parser : public common_chat_combinator_parser_base {
         return parser_->parse(ctx, start);
     }
 
-    void assign_id(std::shared_ptr<common_chat_combinator_parser_counter> counter) override {
+    void assign_id(common_chat_combinator_parser_counter & counter) override {
         common_chat_combinator_parser_base::assign_id(counter);
         parser_->assign_id(counter);
     }
@@ -1273,12 +1280,12 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
 // Visitor for collecting reachable rules from a subtree
 class reachability_visitor : public parser_visitor {
     std::unordered_set<std::string> & reachable_rules_;
-    std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules_;
+    const std::unordered_map<std::string, common_chat_combinator_parser> & rules_;
 
   public:
     reachability_visitor(
         std::unordered_set<std::string> & reachable_rules,
-        std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules
+        const std::unordered_map<std::string, common_chat_combinator_parser> & rules
     ) : reachable_rules_(reachable_rules), rules_(rules) {}
 
     void visit(literal_parser &) override {}
@@ -1306,7 +1313,7 @@ class reachability_visitor : public parser_visitor {
     void visit(zero_or_more_parser & p) override { p.child()->accept(*this); }
     void visit(optional_parser & p) override { p.child()->accept(*this); }
     void visit(repetition_parser & p) override { p.child()->accept(*this); }
-    void visit(schema_parser & p) override {
+    void visit(schema_parser &) override {
         // Schema parsers are opaque - don't traverse their children
         // The schema system will handle rule generation via builder_.add_schema()
     }
@@ -1322,11 +1329,9 @@ class reachability_visitor : public parser_visitor {
         reachable_rules_.insert(name);
 
         // Recursively visit the rule's definition
-        if (rules_) {
-            auto it = rules_->find(name);
-            if (it != rules_->end()) {
-                it->second->accept(*this);
-            }
+        auto it = rules_.find(name);
+        if (it != rules_.end()) {
+            it->second->accept(*this);
         }
     }
 
@@ -1360,7 +1365,7 @@ class gbnf_visitor : public parser_visitor {
     // Collect all reachable rules from the given triggers
     void collect_reachable_rules(
         const std::vector<std::shared_ptr<common_chat_combinator_parser_base>> & triggers,
-        std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules
+        const std::unordered_map<std::string, common_chat_combinator_parser> & rules
     ) {
         reachable_rules_.clear();
         reachability_visitor visitor(reachable_rules_, rules);
@@ -1533,13 +1538,11 @@ class gbnf_visitor : public parser_visitor {
 
         if (!lazy_) {
             // Non-lazy mode: generate all rules eagerly
-            if (rules) {
-                for (const auto & [name, rule] : *rules) {
-                    rule->accept(*this);
-                    auto rule_body = current_result_;
-                    auto canonical_name = builder_.add_rule(name, rule_body);
-                    rule_name_mapping_[name] = canonical_name;
-                }
+            for (const auto & [name, rule] : rules) {
+                rule->accept(*this);
+                auto rule_body = current_result_;
+                auto canonical_name = builder_.add_rule(name, rule_body);
+                rule_name_mapping_[name] = canonical_name;
             }
 
             // Return root body for composition
@@ -1564,18 +1567,16 @@ class gbnf_visitor : public parser_visitor {
         collect_reachable_rules(triggers_, rules);
 
         // Third pass: generate only reachable rules
-        if (rules) {
-            for (const auto & [name, rule] : *rules) {
-                // Skip rules that aren't reachable
-                if (reachable_rules_.find(name) == reachable_rules_.end()) {
-                    continue;
-                }
-
-                rule->accept(*this);
-                auto rule_body = current_result_;
-                auto canonical_name = builder_.add_rule(name, rule_body);
-                rule_name_mapping_[name] = canonical_name;
+        for (const auto & [name, rule] : rules) {
+            // Skip rules that aren't reachable
+            if (reachable_rules_.find(name) == reachable_rules_.end()) {
+                continue;
             }
+
+            rule->accept(*this);
+            auto rule_body = current_result_;
+            auto canonical_name = builder_.add_rule(name, rule_body);
+            rule_name_mapping_[name] = canonical_name;
         }
 
         // Generate root as alternation of trigger rules
@@ -1715,51 +1716,47 @@ void common_chat_combinator_parser::build_grammar(const common_grammar_builder &
 }
 
 common_chat_combinator_parser_builder::common_chat_combinator_parser_builder()
-    : rules_(std::make_shared<std::unordered_map<std::string, common_chat_combinator_parser>>())
-    , counter_(std::make_shared<common_chat_combinator_parser_counter>(0)) {}
-
-common_chat_combinator_parser_builder::common_chat_combinator_parser_builder(std::shared_ptr<common_chat_combinator_parser_counter> counter)
-    : rules_(std::make_shared<std::unordered_map<std::string, common_chat_combinator_parser>>())
-    , counter_(std::move(counter)) {}
+    : root_(std::make_shared<root_parser>(0)) // root parser has id 0
+    , counter_(1) {}
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::literal(const std::string & literal) {
-    return common_chat_combinator_parser(std::make_shared<literal_parser>(literal, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<literal_parser>(literal, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::sequence(std::initializer_list<common_chat_combinator_parser> parsers) {
-    return common_chat_combinator_parser(std::make_shared<sequence_parser>(parsers, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<sequence_parser>(parsers, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::choice(std::initializer_list<common_chat_combinator_parser> parsers) {
-    return common_chat_combinator_parser(std::make_shared<choice_parser>(parsers, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<choice_parser>(parsers, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::one_or_more(const common_chat_combinator_parser & p) {
-    return common_chat_combinator_parser(std::make_shared<one_or_more_parser>(p, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<one_or_more_parser>(p, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::zero_or_more(const common_chat_combinator_parser & p) {
-    return common_chat_combinator_parser(std::make_shared<zero_or_more_parser>(p, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<zero_or_more_parser>(p, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::optional(const common_chat_combinator_parser & p) {
-    return common_chat_combinator_parser(std::make_shared<optional_parser>(p, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<optional_parser>(p, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::peek(const common_chat_combinator_parser & p) {
-    return common_chat_combinator_parser(std::make_shared<and_parser>(p, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<and_parser>(p, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::negate(const common_chat_combinator_parser & p) {
-    return common_chat_combinator_parser(std::make_shared<not_parser>(p, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<not_parser>(p, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::any() {
-    return common_chat_combinator_parser(std::make_shared<any_parser>(counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<any_parser>(counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::chars(const std::string & classes, int min, int max) {
-    return common_chat_combinator_parser(std::make_shared<chars_parser>(classes, min, max, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<chars_parser>(classes, min, max, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::one(const std::string & classes) {
@@ -1767,27 +1764,28 @@ common_chat_combinator_parser common_chat_combinator_parser_builder::one(const s
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::json_string_unqouted() {
-    return common_chat_combinator_parser(std::make_shared<json_string_parser>(counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<json_string_parser>(counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::rule(const std::string & name) {
-    return common_chat_combinator_parser(std::make_shared<rule_parser>(name, rules_, counter_->next()));
+    auto root = cast<root_parser>(root_);
+    return common_chat_combinator_parser(std::make_shared<rule_parser>(name, std::weak_ptr<root_parser>(root), counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::space() {
-    return common_chat_combinator_parser(std::make_shared<space_parser>(counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<space_parser>(counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::until(const std::string & delimiter) {
-    return common_chat_combinator_parser(std::make_shared<until_parser>(delimiter, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<until_parser>(delimiter, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
-    return common_chat_combinator_parser(std::make_shared<until_parser>(delimiters, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<until_parser>(delimiters, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::repeat(const common_chat_combinator_parser & p, int min, int max) {
-    return common_chat_combinator_parser(std::make_shared<repetition_parser>(p, min, max, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<repetition_parser>(p, min, max, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::repeat(const common_chat_combinator_parser & p, int n) {
@@ -1795,11 +1793,11 @@ common_chat_combinator_parser common_chat_combinator_parser_builder::repeat(cons
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::schema(const common_chat_combinator_parser & p, const std::string & name, const nlohmann::ordered_json & schema) {
-    return common_chat_combinator_parser(std::make_shared<schema_parser>(p, name, schema, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<schema_parser>(p, name, schema, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::action(const common_chat_combinator_parser & p, std::function<void(const common_chat_parse_action &)> fn, int when) {
-    return common_chat_combinator_parser(std::make_shared<action_parser>(p, std::move(fn), when, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<action_parser>(p, std::move(fn), when, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::capture(const std::string & key, const common_chat_combinator_parser & p) {
@@ -1810,42 +1808,46 @@ common_chat_combinator_parser common_chat_combinator_parser_builder::capture(con
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::trigger(const common_chat_combinator_parser & p) {
-    return common_chat_combinator_parser(std::make_shared<trigger_parser>(p, counter_->next()));
+    return common_chat_combinator_parser(std::make_shared<trigger_parser>(p, counter_.next()));
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::add_rule(const std::string & name, const common_chat_combinator_parser & p) {
-    (*rules_)[name] = p;
+    auto root = cast<root_parser>(root_);
+    root->add_rule(name, p);
     return rule(name);
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::add_rule(const std::string & name, const std::function<common_chat_combinator_parser()> & builder) {
-    if (rules_->find(name) != rules_->end()) {
+    auto root = cast<root_parser>(root_);
+    if (root->rules().find(name) != root->rules().end()) {
         return rule(name);
     }
 
-    (*rules_)[name] = literal(""); // Placeholder
+    root->add_rule(name, literal("")); // Placeholder
     auto parser = builder();
-    (*rules_)[name] = parser;
+    root->add_rule(name, parser);
     return rule(name);
 }
 
-void common_chat_combinator_parser_builder::assign_ids(common_chat_combinator_parser & p) {
+void common_chat_combinator_parser_builder::set_root(const common_chat_combinator_parser & p) {
+    auto root_container = cast<root_parser>(root_);
+    root_container->set_root(p);
+
+    // Recursively issue IDs to reachable nodes
     if (p.ptr()) {
         p.ptr()->assign_id(counter_);
     }
 }
 
+common_chat_combinator_parser common_chat_combinator_parser_builder::build() {
+    return root_;
+}
+
 common_chat_combinator_parser build_combinator_parser(const std::function<common_chat_combinator_parser(common_chat_combinator_parser_builder&)> & fn) {
     common_chat_combinator_parser_builder builder;
     auto root = fn(builder);
-    builder.assign_ids(root); // Assign IDs to rules that were created with operators
-
-    // Wrap the root parser in a root_parser to own the rules and break circular references
-    auto rules = builder.rules();
-    if (rules && !rules->empty()) {
-        return common_chat_combinator_parser(std::make_shared<root_parser>(root, rules, -1));
-    }
-    return root;
+    builder.set_root(root);
+    return builder.build();
 }
 
 common_chat_combinator_parser common_chat_combinator_parser_builder::json_number() {

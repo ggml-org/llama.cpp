@@ -179,12 +179,11 @@ class common_chat_combinator_parser_counter {
 };
 
 class common_chat_combinator_parser_builder {
-    std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules_;
-    std::shared_ptr<common_chat_combinator_parser_counter> counter_;
+    common_chat_combinator_parser root_;
+    common_chat_combinator_parser_counter counter_;
 
   public:
     common_chat_combinator_parser_builder();
-    common_chat_combinator_parser_builder(std::shared_ptr<common_chat_combinator_parser_counter> counter);
 
     // Matches an exact literal string.
     //   S -> "hello"
@@ -297,9 +296,9 @@ class common_chat_combinator_parser_builder {
     //   add_rule("json", [&]() { return json_object() | json_array() | ... })
     common_chat_combinator_parser add_rule(const std::string & name, const std::function<common_chat_combinator_parser()> & builder);
 
-    void assign_ids(common_chat_combinator_parser & p);
+    void set_root(const common_chat_combinator_parser & p);
 
-    std::shared_ptr<std::unordered_map<std::string, common_chat_combinator_parser>> rules() const { return rules_; }
+    common_chat_combinator_parser build();
 };
 
 common_chat_combinator_parser build_combinator_parser(const std::function<common_chat_combinator_parser(common_chat_combinator_parser_builder&)> & fn);
