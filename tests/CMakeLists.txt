@@ -196,6 +196,7 @@ llama_build_and_test(
     chat-peg-parser/test-optional.cpp
     chat-peg-parser/test-partial-parsing.cpp
     chat-peg-parser/test-recursive-references.cpp
+    chat-peg-parser/test-unicode.cpp
     chat-peg-parser/test_harness.h
     chat-peg-parser/tests.h
 )

@@ -26,3 +26,4 @@ void test_actions(testing &t);
 void test_gbnf_generation(testing &t);
 void test_example_qwen3_coder(testing &t);
 void test_command7_parser_compare(testing &t);
+void test_unicode(testing &t);
