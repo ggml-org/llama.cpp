@@ -24,8 +24,7 @@
 #include <array>
 #include <functional>
 
-// TODO: allow to pass callback from user code
-struct clip_logger_state g_logger_state = {GGML_LOG_LEVEL_CONT, clip_log_callback_default, NULL};
+struct clip_logger_state g_logger_state = {clip_log_callback_default, NULL};
 
 enum ffn_op_type {
     FFN_GELU,
@@ -3507,7 +3506,6 @@ struct clip_model_loader {
 };
 
 struct clip_init_result clip_init(const char * fname, struct clip_context_params ctx_params) {
-    g_logger_state.verbosity_thold = ctx_params.verbosity;
     clip_ctx * ctx_vision = nullptr;
     clip_ctx * ctx_audio = nullptr;
 
