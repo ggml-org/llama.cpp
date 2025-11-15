@@ -774,11 +774,23 @@ static void example_qwen3_coder() {
                 + p.one_or_more(json_arg | string_arg)
                 + "</function>");
 
-        auto tool_call = p.add_rule("tool-call",
-            "<tool_call>" + p.one_or_more(function) + "</tool_call>");
+        auto tool_call = p.trigger(p.add_rule("tool-call",
+            "<tool_call>" + p.one_or_more(function) + "</tool_call>"));
 
         return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
     });
+
+    std::cout << "Grammar (lazy=false):\n";
+    auto grammar = build_grammar([&](const common_grammar_builder & builder) {
+        parser.build_grammar(builder);
+    });
+    std::cout << grammar << "\n";
+
+    std::cout << "Grammar (lazy=true):\n";
+    auto lazy_grammar = build_grammar([&](const common_grammar_builder & builder) {
+        parser.build_grammar(builder, true);
+    });
+    std::cout << lazy_grammar << "\n";
 
     auto handler = [&](const common_chat_parse_event & ev, common_chat_parse_semantics & env) {
         if (ev.rule == "reasoning-content" && ev.ending()) {
@@ -857,26 +869,13 @@ static void example_qwen3_coder() {
         auto parse_result = parser.parse(ctx);
         assert_equals(false, parse_result.fail());
 
-        std::cout << "=================================\n";
-        std::cout << in << "\n\n";
-        /*
-        std::cout << "Reasoning: " << prev.reasoning_content << "\n";
-        std::cout << "Content  : " << prev.content << "\n";
-        if (!prev.tool_calls.empty()) {
-            std::cout << "\n=== Tool Calls ===\n";
-            for (const auto & tc : prev.tool_calls) {
-                std::cout << "ID  : " << tc.id << "\n";
-                std::cout << "Name: " << tc.name << "\n";
-                std::cout << "Args: " << tc.arguments << "\n";
-            }
-        }
-        */
-
         // This shouldn't emit any runtime errors
         auto diffs = common_chat_msg_diff::compute_diffs(prev, env.result);
         prev = env.result;
 
 #if 0
+        std::cout << "=================================\n";
+        std::cout << in << "\n\n";
         std::cout << "----\n";
         std::cout << "Reasoning: " << prev.reasoning_content << "\n";
         std::cout << "Content  : " << prev.content << "\n";
@@ -1128,7 +1127,6 @@ int main() {
     std::cout << "All tests passed!\n";
 
     example_qwen3_coder();
-    //return 0;
 
     std::cout << "\n== Benchmarks ==\n";
     std::string example_reasoning =
