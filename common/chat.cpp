@@ -2382,8 +2382,8 @@ static common_chat_params common_chat_params_init_glm_4_5(const common_chat_temp
 
     // build grammar for tool call
     static const xml_tool_call_format form {
-        /* form.scope_start = */ "\n",
-        /* form.tool_start  = */ "<tool_call>",
+        /* form.scope_start = */ "",
+        /* form.tool_start  = */ "\n<tool_call>",
         /* form.tool_sep    = */ "\n",
         /* form.key_start   = */ "<arg_key>",
         /* form.key_val_sep = */ "</arg_key>\n<arg_value>",

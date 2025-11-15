@@ -243,8 +243,8 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                     }
                 }
 
-                auto next_arg = builder.add_rule(name + "-last-arg-end", form.last_val_end ? gbnf_format_literal(*form.last_val_end) : gbnf_format_literal(form.val_end));
-                auto next_arg_with_sep = next_arg;
+                auto next_arg_with_sep = builder.add_rule(name + "-last-arg-end", form.last_val_end ? gbnf_format_literal(*form.last_val_end) : gbnf_format_literal(form.val_end));
+                decltype(next_arg_with_sep) next_arg = "\"\"";
                 for (auto i = arg_rules.size() - 1; /* i >= 0 && */ i < arg_rules.size(); --i) {
                     std::string include_this_arg = arg_rules[i].symbol_name + " " + next_arg_with_sep;
                     next_arg = builder.add_rule(name + "-arg-after-" + std::to_string(i), arg_rules[i].is_required ?
@@ -269,8 +269,8 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                 tool_rules.push_back(builder.add_rule(name + "-call", 
                         gbnf_format_literal(form.tool_start) + " " +
                         quoted_name + " " +
-                        gbnf_format_literal(form.tool_sep) +
-                        (arg_rules.empty() ? "" : " " + next_arg)
+                        gbnf_format_literal(form.tool_sep) + " " +
+                        next_arg
                 ));
             }
 
@@ -278,7 +278,11 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
             auto tool_call_more = builder.add_rule("root-tool-call-more", gbnf_format_literal(form.tool_end) + " " + tool_call_once);
             auto call_end = builder.add_rule("root-call-end", form.last_tool_end ? gbnf_format_literal(*form.last_tool_end) : gbnf_format_literal(form.tool_end));
             auto tool_call_multiple_with_end = builder.add_rule("root-tool-call-multiple-with-end", tool_call_once + " " + tool_call_more + "* " + call_end);
-            builder.add_rule("root", gbnf_format_literal(form.scope_start) + " " + tool_call_multiple_with_end  + "? " + gbnf_format_literal(form.scope_end));
+            builder.add_rule("root",
+                (form.scope_start.empty() ? "" : gbnf_format_literal(form.scope_start) + " ") +
+                tool_call_multiple_with_end  + "?" +
+                (form.scope_end.empty() ? "" : " " + gbnf_format_literal(form.scope_end))
+            );
         });
 
         // grammar trigger for tool call
