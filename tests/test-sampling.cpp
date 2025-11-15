@@ -42,7 +42,7 @@ struct sampler_tester {
     }
 
     void apply(llama_sampler * sampler) {
-        llama_sampler_apply(sampler, &cur_p);
+        llama_sampler_apply(sampler, &cur_p, 0);
         llama_sampler_free(sampler);
     }
 
@@ -271,13 +271,13 @@ static void bench(llama_sampler * cnstr, const char * cnstr_name, const std::vec
     std::vector<llama_token_data> cur(data.size());
     std::copy(data.begin(), data.end(), cur.begin());
     llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
-    llama_sampler_apply(cnstr, &cur_p);
+    llama_sampler_apply(cnstr, &cur_p, 0);
     llama_sampler_reset(cnstr);
     const int64_t t_start = ggml_time_us();
     for (int i = 0; i < n_iter; i++) {
         std::copy(data.begin(), data.end(), cur.begin());
         llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
-        llama_sampler_apply(cnstr, &cur_p);
+        llama_sampler_apply(cnstr, &cur_p, 0);
         llama_sampler_reset(cnstr);
     }
     const int64_t t_end = ggml_time_us();
