@@ -119,6 +119,7 @@ set(GGML_OPENCL_KERNELS
     pad
     repeat
     mul_mat_f16_f32
+    mul_mm_f16_f32_kq_kqv
     conv2d
     conv2d_f16_f32
     flash_attn_f32_f16
