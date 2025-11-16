@@ -262,9 +262,9 @@ void test_command7_parser_compare(testing &t) {
     // Run benchmarks
     t.bench("legacy_parse_benchmark", [&]() {
         test_command_r7b_legacy_parser(input, false, false);
-    }, 1000);
+    }, 100);
 
     t.bench("current_parse_benchmark", [&]() {
         test_command_r7b_parser(parser, input, false, false);
-    }, 1000);
+    }, 100);
 }
