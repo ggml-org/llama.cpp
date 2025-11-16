@@ -2191,8 +2191,6 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_dispatch_threadgroups(enc, ncpsg, std::max(ne12, ne32), std::max(ne13, ne33), 32, 1, 1);
 
             need_sync = true;
-        } else {
-            assert(ggml_metal_op_flash_attn_ext_extra_pad(op) == 0);
         }
 
         if (has_mask) {
@@ -2222,8 +2220,6 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_dispatch_threadgroups(enc, nblk0, nblk1, ne32*ne33, 32, 1, 1);
 
             need_sync = true;
-        } else {
-            assert(ggml_metal_op_flash_attn_ext_extra_blk(op) == 0);
         }
 
         if (need_sync) {
@@ -2363,8 +2359,6 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_dispatch_threadgroups(enc, ncpsg, std::max(ne12, ne32), std::max(ne13, ne33), 32, 1, 1);
 
             need_sync = true;
-        } else {
-            assert(ggml_metal_op_flash_attn_ext_extra_pad(op) == 0);
         }
 
         if (need_sync) {
