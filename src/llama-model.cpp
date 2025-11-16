@@ -586,7 +586,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
     // by default assume that the sliding-window layers use the same scaling type as the non-sliding-window layers
-    hparams.rope_freq_base_train_swa = hparams.rope_freq_base_train;
+    hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
 
     ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
