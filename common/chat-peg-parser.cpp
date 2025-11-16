@@ -38,10 +38,10 @@ enum parser_type {
 
 const char * common_chat_parse_result_type_name(common_chat_parse_result_type type) {
     switch (type) {
-    case COMMON_CHAT_PARSE_RESULT_FAIL:            return "fail";
-    case COMMON_CHAT_PARSE_RESULT_SUCCESS:         return "success";
-    case COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT: return "need_more_input";
-    default:                                       return "unknown";
+        case COMMON_CHAT_PARSE_RESULT_FAIL:            return "fail";
+        case COMMON_CHAT_PARSE_RESULT_SUCCESS:         return "success";
+        case COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT: return "need_more_input";
+        default:                                       return "unknown";
     }
 }
 
@@ -60,20 +60,17 @@ class common_chat_peg_parser_base {
 
     virtual parser_type type() const = 0;
 
-    // Template Method: handles caching, delegates to parse_uncached()
     virtual common_chat_parse_result parse(common_chat_parse_context & ctx, size_t start = 0) {
         if (id_ == -1) {
             // Don't cache parsers with ID -1 (from operators)
             return parse_uncached(ctx, start);
         }
 
-        // Check cache
         auto cached = ctx.cache.get(id_, start);
         if (cached) {
             return *cached;
         }
 
-        // Execute and cache
         auto result = parse_uncached(ctx, start);
         return ctx.cache.set(id_, start, result);
     }
@@ -124,24 +121,6 @@ static bool is_space(const char c) {
 
 static bool is_hex_digit(const char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-}
-
-// Unescapes a JSON string (without the surrounding quotes)
-// Uses nlohmann::json::parse to handle all JSON escape sequences
-static std::string unescape_json_string(std::string_view str) {
-    try {
-        // Wrap in quotes and parse as JSON string
-        std::string quoted = "\"" + std::string(str) + "\"";
-        auto parsed = nlohmann::json::parse(quoted);
-        if (parsed.is_string()) {
-            return parsed.get<std::string>();
-        }
-        // If not a string, return literally
-        return std::string(str);
-    } catch (...) {
-        // If parsing fails, return original string
-        return std::string(str);
-    }
 }
 
 // Aho-Corasick automation for matching multiple literals.
@@ -1454,14 +1433,14 @@ class reachability_visitor : public parser_visitor {
         const std::unordered_map<std::string, common_chat_peg_parser> & rules
     ) : reachable_rules_(reachable_rules), rules_(rules) {}
 
-    void visit(start_parser &) override {}
-    void visit(end_parser &) override {}
-    void visit(literal_parser &) override {}
-    void visit(any_parser &) override {}
-    void visit(space_parser &) override {}
-    void visit(json_string_parser &) override {}
-    void visit(chars_parser &) override {}
-    void visit(until_parser &) override {}
+    void visit(start_parser & /* p */) override {}
+    void visit(end_parser & /* p */) override {}
+    void visit(literal_parser & /* p */) override {}
+    void visit(any_parser & /* p */) override {}
+    void visit(space_parser & /* p */) override {}
+    void visit(json_string_parser & /* p */) override {}
+    void visit(chars_parser & /* p */) override {}
+    void visit(until_parser & /* p */) override {}
     void visit(and_parser & p) override { p.child()->accept(*this); }
     void visit(not_parser & p) override { p.child()->accept(*this); }
 
@@ -1481,7 +1460,7 @@ class reachability_visitor : public parser_visitor {
     void visit(zero_or_more_parser & p) override { p.child()->accept(*this); }
     void visit(optional_parser & p) override { p.child()->accept(*this); }
     void visit(repetition_parser & p) override { p.child()->accept(*this); }
-    void visit(schema_parser &) override {
+    void visit(schema_parser & /* p */) override {
         // Schema parsers are opaque - don't traverse their children
         // The schema system will handle rule generation via builder_.add_schema()
     }
@@ -1543,11 +1522,11 @@ class gbnf_visitor : public parser_visitor {
     }
 
   public:
-    void visit(start_parser &) override {
+    void visit(start_parser & /* p */) override {
         current_result_ = "";
     }
 
-    void visit(end_parser &) override {
+    void visit(end_parser & /* p */) override {
         current_result_ = "";
     }
 
@@ -1642,22 +1621,22 @@ class gbnf_visitor : public parser_visitor {
         current_result_ = gbnf_excluding_pattern(p.delimiters());
     }
 
-    void visit(and_parser &) override {
+    void visit(and_parser & /* p */) override {
         current_result_ = "";
     }
 
-    void visit(not_parser &) override {
+    void visit(not_parser & /* p */) override {
         // NOT is tricky in GBNF - for now, emit error
         LOG_ERR("NOT operator not directly supported in GBNF generation\n");
         current_result_ = "";
     }
 
-    void visit(any_parser &) override {
+    void visit(any_parser & /* p */) override {
         // Match any single character
         current_result_ = ".";
     }
 
-    void visit(space_parser &) override {
+    void visit(space_parser & /* p */) override {
         // Reference the built-in space rule
         current_result_ = "space";
     }
@@ -1688,7 +1667,7 @@ class gbnf_visitor : public parser_visitor {
         }
     }
 
-    void visit(json_string_parser &) override {
+    void visit(json_string_parser & /* p */) override {
         // JSON string content (without quotes)
         // Pattern: (any non-quote/backslash OR escape sequences)* until closing quote
         current_result_ = R"(( [^"\\] | "\\" ( ["\\/ bfnrt] | "u" [0-9a-fA-F]{4} ) )*)";
