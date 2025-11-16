@@ -676,10 +676,10 @@ class SimpleChat {
             if (lastMsg.ns.role == chatMsg.ns.role) {
                 console.debug(`DBUG:SC:AddSmart:Replacing:${lastMsg}:${chatMsg}`)
                 this.xchat[this.xchat.length-1] = ChatMessageEx.newFrom(chatMsg)
+                this.xchat[this.xchat.length-1].uniqId = lastMsg.uniqId
+                this.save()
+                return true
             }
-            this.xchat[this.xchat.length-1].uniqId = lastMsg.uniqId
-            this.save()
-            return true
         }
         return this.add(chatMsg)
     }
@@ -1411,11 +1411,11 @@ class MultiChatUI {
         // TODO: MAYBE: Call toolcall related ui reset here.
         //this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         for(let i=lastN; i > 0; i-=1) {
-            let msg = chat.xchat[chat.xchat.length-lastN]
-            let nextMsg = chat.xchat[chat.xchat.length-(lastN-1)]
+            let msg = chat.xchat[chat.xchat.length-i]
+            let nextMsg = chat.xchat[chat.xchat.length-(i-1)]
             if (msg) {
                 this.chatmsg_ui_remove(msg.uniqId)
-                this.show_message(this.elDivChat, msg, (lastN-1), nextMsg)
+                this.show_message(this.elDivChat, msg, (i-1), nextMsg)
             }
         }
         if (this.elLastChatMessage != null) {
