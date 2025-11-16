@@ -1,7 +1,11 @@
+#include "log.h"
+
 #include "chat-peg-parser/tests.h"
 
 int main() {
-    testing t(std::cout);
+    common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
+
+    testing t;
 
     test_partial_parsing(t);
     test_one(t);

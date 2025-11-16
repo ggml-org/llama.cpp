@@ -1,3 +1,4 @@
+#include "log.h"
 #include "tests.h"
 
 #include <numeric>
@@ -13,8 +14,10 @@ void test_example_qwen3_coder(testing &t) {
         auto arg_name = p.add_rule("arg-start", "<parameter=" + p.capture("arg-name", p.chars("[a-zA-Z0-9_]")) + ">");
         auto arg_end = p.add_rule("arg-end", "</parameter>" + p.peek(p.literal("<parameter=") | "</function>"));
 
-        auto string_arg_content = p.add_rule("arg-string-content",
-            p.until_one_of({"</parameter><parameter=", "</parameter></function>"}));
+        auto string_arg_content = p.add_rule("arg-string-content", p.until_one_of({
+            "</parameter><parameter=",
+            "</parameter></function>",
+        }));
 
         auto string_arg = p.add_rule("arg-string", arg_name + string_arg_content + arg_end);
 
@@ -30,7 +33,7 @@ void test_example_qwen3_coder(testing &t) {
         auto tool_call = p.trigger(p.add_rule("tool-call",
             "<tool_call>" + p.one_or_more(function) + "</tool_call>"));
 
-        return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
+        return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call) + p.end();
     });
 
 
@@ -55,22 +58,23 @@ void test_example_qwen3_coder(testing &t) {
             "and check access time within the last 30 days. I'll need to use the search_files function.</think>"
             "Based on your requirements, I'll search for log files over 100MB that haven't been "
             "accessed in the last month. This will help identify candidates for cleanup or archival.\n\n"
-            "<tool_call>\n"
-            "<function=search_files>\n"
-            "<parameter=path>/var/log</parameter>\n"
-            "<parameter=pattern>*.log</parameter>\n"
-            "<parameter=min_size_mb>100</parameter>\n"
-            "<parameter=max_depth>5</parameter>\n"
-            "<parameter=include_hidden>false</parameter>\n"
-            "<parameter=modified_days_ago>30</parameter>\n"
-            "<parameter=case_sensitive>true</parameter>\n"
-            "<parameter=sort_by>size</parameter>\n"
+            "<tool_call>"
+            "<function=search_files>"
+            "<parameter=path>/var/log</parameter>"
+            "<parameter=pattern>*.log</parameter>"
+            "<parameter=min_size_mb>100</parameter>"
+            "<parameter=max_depth>5</parameter>"
+            "<parameter=include_hidden>false</parameter>"
+            "<parameter=modified_days_ago>30</parameter>"
+            "<parameter=case_sensitive>true</parameter>"
+            "<parameter=sort_by>size</parameter>"
             "<parameter=filters>{\"exclude_patterns\": [\"*temp*\", \"*cache*\"], \"file_types\": "
-            "[\"regular\"]}</parameter>\n"
-            "</function>\n"
+            "[\"regular\"]}</parameter>"
+            "</function>"
             "</tool_call>";
 
         std::vector<std::string> tokens = simple_tokenize(input);
+        common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
 
         common_chat_msg prev;
         t.test("explicit_builder", [&](testing &t) {
@@ -84,14 +88,20 @@ void test_example_qwen3_coder(testing &t) {
 
                 auto result = explicit_parser.parse(ctx);
                 if (!t.assert_equal("not fail", false, result.fail())) {
-                    t.indent();
-                    t.out << in.substr(0, result.end) << "[failed-->]" << in.substr(result.end) << "\n";
+                    LOG_ERR("%s[failed-->]%s\n", in.substr(0, result.end).c_str(), in.substr(result.end).c_str());
                 }
 
-                // This shouldn't emit any runtime errors
-                auto msg   = semantics.to_msg();
-                auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
-                prev       = msg;
+                auto msg = semantics.to_msg();
+
+                try {
+                    // This shouldn't emit any runtime errors
+                    auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
+                } catch(const std::exception & e) {
+                    LOG_ERR("%s[failed-->]%s\n", in.substr(0, result.end).c_str(), in.substr(result.end).c_str());
+                    t.assert_true(std::string("failed with ") + e.what(), false);
+                }
+
+                prev = msg;
             }
         });
 

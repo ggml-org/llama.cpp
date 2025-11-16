@@ -1,13 +1,14 @@
 #pragma once
 
+#include "log.h"
+
 #include <chrono>
 #include <exception>
-#include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 struct testing {
-    std::ostream &out;
     std::vector<std::string> stack;
     int tests = 0;
     int assertions = 0;
@@ -15,12 +16,8 @@ struct testing {
     int unnamed = 0;
     int exceptions = 0;
 
-    explicit testing(std::ostream &os = std::cout) : out(os) {}
-
-    void indent() {
-        for (std::size_t i = 0; i < stack.size() - 1; ++i) {
-            out << "  ";
-        }
+    std::string indent() {
+        return std::string((stack.size() - 1) * 2, ' ');
     }
 
     template <typename F>
@@ -30,29 +27,24 @@ struct testing {
         } catch (const std::exception &e) {
             ++failures;
             ++exceptions;
-            indent();
-            out << "UNHANDLED EXCEPTION (" << ctx << "): " << e.what() << "\n";
+            LOG_ERR("%sUNHANDLED EXCEPTION (%s): %s\n", indent().c_str(), ctx, e.what());
         } catch (...) {
             ++failures;
             ++exceptions;
-            indent();
-            out << "UNHANDLED EXCEPTION (" << ctx << "): unknown\n";
+            LOG_ERR("%sUNHANDLED EXCEPTION (%s): unknown\n", indent().c_str(), ctx);
         }
     }
 
     void print_result(const std::string &label, const std::string &name, int new_failures, int new_assertions, const std::string &extra = "") {
-        indent();
-        out << label << ": " << name << " [";
+        std::string ind = indent();
+        std::string status = (new_failures == 0) ? "ok" : (std::to_string(new_failures) + " failed of");
+        std::string extra_str = extra.empty() ? "" : (", " + extra);
+
         if (new_failures == 0) {
-            out << "ok, ";
+            LOG_INF("%s%s: %s [ok, %d assertion(s)%s]\n", ind.c_str(), label.c_str(), name.c_str(), new_assertions, extra_str.c_str());
         } else {
-            out << new_failures << " failed of ";
+            LOG_ERR("%s%s: %s [%d failed of %d assertion(s)%s]\n", ind.c_str(), label.c_str(), name.c_str(), new_failures, new_assertions, extra_str.c_str());
         }
-        out << new_assertions << " assertion(s)";
-        if (!extra.empty()) {
-            out << ", " << extra;
-        }
-        out << "]\n";
     }
 
     // Named test
@@ -61,8 +53,7 @@ struct testing {
         ++tests;
         stack.push_back(name);
 
-        indent();
-        out << "BEGIN: " << name << "\n";
+        LOG_INF("%sBEGIN: %s\n", indent().c_str(), name.c_str());
 
         int before_failures = failures;
         int before_assertions = assertions;
@@ -88,8 +79,7 @@ struct testing {
         ++tests;
         stack.push_back(name);
 
-        indent();
-        out << "BEGIN BENCH: " << name << "\n";
+        LOG_INF("%sBEGIN BENCH: %s\n", indent().c_str(), name.c_str());
 
         int before_failures = failures;
         int before_assertions = assertions;
@@ -135,12 +125,11 @@ struct testing {
         ++assertions;
         if (!cond) {
             ++failures;
-            indent();
-            out << "ASSERT TRUE FAILED";
-            if (!msg.empty()) {
-                out << " : " << msg;
+            if (msg.empty()) {
+                LOG_ERR("%sASSERT TRUE FAILED\n", indent().c_str());
+            } else {
+                LOG_ERR("%sASSERT TRUE FAILED : %s\n", indent().c_str(), msg.c_str());
             }
-            out << "\n";
             return false;
         }
         return true;
@@ -156,17 +145,19 @@ struct testing {
         ++assertions;
         if (!(actual == expected)) {
             ++failures;
-            indent();
-            out << "ASSERT EQUAL FAILED";
-            if (!msg.empty()) {
-                out << " : " << msg;
-            }
-            out << "\n";
+            std::string ind = indent();
 
-            indent();
-            out << "  expected: " << expected << "\n";
-            indent();
-            out << "  actual  : " << actual << "\n";
+            std::ostringstream exp_ss, act_ss;
+            exp_ss << expected;
+            act_ss << actual;
+
+            if (msg.empty()) {
+                LOG_ERR("%sASSERT EQUAL FAILED\n", ind.c_str());
+            } else {
+                LOG_ERR("%sASSERT EQUAL FAILED : %s\n", ind.c_str(), msg.c_str());
+            }
+            LOG_ERR("%s  expected: %s\n", ind.c_str(), exp_ss.str().c_str());
+            LOG_ERR("%s  actual  : %s\n", ind.c_str(), act_ss.str().c_str());
             return false;
         }
         return true;
@@ -174,12 +165,12 @@ struct testing {
 
     // Print summary and return an exit code
     int summary() {
-        out << "\n==== TEST SUMMARY ====\n";
-        out << "tests      : " << tests << "\n";
-        out << "assertions : " << assertions << "\n";
-        out << "failures   : " << failures << "\n";
-        out << "exceptions : " << exceptions << "\n";
-        out << "======================\n";
+        LOG_INF("\n==== TEST SUMMARY ====\n");
+        LOG_INF("tests      : %d\n", tests);
+        LOG_INF("assertions : %d\n", assertions);
+        LOG_INF("failures   : %d\n", failures);
+        LOG_INF("exceptions : %d\n", exceptions);
+        LOG_INF("======================\n");
         return failures == 0 ? 0 : 1;
     }
 };
