@@ -1,13 +1,13 @@
+#include "log.h"
+#include "common.h"
 #include "chat-peg-parser.h"
 #include "json-schema-to-grammar.h"
-#include "common.h"
-#include "log.h"
 #include "unicode.h"
 
-#include <initializer_list>
 #include <nlohmann/json.hpp>
 
 #include <deque>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <unordered_set>
