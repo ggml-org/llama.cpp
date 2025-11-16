@@ -23,12 +23,14 @@ let sysdatetime_meta = {
                 "properties": {
                      "template": {
                         "type": "string",
-                        "description": `Optional template can be any combination of Y,M,D,h,m,s.
+                        "description": `Template is used to control what is included in the returned date time string.
+                            It can be any combination of Y,M,D,h,m,s. Here
                             Y - FullYear 4 digits, M - Month 2 digits, D - Day 2 digits,
                             h - hour 2 digits, m - minutes 2 digits, s - seconds 2 digits,
-                            any other char will be returned as is
+                            any other char will be returned as is.
 
-                            If no template is given, it defaults to YMDThm
+                            If no template is given, it defaults to YMDThm.
+                            Remember that the template characters are case sensitive.
                             `
                     }
                },
