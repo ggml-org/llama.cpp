@@ -61,6 +61,7 @@ class common_chat_peg_parser_base {
     virtual parser_type type() const = 0;
 
     virtual common_chat_parse_result parse(common_chat_parse_context & ctx, size_t start = 0) {
+        LOG_DBG("[CCPP type %d] Rule: %s", type(), dump().c_str());
         LOG_DBG("[CCPP type %d] Trying to parse: %s\n", type(), ctx.input.substr(start).c_str());
         if (id_ == -1) {
             // Don't cache parsers with ID -1 (from operators)
@@ -75,7 +76,7 @@ class common_chat_peg_parser_base {
         }
 
         auto result = parse_uncached(ctx, start);
-        LOG_DBG("[CCPP type %d] Parse result is: %s\n", type(), result.type == COMMON_CHAT_PARSE_RESULT_FAIL ? "FAIL" : (result.type == COMMON_CHAT_PARSE_RESULT_SUCCESS ? "SUCCESS" : "NEED_MORE_INPUT"));
+        LOG_DBG("[CCPP type %d] Parse result is: %s\n", type(), common_chat_parse_result_type_name(result.type));
         return ctx.cache.set(id_, start, result);
     }
 
