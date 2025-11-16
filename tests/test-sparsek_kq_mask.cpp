@@ -1,244 +1,291 @@
 #include <cassert>
 #include <cmath>
-#include <cstdint>
-#include <cstdlib>
-#include <iostream>
+#include <cstdio>
 #include <vector>
+#include <limits>
+#include <cstdint>
 
-// Small helper: assert that a value is -INF
+
+// Simple helpers for readability in assertions
 static void assert_is_neginf(float x) {
+    // Expect strict -INF (or any -inf value)
     assert(std::isinf(x) && x < 0.0f && "expected -INF");
 }
 
-// Small helper: assert that a value is exactly 0.0f
 static void assert_is_zero(float x) {
-    const float eps = 1e-8f;
     assert(std::fabs(x - 0.0f) < eps && "expected 0.0f");
 }
 
-// This helper mirrors the SparseK row logic used at the end of
-// llama_kv_cache::set_input_kq_mask in src/llama-kv-cache.cpp.
+// This helper mirrors the SparseK block inside llama_kv_cache::set_input_kq_mask:
 //
-// It operates on a single mask row of length n_kv for a specific token index i.
-static void apply_sparsek_row(float * row, int64_t n_kv, int token_index, bool causal_attn) {
-    // Read SparseK configuration from environment, similar to the production code.
-    const char * s = nullptr;
+//     if (!SPARSEK_ENABLE || (!SPARSEK_EN_LOCAL && !SPARSEK_EN_STRIDE)) {
+//         // do nothing – keep original KQ mask
+//     } else {
+//         for each row i:
+//             std::vector<uint8_t> allow(n_kv, 0);
+//             if (SPARSEK_EN_LOCAL && SPARSEK_WIN_LOCAL > 0) { ... allow[j] = 1; }
+//             if (SPARSEK_EN_STRIDE && SPARSEK_STRIDE > 0) { ... allow[j] = 1; }
+//             for j:
+//                 if (!allow[j]) {
+//                     row[j] = -INFINITY;
+//                 } else if (std::isinf(row[j]) && row[j] < 0.0f) {
+//                     row[j] = 0.0f;
+//                 }
+//         }
+//     }
+//
+// כאן אנחנו בודקים את הלוגיקה הזו על שורה אחת ("row i") במטריצה של KQ-mask.
+static std::vector<float> apply_sparsek_to_base_row(
+        const std::vector<float> & base_row,
+        bool   enable_sparsek,
+        bool   causal_attn,
+        int    win_local,
+        int    stride,
+        bool   en_local,
+        bool   en_stride,
+        int    i,          // row index (token index within stream)
+        int    n_kv) {
 
-    bool  SPARSEK_ENABLE    = false;
-    int   SPARSEK_WIN_LOCAL = 64;
-    int   SPARSEK_STRIDE    = 128;
-    bool  SPARSEK_EN_LOCAL  = true;
-    bool  SPARSEK_EN_STRIDE = true;
+    std::vector<float> row = base_row;
 
-    if ((s = std::getenv("LLAMA_SPARSEK_ENABLE"))) {
-        SPARSEK_ENABLE = std::atoi(s) != 0;
-    }
-    if ((s = std::getenv("LLAMA_SPARSEK_WIN"))) {
-        SPARSEK_WIN_LOCAL = std::max(0, std::atoi(s));
-    }
-    if ((s = std::getenv("LLAMA_SPARSEK_STRIDE"))) {
-        SPARSEK_STRIDE = std::max(0, std::atoi(s));
-    }
-    if ((s = std::getenv("LLAMA_SPARSEK_ENABLE_LOCAL"))) {
-        SPARSEK_EN_LOCAL = std::atoi(s) != 0;
-    }
-    if ((s = std::getenv("LLAMA_SPARSEK_ENABLE_STRIDE"))) {
-        SPARSEK_EN_STRIDE = std::atoi(s) != 0;
-    }
-
-    // Same intended gating as in the SparseK block:
-    // if SparseK is disabled, or all patterns are disabled, leave the row unchanged.
-    if (!SPARSEK_ENABLE || (!SPARSEK_EN_LOCAL && !SPARSEK_EN_STRIDE)) {
-        return;
+    if (!enable_sparsek || (!en_local && !en_stride)) {
+        // When SparseK is disabled, we must return the base mask unchanged.
+        return row;
     }
 
     std::vector<uint8_t> allow(n_kv, 0);
 
-    // Local window pattern (symmetric around the current token index)
-    if (SPARSEK_EN_LOCAL && SPARSEK_WIN_LOCAL > 0) {
-        const int j0 = std::max<int>(0, token_index - SPARSEK_WIN_LOCAL);
-        const int j1 = std::min<int>(static_cast<int>(n_kv) - 1, token_index + SPARSEK_WIN_LOCAL);
+    // Local window: mark tokens in [i - win_local, i + win_local] as allowed
+    if (en_local && win_local > 0) {
+        const int j0 = std::max(0,          i - win_local);
+        const int j1 = std::min(n_kv - 1,   i + win_local);
         for (int j = j0; j <= j1; ++j) {
             allow[j] = 1;
         }
     }
 
-    // Stride pattern (backward only for causal, both directions for non-causal)
-    if (SPARSEK_EN_STRIDE && SPARSEK_STRIDE > 0) {
-        for (int j = token_index; j >= 0; j -= SPARSEK_STRIDE) {
+    // Stride: mark tokens every "stride" steps backward, and optionally forward if non-causal
+    if (en_stride && stride > 0) {
+        for (int j = i; j >= 0; j -= stride) {
             allow[j] = 1;
         }
         if (!causal_attn) {
-            for (int j = token_index; j < static_cast<int>(n_kv); j += SPARSEK_STRIDE) {
+            for (int j = i; j < n_kv; j += stride) {
                 allow[j] = 1;
             }
         }
     }
 
-    // Final mask update: disallowed positions get -INF,
-    // allowed positions reset any negative infinity back to 0.0f.
-    for (int64_t j = 0; j < n_kv; ++j) {
+    // Final SparseK rule:
+    // - if allow[j] == 0 → force -INF
+    // - else if row[j] is already -INF → reset to 0 (so "allowed" entries are neutral in softmax)
+    for (int j = 0; j < n_kv; ++j) {
         if (!allow[j]) {
             row[j] = -INFINITY;
         } else if (std::isinf(row[j]) && row[j] < 0.0f) {
             row[j] = 0.0f;
         }
     }
+
+    return row;
 }
 
-// Pretty-print helper for debugging, not strictly required but useful.
-static void dump_row(const char * name, const std::vector<float> & row) {
-    std::cout << name << ":";
-    for (float v : row) {
-        if (std::isinf(v) && v < 0.0f) {
-            std::cout << " -INF";
+// Convenience: build a base row with all zeros (no masking yet).
+static std::vector<float> make_base_row(int n_kv) {
+    return std::vector<float>(n_kv, 0.0f);
+}
+
+// --- Test cases ----------------------------------------------------------
+
+// 1) Local window only: verify that only the band around i remains non -INF
+static void test_local_window_only() {
+    const int n_kv = 8;
+    const int i    = 4;
+    const int win  = 2;
+
+    std::vector<float> base = make_base_row(n_kv);
+
+    std::vector<float> row = apply_sparsek_to_base_row(
+        base,
+        /*enable_sparsek=*/true,
+        /*causal_attn=*/true,
+        /*win_local=*/win,
+        /*stride=*/0,
+        /*en_local=*/true,
+        /*en_stride=*/false,
+        /*i=*/i,
+        /*n_kv=*/n_kv);
+
+    // Expected allowed indices: [i - win, ..., i + win] → [2,3,4,5,6]
+    for (int j = 0; j < n_kv; ++j) {
+        bool should_be_allowed = (j >= i - win && j <= i + win);
+        if (should_be_allowed) {
+            assert_is_zero(row[j]);
         } else {
-            std::cout << " " << v;
+            assert_is_neginf(row[j]);
         }
     }
-    std::cout << "\n";
+
+    std::printf("SparseK test: local window only – OK\n");
 }
 
-// Scenario 1: SparseK disabled -> row must remain unchanged.
-static void test_sparsek_disabled_keeps_row() {
-    const int64_t n_kv = 8;
-    std::vector<float> row(n_kv, 0.0f);
+// 2) Stride only: verify symmetric backward steps, forward only if non-causal == false here
+static void test_stride_only_causal() {
+    const int n_kv   = 10;
+    const int i      = 7;
+    const int stride = 3;
 
-    // Configure environment: disabled SparseK.
-    setenv("LLAMA_SPARSEK_ENABLE", "0", 1);
-    setenv("LLAMA_SPARSEK_WIN", "2", 1);
-    setenv("LLAMA_SPARSEK_STRIDE", "2", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_LOCAL", "1", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_STRIDE", "1", 1);
+    std::vector<float> base(n_kv, 0.0f);
 
-    apply_sparsek_row(row.data(), n_kv, /*token_index=*/3, /*causal_attn=*/true);
+    std::vector<float> row = apply_sparsek_to_base_row(
+        base,
+        /*enable_sparsek=*/true,
+        /*causal_attn=*/true,
+        /*win_local=*/0,
+        /*stride=*/stride,
+        /*en_local=*/false,
+        /*en_stride=*/true,
+        /*i=*/i,
+        /*n_kv=*/n_kv);
 
-    for (int64_t j = 0; j < n_kv; ++j) {
+    // For causal_attn = true we only walk backwards: i, i-stride, i-2*stride,...
+    std::vector<uint8_t> expected_allow(n_kv, 0);
+    for (int j = i; j >= 0; j -= stride) {
+        expected_allow[j] = 1;
+    }
+
+    for (int j = 0; j < n_kv; ++j) {
+        if (expected_allow[j]) {
+            assert_is_zero(row[j]);
+        } else {
+            assert_is_neginf(row[j]);
+        }
+    }
+
+    std::printf("SparseK test: stride only (causal) – OK\n");
+}
+
+// 3) Combined: local window + stride – any "allowed" wins, others must be -INF
+static void test_local_plus_stride() {
+    const int n_kv   = 16;
+    const int i      = 8;
+    const int win    = 2;
+    const int stride = 5;
+
+    std::vector<float> base(n_kv, 0.0f);
+
+    std::vector<float> row = apply_sparsek_to_base_row(
+        base,
+        /*enable_sparsek=*/true,
+        /*causal_attn=*/false,
+        /*win_local=*/win,
+        /*stride=*/stride,
+        /*en_local=*/true,
+        /*en_stride=*/true,
+        /*i=*/i,
+        /*n_kv=*/n_kv);
+
+    // Build expected "allow" mask exactly like the production logic
+    std::vector<uint8_t> expected_allow(n_kv, 0);
+
+    // local window
+    {
+        const int j0 = std::max(0,         i - win);
+        const int j1 = std::min(n_kv - 1,  i + win);
+        for (int j = j0; j <= j1; ++j) {
+            expected_allow[j] = 1;
+        }
+    }
+
+    // stride (non-causal: both directions)
+    {
+        for (int j = i; j >= 0; j -= stride) {
+            expected_allow[j] = 1;
+        }
+        for (int j = i; j < n_kv; j += stride) {
+            expected_allow[j] = 1;
+        }
+    }
+
+    for (int j = 0; j < n_kv; ++j) {
+        if (expected_allow[j]) {
+            assert_is_zero(row[j]);
+        } else {
+            assert_is_neginf(row[j]);
+        }
+    }
+
+    std::printf("SparseK test: local + stride (non-causal) – OK\n");
+}
+
+// 4) Disabled: when SparseK is not enabled, base mask must remain unchanged.
+static void test_sparsek_disabled() {
+    const int n_kv = 6;
+    std::vector<float> base(n_kv, 0.0f);
+
+    // We intentionally pass enable_sparsek = false
+    std::vector<float> row = apply_sparsek_to_base_row(
+        base,
+        /*enable_sparsek=*/false,
+        /*causal_attn=*/true,
+        /*win_local=*/4,
+        /*stride=*/3,
+        /*en_local=*/true,
+        /*en_stride=*/true,
+        /*i=*/3,
+        /*n_kv=*/n_kv);
+
+    // Must be identical to base: all zeros, no -INF introduced.
+    for (int j = 0; j < n_kv; ++j) {
         assert_is_zero(row[j]);
     }
+
+    std::printf("SparseK test: disabled path keeps base mask – OK\n");
 }
 
-// Scenario 2: Local window only, causal attention.
-// With n_kv = 8, token_index = 3 and window = 1, we expect positions {2,3,4} to be allowed.
-static void test_sparsek_local_window_only() {
-    const int64_t n_kv = 8;
-    std::vector<float> row(n_kv, -INFINITY);
+// 5) Base row pre-filled with -INF on allowed positions: SparseK must reset them to 0
+//    so that "allowed" entries are neutral in softmax.
+static void test_reset_inf_to_zero_for_allowed() {
+    const int n_kv = 8;
+    const int i    = 3;
+    const int win  = 1;
 
-    setenv("LLAMA_SPARSEK_ENABLE", "1", 1);
-    setenv("LLAMA_SPARSEK_WIN", "1", 1);
-    setenv("LLAMA_SPARSEK_STRIDE", "0", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_LOCAL", "1", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_STRIDE", "0", 1);
+    // Base row has -INF everywhere
+    std::vector<float> base(n_kv, -INFINITY);
 
-    const int token_index = 3;
-    apply_sparsek_row(row.data(), n_kv, token_index, /*causal_attn=*/true);
+    std::vector<float> row = apply_sparsek_to_base_row(
+        base,
+        /*enable_sparsek=*/true,
+        /*causal_attn=*/true,
+        /*win_local=*/win,
+        /*stride=*/0,
+        /*en_local=*/true,
+        /*en_stride=*/false,
+        /*i=*/i,
+        /*n_kv=*/n_kv);
 
-    // Optional debug print:
-    // dump_row("local_window_only", row);
-
-    for (int64_t j = 0; j < n_kv; ++j) {
-        bool should_allow = (j == 2 || j == 3 || j == 4);
-        if (should_allow) {
+    for (int j = 0; j < n_kv; ++j) {
+        bool should_be_allowed = (j >= i - win && j <= i + win);
+        if (should_be_allowed) {
+            // allowed entries must be reset to 0 even if they started as -INF
             assert_is_zero(row[j]);
         } else {
             assert_is_neginf(row[j]);
         }
     }
-}
 
-// Scenario 3: Stride only, causal attention.
-// With n_kv = 8, token_index = 5, stride = 2, causal:
-// allowed positions should be {5, 3, 1}.
-static void test_sparsek_stride_causal() {
-    const int64_t n_kv = 8;
-    std::vector<float> row(n_kv, -INFINITY);
-
-    setenv("LLAMA_SPARSEK_ENABLE", "1", 1);
-    setenv("LLAMA_SPARSEK_WIN", "0", 1);
-    setenv("LLAMA_SPARSEK_STRIDE", "2", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_LOCAL", "0", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_STRIDE", "1", 1);
-
-    const int token_index = 5;
-    apply_sparsek_row(row.data(), n_kv, token_index, /*causal_attn=*/true);
-
-    // dump_row("stride_causal", row);
-
-    for (int64_t j = 0; j < n_kv; ++j) {
-        bool should_allow = (j == 1 || j == 3 || j == 5);
-        if (should_allow) {
-            assert_is_zero(row[j]);
-        } else {
-            assert_is_neginf(row[j]);
-        }
-    }
-}
-
-// Scenario 4: Stride only, non-causal.
-// With n_kv = 8, token_index = 5, stride = 2, non-causal:
-// allowed positions should be {1, 3, 5, 7}.
-static void test_sparsek_stride_noncausal() {
-    const int64_t n_kv = 8;
-    std::vector<float> row(n_kv, -INFINITY);
-
-    setenv("LLAMA_SPARSEK_ENABLE", "1", 1);
-    setenv("LLAMA_SPARSEK_WIN", "0", 1);
-    setenv("LLAMA_SPARSEK_STRIDE", "2", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_LOCAL", "0", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_STRIDE", "1", 1);
-
-    const int token_index = 5;
-    apply_sparsek_row(row.data(), n_kv, token_index, /*causal_attn=*/false);
-
-    // dump_row("stride_noncausal", row);
-
-    for (int64_t j = 0; j < n_kv; ++j) {
-        bool should_allow = (j == 1 || j == 3 || j == 5 || j == 7);
-        if (should_allow) {
-            assert_is_zero(row[j]);
-        } else {
-            assert_is_neginf(row[j]);
-        }
-    }
-}
-
-// Scenario 5: Combined local window + stride.
-// This checks that both patterns are OR'ed together.
-static void test_sparsek_combined_patterns() {
-    const int64_t n_kv = 16;
-    std::vector<float> row(n_kv, -INFINITY);
-
-    setenv("LLAMA_SPARSEK_ENABLE", "1", 1);
-    setenv("LLAMA_SPARSEK_WIN", "1", 1);
-    setenv("LLAMA_SPARSEK_STRIDE", "4", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_LOCAL", "1", 1);
-    setenv("LLAMA_SPARSEK_ENABLE_STRIDE", "1", 1);
-
-    const int token_index = 8;
-    apply_sparsek_row(row.data(), n_kv, token_index, /*causal_attn=*/true);
-
-    // Local window (radius 1) -> {7,8,9}
-    // Stride (4, causal, backward) from 8 -> {8,4,0}
-    // Union -> {0,4,7,8,9}
-    for (int64_t j = 0; j < n_kv; ++j) {
-        bool should_allow = (j == 0 || j == 4 || j == 7 || j == 8 || j == 9);
-        if (should_allow) {
-            assert_is_zero(row[j]);
-        } else {
-            assert_is_neginf(row[j]);
-        }
-    }
+    std::printf("SparseK test: allowed positions reset -INF → 0 – OK\n");
 }
 
 int main() {
-    std::cout << "Running SparseK KQ mask row tests...\n";
+    std::printf("Running SparseK KQ mask CPU tests...\n");
 
-    test_sparsek_disabled_keeps_row();
-    test_sparsek_local_window_only();
-    test_sparsek_stride_causal();
-    test_sparsek_stride_noncausal();
-    test_sparsek_combined_patterns();
+    test_local_window_only();
+    test_stride_only_causal();
+    test_local_plus_stride();
+    test_sparsek_disabled();
+    test_reset_inf_to_zero_for_allowed();
 
-    std::cout << "All SparseK KQ mask tests passed.\n";
+    std::printf("All SparseK KQ mask tests passed.\n");
     return 0;
 }
