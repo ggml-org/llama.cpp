@@ -96,7 +96,7 @@ void test_gbnf_generation(testing &t) {
     // Test rule references
     t.test("rule references", [](testing &t) {
         auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-            auto digit = p.add_rule("digit", p.one("[0-9]"));
+            auto digit = p.rule("digit", p.one("[0-9]"));
             return p.one_or_more(digit);
         });
 

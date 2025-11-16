@@ -9,29 +9,29 @@
 
 static common_chat_peg_parser create_command_r7b_parser() {
     auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-        auto thinking = p.add_rule("thinking",
-            "<|START_THINKING|>" << p.add_rule("reasoning-content", p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
+        auto thinking = p.rule("thinking",
+            "<|START_THINKING|>" << p.rule("reasoning-content", p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
 
-        auto response = p.add_rule("response",
-            "<|START_RESPONSE|>" << p.add_rule("content", p.until("<|END_RESPONSE|>")) << "<|END_RESPONSE|>");
+        auto response = p.rule("response",
+            "<|START_RESPONSE|>" << p.rule("content", p.until("<|END_RESPONSE|>")) << "<|END_RESPONSE|>");
 
-        auto json = p.add_rule("json", p.json());
+        auto json = p.rule("json", p.json());
 
-        auto tool_call_id = p.add_rule("tool-call-id",
-            "\"tool_call_id\"" << (":" << p.add_rule("tool-call-id-value", "\"" + p.json_string() + "\"")));
+        auto tool_call_id = p.rule("tool-call-id",
+            "\"tool_call_id\"" << (":" << p.rule("tool-call-id-value", "\"" + p.json_string() + "\"")));
 
-        auto tool_call_name = p.add_rule("tool-name",
-            "\"tool_name\"" << (":" << p.add_rule("tool-name-value", "\"" + p.json_string() + "\"")));
+        auto tool_call_name = p.rule("tool-name",
+            "\"tool_name\"" << (":" << p.rule("tool-name-value", "\"" + p.json_string() + "\"")));
 
-        auto tool_call_args = p.add_rule("tool-args",
-            "\"parameters\"" << (":" << p.add_rule("tool-args-value", json)));
+        auto tool_call_args = p.rule("tool-args",
+            "\"parameters\"" << (":" << p.rule("tool-args-value", json)));
 
-        auto tool_call_fields = p.add_rule("tool-call-fields", tool_call_id | tool_call_name | tool_call_args);
+        auto tool_call_fields = p.rule("tool-call-fields", tool_call_id | tool_call_name | tool_call_args);
 
-        auto tool_call = p.add_rule("tool-call",
+        auto tool_call = p.rule("tool-call",
             "{" << tool_call_fields << p.zero_or_more(p.literal(",") << tool_call_fields) << "}");
 
-        auto tool_calls = p.add_rule("tool-calls",
+        auto tool_calls = p.rule("tool-calls",
             "<|START_ACTION|>"
             << ("[" << tool_call << p.zero_or_more(p.literal(",") << tool_call) << "]")
             << "<|END_ACTION|>");

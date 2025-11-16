@@ -6,32 +6,32 @@
 
 void test_example_qwen3_coder(testing &t) {
     auto explicit_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
-        auto thinking = p.add_rule("raw-reasoning",
-            "<think>" << p.add_rule("reasoning-content", p.until("</think>")) << "</think>");
+        auto thinking = p.rule("raw-reasoning",
+            "<think>" << p.rule("reasoning-content", p.until("</think>")) << "</think>");
 
-        auto content = p.add_rule("content", p.until("<tool_call>"));
+        auto content = p.rule("content", p.until("<tool_call>"));
 
-        auto arg_name = p.add_rule("arg-start", "<parameter=" + p.capture("arg-name", p.chars("[a-zA-Z0-9_]")) + ">");
-        auto arg_end = p.add_rule("arg-end", "</parameter>" + p.peek(p.literal("<parameter=") | "</function>"));
+        auto arg_name = p.rule("arg-start", "<parameter=" + p.capture("arg-name", p.chars("[a-zA-Z0-9_]")) + ">");
+        auto arg_end = p.rule("arg-end", "</parameter>" + p.peek(p.literal("<parameter=") | "</function>"));
 
-        auto string_arg_content = p.add_rule("arg-string-content", p.until_one_of({
+        auto string_arg_content = p.rule("arg-string-content", p.until_one_of({
             "</parameter><parameter=",
             "</parameter></function>",
         }));
 
-        auto string_arg = p.add_rule("arg-string", arg_name + string_arg_content + arg_end);
+        auto string_arg = p.rule("arg-string", arg_name + string_arg_content + arg_end);
 
         auto json = p.json();
 
-        auto json_arg = p.add_rule("arg-json", arg_name + p.add_rule("arg-json-content", json) + arg_end);
+        auto json_arg = p.rule("arg-json", arg_name + p.rule("arg-json-content", json) + arg_end);
 
-        auto function = p.add_rule("function",
-                p.add_rule("function-start", "<function=" + p.capture("tool-name", p.chars("[a-zA-Z0-9_]")) + ">")
+        auto function = p.rule("function",
+                p.rule("function-start", "<function=" + p.capture("tool-name", p.chars("[a-zA-Z0-9_]")) + ">")
                 + p.one_or_more(json_arg | string_arg)
                 + "</function>");
 
-        auto tool_call = p.trigger(p.add_rule("tool-call",
-            "<tool_call>" + p.one_or_more(function) + "</tool_call>"));
+        auto tool_call = p.rule("tool-call",
+            "<tool_call>" + p.one_or_more(function) + "</tool_call>", true);
 
         return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call) + p.end();
     });
@@ -45,8 +45,8 @@ void test_example_qwen3_coder(testing &t) {
                 "path", "pattern", "min_size_mb", "max_depth", "include_hidden", "modified_days_ago",
                 "case_sensitive", "sort_by", "filters"
             }));
-        auto tool_call = p.trigger(p.add_rule("tool-call",
-            "<tool_call>" + p.one_or_more(function) + "</tool_call>"));
+        auto tool_call = p.rule("tool-call",
+            "<tool_call>" + p.one_or_more(function) + "</tool_call>", true);
 
         return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
     });

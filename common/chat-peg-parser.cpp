@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <unordered_set>
 
 enum parser_type {
@@ -27,13 +28,13 @@ enum parser_type {
     ANY,
     CHARS,
     RULE,
+    REF,
     UNTIL,
     SPACE,
     SCHEMA,
     ROOT,
     JSON_STRING,
     CAPTURE,
-    TRIGGER,
 };
 
 const char * common_chat_parse_result_type_name(common_chat_parse_result_type type) {
@@ -61,13 +62,13 @@ static const char * common_chat_parser_type_name(parser_type type) {
         case ANY:          return "any";
         case CHARS:        return "chars";
         case RULE:         return "rule";
+        case REF:          return "ref";
         case UNTIL:        return "until";
         case SPACE:        return "space";
         case SCHEMA:       return "schema";
         case ROOT:         return "root";
         case JSON_STRING:  return "json_string";
         case CAPTURE:      return "capture";
-        case TRIGGER:      return "trigger";
         default:           return "unknown";
     }
 }
@@ -327,7 +328,12 @@ class root_parser : public common_chat_peg_parser_base {
 
     void assign_id(common_chat_peg_parser_counter & counter) override {
         common_chat_peg_parser_base::assign_id(counter);
-        root_->assign_id(counter);
+        for (auto & [name, rule] : rules_) {
+            rule->assign_id(counter);
+        }
+        if (root_.ptr()) {
+            root_->assign_id(counter);
+        }
     }
 
     std::string dump() const override {
@@ -1198,33 +1204,22 @@ class schema_parser : public common_chat_peg_parser_base {
     const nlohmann::ordered_json & schema() const { return schema_; }
 };
 
-// References a named rule for recursive or reusable grammar definitions.
+// Defines a named rule for recursive or reusable grammar definitions.
+// Owns the implementation and fires NODE_START/END events.
 //   expr -> term | expr "+" term
-class rule_parser : public common_chat_peg_parser_base {
+class rule_parser : public common_chat_peg_parser_base, public std::enable_shared_from_this<rule_parser> {
     std::string name_;
-    std::weak_ptr<root_parser> root_;
+    common_chat_peg_parser child_;
+    bool trigger_;
 
   public:
     static constexpr parser_type type_value = RULE;
     parser_type type() const override { return type_value; }
 
-    rule_parser(const std::string & name, const std::weak_ptr<root_parser> & root, int id)
-        : common_chat_peg_parser_base(id), name_(name), root_(root) {}
+    rule_parser(const std::string & name, const common_chat_peg_parser & child, bool trigger, int id)
+        : common_chat_peg_parser_base(id), name_(name), child_(child), trigger_(trigger) {}
 
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto root = root_.lock();
-        if (!root) {
-            LOG_ERR("rule_parser::parse called with expired root parser\n");
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-        }
-
-        auto & rules = root->rules();
-        auto it = rules.find(name_);
-        if (it == rules.end()) {
-            LOG_ERR("rule_parser::parse rule '%s' not found in registry\n", name_.c_str());
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-        }
-
         // Fire NODE_START event
         if (ctx.event_handler && ctx.semantics) {
             ctx.event_handler(common_chat_parse_event{
@@ -1239,8 +1234,8 @@ class rule_parser : public common_chat_peg_parser_base {
             ctx.current_depth++;
         }
 
-        // Parse the referenced rule
-        auto result = it->second->parse(ctx, start);
+        // Parse the child
+        auto result = child_->parse(ctx, start);
 
         // Fire NODE_END event
         if (ctx.event_handler && ctx.semantics) {
@@ -1265,13 +1260,55 @@ class rule_parser : public common_chat_peg_parser_base {
         return result;
     }
 
+    void assign_id(common_chat_peg_parser_counter & counter) override {
+        common_chat_peg_parser_base::assign_id(counter);
+        child_->assign_id(counter);
+    }
+
     std::string dump() const override {
-        return "Rule(" + name_ + ")";
+        return "Rule(" + name_ + ", " + child_->dump() + ")";
     }
 
     void accept(parser_visitor & visitor) override;
 
     const std::string & name() const { return name_; }
+    const common_chat_peg_parser & child() const { return child_; }
+    bool is_trigger() const { return trigger_; }
+};
+
+// References a named rule (lightweight reference, resolved during resolution phase)
+//   expr_ref -> expr
+class ref_parser : public common_chat_peg_parser_base, public std::enable_shared_from_this<ref_parser> {
+    std::string name_;
+    std::weak_ptr<rule_parser> target_;
+
+  public:
+    static constexpr parser_type type_value = REF;
+    parser_type type() const override { return type_value; }
+
+    ref_parser(const std::string & name, int id)
+        : common_chat_peg_parser_base(id), name_(name) {}
+
+    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
+        auto target = target_.lock();
+        if (!target) {
+            LOG_ERR("ref_parser::parse called with unresolved reference '%s'\n", name_.c_str());
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+        }
+
+        // Delegate to the target rule parser
+        return target->parse(ctx, start);
+    }
+
+    std::string dump() const override {
+        return "Ref(" + name_ + ")";
+    }
+
+    void accept(parser_visitor & visitor) override;
+
+    const std::string & name() const { return name_; }
+    void set_target(const std::weak_ptr<rule_parser> & target) { target_ = target; }
+    std::weak_ptr<rule_parser> target() const { return target_; }
 };
 
 // Capture content if child parser matches
@@ -1313,37 +1350,6 @@ class capture_parser : public common_chat_peg_parser_base {
     const common_chat_peg_parser & child() const { return parser_; }
 };
 
-// Annotate nodes for use when generating lazy GBNF grammar rules. When built
-// with lazy = true, only grammar rules reachable from trigger nodes are
-// emitted.
-class trigger_parser : public common_chat_peg_parser_base {
-    common_chat_peg_parser parser_;
-
-  public:
-    static constexpr parser_type type_value = TRIGGER;
-    parser_type type() const override { return type_value; }
-
-    trigger_parser(const common_chat_peg_parser & parser, int id)
-        : common_chat_peg_parser_base(id), parser_(parser) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        return parser_->parse(ctx, start);
-    }
-
-    void assign_id(common_chat_peg_parser_counter & counter) override {
-        common_chat_peg_parser_base::assign_id(counter);
-        parser_->assign_id(counter);
-    }
-
-    std::string dump() const override {
-        return "Trigger(" + parser_->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const common_chat_peg_parser & child() const { return parser_; }
-};
-
 // Base visitor class for parser tree traversal
 class parser_visitor {
   public:
@@ -1367,9 +1373,9 @@ class parser_visitor {
     virtual void visit(json_string_parser & p) = 0;
     virtual void visit(schema_parser & p) = 0;
     virtual void visit(rule_parser & p) = 0;
+    virtual void visit(ref_parser & p) = 0;
     virtual void visit(root_parser & p) = 0;
     virtual void visit(capture_parser & p) = 0;
-    virtual void visit(trigger_parser & p) = 0;
 };
 
 // Escape special characters for GBNF literals
@@ -1435,16 +1441,102 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
     return "(" + pattern + ")*";
 }
 
+// Visitor for resolving rule references and collecting rules
+class resolution_visitor : public parser_visitor {
+    std::unordered_map<std::string, std::shared_ptr<rule_parser>> rules_;
+    std::vector<std::shared_ptr<ref_parser>> refs_;
+
+  public:
+    resolution_visitor() = default;
+
+    void visit(start_parser & /* p */) override {}
+    void visit(end_parser & /* p */) override {}
+    void visit(literal_parser & /* p */) override {}
+    void visit(any_parser & /* p */) override {}
+    void visit(space_parser & /* p */) override {}
+    void visit(json_string_parser & /* p */) override {}
+    void visit(chars_parser & /* p */) override {}
+    void visit(until_parser & /* p */) override {}
+    void visit(and_parser & p) override { p.child()->accept(*this); }
+    void visit(not_parser & p) override { p.child()->accept(*this); }
+
+    void visit(sequence_parser & p) override {
+        for (const auto & child : p.parsers()) {
+            child->accept(*this);
+        }
+    }
+
+    void visit(choice_parser & p) override {
+        for (const auto & child : p.parsers()) {
+            child->accept(*this);
+        }
+    }
+
+    void visit(one_or_more_parser & p) override { p.child()->accept(*this); }
+    void visit(zero_or_more_parser & p) override { p.child()->accept(*this); }
+    void visit(optional_parser & p) override { p.child()->accept(*this); }
+    void visit(repetition_parser & p) override { p.child()->accept(*this); }
+    void visit(schema_parser & p) override { p.child()->accept(*this); }
+    void visit(capture_parser & p) override { p.child()->accept(*this); }
+
+    void visit(rule_parser & p) override {
+        const std::string & name = p.name();
+
+        // Check for duplicate rule names
+        if (rules_.find(name) != rules_.end()) {
+            throw std::runtime_error("Duplicate rule name: " + name);
+        }
+
+        // Collect this rule
+        auto rule_ptr = cast<rule_parser>(p.shared_from_this());
+        if (rule_ptr) {
+            rules_[name] = rule_ptr;
+        }
+
+        // Recursively visit the child
+        p.child()->accept(*this);
+    }
+
+    void visit(ref_parser & p) override {
+        // Collect this ref for later resolution
+        auto ref_ptr = cast<ref_parser>(p.shared_from_this());
+        if (ref_ptr) {
+            refs_.push_back(ref_ptr);
+        }
+    }
+
+    void visit(root_parser & p) override {
+        // Visit all rules stored in the map
+        for (const auto & [name, rule] : p.rules()) {
+            rule->accept(*this);
+        }
+
+        // Visit the root tree
+        p.root()->accept(*this);
+    }
+
+    // Resolve all collected refs
+    void resolve() {
+        for (const auto & ref : refs_) {
+            const std::string & name = ref->name();
+            auto it = rules_.find(name);
+            if (it == rules_.end()) {
+                throw std::runtime_error("Unresolved reference: " + name);
+            }
+            ref->set_target(it->second);
+        }
+    }
+
+    const std::unordered_map<std::string, std::shared_ptr<rule_parser>> & rules() const { return rules_; }
+};
+
 // Visitor for collecting reachable rules from a subtree
 class reachability_visitor : public parser_visitor {
     std::unordered_set<std::string> & reachable_rules_;
-    const std::unordered_map<std::string, common_chat_peg_parser> & rules_;
 
   public:
-    reachability_visitor(
-        std::unordered_set<std::string> & reachable_rules,
-        const std::unordered_map<std::string, common_chat_peg_parser> & rules
-    ) : reachable_rules_(reachable_rules), rules_(rules) {}
+    reachability_visitor(std::unordered_set<std::string> & reachable_rules)
+        : reachable_rules_(reachable_rules) {}
 
     void visit(start_parser & /* p */) override {}
     void visit(end_parser & /* p */) override {}
@@ -1478,7 +1570,6 @@ class reachability_visitor : public parser_visitor {
         // The schema system will handle rule generation via builder_.add_schema()
     }
     void visit(capture_parser & p) override { p.child()->accept(*this); }
-    void visit(trigger_parser & p) override { p.child()->accept(*this); }
 
     void visit(rule_parser & p) override {
         const std::string & name = p.name();
@@ -1488,10 +1579,22 @@ class reachability_visitor : public parser_visitor {
         }
         reachable_rules_.insert(name);
 
-        // Recursively visit the rule's definition
-        auto it = rules_.find(name);
-        if (it != rules_.end()) {
-            it->second->accept(*this);
+        // Recursively visit the rule's child
+        p.child()->accept(*this);
+    }
+
+    void visit(ref_parser & p) override {
+        const std::string & name = p.name();
+        // Mark as reachable
+        if (reachable_rules_.find(name) != reachable_rules_.end()) {
+            return;
+        }
+        reachable_rules_.insert(name);
+
+        // Follow the reference to the target rule
+        auto target = p.target().lock();
+        if (target) {
+            target->accept(*this);
         }
     }
 
@@ -1505,14 +1608,12 @@ class gbnf_visitor : public parser_visitor {
     std::unordered_map<std::string, std::string> rule_name_mapping_;
     std::string current_result_;
     bool lazy_;
-    std::vector<std::string> trigger_names_;
+    std::unordered_map<std::string, std::shared_ptr<rule_parser>> all_rules_;
     std::unordered_set<std::string> reachable_rules_;
-    int trigger_counter_;
-    std::vector<std::shared_ptr<common_chat_peg_parser_base>> triggers_;
 
   public:
     gbnf_visitor(const common_grammar_builder & builder, bool lazy = false)
-        : builder_(builder), lazy_(lazy), trigger_counter_(0) {}
+        : builder_(builder), lazy_(lazy) {}
 
     const std::string& result() const { return current_result_; }
 
@@ -1522,16 +1623,24 @@ class gbnf_visitor : public parser_visitor {
         return type == CHOICE || type == SEQUENCE;
     }
 
-    // Collect all reachable rules from the given triggers
-    void collect_reachable_rules(
-        const std::vector<std::shared_ptr<common_chat_peg_parser_base>> & triggers,
-        const std::unordered_map<std::string, common_chat_peg_parser> & rules
-    ) {
+    // Collect all reachable rules from trigger rules
+    void collect_reachable_rules() {
         reachable_rules_.clear();
-        reachability_visitor visitor(reachable_rules_, rules);
-        for (const auto & trigger : triggers) {
-            trigger->accept(visitor);
+        reachability_visitor visitor(reachable_rules_);
+
+        // Find all trigger rules and traverse from them
+        for (const auto & [name, rule] : all_rules_) {
+            if (rule->is_trigger()) {
+                rule->accept(visitor);
+            }
         }
+    }
+
+    // Collect all rules from the tree
+    void collect_all_rules(common_chat_peg_parser_base & root) {
+        resolution_visitor resolver;
+        root.accept(resolver);
+        all_rules_ = resolver.rules();
     }
 
   public:
@@ -1691,6 +1800,11 @@ class gbnf_visitor : public parser_visitor {
     }
 
     void visit(rule_parser & p) override {
+        // When visiting a rule, generate its definition
+        p.child()->accept(*this);
+    }
+
+    void visit(ref_parser & p) override {
         // Return canonical rule reference
         auto it = rule_name_mapping_.find(p.name());
         if (it != rule_name_mapping_.end()) {
@@ -1702,11 +1816,12 @@ class gbnf_visitor : public parser_visitor {
     }
 
     void visit(root_parser & p) override {
-        auto rules = p.rules();
+        // Collect all rules from the tree
+        collect_all_rules(p);
 
         if (!lazy_) {
             // Non-lazy mode: generate all rules eagerly
-            for (const auto & [name, rule] : rules) {
+            for (const auto & [name, rule] : all_rules_) {
                 rule->accept(*this);
                 auto rule_body = current_result_;
                 auto canonical_name = builder_.add_rule(name, rule_body);
@@ -1720,22 +1835,18 @@ class gbnf_visitor : public parser_visitor {
 
         // Lazy mode: only generate rules reachable from triggers
 
-        // First pass: traverse root to collect triggers and generate synthetic rules
-        // (visit(trigger_parser) will populate triggers_ and trigger_names_)
-        p.root()->accept(*this);
+        // Collect all rules reachable from triggers
+        collect_reachable_rules();
 
-        // Check if we found any triggers
-        if (triggers_.empty()) {
-            LOG_ERR("Lazy grammar generation enabled but no trigger nodes found\n");
+        // Check if we found any trigger rules
+        if (reachable_rules_.empty()) {
+            LOG_ERR("Lazy grammar generation enabled but no trigger rules found\n");
             current_result_ = "";
             return;
         }
 
-        // Second pass: collect all rules reachable from triggers
-        collect_reachable_rules(triggers_, rules);
-
-        // Third pass: generate only reachable rules
-        for (const auto & [name, rule] : rules) {
+        // Generate only reachable rules
+        for (const auto & [name, rule] : all_rules_) {
             // Skip rules that aren't reachable
             if (reachable_rules_.find(name) == reachable_rules_.end()) {
                 continue;
@@ -1747,38 +1858,21 @@ class gbnf_visitor : public parser_visitor {
             rule_name_mapping_[name] = canonical_name;
         }
 
-        // Generate root as alternation of trigger rules
-        current_result_ = string_join(trigger_names_, " | ");
+        // Generate root as alternation of trigger rule names
+        std::vector<std::string> trigger_names;
+        for (const auto & [name, rule] : all_rules_) {
+            if (rule->is_trigger()) {
+                auto it = rule_name_mapping_.find(name);
+                if (it != rule_name_mapping_.end()) {
+                    trigger_names.push_back(it->second);
+                }
+            }
+        }
+        current_result_ = string_join(trigger_names, " | ");
     }
 
     void visit(capture_parser & p) override {
         p.child()->accept(*this);
-    }
-
-    void visit(trigger_parser & p) override {
-        if (!lazy_) {
-            // Non-lazy mode: transparent pass-through
-            p.child()->accept(*this);
-            return;
-        }
-
-        // Lazy mode: create synthetic rule for this trigger
-        ++trigger_counter_;
-        std::string trigger_name = "trigger-" + std::to_string(trigger_counter_);
-
-        // Visit child to generate its grammar
-        p.child()->accept(*this);
-        std::string child_grammar = current_result_;
-
-        // Add synthetic rule
-        builder_.add_rule(trigger_name, child_grammar);
-        trigger_names_.push_back(trigger_name);
-
-        // Store trigger for reachability analysis
-        triggers_.push_back(p.child().ptr());
-
-        // Return the trigger rule reference
-        current_result_ = trigger_name;
     }
 };
 
@@ -1801,9 +1895,9 @@ void chars_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void json_string_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void schema_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void rule_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void ref_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void root_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void capture_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void trigger_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 
 common_chat_parse_result common_chat_parse_cache::set(int id, size_t start, common_chat_parse_result result) {
     if (id == -1) {
@@ -1900,9 +1994,8 @@ common_chat_peg_parser builder::until_one_of(const std::vector<std::string> & de
 common_chat_peg_parser builder::repeat(const common_chat_peg_parser & p, int min, int max) { return make_parser<repetition_parser>(counter_, p, min, max); }
 common_chat_peg_parser builder::repeat(const common_chat_peg_parser & p, int n) { return make_parser<repetition_parser>(counter_, p, n, n); }
 
-common_chat_peg_parser builder::rule(const std::string & name) {
-    auto root = cast<root_parser>(root_);
-    return make_parser<rule_parser>(counter_, name, std::weak_ptr<root_parser>(root));
+common_chat_peg_parser builder::ref(const std::string & name) {
+    return make_parser<ref_parser>(counter_, name);
 }
 
 common_chat_peg_parser builder::schema(const common_chat_peg_parser & p, const std::string & name, const nlohmann::ordered_json & schema) {
@@ -1913,26 +2006,31 @@ common_chat_peg_parser builder::capture(const std::string & key, const common_ch
     return make_parser<capture_parser>(counter_, p, key);
 }
 
-common_chat_peg_parser builder::trigger(const common_chat_peg_parser & p) {
-    return make_parser<trigger_parser>(counter_, p);
+common_chat_peg_parser builder::rule(const std::string & name, const common_chat_peg_parser & p, bool trigger) {
+    auto root_container = cast<root_parser>(root_);
+    auto rule_node = make_parser<rule_parser>(counter_, name, p, trigger);
+    root_container->add_rule(name, rule_node);
+    return make_parser<ref_parser>(counter_, name);
 }
 
-common_chat_peg_parser builder::add_rule(const std::string & name, const common_chat_peg_parser & p) {
-    auto root = cast<root_parser>(root_);
-    root->add_rule(name, p);
-    return rule(name);
-}
-
-common_chat_peg_parser builder::add_rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder) {
-    auto root = cast<root_parser>(root_);
-    if (root->rules().find(name) != root->rules().end()) {
-        return rule(name);
+common_chat_peg_parser builder::rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder_fn, bool trigger) {
+    auto root_container = cast<root_parser>(root_);
+    if (root_container->rules().find(name) != root_container->rules().end()) {
+        return ref(name);
     }
 
-    root->add_rule(name, literal("")); // Placeholder
-    auto parser = builder();
-    root->add_rule(name, parser);
-    return rule(name);
+    // Create placeholder rule to allow recursive references
+    auto placeholder = make_parser<rule_parser>(counter_, name, literal(""), trigger);
+    root_container->add_rule(name, placeholder);
+
+    // Build the actual parser
+    auto parser = builder_fn();
+
+    // Replace placeholder with actual rule
+    auto rule_node = make_parser<rule_parser>(counter_, name, parser, trigger);
+    root_container->add_rule(name, rule_node);
+
+    return make_parser<ref_parser>(counter_, name);
 }
 
 void builder::set_root(const common_chat_peg_parser & p) {
@@ -1946,7 +2044,7 @@ void builder::set_root(const common_chat_peg_parser & p) {
 }
 
 common_chat_peg_parser builder::json_number() {
-    return add_rule("json-number", [this]() {
+    return rule("json-number", [this]() {
         auto digit1_9 = chars("[1-9]", 1, 1);
         auto digits = chars("[0-9]");
         auto int_part = literal("0") | (digit1_9 + chars("[0-9]", 0, -1));
@@ -1957,25 +2055,25 @@ common_chat_peg_parser builder::json_number() {
 }
 
 common_chat_peg_parser builder::json_string() {
-    return add_rule("json-string", [this]() {
+    return rule("json-string", [this]() {
         return literal("\"") + json_string_content() + literal("\"");
     });
 }
 
 common_chat_peg_parser builder::json_bool() {
-    return add_rule("json-bool", [this]() {
+    return rule("json-bool", [this]() {
         return literal("true") | literal("false");
     });
 }
 
 common_chat_peg_parser builder::json_null() {
-    return add_rule("json-null", [this]() {
+    return rule("json-null", [this]() {
         return literal("null");
     });
 }
 
 common_chat_peg_parser builder::json_object() {
-    return add_rule("json-object", [this]() {
+    return rule("json-object", [this]() {
         auto ws = space();
         auto member = json_string() + ws + literal(":") + ws + json();
         auto members = member + zero_or_more(ws + literal(",") + ws + member);
@@ -1985,7 +2083,7 @@ common_chat_peg_parser builder::json_object() {
 }
 
 common_chat_peg_parser builder::json_array() {
-    return add_rule("json-array", [this]() {
+    return rule("json-array", [this]() {
         auto ws = space();
         auto elements = json() + zero_or_more(ws + literal(",") + ws + json());
         return (literal("[") + ws + literal("]")) |
@@ -1994,7 +2092,7 @@ common_chat_peg_parser builder::json_array() {
 }
 
 common_chat_peg_parser builder::json() {
-    return add_rule("json-value", [this]() {
+    return rule("json-value", [this]() {
         return json_object() |
                json_array() |
                json_string() |
@@ -2005,6 +2103,11 @@ common_chat_peg_parser builder::json() {
 }
 
 common_chat_peg_parser builder::build() {
+    // Resolve all references
+    resolution_visitor resolver;
+    root_->accept(resolver);
+    resolver.resolve();
+
     return root_;
 }
 

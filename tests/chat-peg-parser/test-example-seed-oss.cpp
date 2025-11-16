@@ -11,8 +11,8 @@ void test_example_seed_oss(testing &t) {
             std::vector<std::string>({
                 "location", "units"
             }));
-        auto tool_call = p.trigger(p.add_rule("tool-call",
-            "<seed:tool_call>" + p.one_or_more(function) + "</seed:tool_call>"));
+        auto tool_call = p.rule("tool-call",
+            "<seed:tool_call>" + p.one_or_more(function) + "</seed:tool_call>", true);
 
         return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
     });

@@ -240,9 +240,10 @@ class common_chat_peg_parser_builder {
     // Equivalent to chars(classes, 1, 1)
     common_chat_peg_parser one(const std::string & classes);
 
-    // References a named rule for recursive or reusable grammar definitions.
-    //   expr -> term | expr "+" term
-    common_chat_peg_parser rule(const std::string & name);
+    // Creates a lightweight reference to a named rule (resolved during build()).
+    // Use this for forward references in recursive grammars.
+    //   expr_ref -> expr
+    common_chat_peg_parser ref(const std::string & name);
 
     // Matches zero or more whitespace characters (space, tab, newline).
     //   S -> [ \t\n]*
@@ -282,21 +283,18 @@ class common_chat_peg_parser_builder {
     // Captures matched text to semantics.captures[key]
     common_chat_peg_parser capture(const std::string & key, const common_chat_peg_parser & p);
 
-    // Mark a node as a trigger for GBNF grammar generartion. This is used for
-    // lazy grammar evaluation by only producing GBNF grammar rules that are
-    // reachable from trigger nodes.
-    //   S -> Trigger(A)
-    common_chat_peg_parser trigger(const common_chat_peg_parser & p);
+    // Creates a named rule, stores it in the grammar, and returns a reference to it.
+    // If trigger=true, marks this rule as an entry point for lazy grammar generation.
+    //   auto json = p.rule("json", json_obj | json_arr | ...)
+    common_chat_peg_parser rule(const std::string & name, const common_chat_peg_parser & p, bool trigger = false);
 
-    // Adds a named rule and returns a rule reference.
-    common_chat_peg_parser add_rule(const std::string & name, const common_chat_peg_parser & p);
-
-    // Adds a named rule using a function. This handles recursive grammars by
+    // Creates a named rule using a builder function. This handles recursive grammars by
     // inserting a placeholder rule before invoking the builder, allowing the
-    // builder to reference the rule being defined. Use this when the rule
+    // builder to reference the rule being defined via ref(). Use this when the rule
     // definition needs to call back to itself (directly or indirectly).
-    //   add_rule("json", [&]() { return json_object() | json_array() | ... })
-    common_chat_peg_parser add_rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder);
+    // If trigger=true, marks this rule as an entry point for lazy grammar generation.
+    //   auto json = p.rule("json", [&]() { return json_object() | json_array() | ... })
+    common_chat_peg_parser rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder, bool trigger = false);
 
     void set_root(const common_chat_peg_parser & p);
 
