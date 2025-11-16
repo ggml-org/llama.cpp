@@ -279,3 +279,4 @@ void llama_model_saver::add_tensors_from_model() {
 void llama_model_saver::save(const std::string & path_model) {
     gguf_write_to_file(gguf_ctx, path_model.c_str(), false);
 }
+

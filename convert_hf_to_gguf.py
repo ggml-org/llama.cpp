@@ -5048,6 +5048,9 @@ class Plamo3Model(TextModel):
 
         self.gguf_writer.add_add_space_prefix(False)
 
+        if "chat_template" in tokenizer_config and tokenizer_config["chat_template"] is not None:
+            self.gguf_writer.add_chat_template(tokenizer_config["chat_template"])
+
     def _sliding_window_pattern(self, block_count: int) -> list[bool]:
         layer_types = self.hparams.get("layer_types")
         if isinstance(layer_types, list) and len(layer_types) == block_count:
