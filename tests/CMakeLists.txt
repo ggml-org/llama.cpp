@@ -189,6 +189,8 @@ llama_build_and_test(
     chat-peg-parser/simple_tokenizer.cpp
     chat-peg-parser/test-command7-parser-compare.cpp
     chat-peg-parser/test-example-qwen3-coder.cpp
+    chat-peg-parser/test-example-minimax-m2.cpp
+    chat-peg-parser/test-example-seed-oss.cpp
     chat-peg-parser/test-gbnf-generation.cpp
     chat-peg-parser/test-json-parser.cpp
     chat-peg-parser/test-one.cpp

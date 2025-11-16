@@ -48,48 +48,6 @@ void test_example_qwen3_coder(testing &t) {
         return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
     });
 
-    auto handler = [&](const common_chat_parse_event & ev, common_chat_parse_semantics & semantics) {
-        if (ev.rule == "reasoning-content" && ev.ending()) {
-            semantics.reasoning_content = ev.text;
-        }
-
-        if (ev.rule == "content" && ev.ending()) {
-            semantics.content = ev.text;
-        }
-
-        if (ev.rule == "function-start" && ev.ending() && ev.success()) {
-            semantics.tool_calls.emplace_back();
-            auto & tc = semantics.tool_calls.back();
-            tc.name = semantics.captures["tool-name"];
-        }
-
-        if (ev.rule == "arg-start" && ev.ending() && ev.success()) {
-            auto & tc = semantics.tool_calls.back();
-            auto name = semantics.captures["arg-name"];
-            if (tc.arguments.empty()) {
-                tc.arguments += "{";
-            } else {
-                tc.arguments += ", ";
-            }
-            tc.arguments += "\"" + name + "\": ";
-        }
-
-        if (ev.rule == "arg-string-content" && ev.ending() && ev.success()) {
-            auto & tc = semantics.tool_calls.back();
-            tc.arguments += "\"" + std::string(ev.text);
-        }
-
-        if (ev.rule == "arg-string" && ev.ending() && ev.success()) {
-            auto & tc = semantics.tool_calls.back();
-            tc.arguments += "\"";
-        }
-
-        if (ev.rule == "arg-json-content" && ev.ending() && (ev.success() || ev.need_more_input())) {
-            auto & tc = semantics.tool_calls.back();
-            tc.arguments += std::string(ev.text);
-        }
-    };
-
     t.test("qwen3_accumulation_test", [&](testing &t) {
         std::string input =
             "<think>The user wants to find large log files that haven't been accessed recently. "
@@ -123,7 +81,7 @@ void test_example_qwen3_coder(testing &t) {
                 common_chat_parse_semantics semantics;
                 common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
 
-                ctx.event_handler = handler;
+                ctx.event_handler = parser_semantic_handler;
 
                 auto result = explicit_parser.parse(ctx);
                 if (result.fail()) {
@@ -148,7 +106,7 @@ void test_example_qwen3_coder(testing &t) {
                 common_chat_parse_semantics semantics;
                 common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
 
-                ctx.event_handler = handler;
+                ctx.event_handler = parser_semantic_handler;
 
                 auto result = helper_parser.parse(ctx);
                 if (result.fail()) {

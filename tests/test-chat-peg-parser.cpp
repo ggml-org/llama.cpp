@@ -11,6 +11,8 @@ int main() {
     test_json_parser(t);
     test_gbnf_generation(t);
     test_example_qwen3_coder(t);
+    test_example_seed_oss(t);
+    test_example_minimax_m2(t);
     test_command7_parser_compare(t);
 
     return t.summary();
