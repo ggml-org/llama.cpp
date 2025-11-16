@@ -1566,14 +1566,14 @@ class reachability_visitor : public parser_visitor {
     void visit(optional_parser & p) override { p.child()->accept(*this); }
     void visit(repetition_parser & p) override { p.child()->accept(*this); }
     void visit(schema_parser & /* p */) override {
-        // Schema parsers are opaque - don't traverse their children
         // The schema system will handle rule generation via builder_.add_schema()
     }
     void visit(capture_parser & p) override { p.child()->accept(*this); }
 
     void visit(rule_parser & p) override {
         const std::string & name = p.name();
-        // If we've already processed this rule, skip to avoid infinite recursion
+        // Check if we arleady reached this rule. Technically we shouldn't,
+        // since we don't traverse ref_parser
         if (reachable_rules_.find(name) != reachable_rules_.end()) {
             return;
         }
@@ -1584,18 +1584,8 @@ class reachability_visitor : public parser_visitor {
     }
 
     void visit(ref_parser & p) override {
-        const std::string & name = p.name();
         // Mark as reachable
-        if (reachable_rules_.find(name) != reachable_rules_.end()) {
-            return;
-        }
-        reachable_rules_.insert(name);
-
-        // Follow the reference to the target rule
-        auto target = p.target().lock();
-        if (target) {
-            target->accept(*this);
-        }
+        reachable_rules_.insert(p.name());
     }
 
     void visit(root_parser & p) override {
