@@ -18,24 +18,24 @@ void test_example_qwen3_coder(testing &t) {
         return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
     });
 
-    auto handler = [&](const common_chat_parse_event & ev, common_chat_parse_semantics & env) {
+    auto handler = [&](const common_chat_parse_event & ev, common_chat_parse_semantics & semantics) {
         if (ev.rule == "reasoning-content" && ev.ending()) {
-            env.result.reasoning_content = ev.text;
+            semantics.reasoning_content = ev.text;
         }
 
         if (ev.rule == "content" && ev.ending()) {
-            env.result.content = ev.text;
+            semantics.content = ev.text;
         }
 
         if (ev.rule == "function-start" && ev.ending() && ev.success()) {
-            env.result.tool_calls.emplace_back();
-            auto & tc = env.result.tool_calls.back();
-            tc.name = env.captures["tool-name"];
+            semantics.tool_calls.emplace_back();
+            auto & tc = semantics.tool_calls.back();
+            tc.name = semantics.captures["tool-name"];
         }
 
         if (ev.rule == "arg-start" && ev.ending() && ev.success()) {
-            auto & tc = env.result.tool_calls.back();
-            auto name = env.captures["arg-name"];
+            auto & tc = semantics.tool_calls.back();
+            auto name = semantics.captures["arg-name"];
             if (tc.arguments.empty()) {
                 tc.arguments += "{";
             } else {
@@ -45,17 +45,17 @@ void test_example_qwen3_coder(testing &t) {
         }
 
         if (ev.rule == "arg-string-content" && ev.ending() && ev.success()) {
-            auto & tc = env.result.tool_calls.back();
+            auto & tc = semantics.tool_calls.back();
             tc.arguments += "\"" + std::string(ev.text);
         }
 
         if (ev.rule == "arg-string" && ev.ending() && ev.success()) {
-            auto & tc = env.result.tool_calls.back();
+            auto & tc = semantics.tool_calls.back();
             tc.arguments += "\"";
         }
 
         if (ev.rule == "arg-json-content" && ev.ending() && (ev.success() || ev.need_more_input())) {
-            auto & tc = env.result.tool_calls.back();
+            auto & tc = semantics.tool_calls.back();
             tc.arguments += std::string(ev.text);
         }
     };
@@ -90,8 +90,8 @@ void test_example_qwen3_coder(testing &t) {
             token_cnt++;
             std::string in = std::accumulate(tokens.begin(), it, std::string());
 
-            common_chat_parse_semantics env;
-            common_chat_parse_context   ctx(in, &env, it == tokens.end() - 1);
+            common_chat_parse_semantics semantics;
+            common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
 
             ctx.event_handler = handler;
 
@@ -99,8 +99,9 @@ void test_example_qwen3_coder(testing &t) {
             t.assert_equal(std::string("should_not_fail_token_") + std::to_string(token_cnt), false, result.fail());
 
             // This shouldn't emit any runtime errors
-            auto diffs = common_chat_msg_diff::compute_diffs(prev, env.result);
-            prev       = env.result;
+            auto msg   = semantics.to_msg();
+            auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
+            prev       = msg;
         }
     });
 }

@@ -14,9 +14,19 @@
 struct common_grammar_builder;
 
 struct common_chat_parse_semantics {
-    common_chat_msg result;
+    std::string content;
+    std::string reasoning_content;
+    std::vector<common_chat_tool_call> tool_calls;
 
     std::unordered_map<std::string, std::string> captures;
+
+    common_chat_msg to_msg() const {
+        common_chat_msg msg;
+        msg.content = content;
+        msg.reasoning_content = reasoning_content;
+        msg.tool_calls = tool_calls;
+        return msg;
+    }
 };
 
 enum common_chat_parse_result_type {
@@ -59,12 +69,6 @@ struct common_chat_parse_result {
     bool fail() const { return type == COMMON_CHAT_PARSE_RESULT_FAIL; }
     bool need_more_input() const { return type == COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT; }
     bool success() const { return type == COMMON_CHAT_PARSE_RESULT_SUCCESS; }
-};
-
-struct common_chat_parse_action {
-    common_chat_parse_result & result;
-    common_chat_parse_semantics & env;
-    std::string_view match;
 };
 
 enum common_chat_parse_event_type {
@@ -286,12 +290,7 @@ class common_chat_peg_parser_builder {
     // Used internally to convert JSON schemas to GBNF grammar rules.
     common_chat_peg_parser schema(const common_chat_peg_parser & p, const std::string & name, const nlohmann::ordered_json & schema);
 
-    // Wraps a parser with a semantic action callback.
-    // The callback is invoked on successful parse with the result, matched text, and environment.
-    //   S -> A [action]
-    common_chat_peg_parser action(const common_chat_peg_parser & p, std::function<void(const common_chat_parse_action &)> fn, int when = COMMON_CHAT_PARSE_RESULT_SUCCESS);
-
-    // Captures matched text to env.captures[key]
+    // Captures matched text to semantics.captures[key]
     common_chat_peg_parser capture(const std::string & key, const common_chat_peg_parser & p);
 
     // Mark a node as a trigger for GBNF grammar generartion. This is used for

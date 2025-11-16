@@ -32,7 +32,7 @@ enum parser_type {
     SCHEMA,
     ROOT,
     JSON_STRING,
-    ACTION,
+    CAPTURE,
     TRIGGER,
 };
 
@@ -1251,35 +1251,27 @@ class rule_parser : public common_chat_peg_parser_base {
     const std::string & name() const { return name_; }
 };
 
-// Wraps a parser with a semantic action callback.
-class action_parser : public common_chat_peg_parser_base {
+// Capture content if child parser matches
+class capture_parser : public common_chat_peg_parser_base {
     common_chat_peg_parser parser_;
-    std::function<void(const common_chat_parse_action &)> action_;
-    int when_;
+    std::string key_;
 
   public:
-    static constexpr parser_type type_value = ACTION;
+    static constexpr parser_type type_value = CAPTURE;
 
-    action_parser(
-        const common_chat_peg_parser & parser,
-        std::function<void(const common_chat_parse_action &)> action,
-        int when,
-        int id
-    ) : common_chat_peg_parser_base(id), parser_(parser), action_(std::move(action)), when_(when) {}
+    capture_parser(const common_chat_peg_parser & parser, const std::string & key, int id)
+        : common_chat_peg_parser_base(id), parser_(parser), key_(key) {}
 
     parser_type type() const override { return type_value; }
 
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
         auto result = parser_->parse(ctx, start);
 
-        if ((result.type & when_) && ctx.env && action_) {
+        if (!result.fail() && ctx.env) {
             std::string_view matched = ctx.input;
             matched = matched.substr(result.start, result.end - result.start);
-            action_({
-                result,
-                *ctx.env,
-                matched,
-            });
+            std::string value = std::string(matched);
+            ctx.env->captures[key_] = std::move(value);
         }
 
         return result;
@@ -1291,7 +1283,7 @@ class action_parser : public common_chat_peg_parser_base {
     }
 
     std::string dump() const override {
-        return "Action(" + parser_->dump() + ", when=" + std::to_string(when_) +")";
+        return "Capture(" + key_ + ", " + parser_->dump() + ")";
     }
 
     void accept(parser_visitor & visitor) override;
@@ -1355,7 +1347,7 @@ class parser_visitor {
     virtual void visit(schema_parser & p) = 0;
     virtual void visit(rule_parser & p) = 0;
     virtual void visit(root_parser & p) = 0;
-    virtual void visit(action_parser & p) = 0;
+    virtual void visit(capture_parser & p) = 0;
     virtual void visit(trigger_parser & p) = 0;
 };
 
@@ -1464,7 +1456,7 @@ class reachability_visitor : public parser_visitor {
         // Schema parsers are opaque - don't traverse their children
         // The schema system will handle rule generation via builder_.add_schema()
     }
-    void visit(action_parser & p) override { p.child()->accept(*this); }
+    void visit(capture_parser & p) override { p.child()->accept(*this); }
     void visit(trigger_parser & p) override { p.child()->accept(*this); }
 
     void visit(rule_parser & p) override {
@@ -1738,8 +1730,7 @@ class gbnf_visitor : public parser_visitor {
         current_result_ = string_join(trigger_names_, " | ");
     }
 
-    void visit(action_parser & p) override {
-        // Actions are transparent for grammar generation - just visit child
+    void visit(capture_parser & p) override {
         p.child()->accept(*this);
     }
 
@@ -1790,7 +1781,7 @@ void json_string_parser::accept(parser_visitor & visitor) { visitor.visit(*this)
 void schema_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void rule_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void root_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void action_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
+void capture_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 void trigger_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
 
 common_chat_parse_result common_chat_parse_cache::set(int id, size_t start, common_chat_parse_result result) {
@@ -1899,15 +1890,8 @@ common_chat_peg_parser builder::schema(const common_chat_peg_parser & p, const s
     return make_parser<schema_parser>(counter_, p, name, schema);
 }
 
-common_chat_peg_parser builder::action(const common_chat_peg_parser & p, std::function<void(const common_chat_parse_action &)> fn, int when) {
-    return make_parser<action_parser>(counter_, p, std::move(fn), when);
-}
-
 common_chat_peg_parser builder::capture(const std::string & key, const common_chat_peg_parser & p) {
-    return action(p, [key](const common_chat_parse_action & act) {
-        std::string value = std::string(act.match);
-        act.env.captures[key] = std::move(value);
-    }, COMMON_CHAT_PARSE_RESULT_SUCCESS);
+    return make_parser<capture_parser>(counter_, p, key);
 }
 
 common_chat_peg_parser builder::trigger(const common_chat_peg_parser & p) {

@@ -45,31 +45,31 @@ static common_chat_peg_parser create_command_r7b_parser() {
 }
 
 static common_chat_parse_event_handler create_command_r7b_event_handler() {
-    return [](const common_chat_parse_event & ev, common_chat_parse_semantics & env) {
+    return [](const common_chat_parse_event & ev, common_chat_parse_semantics & semantics) {
         if (ev.rule == "reasoning-content" && ev.ending()) {
-            env.result.reasoning_content = ev.text;
+            semantics.reasoning_content = ev.text;
         }
 
         if (ev.rule == "content" && ev.ending()) {
-            env.result.content = ev.text;
+            semantics.content = ev.text;
         }
 
         if (ev.rule == "tool-call" && ev.starting()) {
-            env.result.tool_calls.emplace_back();
+            semantics.tool_calls.emplace_back();
         }
 
         if (ev.rule == "tool-call-id-value" && ev.ending() && ev.success()) {
-            auto & tc = env.result.tool_calls.back();
+            auto & tc = semantics.tool_calls.back();
             tc.id = nlohmann::json::parse(ev.text).get<std::string>();
         }
 
         if (ev.rule == "tool-name-value" && ev.ending() && ev.success()) {
-            auto & tc = env.result.tool_calls.back();
+            auto & tc = semantics.tool_calls.back();
             tc.name = nlohmann::json::parse(ev.text).get<std::string>();
         }
 
         if (ev.rule == "tool-args-value" && ev.ending() && (ev.success() || ev.need_more_input())) {
-            auto & tc = env.result.tool_calls.back();
+            auto & tc = semantics.tool_calls.back();
             tc.arguments = ev.text;
         }
     };
@@ -79,18 +79,18 @@ static void test_command_r7b_parser(const common_chat_peg_parser & p,
                            const std::string &  input,
                            bool                 need_more_input,
                            bool                 print_results) {
-    common_chat_parse_semantics env;
-    common_chat_parse_context     ctx(input, &env, !need_more_input);
+    common_chat_parse_semantics semantics;
+    common_chat_parse_context   ctx(input, &semantics, !need_more_input);
     p.parse(ctx);
 
     if (print_results) {
         std::cout << "== Parsed (new) ==\n";
         std::cout << "=== Reasoning ===\n";
-        std::cout << env.result.reasoning_content << "\n";
+        std::cout << semantics.reasoning_content << "\n";
         std::cout << "\n\n=== Content ===\n";
-        std::cout << env.result.content << "\n";
+        std::cout << semantics.content << "\n";
         std::cout << "\n\n=== Tool Calls ===\n";
-        for (const auto & tc : env.result.tool_calls) {
+        for (const auto & tc : semantics.tool_calls) {
             std::cout << "id: " << tc.id << "\n";
             std::cout << "name: " << tc.name << "\n";
             std::cout << "args: " << tc.arguments << "\n";

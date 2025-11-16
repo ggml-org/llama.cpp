@@ -22,7 +22,6 @@ void test_one(testing &t);
 void test_optional(testing &t);
 void test_recursive_references(testing &t);
 void test_json_parser(testing &t);
-void test_actions(testing &t);
 void test_gbnf_generation(testing &t);
 void test_example_qwen3_coder(testing &t);
 void test_command7_parser_compare(testing &t);
