@@ -454,29 +454,20 @@ class sequence_parser : public common_chat_peg_parser_base {
   public:
     static constexpr parser_type type_value = SEQUENCE;
 
-    sequence_parser(std::initializer_list<common_chat_peg_parser> parsers, int id) : common_chat_peg_parser_base(id) {
-        for (const auto & p : parsers) {
-            if (auto seq = cast<sequence_parser>(p)) {
-                for (const auto & embedded : seq->parsers()) {
-                    parsers_.push_back(embedded);
-                }
+    template <typename InputIt>
+    sequence_parser(InputIt first, InputIt last, int id) : common_chat_peg_parser_base(id) {
+        for (auto it = first; it != last; ++it) {
+            if (auto seq = cast<sequence_parser>(*it)) {
+                parsers_.insert(parsers_.end(), seq->parsers().begin(), seq->parsers().end());
             } else {
-                parsers_.push_back(p);
+                parsers_.push_back(*it);
             }
         }
     }
 
-    sequence_parser(const std::vector<common_chat_peg_parser>& parsers, int id) : common_chat_peg_parser_base(id) {
-        for (const auto & p : parsers) {
-            if (auto seq = cast<sequence_parser>(p)) {
-                for (const auto & embedded : seq->parsers()) {
-                    parsers_.push_back(embedded);
-                }
-            } else {
-                parsers_.push_back(p);
-            }
-        }
-    }
+    template <typename T>
+    sequence_parser(const T & parsers, int id)
+        : sequence_parser(std::begin(parsers), std::end(parsers), id) {}
 
     parser_type type() const override { return type_value; }
 
@@ -523,17 +514,20 @@ class choice_parser : public common_chat_peg_parser_base {
   public:
     static constexpr parser_type type_value = CHOICE;
 
-    choice_parser(std::initializer_list<common_chat_peg_parser> parsers, int id) : common_chat_peg_parser_base(id) {
-        for (const auto & p : parsers) {
-            if (auto choice = cast<choice_parser>(p)) {
-                for (const auto & embedded : choice->parsers()) {
-                    parsers_.push_back(embedded);
-                }
+    template <typename InputIt>
+    choice_parser(InputIt first, InputIt last, int id) : common_chat_peg_parser_base(id) {
+        for (auto it = first; it != last; ++it) {
+            if (auto choice = cast<choice_parser>(*it)) {
+                parsers_.insert(parsers_.end(), choice->parsers().begin(), choice->parsers().end());
             } else {
-                parsers_.push_back(p);
+                parsers_.push_back(*it);
             }
         }
     }
+
+    template <typename T>
+    choice_parser(const T & parsers, int id)
+        : choice_parser(std::begin(parsers), std::end(parsers), id) {}
 
     parser_type type() const override { return type_value; }
 
@@ -1898,8 +1892,28 @@ common_chat_peg_parser common_chat_peg_parser_builder::literal(const std::string
     return common_chat_peg_parser(std::make_shared<literal_parser>(literal, counter_.next()));
 }
 
+template <typename InputIt>
+common_chat_peg_parser common_chat_peg_parser_builder::sequence(InputIt first, InputIt last) {
+    return common_chat_peg_parser(std::make_shared<sequence_parser>(first, last, counter_.next()));
+}
+
+template <typename T>
+common_chat_peg_parser common_chat_peg_parser_builder::sequence(const T & parsers) {
+    return common_chat_peg_parser(std::make_shared<sequence_parser>(parsers, counter_.next()));
+}
+
 common_chat_peg_parser common_chat_peg_parser_builder::sequence(std::initializer_list<common_chat_peg_parser> parsers) {
     return common_chat_peg_parser(std::make_shared<sequence_parser>(parsers, counter_.next()));
+}
+
+template <typename InputIt>
+common_chat_peg_parser common_chat_peg_parser_builder::choice(InputIt first, InputIt last) {
+    return common_chat_peg_parser(std::make_shared<choice_parser>(first, last, counter_.next()));
+}
+
+template <typename T>
+common_chat_peg_parser common_chat_peg_parser_builder::choice(const T & parsers) {
+    return common_chat_peg_parser(std::make_shared<choice_parser>(parsers, counter_.next()));
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::choice(std::initializer_list<common_chat_peg_parser> parsers) {
@@ -2108,8 +2122,7 @@ common_chat_peg_parser common_chat_peg_parser_builder::quasi_xml_no_attr(const s
         args.push_back(arg_json_or_string);
     }
 
-    auto args_seq_raw = sequence_parser(args, counter_.next());
-    auto args_sequence = common_chat_peg_parser(std::make_shared<sequence_parser>(args_seq_raw));
+    auto args_sequence = sequence(args);
     auto function = add_rule("function-" + function_name,
                 add_rule("function-start-" + function_name, "<" + function_tag + "=" + function_name + ">")
                 + args_sequence + "</" + function_tag + ">");
