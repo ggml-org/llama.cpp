@@ -2,6 +2,7 @@
 #include "json-schema-to-grammar.h"
 #include "common.h"
 #include "log.h"
+#include "unicode.h"
 
 #include <initializer_list>
 #include <nlohmann/json.hpp>
@@ -112,152 +113,6 @@ static bool is_space(const char c) {
 
 static bool is_hex_digit(const char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-}
-
-// UTF-8 parsing utilities for streaming-aware unicode support
-struct utf8_parse_result {
-    uint32_t codepoint;      // Decoded codepoint (only valid if status == SUCCESS)
-    size_t bytes_consumed;   // How many bytes this codepoint uses (1-4)
-    enum status_t { SUCCESS, NEED_MORE, INVALID } status;
-
-    utf8_parse_result(status_t s, uint32_t cp = 0, size_t bytes = 0)
-        : codepoint(cp), bytes_consumed(bytes), status(s) {}
-};
-
-// Determine the expected length of a UTF-8 sequence from its first byte
-// Returns 0 for invalid first bytes
-static size_t utf8_sequence_length(unsigned char first_byte) {
-    // Lookup table based on high 4 bits
-    // 0xxx xxxx = 1 byte  (ASCII)
-    // 110x xxxx = 2 bytes
-    // 1110 xxxx = 3 bytes
-    // 1111 0xxx = 4 bytes (only 0xF0-0xF7, not 0xF8-0xFF)
-    static const size_t lookup[] = {
-        1, 1, 1, 1, 1, 1, 1, 1,  // 0000-0111 (0x00-0x7F)
-        0, 0, 0, 0,              // 1000-1011 (continuation bytes 0x80-0xBF, invalid as first byte)
-        2, 2,                    // 1100-1101 (0xC0-0xDF)
-        3,                       // 1110      (0xE0-0xEF)
-        4                        // 1111      (0xF0-0xFF, but need to check 0xF8-0xFF separately)
-    };
-    size_t len = lookup[first_byte >> 4];
-
-    // Additional validation for invalid first bytes:
-    // - 0xC0-0xC1: would create overlong 2-byte sequences
-    // - 0xF8-0xFF: invalid 5+ byte sequences
-    if (first_byte >= 0xF8 || (first_byte >= 0xC0 && first_byte <= 0xC1)) {
-        return 0;  // Invalid
-    }
-
-    return len;
-}
-
-// Parse a single UTF-8 codepoint from input, with streaming support
-// Returns SUCCESS if a complete, valid codepoint is parsed
-// Returns NEED_MORE if the sequence is incomplete and input_is_complete is false
-// Returns INVALID if the UTF-8 encoding is malformed
-static utf8_parse_result parse_utf8_codepoint(
-    std::string_view input,
-    size_t offset,
-    bool input_is_complete
-) {
-    if (offset >= input.size()) {
-        if (input_is_complete) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        return utf8_parse_result(utf8_parse_result::NEED_MORE);
-    }
-
-    const unsigned char first = static_cast<unsigned char>(input[offset]);
-
-    // ASCII fast path (most common case)
-    if (first < 0x80) {
-        return utf8_parse_result(utf8_parse_result::SUCCESS, first, 1);
-    }
-
-    // Invalid first byte (continuation byte 10xxxxxx as first byte, or 0xF8-0xFF)
-    if ((first & 0xC0) == 0x80) {
-        return utf8_parse_result(utf8_parse_result::INVALID);
-    }
-
-    size_t seq_len = utf8_sequence_length(first);
-    if (seq_len == 0) {
-        // Invalid first byte (e.g., 0xF8-0xFF)
-        return utf8_parse_result(utf8_parse_result::INVALID);
-    }
-
-    size_t available = input.size() - offset;
-
-    // Check if we have enough bytes for the complete sequence
-    if (available < seq_len) {
-        if (input_is_complete) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        return utf8_parse_result(utf8_parse_result::NEED_MORE);
-    }
-
-    uint32_t codepoint = 0;
-
-    // Decode based on sequence length
-    if (seq_len == 2) {
-        // 110xxxxx 10xxxxxx
-        if ((first & 0xE0) != 0xC0) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        const unsigned char second = static_cast<unsigned char>(input[offset + 1]);
-        if ((second & 0xC0) != 0x80) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        codepoint = ((first & 0x1F) << 6) | (second & 0x3F);
-        // Check for overlong encoding
-        if (codepoint < 0x80) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-    } else if (seq_len == 3) {
-        // 1110xxxx 10xxxxxx 10xxxxxx
-        if ((first & 0xF0) != 0xE0) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        const unsigned char second = static_cast<unsigned char>(input[offset + 1]);
-        const unsigned char third = static_cast<unsigned char>(input[offset + 2]);
-        if ((second & 0xC0) != 0x80 || (third & 0xC0) != 0x80) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        codepoint = ((first & 0x0F) << 12) | ((second & 0x3F) << 6) | (third & 0x3F);
-        // Check for overlong encoding
-        if (codepoint < 0x800) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        // Check for surrogate pairs (0xD800-0xDFFF are invalid in UTF-8)
-        if (codepoint >= 0xD800 && codepoint <= 0xDFFF) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-    } else if (seq_len == 4) {
-        // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
-        if ((first & 0xF8) != 0xF0) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        const unsigned char second = static_cast<unsigned char>(input[offset + 1]);
-        const unsigned char third = static_cast<unsigned char>(input[offset + 2]);
-        const unsigned char fourth = static_cast<unsigned char>(input[offset + 3]);
-        if ((second & 0xC0) != 0x80 || (third & 0xC0) != 0x80 || (fourth & 0xC0) != 0x80) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        codepoint = ((first & 0x07) << 18) | ((second & 0x3F) << 12) |
-                    ((third & 0x3F) << 6) | (fourth & 0x3F);
-        // Check for overlong encoding
-        if (codepoint < 0x10000) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-        // Check for valid Unicode range (max is 0x10FFFF)
-        if (codepoint > 0x10FFFF) {
-            return utf8_parse_result(utf8_parse_result::INVALID);
-        }
-    } else {
-        // Invalid sequence length
-        return utf8_parse_result(utf8_parse_result::INVALID);
-    }
-
-    return utf8_parse_result(utf8_parse_result::SUCCESS, codepoint, seq_len);
 }
 
 // Unescapes a JSON string (without the surrounding quotes)
@@ -933,17 +788,17 @@ class any_parser : public common_chat_peg_parser_base {
 
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
         // Parse a single UTF-8 codepoint (not just a single byte)
-        auto result = parse_utf8_codepoint(ctx.input, start, ctx.input_is_complete);
+        auto result = parse_utf8_codepoint(ctx.input, start);
 
-        if (result.status == utf8_parse_result::NEED_MORE) {
-            // Incomplete UTF-8 sequence: end position is at start (before incomplete bytes)
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, start);
+        if (result.status == utf8_parse_result::INCOMPLETE) {
+            if (ctx.input_is_complete) {
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+            }
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start);
         }
         if (result.status == utf8_parse_result::INVALID) {
-            // Malformed UTF-8
             return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
         }
-        // Success: advance by full codepoint (1-4 bytes)
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, start + result.bytes_consumed);
     }
 
@@ -1127,17 +982,17 @@ class chars_parser : public common_chat_peg_parser_base {
 
         // Try to match up to max_count times (or unlimited if max_count is -1)
         while (max_count_ == -1 || match_count < max_count_) {
-            // Parse UTF-8 codepoint from input
-            auto result = parse_utf8_codepoint(ctx.input, pos, ctx.input_is_complete);
+            auto result = parse_utf8_codepoint(ctx.input, pos);
 
-            if (result.status == utf8_parse_result::NEED_MORE) {
-                // Incomplete UTF-8 sequence at current position
+            if (result.status == utf8_parse_result::INCOMPLETE) {
                 if (match_count >= min_count_) {
                     // We have enough matches, succeed with what we have
-                    // End position is at pos (before the incomplete sequence)
                     return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
                 }
-                // Not enough matches yet, need more input
+                // Not enough matches yet
+                if (ctx.input_is_complete) {
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                }
                 return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
             }
 
