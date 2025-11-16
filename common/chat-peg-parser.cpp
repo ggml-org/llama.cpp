@@ -2098,7 +2098,7 @@ common_chat_peg_parser common_chat_peg_parser_builder::quasi_xml_no_attr(const s
 
     for (auto it = parameters.begin(); it != parameters.end(); it++) {
         auto arg_name = add_rule(std::string("arg-start-" + *it), literal("<" + param_tag + "=" + *it + ">"));
-        auto arg_end = add_rule("arg-end", "</" + param_tag + ">" + peek(literal("<" + param_tag + "=") | "</" + function_tag + ">"));
+        auto arg_end = add_rule("arg-end", "</" + param_tag + ">" + peek(literal("<" + param_tag + "=") | ("</" + function_tag + ">")));
         auto string_arg_content = add_rule("arg-string-content",
             until_one_of({"</" + param_tag + "><" + param_tag + "=", "</" + param_tag + "></" + function_tag + ">"}));
         auto string_arg = add_rule("arg-string-" + *it, arg_name + string_arg_content + arg_end);
