@@ -771,6 +771,15 @@ sliding window based drop off or even before they kick in, this can help in many
     chat session ui without recreating the full chat session ui.
   * a helper to add a message into specified chat session, as well as show/update in the chat session
     ui by appending the chat message, instead of recreating the full chat session ui.
+  ...
+
+* MultiChatUI+
+  * both chat_show and chat_uirefresh (if lastN >= 2) both take care of updating tool call edit/trigger
+    as well as the tool call response edit/submit related ui elements suitably.
+    * chat_show recreates currently active sliding window of chat session (which could even be full)
+    * while chat_uirefresh recreates/updates ui only for the lastN messages (prefer in general, as optimal)
+  * normal user response / query submit as well as tool call response or error submit have been updated
+    to use the optimal uirefresh logic now.
 
 
 #### ToDo
@@ -792,15 +801,12 @@ same when saved chat is loaded.
 MAYBE make the settings in general chat session specific, rather than the current global config flow.
 
 Have a seperate helper to show the user input area, based on set state. And have support for multiple images
-if the models support same.
+if the models support same. It should also take care of some aspects of the tool call response edit / submit,
+potentially.
 
 Make chat show messages by default only appends new chat messages to existing list of shown messages in ui,
 instead of clearing ui and recreating each message ui element again. Have forgotten what I had originally
 implemented, need to cross check.
-
-The ui update helpers should call the tool call edit/trigger ui reset logic.
-
-With the new optimized limited ui update based flow, avoid duplicate chat message ui blocks.
 
 Show a loading message, when a previously saved chat session is being loaded.
 
