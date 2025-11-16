@@ -266,7 +266,7 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                 if (data.format == COMMON_CHAT_FORMAT_KIMI_K2) {
                     quoted_name = "\"functions.\" " + quoted_name + " \":\" [0-9]+";
                 }
-                tool_rules.push_back(builder.add_rule(name + "-call", 
+                tool_rules.push_back(builder.add_rule(name + "-call",
                         gbnf_format_literal(form.tool_start) + " " +
                         quoted_name + " " +
                         gbnf_format_literal(form.tool_sep) + " " +
