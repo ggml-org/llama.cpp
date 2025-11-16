@@ -140,16 +140,8 @@ class common_chat_peg_parser {
   public:
     common_chat_peg_parser();
     common_chat_peg_parser(std::shared_ptr<common_chat_peg_parser_base> parser);
-    common_chat_peg_parser(const common_chat_peg_parser & other) = default;
     common_chat_peg_parser(const std::string & literal);
     common_chat_peg_parser(const char * literal);
-
-    common_chat_peg_parser & operator=(const common_chat_peg_parser & other) {
-        if (this != &other) {
-            ptr_ = other.ptr_;
-        }
-        return *this;
-    }
 
     common_chat_peg_parser operator~() const;
     common_chat_peg_parser operator+(const common_chat_peg_parser & other) const;
