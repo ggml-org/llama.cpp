@@ -100,11 +100,10 @@ static std::vector<int> topk_indices_per_column(
 }
 
 // Build SparseK mask (reference):
-// base_mask: [n_kv x n_cols], scores: [n_kv x n_cols]
+// base_mask: [n_kv x n_cols]
 // topk_idx: [topk x n_cols] flattened as [col * topk + k]
 static std::vector<float> build_sparsek_mask_reference(
         const std::vector<float> & base_mask,
-        const std::vector<float> & scores,
         const std::vector<int>   & topk_idx,
         int n_kv,
         int n_cols,
@@ -183,7 +182,7 @@ static void test_sparsek_topk_basic() {
 
     std::vector<float> scores   = matmul_KxQ(K, Q, n_kv, d, n_cols);
     std::vector<int>   topk_idx = topk_indices_per_column(scores, n_kv, n_cols, topk);
-    std::vector<float> final_m  = build_sparsek_mask_reference(base, scores, topk_idx, n_kv, n_cols, topk);
+    std::vector<float> final_m  = build_sparsek_mask_reference(base, topk_idx, n_kv, n_cols, topk);
 
     // We expect:
     // col 0: row 2 is largest → allowed (0), others -INF
@@ -235,7 +234,7 @@ static void test_sparsek_topk_with_base_neginf() {
 
     std::vector<float> scores   = matmul_KxQ(K, Q, n_kv, d, n_cols);
     std::vector<int>   topk_idx = topk_indices_per_column(scores, n_kv, n_cols, topk);
-    std::vector<float> final_m  = build_sparsek_mask_reference(base, scores, topk_idx, n_kv, n_cols, topk);
+    std::vector<float> final_m  = build_sparsek_mask_reference(base, topk_idx, n_kv, n_cols, topk);
 
     // Exactly topk rows should be finite (0), the rest -INF
     int finite_count = 0;
@@ -261,30 +260,12 @@ static void test_sparsek_topk_with_base_neginf() {
 // -----------------------------------------------------------------------------
 static void test_sparsek_topk_zero_passthrough() {
     const int n_kv   = 4;
-    const int d      = 2;
     const int n_cols = 2;
-    const int topk   = 0;
-
-    std::vector<float> K = {
-        1.0f, 0.0f,
-        0.0f, 1.0f,
-        1.0f, 1.0f,
-        2.0f, 0.0f,
-    };
-
-    std::vector<float> Q = {
-        1.0f, 0.0f,
-        0.0f, 1.0f,
-    };
 
     std::vector<float> base = make_base_mask_zeros(n_kv, n_cols);
 
-    std::vector<float> scores   = matmul_KxQ(K, Q, n_kv, d, n_cols);
-    std::vector<int>   topk_idx; // empty, since topk == 0
-
     // For topk == 0, we expect "passthrough": final == base.
-    // So we do not actually call build_sparsek_mask_reference here,
-    // we just make sure base is unchanged.
+    // Here we simply check that the base mask is all zeros.
     for (float v : base) {
         assert_is_zero(v);
     }
@@ -302,5 +283,3 @@ int main() {
     std::printf("All SparseK KQ mask top-K tests passed.\n");
     return 0;
 }
-
-
