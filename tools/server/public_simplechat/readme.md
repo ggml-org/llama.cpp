@@ -788,6 +788,11 @@ Cleanup in general
   had to account for delayed collating of available simpleproxy based tool calls, I forgot to clean
   this flow up.
 * Make the sys_date_time template description bit more verbose, just in case.
+* ui_reset_userinput now also resets associated Role always, inturn
+  * full on version from chat_show, inturn when session switching.
+    So user switchs session will reset all user input area and related data, while
+    also ensuring user input area has the right needed associated role setup.
+  * partial version from uirefresh, inturn adding user or tool call response messages.
 
 
 
@@ -819,6 +824,9 @@ implemented, need to cross check.
 
 Should I force a chat_show which clears usage and current settings info from chat session ui block at the
 begining like before the new optimised uirefresh based flow?
+
+Updating system prompt, will reset user input area fully now, which seems a good enough behaviour, while
+keeping the code flow also simple and straight, do I need to change it, I dont think so as of now.
 
 
 ### Debuging the handshake and beyond
