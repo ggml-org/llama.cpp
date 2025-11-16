@@ -205,23 +205,11 @@ class common_chat_peg_parser_builder {
 
     // Matches a sequence of parsers in order, all must succeed.
     //   S -> A B C
-    template <typename InputIt>
-    common_chat_peg_parser sequence(InputIt first, InputIt last);
-
-    template <typename T>
-    common_chat_peg_parser sequence(const T & parsers);
-
-    common_chat_peg_parser sequence(std::initializer_list<common_chat_peg_parser> parsers);
+    common_chat_peg_parser sequence(const std::vector<common_chat_peg_parser> & parsers);
 
     // Matches the first parser that succeeds from a list of alternatives.
     //   S -> A | B | C
-    template <typename InputIt>
-    common_chat_peg_parser choice(InputIt first, InputIt last);
-
-    template <typename T>
-    common_chat_peg_parser choice(const T & parsers);
-
-    common_chat_peg_parser choice(std::initializer_list<common_chat_peg_parser> parsers);
+    common_chat_peg_parser choice(const std::vector<common_chat_peg_parser> & parsers);
 
     // Matches one or more repetitions of a parser.
     //   S -> A+

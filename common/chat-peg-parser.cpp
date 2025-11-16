@@ -1892,31 +1892,11 @@ common_chat_peg_parser common_chat_peg_parser_builder::literal(const std::string
     return common_chat_peg_parser(std::make_shared<literal_parser>(literal, counter_.next()));
 }
 
-template <typename InputIt>
-common_chat_peg_parser common_chat_peg_parser_builder::sequence(InputIt first, InputIt last) {
-    return common_chat_peg_parser(std::make_shared<sequence_parser>(first, last, counter_.next()));
-}
-
-template <typename T>
-common_chat_peg_parser common_chat_peg_parser_builder::sequence(const T & parsers) {
+common_chat_peg_parser common_chat_peg_parser_builder::sequence(const std::vector<common_chat_peg_parser> & parsers) {
     return common_chat_peg_parser(std::make_shared<sequence_parser>(parsers, counter_.next()));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::sequence(std::initializer_list<common_chat_peg_parser> parsers) {
-    return common_chat_peg_parser(std::make_shared<sequence_parser>(parsers, counter_.next()));
-}
-
-template <typename InputIt>
-common_chat_peg_parser common_chat_peg_parser_builder::choice(InputIt first, InputIt last) {
-    return common_chat_peg_parser(std::make_shared<choice_parser>(first, last, counter_.next()));
-}
-
-template <typename T>
-common_chat_peg_parser common_chat_peg_parser_builder::choice(const T & parsers) {
-    return common_chat_peg_parser(std::make_shared<choice_parser>(parsers, counter_.next()));
-}
-
-common_chat_peg_parser common_chat_peg_parser_builder::choice(std::initializer_list<common_chat_peg_parser> parsers) {
+common_chat_peg_parser common_chat_peg_parser_builder::choice(const std::vector<common_chat_peg_parser> & parsers) {
     return common_chat_peg_parser(std::make_shared<choice_parser>(parsers, counter_.next()));
 }
 
