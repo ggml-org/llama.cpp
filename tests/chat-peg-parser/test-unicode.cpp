@@ -8,12 +8,10 @@
 #include <iomanip>
 #include <cctype>
 
-// Assertions specific to chat-peg-parser
 static void assert_result_equal(testing & t, common_chat_parse_result_type expected, common_chat_parse_result_type actual) {
     t.assert_equal(common_chat_parse_result_type_name(expected), common_chat_parse_result_type_name(actual));
 }
 
-// Helper function to produce hex dump for non-printable characters
 static std::string hex_dump(const std::string& str) {
     std::ostringstream oss;
     for (unsigned char c : str) {
@@ -210,16 +208,13 @@ void test_unicode(testing &t) {
         t.test("ASCII delimiter with Unicode content", [](testing &t) {
             std::vector<test_case> test_cases {
                 // CJK characters before delimiter
-                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD</tag>"),
-                 std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // 你好</tag>
+                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD</tag>"), std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
 
                 // Emoji before delimiter
-                {std::string("\xF0\x9F\x98\x80</tag>"),
-                 std::string("\xF0\x9F\x98\x80"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // 😀</tag>
+                {std::string("\xF0\x9F\x98\x80</tag>"), std::string("\xF0\x9F\x98\x80"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
 
                 // Mixed content
-                {std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!</tag>"),
-                 std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // Hello 世界!</tag>
+                {std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!</tag>"), std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
             };
 
             auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
@@ -244,19 +239,16 @@ void test_unicode(testing &t) {
             }
         });
 
-        t.test("incomplete UTF-8 at end (streaming)", [](testing &t) {
+        t.test("incomplete UTF-8 at end", [](testing &t) {
             std::vector<test_case> test_cases {
                 // Incomplete emoji at end, no delimiter
-                {std::string("content\xF0\x9F\x98"),
-                 std::string("content"), COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT},
+                {std::string("content\xF0\x9F\x98"), std::string("content"), COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT},
 
                 // Incomplete CJK at end, no delimiter
-                {std::string("hello\xE4\xB8"),
-                 std::string("hello"), COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT},
+                {std::string("hello\xE4\xB8"), std::string("hello"), COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT},
 
                 // Complete content, no delimiter (should consume all valid UTF-8)
-                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD"),
-                 std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
+                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
             };
 
             auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
@@ -284,16 +276,13 @@ void test_unicode(testing &t) {
         t.test("malformed UTF-8", [](testing &t) {
             std::vector<test_case> test_cases {
                 // Invalid UTF-8 bytes
-                {std::string("Hello\xFF\xFE"),
-                 "", COMMON_CHAT_PARSE_RESULT_FAIL},
+                {std::string("Hello\xFF\xFE"), "", COMMON_CHAT_PARSE_RESULT_FAIL},
 
                 // Continuation byte without lead byte
-                {std::string("Hello\x80World"),
-                 "", COMMON_CHAT_PARSE_RESULT_FAIL},
+                {std::string("Hello\x80World"), "", COMMON_CHAT_PARSE_RESULT_FAIL},
 
                 // Invalid continuation byte
-                {std::string("\xC3\x28"),
-                 "", COMMON_CHAT_PARSE_RESULT_FAIL},
+                {std::string("\xC3\x28"), "", COMMON_CHAT_PARSE_RESULT_FAIL},
             };
 
             auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
@@ -321,16 +310,16 @@ void test_unicode(testing &t) {
                 {"Hello World\"", "Hello World", COMMON_CHAT_PARSE_RESULT_SUCCESS},
 
                 // 2-byte UTF-8 (accented characters)
-                {std::string("Caf\xC3\xA9\""), std::string("Caf\xC3\xA9"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // Café
+                {std::string("Caf\xC3\xA9\""), std::string("Caf\xC3\xA9"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
 
                 // 3-byte UTF-8 (CJK)
-                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD\""), std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // 你好
+                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD\""), std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
 
                 // 4-byte UTF-8 (emoji)
-                {std::string("\xF0\x9F\x98\x80\""), std::string("\xF0\x9F\x98\x80"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // 😀
+                {std::string("\xF0\x9F\x98\x80\""), std::string("\xF0\x9F\x98\x80"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
 
                 // Mixed content
-                {std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!\""), std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // Hello 世界!
+                {std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!\""), std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
             };
 
             for (size_t i = 0; i < test_cases.size(); i++) {
@@ -355,7 +344,7 @@ void test_unicode(testing &t) {
             }
         });
 
-        t.test("incomplete UTF-8 (streaming mode)", [](testing &t) {
+        t.test("incomplete UTF-8", [](testing &t) {
             std::vector<test_case> test_cases {
                 // Incomplete 2-byte sequence
                 {std::string("Caf\xC3"), std::string("Caf"), COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT},
@@ -427,13 +416,13 @@ void test_unicode(testing &t) {
         t.test("escape sequences with UTF-8", [](testing &t) {
             std::vector<test_case> test_cases {
                 // Unicode escape sequence
-                {"Hello\\u0041\"", "Hello\\u0041", COMMON_CHAT_PARSE_RESULT_SUCCESS},  // \u0041 = 'A'
+                {"Hello\\u0041\"", "Hello\\u0041", COMMON_CHAT_PARSE_RESULT_SUCCESS},
 
                 // Mix of UTF-8 and escape sequences
-                {std::string("\xE4\xBD\xA0\\n\xE5\xA5\xBD\""), std::string("\xE4\xBD\xA0\\n\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // 你\n好
+                {std::string("\xE4\xBD\xA0\\n\xE5\xA5\xBD\""), std::string("\xE4\xBD\xA0\\n\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
 
                 // Escaped quote in UTF-8 string
-                {std::string("\xE4\xBD\xA0\\\"\xE5\xA5\xBD\""), std::string("\xE4\xBD\xA0\\\"\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // 你\"好
+                {std::string("\xE4\xBD\xA0\\\"\xE5\xA5\xBD\""), std::string("\xE4\xBD\xA0\\\"\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
             };
 
             for (size_t i = 0; i < test_cases.size(); i++) {
