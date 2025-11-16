@@ -487,9 +487,8 @@ void llm_graph_result::reset() {
 
     inputs.clear();
 
-    // buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
     // increase meta buffer slightly to accommodate extra nodes from SparseK
-    int64_t max_nodes_ex = max_nodes + ; // safety headroom
+    int64_t max_nodes_ex = max_nodes + 128; // safety headroom
 
     buf_compute_meta.resize(
         ggml_tensor_overhead() * max_nodes_ex +
