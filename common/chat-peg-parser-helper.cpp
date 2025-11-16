@@ -1,7 +1,7 @@
 #include "chat-peg-parser-helper.h"
 #include "chat-peg-parser.h"
 
-common_chat_peg_parser common_chat_peg_parser_builder_helper::reasoning(const std::string &tag) {
+common_chat_peg_parser common_chat_peg_parser_builder_helper::reasoning(const std::string & tag) {
     std::string open_tag;
     open_tag.append("<").append(tag).append(">");
     std::string close_tag;
@@ -9,12 +9,15 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::reasoning(const st
     return add_rule("raw-reasoning", open_tag << add_rule("reasoning-content", until(close_tag)) << close_tag);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder_helper::content_before_tools(const std::string &tag) {
+common_chat_peg_parser common_chat_peg_parser_builder_helper::content_before_tools(const std::string & tag) {
     return add_rule("content", until(tag));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_no_attr(const std::string &function_name, const std::vector<std::string> &parameters,
-    const std::string &function_tag, const std::string &param_tag) {
+common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_no_attr(
+    const std::string &              function_name,
+    const std::vector<std::string> & parameters,
+    const std::string &              function_tag,
+    const std::string &              param_tag) {
     std::vector<common_chat_peg_parser> args;
 
     for (auto it = parameters.begin(); it != parameters.end(); it++) {
@@ -42,22 +45,20 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_no_attr(
         std::string string_content_2;
         string_content_2.append("</").append(param_tag).append("></").append(function_tag).append(">");
 
-        auto string_arg_content = add_rule("arg-string-content",
-            until_one_of({string_content_1, string_content_2}));
+        auto string_arg_content = add_rule("arg-string-content", until_one_of({ string_content_1, string_content_2 }));
 
         std::string arg_string_name;
         arg_string_name.append("arg-string-").append(*it);
         auto string_arg = add_rule(arg_string_name, arg_name + string_arg_content + arg_end);
-auto json_sec = json();
+        auto json_sec   = json();
 
         std::string arg_json_name;
         arg_json_name.append("arg-json-").append(*it);
-        auto json_arg = add_rule(arg_json_name, arg_name + add_rule("arg-json-content", json_sec) + arg_end);
+        auto json_arg           = add_rule(arg_json_name, arg_name + add_rule("arg-json-content", json_sec) + arg_end);
         auto arg_json_or_string = one_or_more(json_arg | string_arg);
         args.push_back(arg_json_or_string);
-
     }
-auto args_sequence = sequence(args);
+    auto args_sequence = sequence(args);
 
     std::string function_start_name;
     function_start_name.append("function-start-").append(function_name);
@@ -72,15 +73,15 @@ auto args_sequence = sequence(args);
     function_rule_name.append("function-").append(function_name);
     auto function = add_rule(function_rule_name,
 
-                add_rule(function_start_name, function_open)
-                + args_sequence + function_close);
+                             add_rule(function_start_name, function_open) + args_sequence + function_close);
 
     return function;
 }
 
-common_chat_peg_parser build_peg_parser_helper(const std::function<common_chat_peg_parser(common_chat_peg_parser_builder_helper&)> & fn) {
+common_chat_peg_parser build_peg_parser_helper(
+    const std::function<common_chat_peg_parser(common_chat_peg_parser_builder_helper &)> & fn) {
     common_chat_peg_parser_builder_helper builder;
-    auto root = fn(builder);
+    auto                                  root = fn(builder);
     builder.set_root(root);
     return builder.build();
 }
