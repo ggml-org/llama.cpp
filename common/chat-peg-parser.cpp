@@ -45,6 +45,33 @@ const char * common_chat_parse_result_type_name(common_chat_parse_result_type ty
     }
 }
 
+static const char * common_chat_parser_type_name(parser_type type) {
+    switch (type) {
+        case START:        return "start";
+        case END:          return "end";
+        case LITERAL:      return "literal";
+        case SEQUENCE:     return "sequence";
+        case CHOICE:       return "choice";
+        case REPETITION:   return "repetition";
+        case OPTIONAL:     return "optional";
+        case ZERO_OR_MORE: return "zero_or_more";
+        case ONE_OR_MORE:  return "one_or_more";
+        case AND:          return "and";
+        case NOT:          return "not";
+        case ANY:          return "any";
+        case CHARS:        return "chars";
+        case RULE:         return "rule";
+        case UNTIL:        return "until";
+        case SPACE:        return "space";
+        case SCHEMA:       return "schema";
+        case ROOT:         return "root";
+        case JSON_STRING:  return "json_string";
+        case CAPTURE:      return "capture";
+        case TRIGGER:      return "trigger";
+        default:           return "unknown";
+    }
+}
+
 class parser_visitor;
 
 class common_chat_peg_parser_base {
@@ -61,22 +88,28 @@ class common_chat_peg_parser_base {
     virtual parser_type type() const = 0;
 
     virtual common_chat_parse_result parse(common_chat_parse_context & ctx, size_t start = 0) {
-        LOG_DBG("[CCPP type %d] Rule: %s", type(), dump().c_str());
-        LOG_DBG("[CCPP type %d] Trying to parse: %s\n", type(), ctx.input.substr(start).c_str());
+        std::string indent(ctx.parse_depth * 2, ' ');
+        ctx.parse_depth++;
+
+        LOG_DBG("%s[CCPP type %d] Rule: %s\n", indent.c_str(), type(), dump().c_str());
+        LOG_DBG("%s[CCPP type %d] Trying to parse: %s\n", indent.c_str(), type(), ctx.input.substr(start).c_str());
         if (id_ == -1) {
             // Don't cache parsers with ID -1 (from operators)
-            LOG_DBG("[CCPP type %d] Parsing uncached due to operator\n", type());
+            LOG_DBG("%s[CCPP type %d] Parsing uncached due to operator\n", indent.c_str(), type());
+            ctx.parse_depth--;
             return parse_uncached(ctx, start);
         }
 
         auto cached = ctx.cache.get(id_, start);
         if (cached) {
-            LOG_DBG("[CCPP type %d] Found cached result, returning\n", type());
+            LOG_DBG("%s[CCPP type %d] Found cached result, returning\n", indent.c_str(), type());
+            ctx.parse_depth--;
             return *cached;
         }
 
         auto result = parse_uncached(ctx, start);
-        LOG_DBG("[CCPP type %d] Parse result is: %s\n", type(), common_chat_parse_result_type_name(result.type));
+        LOG_DBG("%s[CCPP type %d] Parse result is: %s\n", indent.c_str(), type(), common_chat_parse_result_type_name(result.type));
+        ctx.parse_depth--;
         return ctx.cache.set(id_, start, result);
     }
 
@@ -552,6 +585,9 @@ class repetition_parser : public common_chat_peg_parser_base {
 
         // Check if we got enough matches
         if (min_count_ > 0 && match_count < min_count_) {
+            if (pos >= ctx.input.size() && !ctx.input_is_complete) {
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+            }
             return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start, pos);
         }
 
@@ -640,13 +676,8 @@ class and_parser : public common_chat_peg_parser_base {
 
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
         auto result = parser_->parse(ctx, start);
-        if (result.success()) {
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start);
-        }
-        if (result.need_more_input()) {
-            return result;
-        }
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start);
+        // Pass result but don't consume input
+        return common_chat_parse_result(result.type, start);
     }
 
     void assign_id(common_chat_peg_parser_counter & counter) override {
