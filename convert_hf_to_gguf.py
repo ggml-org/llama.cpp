@@ -5075,9 +5075,6 @@ class Plamo3Model(TextModel):
         self.gguf_writer.add_value_length(head_dim)
         self.gguf_writer.add_layer_norm_rms_eps(hparams["rms_norm_eps"])
         self.gguf_writer.add_rope_freq_base(hparams["rope_theta"])
-        rope_local = hparams.get("rope_local_theta")
-        if rope_local is not None:
-            self.gguf_writer.add_rope_freq_base_swa(rope_local)
 
         window_size = hparams.get("window_size") or hparams.get("sliding_window") or 0
         self.gguf_writer.add_sliding_window(window_size)

@@ -188,7 +188,6 @@ void llama_model_saver::add_kv_from_model() {
 
     add_kv(LLM_KV_ROPE_DIMENSION_COUNT,              hparams.n_rot);
     add_kv(LLM_KV_ROPE_FREQ_BASE,                    hparams.rope_freq_base_train);
-    add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,                hparams.rope_freq_base_train_swa);
     // add_kv(LLM_KV_ROPE_SCALE_LINEAR,                 rope_scaling_factor); // old name
     add_kv(LLM_KV_ROPE_SCALING_TYPE,                 llama_rope_scaling_type_name(hparams.rope_scaling_type_train));
     add_kv(LLM_KV_ROPE_SCALING_FACTOR,               rope_scaling_factor);
