@@ -66,7 +66,7 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
+          zip -y -r llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -120,7 +120,7 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip ./build/bin/*
+          zip -y -r llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip ./build/bin/*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -182,7 +182,7 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
+          zip -y -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -235,7 +235,7 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./build/bin/*
+          zip -y -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./build/bin/*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -298,7 +298,7 @@ jobs:
         run: |
           Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll .\build\bin\Release\
           Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
-          7z a llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
+          7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -380,7 +380,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          7z a llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
+          7z a -snl llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -434,7 +434,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          7z a llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip .\build\bin\Release\ggml-cuda.dll
+          7z a -snl llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip .\build\bin\Release\ggml-cuda.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -526,7 +526,7 @@ jobs:
           cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
 
           echo "cp oneAPI running time dll files to ./build/bin done"
-          7z a llama-bin-win-sycl-x64.zip ./build/bin/*
+          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
 
       - name: Upload the release package
         uses: actions/upload-artifact@v4
@@ -632,7 +632,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          7z a llama-bin-win-hip-${{ matrix.name }}-x64.zip .\build\bin\*
+          7z a -snl llama-bin-win-hip-${{ matrix.name }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -685,7 +685,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          zip --symlinks -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
+          zip -y -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
