@@ -629,8 +629,8 @@ class SimpleChat {
 
     /**
      * Add an entry into xchat.
-     * If the last message in chat history is a ToolTemp message, discard it
-     * as the runtime logic is asking for adding new message instead of promoting the tooltemp message.
+     * If the last message in chat history is a Temp message, discard it
+     * as the runtime logic is asking for adding new message instead of promoting the temp message.
      *
      * NOTE: A new copy is created and added into xchat.
      * Also update iLastSys system prompt index tracker
@@ -644,8 +644,8 @@ class SimpleChat {
     add(chatMsg, extra=undefined) {
         if (this.xchat.length > 0) {
             let lastIndex = this.xchat.length - 1;
-            if (this.xchat[lastIndex].ns.role == Roles.ToolTemp) {
-                console.debug("DBUG:SimpleChat:Add:Discarding prev ToolTemp message...")
+            if (this.xchat[lastIndex].ns.role.endsWith(ROLES_TEMP_ENDSWITH)) {
+                console.debug("DBUG:SimpleChat:Add:Discarding prev TEMP role message...")
                 this.xchat.pop()
             }
         }
@@ -660,6 +660,28 @@ class SimpleChat {
         }
         this.save();
         return true;
+    }
+
+    /**
+     * If passed chatMsg has same role as existing last message, then replace last message,
+     * else add passed chatMsg using add.
+     *
+     * NOTE: If replacing, ensures that replaced chat message has same uniqId as message it replaced.
+     *
+     * @param {ChatMessageEx} chatMsg
+     */
+    add_smart(chatMsg) {
+        let lastMsg = this.xchat[this.xchat.length-1];
+        if (lastMsg) {
+            if (lastMsg.ns.role == chatMsg.ns.role) {
+                console.debug(`DBUG:SC:AddSmart:Replacing:${lastMsg}:${chatMsg}`)
+                this.xchat[this.xchat.length-1] = ChatMessageEx.newFrom(chatMsg)
+            }
+            this.xchat[this.xchat.length-1].uniqId = lastMsg.uniqId
+            this.save()
+            return true
+        }
+        return this.add(chatMsg)
     }
 
     /**
@@ -699,14 +721,15 @@ class SimpleChat {
         let lastIndex = this.xchat.length - 1;
         if (lastIndex < 0) {
             console.error("DBUG:SimpleChat:PromoteToolTemp:No chat messages including ToolTemp")
-            return
+            return false
         }
         if (this.xchat[lastIndex].ns.role != Roles.ToolTemp) {
             console.error("DBUG:SimpleChat:PromoteToolTemp:LastChatMsg not ToolTemp")
-            return
+            return false
         }
         this.xchat[lastIndex].ns.role = Roles.Tool;
         this.xchat[lastIndex].ns.content_adj(content, true);
+        return true
     }
 
     /**
@@ -1366,26 +1389,35 @@ class MultiChatUI {
     }
 
     /**
-     * Adjust and update chat session ui wrt the last two messages
+     * Refresh chat session ui wrt the last N messages
      * in specified chat session, if current.
      *
-     * The last but one chat message needs to be already in the chat session ui.
-     * The last chat message shouldnt be already in the chat session ui.
+     * This involves either
+     * replacing any existing ui block wrt a given message
+     * OR ELSE
+     * appending new ui block wrt that given message.
+     *
+     * Also tool call edit/trigger/submit ui will be handled as needed,
+     * provided lastN is atleast 2.
      *
      * @param {string} chatId
+     * @param {number} lastN
      */
-    chatmsg_ui_updateprev_appendlast(chatId) {
+    chatmsg_ui_refresh(chatId, lastN=2) {
         let chat = this.simpleChats[chatId];
         if (chat.chatId != this.curChatId) {
             return false
         }
-        let prevLastMsg = chat.xchat[chat.xchat.length-2]
-        let msg = chat.xchat[chat.xchat.length-1]
-        if (prevLastMsg) {
-            this.chatmsg_ui_remove(prevLastMsg.uniqId)
-            this.show_message(this.elDivChat, prevLastMsg, 1, msg)
+        // TODO: MAYBE: Call toolcall related ui reset here.
+        //this.ui_reset_toolcall_as_needed(new ChatMessageEx());
+        for(let i=lastN; i > 0; i-=1) {
+            let msg = chat.xchat[chat.xchat.length-lastN]
+            let nextMsg = chat.xchat[chat.xchat.length-(lastN-1)]
+            if (msg) {
+                this.chatmsg_ui_remove(msg.uniqId)
+                this.show_message(this.elDivChat, msg, (lastN-1), nextMsg)
+            }
         }
-        this.show_message(this.elDivChat, msg, 0, undefined)
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         }
@@ -1399,13 +1431,13 @@ class MultiChatUI {
      * @param {string} chatId
      * @param {ChatMessageEx} msg
      */
-    chatmsg_add_uishow(chatId, msg) {
+    chatmsg_addsmart_uishow(chatId, msg) {
         let chat = this.simpleChats[chatId];
         if (!chat) {
             return { added: false, shown: false }
         }
-        chat.add(msg)
-        return { added: true, shown: this.chatmsg_ui_updateprev_appendlast(chat.chatId) }
+        chat.add_smart(msg)
+        return { added: true, shown: this.chatmsg_ui_refresh(chat.chatId) }
     }
 
     /**
@@ -1483,7 +1515,7 @@ class MultiChatUI {
                     limitedData = data.slice(0, this.me.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
                 }
             }
-            if (this.chatmsg_add_uishow(cid, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, tcid, name, limitedData))).shown) {
+            if (this.chatmsg_addsmart_uishow(cid, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, tcid, name, limitedData))).shown) {
                 if (this.me.tools.autoSecs > 0) {
                     this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
                         this.elBtnUser.click()
@@ -1586,6 +1618,7 @@ class MultiChatUI {
         let content = this.elInUser.value;
         if (this.elInUser.dataset.role == Roles.ToolTemp) {
             chat.promote_tooltemp(content)
+            this.chatmsg_ui_refresh(chat.chatId)
         } else {
             if (content.trim() == "") {
                 this.elInUser.placeholder = "dont forget to enter a message, before submitting to ai"
@@ -1597,7 +1630,7 @@ class MultiChatUI {
                 if (this.me.dataURLs.length > 0) {
                     image = this.dataurl_get()
                 }
-                chat.add(new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
+                this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
             } catch (err) {
                 throw new Error("HandleUserSubmit:ChatAdd failure", {cause: err})
             } finally {
@@ -1609,7 +1642,6 @@ class MultiChatUI {
         if (this.elInUser.dataset.placeholder) {
             this.elInUser.placeholder = this.elInUser.dataset.placeholder;
         }
-        this.chatmsg_ui_updateprev_appendlast(chat.chatId)
 
         this.elInUser.dataset.role = ""
         this.elInUser.value = "working...";
@@ -1618,7 +1650,7 @@ class MultiChatUI {
         try {
             let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, this.elDivChat)
             if (chatId == this.curChatId) {
-                this.chatmsg_ui_updateprev_appendlast(chatId);
+                this.chatmsg_ui_refresh(chatId);
                 if ((theResp.trimmedContent) && (theResp.trimmedContent.length > 0)) {
                     let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmedContent}`, this.elDivChat);
                     p.className="role-trim";
@@ -1647,12 +1679,12 @@ class MultiChatUI {
         }
         let toolResult = await chat.handle_toolcall(toolCallId, toolname, this.elInToolArgs.value)
         if (toolResult !== undefined) {
-            this.chatmsg_add_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
+            this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
             this.ui_reset_userinput(false)
         } else {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
                 this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
-                this.chatmsg_add_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
+                this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
                 this.ui_reset_userinput(false)
             }, this.me.tools.toolCallResponseTimeoutMS)
         }
