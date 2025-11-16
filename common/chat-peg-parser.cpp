@@ -1203,7 +1203,7 @@ class rule_parser : public common_chat_peg_parser_base {
         }
 
         // Fire NODE_START event
-        if (ctx.event_handler && ctx.env) {
+        if (ctx.event_handler && ctx.semantics) {
             ctx.event_handler(common_chat_parse_event{
                 COMMON_CHAT_PARSE_EVENT_NODE_START,
                 name_,
@@ -1212,7 +1212,7 @@ class rule_parser : public common_chat_peg_parser_base {
                 "",
                 COMMON_CHAT_PARSE_RESULT_FAIL,
                 ctx.current_depth
-            }, *ctx.env);
+            }, *ctx.semantics);
             ctx.current_depth++;
         }
 
@@ -1220,7 +1220,7 @@ class rule_parser : public common_chat_peg_parser_base {
         auto result = it->second->parse(ctx, start);
 
         // Fire NODE_END event
-        if (ctx.event_handler && ctx.env) {
+        if (ctx.event_handler && ctx.semantics) {
             ctx.current_depth--;
             std::string_view text = ctx.input;
             if (result.start < ctx.input.size()) {
@@ -1236,7 +1236,7 @@ class rule_parser : public common_chat_peg_parser_base {
                 text,
                 result.type,
                 ctx.current_depth
-            }, *ctx.env);
+            }, *ctx.semantics);
         }
 
         return result;
@@ -1267,11 +1267,11 @@ class capture_parser : public common_chat_peg_parser_base {
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
         auto result = parser_->parse(ctx, start);
 
-        if (!result.fail() && ctx.env) {
+        if (!result.fail() && ctx.semantics) {
             std::string_view matched = ctx.input;
             matched = matched.substr(result.start, result.end - result.start);
             std::string value = std::string(matched);
-            ctx.env->captures[key_] = std::move(value);
+            ctx.semantics->captures[key_] = std::move(value);
         }
 
         return result;
