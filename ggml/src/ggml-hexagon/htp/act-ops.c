@@ -212,7 +212,7 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
     const float   alpha   = ((const float *) (op_params))[2];
     const float   limit   = ((const float *) (op_params))[3];
 
-    const int nc = (src1_valid) ? ne0 : ne0 / 2;
+    const int nc = (src1_valid) ? ne00 : ne00 / 2;
 
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
         const float * restrict src0 = (float *) (data_src0 + (ir * src0_row_size));
