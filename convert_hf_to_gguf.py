@@ -4965,8 +4965,12 @@ class Plamo2Model(TextModel):
 
         return [(new_name, data_torch)]
 
-class PlamoTokenizerMixin:
-    def _set_plamo_vocab(self) -> None:
+
+@ModelBase.register("Plamo3ForCausalLM", "PLaMo3ForCausalLM")
+class Plamo3Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.PLAMO3
+
+    def set_vocab(self):
         # PLaMo models use a custom tokenizer with a .jsonl file
         tokenizer_jsonl_path = self.dir_model / "tokenizer.jsonl"
         tokenizer_config_path = self.dir_model / "tokenizer_config.json"
@@ -5043,14 +5047,6 @@ class PlamoTokenizerMixin:
         self.gguf_writer.add_eot_token_id(4)
 
         self.gguf_writer.add_add_space_prefix(False)
-
-
-@ModelBase.register("Plamo3ForCausalLM", "PLaMo3ForCausalLM")
-class Plamo3Model(PlamoTokenizerMixin, TextModel):
-    model_arch = gguf.MODEL_ARCH.PLAMO3
-
-    def set_vocab(self):
-        self._set_plamo_vocab()
 
     def _sliding_window_pattern(self, block_count: int) -> list[bool]:
         layer_types = self.hparams.get("layer_types")
