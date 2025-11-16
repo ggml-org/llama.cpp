@@ -1397,19 +1397,18 @@ class MultiChatUI {
      * OR ELSE
      * appending new ui block wrt that given message.
      *
-     * Also tool call edit/trigger/submit ui will be handled as needed,
-     * provided lastN is atleast 2.
+     * Also tool call & response edit/trigger/submit ui will be
+     * updated as needed, provided lastN is atleast 2.
      *
      * @param {string} chatId
      * @param {number} lastN
      */
-    chatmsg_ui_refresh(chatId, lastN=2) {
+    chat_uirefresh(chatId, lastN=2) {
         let chat = this.simpleChats[chatId];
         if (chat.chatId != this.curChatId) {
             return false
         }
-        // TODO: MAYBE: Call toolcall related ui reset here.
-        //this.ui_reset_toolcall_as_needed(new ChatMessageEx());
+        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         for(let i=lastN; i > 0; i-=1) {
             let msg = chat.xchat[chat.xchat.length-i]
             let nextMsg = chat.xchat[chat.xchat.length-(i-1)]
@@ -1437,7 +1436,7 @@ class MultiChatUI {
             return { added: false, shown: false }
         }
         chat.add_smart(msg)
-        return { added: true, shown: this.chatmsg_ui_refresh(chat.chatId) }
+        return { added: true, shown: this.chat_uirefresh(chat.chatId) }
     }
 
     /**
@@ -1451,9 +1450,10 @@ class MultiChatUI {
         if ((index >= 0) && (curChatId == this.curChatId) && bUpdateUI) {
             this.chatmsg_ui_remove(uniqIdChatMsg)
             if (index >= (this.simpleChats[curChatId].xchat.length-1)) {
-                // so that tool call edit/trigger control etal can be controlled suitably
-                // from a single place - need to add that centrally controlled logic flor still.
-                this.chat_show(curChatId)
+                // so that tool call edit/trigger and tool call response/submit
+                // ui / control etal can be suitably adjusted, force a refresh
+                // of the ui wrt the currently last two messages.
+                this.chat_uirefresh(curChatId)
             }
         }
     }
@@ -1618,7 +1618,7 @@ class MultiChatUI {
         let content = this.elInUser.value;
         if (this.elInUser.dataset.role == Roles.ToolTemp) {
             chat.promote_tooltemp(content)
-            this.chatmsg_ui_refresh(chat.chatId)
+            this.chat_uirefresh(chat.chatId)
         } else {
             if (content.trim() == "") {
                 this.elInUser.placeholder = "dont forget to enter a message, before submitting to ai"
@@ -1650,7 +1650,7 @@ class MultiChatUI {
         try {
             let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, this.elDivChat)
             if (chatId == this.curChatId) {
-                this.chatmsg_ui_refresh(chatId);
+                this.chat_uirefresh(chatId);
                 if ((theResp.trimmedContent) && (theResp.trimmedContent.length > 0)) {
                     let p = ui.el_create_append_p(`TRIMMED:${theResp.trimmedContent}`, this.elDivChat);
                     p.className="role-trim";
