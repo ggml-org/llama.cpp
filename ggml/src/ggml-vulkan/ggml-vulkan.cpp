@@ -2716,7 +2716,18 @@ static uint32_t get_default_bk_step(const vk_device& device, ggml_type src0_type
         }
         return 4;
     } else if (device->vendor_id == VK_VENDOR_ID_AMD) {
-        return 1;
+        if (mul_mat_id) {
+            return src0_type == GGML_TYPE_Q8_0 ? 1 : 2;
+        }
+
+        if (kq) {
+            if (src0_type == GGML_TYPE_Q2_K || src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q4_K) {
+                return 4;
+            }
+            return 2;
+        }
+
+        return 4;
     }
 
     if (device->vendor_id == VK_VENDOR_ID_INTEL) {
