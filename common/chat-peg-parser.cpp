@@ -550,7 +550,7 @@ class repetition_parser : public common_chat_peg_parser_base {
         }
 
         // Check if we got enough matches
-        if (match_count < min_count_) {
+        if (min_count_ > 0 && match_count < min_count_) {
             return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start, pos);
         }
 
