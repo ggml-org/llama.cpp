@@ -1876,97 +1876,103 @@ void common_chat_peg_parser::build_grammar(const common_grammar_builder & builde
     }
 }
 
+// Create an internal parser and wrap it in common_chat_peg_parser
+template <typename Parser, typename... Args>
+static common_chat_peg_parser make_parser(common_chat_peg_parser_counter & counter, Args&&... args) {
+    return common_chat_peg_parser(std::make_shared<Parser>(std::forward<Args>(args)..., counter.next()));
+}
+
 common_chat_peg_parser_builder::common_chat_peg_parser_builder()
     : root_(std::make_shared<root_parser>(0)) // root parser has id 0
     , counter_(1) {}
 
 common_chat_peg_parser common_chat_peg_parser_builder::start() {
-    return common_chat_peg_parser(std::make_shared<start_parser>(counter_.next()));
+    return make_parser<start_parser>(counter_);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::end() {
-    return common_chat_peg_parser(std::make_shared<end_parser>(counter_.next()));
+    return make_parser<end_parser>(counter_);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::literal(const std::string & literal) {
-    return common_chat_peg_parser(std::make_shared<literal_parser>(literal, counter_.next()));
+    return make_parser<literal_parser>(counter_, literal);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::sequence(const std::vector<common_chat_peg_parser> & parsers) {
-    return common_chat_peg_parser(std::make_shared<sequence_parser>(parsers, counter_.next()));
+    return make_parser<sequence_parser>(counter_, parsers);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::choice(const std::vector<common_chat_peg_parser> & parsers) {
-    return common_chat_peg_parser(std::make_shared<choice_parser>(parsers, counter_.next()));
+    return make_parser<choice_parser>(counter_, parsers);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::one_or_more(const common_chat_peg_parser & p) {
-    return common_chat_peg_parser(std::make_shared<one_or_more_parser>(p, counter_.next()));
+    return make_parser<one_or_more_parser>(counter_, p);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::zero_or_more(const common_chat_peg_parser & p) {
-    return common_chat_peg_parser(std::make_shared<zero_or_more_parser>(p, counter_.next()));
+    return make_parser<zero_or_more_parser>(counter_, p);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::optional(const common_chat_peg_parser & p) {
-    return common_chat_peg_parser(std::make_shared<optional_parser>(p, counter_.next()));
+    return make_parser<optional_parser>(counter_, p);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::peek(const common_chat_peg_parser & p) {
-    return common_chat_peg_parser(std::make_shared<and_parser>(p, counter_.next()));
+    return make_parser<and_parser>(counter_, p);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::negate(const common_chat_peg_parser & p) {
-    return common_chat_peg_parser(std::make_shared<not_parser>(p, counter_.next()));
+    return make_parser<not_parser>(counter_, p);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::any() {
-    return common_chat_peg_parser(std::make_shared<any_parser>(counter_.next()));
+    return make_parser<any_parser>(counter_);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::chars(const std::string & classes, int min, int max) {
-    return common_chat_peg_parser(std::make_shared<chars_parser>(classes, min, max, counter_.next()));
+    return make_parser<chars_parser>(counter_, classes, min, max);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::one(const std::string & classes) {
-    return chars(classes, 1, 1);
+    return make_parser<chars_parser>(counter_, classes, 1, 1);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::json_string_unqouted() {
-    return common_chat_peg_parser(std::make_shared<json_string_parser>(counter_.next()));
+    return make_parser<json_string_parser>(counter_);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name) {
     auto root = cast<root_parser>(root_);
-    return common_chat_peg_parser(std::make_shared<rule_parser>(name, std::weak_ptr<root_parser>(root), counter_.next()));
+    return make_parser<rule_parser>(counter_, name, std::weak_ptr<root_parser>(root));
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::space() {
-    return common_chat_peg_parser(std::make_shared<space_parser>(counter_.next()));
+    return make_parser<space_parser>(counter_);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::until(const std::string & delimiter) {
-    return common_chat_peg_parser(std::make_shared<until_parser>(delimiter, counter_.next()));
+    return make_parser<until_parser>(counter_, delimiter);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
-    return common_chat_peg_parser(std::make_shared<until_parser>(delimiters, counter_.next()));
+    return make_parser<until_parser>(counter_, delimiters);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::repeat(const common_chat_peg_parser & p, int min, int max) {
-    return common_chat_peg_parser(std::make_shared<repetition_parser>(p, min, max, counter_.next()));
+    return make_parser<repetition_parser>(counter_, p, min, max);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::repeat(const common_chat_peg_parser & p, int n) {
-    return repeat(p, n, n);
+    return make_parser<repetition_parser>(counter_, p, n, n);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::schema(const common_chat_peg_parser & p, const std::string & name, const nlohmann::ordered_json & schema) {
-    return common_chat_peg_parser(std::make_shared<schema_parser>(p, name, schema, counter_.next()));
+    return make_parser<schema_parser>(counter_, p, name, schema);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::action(const common_chat_peg_parser & p, std::function<void(const common_chat_parse_action &)> fn, int when) {
-    return common_chat_peg_parser(std::make_shared<action_parser>(p, std::move(fn), when, counter_.next()));
+    return make_parser<action_parser>(counter_, p, std::move(fn), when);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::capture(const std::string & key, const common_chat_peg_parser & p) {
