@@ -791,6 +791,73 @@ class space_parser : public common_chat_peg_parser_base {
     void accept(parser_visitor & visitor) override;
 };
 
+static std::pair<uint32_t, size_t> parse_hex_escape(const std::string & str, size_t pos, int hex_count) {
+    if (pos + hex_count > str.length()) {
+        return {0, 0};
+    }
+
+    uint32_t value = 0;
+    for (int i = 0; i < hex_count; i++) {
+        char c = str[pos + i];
+        if (!is_hex_digit(c)) {
+            return {0, 0};
+        }
+        value <<= 4;
+        if ('a' <= c && c <= 'f') {
+            value += c - 'a' + 10;
+        } else if ('A' <= c && c <= 'F') {
+            value += c - 'A' + 10;
+        } else if ('0' <= c && c <= '9') {
+            value += c - '0';
+        } else {
+            break;
+        }
+    }
+    return {value, static_cast<size_t>(hex_count)};
+}
+
+static std::pair<uint32_t, size_t> parse_char_class_char(const std::string & content, size_t pos) {
+    if (content[pos] == '\\' && pos + 1 < content.length()) {
+        switch (content[pos + 1]) {
+            case 'x': {
+                auto result = parse_hex_escape(content, pos + 2, 2);
+                if (result.second > 0) {
+                    return {result.first, 2 + result.second};
+                }
+                // Invalid escape, treat as literal 'x'
+                return {static_cast<uint32_t>('x'), 2};
+            }
+            case 'u': {
+                auto result = parse_hex_escape(content, pos + 2, 4);
+                if (result.second > 0) {
+                    return {result.first, 2 + result.second};
+                }
+                // Invalid escape, treat as literal 'u'
+                return {static_cast<uint32_t>('u'), 2};
+            }
+            case 'U': {
+                auto result = parse_hex_escape(content, pos + 2, 8);
+                if (result.second > 0) {
+                    return {result.first, 2 + result.second};
+                }
+                // Invalid escape, treat as literal 'U'
+                return {static_cast<uint32_t>('U'), 2};
+            }
+            case 'n':  return {'\n', 2};
+            case 't':  return {'\t', 2};
+            case 'r':  return {'\r', 2};
+            case '\\': return {'\\', 2};
+            case ']':  return {']', 2};
+            case '-':  return {'-', 2};
+            case '[':  return {'[', 2};
+            default:   return {static_cast<uint32_t>(content[pos + 1]), 2};
+        }
+    }
+
+    // Regular character - return as codepoint
+    return {static_cast<uint32_t>(static_cast<unsigned char>(content[pos])), 1};
+}
+
 // Matches between min and max repetitions of characters from a character class.
 //   S -> [a-z]{m,n}
 // Supports Unicode codepoint ranges and escape sequences: \xXX \uXXXX \UXXXXXXXX
@@ -827,94 +894,14 @@ class chars_parser : public common_chat_peg_parser_base {
             content = content.substr(1);
         }
 
-        // Parse a character or escape sequence, returning codepoint and bytes consumed
-        auto parse_char = [&](size_t pos) -> std::pair<uint32_t, size_t> {
-            if (content[pos] == '\\' && pos + 1 < content.length()) {
-                char next = content[pos + 1];
-                switch (next) {
-                    case 'n':  return {'\n', 2};
-                    case 't':  return {'\t', 2};
-                    case 'r':  return {'\r', 2};
-                    case '\\': return {'\\', 2};
-                    case ']':  return {']', 2};
-                    case '-':  return {'-', 2};
-                    case '[':  return {'[', 2};
-
-                    // \xXX - 8-bit hex escape
-                    case 'x': {
-                        if (pos + 3 < content.length() &&
-                            is_hex_digit(content[pos + 2]) &&
-                            is_hex_digit(content[pos + 3])) {
-                            uint32_t value = 0;
-                            for (int i = 0; i < 2; i++) {
-                                char c = content[pos + 2 + i];
-                                value = value * 16 + (c >= 'a' ? c - 'a' + 10 :
-                                                     c >= 'A' ? c - 'A' + 10 :
-                                                     c - '0');
-                            }
-                            return {value, 4};  // \xXX
-                        }
-                        return {next, 2};  // Invalid escape, treat as literal 'x'
-                    }
-
-                    // \uXXXX - 16-bit hex escape
-                    case 'u': {
-                        if (pos + 5 < content.length() &&
-                            is_hex_digit(content[pos + 2]) &&
-                            is_hex_digit(content[pos + 3]) &&
-                            is_hex_digit(content[pos + 4]) &&
-                            is_hex_digit(content[pos + 5])) {
-                            uint32_t value = 0;
-                            for (int i = 0; i < 4; i++) {
-                                char c = content[pos + 2 + i];
-                                value = value * 16 + (c >= 'a' ? c - 'a' + 10 :
-                                                     c >= 'A' ? c - 'A' + 10 :
-                                                     c - '0');
-                            }
-                            return {value, 6};  // \uXXXX
-                        }
-                        return {next, 2};  // Invalid escape, treat as literal 'u'
-                    }
-
-                    // \UXXXXXXXX - 32-bit hex escape
-                    case 'U': {
-                        if (pos + 9 < content.length()) {
-                            bool all_hex = true;
-                            for (int i = 0; i < 8; i++) {
-                                if (!is_hex_digit(content[pos + 2 + i])) {
-                                    all_hex = false;
-                                    break;
-                                }
-                            }
-                            if (all_hex) {
-                                uint32_t value = 0;
-                                for (int i = 0; i < 8; i++) {
-                                    char c = content[pos + 2 + i];
-                                    value = value * 16 + (c >= 'a' ? c - 'a' + 10 :
-                                                         c >= 'A' ? c - 'A' + 10 :
-                                                         c - '0');
-                                }
-                                return {value, 10};  // \UXXXXXXXX
-                            }
-                        }
-                        return {next, 2};  // Invalid escape, treat as literal 'U'
-                    }
-
-                    default:   return {next, 2}; // Treat as literal escaped character
-                }
-            }
-            // Regular character - return as codepoint
-            return {static_cast<uint32_t>(static_cast<unsigned char>(content[pos])), 1};
-        };
-
         size_t i = 0;
         while (i < content.length()) {
-            auto [start, start_len] = parse_char(i);
+            auto [start, start_len] = parse_char_class_char(content, i);
             i += start_len;
 
             if (i + 1 < content.length() && content[i] == '-') {
                 // Range detected
-                auto [end, end_len] = parse_char(i + 1);
+                auto [end, end_len] = parse_char_class_char(content, i + 1);
                 ranges_.push_back(char_range{start, end});
                 i += 1 + end_len;
             } else {
