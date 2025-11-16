@@ -1186,6 +1186,7 @@ class MultiChatUI {
      * Reset user input ui.
      * * clear user input (if requested, default true)
      * * enable user input
+     * * set to Roles.User
      * * set focus to user input
      * @param {boolean} [bClearElInUser=true]
      */
@@ -1194,6 +1195,7 @@ class MultiChatUI {
             this.elInUser.value = "";
             this.dataurl_plus_clear()
         }
+        this.elInUser.dataset.role = Roles.User;
         this.elInUser.disabled = false;
         this.elInUser.focus();
     }
@@ -1245,9 +1247,7 @@ class MultiChatUI {
             } else {
                 this.elInUser.value = "";
             }
-            // Rather maybe set this to between either ToolTemp or User
-            // and not any and every possible role.
-            this.elInUser.dataset.role = msg.ns.role
+            this.elInUser.dataset.role = (msg.ns.role == Roles.ToolTemp) ? Roles.ToolTemp : Roles.User
         }
         // Create main section
         let secMain = document.createElement('section')
@@ -1352,6 +1352,7 @@ class MultiChatUI {
         let chat = this.simpleChats[this.curChatId];
         if (bClear) {
             this.elDivChat.replaceChildren();
+            this.ui_reset_userinput()
         }
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
@@ -1410,6 +1411,7 @@ class MultiChatUI {
         if (chat.chatId != this.curChatId) {
             return false
         }
+        this.ui_reset_userinput(false)
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         for(let i=lastN; i > 0; i-=1) {
             let msg = chat.xchat[chat.xchat.length-i]
@@ -1524,7 +1526,6 @@ class MultiChatUI {
                     }, this.me.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
                 }
             }
-            this.ui_reset_userinput(false)
         })
 
         this.elInUser.addEventListener("keyup", (ev)=> {
@@ -1682,12 +1683,10 @@ class MultiChatUI {
         let toolResult = await chat.handle_toolcall(toolCallId, toolname, this.elInToolArgs.value)
         if (toolResult !== undefined) {
             this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
-            this.ui_reset_userinput(false)
         } else {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
                 this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
                 this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
-                this.ui_reset_userinput(false)
             }, this.me.tools.toolCallResponseTimeoutMS)
         }
     }
@@ -1766,7 +1765,6 @@ class MultiChatUI {
             return;
         }
         this.elInSystem.value = chat.get_system_latest().ns.getContent();
-        this.elInUser.value = "";
         this.curChatId = chatId;
         this.chat_show(chatId, true, true);
         this.elInUser.focus();
