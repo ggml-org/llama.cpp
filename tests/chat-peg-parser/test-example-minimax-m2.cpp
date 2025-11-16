@@ -59,9 +59,7 @@ void test_example_minimax_m2(testing &t) {
         common_chat_msg prev;
         common_chat_parse_result last_result;
         t.test("helper_builder", [&](testing &t) {
-            size_t token_cnt = 0;
             for (auto it = tokens.begin(); it != tokens.end(); it++) {
-                token_cnt++;
                 std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
                 LOG_ERR("Current input: %s\n", in.c_str());
 
@@ -76,10 +74,7 @@ void test_example_minimax_m2(testing &t) {
 
                 auto result = helper_parser.parse(ctx);
                 last_result = result;
-                if (result.fail()) {
-                    LOG_ERR("Parsing failure!");
-                    break;
-                }
+                t.assert_equal("not fail", false, result.fail());
 
                 // This shouldn't emit any runtime errors
                 auto msg   = semantics.to_msg();
@@ -88,7 +83,6 @@ void test_example_minimax_m2(testing &t) {
             }
             LOG_ERR("Last message: %s\n", prev.to_json_oaicompat<nlohmann::ordered_json>().dump().c_str());
             t.assert_true("last_result_should_be_success", last_result.success());
-            t.assert_equal("should_parse_all_tokens_helper", tokens.size(), token_cnt);
         });
         common_log_set_verbosity_thold(LOG_DEFAULT_LLAMA);
     });

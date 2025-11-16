@@ -31,10 +31,8 @@ void test_example_seed_oss(testing &t) {
 
         common_chat_msg prev;
         t.test("helper_builder", [&](testing &t) {
-            size_t token_cnt = 0;
             for (auto it = tokens.begin(); it != tokens.end(); it++) {
-                token_cnt++;
-                std::string in = std::accumulate(tokens.begin(), it, std::string());
+                std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
                 common_chat_parse_semantics semantics;
                 common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
@@ -42,16 +40,13 @@ void test_example_seed_oss(testing &t) {
                 ctx.event_handler = parser_semantic_handler;
 
                 auto result = helper_parser.parse(ctx);
-                if (result.fail()) {
-                    break;
-                }
+                t.assert_equal("not fail", false, result.fail());
 
                 // This shouldn't emit any runtime errors
                 auto msg   = semantics.to_msg();
                 auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
                 prev       = msg;
             }
-            t.assert_equal("should_parse_all_tokens_helper", tokens.size(), token_cnt);
         });
     });
 }

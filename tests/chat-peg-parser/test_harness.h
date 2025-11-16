@@ -127,11 +127,11 @@ struct testing {
     }
 
     // Assertions
-    void assert_true(bool cond) {
-        assert_true("", cond);
+    bool assert_true(bool cond) {
+        return assert_true("", cond);
     }
 
-    void assert_true(const std::string &msg, bool cond) {
+    bool assert_true(const std::string &msg, bool cond) {
         ++assertions;
         if (!cond) {
             ++failures;
@@ -141,16 +141,18 @@ struct testing {
                 out << " : " << msg;
             }
             out << "\n";
+            return false;
         }
+        return true;
     }
 
     template <typename A, typename B>
-    void assert_equal(const A & expected, const B & actual) {
-        assert_equal("", expected, actual);
+    bool assert_equal(const A & expected, const B & actual) {
+        return assert_equal("", expected, actual);
     }
 
     template <typename A, typename B>
-    void assert_equal(const std::string & msg, const A & expected, const B & actual) {
+    bool assert_equal(const std::string & msg, const A & expected, const B & actual) {
         ++assertions;
         if (!(actual == expected)) {
             ++failures;
@@ -165,7 +167,9 @@ struct testing {
             out << "  expected: " << expected << "\n";
             indent();
             out << "  actual  : " << actual << "\n";
+            return false;
         }
+        return true;
     }
 
     // Print summary and return an exit code
