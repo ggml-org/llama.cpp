@@ -231,7 +231,7 @@ class aho_corasick_matcher {
 
         for (const auto & p : trie[index].children) {
             unsigned char ch = p.first;
-            int child = p.second;
+            auto child = p.second;
             prefix.push_back(ch);
             collect_prefix_and_next(child, prefix, out);
             prefix.pop_back();
