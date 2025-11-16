@@ -1245,6 +1245,8 @@ class MultiChatUI {
             } else {
                 this.elInUser.value = "";
             }
+            // Rather maybe set this to between either ToolTemp or User
+            // and not any and every possible role.
             this.elInUser.dataset.role = msg.ns.role
         }
         // Create main section
@@ -1632,7 +1634,7 @@ class MultiChatUI {
                 }
                 this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
             } catch (err) {
-                throw new Error("HandleUserSubmit:ChatAdd failure", {cause: err})
+                throw new Error("HandleUserSubmit:ChatAddShow failure", {cause: err})
             } finally {
                 // TODO:MAYBE: in future if we dont want to clear up user loaded image on failure
                 // move this to end of try block
@@ -1897,6 +1899,7 @@ export class Me {
             <p>Load previously saved chat session, if available</p>`;
             let btn = ui.el_create_button(chat.ods_key(), (ev)=>{
                 console.log(`DBUG:${tag}`, chat);
+                this.multiChat.elInUser.value = `Loading ${chat.ods_key()}...`
                 chat.load((loadStatus, dbStatus, related)=>{
                     if (!loadStatus || !dbStatus) {
                         console.log(`WARN:${tag}:DidntLoad:${loadStatus}:${dbStatus}:${related}`);
