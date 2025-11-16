@@ -138,7 +138,7 @@ void test_example_qwen3_coder(testing &t) {
             }
             t.assert_equal("should_parse_all_tokens_explicit", tokens.size(), token_cnt);
         });
-        
+
         t.test("helper_builder", [&](testing &t) {
             size_t token_cnt = 0;
             for (auto it = tokens.begin(); it != tokens.end(); it++) {
