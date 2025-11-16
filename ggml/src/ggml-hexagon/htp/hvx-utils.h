@@ -19,7 +19,7 @@ typedef union {
     uint32_t   w[VLEN_FP32];
     __fp16     fp16[VLEN_FP16];
     float      fp32[VLEN_FP32];
-} __attribute__((packed)) __attribute__((aligned(VLEN))) HVX_VectorAlias;
+} __attribute__((aligned(VLEN), packed)) HVX_VectorAlias;
 
 static inline HVX_Vector hvx_vec_splat_fp32(float i) {
     union {
@@ -497,7 +497,7 @@ static inline HVX_Vector hvx_vec_abs_fp16(HVX_Vector v) {
 static inline HVX_Vector hvx_vec_neg_fp16(HVX_Vector v) {
     // neg by setting the fp16 sign bit
     HVX_Vector mask = Q6_Vh_vsplat_R(0x8000);
-    return Q6_V_vor_VV(v, mask);
+    return Q6_V_vxor_VV(v, mask);
 }
 
 static inline HVX_Vector hvx_vec_abs_fp32(HVX_Vector v) {
@@ -512,7 +512,7 @@ static inline HVX_Vector hvx_vec_neg_fp32(HVX_Vector v) {
 #else
     // neg by setting the fp32 sign bit
     HVX_Vector mask = Q6_V_vsplat_R(0x80000000);
-    return Q6_V_vor_VV(v, mask);
+    return Q6_V_vxor_VV(v, mask);
 #endif  // __HTP_ARCH__ > 75
 }
 
