@@ -15,15 +15,20 @@ static float neg_inf() {
 }
 
 static void assert_is_neginf(float x) {
-    (void) x; // silence unused parameter in release builds
+#ifndef NDEBUG
     assert(std::isinf(x) && x < 0.0f && "expected -INF");
+#else
+    (void) x; // silence unused parameter in release builds
+#endif
 }
 
 static void assert_is_zero(float x) {
-    const float eps = 1e-6f;
-    (void) x;   // silence unused parameter in release builds
-    (void) eps; // silence unused variable in release builds
+#ifndef NDEBUG
+    constexpr float eps = 1e-6f;
     assert(std::fabs(x) <= eps && "expected zero");
+#else
+    (void) x; // silence unused parameter in release builds
+#endif
 }
 
 // Naive matmul: scores = K [n_kv x d]  *  Q [d x n_cols]
@@ -156,24 +161,30 @@ static void test_sparsek_topk_basic() {
         }
     }
 
-    auto base = make_base_mask_zero(n_kv, n_cols);
-    auto scores = matmul_KxQ(K, Q, n_kv, d, n_cols);
-    auto topk_idx = topk_indices_per_column(scores, n_kv, n_cols, topk);
-    auto final_m = build_sparsek_mask_reference(base, topk_idx, n_kv, n_cols, topk);
+    auto base      = make_base_mask_zero(n_kv, n_cols);
+    auto scores    = matmul_KxQ(K, Q, n_kv, d, n_cols);
+    auto topk_idx  = topk_indices_per_column(scores, n_kv, n_cols, topk);
+    auto final_m   = build_sparsek_mask_reference(base, topk_idx, n_kv, n_cols, topk);
 
     // Check: in each column exactly topk entries are finite (0), the rest are -INF.
     for (int col = 0; col < n_cols; ++col) {
+#ifndef NDEBUG
         int finite_count = 0;
+#endif
         for (int row = 0; row < n_kv; ++row) {
             float v = final_m[row * n_cols + col];
             if (std::isinf(v) && v < 0.0f) {
                 assert_is_neginf(v);
             } else {
                 assert_is_zero(v);
+#ifndef NDEBUG
                 finite_count++;
+#endif
             }
         }
+#ifndef NDEBUG
         assert(finite_count == topk && "Expected exactly topk finite entries per column");
+#endif
     }
 }
 
@@ -198,24 +209,30 @@ static void test_sparsek_topk_with_base_neginf() {
         }
     }
 
-    auto base = make_base_mask_neginf(n_kv, n_cols);
-    auto scores = matmul_KxQ(K, Q, n_kv, d, n_cols);
-    auto topk_idx = topk_indices_per_column(scores, n_kv, n_cols, topk);
-    auto final_m = build_sparsek_mask_reference(base, topk_idx, n_kv, n_cols, topk);
+    auto base      = make_base_mask_neginf(n_kv, n_cols);
+    auto scores    = matmul_KxQ(K, Q, n_kv, d, n_cols);
+    auto topk_idx  = topk_indices_per_column(scores, n_kv, n_cols, topk);
+    auto final_m   = build_sparsek_mask_reference(base, topk_idx, n_kv, n_cols, topk);
 
     // Even with base = -INF everywhere, SparseK should unmask exactly topk entries per column.
     for (int col = 0; col < n_cols; ++col) {
+#ifndef NDEBUG
         int finite_count = 0;
+#endif
         for (int row = 0; row < n_kv; ++row) {
             float v = final_m[row * n_cols + col];
             if (std::isinf(v) && v < 0.0f) {
                 assert_is_neginf(v);
             } else {
                 assert_is_zero(v);
+#ifndef NDEBUG
                 finite_count++;
+#endif
             }
         }
+#ifndef NDEBUG
         assert(finite_count == topk && "Expected exactly topk finite entries per column");
+#endif
     }
 }
 
