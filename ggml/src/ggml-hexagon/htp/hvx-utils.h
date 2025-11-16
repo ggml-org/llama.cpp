@@ -19,7 +19,7 @@ typedef union {
     uint32_t   w[VLEN_FP32];
     __fp16     fp16[VLEN_FP16];
     float      fp32[VLEN_FP32];
-} HVX_VectorAlias;
+} __attribute__((packed)) __attribute__((aligned(VLEN))) HVX_VectorAlias;
 
 static inline HVX_Vector hvx_vec_splat_fp32(float i) {
     union {
