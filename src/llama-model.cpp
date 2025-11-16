@@ -2235,7 +2235,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case 80: type = LLM_TYPE_80B_A3B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
-            }
+            } break;
         default: throw std::runtime_error("unsupported model architecture");
     }
 
