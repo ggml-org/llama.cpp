@@ -7,8 +7,8 @@ void test_example_qwen3_coder(testing &t) {
     auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.reasoning();
         auto content = p.content_before_tools("<tool_call>");
-        auto function = p.quasi_xml_no_attr("search_files", 
-            std::vector<std::string>({ 
+        auto function = p.quasi_xml_no_attr("search_files",
+            std::vector<std::string>({
                 "path", "pattern", "min_size_mb", "max_depth", "include_hidden", "modified_days_ago",
                 "case_sensitive", "sort_by", "filters"
             }));

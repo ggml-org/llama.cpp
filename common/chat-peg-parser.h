@@ -328,7 +328,7 @@ class common_chat_peg_parser_builder {
     // Adds a quasi-XML tool call spec with a separate name attribute (Minimax-M2 style)
     // TODO: accept parameter schemas (required, value types etc.)
     // common_chat_peg_parser quasi_xml_attr(const std::string &function_name, const std::vector<std::string> &parameters,
-    //     const std::string &function_tag = "invoke", const std::string &param_tag = "parameter", 
+    //     const std::string &function_tag = "invoke", const std::string &param_tag = "parameter",
     //     const std::string &name_attr = "name");
 
     common_chat_peg_parser build();
