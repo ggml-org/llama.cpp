@@ -1857,7 +1857,7 @@ common_chat_peg_parser builder::negate(const common_chat_peg_parser & p) { retur
 common_chat_peg_parser builder::any() { return make_parser<any_parser>(counter_); }
 common_chat_peg_parser builder::chars(const std::string & classes, int min, int max) { return make_parser<chars_parser>(counter_, classes, min, max); }
 common_chat_peg_parser builder::one(const std::string & classes) { return make_parser<chars_parser>(counter_, classes, 1, 1); }
-common_chat_peg_parser builder::json_string_unqouted() { return make_parser<json_string_parser>(counter_); }
+common_chat_peg_parser builder::json_string_content() { return make_parser<json_string_parser>(counter_); }
 common_chat_peg_parser builder::space() { return make_parser<space_parser>(counter_); }
 common_chat_peg_parser builder::until(const std::string & delimiter) { return make_parser<until_parser>(counter_, delimiter); }
 common_chat_peg_parser builder::until_one_of(const std::vector<std::string> & delimiters) { return make_parser<until_parser>(counter_, delimiters); }
@@ -1922,7 +1922,7 @@ common_chat_peg_parser builder::json_number() {
 
 common_chat_peg_parser builder::json_string() {
     return add_rule("json-string", [this]() {
-        return literal("\"") + json_string_unqouted() + literal("\"");
+        return literal("\"") + json_string_content() + literal("\"");
     });
 }
 

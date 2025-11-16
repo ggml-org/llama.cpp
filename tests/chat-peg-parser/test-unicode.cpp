@@ -328,7 +328,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-                        return p.json_string_unqouted() + p.literal("\"");
+                        return p.json_string_content() + p.literal("\"");
                     });
 
                     common_chat_parse_context ctx(tc.input, true);
@@ -365,7 +365,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-                        return p.json_string_unqouted();
+                        return p.json_string_content();
                     });
 
                     common_chat_parse_context ctx(tc.input, false);  // input_is_complete = false
@@ -402,7 +402,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-                        return p.json_string_unqouted();
+                        return p.json_string_content();
                     });
 
                     common_chat_parse_context ctx(tc.input, true);
@@ -431,7 +431,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-                        return p.json_string_unqouted() + p.literal("\"");
+                        return p.json_string_content() + p.literal("\"");
                     });
 
                     common_chat_parse_context ctx(tc.input, true);

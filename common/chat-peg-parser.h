@@ -272,7 +272,7 @@ class common_chat_peg_parser_builder {
     common_chat_peg_parser json_null();
 
     // Specialized single-pass JSON string parser with escape sequence handling
-    common_chat_peg_parser json_string_unqouted();
+    common_chat_peg_parser json_string_content();
 
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
