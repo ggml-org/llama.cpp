@@ -319,7 +319,7 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(960,320,104,152,3,3),
         // std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1920,640,32,32,3,3)
-        // std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
         // std::make_tuple(32,12,141,133,3,3),
         // std::make_tuple(32,6,141,133,3,3),
         // std::make_tuple(32,12,141,121,3,3),
@@ -329,7 +329,8 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(320,12,16,16,3,3),  //working
         //  std::make_tuple(256,12,16,16,3,3),  //working
         //  std::make_tuple(32,12,16,16,3,3),  //not working
-        std::make_tuple(16,12,16,16,3,3),  //not working
+        // std::make_tuple(16,12,16,16,3,3),  //not working
+        // std::make_tuple(32,12,16,16,3,3),  //not working
         // std::make_tuple(48,12,16,16,3,3),  // not working
         // std::make_tuple(96,12,16,16,3,3),  //not working
         // std::make_tuple(64,12,16,16,3,3),  //working
@@ -750,15 +751,15 @@ int main(void)
        // int i = 2048;
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
         // for(int i = 0; i < 26*38; i++) {
-        for(int i = 0; i < conv2d_data.size(); i++) {
-            float diff = fabs(im2col_data[i] - conv2d_data[i]);
-            // if(diff > 0.5) {
-                  printf("(%7.3f, %7.3f, %.2f, %d) \n",
-                  im2col_data[i], conv2d_data[i],
-                  diff, i);
-                // break;
-            // }
-        }
+        // for(int i = 0; i < conv2d_data.size(); i++) {
+        //     float diff = fabs(im2col_data[i] - conv2d_data[i]);
+        //     // if(diff > 0.5) {
+        //           printf("(%7.3f, %7.3f, %.2f, %d) \n",
+        //           im2col_data[i], conv2d_data[i],
+        //           diff, i);
+        //         // break;
+        //     // }
+        // }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);
