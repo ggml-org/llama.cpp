@@ -2745,6 +2745,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_QWEN3NEXT:
             return true;
         default:
             return false;

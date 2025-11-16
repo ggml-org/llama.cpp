@@ -20,9 +20,8 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
 
     ggml_tensor * causal_mask =
         ggml_tri(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens, ubatch.n_seq_tokens), 1.0f),
-                 GGML_TRI_TYPE_LOWER);
-    ggml_tensor * identity = ggml_diag(
-        ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens), 1.0f));
+                    GGML_TRI_TYPE_LOWER);
+    ggml_tensor * identity = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens), 1.0f));
 
     ggml_build_forward_expand(gf, causal_mask);
     ggml_build_forward_expand(gf, identity);
@@ -170,10 +169,8 @@ ggml_tensor * llm_build_qwen3next::delta_net_unified(ggml_context * ctx,
     cb(v_beta, "v_beta", il);
     cb(g_cumsum, "g_cumsum", il);
 
-    ggml_tensor * gcs_i = ggml_cont_4d(ctx, g_cumsum, n_tokens, 1, H_v,
-                                       n_seqs);  // [chunk_size, 1, n_tokens, n_seqs]
-    ggml_tensor * gcs_j = ggml_cont_4d(ctx, g_cumsum, 1, n_tokens, H_v,
-                                       n_seqs);  // [1, chunk_size, n_tokens, n_seqs]
+    ggml_tensor * gcs_i = ggml_cont_4d(ctx, g_cumsum, n_tokens, 1, H_v, n_seqs);  // [chunk_size, 1, n_tokens, n_seqs]
+    ggml_tensor * gcs_j = ggml_cont_4d(ctx, g_cumsum, 1, n_tokens, H_v, n_seqs);  // [1, chunk_size, n_tokens, n_seqs]
 
     // Broadcast both tensors to [chunk_size, chunk_size, H_v, n_seqs]
     // ggml_tensor * gcs_i_broadcast =
@@ -181,8 +178,7 @@ ggml_tensor * llm_build_qwen3next::delta_net_unified(ggml_context * ctx,
     //                     n_seqs);  // [chunk_size, 1, H_v, n_seqs] -> [chunk_size, chunk_size, H_v, n_seqs]
     // Don't need this, this one will get auto-broadcast
     ggml_tensor * gcs_j_broadcast =
-        ggml_repeat_4d(ctx, gcs_j, n_tokens, n_tokens, H_v,
-                       n_seqs);  // [1, chunk_size, H_v, n_seqs] -> [chunk_size, chunk_size, H_v, n_seqs]
+        ggml_repeat_4d(ctx, gcs_j, n_tokens, n_tokens, H_v, n_seqs);  // [1, chunk_size, H_v, n_seqs] -> [chunk_size, chunk_size, H_v, n_seqs]
 
     ggml_tensor * decay_mask = ggml_sub(ctx, gcs_j_broadcast, gcs_i);
 
@@ -215,9 +211,9 @@ ggml_tensor * llm_build_qwen3next::delta_net_unified(ggml_context * ctx,
     ggml_tensor * attn_lower = ggml_mul(ctx, attn, causal_mask);
     ggml_tensor * lhs        = ggml_sub(ctx, ggml_repeat(ctx, identity, attn_lower), attn_lower);
 
-    ggml_tensor * lin_solve = ggml_solve_tri(ctx, lhs, attn, true, true, false);
-    attn                    = ggml_mul(ctx, lin_solve, causal_mask);
-    attn                    = ggml_add(ctx, attn, identity);
+    ggml_tensor * lin_solve  = ggml_solve_tri(ctx, lhs, attn, true, true, false);
+    attn                     = ggml_mul(ctx, lin_solve, causal_mask);
+    attn                     = ggml_add(ctx, attn, identity);
 
     // value = attn @ v_beta
     v = ggml_mul_mat(ctx, ggml_cont(ctx, ggml_transpose(ctx0, v_beta)), attn);
@@ -361,11 +357,11 @@ ggml_tensor * llm_build_qwen3next::build_qwen3next_attention_layer(ggml_tensor *
     Qcur_full                 = ggml_reshape_4d(ctx0, Qcur_full, n_embd_head * 2, n_head, n_tokens, 1);
     // Split Q projection into query and gate
     // The split should be along dimension 0 (the feature dimension)
-    struct ggml_tensor * Qcur = ggml_view_4d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens, 1, Qcur_full->nb[1],
-                                             Qcur_full->nb[2], Qcur_full->nb[3], 0);
+    struct ggml_tensor * Qcur = ggml_view_4d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens, 1,
+                                             Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], 0);
     struct ggml_tensor * gate =
-        ggml_view_4d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens, 1, Qcur_full->nb[1], Qcur_full->nb[2],
-                     Qcur_full->nb[3], n_embd_head * ggml_element_size(Qcur_full));
+        ggml_view_4d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens, 1,
+                     Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], n_embd_head * ggml_element_size(Qcur_full));
     cb(Qcur, "Qcur", il);
     cb(gate, "gate", il);
 
@@ -395,11 +391,15 @@ ggml_tensor * llm_build_qwen3next::build_qwen3next_attention_layer(ggml_tensor *
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
     // Apply RoPE
-    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
-                         attn_factor, beta_fast, beta_slow);
+    Qcur = ggml_rope_ext(
+            ctx0, Qcur, inp_pos, nullptr,
+            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow);
 
-    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
-                         attn_factor, beta_fast, beta_slow);
+    Kcur = ggml_rope_ext(
+            ctx0, Kcur, inp_pos, nullptr,
+            n_rot, rope_type, n_ctx_orig, freq_base,
+            freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
 
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
@@ -408,7 +408,9 @@ ggml_tensor * llm_build_qwen3next::build_qwen3next_attention_layer(ggml_tensor *
     // Attention computation
     const float kq_scale =
         hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-    cur = build_attn(inp_attn, nullptr, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+    cur = build_attn(inp_attn,
+                nullptr, nullptr,
+                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_pregate", il);
 
     struct ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
@@ -716,8 +718,12 @@ ggml_tensor * llm_build_qwen3next::build_layer_ffn(ggml_tensor * cur, const llam
         // Add shared experts if present - following Qwen3Next reference implementation
         if (model.layers[il].ffn_up_shexp != nullptr) {
             ggml_tensor * ffn_shexp =
-                build_ffn(cur, model.layers[il].ffn_up_shexp, NULL, NULL, model.layers[il].ffn_gate_shexp, NULL, NULL,
-                          model.layers[il].ffn_down_shexp, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+                build_ffn(cur,
+                    model.layers[il].ffn_up_shexp, NULL, NULL,
+                    model.layers[il].ffn_gate_shexp, NULL, NULL,
+                    model.layers[il].ffn_down_shexp, NULL, NULL,
+                    NULL,
+                    LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(ffn_shexp, "ffn_shexp", il);
 
             // Apply shared expert gating as in the reference implementation
@@ -747,8 +753,12 @@ ggml_tensor * llm_build_qwen3next::build_layer_ffn(ggml_tensor * cur, const llam
         }
     } else {
         // Dense FFN branch (not currently used I believe)
-        cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                        model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cur = build_ffn(cur,
+            model.layers[il].ffn_up, NULL, NULL,
+            model.layers[il].ffn_gate, NULL, NULL,
+            model.layers[il].ffn_down, NULL, NULL,
+            NULL,
+            LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
     }
     return cur;
