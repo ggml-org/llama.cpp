@@ -93,6 +93,8 @@ static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, co
     const unsigned int bx   = blockIdx.x;
     const unsigned int by   = blockIdx.y;
 
+    const unsigned int blk = (bx+1) * blk_c <= ne00 ? blk_c : ne00 - bx * blk_c;
+
     __shared__ src_T tile[rs*blk_c];
 
 #pragma unroll
@@ -103,12 +105,12 @@ static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, co
             break;
 #pragma unroll
         for (unsigned int j = 0; j < rs; j++){
-            const unsigned int row = (j * blk_c + tx) % rs;
-            const unsigned int col = (j * blk_c + tx) / rs;
-            const unsigned int src_index = imat*n + bx * blk_c * rs + j * blk_c + tx;
+            const unsigned int row = (j * blk + tx) % rs;
+            const unsigned int col = (j * blk + tx) / rs;
+            const unsigned int src_index = imat*n + bx * blk_c * rs + j * blk + tx;
             // const unsigned int src_index = imat*n + rs*ne00 + bx * blk_c + j * blk_c + tx;
             unsigned int idx = row * blk_c + col;
-            // idx =  idx ^ ((idx & mask) >> 4);
+            idx =  idx ^ ((idx & mask) >> 4);
             if (src_index < ne) {
               tile[idx] = src[src_index];
             }
@@ -117,9 +119,9 @@ static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, co
 #pragma unroll
         for (unsigned int j = 0; j < rs; j++){
             const unsigned int dst_index = imat*n + j*ne00 + bx*blk_c + tx;
-            if(dst_index < ne){
+            if(dst_index < ne && tx < blk){
               unsigned int idx = j*blk_c + tx;
-              // idx =  idx ^ ((idx & mask) >> 4);
+              idx =  idx ^ ((idx & mask) >> 4);
                dst[dst_index] = ggml_cuda_cast<dst_T>(tile[idx]);
             }
         }
@@ -1338,17 +1340,17 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         // ggml_cuda_pool_alloc<half> kernel_f16(ctx.pool(id), ne);
         ggml_cuda_pool_alloc<half> kernel_f16(ctx.pool(id));
         if (ne01 > 1){
-          kernel_f16.alloc(ne);
+          // kernel_f16.alloc(ne);
           // dim3 dimGrid1((ne00 + CUDA_NCHW_2_NHWC_BLOCK_C - 1) / CUDA_NCHW_2_NHWC_BLOCK_C,
           //                 (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM,
           //                 1) ;
           // if (ne01 == 25) {
           //   constexpr unsigned int mask = filter_swizzle_mask(25, CUDA_NCHW_2_NHWC_BLOCK_C);
           //   NCHW2NHWC<half, half, mask, 25, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
-          // }else if (ne01 == 16) {
+          // } else if (ne01 == 16) {
           //   constexpr unsigned int mask = filter_swizzle_mask(16, CUDA_NCHW_2_NHWC_BLOCK_C);
           //   NCHW2NHWC<half, half, mask, 16, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
-          // }else if (ne01 == 9) {
+          // } else if (ne01 == 9) {
           //   constexpr unsigned int mask = filter_swizzle_mask(9, CUDA_NCHW_2_NHWC_BLOCK_C);
           //   NCHW2NHWC<half, half, mask, 9, CUDA_NCHW_2_NHWC_BLOCK_C><<<dimGrid1, CUDA_NCHW_2_NHWC_BLOCK_C, 0, st>>>(K_D, kernel_f16.get(), ne, ne00, ne01);
           // } else if (ne01 == 8) {

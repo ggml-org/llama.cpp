@@ -5826,7 +5826,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for (uint32_t s0 : { 1, 3 }) {
         for (uint32_t p1 : { 2, 5 }) {
-            for (uint32_t Cin : { 1, 25, 48 }) {
+            for (uint32_t Cin : { 1, 16, 25, 48 }) {
                 for (uint32_t Cout : { 1, 12 }) {
                     for (uint32_t KH : { 1, 2, 3, 11 }) {
                         for (uint32_t KW : { 1, 2, 3, 11 }) {
