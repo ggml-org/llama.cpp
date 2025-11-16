@@ -30,9 +30,9 @@ struct common_chat_parse_semantics {
 };
 
 enum common_chat_parse_result_type {
-    COMMON_CHAT_PARSE_RESULT_FAIL            = 1 << 0,
-    COMMON_CHAT_PARSE_RESULT_SUCCESS         = 1 << 1,
-    COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT = 1 << 2,
+    COMMON_CHAT_PARSE_RESULT_FAIL            = 0,
+    COMMON_CHAT_PARSE_RESULT_SUCCESS         = 1,
+    COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT = 2,
 };
 
 const char * common_chat_parse_result_type_name(common_chat_parse_result_type type);
