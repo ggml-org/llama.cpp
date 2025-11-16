@@ -1,6 +1,5 @@
 #include "chat-peg-parser.h"
 #include "log.h"
-#include <iostream>
 
 class common_chat_peg_parser_builder_helper : public common_chat_peg_parser_builder {
 
@@ -53,7 +52,7 @@ inline void parser_semantic_handler(const common_chat_parse_event & ev, common_c
         tc.arguments += "\"" + name + "\": ";
     }
 
-    if (ev.rule == "arg-string-content" && ev.ending() && ev.success()) {
+    if (ev.rule == "arg-str-content" && ev.ending() && ev.success()) {
         auto & tc = semantics.tool_calls.back();
         tc.arguments += "\"" + std::string(ev.text);
     }
@@ -71,7 +70,7 @@ inline void parser_semantic_handler(const common_chat_parse_event & ev, common_c
 
 inline void parser_semantic_handler_with_printout(const common_chat_parse_event & ev, common_chat_parse_semantics & semantics) {
     LOG_ERR("\n===============\nEvent type: %s\n", (ev.type == COMMON_CHAT_PARSE_EVENT_NODE_START ? "START" : "END"));
-    LOG_ERR("Event rule: %s\nEvent text: %s\nEvent status: %s\n", ev.rule.c_str(), ev.text.data(), (ev.status == COMMON_CHAT_PARSE_RESULT_SUCCESS ? "SUCCESS" : (ev.status == COMMON_CHAT_PARSE_RESULT_FAIL ? "FAIL" : "NEED_MORE_INPUT")));
+    LOG_ERR("Event rule: %s\nEvent text: %s\nEvent status: %s\n", ev.rule.c_str(), std::string(ev.text.data(), ev.text.size()).c_str(), (ev.status == COMMON_CHAT_PARSE_RESULT_SUCCESS ? "SUCCESS" : (ev.status == COMMON_CHAT_PARSE_RESULT_FAIL ? "FAIL" : "NEED_MORE_INPUT")));
 
     if (ev.rule == "reasoning-content" && ev.ending()) {
         semantics.reasoning_content = ev.text;
@@ -98,7 +97,7 @@ inline void parser_semantic_handler_with_printout(const common_chat_parse_event 
         tc.arguments += "\"" + name + "\": ";
     }
 
-    if (ev.rule == "arg-string-content" && ev.ending() && ev.success()) {
+    if (ev.rule == "arg-str-content" && ev.ending() && ev.success()) {
         auto & tc = semantics.tool_calls.back();
         tc.arguments += "\"" + std::string(ev.text);
     }

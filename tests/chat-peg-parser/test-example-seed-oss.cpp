@@ -34,10 +34,10 @@ void test_example_seed_oss(testing &t) {
             size_t token_cnt = 0;
             for (auto it = tokens.begin(); it != tokens.end(); it++) {
                 token_cnt++;
-                std::string in = std::accumulate(tokens.begin(), it, std::string());
+                std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
                 common_chat_parse_semantics semantics;
-                common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
+                common_chat_parse_context   ctx(in, &semantics, it == tokens.end());
 
                 ctx.event_handler = parser_semantic_handler;
 

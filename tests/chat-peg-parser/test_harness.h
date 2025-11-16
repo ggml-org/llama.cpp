@@ -1,8 +1,10 @@
 #pragma once
 
+#include "log.h"
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -17,9 +19,9 @@ struct testing {
 
     explicit testing(std::ostream &os = std::cout) : out(os) {}
 
-    void indent() {
+    void indent() const {
         for (std::size_t i = 0; i < stack.size() - 1; ++i) {
-            out << "  ";
+            LOG_ERR("  ");
         }
     }
 
@@ -40,19 +42,19 @@ struct testing {
         }
     }
 
-    void print_result(const std::string &label, const std::string &name, int new_failures, int new_assertions, const std::string &extra = "") {
+    void print_result(const std::string &label, const std::string &name, int new_failures, int new_assertions, const std::string &extra = "") const {
         indent();
-        out << label << ": " << name << " [";
+        LOG_ERR("%s: %s [", label.c_str(), name.c_str());
         if (new_failures == 0) {
-            out << "ok, ";
+            LOG_ERR("ok, ");
         } else {
-            out << new_failures << " failed of ";
+            LOG_ERR("%d failed of ", new_failures);
         }
-        out << new_assertions << " assertion(s)";
+        LOG_ERR("%d assertion(s)", new_assertions);
         if (!extra.empty()) {
-            out << ", " << extra;
+            LOG_ERR(", %s", extra.c_str());
         }
-        out << "]\n";
+        LOG_ERR("]\n");
     }
 
     // Named test
@@ -62,7 +64,7 @@ struct testing {
         stack.push_back(name);
 
         indent();
-        out << "BEGIN: " << name << "\n";
+        LOG_ERR("BEGIN: %s\n", name.c_str());
 
         int before_failures = failures;
         int before_assertions = assertions;
@@ -155,27 +157,36 @@ struct testing {
         if (!(actual == expected)) {
             ++failures;
             indent();
-            out << "ASSERT EQUAL FAILED";
+            LOG_ERR("ASSERT EQUAL FAILED");
             if (!msg.empty()) {
-                out << " : " << msg;
+                LOG_ERR(" : %s", msg.c_str());
             }
-            out << "\n";
+            LOG_ERR("\n");
 
             indent();
-            out << "  expected: " << expected << "\n";
+            LOG_ERR("  expected: %s\n", to_string_convert(expected).c_str());
             indent();
-            out << "  actual  : " << actual << "\n";
+            LOG_ERR("  actual  : %s\n", to_string_convert(actual).c_str());
         }
     }
 
     // Print summary and return an exit code
-    int summary() {
-        out << "\n==== TEST SUMMARY ====\n";
-        out << "tests      : " << tests << "\n";
-        out << "assertions : " << assertions << "\n";
-        out << "failures   : " << failures << "\n";
-        out << "exceptions : " << exceptions << "\n";
-        out << "======================\n";
+    int summary() const {
+        LOG_ERR("\n==== TEST SUMMARY ====\n");
+        LOG_ERR("tests      : %d\n", tests);
+        LOG_ERR("assertions : %d\n", assertions);
+        LOG_ERR("failures   : %d\n", failures);
+        LOG_ERR("exceptions : %d\n", exceptions);
+        LOG_ERR("======================\n");
         return failures == 0 ? 0 : 1;
     }
+
+private:
+    template <typename T>
+    std::string to_string_convert(const T & value) const {
+        std::ostringstream oss;
+        oss << value;
+        return oss.str();
+    }
+
 };

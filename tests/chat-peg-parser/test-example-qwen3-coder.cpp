@@ -13,7 +13,7 @@ void test_example_qwen3_coder(testing &t) {
         auto arg_name = p.add_rule("arg-start", "<parameter=" + p.capture("arg-name", p.chars("[a-zA-Z0-9_]")) + ">");
         auto arg_end = p.add_rule("arg-end", "</parameter>" + p.peek(p.literal("<parameter=") | "</function>"));
 
-        auto string_arg_content = p.add_rule("arg-string-content",
+        auto string_arg_content = p.add_rule("arg-str-content",
             p.until_one_of({"</parameter><parameter=", "</parameter></function>"}));
 
         auto string_arg = p.add_rule("arg-string", arg_name + string_arg_content + arg_end);
@@ -101,10 +101,10 @@ void test_example_qwen3_coder(testing &t) {
             size_t token_cnt = 0;
             for (auto it = tokens.begin(); it != tokens.end(); it++) {
                 token_cnt++;
-                std::string in = std::accumulate(tokens.begin(), it, std::string());
+                std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
                 common_chat_parse_semantics semantics;
-                common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
+                common_chat_parse_context   ctx(in, &semantics, it == tokens.end());
 
                 ctx.event_handler = parser_semantic_handler;
 
