@@ -106,35 +106,30 @@ class common_chat_parse_cache {
 
 struct common_chat_parse_context {
     std::string input;
-    common_chat_parse_cache cache;
     bool input_is_complete;
+    common_chat_parse_cache cache;
     common_chat_parse_semantics * semantics;
     common_chat_parse_event_handler event_handler;
+
     int current_depth;
 
     common_chat_parse_context()
-        : cache(), input_is_complete(true), semantics(nullptr), event_handler(nullptr), current_depth(0) {}
+        : input_is_complete(true), cache(), semantics(nullptr), event_handler(nullptr), current_depth(0) {}
 
     common_chat_parse_context(const std::string & input)
-        : input(input), cache(), input_is_complete(true), semantics(nullptr), event_handler(nullptr), current_depth(0) {}
+        : input(input), input_is_complete(true), cache(), semantics(nullptr), event_handler(nullptr), current_depth(0) {}
 
     common_chat_parse_context(const std::string & input, bool complete)
-        : input(input), cache(), input_is_complete(complete), semantics(nullptr), event_handler(nullptr), current_depth(0) {}
+        : input(input), input_is_complete(complete), cache(), semantics(nullptr), event_handler(nullptr), current_depth(0) {}
 
-    common_chat_parse_context(const std::string & input, common_chat_parse_cache memo, bool complete = true)
-        : input(input), cache(std::move(memo)), input_is_complete(complete), semantics(nullptr), event_handler(nullptr), current_depth(0) {}
+    common_chat_parse_context(const std::string & input, common_chat_parse_semantics * semantics)
+        : input(input), input_is_complete(true), cache(), semantics(semantics), event_handler(nullptr), current_depth(0) {}
 
-    common_chat_parse_context(const std::string & input, common_chat_parse_semantics * environment)
-        : input(input), cache(), input_is_complete(true), semantics(environment), event_handler(nullptr), current_depth(0) {}
+    common_chat_parse_context(const std::string & input, common_chat_parse_semantics * semantics, bool complete)
+        : input(input), input_is_complete(complete), cache(), semantics(semantics), event_handler(nullptr), current_depth(0) {}
 
-    common_chat_parse_context(const std::string & input, common_chat_parse_semantics * environment, bool complete)
-        : input(input), cache(), input_is_complete(complete), semantics(environment), event_handler(nullptr), current_depth(0) {}
-
-    common_chat_parse_context(const std::string & input, common_chat_parse_cache memo, common_chat_parse_semantics * environment, bool complete = true)
-        : input(input), cache(std::move(memo)), input_is_complete(complete), semantics(environment), event_handler(nullptr), current_depth(0) {}
-
-    common_chat_parse_context(const std::string & input, common_chat_parse_semantics * environment, common_chat_parse_event_handler handler, bool complete = true)
-        : input(input), cache(), input_is_complete(complete), semantics(environment), event_handler(std::move(handler)), current_depth(0) {}
+    common_chat_parse_context(const std::string & input, common_chat_parse_semantics * semantics, common_chat_parse_event_handler handler, bool complete = true)
+        : input(input), input_is_complete(complete), cache(), semantics(semantics), event_handler(std::move(handler)), current_depth(0) {}
 };
 
 class common_chat_peg_parser_base;
