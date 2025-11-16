@@ -1799,21 +1799,19 @@ common_chat_peg_parser::common_chat_peg_parser(std::shared_ptr<common_chat_peg_p
 common_chat_peg_parser::common_chat_peg_parser(const std::string & literal) : ptr_(make_parser<literal_parser>(-1, literal)) {}
 common_chat_peg_parser::common_chat_peg_parser(const char * literal) : ptr_(make_parser<literal_parser>(-1, literal)) {}
 
-common_chat_peg_parser common_chat_peg_parser::operator~() const {
-    return make_parser<not_parser>(-1, *this);
+common_chat_peg_parser operator~(const common_chat_peg_parser & p) { return make_parser<not_parser>(-1, p); }
+
+common_chat_peg_parser operator+(const common_chat_peg_parser & lhs, const common_chat_peg_parser & rhs) {
+    return make_parser<sequence_parser>(-1, std::initializer_list<common_chat_peg_parser>{lhs, rhs});
 }
 
-common_chat_peg_parser common_chat_peg_parser::operator+(const common_chat_peg_parser & other) const {
-    return make_parser<sequence_parser>(-1, std::initializer_list<common_chat_peg_parser>{*this, other});
+common_chat_peg_parser operator|(const common_chat_peg_parser & lhs, const common_chat_peg_parser & rhs) {
+    return make_parser<choice_parser>(-1, std::initializer_list<common_chat_peg_parser>{lhs, rhs});
 }
 
-common_chat_peg_parser common_chat_peg_parser::operator|(const common_chat_peg_parser & other) const {
-    return make_parser<choice_parser>(-1, std::initializer_list<common_chat_peg_parser>{*this, other});
-}
-
-common_chat_peg_parser common_chat_peg_parser::operator<<(const common_chat_peg_parser & other) const {
+common_chat_peg_parser operator<<(const common_chat_peg_parser & lhs, const common_chat_peg_parser & rhs) {
     auto ws = make_parser<space_parser>(-1);
-    return make_parser<sequence_parser>(-1, std::initializer_list<common_chat_peg_parser>{*this, ws, other});
+    return make_parser<sequence_parser>(-1, std::initializer_list<common_chat_peg_parser>{lhs, ws, rhs});
 }
 
 common_chat_peg_parser operator+(const char * lhs, const common_chat_peg_parser & rhs) { return common_chat_peg_parser(lhs) + rhs; }

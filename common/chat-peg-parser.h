@@ -143,11 +143,6 @@ class common_chat_peg_parser {
     common_chat_peg_parser(const std::string & literal);
     common_chat_peg_parser(const char * literal);
 
-    common_chat_peg_parser operator~() const;
-    common_chat_peg_parser operator+(const common_chat_peg_parser & other) const;
-    common_chat_peg_parser operator|(const common_chat_peg_parser & other) const;
-    common_chat_peg_parser operator<<(const common_chat_peg_parser & other) const;
-
     common_chat_peg_parser_base & operator*() const;
     common_chat_peg_parser_base * operator->() const;
 
@@ -159,6 +154,12 @@ class common_chat_peg_parser {
 
     void build_grammar(const common_grammar_builder & builder, bool lazy = false) const;
 };
+
+common_chat_peg_parser operator~(const common_chat_peg_parser & p);
+
+common_chat_peg_parser operator+(const common_chat_peg_parser & lhs, const common_chat_peg_parser & rhs);
+common_chat_peg_parser operator|(const common_chat_peg_parser & lhs, const common_chat_peg_parser & rhs);
+common_chat_peg_parser operator<<(const common_chat_peg_parser & lhs, const common_chat_peg_parser & rhs);
 
 common_chat_peg_parser operator+(const char * lhs, const common_chat_peg_parser & rhs);
 common_chat_peg_parser operator|(const char * lhs, const common_chat_peg_parser & rhs);
