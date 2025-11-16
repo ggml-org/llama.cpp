@@ -798,6 +798,12 @@ Make chat show messages by default only appends new chat messages to existing li
 instead of clearing ui and recreating each message ui element again. Have forgotten what I had originally
 implemented, need to cross check.
 
+The ui update helpers should call the tool call edit/trigger ui reset logic.
+
+With the new optimized limited ui update based flow, avoid duplicate chat message ui blocks.
+
+Show a loading message, when a previously saved chat session is being loaded.
+
 
 ### Debuging the handshake and beyond
 
