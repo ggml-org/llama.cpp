@@ -15,11 +15,14 @@ static float neg_inf() {
 }
 
 static void assert_is_neginf(float x) {
+    (void) x; // silence unused parameter in release builds
     assert(std::isinf(x) && x < 0.0f && "expected -INF");
 }
 
 static void assert_is_zero(float x) {
-    constexpr float eps = 1e-6f;
+    const float eps = 1e-6f;
+    (void) x;   // silence unused parameter in release builds
+    (void) eps; // silence unused variable in release builds
     assert(std::fabs(x) <= eps && "expected zero");
 }
 
