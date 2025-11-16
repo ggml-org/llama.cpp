@@ -1172,8 +1172,38 @@ class until_parser : public common_chat_peg_parser_base {
     parser_type type() const override { return type_value; }
 
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
+        // First pass: byte-based Aho-Corasick search for delimiter
         auto search_result = matcher_.search(ctx.input, start);
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, search_result.pos);
+        size_t delimiter_pos = search_result.pos;
+
+        // Second pass: validate UTF-8 from start to delimiter_pos
+        size_t pos = start;
+        size_t last_valid_pos = start;
+
+        while (pos < delimiter_pos) {
+            auto utf8_result = parse_utf8_codepoint(ctx.input, pos);
+
+            if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
+                // Incomplete UTF-8 sequence before delimiter
+                if (ctx.input_is_complete) {
+                    // Input is complete but UTF-8 is incomplete = malformed
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                }
+                // Return what we have so far (before incomplete sequence)
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, last_valid_pos);
+            }
+
+            if (utf8_result.status == utf8_parse_result::INVALID) {
+                // Malformed UTF-8
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+            }
+
+            pos += utf8_result.bytes_consumed;
+            last_valid_pos = pos;
+        }
+
+        // All UTF-8 validated up to delimiter
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, last_valid_pos);
     }
 
     std::string dump() const override {

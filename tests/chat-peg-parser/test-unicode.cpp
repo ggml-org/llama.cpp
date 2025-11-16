@@ -205,4 +205,112 @@ void test_unicode(testing &t) {
             }
         });
     });
+
+    t.test("until parser", [](testing &t) {
+        t.test("ASCII delimiter with Unicode content", [](testing &t) {
+            std::vector<test_case> test_cases {
+                // CJK characters before delimiter
+                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD</tag>"),
+                 std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // 你好</tag>
+
+                // Emoji before delimiter
+                {std::string("\xF0\x9F\x98\x80</tag>"),
+                 std::string("\xF0\x9F\x98\x80"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // 😀</tag>
+
+                // Mixed content
+                {std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!</tag>"),
+                 std::string("Hello \xE4\xB8\x96\xE7\x95\x8C!"), COMMON_CHAT_PARSE_RESULT_SUCCESS},  // Hello 世界!</tag>
+            };
+
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
+                return p.until("</tag>");
+            });
+
+            for (size_t i = 0; i < test_cases.size(); i++) {
+                const auto & tc = test_cases[i];
+                std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
+
+                t.test(test_name, [&](testing &t) {
+                    common_chat_parse_context ctx(tc.input, true);
+                    auto result = parser.parse(ctx);
+
+                    assert_result_equal(t, tc.expected_result, result.type);
+
+                    if (result.success()) {
+                        std::string matched = tc.input.substr(result.start, result.end - result.start);
+                        t.assert_equal(tc.expected_text, matched);
+                    }
+                });
+            }
+        });
+
+        t.test("incomplete UTF-8 at end (streaming)", [](testing &t) {
+            std::vector<test_case> test_cases {
+                // Incomplete emoji at end, no delimiter
+                {std::string("content\xF0\x9F\x98"),
+                 std::string("content"), COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT},
+
+                // Incomplete CJK at end, no delimiter
+                {std::string("hello\xE4\xB8"),
+                 std::string("hello"), COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT},
+
+                // Complete content, no delimiter (should consume all valid UTF-8)
+                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD"),
+                 std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_CHAT_PARSE_RESULT_SUCCESS},
+            };
+
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
+                return p.until("</tag>");
+            });
+
+            for (size_t i = 0; i < test_cases.size(); i++) {
+                const auto & tc = test_cases[i];
+                std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
+
+                t.test(test_name, [&](testing &t) {
+                    common_chat_parse_context ctx(tc.input, false);  // input_is_complete = false
+                    auto result = parser.parse(ctx);
+
+                    assert_result_equal(t, tc.expected_result, result.type);
+
+                    if (result.success() || result.need_more_input()) {
+                        std::string matched = tc.input.substr(result.start, result.end - result.start);
+                        t.assert_equal(tc.expected_text, matched);
+                    }
+                });
+            }
+        });
+
+        t.test("malformed UTF-8", [](testing &t) {
+            std::vector<test_case> test_cases {
+                // Invalid UTF-8 bytes
+                {std::string("Hello\xFF\xFE"),
+                 "", COMMON_CHAT_PARSE_RESULT_FAIL},
+
+                // Continuation byte without lead byte
+                {std::string("Hello\x80World"),
+                 "", COMMON_CHAT_PARSE_RESULT_FAIL},
+
+                // Invalid continuation byte
+                {std::string("\xC3\x28"),
+                 "", COMMON_CHAT_PARSE_RESULT_FAIL},
+            };
+
+            auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
+                return p.until("</tag>");
+            });
+
+            for (size_t i = 0; i < test_cases.size(); i++) {
+                const auto & tc = test_cases[i];
+                std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
+
+                t.test(test_name, [&](testing &t) {
+                    common_chat_parse_context ctx(tc.input, true);
+                    auto result = parser.parse(ctx);
+
+                    assert_result_equal(t, tc.expected_result, result.type);
+                });
+            }
+        });
+    });
 }
