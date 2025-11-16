@@ -292,60 +292,6 @@ class aho_corasick_matcher {
     }
 };
 
-// Generate an excluding pattern, with customized escaping
-static std::string generic_excluding_pattern(
-        const std::vector<std::string> & strings,
-        const std::function<std::string(const std::string &)> & literal,
-        const std::function<std::string(char c)> & escape_char_class,
-        bool pad = false) {
-
-    // Use the aho_corasick_matcher to grab an exhaustive list of prefixes and
-    // potential next characters. We can use this to build an exclusion for
-    // multiple strings.
-    aho_corasick_matcher matcher(strings);
-    auto pieces = matcher.collect_prefix_and_next();
-
-    std::string pattern;
-    for (size_t i = 0; i < pieces.size(); ++i) {
-        if (i > 0) {
-            pattern += pad ? " | " : "|";
-        }
-
-        const auto & pre = pieces[i].prefix;
-        const auto & chars = pieces[i].next_chars;
-
-        std::string cls;
-        cls.reserve(chars.size());
-        for (const auto & ch : chars) {
-            cls += escape_char_class(ch);
-        }
-
-        if (!pre.empty()) {
-            pattern += literal(pre) + (pad ? " [^" : "[^") + cls + "]";
-        } else {
-            pattern += "[^" + cls + "]";
-        }
-    }
-
-    return "(" + pattern + ")*";
-}
-
-// Escape a single character for use in regex character classes
-static std::string regex_escape_char_class(char c) {
-    switch (c) {
-        case '\\': return "\\\\";
-        case ']':  return "\\]";
-        case '-':  return "\\-";
-        case '^':  return "\\^";
-        default:   return std::string(1, c);
-    }
-}
-
-// Create a regex excluding pattern
-static std::string regex_excluding_pattern(const std::vector<std::string> & strings) {
-    return generic_excluding_pattern(strings, regex_escape, regex_escape_char_class);
-}
-
 // Container for the root parser and all named rules in the grammar.
 // Manages ownership of rule registry to enable recursive grammar definitions.
 class root_parser : public common_chat_peg_parser_base {
@@ -1469,13 +1415,45 @@ static std::string gbnf_escape_char_class(char c) {
         case '\n': return "\\n";
         case '\t': return "\\t";
         case '\r': return "\\r";
-        default:   return regex_escape_char_class(c); // these too
+        case '\\': return "\\\\";
+        case ']':  return "\\]";
+        case '-':  return "\\-";
+        case '^':  return "\\^";
+        default:   return std::string(1, c);
     }
 }
 
 // Create a GBNF excluding pattern
 static std::string gbnf_excluding_pattern(const std::vector<std::string> & strings) {
-    return generic_excluding_pattern(strings, gbnf_literal, gbnf_escape_char_class, true);
+    // Use the aho_corasick_matcher to grab an exhaustive list of prefixes and
+    // potential next characters. We can use this to build an exclusion for
+    // multiple strings.
+    aho_corasick_matcher matcher(strings);
+    auto pieces = matcher.collect_prefix_and_next();
+
+    std::string pattern;
+    for (size_t i = 0; i < pieces.size(); ++i) {
+        if (i > 0) {
+            pattern += " | ";
+        }
+
+        const auto & pre = pieces[i].prefix;
+        const auto & chars = pieces[i].next_chars;
+
+        std::string cls;
+        cls.reserve(chars.size());
+        for (const auto & ch : chars) {
+            cls += gbnf_escape_char_class(ch);
+        }
+
+        if (!pre.empty()) {
+            pattern += gbnf_literal(pre) + " [^" + cls + "]";
+        } else {
+            pattern += "[^" + cls + "]";
+        }
+    }
+
+    return "(" + pattern + ")*";
 }
 
 // Visitor for collecting reachable rules from a subtree
