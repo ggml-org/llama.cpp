@@ -808,7 +808,8 @@ Make chat show messages by default only appends new chat messages to existing li
 instead of clearing ui and recreating each message ui element again. Have forgotten what I had originally
 implemented, need to cross check.
 
-Show a loading message, when a previously saved chat session is being loaded.
+Should I force a chat_show which clears usage and current settings info from chat session ui block at the
+begining like before the new optimised uirefresh based flow?
 
 
 ### Debuging the handshake and beyond
