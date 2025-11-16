@@ -3081,7 +3081,7 @@ Hey there!<|im_end|>
                 "    </parameter>\n"
                 "  </function>\n"
                 "</tool_call>",
-            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });        
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Parameter with only whitespace
         common_chat_msg expected_whitespace_param;
