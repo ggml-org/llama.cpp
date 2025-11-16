@@ -5705,7 +5705,7 @@ static void ggml_opencl_op_rms_norm_fused(ggml_backend_t backend, ggml_tensor * 
     CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_ulong),      &nb2));
     CL_CHECK(clSetKernelArg(kernel, 22, sizeof(cl_ulong),      &nb3));
     CL_CHECK(clSetKernelArg(kernel, 23, sizeof(float),         &eps));
-    CL_CHECK(clSetKernelArg(kernel, 24, sizeof(float)*nth/sgs, NULL));
+    CL_CHECK(clSetKernelArg(kernel, 24, sizeof(float)*sgs,     NULL));
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
