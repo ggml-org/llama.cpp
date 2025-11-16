@@ -739,6 +739,13 @@ class TextModel(ModelBase):
             # move the text_config to the root level
             self.hparams = {**self.hparams, **self.hparams["text_config"]}
 
+        # SparseK (optional, for experimental models)
+        # We only propagate these keys if they exist in the HF config.
+        self.sparsek_enable = self.hparams.get("sparsek_enable", None)
+        self.sparsek_top_k = self.hparams.get("sparsek_top_k", None)
+        self.sparsek_window = self.hparams.get("sparsek_window", None)
+        self.sparsek_stride = self.hparams.get("sparsek_stride", None)
+
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
@@ -825,6 +832,26 @@ class TextModel(ModelBase):
         if (head_dim := self.hparams.get("head_dim")) is not None:
             self.gguf_writer.add_key_length(head_dim)
             self.gguf_writer.add_value_length(head_dim)
+
+        # === SparseK metadata (optional) =====================================
+        # Only write these keys if they are explicitly provided in the HF config.
+        if self.sparsek_enable is not None:
+            self.gguf_writer.add_bool("llama.sparsek.enable", bool(self.sparsek_enable))
+            logger.info(f"gguf: sparsek.enable = {bool(self.sparsek_enable)}")
+
+        if self.sparsek_top_k is not None:
+            self.gguf_writer.add_int32("llama.sparsek.top_k", int(self.sparsek_top_k))
+            logger.info(f"gguf: sparsek.top_k = {int(self.sparsek_top_k)}")
+
+        if self.sparsek_window is not None:
+            self.gguf_writer.add_int32("llama.sparsek.window", int(self.sparsek_window))
+            logger.info(f"gguf: sparsek.window = {int(self.sparsek_window)}")
+
+        if self.sparsek_stride is not None:
+            self.gguf_writer.add_int32("llama.sparsek.stride", int(self.sparsek_stride))
+            logger.info(f"gguf: sparsek.stride = {int(self.sparsek_stride)}")
+
+        # =====================================================================
 
         self.gguf_writer.add_file_type(self.ftype)
         logger.info(f"gguf: file type = {self.ftype}")
@@ -10202,7 +10229,6 @@ def parse_args() -> argparse.Namespace:
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
     return args
-
 
 def split_str_to_n_bytes(split_str: str) -> int:
     if split_str.endswith("K"):

@@ -596,7 +596,7 @@ struct llm_graph_context {
     //
 
     // ===[ SPARSEK: config & builders ]===========================================
-    // Runtime config toggles (filled in .cpp constructor; env or defaults)
+    // Runtime config toggles (copied from llama_hparams; default = disabled)
     bool  sparsek_enable      = false;   // enable/disable dynamic Sparse-K
     int32_t sparsek_topk      = 0;       // top-K per row (0 -> disabled unless window/stride applies)
     int32_t sparsek_win_local = 0;       // local window radius (tokens to each side)
