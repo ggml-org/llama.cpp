@@ -67,7 +67,7 @@ layout (push_constant) uniform parameter
 layout (constant_id = 0) const uint BLOCK_SIZE = 64;
 layout (constant_id = 1) const uint BM = 64;
 layout (constant_id = 2) const uint BN = 64;
-// layout (constant_id = 3) const uint BK = 32;
+layout (constant_id = 3) const uint BK_STEP = 1;  // Amount of quant blocks stored in shared memory
 layout (constant_id = 4) const uint WM = 32;
 layout (constant_id = 5) const uint WN = 32;
 layout (constant_id = 6) const uint WMITER = 2;
@@ -81,14 +81,6 @@ layout (constant_id = 10) const uint WARP = 32;
 #define MMQ_SHMEM
 
 #include "mul_mmq_shmem_types.glsl"
-
-#ifdef MUL_MAT_ID
-#define BK_STEP 1
-#else
-#ifndef BK_STEP
-#define BK_STEP 4
-#endif
-#endif
 
 // Shared memory cache
 shared block_a_cache buf_a[BM * BK_STEP];
