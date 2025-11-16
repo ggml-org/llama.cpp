@@ -1000,7 +1000,6 @@ class chars_parser : public common_chat_peg_parser_base {
 // Handles escape sequences and emits NEED_MORE_INPUT for incomplete input.
 //   S -> (regular chars and escape sequences)* until closing "
 class json_string_parser : public common_chat_peg_parser_base {
-
   public:
     static constexpr parser_type type_value = JSON_STRING;
 
@@ -1021,58 +1020,14 @@ class json_string_parser : public common_chat_peg_parser_base {
             }
 
             if (c == '\\') {
-                // Handle escape sequence
-                ++pos;
-                if (pos >= ctx.input.size()) {
-                    // Mid-escape sequence
-                    if (ctx.input_is_complete) {
-                        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-                    }
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
-                }
-
-                char escape = ctx.input[pos];
-                switch (escape) {
-                    case '"':
-                    case '\\':
-                    case '/':
-                    case 'b':
-                    case 'f':
-                    case 'n':
-                    case 'r':
-                    case 't':
-                        // Valid escape
-                        ++pos;
-                        break;
-
-                    case 'u':
-                        // Unicode escape: must be followed by 4 hex digits
-                        ++pos;
-                        for (int i = 0; i < 4; ++i) {
-                            if (pos >= ctx.input.size()) {
-                                // Incomplete unicode escape
-                                if (ctx.input_is_complete) {
-                                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-                                }
-                                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
-                            }
-                            if (!is_hex_digit(ctx.input[pos])) {
-                                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-                            }
-                            ++pos;
-                        }
-                        break;
-
-                    default:
-                        // Invalid escape sequence
-                        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                auto result = handle_escape_sequence(ctx, start, pos);
+                if (!result.success()) {
+                    return result;
                 }
             } else {
-                // Regular character - validate UTF-8
                 auto utf8_result = parse_utf8_codepoint(ctx.input, pos);
 
                 if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
-                    // Incomplete UTF-8 sequence
                     if (ctx.input_is_complete) {
                         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
                     }
@@ -1080,7 +1035,6 @@ class json_string_parser : public common_chat_peg_parser_base {
                 }
 
                 if (utf8_result.status == utf8_parse_result::INVALID) {
-                    // Malformed UTF-8 in JSON string
                     return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
                 }
 
@@ -1100,6 +1054,52 @@ class json_string_parser : public common_chat_peg_parser_base {
     }
 
     void accept(parser_visitor & visitor) override;
+
+  private:
+    static common_chat_parse_result handle_escape_sequence(common_chat_parse_context & ctx, size_t start, size_t & pos) {
+        ++pos; // consume '\'
+        if (pos >= ctx.input.size()) {
+            if (ctx.input_is_complete) {
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+            }
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+        }
+
+        switch (ctx.input[pos]) {
+            case '"':
+            case '\\':
+            case '/':
+            case 'b':
+            case 'f':
+            case 'n':
+            case 'r':
+            case 't':
+                ++pos;
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+            case 'u':
+                return handle_unicode_escape(ctx, start, pos);
+            default:
+                // Invalid escape sequence
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+        }
+    }
+
+    static common_chat_parse_result handle_unicode_escape(common_chat_parse_context & ctx, size_t start, size_t & pos) {
+        ++pos; // consume 'u'
+        for (int i = 0; i < 4; ++i) {
+            if (pos >= ctx.input.size()) {
+                if (ctx.input_is_complete) {
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                }
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+            }
+            if (!is_hex_digit(ctx.input[pos])) {
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+            }
+            ++pos;
+        }
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+    }
 };
 
 // Matches all characters until a delimiter is found (delimiter not consumed).
