@@ -4,7 +4,37 @@
 #include <string>
 
 void test_example_qwen3_coder(testing &t) {
-    auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+    auto explicit_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto thinking = p.add_rule("raw-reasoning",
+            "<think>" << p.add_rule("reasoning-content", p.until("</think>")) << "</think>");
+
+        auto content = p.add_rule("content", p.until("<tool_call>"));
+
+        auto arg_name = p.add_rule("arg-start", "<parameter=" + p.capture("arg-name", p.chars("[a-zA-Z0-9_]")) + ">");
+        auto arg_end = p.add_rule("arg-end", "</parameter>" + p.peek(p.literal("<parameter=") | "</function>"));
+
+        auto string_arg_content = p.add_rule("arg-string-content",
+            p.until_one_of({"</parameter><parameter=", "</parameter></function>"}));
+
+        auto string_arg = p.add_rule("arg-string", arg_name + string_arg_content + arg_end);
+
+        auto json = p.json();
+
+        auto json_arg = p.add_rule("arg-json", arg_name + p.add_rule("arg-json-content", json) + arg_end);
+
+        auto function = p.add_rule("function",
+                p.add_rule("function-start", "<function=" + p.capture("tool-name", p.chars("[a-zA-Z0-9_]")) + ">")
+                + p.one_or_more(json_arg | string_arg)
+                + "</function>");
+
+        auto tool_call = p.trigger(p.add_rule("tool-call",
+            "<tool_call>" + p.one_or_more(function) + "</tool_call>"));
+
+        return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
+    });
+
+
+    auto helper_parser = build_peg_parser_helper([](common_chat_peg_parser_builder_helper & p) {
         auto thinking = p.reasoning();
         auto content = p.content_before_tools("<tool_call>");
         auto function = p.quasi_xml_no_attr("search_files",
@@ -60,7 +90,7 @@ void test_example_qwen3_coder(testing &t) {
         }
     };
 
-    t.test("accumulation_test", [&](testing &t) {
+    t.test("qwen3_accumulation_test", [&](testing &t) {
         std::string input =
             "<think>The user wants to find large log files that haven't been accessed recently. "
             "I should search for files with .log extension, filter by size (over 100MB), "
@@ -85,23 +115,52 @@ void test_example_qwen3_coder(testing &t) {
         std::vector<std::string> tokens = simple_tokenize(input);
 
         common_chat_msg prev;
-        int token_cnt = 0;
-        for (auto it = tokens.begin(); it != tokens.end(); it++) {
-            token_cnt++;
-            std::string in = std::accumulate(tokens.begin(), it, std::string());
+        t.test("explicit_builder", [&](testing &t) {
+            size_t token_cnt = 0;
+            for (auto it = tokens.begin(); it != tokens.end(); it++) {
+                std::string in = std::accumulate(tokens.begin(), it, std::string());
 
-            common_chat_parse_semantics semantics;
-            common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
+                common_chat_parse_semantics semantics;
+                common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
 
-            ctx.event_handler = handler;
+                ctx.event_handler = handler;
 
-            auto result = parser.parse(ctx);
-            t.assert_equal(std::string("should_not_fail_token_") + std::to_string(token_cnt), false, result.fail());
+                auto result = explicit_parser.parse(ctx);
+                if (result.fail()) {
+                    break;
+                }
+                token_cnt++;
 
-            // This shouldn't emit any runtime errors
-            auto msg   = semantics.to_msg();
-            auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
-            prev       = msg;
-        }
+                // This shouldn't emit any runtime errors
+                auto msg   = semantics.to_msg();
+                auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
+                prev       = msg;
+            }
+            t.assert_equal("should_parse_all_tokens_explicit", tokens.size(), token_cnt);
+        });
+        
+        t.test("helper_builder", [&](testing &t) {
+            size_t token_cnt = 0;
+            for (auto it = tokens.begin(); it != tokens.end(); it++) {
+                token_cnt++;
+                std::string in = std::accumulate(tokens.begin(), it, std::string());
+
+                common_chat_parse_semantics semantics;
+                common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
+
+                ctx.event_handler = handler;
+
+                auto result = helper_parser.parse(ctx);
+                if (result.fail()) {
+                    break;
+                }
+
+                // This shouldn't emit any runtime errors
+                auto msg   = semantics.to_msg();
+                auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
+                prev       = msg;
+            }
+            t.assert_equal("should_parse_all_tokens_helper", tokens.size(), token_cnt);
+        });
     });
 }

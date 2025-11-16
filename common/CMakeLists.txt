@@ -52,6 +52,8 @@ add_library(${TARGET} STATIC
     chat-parser.h
     chat-peg-parser.cpp
     chat-peg-parser.h
+    chat-peg-parser-helper.cpp
+    chat-peg-parser-helper.h
     chat.cpp
     chat.h
     common.cpp
