@@ -61,17 +61,21 @@ class common_chat_peg_parser_base {
     virtual parser_type type() const = 0;
 
     virtual common_chat_parse_result parse(common_chat_parse_context & ctx, size_t start = 0) {
+        LOG_DBG("[CCPP type %d] Trying to parse: %s\n", type(), ctx.input.substr(start).c_str());
         if (id_ == -1) {
             // Don't cache parsers with ID -1 (from operators)
+            LOG_DBG("[CCPP type %d] Parsing uncached due to operator\n", type());
             return parse_uncached(ctx, start);
         }
 
         auto cached = ctx.cache.get(id_, start);
         if (cached) {
+            LOG_DBG("[CCPP type %d] Found cached result, returning\n", type());
             return *cached;
         }
 
         auto result = parse_uncached(ctx, start);
+        LOG_DBG("[CCPP type %d] Parse result is: %s\n", type(), result.type == COMMON_CHAT_PARSE_RESULT_FAIL ? "FAIL" : (result.type == COMMON_CHAT_PARSE_RESULT_SUCCESS ? "SUCCESS" : "NEED_MORE_INPUT"));
         return ctx.cache.set(id_, start, result);
     }
 
