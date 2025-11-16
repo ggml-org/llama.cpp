@@ -1135,8 +1135,23 @@ class json_string_parser : public common_chat_peg_parser_base {
                         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
                 }
             } else {
-                // Regular character
-                ++pos;
+                // Regular character - validate UTF-8
+                auto utf8_result = parse_utf8_codepoint(ctx.input, pos);
+
+                if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
+                    // Incomplete UTF-8 sequence
+                    if (ctx.input_is_complete) {
+                        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                    }
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+                }
+
+                if (utf8_result.status == utf8_parse_result::INVALID) {
+                    // Malformed UTF-8 in JSON string
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                }
+
+                pos += utf8_result.bytes_consumed;
             }
         }
 
