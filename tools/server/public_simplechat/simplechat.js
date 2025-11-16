@@ -1254,7 +1254,7 @@ class MultiChatUI {
         secMain.classList.add(`role-${msg.ns.role}`)
         secMain.classList.add('chat-message')
         secMain.addEventListener('mouseenter', (ev)=>{
-            console.log(`DBUG:MCUI:ChatMessageMEnter:${msg.uniqId}`)
+            console.debug(`DBUG:MCUI:ChatMessageMEnter:${msg.uniqId}`)
             if (this.uniqIdChatMsgPO != msg.uniqId) {
                 this.elPopoverChatMsg.hidePopover()
             }
@@ -1263,7 +1263,7 @@ class MultiChatUI {
             this.elPopoverChatMsg.showPopover({source: secMain})
         })
         secMain.addEventListener('mouseleave', (ev)=>{
-            console.log(`DBUG:MCUI:ChatMessageMLeave:${msg.uniqId}`)
+            console.debug(`DBUG:MCUI:ChatMessageMLeave:${msg.uniqId}`)
         })
         elParent?.append(secMain)
         secMain.setAttribute("CMUniqId", String(msg.uniqId))
@@ -1624,7 +1624,7 @@ class MultiChatUI {
         } else {
             if (content.trim() == "") {
                 this.elInUser.placeholder = "dont forget to enter a message, before submitting to ai"
-                this.chat_show(chatId)
+                this.chat_uirefresh(chatId)
                 return;
             }
             try {
