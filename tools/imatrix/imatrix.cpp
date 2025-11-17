@@ -274,7 +274,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
 static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
     static const std::regex pattern(R"(blk\.(\d+)\.)");
     for (auto & ts : tstats) {
-        ts.cossim = 0.0f;
+        ts.cossim = 1.0f;
         ts.l2_dist = 0.0f;
 
         if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
@@ -1495,9 +1495,20 @@ static bool show_statistics(const common_params & params) {
     for (const auto & [layer, stats] : ls) {
         if (layer < 0 || stats.n == 0) { continue; }
         const auto lcs = layer_cossim.find(layer);
-        const float layer_cs = lcs != layer_cossim.end() ? lcs->second : 0.0f;
         const auto ll2n = layer_l2_dist.find(layer);
-        const float layer_l2n = ll2n != layer_l2_dist.end() ? ll2n->second : 0.0f;
+        float layer_cs  = 0.0f;
+        float layer_l2n = 0.0f;
+
+        if (lcs != layer_cossim.end() && ll2n != layer_l2_dist.end()) {
+            layer_cs  = lcs->second;
+            layer_l2n = ll2n->second;
+        } else if (layer == 0) {
+            layer_cs  = 1.0f;
+            layer_l2n = 0.0f;
+        } else {
+            continue;
+        }
+
         if (legacy) {
             LOG_INF("%5d\t%11.4f\t%6.2f%%\t%11.4f\n",
                 layer,
@@ -1505,12 +1516,13 @@ static bool show_statistics(const common_params & params) {
                 100.0f * stats.layer_zd / stats.n,
                 layer_cs);
         } else {
+            const float layer_ecs = 100.0f * (1.0f - std::exp(-0.01f * layer_l2n) * std::pow(std::fabs(layer_cs), 10.0f));
             LOG_INF("%5d\t%11.4f\t%6.2f%%\t%11.4f\t%8.4f\n",
                 layer,
                 layer_l2n,
                 100.0f * stats.layer_zd / stats.n,
                 layer_cs,
-                100.0f * (1.0f - std::exp(-0.01f * layer_l2n) * std::pow(std::fabs(layer_cs), 10.0f))); // Euclidean-Cosine score
+                layer_ecs);
         }
     }
     LOG_INF("\n");
