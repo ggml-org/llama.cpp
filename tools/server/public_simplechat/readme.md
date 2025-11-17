@@ -788,12 +788,14 @@ Cleanup in general
   had to account for delayed collating of available simpleproxy based tool calls, I forgot to clean
   this flow up.
 * Make the sys_date_time template description bit more verbose, just in case.
-* ui_reset_userinput now also resets associated Role always, inturn
+* ui_userinput_reset now also resets associated Role always, inturn
   * full on version from chat_show, inturn when session switching.
     So user switchs session will reset all user input area and related data, while
     also ensuring user input area has the right needed associated role setup.
   * partial version from uirefresh, inturn adding user or tool call response messages.
-
+* ui cleanup
+  * more rounded buttons, chat messages and input area elements
+  * make the body very very lightly gray in color, while the user input area is made whiter.
 
 
 #### ToDo
