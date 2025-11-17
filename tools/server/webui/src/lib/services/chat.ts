@@ -1,5 +1,10 @@
-import { getJsonHeaders } from '$lib/utils';
+import { getAuthHeaders, getJsonHeaders } from '$lib/utils';
 import { AttachmentType } from '$lib/enums';
+import { config } from '$lib/stores/settings.svelte';
+import { ensureMcpClient } from '$lib/services/mcp-singleton';
+import { getAgenticConfig } from '$lib/config/agentic';
+import { AgenticOrchestrator } from '$lib/agentic/orchestrator';
+import { OpenAISseClient } from '$lib/agentic/openai-sse-client';
 
 /**
  * ChatService - Low-level API communication layer for Chat Completions
@@ -170,6 +175,71 @@ export class ChatService {
 				Object.assign(requestBody, customParams);
 			} catch (error) {
 				console.warn('Failed to parse custom parameters:', error);
+			}
+		}
+
+		// MCP agentic orchestration (low-coupling mode)
+		// Check if MCP client is available and agentic mode is enabled
+		if (stream) {
+			const mcpClient = await ensureMcpClient();
+			const agenticConfig = mcpClient ? getAgenticConfig(config()) : undefined;
+
+			// Debug: verify MCP tools are available
+			if (mcpClient) {
+				const availableTools = mcpClient.listTools();
+				console.log(
+					`[MCP] Client initialized with ${availableTools.length} tools:`,
+					availableTools
+				);
+			} else {
+				console.log('[MCP] No MCP client available');
+			}
+
+			if (mcpClient && agenticConfig?.enabled) {
+				try {
+					const llmClient = new OpenAISseClient({
+						url: './v1/chat/completions',
+						buildHeaders: () => getAuthHeaders()
+					});
+
+					const orchestrator = new AgenticOrchestrator({
+						mcpClient,
+						llmClient,
+						maxTurns: agenticConfig.maxTurns,
+						maxToolPreviewLines: agenticConfig.maxToolPreviewLines
+					});
+
+					let capturedTimings: ChatMessageTimings | undefined;
+
+					await orchestrator.run({
+						initialMessages: processedMessages,
+						requestTemplate: requestBody,
+						callbacks: {
+							onChunk,
+							onReasoningChunk,
+							onToolCallChunk,
+							onModel,
+							onComplete: onComplete
+								? () => onComplete('', undefined, capturedTimings, undefined)
+								: undefined,
+							onError
+						},
+						abortSignal: signal,
+						onProcessingUpdate: (timings, progress) => {
+							ChatService.notifyTimings(timings, progress, onTimings);
+							if (timings) {
+								capturedTimings = timings;
+							}
+						},
+						maxTurns: agenticConfig.maxTurns,
+						filterReasoningAfterFirstTurn: agenticConfig.filterReasoningAfterFirstTurn
+					});
+
+					return;
+				} catch (error) {
+					// If MCP orchestration fails, log and fall through to standard flow
+					console.warn('MCP orchestration failed, falling back to standard flow:', error);
+				}
 			}
 		}
 

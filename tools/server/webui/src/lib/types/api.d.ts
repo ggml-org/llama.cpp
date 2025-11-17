@@ -1,6 +1,17 @@
 import type { ServerModelStatus, ServerRole } from '$lib/enums';
 import type { ChatMessagePromptProgress } from './chat';
 
+export interface ApiChatCompletionToolFunction {
+	name: string;
+	description?: string;
+	parameters: Record<string, unknown>;
+}
+
+export interface ApiChatCompletionTool {
+	type: 'function';
+	function: ApiChatCompletionToolFunction;
+}
+
 export interface ApiChatMessageContentPart {
 	type: 'text' | 'image_url' | 'input_audio';
 	text?: string;
@@ -34,6 +45,8 @@ export interface ApiErrorResponse {
 export interface ApiChatMessageData {
 	role: ChatRole;
 	content: string | ApiChatMessageContentPart[];
+	tool_calls?: ApiChatCompletionToolCall[];
+	tool_call_id?: string;
 	timestamp?: number;
 }
 
@@ -188,6 +201,7 @@ export interface ApiChatCompletionRequest {
 	stream?: boolean;
 	model?: string;
 	return_progress?: boolean;
+	tools?: ApiChatCompletionTool[];
 	// Reasoning parameters
 	reasoning_format?: string;
 	// Generation parameters
@@ -247,6 +261,7 @@ export interface ApiChatCompletionStreamChunk {
 			model?: string;
 			tool_calls?: ApiChatCompletionToolCallDelta[];
 		};
+		finish_reason?: string | null;
 	}>;
 	timings?: {
 		prompt_n?: number;
@@ -267,8 +282,9 @@ export interface ApiChatCompletionResponse {
 			content: string;
 			reasoning_content?: string;
 			model?: string;
-			tool_calls?: ApiChatCompletionToolCallDelta[];
+			tool_calls?: ApiChatCompletionToolCall[];
 		};
+		finish_reason?: string | null;
 	}>;
 }
 
