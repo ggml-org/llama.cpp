@@ -4701,23 +4701,37 @@ kernel void kernel_argsort_merge_f32_i32(
     int i = low;
     int j = k0 - i;
 
+    // keep the merge fronts into registers
+    int32_t idx0 = 0;
+    float   val0 = 0.0f;
+    if (i < len0) {
+        idx0 = tmp0[i];
+        val0 = src0_row[idx0];
+    }
+
+    int32_t idx1 = 0;
+    float   val1 = 0.0f;
+    if (j < len1) {
+        idx1 = tmp1[j];
+        val1 = src0_row[idx1];
+    }
+
     for (int k = k0; k < k1; ++k) {
         int32_t out_idx;
 
         if (i >= len0) {
-            out_idx = tmp1[j];
-            ++j;
+            while (k < k1) {
+                dst[k++] = tmp1[j++];
+            }
+            break;
         } else if (j >= len1) {
-            out_idx = tmp0[i];
-            ++i;
+            while (k < k1) {
+                dst[k++] = tmp0[i++];
+            }
+            break;
         } else {
-            const int32_t idx0 = tmp0[i];
-            const int32_t idx1 = tmp1[j];
-
-            const float val0 = src0_row[idx0];
-            const float val1 = src0_row[idx1];
-
             bool take_left;
+
             if (order == GGML_SORT_ORDER_ASC) {
                 take_left = (val0 <= val1);
             } else {
@@ -4727,9 +4741,17 @@ kernel void kernel_argsort_merge_f32_i32(
             if (take_left) {
                 out_idx = idx0;
                 ++i;
+                if (i < len0) {
+                    idx0 = tmp0[i];
+                    val0 = src0_row[idx0];
+                }
             } else {
                 out_idx = idx1;
                 ++j;
+                if (j < len1) {
+                    idx1 = tmp1[j];
+                    val1 = src0_row[idx1];
+                }
             }
         }
 
