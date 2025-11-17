@@ -287,30 +287,30 @@ ggml_tensor * llm_build_qwen3next::delta_net_unified(ggml_context * ctx,
     ggml_tensor * gexp_last =
         ggml_reshape_4d(ctx, ggml_exp(ctx, g_cum_last), 1, 1, g_cum_last->ne[0] * g_cum_last->ne[2], g_cum_last->ne[3]);
 
-    cb(g_cum_last, "gexp_last", il);
+    cb(gexp_last, "gexp_last", il);
 
     ggml_tensor * g_cum_last_3d =
         ggml_reshape_3d(ctx, g_cum_last, g_cum_last->ne[0], g_cum_last->ne[2], g_cum_last->ne[3]);
 
-    cb(g_cum_last, "g_cum_last_3d", il);
+    cb(g_cum_last_3d, "g_cum_last_3d", il);
 
     ggml_tensor * g_cumsum_3d = ggml_reshape_3d(ctx, g_cumsum, g_cumsum->ne[0], g_cumsum->ne[2], g_cumsum->ne[3]);
 
-    cb(g_cum_last, "g_cumsum_3d", il);
+    cb(g_cumsum_3d, "g_cumsum_3d", il);
 
     ggml_tensor * g_diff = ggml_neg(ctx, ggml_sub(ctx, g_cumsum_3d, g_cum_last_3d));
 
-    cb(g_cum_last, "g_diff", il);
+    cb(g_diff, "g_diff", il);
 
     ggml_tensor * g_diff_exp = ggml_exp(ctx, g_diff);
 
-    cb(g_cum_last, "g_diff_exp", il);
+    cb(g_diff_exp, "g_diff_exp", il);
 
     ggml_tensor * key_gdiff = ggml_mul(ctx, k,
                                        ggml_reshape_4d(ctx, g_diff_exp, 1, g_diff_exp->ne[0], g_diff_exp->ne[1],
                                                        g_diff_exp->ne[2] * g_diff_exp->ne[3]));
 
-    cb(g_cum_last, "key_gdiff", il);
+    cb(key_gdiff, "key_gdiff", il);
 
     ggml_tensor * kgdmulvnew = ggml_mul_mat(ctx, v_new_t, ggml_cont(ctx, ggml_transpose(ctx, key_gdiff)));
 
