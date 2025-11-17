@@ -1334,28 +1334,40 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
 static bool show_statistics(const common_params & params) {
     std::vector<tensor_statistics> ts;
-    bool legacy = true;
-
     if (params.in_files.empty() || params.in_files.size() > 1) {
         LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
         return false;
     }
+
+    bool has_activations = false;
+    bool no_activations = false;
     if (g_collector.load_imatrix(params.in_files[0].c_str())) {
         for (const auto & [name, stats] : g_collector.get_mstats()) {
-            if (!compute_vector_statistics(ts, name, stats, legacy)) {
+            bool legacy_imatrix = true;
+            if (!compute_vector_statistics(ts, name, stats, legacy_imatrix)) {
                 LOG_WRN("%s: tensor %s has no data - skipping\n", __func__, name.c_str());
+                continue;
             }
+            if (legacy_imatrix) { no_activations = true; }
+            else { has_activations = true; }
         }
     } else {
         LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
         return false;
     }
-    if (!ts.empty()) {
-        compute_tensor_statistics(ts);
-    } else {
+    if (ts.empty()) {
         LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
         return false;
     }
+
+    bool legacy;
+    if (has_activations && no_activations) {
+        LOG_ERR("Error: %s has mixed tensors with and without activations\n\n", params.in_files[0].c_str());
+        return false;
+    }
+
+    legacy = !has_activations;
+    compute_tensor_statistics(ts);
 
     struct tensor_comparer {
         bool legacy_mode;
