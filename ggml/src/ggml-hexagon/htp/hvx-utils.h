@@ -729,9 +729,8 @@ static inline HVX_Vector hvx_vec_inverse_fp32(HVX_Vector v_sf) {
 static inline HVX_Vector hvx_vec_inverse_fp32_guard_inf(HVX_Vector v_sf) {
     static const float kInf = INFINITY;
 
-    const HVX_Vector     inf      = Q6_V_vsplat_R(*((uint32_t *) &kInf));
+    const HVX_Vector     inf      = hvx_vec_splat_fp32(kInf);
     const HVX_VectorPred pred_inf = Q6_Q_vcmp_gt_VsfVsf(inf, v_sf);
-    const HVX_VectorPred pred_nan = Q6_Q_vcmp_eq_VwVw(Q6_V_vzero(), v_sf);
 
     HVX_Vector out = hvx_vec_inverse_fp32(v_sf);
     return Q6_V_vmux_QVV(pred_inf, out, Q6_V_vzero());

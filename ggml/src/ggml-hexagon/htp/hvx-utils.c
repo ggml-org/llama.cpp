@@ -402,7 +402,7 @@ void hvx_add_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
     }
 
     static const float kInf    = INFINITY;
-    const HVX_Vector   inf     = Q6_V_vsplat_R(*((uint32_t *) &kInf));
+    const HVX_Vector   inf     = hvx_vec_splat_fp32(kInf);
     HVX_Vector         val_vec = hvx_vec_splat_fp32(val);
 
     if (0 == unaligned_loop) {

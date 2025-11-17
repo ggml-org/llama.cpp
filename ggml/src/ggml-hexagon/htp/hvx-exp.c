@@ -20,8 +20,8 @@ static inline HVX_Vector hvx_vec_exp_fp32_guard_inf(HVX_Vector in_vec) {
     static const float kInf    = INFINITY;
     static const float kMaxExp = 88.02f;  // log(INF)
 
-    const HVX_Vector     max_exp = Q6_V_vsplat_R(*((uint32_t *) &kMaxExp));
-    const HVX_Vector     inf     = Q6_V_vsplat_R(*((uint32_t *) &kInf));
+    const HVX_Vector     max_exp = hvx_vec_splat_fp32(kMaxExp);
+    const HVX_Vector     inf     = hvx_vec_splat_fp32(kInf);
     const HVX_VectorPred pred0   = Q6_Q_vcmp_gt_VsfVsf(in_vec, max_exp);
 
     HVX_Vector out = hvx_vec_exp_fp32(in_vec);
