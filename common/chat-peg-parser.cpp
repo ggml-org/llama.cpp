@@ -52,9 +52,7 @@ class trie_matcher {
       }
     }
 
-    struct match_result {
-        enum match_type { NO_MATCH, PARTIAL_MATCH, COMPLETE_MATCH } type;
-    };
+    enum match_result { NO_MATCH, PARTIAL_MATCH, COMPLETE_MATCH };
 
     // Check if a delimiter starts at the given position
     match_result check_at(std::string_view sv, size_t start_pos) const {
@@ -643,12 +641,12 @@ struct parser_executor {
             // Check if a delimiter starts at this position
             auto match = matcher.check_at(ctx.input, pos);
 
-            if (match.type == trie_matcher::match_result::COMPLETE_MATCH) {
+            if (match == trie_matcher::COMPLETE_MATCH) {
                 // Found a complete delimiter, return everything before it
                 return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
-            if (match.type == trie_matcher::match_result::PARTIAL_MATCH) {
+            if (match == trie_matcher::PARTIAL_MATCH) {
                 // Found a partial match extending to end of input, return everything before it
                 return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
