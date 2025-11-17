@@ -1,5 +1,6 @@
 #version 450
 
+#include "rte.glsl"
 #include "types.glsl"
 #include "generic_unary_head.glsl"
 
@@ -12,6 +13,6 @@ void main() {
         return;
     }
 
-    const FLOAT_TYPE val = FLOAT_TYPE(data_a[get_aoffset() + src0_idx(idx)]);
+    const float val = float(data_a[get_aoffset() + src0_idx(idx)]);
     data_d[get_doffset() + dst_idx(idx)] = D_TYPE(log(val));
 }
