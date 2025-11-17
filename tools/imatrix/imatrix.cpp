@@ -766,9 +766,9 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
     // Compute per-tensor statistics (CosSim, L2 Dist, ECS) to store alongside sums
     std::vector<tensor_statistics> tstats;
     tstats.reserve(m_stats.size());
-    bool legacy = true;
+    bool legacy_tensor = true;
     for (const auto & kv : m_stats) {
-        if (!compute_vector_statistics(tstats, kv.first, kv.second, legacy)) {
+        if (!compute_vector_statistics(tstats, kv.first, kv.second, legacy_tensor)) {
             LOG_WRN("%s: tensor %s has no data - skipping\n", __func__, kv.first.c_str());
         }
     }
