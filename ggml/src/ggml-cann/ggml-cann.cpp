@@ -22,24 +22,24 @@
 
 #include "ggml-cann.h"
 
-#include <acl/acl.h>
-#include <stdarg.h>
-#include <aclnnop/aclnn_trans_matmul_weight.h>
+#include "ggml-backend-impl.h"
+#include "ggml-cann/aclnn_ops.h"
+#include "ggml-cann/common.h"
+#include "ggml-impl.h"
+#include "ggml.h"
 
+#include <acl/acl.h>
+#include <aclnnop/aclnn_trans_matmul_weight.h>
+#include <stdarg.h>
+
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
-#include <queue>
-#include <chrono>
-#include <unordered_set>
 #include <optional>
-
-#include "ggml-impl.h"
-#include "ggml-backend-impl.h"
-#include "ggml-cann/aclnn_ops.h"
-#include "ggml-cann/common.h"
-#include "ggml.h"
+#include <queue>
+#include <unordered_set>
 
 #define GGML_COMMON_DECL_C
 
@@ -1177,19 +1177,18 @@ static ggml_cann_nz_workspace g_nz_workspaces[GGML_CANN_MAX_DEVICES];
  *       across calls. This reduces overhead from repeated memory allocation and deallocation.
  */
 static void weight_format_to_nz(ggml_tensor * tensor, size_t offset, int device) {
-    aclTensor * weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne, tensor->nb, 2, ACL_FORMAT_ND, offset);
-    uint64_t    workspaceSize    = 0;
+    acl_tensor_ptr weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne, tensor->nb, 2, ACL_FORMAT_ND, offset);
+    uint64_t       workspaceSize    = 0;
     aclOpExecutor * executor;
 
     // TransMatmulWeight
-    ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed, &workspaceSize, &executor));
+    ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed.get(), &workspaceSize, &executor));
     // Avoid frequent malloc/free of the workspace.
     g_nz_workspaces[device].realloc(workspaceSize);
 
     void * g_nz_workspace = g_nz_workspaces[device].get();
 
     ACL_CHECK(aclnnTransMatmulWeight(g_nz_workspace, workspaceSize, executor, nullptr));
-    ACL_CHECK(aclDestroyTensor(weightTransposed));
 }
 
 // TODO: need handle tensor which has paddings.
@@ -1641,7 +1640,7 @@ ggml_backend_buffer_type_t ggml_backend_cann_host_buffer_type() {
                            /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
                            },
         /* .device   = */
-         ggml_backend_reg_dev_get(ggml_backend_cann_reg(), 0),
+        ggml_backend_reg_dev_get(ggml_backend_cann_reg(), 0),
         /* .context  = */ nullptr,
     };
 
@@ -1776,6 +1775,12 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
             break;
         case GGML_OP_GROUP_NORM:
             ggml_cann_group_norm(ctx, dst);
+            break;
+        case GGML_OP_L2_NORM:
+            ggml_cann_l2_norm(ctx, dst);
+            break;
+        case GGML_OP_CROSS_ENTROPY_LOSS:
+            ggml_cann_cross_entropy_loss(ctx, dst);
             break;
         case GGML_OP_CONCAT:
             ggml_cann_concat(ctx, dst);
@@ -1943,7 +1948,8 @@ static void ggml_backend_cann_set_tensor_async(ggml_backend_t backend,
     GGML_ASSERT(buf->buft == ggml_backend_cann_buffer_type(cann_ctx->device) && "unsupported buffer type");
     GGML_ASSERT(!ggml_is_quantized(tensor->type));
 
-    ggml_cann_async_memcpy(cann_ctx, (char *) tensor->data + offset, data, size, ACL_MEMCPY_HOST_TO_DEVICE);
+    ACL_CHECK(aclrtMemcpyAsync((char *) tensor->data + offset, size, data, size, ACL_MEMCPY_HOST_TO_DEVICE,
+                               cann_ctx->stream()));
 }
 
 /**
@@ -1968,7 +1974,8 @@ static void ggml_backend_cann_get_tensor_async(ggml_backend_t      backend,
     GGML_ASSERT(buf->buft == ggml_backend_cann_buffer_type(cann_ctx->device) && "unsupported buffer type");
     GGML_ASSERT(!ggml_is_quantized(tensor->type));
 
-    ggml_cann_async_memcpy(cann_ctx, data, (char *) tensor->data + offset, size, ACL_MEMCPY_DEVICE_TO_HOST);
+    ACL_CHECK(aclrtMemcpyAsync(data, size, (char *) tensor->data + offset, size, ACL_MEMCPY_DEVICE_TO_HOST,
+                               cann_ctx->stream()));
 }
 
 /**
@@ -2029,7 +2036,6 @@ static bool ggml_backend_cann_cpy_tensor_async(ggml_backend_t      backend_src,
         ACL_CHECK(aclrtDeviceEnablePeerAccess(cann_ctx_dst->device, 0));
 
         // wait for task_queue empty to keep task order.
-        cann_ctx_src->task_queue.wait();
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size, ACL_MEMCPY_DEVICE_TO_DEVICE,
                                    cann_ctx_src->stream()));
         // record event on src stream after the copy
@@ -2062,7 +2068,6 @@ static bool ggml_backend_cann_cpy_tensor_async(ggml_backend_t      backend_src,
  */
 static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
     ggml_backend_cann_context * cann_ctx = (ggml_backend_cann_context *) backend->context;
-    cann_ctx->task_queue.wait();
     ggml_cann_set_device(cann_ctx->device);
     ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));
 }
@@ -2479,6 +2484,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 if (mode & GGML_ROPE_TYPE_VISION) {
                     return false;
                 }
+                if (op->src[0]->ne[0] > 896) {
+                    return false;
+                }
 #ifdef ASCEND_310P
                 if (!ggml_is_contiguous(op->src[0])) {
                     return false;
@@ -2515,8 +2523,11 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 // value of paddingW should be at most half of kernelW
                 return (p0 <= (k0 / 2)) && (p1 <= (k1 / 2));
             }
-        case GGML_OP_DUP:
         case GGML_OP_SUM:
+            return ggml_is_contiguous_rows(op->src[0]);
+        case GGML_OP_L2_NORM:
+        case GGML_OP_CROSS_ENTROPY_LOSS:
+        case GGML_OP_DUP:
         case GGML_OP_IM2COL:
         case GGML_OP_CONCAT:
         case GGML_OP_REPEAT:
