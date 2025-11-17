@@ -1285,9 +1285,9 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const floa
         constexpr unsigned int NumThreads = ThreadsM * ThreadsN;
         const unsigned int shmem_bytes = (BM_dim * BK_dim + BK_dim * BN_dim) * 2 * sizeof(half);
 
-        const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+        const unsigned int nsm = (unsigned int) (ggml_cuda_info().devices[ggml_cuda_get_device()].nsm);
         // if (BlocksM * BlocksN < nsm && P.c >= 8 * ksplit && (P.c * P.r * P.s) % (8*ksplit) == 0) {
-        if (BlocksM * BlocksN < 2*(unsigned int)nsm){
+        if (BlocksM * BlocksN < 2*nsm){
             int j, max_remaining_waves = -1, candidate = -1;
             int ks = min(20, nsm / (BlocksM * BlocksN));
             if (ks < 2 && (BlocksM * BlocksN) % nsm < nsm*4/5)
