@@ -27,8 +27,8 @@ struct testing {
 
     template <typename F>
     void run_with_exceptions(F &&f, const char *ctx) {
-        f();
         try {
+            f();
         } catch (const std::exception &e) {
             ++failures;
             ++exceptions;
