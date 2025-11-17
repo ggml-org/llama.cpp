@@ -785,11 +785,11 @@ namespace ggml_cuda_mma {
 
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(
             true,
-            a_vec[0],        
-            true,           
-            b_vec[0],                  
-            acc[0],          
-            true           
+            a_vec[0],
+            true,
+            b_vec[0],
+            acc[0],
+            true
         );
 
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(
@@ -897,7 +897,7 @@ static __device__ __forceinline__ void mma(
         GGML_UNUSED(A);
         GGML_UNUSED(B);
         NO_DEVICE_CODE;
-#endif 
+#endif
     }
 }
 
