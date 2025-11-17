@@ -549,7 +549,6 @@ __device__ __forceinline__ void tileMemcpySwizzleStore(
 ) {
 #if __CUDA_ARCH__ >= GGML_CUDA_TURING
 
-    
     constexpr unsigned int TILE_COLS = 32;
 
     // reinterpret input/output as float4
