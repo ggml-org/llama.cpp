@@ -147,6 +147,9 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // Configure backend sampler chain
+    llama_set_backend_sampler(ctx, 0, common_sampler_backend_init(model, sparams));
+
     auto * mem = llama_get_memory(ctx);
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
