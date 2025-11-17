@@ -671,6 +671,8 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_arange_f32;
 
+    vk_pipeline pipeline_fill_f32;
+
     vk_pipeline pipeline_geglu[2];
     vk_pipeline pipeline_reglu[2];
     vk_pipeline pipeline_swiglu[2];
@@ -3850,6 +3852,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_add1_f32_f32, "add1_f32_f32", add1_f32_f32_len, add1_f32_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_arange_f32, "arange_f32", arange_f32_len, arange_f32_data, "main", 1, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+
+    ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
 #define CREATE_GLU(name)  \
     if (device->float_controls_rte_fp16) {  \
@@ -8555,6 +8559,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_arange_f32;
         }
         return nullptr;
+    case GGML_OP_FILL:
+        if (dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_fill_f32;
+        }
+        return nullptr;
     default:
         return nullptr;
     }
@@ -8847,6 +8856,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_MUL:
     case GGML_OP_ADD1:
     case GGML_OP_ARANGE:
+    case GGML_OP_FILL:
     case GGML_OP_SCALE:
     case GGML_OP_SQR:
     case GGML_OP_SQRT:
@@ -9479,6 +9489,27 @@ static void ggml_vk_arange(ggml_backend_vk_context * ctx, vk_context& subctx, gg
     };
 
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, dst, GGML_OP_ARANGE);
+    GGML_ASSERT(pipeline != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst, false);
+
+    std::array<uint32_t, 3> elements = { (uint32_t)ggml_nelements(dst), 1, 1 };
+
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { dst_buf }, pc, elements);
+}
+
+static void ggml_vk_fill(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    VK_LOG_DEBUG("ggml_vk_fill(dst=" << dst << ", ne=" << ggml_nelements(dst) << ")");
+
+    vk_op_push_constants pc = {
+        (uint32_t)ggml_nelements(dst),
+        1,
+        ggml_get_op_params_f32(dst, 0),
+        0.0f,
+    };
+
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, dst, GGML_OP_FILL);
     GGML_ASSERT(pipeline != nullptr);
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
@@ -11291,6 +11322,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_DIV:
     case GGML_OP_ADD1:
     case GGML_OP_ARANGE:
+    case GGML_OP_FILL:
     case GGML_OP_CONCAT:
     case GGML_OP_UPSCALE:
     case GGML_OP_SCALE:
@@ -11510,6 +11542,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_ARANGE:
         ggml_vk_arange(ctx, compute_ctx, node);
+
+        break;
+    case GGML_OP_FILL:
+        ggml_vk_fill(ctx, compute_ctx, node);
 
         break;
     case GGML_OP_SCALE:
@@ -11799,6 +11835,7 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
     case GGML_OP_DIV:
     case GGML_OP_ADD1:
     case GGML_OP_ARANGE:
+    case GGML_OP_FILL:
     case GGML_OP_ADD_ID:
     case GGML_OP_CONCAT:
     case GGML_OP_UPSCALE:
@@ -13779,6 +13816,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_CONCAT:
         case GGML_OP_ADD1:
         case GGML_OP_ARANGE:
+        case GGML_OP_FILL:
         case GGML_OP_SCALE:
         case GGML_OP_PAD:
         case GGML_OP_ROLL:
@@ -14268,6 +14306,9 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             const float stop = ggml_get_op_params_f32(tensor, 1);
             const float step = ggml_get_op_params_f32(tensor, 2);
             tensor_clone = ggml_arange(ggml_ctx, start, stop, step);
+        } else if (tensor->op == GGML_OP_FILL) {
+            const float value = ggml_get_op_params_f32(tensor, 0);
+            tensor_clone = ggml_fill(ggml_ctx, tensor_clone, value);
         } else if (tensor->op == GGML_OP_SQR) {
             tensor_clone = ggml_sqr(ggml_ctx, src_clone[0]);
         } else if (tensor->op == GGML_OP_SQRT) {
