@@ -51,7 +51,7 @@ void test_unicode(testing &t) {
         };
 
         auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-            return p.one_or_more(p.any()) + p.end();
+            return p.sequence({p.one_or_more(p.any()), p.end()});
         });
 
         for (size_t i = 0; i < test_cases.size(); i++) {
@@ -94,7 +94,7 @@ void test_unicode(testing &t) {
             };
 
             auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-                return p.chars(R"([\u4E00-\u9FFF])") + p.end();
+                return p.sequence({p.chars(R"([\u4E00-\u9FFF])"), p.end()});
             });
 
             for (size_t i = 0; i < test_cases.size(); i++) {
@@ -135,7 +135,7 @@ void test_unicode(testing &t) {
             };
 
             auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-                return p.chars(R"([\U0001F600-\U0001F64F])") + p.end();
+                return p.sequence({p.chars(R"([\U0001F600-\U0001F64F])"), p.end()});
             });
 
             for (size_t i = 0; i < test_cases.size(); i++) {
@@ -180,7 +180,7 @@ void test_unicode(testing &t) {
             };
 
             auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-                return p.chars(R"([\u4E00-\u9FFF\U0001F600-\U0001F64F0-9])") + p.end();
+                return p.sequence({p.chars(R"([\u4E00-\u9FFF\U0001F600-\U0001F64F0-9])"), p.end()});
             });
 
             for (size_t i = 0; i < test_cases.size(); i++) {
@@ -328,7 +328,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-                        return p.json_string_content() + p.literal("\"");
+                        return p.sequence({p.json_string_content(), p.literal("\"")});
                     });
 
                     common_chat_parse_context ctx(tc.input, true);
@@ -431,7 +431,7 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_chat_peg_parser_builder& p) {
-                        return p.json_string_content() + p.literal("\"");
+                        return p.sequence({p.json_string_content(), p.literal("\"")});
                     });
 
                     common_chat_parse_context ctx(tc.input, true);

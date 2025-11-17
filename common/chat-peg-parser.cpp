@@ -12,30 +12,7 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_set>
-
-enum parser_type {
-    START,
-    END,
-    LITERAL,
-    SEQUENCE,
-    CHOICE,
-    REPETITION,
-    OPTIONAL,
-    ZERO_OR_MORE,
-    ONE_OR_MORE,
-    AND,
-    NOT,
-    ANY,
-    CHARS,
-    RULE,
-    REF,
-    UNTIL,
-    SPACE,
-    SCHEMA,
-    ROOT,
-    JSON_STRING,
-    CAPTURE,
-};
+#include <map>
 
 const char * common_chat_parse_result_type_name(common_chat_parse_result_type type) {
     switch (type) {
@@ -44,112 +21,6 @@ const char * common_chat_parse_result_type_name(common_chat_parse_result_type ty
         case COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT: return "need_more_input";
         default:                                       return "unknown";
     }
-}
-
-static const char * common_chat_parser_type_name(parser_type type) {
-    switch (type) {
-        case START:        return "start";
-        case END:          return "end";
-        case LITERAL:      return "literal";
-        case SEQUENCE:     return "sequence";
-        case CHOICE:       return "choice";
-        case REPETITION:   return "repetition";
-        case OPTIONAL:     return "optional";
-        case ZERO_OR_MORE: return "zero_or_more";
-        case ONE_OR_MORE:  return "one_or_more";
-        case AND:          return "and";
-        case NOT:          return "not";
-        case ANY:          return "any";
-        case CHARS:        return "chars";
-        case RULE:         return "rule";
-        case REF:          return "ref";
-        case UNTIL:        return "until";
-        case SPACE:        return "space";
-        case SCHEMA:       return "schema";
-        case ROOT:         return "root";
-        case JSON_STRING:  return "json_string";
-        case CAPTURE:      return "capture";
-        default:           return "unknown";
-    }
-}
-
-class parser_visitor;
-
-class common_chat_peg_parser_base {
-  protected:
-    int id_;
-
-  public:
-    common_chat_peg_parser_base(int id) : id_(id) {}
-    virtual ~common_chat_peg_parser_base() = default;
-
-    int id() const { return id_; }
-    void set_id(int id) { id_ = id; }
-
-    virtual parser_type type() const = 0;
-
-    virtual common_chat_parse_result parse(common_chat_parse_context & ctx, size_t start = 0) {
-        std::string indent(ctx.parse_depth * 2, ' ');
-        ctx.parse_depth++;
-
-        LOG_DBG("%s[CCPP type %d] Rule: %s\n", indent.c_str(), type(), dump().c_str());
-        LOG_DBG("%s[CCPP type %d] Trying to parse: %s\n", indent.c_str(), type(), ctx.input.substr(start).c_str());
-        if (id_ == -1) {
-            // Don't cache parsers with ID -1 (from operators)
-            LOG_DBG("%s[CCPP type %d] Parsing uncached due to operator\n", indent.c_str(), type());
-            ctx.parse_depth--;
-            return parse_uncached(ctx, start);
-        }
-
-        auto cached = ctx.cache.get(id_, start);
-        if (cached) {
-            LOG_DBG("%s[CCPP type %d] Found cached result, returning\n", indent.c_str(), type());
-            ctx.parse_depth--;
-            return *cached;
-        }
-
-        auto result = parse_uncached(ctx, start);
-        LOG_DBG("%s[CCPP type %d] Parse result is: %s\n", indent.c_str(), type(), common_chat_parse_result_type_name(result.type));
-        ctx.parse_depth--;
-        return ctx.cache.set(id_, start, result);
-    }
-
-    // Actual parsing implementation (to be overridden by subclasses)
-    virtual common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) = 0;
-
-    virtual void assign_id(common_chat_peg_parser_counter & counter) {
-        if (id_ == -1) {
-            id_ = counter.next();
-        }
-    }
-
-    virtual std::string dump() const = 0;
-    virtual void accept(parser_visitor & visitor) = 0;
-};
-
-// Create an internal parser
-template <typename Parser, typename... Args>
-static std::shared_ptr<common_chat_peg_parser_base> make_parser(int id, Args&&... args) {
-    return std::make_shared<Parser>(std::forward<Args>(args)..., id);
-}
-
-template <typename Parser, typename... Args>
-static std::shared_ptr<common_chat_peg_parser_base> make_parser(common_chat_peg_parser_counter & counter, Args&&... args) {
-    return std::make_shared<Parser>(std::forward<Args>(args)..., counter.next());
-}
-
-// Convenience cast functions
-template<typename T>
-static std::shared_ptr<T> cast(const std::shared_ptr<common_chat_peg_parser_base> & p) {
-    if (p->type() != T::type_value) {
-        return nullptr;
-    }
-    return std::static_pointer_cast<T>(p);
-}
-
-template<typename T>
-static std::shared_ptr<T> cast(const common_chat_peg_parser & p) {
-    return cast<T>(p.ptr());
 }
 
 // We define our own space function because MSVC's std::isspace()
@@ -163,7 +34,7 @@ static bool is_hex_digit(const char c) {
 }
 
 // Trie for matching multiple literals.
-// This is used in until_parser and to build a GBNF exclusion grammar
+// This is used in common_chat_peg_until_parser and to build a GBNF exclusion grammar
 class trie_matcher {
     struct node {
         size_t depth = 0;
@@ -273,486 +144,6 @@ class trie_matcher {
     }
 };
 
-// Matches the start of the input
-//   S -> ^
-class start_parser : public common_chat_peg_parser_base {
-  public:
-    static constexpr parser_type type_value = START;
-    parser_type type() const override { return type_value; }
-
-    start_parser(int id) : common_chat_peg_parser_base(id) {}
-
-    void accept(parser_visitor & visitor) override;
-    std::string dump() const override { return "Start"; }
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & /*ctx*/, size_t start = 0) override {
-        return common_chat_parse_result(start == 0 ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL, start);
-    }
-};
-
-// Matches the end of the input
-//   S -> $
-class end_parser : public common_chat_peg_parser_base {
-  public:
-    static constexpr parser_type type_value = END;
-    parser_type type() const override { return type_value; }
-
-    end_parser(int id) : common_chat_peg_parser_base(id) {}
-
-    void accept(parser_visitor & visitor) override;
-    std::string dump() const override { return "End"; }
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        return common_chat_parse_result(start >= ctx.input.size() ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL, start);
-    }
-};
-
-// Matches an exact literal string.
-//   S -> "hello"
-class literal_parser : public common_chat_peg_parser_base {
-    std::string literal_;
-
-  public:
-    static constexpr parser_type type_value = LITERAL;
-    parser_type type() const override { return type_value; }
-
-    literal_parser(const std::string & literal, int id) : common_chat_peg_parser_base(id), literal_(literal) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto pos = start;
-        for (auto i = 0u; i < literal_.size(); ++i) {
-            if (pos >= ctx.input.size()) {
-                if (ctx.input_is_complete) {
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-                }
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
-            }
-            if (ctx.input[pos] != literal_[i]) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-            }
-            ++pos;
-        }
-
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
-    }
-
-    std::string dump() const override {
-        return "Literal(" + literal_ + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::string & literal() const { return literal_; }
-};
-
-// Matches a sequence of parsers in order, all must succeed.
-//   S -> A B C
-class sequence_parser : public common_chat_peg_parser_base {
-    std::vector<std::shared_ptr<common_chat_peg_parser_base>> parsers_;
-
-  public:
-    static constexpr parser_type type_value = SEQUENCE;
-    parser_type type() const override { return type_value; }
-
-    template <typename InputIt>
-    sequence_parser(InputIt first, InputIt last, int id) : common_chat_peg_parser_base(id) {
-        for (auto it = first; it != last; ++it) {
-            auto ptr = it->ptr();
-            if (auto seq = cast<sequence_parser>(ptr)) {
-                parsers_.insert(parsers_.end(), seq->parsers().begin(), seq->parsers().end());
-            } else {
-                parsers_.push_back(ptr);
-            }
-        }
-    }
-
-    template <typename T>
-    sequence_parser(const T & parsers, int id)
-        : sequence_parser(std::begin(parsers), std::end(parsers), id) {}
-
-    sequence_parser(const std::vector<std::shared_ptr<common_chat_peg_parser_base>> & parsers, int id)
-        : common_chat_peg_parser_base(id) {
-        for (const auto & ptr : parsers) {
-            if (auto seq = cast<sequence_parser>(ptr)) {
-                parsers_.insert(parsers_.end(), seq->parsers().begin(), seq->parsers().end());
-            } else {
-                parsers_.push_back(ptr);
-            }
-        }
-    }
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto pos = start;
-        for (const auto & p : parsers_) {
-            auto result = p->parse(ctx, pos);
-            if (!result.success()) {
-                return common_chat_parse_result(result.type, start, result.end);
-            }
-
-            pos = result.end;
-        }
-
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
-    }
-
-    void assign_id(common_chat_peg_parser_counter & counter) override {
-        common_chat_peg_parser_base::assign_id(counter);
-        for (auto & p : parsers_) {
-            p->assign_id(counter);
-        }
-    }
-
-    std::string dump() const override {
-        std::vector<std::string> parts;
-        parts.reserve(parsers_.size());
-        for (const auto & p : parsers_) {
-            parts.push_back(p->dump());
-        }
-        return "Sequence(" + string_join(parts, ", ") + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::vector<std::shared_ptr<common_chat_peg_parser_base>> & parsers() const { return parsers_; }
-};
-
-// Matches the first parser that succeeds from a list of alternatives.
-//   S -> A | B | C
-class choice_parser : public common_chat_peg_parser_base {
-    std::vector<std::shared_ptr<common_chat_peg_parser_base>> parsers_;
-
-  public:
-    static constexpr parser_type type_value = CHOICE;
-    parser_type type() const override { return type_value; }
-
-    template <typename InputIt>
-    choice_parser(InputIt first, InputIt last, int id) : common_chat_peg_parser_base(id) {
-        for (auto it = first; it != last; ++it) {
-            auto ptr = it->ptr();
-            if (auto choice = cast<choice_parser>(ptr)) {
-                parsers_.insert(parsers_.end(), choice->parsers().begin(), choice->parsers().end());
-            } else {
-                parsers_.push_back(ptr);
-            }
-        }
-    }
-
-    template <typename T>
-    choice_parser(const T & parsers, int id)
-        : choice_parser(std::begin(parsers), std::end(parsers), id) {}
-
-    choice_parser(const std::vector<std::shared_ptr<common_chat_peg_parser_base>> & parsers, int id)
-        : common_chat_peg_parser_base(id) {
-        for (const auto & ptr : parsers) {
-            if (auto choice = cast<choice_parser>(ptr)) {
-                parsers_.insert(parsers_.end(), choice->parsers().begin(), choice->parsers().end());
-            } else {
-                parsers_.push_back(ptr);
-            }
-        }
-    }
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto pos = start;
-        for (const auto & p : parsers_) {
-            auto result = p->parse(ctx, pos);
-            if (!result.fail()) {
-                return result;
-            }
-        }
-
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-    }
-
-    void assign_id(common_chat_peg_parser_counter & counter) override {
-        common_chat_peg_parser_base::assign_id(counter);
-        for (auto & p : parsers_) {
-            p->assign_id(counter);
-        }
-    }
-
-    std::string dump() const override {
-        std::vector<std::string> parts;
-        parts.reserve(parsers_.size());
-        for (const auto & p : parsers_) {
-            parts.push_back(p->dump());
-        }
-        return "Choice(" + string_join(parts, ", ") + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::vector<std::shared_ptr<common_chat_peg_parser_base>> & parsers() const { return parsers_; }
-};
-
-// Matches between min and max repetitions of a parser (inclusive).
-//   S -> A{m,n}
-// Use -1 for max_count to represent unbounded repetition (equivalent to {m,})
-class repetition_parser : public common_chat_peg_parser_base {
-    std::shared_ptr<common_chat_peg_parser_base> parser_;
-    int min_count_;
-    int max_count_;
-
-  public:
-    static constexpr parser_type type_value = REPETITION;
-    parser_type type() const override { return type_value; }
-
-    repetition_parser(const common_chat_peg_parser & parser, int min_count, int max_count, int id)
-        : common_chat_peg_parser_base(id), parser_(parser.ptr()), min_count_(min_count), max_count_(max_count) {}
-
-    repetition_parser(const std::shared_ptr<common_chat_peg_parser_base> & parser, int min_count, int max_count, int id)
-        : common_chat_peg_parser_base(id), parser_(parser), min_count_(min_count), max_count_(max_count) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto pos = start;
-        int match_count = 0;
-
-        // Try to match up to max_count times (or unlimited if max_count is -1)
-        while (max_count_ == -1 || match_count < max_count_) {
-            if (pos >= ctx.input.size()) {
-                break;
-            }
-
-            auto result = parser_->parse(ctx, pos);
-
-            if (result.success()) {
-                // Prevent infinite loop on empty matches
-                if (result.end == pos) {
-                    break;
-                }
-                pos = result.end;
-                match_count++;
-                continue;
-            }
-
-            if (result.need_more_input()) {
-                return common_chat_parse_result(result.type, start, result.end);
-            }
-
-            // Child failed - stop trying
-            break;
-        }
-
-        // Check if we got enough matches
-        if (min_count_ > 0 && match_count < min_count_) {
-            if (pos >= ctx.input.size() && !ctx.input_is_complete) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
-            }
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start, pos);
-        }
-
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
-    }
-
-    void assign_id(common_chat_peg_parser_counter & counter) override {
-        common_chat_peg_parser_base::assign_id(counter);
-        parser_->assign_id(counter);
-    }
-
-    std::string dump() const override {
-        if (max_count_ == -1) {
-            return "Repetition(" + parser_->dump() + ", " + std::to_string(min_count_) + ", unbounded)";
-        }
-        return "Repetition(" + parser_->dump() + ", " + std::to_string(min_count_) + ", " + std::to_string(max_count_) + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::shared_ptr<common_chat_peg_parser_base> & child() const { return parser_; }
-
-    int min_count() const { return min_count_; }
-
-    int max_count() const { return max_count_; }
-};
-
-// Matches one or more repetitions of a parser.
-//   S -> A+
-class one_or_more_parser : public repetition_parser {
-  public:
-    static constexpr parser_type type_value = ONE_OR_MORE;
-    parser_type type() const override { return type_value; }
-
-    one_or_more_parser(const common_chat_peg_parser & p, int id) : repetition_parser(p, 1, -1, id) {}
-    one_or_more_parser(const std::shared_ptr<common_chat_peg_parser_base> & p, int id) : repetition_parser(p, 1, -1, id) {}
-
-    std::string dump() const override {
-        return "OneOrMore(" + child()->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-};
-
-// Matches zero or more repetitions of a parser, always succeeds.
-//   S -> A*
-class zero_or_more_parser : public repetition_parser {
-  public:
-    static constexpr parser_type type_value = ZERO_OR_MORE;
-    parser_type type() const override { return type_value; }
-
-    zero_or_more_parser(const common_chat_peg_parser & p, int id) : repetition_parser(p, 0, -1, id) {}
-    zero_or_more_parser(const std::shared_ptr<common_chat_peg_parser_base> & p, int id) : repetition_parser(p, 0, -1, id) {}
-
-    std::string dump() const override {
-        return "ZeroOrMore(" + child()->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-};
-
-// Matches zero or one occurrence of a parser, always succeeds.
-//   S -> A?
-class optional_parser : public repetition_parser {
-  public:
-    static constexpr parser_type type_value = OPTIONAL;
-    parser_type type() const override { return type_value; }
-
-    optional_parser(const common_chat_peg_parser & p, int id) : repetition_parser(p, 0, 1, id) {}
-    optional_parser(const std::shared_ptr<common_chat_peg_parser_base> & p, int id) : repetition_parser(p, 0, 1, id) {}
-
-    std::string dump() const override {
-        return "Optional(" + child()->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-};
-
-// Positive lookahead: succeeds if child parser succeeds, consumes no input.
-//   S -> &A
-class and_parser : public common_chat_peg_parser_base {
-    std::shared_ptr<common_chat_peg_parser_base> parser_;
-
-  public:
-    static constexpr parser_type type_value = AND;
-    parser_type type() const override { return type_value; }
-
-    and_parser(const common_chat_peg_parser & parser, int id) : common_chat_peg_parser_base(id), parser_(parser.ptr()) {}
-    and_parser(const std::shared_ptr<common_chat_peg_parser_base> & parser, int id) : common_chat_peg_parser_base(id), parser_(parser) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto result = parser_->parse(ctx, start);
-        // Pass result but don't consume input
-        return common_chat_parse_result(result.type, start);
-    }
-
-    void assign_id(common_chat_peg_parser_counter & counter) override {
-        common_chat_peg_parser_base::assign_id(counter);
-        parser_->assign_id(counter);
-    }
-
-    std::string dump() const override {
-        return "And(" + parser_->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::shared_ptr<common_chat_peg_parser_base> & child() const { return parser_; }
-};
-
-// Negative lookahead: succeeds if child parser fails, consumes no input.
-//   S -> !A
-class not_parser : public common_chat_peg_parser_base {
-    std::shared_ptr<common_chat_peg_parser_base> parser_;
-
-  public:
-    static constexpr parser_type type_value = NOT;
-    parser_type type() const override { return type_value; }
-
-    not_parser(const common_chat_peg_parser & parser, int id) : common_chat_peg_parser_base(id), parser_(parser.ptr()) {}
-    not_parser(const std::shared_ptr<common_chat_peg_parser_base> & parser, int id) : common_chat_peg_parser_base(id), parser_(parser) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto result = parser_->parse(ctx, start);
-
-        if (result.success()) {
-            // Fail if the underlying parser matches
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-        }
-
-        if (result.need_more_input()) {
-            // Propagate - need to know what child would match before negating
-            return result;
-        }
-
-        // Child failed, so negation succeeds
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start);
-    }
-
-    void assign_id(common_chat_peg_parser_counter & counter) override {
-        common_chat_peg_parser_base::assign_id(counter);
-        parser_->assign_id(counter);
-    }
-
-    std::string dump() const override {
-        return "Not(" + parser_->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::shared_ptr<common_chat_peg_parser_base> & child() const { return parser_; }
-};
-
-// Matches any single character.
-//   S -> .
-class any_parser : public common_chat_peg_parser_base {
-  public:
-    static constexpr parser_type type_value = ANY;
-    parser_type type() const override { return type_value; }
-
-    any_parser(int id) : common_chat_peg_parser_base(id) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        // Parse a single UTF-8 codepoint (not just a single byte)
-        auto result = parse_utf8_codepoint(ctx.input, start);
-
-        if (result.status == utf8_parse_result::INCOMPLETE) {
-            if (ctx.input_is_complete) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-            }
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start);
-        }
-        if (result.status == utf8_parse_result::INVALID) {
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-        }
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, start + result.bytes_consumed);
-    }
-
-    std::string dump() const override {
-        return "Any";
-    }
-
-    void accept(parser_visitor & visitor) override;
-};
-
-// Matches zero or more whitespace characters (space, tab, newline).
-//   S -> [ \t\n]*
-class space_parser : public common_chat_peg_parser_base {
-  public:
-    static constexpr parser_type type_value = SPACE;
-    parser_type type() const override { return type_value; }
-
-    space_parser(int id) : common_chat_peg_parser_base(id) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto pos = start;
-        while (pos < ctx.input.size()) {
-            char c = ctx.input[pos];
-            if (is_space(c)) {
-                ++pos;
-            } else {
-                break;
-            }
-        }
-
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
-    }
-
-    std::string dump() const override {
-        return "Space";
-    }
-
-    void accept(parser_visitor & visitor) override;
-};
-
 static std::pair<uint32_t, size_t> parse_hex_escape(const std::string & str, size_t pos, int hex_count) {
     if (pos + hex_count > str.length()) {
         return {0, 0};
@@ -820,94 +211,292 @@ static std::pair<uint32_t, size_t> parse_char_class_char(const std::string & con
     return {static_cast<uint32_t>(static_cast<unsigned char>(content[pos])), 1};
 }
 
-// Matches between min and max repetitions of characters from a character class.
-//   S -> [a-z]{m,n}
-// Supports Unicode codepoint ranges and escape sequences: \xXX \uXXXX \UXXXXXXXX
-class chars_parser : public common_chat_peg_parser_base {
-    struct char_range {
-        uint32_t start;
-        uint32_t end;
+// Helper to parse common_chat_peg_chars_parser pattern and build ranges
+static std::pair<std::vector<common_chat_peg_chars_parser::char_range>, bool> parse_char_classes(const std::string & classes) {
+    std::vector<common_chat_peg_chars_parser::char_range> ranges;
+    bool negated = false;
 
-        bool contains(uint32_t codepoint) const { return codepoint >= start && codepoint <= end; }
-    };
+    std::string content = classes;
+    if (content.front() == '[') {
+        content = content.substr(1);
+    }
 
-    std::string pattern_;
-    std::vector<char_range> ranges_;
-    bool negated_;
-    int min_count_;
-    int max_count_;
+    if (content.back() == ']') {
+        content.pop_back();
+    }
 
-  public:
-    static constexpr parser_type type_value = CHARS;
-    parser_type type() const override { return type_value; }
+    // Check for negation
+    if (!content.empty() && content.front() == '^') {
+        negated = true;
+        content = content.substr(1);
+    }
 
-    chars_parser(const std::string & classes, int min_count, int max_count, int id)
-        : common_chat_peg_parser_base(id), pattern_(classes), negated_(false), min_count_(min_count), max_count_(max_count) {
+    size_t i = 0;
+    while (i < content.length()) {
+        auto [start, start_len] = parse_char_class_char(content, i);
+        i += start_len;
 
-        std::string content = classes;
-        if (content.front() == '[') {
-            content = content.substr(1);
-        }
-
-        if (content.back() == ']') {
-            content.pop_back();
-        }
-
-        // Check for negation
-        if (!content.empty() && content.front() == '^') {
-            negated_ = true;
-            content = content.substr(1);
-        }
-
-        size_t i = 0;
-        while (i < content.length()) {
-            auto [start, start_len] = parse_char_class_char(content, i);
-            i += start_len;
-
-            if (i + 1 < content.length() && content[i] == '-') {
-                // Range detected
-                auto [end, end_len] = parse_char_class_char(content, i + 1);
-                ranges_.push_back(char_range{start, end});
-                i += 1 + end_len;
-            } else {
-                ranges_.push_back(char_range{start, start});
-            }
+        if (i + 1 < content.length() && content[i] == '-') {
+            // Range detected
+            auto [end, end_len] = parse_char_class_char(content, i + 1);
+            ranges.push_back(common_chat_peg_chars_parser::char_range{start, end});
+            i += 1 + end_len;
+        } else {
+            ranges.push_back(common_chat_peg_chars_parser::char_range{start, start});
         }
     }
 
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto pos = start;
+    return {ranges, negated};
+}
+
+// Parse cache implementation
+common_chat_parse_result common_chat_parse_cache::set(common_chat_peg_parser_id id, size_t start, common_chat_parse_result result) {
+    results[common_chat_parse_cache_key{id, start}] = result;
+    return result;
+}
+
+std::optional<common_chat_parse_result> common_chat_parse_cache::get(common_chat_peg_parser_id id, size_t start) {
+    auto it = results.find(common_chat_parse_cache_key{id, start});
+    if (it != results.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+void common_chat_parse_cache::clear() {
+    results.clear();
+}
+
+// Forward declaration of parser
+struct parser_executor;
+
+// Arena implementation
+common_chat_peg_arena::common_chat_peg_arena() : root_(COMMON_CHAT_PEG_INVALID_PARSER_ID) {}
+
+common_chat_peg_parser_id common_chat_peg_arena::add_parser(common_chat_peg_parser_variant parser) {
+    common_chat_peg_parser_id id = parsers_.size();
+    parsers_.push_back(std::move(parser));
+    return id;
+}
+
+void common_chat_peg_arena::add_rule(const std::string & name, common_chat_peg_parser_id id) {
+    rules_[name] = id;
+}
+
+common_chat_peg_parser_id common_chat_peg_arena::get_rule(const std::string & name) const {
+    auto it = rules_.find(name);
+    if (it == rules_.end()) {
+        throw std::runtime_error("Rule not found: " + name);
+    }
+    return it->second;
+}
+
+// Parsing executor - uses std::visit to dispatch to appropriate parser
+struct parser_executor {
+    const common_chat_peg_arena & arena;
+    common_chat_parse_context & ctx;
+    size_t start_pos;
+
+    parser_executor(const common_chat_peg_arena & arena, common_chat_parse_context & ctx, size_t start)
+        : arena(arena), ctx(ctx), start_pos(start) {}
+
+    common_chat_parse_result operator()(const common_chat_peg_start_parser & /* p */) {
+        return common_chat_parse_result(
+            start_pos == 0 ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL,
+            start_pos
+        );
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_end_parser & /* p */) {
+        return common_chat_parse_result(
+            start_pos >= ctx.input.size() ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL,
+            start_pos
+        );
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_literal_parser & p) {
+        auto pos = start_pos;
+        for (auto i = 0u; i < p.literal.size(); ++i) {
+            if (pos >= ctx.input.size()) {
+                if (ctx.input_is_complete) {
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                }
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+            }
+            if (ctx.input[pos] != p.literal[i]) {
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+            }
+            ++pos;
+        }
+
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_sequence_parser & p) {
+        auto pos = start_pos;
+        for (const auto & child_id : p.children) {
+            auto result = arena.parse(child_id, ctx, pos);
+            if (!result.success()) {
+                return common_chat_parse_result(result.type, start_pos, result.end);
+            }
+
+            pos = result.end;
+        }
+
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_choice_parser & p) {
+        auto pos = start_pos;
+        for (const auto & child_id : p.children) {
+            auto result = arena.parse(child_id, ctx, pos);
+            if (!result.fail()) {
+                return result;
+            }
+        }
+
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_repetition_parser & p) {
+        auto pos = start_pos;
         int match_count = 0;
 
         // Try to match up to max_count times (or unlimited if max_count is -1)
-        while (max_count_ == -1 || match_count < max_count_) {
+        while (p.max_count == -1 || match_count < p.max_count) {
+            if (pos >= ctx.input.size()) {
+                break;
+            }
+
+            auto result = arena.parse(p.child, ctx, pos);
+
+            if (result.success()) {
+                // Prevent infinite loop on empty matches
+                if (result.end == pos) {
+                    break;
+                }
+                pos = result.end;
+                match_count++;
+                continue;
+            }
+
+            if (result.need_more_input()) {
+                return common_chat_parse_result(result.type, start_pos, result.end);
+            }
+
+            // Child failed - stop trying
+            break;
+        }
+
+        // Check if we got enough matches
+        if (p.min_count > 0 && match_count < p.min_count) {
+            if (pos >= ctx.input.size() && !ctx.input_is_complete) {
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+            }
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos, pos);
+        }
+
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_one_or_more_parser & p) {
+        return (*this)(common_chat_peg_repetition_parser{p.child, 1, -1});
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_zero_or_more_parser & p) {
+        return (*this)(common_chat_peg_repetition_parser{p.child, 0, -1});
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_optional_parser & p) {
+        return (*this)(common_chat_peg_repetition_parser{p.child, 0, 1});
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_and_parser & p) {
+        auto result = arena.parse(p.child, ctx, start_pos);
+        // Pass result but don't consume input
+        return common_chat_parse_result(result.type, start_pos);
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_not_parser & p) {
+        auto result = arena.parse(p.child, ctx, start_pos);
+
+        if (result.success()) {
+            // Fail if the underlying parser matches
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+        }
+
+        if (result.need_more_input()) {
+            // Propagate - need to know what child would match before negating
+            return result;
+        }
+
+        // Child failed, so negation succeeds
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos);
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_any_parser & /* p */) {
+        // Parse a single UTF-8 codepoint (not just a single byte)
+        auto result = parse_utf8_codepoint(ctx.input, start_pos);
+
+        if (result.status == utf8_parse_result::INCOMPLETE) {
+            if (ctx.input_is_complete) {
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+            }
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
+        }
+        if (result.status == utf8_parse_result::INVALID) {
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+        }
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, start_pos + result.bytes_consumed);
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_space_parser & /* p */) {
+        auto pos = start_pos;
+        while (pos < ctx.input.size()) {
+            char c = ctx.input[pos];
+            if (is_space(c)) {
+                ++pos;
+            } else {
+                break;
+            }
+        }
+
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_chars_parser & p) {
+        auto pos = start_pos;
+        int match_count = 0;
+
+        // Try to match up to max_count times (or unlimited if max_count is -1)
+        while (p.max_count == -1 || match_count < p.max_count) {
             auto result = parse_utf8_codepoint(ctx.input, pos);
 
             if (result.status == utf8_parse_result::INCOMPLETE) {
-                if (match_count >= min_count_) {
+                if (match_count >= p.min_count) {
                     // We have enough matches, succeed with what we have
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
                 }
                 // Not enough matches yet
                 if (ctx.input_is_complete) {
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
                 }
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
 
             if (result.status == utf8_parse_result::INVALID) {
                 // Malformed UTF-8 in input
-                if (match_count >= min_count_) {
+                if (match_count >= p.min_count) {
                     // We have enough matches, succeed up to here
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
                 }
                 // Not enough matches, fail
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
             }
 
             // Check if this codepoint matches our character class
             bool matches = false;
-            for (const auto & range : ranges_) {
+            for (const auto & range : p.ranges) {
                 if (range.contains(result.codepoint)) {
                     matches = true;
                     break;
@@ -915,7 +504,7 @@ class chars_parser : public common_chat_peg_parser_base {
             }
 
             // If negated, invert the match result
-            if (negated_) {
+            if (p.negated) {
                 matches = !matches;
             }
 
@@ -929,93 +518,16 @@ class chars_parser : public common_chat_peg_parser_base {
         }
 
         // Check if we got enough matches
-        if (match_count < min_count_) {
+        if (match_count < p.min_count) {
             if (pos >= ctx.input.size() && !ctx.input_is_complete) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start, pos);
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos, pos);
         }
 
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
     }
 
-    std::string dump() const override {
-        if (max_count_ == -1) {
-            return "CharRepeat(" + pattern_ + ", " + std::to_string(min_count_) + ", unbounded)";
-        }
-        return "CharRepeat(" + pattern_ + ", " + std::to_string(min_count_) + ", " + std::to_string(max_count_) + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::string & pattern() const { return pattern_; }
-
-    int min_count() const { return min_count_; }
-
-    int max_count() const { return max_count_; }
-};
-
-// Specialized parser for JSON string content (without quotes).
-// Parses the content between quotes with single-pass streaming support.
-// Stops before the closing quote (doesn't consume it).
-// Handles escape sequences and emits NEED_MORE_INPUT for incomplete input.
-//   S -> (regular chars and escape sequences)* until closing "
-class json_string_parser : public common_chat_peg_parser_base {
-  public:
-    static constexpr parser_type type_value = JSON_STRING;
-    parser_type type() const override { return type_value; }
-
-    json_string_parser(int id) : common_chat_peg_parser_base(id) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto pos = start;
-
-        // Parse string content (without quotes)
-        while (pos < ctx.input.size()) {
-            char c = ctx.input[pos];
-
-            if (c == '"') {
-                // Found closing quote - success (don't consume it)
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
-            }
-
-            if (c == '\\') {
-                auto result = handle_escape_sequence(ctx, start, pos);
-                if (!result.success()) {
-                    return result;
-                }
-            } else {
-                auto utf8_result = parse_utf8_codepoint(ctx.input, pos);
-
-                if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
-                    if (ctx.input_is_complete) {
-                        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-                    }
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
-                }
-
-                if (utf8_result.status == utf8_parse_result::INVALID) {
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-                }
-
-                pos += utf8_result.bytes_consumed;
-            }
-        }
-
-        // Reached end without finding closing quote
-        if (ctx.input_is_complete) {
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start, pos);
-        }
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
-    }
-
-    std::string dump() const override {
-        return "JsonString()";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-  private:
     static common_chat_parse_result handle_escape_sequence(common_chat_parse_context & ctx, size_t start, size_t & pos) {
         ++pos; // consume '\'
         if (pos >= ctx.input.size()) {
@@ -1060,28 +572,55 @@ class json_string_parser : public common_chat_peg_parser_base {
         }
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
     }
-};
 
-// Matches all characters until a delimiter is found (delimiter not consumed).
-//   S -> (!delim .)*
-class until_parser : public common_chat_peg_parser_base {
-    std::vector<std::string> delimiters_;
-    trie_matcher matcher_;
+    common_chat_parse_result operator()(const common_chat_peg_json_string_parser & /* p */) {
+        auto pos = start_pos;
 
-  public:
-    static constexpr parser_type type_value = UNTIL;
-    parser_type type() const override { return type_value; }
+        // Parse string content (without quotes)
+        while (pos < ctx.input.size()) {
+            char c = ctx.input[pos];
 
-    until_parser(const std::vector<std::string> & delimiters, int id)
-        : common_chat_peg_parser_base(id), delimiters_(delimiters), matcher_(delimiters) {}
+            if (c == '"') {
+                // Found closing quote - success (don't consume it)
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+            }
 
-    until_parser(const std::string & delimiter, int id)
-        : until_parser(std::vector<std::string>{delimiter}, id) {}
+            if (c == '\\') {
+                auto result = handle_escape_sequence(ctx, start_pos, pos);
+                if (!result.success()) {
+                    return result;
+                }
+            } else {
+                auto utf8_result = parse_utf8_codepoint(ctx.input, pos);
 
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
+                if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
+                    if (ctx.input_is_complete) {
+                        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                    }
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+                }
+
+                if (utf8_result.status == utf8_parse_result::INVALID) {
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                }
+
+                pos += utf8_result.bytes_consumed;
+            }
+        }
+
+        // Reached end without finding closing quote
+        if (ctx.input_is_complete) {
+            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos, pos);
+        }
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+    }
+
+    common_chat_parse_result operator()(const common_chat_peg_until_parser & p) {
+        trie_matcher matcher(p.delimiters);
+
         // Scan input and check for delimiters
-        size_t pos = start;
-        size_t last_valid_pos = start;
+        size_t pos = start_pos;
+        size_t last_valid_pos = start_pos;
 
         while (pos < ctx.input.size()) {
             auto utf8_result = parse_utf8_codepoint(ctx.input, pos);
@@ -1090,106 +629,49 @@ class until_parser : public common_chat_peg_parser_base {
                 // Incomplete UTF-8 sequence
                 if (ctx.input_is_complete) {
                     // Input is complete but UTF-8 is incomplete = malformed
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
                 }
                 // Return what we have so far (before incomplete sequence)
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, last_valid_pos);
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, last_valid_pos);
             }
 
             if (utf8_result.status == utf8_parse_result::INVALID) {
                 // Malformed UTF-8
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
             }
 
             // Check if a delimiter starts at this position
-            auto match = matcher_.check_at(ctx.input, pos);
+            auto match = matcher.check_at(ctx.input, pos);
 
             if (match.type == trie_matcher::match_result::COMPLETE_MATCH) {
                 // Found a complete delimiter, return everything before it
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
             if (match.type == trie_matcher::match_result::PARTIAL_MATCH) {
                 // Found a partial match extending to end of input, return everything before it
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
             pos += utf8_result.bytes_consumed;
             last_valid_pos = pos;
         }
 
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, last_valid_pos);
+        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, last_valid_pos);
     }
 
-    std::string dump() const override {
-        return "Until(" + string_join(delimiters_, " | ") + ")";
+    common_chat_parse_result operator()(const common_chat_peg_schema_parser & p) {
+        return arena.parse(p.child, ctx, start_pos);
     }
 
-    void accept(parser_visitor & visitor) override;
-
-    std::vector<std::string> delimiters() const { return delimiters_; }
-};
-
-// Wraps a parser with JSON schema metadata for grammar generation.
-// Used internally to convert JSON schemas to GBNF grammar rules.
-class schema_parser : public common_chat_peg_parser_base {
-    std::shared_ptr<common_chat_peg_parser_base> parser_;
-    std::string name_;
-    nlohmann::ordered_json schema_;
-
-  public:
-    static constexpr parser_type type_value = SCHEMA;
-    parser_type type() const override { return type_value; }
-
-    schema_parser(const common_chat_peg_parser & parser, const std::string & name, const nlohmann::ordered_json & schema, int id)
-        : common_chat_peg_parser_base(id), parser_(parser.ptr()), name_(name), schema_(schema) {}
-
-    schema_parser(const std::shared_ptr<common_chat_peg_parser_base> & parser, const std::string & name, const nlohmann::ordered_json & schema, int id)
-        : common_chat_peg_parser_base(id), parser_(parser), name_(name), schema_(schema) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        return parser_->parse(ctx, start);
-    }
-
-    std::string dump() const override {
-        return "Schema(" + parser_->dump() + ", " + schema_.dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::shared_ptr<common_chat_peg_parser_base> & child() const { return parser_; }
-
-    const std::string & name() const { return name_; }
-
-    const nlohmann::ordered_json & schema() const { return schema_; }
-};
-
-// Defines a named rule for recursive or reusable grammar definitions.
-// Owns the implementation and fires NODE_START/END events.
-//   expr -> term | expr "+" term
-class rule_parser : public common_chat_peg_parser_base, public std::enable_shared_from_this<rule_parser> {
-    std::string name_;
-    std::shared_ptr<common_chat_peg_parser_base> child_;
-    bool trigger_;
-
-  public:
-    static constexpr parser_type type_value = RULE;
-    parser_type type() const override { return type_value; }
-
-    rule_parser(const std::string & name, const common_chat_peg_parser & child, bool trigger, int id)
-        : common_chat_peg_parser_base(id), name_(name), child_(child.ptr()), trigger_(trigger) {}
-
-    rule_parser(const std::string & name, const std::shared_ptr<common_chat_peg_parser_base> & child, bool trigger, int id)
-        : common_chat_peg_parser_base(id), name_(name), child_(child), trigger_(trigger) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
+    common_chat_parse_result operator()(const common_chat_peg_rule_parser & p) {
         // Fire NODE_START event
         if (ctx.event_handler && ctx.semantics) {
             ctx.event_handler(common_chat_parse_event{
                 COMMON_CHAT_PARSE_EVENT_NODE_START,
-                name_,
-                start,
-                start,
+                p.name,
+                start_pos,
+                start_pos,
                 "",
                 COMMON_CHAT_PARSE_RESULT_FAIL,
                 ctx.current_depth
@@ -1198,7 +680,7 @@ class rule_parser : public common_chat_peg_parser_base, public std::enable_share
         }
 
         // Parse the child
-        auto result = child_->parse(ctx, start);
+        auto result = arena.parse(p.child, ctx, start_pos);
 
         // Fire NODE_END event
         if (ctx.event_handler && ctx.semantics) {
@@ -1211,7 +693,7 @@ class rule_parser : public common_chat_peg_parser_base, public std::enable_share
             }
             ctx.event_handler(common_chat_parse_event{
                 COMMON_CHAT_PARSE_EVENT_NODE_END,
-                name_,
+                p.name,
                 result.start,
                 result.end,
                 text,
@@ -1223,173 +705,428 @@ class rule_parser : public common_chat_peg_parser_base, public std::enable_share
         return result;
     }
 
-    void assign_id(common_chat_peg_parser_counter & counter) override {
-        common_chat_peg_parser_base::assign_id(counter);
-        child_->assign_id(counter);
+    common_chat_parse_result operator()(const common_chat_peg_ref_parser & p) {
+        auto rule_id = arena.get_rule(p.name);
+        return arena.parse(rule_id, ctx, start_pos);
     }
 
-    std::string dump() const override {
-        return "Rule(" + name_ + ", " + child_->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::string & name() const { return name_; }
-    const std::shared_ptr<common_chat_peg_parser_base> & child() const { return child_; }
-    bool is_trigger() const { return trigger_; }
-};
-
-// References a named rule (lightweight reference, resolved during resolution phase)
-//   expr_ref -> expr
-class ref_parser : public common_chat_peg_parser_base, public std::enable_shared_from_this<ref_parser> {
-    std::string name_;
-    std::weak_ptr<rule_parser> target_;
-
-  public:
-    static constexpr parser_type type_value = REF;
-    parser_type type() const override { return type_value; }
-
-    ref_parser(const std::string & name, int id)
-        : common_chat_peg_parser_base(id), name_(name) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto target = target_.lock();
-        if (!target) {
-            LOG_ERR("ref_parser::parse called with unresolved reference '%s'\n", name_.c_str());
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
-        }
-
-        // Delegate to the target rule parser
-        return target->parse(ctx, start);
-    }
-
-    std::string dump() const override {
-        return "Ref(" + name_ + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::string & name() const { return name_; }
-    void set_target(const std::weak_ptr<rule_parser> & target) { target_ = target; }
-    std::weak_ptr<rule_parser> target() const { return target_; }
-};
-
-// Capture content if child parser matches
-class capture_parser : public common_chat_peg_parser_base {
-    std::shared_ptr<common_chat_peg_parser_base> parser_;
-    std::string key_;
-
-  public:
-    static constexpr parser_type type_value = CAPTURE;
-    parser_type type() const override { return type_value; }
-
-    capture_parser(const common_chat_peg_parser & parser, const std::string & key, int id)
-        : common_chat_peg_parser_base(id), parser_(parser.ptr()), key_(key) {}
-
-    capture_parser(const std::shared_ptr<common_chat_peg_parser_base> & parser, const std::string & key, int id)
-        : common_chat_peg_parser_base(id), parser_(parser), key_(key) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        auto result = parser_->parse(ctx, start);
+    common_chat_parse_result operator()(const common_chat_peg_capture_parser & p) {
+        auto result = arena.parse(p.child, ctx, start_pos);
 
         if (!result.fail() && ctx.semantics) {
             std::string_view matched = ctx.input;
             matched = matched.substr(result.start, result.end - result.start);
             std::string value = std::string(matched);
-            ctx.semantics->captures[key_] = std::move(value);
+            ctx.semantics->captures[p.key] = std::move(value);
         }
 
         return result;
     }
-
-    void assign_id(common_chat_peg_parser_counter & counter) override {
-        common_chat_peg_parser_base::assign_id(counter);
-        parser_->assign_id(counter);
-    }
-
-    std::string dump() const override {
-        return "Capture(" + key_ + ", " + parser_->dump() + ")";
-    }
-
-    void accept(parser_visitor & visitor) override;
-
-    const std::shared_ptr<common_chat_peg_parser_base> & child() const { return parser_; }
 };
 
-// Container for the root parser and all named rules in the grammar.
-// Manages ownership of rule registry to enable recursive grammar definitions.
-class root_parser : public common_chat_peg_parser_base {
-    std::shared_ptr<common_chat_peg_parser_base> root_;
-    std::unordered_map<std::string, std::shared_ptr<rule_parser>> rules_;
+common_chat_parse_result common_chat_peg_arena::parse(common_chat_parse_context & ctx, size_t start) const {
+    if (root_ == COMMON_CHAT_PEG_INVALID_PARSER_ID) {
+        throw std::runtime_error("No root parser set");
+    }
+    return parse(root_, ctx, start);
+}
 
-  public:
-    static constexpr parser_type type_value = ROOT;
-    parser_type type() const override { return type_value; }
-
-    root_parser(int id) : common_chat_peg_parser_base(id) {}
-
-    common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        return root_->parse(ctx, start);
+common_chat_parse_result common_chat_peg_arena::parse(common_chat_peg_parser_id id, common_chat_parse_context & ctx, size_t start) const {
+    // Check cache
+    auto cached = ctx.cache.get(id, start);
+    if (cached) {
+        return *cached;
     }
 
-    void assign_id(common_chat_peg_parser_counter & counter) override {
-        common_chat_peg_parser_base::assign_id(counter);
-        for (auto & [name, rule] : rules_) {
-            rule->assign_id(counter);
+    // Execute parser
+    const auto & parser = parsers_.at(id);
+    parser_executor exec(*this, ctx, start);
+    auto result = std::visit(exec, parser);
+
+    // Cache result
+    return ctx.cache.set(id, start, result);
+}
+
+// Dump implementation (for debugging)
+std::string common_chat_peg_arena::dump(common_chat_peg_parser_id id) const {
+    const auto & parser = parsers_.at(id);
+
+    return std::visit([this](const auto & p) -> std::string {
+        using T = std::decay_t<decltype(p)>;
+
+        if constexpr (std::is_same_v<T, common_chat_peg_start_parser>) {
+            return "Start";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_end_parser>) {
+            return "End";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_literal_parser>) {
+            return "Literal(" + p.literal + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_sequence_parser>) {
+            std::vector<std::string> parts;
+            for (const auto & child : p.children) {
+                parts.push_back(dump(child));
+            }
+            return "Sequence(" + string_join(parts, ", ") + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_choice_parser>) {
+            std::vector<std::string> parts;
+            for (const auto & child : p.children) {
+                parts.push_back(dump(child));
+            }
+            return "Choice(" + string_join(parts, ", ") + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_repetition_parser>) {
+            if (p.max_count == -1) {
+                return "Repetition(" + dump(p.child) + ", " + std::to_string(p.min_count) + ", unbounded)";
+            }
+            return "Repetition(" + dump(p.child) + ", " + std::to_string(p.min_count) + ", " + std::to_string(p.max_count) + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_one_or_more_parser>) {
+            return "OneOrMore(" + dump(p.child) + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_zero_or_more_parser>) {
+            return "ZeroOrMore(" + dump(p.child) + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_optional_parser>) {
+            return "Optional(" + dump(p.child) + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_and_parser>) {
+            return "And(" + dump(p.child) + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_not_parser>) {
+            return "Not(" + dump(p.child) + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_any_parser>) {
+            return "Any";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_space_parser>) {
+            return "Space";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_chars_parser>) {
+            if (p.max_count == -1) {
+                return "CharRepeat(" + p.pattern + ", " + std::to_string(p.min_count) + ", unbounded)";
+            }
+            return "CharRepeat(" + p.pattern + ", " + std::to_string(p.min_count) + ", " + std::to_string(p.max_count) + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_json_string_parser>) {
+            return "JsonString()";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_until_parser>) {
+            return "Until(" + string_join(p.delimiters, " | ") + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_schema_parser>) {
+            return "Schema(" + dump(p.child) + ", " + (p.schema ? p.schema->dump() : "null") + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
+            return "Rule(" + p.name + ", " + dump(p.child) + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
+            return "Ref(" + p.name + ")";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_capture_parser>) {
+            return "Capture(" + p.key + ", " + dump(p.child) + ")";
+        } else {
+            return "Unknown";
         }
-        if (root_) {
-            root_->assign_id(counter);
+    }, parser);
+}
+
+// Parser wrapper operator implementations
+common_chat_peg_parser common_chat_peg_parser::operator+(const common_chat_peg_parser & other) const {
+    return builder_->sequence({id_, other.id_});
+}
+
+common_chat_peg_parser common_chat_peg_parser::operator|(const common_chat_peg_parser & other) const {
+    return builder_->choice({id_, other.id_});
+}
+
+common_chat_peg_parser common_chat_peg_parser::operator<<(const common_chat_peg_parser & other) const {
+    return builder_->sequence({id_, builder_->space(), other.id_});
+}
+
+// String literal overloads
+common_chat_peg_parser common_chat_peg_parser::operator+(const char * str) const {
+    return *this + builder_->literal(str);
+}
+
+common_chat_peg_parser common_chat_peg_parser::operator+(const std::string & str) const {
+    return *this + builder_->literal(str);
+}
+
+common_chat_peg_parser common_chat_peg_parser::operator|(const char * str) const {
+    return *this | builder_->literal(str);
+}
+
+common_chat_peg_parser common_chat_peg_parser::operator|(const std::string & str) const {
+    return *this | builder_->literal(str);
+}
+
+common_chat_peg_parser common_chat_peg_parser::operator<<(const char * str) const {
+    return *this << builder_->literal(str);
+}
+
+common_chat_peg_parser common_chat_peg_parser::operator<<(const std::string & str) const {
+    return *this << builder_->literal(str);
+}
+
+// Free function operators for string + parser
+common_chat_peg_parser operator+(const char * str, const common_chat_peg_parser & p) {
+    return p.builder()->literal(str) + p;
+}
+
+common_chat_peg_parser operator+(const std::string & str, const common_chat_peg_parser & p) {
+    return operator+(str.c_str(), p);
+}
+
+common_chat_peg_parser operator<<(const char * str, const common_chat_peg_parser & p) {
+    return p.builder()->literal(str) << p;
+}
+
+common_chat_peg_parser operator<<(const std::string & str, const common_chat_peg_parser & p) {
+    return operator<<(str.c_str(), p);
+}
+
+// Builder implementation
+common_chat_peg_parser_builder::common_chat_peg_parser_builder() {}
+
+common_chat_peg_parser common_chat_peg_parser_builder::start() {
+    return wrap(arena_.add_parser(common_chat_peg_start_parser{}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::end() {
+    return wrap(arena_.add_parser(common_chat_peg_end_parser{}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::literal(const std::string & literal) {
+    return wrap(arena_.add_parser(common_chat_peg_literal_parser{literal}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::sequence(const std::vector<common_chat_peg_parser_id> & parsers) {
+    // Flatten nested sequences
+    std::vector<common_chat_peg_parser_id> flattened;
+    for (const auto & p : parsers) {
+        const auto & parser = arena_.get(p);
+        if (auto seq = std::get_if<common_chat_peg_sequence_parser>(&parser)) {
+            flattened.insert(flattened.end(), seq->children.begin(), seq->children.end());
+        } else {
+            flattened.push_back(p);
         }
     }
+    return wrap(arena_.add_parser(common_chat_peg_sequence_parser{flattened}));
+}
 
-    std::string dump() const override {
-        return root_->dump();
+common_chat_peg_parser common_chat_peg_parser_builder::sequence(const std::vector<common_chat_peg_parser> & parsers) {
+    std::vector<common_chat_peg_parser_id> ids;
+    ids.reserve(parsers.size());
+    for (const auto & p : parsers) {
+        ids.push_back(p.id());
+    }
+    return sequence(ids);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::sequence(std::initializer_list<common_chat_peg_parser> parsers) {
+    std::vector<common_chat_peg_parser_id> ids;
+    ids.reserve(parsers.size());
+    for (const auto & p : parsers) {
+        ids.push_back(p.id());
+    }
+    return sequence(ids);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::choice(const std::vector<common_chat_peg_parser_id> & parsers) {
+    // Flatten nested choices
+    std::vector<common_chat_peg_parser_id> flattened;
+    for (const auto & p : parsers) {
+        const auto & parser = arena_.get(p);
+        if (auto choice = std::get_if<common_chat_peg_choice_parser>(&parser)) {
+            flattened.insert(flattened.end(), choice->children.begin(), choice->children.end());
+        } else {
+            flattened.push_back(p);
+        }
+    }
+    return wrap(arena_.add_parser(common_chat_peg_choice_parser{flattened}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::choice(const std::vector<common_chat_peg_parser> & parsers) {
+    std::vector<common_chat_peg_parser_id> ids;
+    ids.reserve(parsers.size());
+    for (const auto & p : parsers) {
+        ids.push_back(p.id());
+    }
+    return choice(ids);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::choice(std::initializer_list<common_chat_peg_parser> parsers) {
+    std::vector<common_chat_peg_parser_id> ids;
+    ids.reserve(parsers.size());
+    for (const auto & p : parsers) {
+        ids.push_back(p.id());
+    }
+    return choice(ids);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::one_or_more(common_chat_peg_parser p) {
+    return wrap(arena_.add_parser(common_chat_peg_one_or_more_parser{p.id()}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::zero_or_more(common_chat_peg_parser p) {
+    return wrap(arena_.add_parser(common_chat_peg_zero_or_more_parser{p.id()}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::optional(common_chat_peg_parser p) {
+    return wrap(arena_.add_parser(common_chat_peg_optional_parser{p.id()}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::peek(common_chat_peg_parser p) {
+    return wrap(arena_.add_parser(common_chat_peg_and_parser{p.id()}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::negate(common_chat_peg_parser p) {
+    return wrap(arena_.add_parser(common_chat_peg_not_parser{p.id()}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::any() {
+    return wrap(arena_.add_parser(common_chat_peg_any_parser{}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::chars(const std::string & classes, int min, int max) {
+    auto [ranges, negated] = parse_char_classes(classes);
+    return wrap(arena_.add_parser(common_chat_peg_chars_parser{classes, ranges, negated, min, max}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::one(const std::string & classes) {
+    return chars(classes, 1, 1);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::ref(const std::string & name) {
+    return wrap(arena_.add_parser(common_chat_peg_ref_parser{name}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::space() {
+    return wrap(arena_.add_parser(common_chat_peg_space_parser{}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::until(const std::string & delimiter) {
+    return wrap(arena_.add_parser(common_chat_peg_until_parser{std::vector<std::string>{delimiter}}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
+    return wrap(arena_.add_parser(common_chat_peg_until_parser{delimiters}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::repeat(common_chat_peg_parser p, int min, int max) {
+    return wrap(arena_.add_parser(common_chat_peg_repetition_parser{p.id(), min, max}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::repeat(common_chat_peg_parser p, int n) {
+    return wrap(arena_.add_parser(common_chat_peg_repetition_parser{p.id(), n, n}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::json_string_content() {
+    return wrap(arena_.add_parser(common_chat_peg_json_string_parser{}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::schema(common_chat_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema) {
+    return wrap(arena_.add_parser(common_chat_peg_schema_parser{p.id(), name, std::make_shared<nlohmann::ordered_json>(schema)}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::capture(const std::string & key, common_chat_peg_parser p) {
+    return wrap(arena_.add_parser(common_chat_peg_capture_parser{p.id(), key}));
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, common_chat_peg_parser p, bool trigger) {
+    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, p.id(), trigger});
+    arena_.add_rule(name, rule_id);
+    return ref(name);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder_fn, bool trigger) {
+    // Check if rule already exists
+    if (arena_.has_rule(name)) {
+        return ref(name);
     }
 
-    void accept(parser_visitor & visitor) override;
+    // Create placeholder rule to allow recursive references
+    auto placeholder = any();  // Temporary placeholder
+    auto placeholder_rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, placeholder.id(), trigger});
+    arena_.add_rule(name, placeholder_rule_id);
 
-    void add_rule(const std::string & name, const std::shared_ptr<rule_parser> & rule) {
-        rules_[name] = rule;
-    }
+    // Build the actual parser
+    auto parser = builder_fn();
 
-    void set_root(const common_chat_peg_parser & parser) {
-        root_ = parser.ptr();
-    }
+    // Replace placeholder with actual rule
+    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, parser.id(), trigger});
+    arena_.rules_[name] = rule_id;
 
-    const std::shared_ptr<common_chat_peg_parser_base> & root() const { return root_; }
+    return ref(name);
+}
 
-    const std::unordered_map<std::string, std::shared_ptr<rule_parser>> & rules() const { return rules_; }
-};
+void common_chat_peg_parser_builder::set_root(common_chat_peg_parser p) {
+    arena_.set_root(p.id());
+}
 
-// Base visitor class for parser tree traversal
-class parser_visitor {
-  public:
-    virtual ~parser_visitor() = default;
+common_chat_peg_arena common_chat_peg_parser_builder::build() {
+    return std::move(arena_);
+}
 
-    virtual void visit(start_parser & p) = 0;
-    virtual void visit(end_parser & p) = 0;
-    virtual void visit(literal_parser & p) = 0;
-    virtual void visit(sequence_parser & p) = 0;
-    virtual void visit(choice_parser & p) = 0;
-    virtual void visit(one_or_more_parser & p) = 0;
-    virtual void visit(zero_or_more_parser & p) = 0;
-    virtual void visit(optional_parser & p) = 0;
-    virtual void visit(repetition_parser & p) = 0;
-    virtual void visit(until_parser & p) = 0;
-    virtual void visit(and_parser & p) = 0;
-    virtual void visit(not_parser & p) = 0;
-    virtual void visit(any_parser & p) = 0;
-    virtual void visit(space_parser & p) = 0;
-    virtual void visit(chars_parser & p) = 0;
-    virtual void visit(json_string_parser & p) = 0;
-    virtual void visit(schema_parser & p) = 0;
-    virtual void visit(rule_parser & p) = 0;
-    virtual void visit(ref_parser & p) = 0;
-    virtual void visit(root_parser & p) = 0;
-    virtual void visit(capture_parser & p) = 0;
-};
+// JSON parsers
+common_chat_peg_parser common_chat_peg_parser_builder::json_number() {
+    std::function<common_chat_peg_parser()> builder = [this]() {
+        auto digit1_9 = chars("[1-9]", 1, 1);
+        auto digits = chars("[0-9]");
+        auto int_part = choice({literal("0"), sequence({digit1_9, chars("[0-9]", 0, -1)})});
+        auto frac = sequence({literal("."), digits});
+        auto exp = sequence({choice({literal("e"), literal("E")}), optional(chars("[+\\-]", 1, 1)), digits});
+        return sequence({optional(literal("-")), int_part, optional(frac), optional(exp)});
+    };
+    return rule("json-number", builder);
+}
 
-// Escape special characters for GBNF literals
+common_chat_peg_parser common_chat_peg_parser_builder::json_string() {
+    std::function<common_chat_peg_parser()> builder = [this]() {
+        return sequence({literal("\""), json_string_content(), literal("\"")});
+    };
+    return rule("json-string", builder);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::json_bool() {
+    std::function<common_chat_peg_parser()> builder = [this]() {
+        return choice({literal("true"), literal("false")});
+    };
+    return rule("json-bool", builder);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::json_null() {
+    std::function<common_chat_peg_parser()> builder = [this]() {
+        return literal("null");
+    };
+    return rule("json-null", builder);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::json_object() {
+    std::function<common_chat_peg_parser()> builder = [this]() {
+        auto ws = space();
+        auto member = sequence({json_string(), ws, literal(":"), ws, json()});
+        auto members = sequence({member, zero_or_more(sequence({ws, literal(","), ws, member}))});
+        return choice({
+            sequence({literal("{"), ws, literal("}")}),
+            sequence({literal("{"), ws, members, ws, literal("}")})
+        });
+    };
+    return rule("json-object", builder);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::json_array() {
+    std::function<common_chat_peg_parser()> builder = [this]() {
+        auto ws = space();
+        auto elements = sequence({json(), zero_or_more(sequence({ws, literal(","), ws, json()}))});
+        return choice({
+            sequence({literal("["), ws, literal("]")}),
+            sequence({literal("["), ws, elements, ws, literal("]")})
+        });
+    };
+    return rule("json-array", builder);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::json() {
+    std::function<common_chat_peg_parser()> builder = [this]() {
+        return choice({
+            json_object(),
+            json_array(),
+            json_string(),
+            json_number(),
+            json_bool(),
+            json_null()
+        });
+    };
+    return rule("json-value", builder);
+}
+
+
+// GBNF generation helper functions
 static std::string gbnf_literal(const std::string & s) {
     std::string escaped;
     for (char c : s) {
@@ -1405,7 +1142,6 @@ static std::string gbnf_literal(const std::string & s) {
     return "\"" + escaped + "\"";
 }
 
-// Escape a single character for use in gbnf character classes
 static std::string gbnf_escape_char_class(char c) {
     switch (c) {
         case '\n': return "\\n";
@@ -1419,11 +1155,7 @@ static std::string gbnf_escape_char_class(char c) {
     }
 }
 
-// Create a GBNF excluding pattern
 static std::string gbnf_excluding_pattern(const std::vector<std::string> & strings) {
-    // Use the trie_matcher to grab an exhaustive list of prefixes and
-    // potential next characters. We can use this to build an exclusion for
-    // multiple strings.
     trie_matcher matcher(strings);
     auto pieces = matcher.collect_prefix_and_next();
 
@@ -1452,653 +1184,243 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
     return "(" + pattern + ")*";
 }
 
-// Visitor for resolving rule references and collecting rules
-class resolution_visitor : public parser_visitor {
-    std::unordered_map<std::string, std::shared_ptr<rule_parser>> rules_;
-    std::vector<std::shared_ptr<ref_parser>> refs_;
+// Collect all rule parsers reachable from triggers (for lazy mode)
+static std::unordered_set<std::string> collect_reachable_rules(
+    const common_chat_peg_arena & arena,
+    const std::unordered_map<std::string, common_chat_peg_parser_id> & all_rules
+) {
+    std::unordered_set<std::string> reachable;
+    std::unordered_set<std::string> visited;
 
-  public:
-    resolution_visitor() = default;
+    std::function<void(common_chat_peg_parser_id)> visit = [&](common_chat_peg_parser_id id) {
+        const auto & parser = arena.get(id);
 
-    void visit(start_parser & /* p */) override {}
-    void visit(end_parser & /* p */) override {}
-    void visit(literal_parser & /* p */) override {}
-    void visit(any_parser & /* p */) override {}
-    void visit(space_parser & /* p */) override {}
-    void visit(json_string_parser & /* p */) override {}
-    void visit(chars_parser & /* p */) override {}
-    void visit(until_parser & /* p */) override {}
-    void visit(and_parser & p) override { p.child()->accept(*this); }
-    void visit(not_parser & p) override { p.child()->accept(*this); }
+        std::visit([&](const auto & p) {
+            using T = std::decay_t<decltype(p)>;
 
-    void visit(sequence_parser & p) override {
-        for (const auto & child : p.parsers()) {
-            child->accept(*this);
-        }
-    }
-
-    void visit(choice_parser & p) override {
-        for (const auto & child : p.parsers()) {
-            child->accept(*this);
-        }
-    }
-
-    void visit(one_or_more_parser & p) override { p.child()->accept(*this); }
-    void visit(zero_or_more_parser & p) override { p.child()->accept(*this); }
-    void visit(optional_parser & p) override { p.child()->accept(*this); }
-    void visit(repetition_parser & p) override { p.child()->accept(*this); }
-    void visit(schema_parser & p) override { p.child()->accept(*this); }
-    void visit(capture_parser & p) override { p.child()->accept(*this); }
-
-    void visit(rule_parser & p) override {
-        const std::string & name = p.name();
-
-        // Check for duplicate rule names
-        if (rules_.find(name) != rules_.end()) {
-            throw std::runtime_error("Duplicate rule name: " + name);
-        }
-
-        // Collect this rule
-        auto rule_ptr = cast<rule_parser>(p.shared_from_this());
-        if (rule_ptr) {
-            rules_[name] = rule_ptr;
-        }
-
-        // Recursively visit the child
-        p.child()->accept(*this);
-    }
-
-    void visit(ref_parser & p) override {
-        // Collect this ref for later resolution
-        auto ref_ptr = cast<ref_parser>(p.shared_from_this());
-        if (ref_ptr) {
-            refs_.push_back(ref_ptr);
-        }
-    }
-
-    void visit(root_parser & p) override {
-        // Visit all rules stored in the map
-        for (const auto & [name, rule] : p.rules()) {
-            rule->accept(*this);
-        }
-
-        // Visit the root tree
-        p.root()->accept(*this);
-    }
-
-    // Resolve all collected refs
-    void resolve() {
-        for (const auto & ref : refs_) {
-            const std::string & name = ref->name();
-            auto it = rules_.find(name);
-            if (it == rules_.end()) {
-                throw std::runtime_error("Unresolved reference: " + name);
+            if constexpr (std::is_same_v<T, common_chat_peg_sequence_parser>) {
+                for (auto child : p.children) {
+                    visit(child);
+                }
+            } else if constexpr (std::is_same_v<T, common_chat_peg_choice_parser>) {
+                for (auto child : p.children) {
+                    visit(child);
+                }
+            } else if constexpr (std::is_same_v<T, common_chat_peg_repetition_parser> ||
+                                std::is_same_v<T, common_chat_peg_one_or_more_parser> ||
+                                std::is_same_v<T, common_chat_peg_zero_or_more_parser> ||
+                                std::is_same_v<T, common_chat_peg_optional_parser> ||
+                                std::is_same_v<T, common_chat_peg_and_parser> ||
+                                std::is_same_v<T, common_chat_peg_not_parser> ||
+                                std::is_same_v<T, common_chat_peg_schema_parser> ||
+                                std::is_same_v<T, common_chat_peg_capture_parser>) {
+                visit(p.child);
+            } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
+                if (visited.find(p.name) == visited.end()) {
+                    visited.insert(p.name);
+                    reachable.insert(p.name);
+                    visit(p.child);
+                }
+            } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
+                reachable.insert(p.name);
             }
-            ref->set_target(it->second);
-        }
-    }
+        }, parser);
+    };
 
-    const std::unordered_map<std::string, std::shared_ptr<rule_parser>> & rules() const { return rules_; }
-};
-
-// Visitor for collecting reachable rules from a subtree
-class reachability_visitor : public parser_visitor {
-    std::unordered_set<std::string> & reachable_rules_;
-
-  public:
-    reachability_visitor(std::unordered_set<std::string> & reachable_rules)
-        : reachable_rules_(reachable_rules) {}
-
-    void visit(start_parser & /* p */) override {}
-    void visit(end_parser & /* p */) override {}
-    void visit(literal_parser & /* p */) override {}
-    void visit(any_parser & /* p */) override {}
-    void visit(space_parser & /* p */) override {}
-    void visit(json_string_parser & /* p */) override {}
-    void visit(chars_parser & /* p */) override {}
-    void visit(until_parser & /* p */) override {}
-    void visit(and_parser & p) override { p.child()->accept(*this); }
-    void visit(not_parser & p) override { p.child()->accept(*this); }
-
-    void visit(sequence_parser & p) override {
-        for (const auto & child : p.parsers()) {
-            child->accept(*this);
-        }
-    }
-
-    void visit(choice_parser & p) override {
-        for (const auto & child : p.parsers()) {
-            child->accept(*this);
-        }
-    }
-
-    void visit(one_or_more_parser & p) override { p.child()->accept(*this); }
-    void visit(zero_or_more_parser & p) override { p.child()->accept(*this); }
-    void visit(optional_parser & p) override { p.child()->accept(*this); }
-    void visit(repetition_parser & p) override { p.child()->accept(*this); }
-    void visit(schema_parser & /* p */) override {
-        // The schema system will handle rule generation via builder_.add_schema()
-    }
-    void visit(capture_parser & p) override { p.child()->accept(*this); }
-
-    void visit(rule_parser & p) override {
-        const std::string & name = p.name();
-        // Check if we arleady reached this rule. Technically we shouldn't,
-        // since we don't traverse ref_parser
-        if (reachable_rules_.find(name) != reachable_rules_.end()) {
-            return;
-        }
-        reachable_rules_.insert(name);
-
-        // Recursively visit the rule's child
-        p.child()->accept(*this);
-    }
-
-    void visit(ref_parser & p) override {
-        // Mark as reachable
-        reachable_rules_.insert(p.name());
-    }
-
-    void visit(root_parser & p) override {
-        p.root()->accept(*this);
-    }
-};
-
-class gbnf_visitor : public parser_visitor {
-    const common_grammar_builder & builder_;
-    std::unordered_map<std::string, std::string> rule_name_mapping_;
-    std::string current_result_;
-    bool lazy_;
-    std::unordered_map<std::string, std::shared_ptr<rule_parser>> all_rules_;
-
-  public:
-    gbnf_visitor(const common_grammar_builder & builder, bool lazy = false)
-        : builder_(builder), lazy_(lazy) {}
-
-    const std::string& result() const { return current_result_; }
-
-  private:
-    // Check if expression needs parentheses
-    static bool needs_parens(parser_type type) {
-        return type == CHOICE || type == SEQUENCE;
-    }
-
-  public:
-    void visit(start_parser & /* p */) override {
-        current_result_ = "";
-    }
-
-    void visit(end_parser & /* p */) override {
-        current_result_ = "";
-    }
-
-    void visit(literal_parser & p) override {
-        current_result_ = gbnf_literal(p.literal());
-    }
-
-    void visit(sequence_parser & p) override {
-        std::string s;
-        for (const auto & child : p.parsers()) {
-            if (!s.empty()) {
-                s += " ";
-            }
-            child->accept(*this);
-
-            // Parenthesize choices
-            if (needs_parens(child->type())) {
-                s += "(" + current_result_ + ")";
-            } else {
-                s += current_result_;
+    // Find trigger rules and traverse from them
+    for (const auto & [name, rule_id] : all_rules) {
+        const auto & parser = arena.get(rule_id);
+        if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
+            if (rule->trigger) {
+                visit(rule_id);
             }
         }
-        current_result_ = s;
     }
 
-    void visit(choice_parser & p) override {
-        std::string s;
-        for (const auto & child : p.parsers()) {
-            if (!s.empty()) {
-                s += " | ";
-            }
+    return reachable;
+}
 
-            child->accept(*this);
+// GBNF generation implementation
+void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
+    std::unordered_map<std::string, std::string> rule_name_mapping;
+    std::unordered_set<std::string> reachable_rules;
 
-            // Parenthesize choices
-            if (child->type() == CHOICE) {
-                s += "(" + current_result_ + ")";
-            } else {
-                s += current_result_;
-            }
-        }
-        current_result_ = s;
-    }
-
-    void visit(one_or_more_parser & p) override {
-        p.child()->accept(*this);
-        if (needs_parens(p.child()->type())) {
-            current_result_ = "(" + current_result_ + ")+";
-        } else {
-            current_result_ = current_result_ + "+";
-        }
-    }
-
-    void visit(zero_or_more_parser & p) override {
-        p.child()->accept(*this);
-        if (needs_parens(p.child()->type())) {
-            current_result_ = "(" + current_result_ + ")*";
-        } else {
-            current_result_ = current_result_ + "*";
-        }
-    }
-
-    void visit(optional_parser & p) override {
-        p.child()->accept(*this);
-        if (needs_parens(p.child()->type())) {
-            current_result_ = "(" + current_result_ + ")?";
-        } else {
-            current_result_ = current_result_ + "?";
-        }
-    }
-
-    void visit(repetition_parser & p) override {
-        p.child()->accept(*this);
-        std::string child_result = current_result_;
-
-        if (needs_parens(p.child()->type())) {
-            child_result = "(" + child_result + ")";
-        }
-
-        if (p.max_count() == -1) {
-            // Unbounded: {n,}
-            current_result_ = child_result + "{" + std::to_string(p.min_count()) + ",}";
-        } else {
-            // Bounded: {n,m}
-            current_result_ = child_result + "{" + std::to_string(p.min_count()) + "," +
-                             std::to_string(p.max_count()) + "}";
-        }
-    }
-
-    void visit(until_parser & p) override {
-        // Generate pattern that matches prefixes but prevents full delimiter match
-        current_result_ = gbnf_excluding_pattern(p.delimiters());
-    }
-
-    void visit(and_parser & /* p */) override {
-        current_result_ = "";
-    }
-
-    void visit(not_parser & /* p */) override {
-        // NOT is tricky in GBNF - for now, emit error
-        LOG_ERR("NOT operator not directly supported in GBNF generation\n");
-        current_result_ = "";
-    }
-
-    void visit(any_parser & /* p */) override {
-        // Match any single character
-        current_result_ = ".";
-    }
-
-    void visit(space_parser & /* p */) override {
-        // Reference the built-in space rule
-        current_result_ = "space";
-    }
-
-    void visit(chars_parser & p) override {
-        const std::string & pattern = p.pattern();
-
-        if (p.min_count() == 0 && p.max_count() == -1) {
-            // Zero or more: *
-            current_result_ = pattern + "*";
-        } else if (p.min_count() == 1 && p.max_count() == -1) {
-            // One or more: +
-            current_result_ = pattern + "+";
-        } else if (p.max_count() == -1) {
-            // Unbounded: {n,}
-            current_result_ = pattern + "{" + std::to_string(p.min_count()) + ",}";
-        } else if (p.min_count() == p.max_count()) {
-            // Exact count: {n} or just pattern for n=1
-            if (p.min_count() == 1) {
-                current_result_ = pattern;
-            } else {
-                current_result_ = pattern + "{" + std::to_string(p.min_count()) + "}";
-            }
-        } else {
-            // Bounded: {n,m}
-            current_result_ = pattern + "{" + std::to_string(p.min_count()) + "," +
-                             std::to_string(p.max_count()) + "}";
-        }
-    }
-
-    void visit(json_string_parser & /* p */) override {
-        // JSON string content (without quotes)
-        // Pattern: (any non-quote/backslash OR escape sequences)* until closing quote
-        current_result_ = R"(( [^"\\] | "\\" ( ["\\/ bfnrt] | "u" [0-9a-fA-F]{4} ) )*)";
-    }
-
-    void visit(schema_parser & p) override {
-        current_result_ = builder_.add_schema(p.name(), p.schema());
-    }
-
-    void visit(rule_parser & p) override {
-        // When visiting a rule, generate its definition
-        p.child()->accept(*this);
-    }
-
-    void visit(ref_parser & p) override {
-        // Return canonical rule reference
-        auto it = rule_name_mapping_.find(p.name());
-        if (it != rule_name_mapping_.end()) {
-            current_result_ = it->second;
-        } else {
-            // Fallback to original name if not in mapping (shouldn't happen in valid usage)
-            current_result_ = p.name();
-        }
-    }
-
-    void visit(root_parser & p) override {
-        if (!lazy_) {
-            // Non-lazy mode: generate all rules eagerly
-            for (const auto & [name, rule] : p.rules()) {
-                rule->accept(*this);
-                auto rule_body = current_result_;
-                auto canonical_name = builder_.add_rule(name, rule_body);
-                rule_name_mapping_[name] = canonical_name;
-            }
-
-            // Return root body
-            p.root()->accept(*this);
-            return;
-        }
-
-        // Lazy mode
-
-        // Collect all rules reachable from triggers
-        std::unordered_set<std::string> reachable;
-        reachability_visitor visitor(reachable);
-
-        // Find all trigger rules and traverse from them
-        for (const auto & [name, rule] : all_rules_) {
-            if (rule->is_trigger()) {
-                rule->accept(visitor);
-            }
-        }
-
-        // Check if we found any trigger rules
-        if (reachable.empty()) {
+    // Collect all rules
+    if (lazy) {
+        reachable_rules = collect_reachable_rules(*this, rules_);
+        if (reachable_rules.empty()) {
             LOG_ERR("Lazy grammar generation enabled but no trigger rules found\n");
-            current_result_ = "";
             return;
         }
+    }
 
-        // Generate only reachable rules
-        for (const auto & [name, rule] : p.rules()) {
-            // Skip rules that aren't reachable
-            if (reachable.find(name) == reachable.end()) {
+    // Generate GBNF for a parser
+    std::function<std::string(common_chat_peg_parser_id)> to_gbnf = [&](common_chat_peg_parser_id id) -> std::string {
+        const auto & parser = parsers_.at(id);
+
+        return std::visit([&](const auto & p) -> std::string {
+            using T = std::decay_t<decltype(p)>;
+
+            if constexpr (std::is_same_v<T, common_chat_peg_start_parser> || std::is_same_v<T, common_chat_peg_end_parser>) {
+                return "";
+            } else if constexpr (std::is_same_v<T, common_chat_peg_literal_parser>) {
+                return gbnf_literal(p.literal);
+            } else if constexpr (std::is_same_v<T, common_chat_peg_sequence_parser>) {
+                std::string s;
+                for (const auto & child : p.children) {
+                    if (!s.empty()) s += " ";
+                    auto child_gbnf = to_gbnf(child);
+                    const auto & child_parser = parsers_.at(child);
+                    if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser) ||
+                        std::holds_alternative<common_chat_peg_sequence_parser>(child_parser)) {
+                        s += "(" + child_gbnf + ")";
+                    } else {
+                        s += child_gbnf;
+                    }
+                }
+                return s;
+            } else if constexpr (std::is_same_v<T, common_chat_peg_choice_parser>) {
+                std::string s;
+                for (const auto & child : p.children) {
+                    if (!s.empty()) s += " | ";
+                    auto child_gbnf = to_gbnf(child);
+                    const auto & child_parser = parsers_.at(child);
+                    if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser)) {
+                        s += "(" + child_gbnf + ")";
+                    } else {
+                        s += child_gbnf;
+                    }
+                }
+                return s;
+            } else if constexpr (std::is_same_v<T, common_chat_peg_one_or_more_parser>) {
+                auto child_gbnf = to_gbnf(p.child);
+                const auto & child_parser = parsers_.at(p.child);
+                if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser) ||
+                    std::holds_alternative<common_chat_peg_sequence_parser>(child_parser)) {
+                    return "(" + child_gbnf + ")+";
+                }
+                return child_gbnf + "+";
+            } else if constexpr (std::is_same_v<T, common_chat_peg_zero_or_more_parser>) {
+                auto child_gbnf = to_gbnf(p.child);
+                const auto & child_parser = parsers_.at(p.child);
+                if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser) ||
+                    std::holds_alternative<common_chat_peg_sequence_parser>(child_parser)) {
+                    return "(" + child_gbnf + ")*";
+                }
+                return child_gbnf + "*";
+            } else if constexpr (std::is_same_v<T, common_chat_peg_optional_parser>) {
+                auto child_gbnf = to_gbnf(p.child);
+                const auto & child_parser = parsers_.at(p.child);
+                if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser) ||
+                    std::holds_alternative<common_chat_peg_sequence_parser>(child_parser)) {
+                    return "(" + child_gbnf + ")?";
+                }
+                return child_gbnf + "?";
+            } else if constexpr (std::is_same_v<T, common_chat_peg_repetition_parser>) {
+                auto child_gbnf = to_gbnf(p.child);
+                const auto & child_parser = parsers_.at(p.child);
+                if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser) ||
+                    std::holds_alternative<common_chat_peg_sequence_parser>(child_parser)) {
+                    child_gbnf = "(" + child_gbnf + ")";
+                }
+                if (p.max_count == -1) {
+                    return child_gbnf + "{" + std::to_string(p.min_count) + ",}";
+                }
+                return child_gbnf + "{" + std::to_string(p.min_count) + "," + std::to_string(p.max_count) + "}";
+            } else if constexpr (std::is_same_v<T, common_chat_peg_and_parser> || std::is_same_v<T, common_chat_peg_not_parser>) {
+                return "";  // Lookahead not supported in GBNF
+            } else if constexpr (std::is_same_v<T, common_chat_peg_any_parser>) {
+                return ".";
+            } else if constexpr (std::is_same_v<T, common_chat_peg_space_parser>) {
+                return "space";
+            } else if constexpr (std::is_same_v<T, common_chat_peg_chars_parser>) {
+                std::string result = p.pattern;
+                if (p.min_count == 0 && p.max_count == -1) {
+                    return result + "*";
+                } else if (p.min_count == 1 && p.max_count == -1) {
+                    return result + "+";
+                } else if (p.max_count == -1) {
+                    return result + "{" + std::to_string(p.min_count) + ",}";
+                } else if (p.min_count == p.max_count) {
+                    if (p.min_count == 1) {
+                        return result;
+                    }
+                    return result + "{" + std::to_string(p.min_count) + "}";
+                } else {
+                    return result + "{" + std::to_string(p.min_count) + "," + std::to_string(p.max_count) + "}";
+                }
+            } else if constexpr (std::is_same_v<T, common_chat_peg_json_string_parser>) {
+                return R"(( [^"\\] | "\\" ( ["\\/ bfnrt] | "u" [0-9a-fA-F]{4} ) )*)";
+            } else if constexpr (std::is_same_v<T, common_chat_peg_until_parser>) {
+                return gbnf_excluding_pattern(p.delimiters);
+            } else if constexpr (std::is_same_v<T, common_chat_peg_schema_parser>) {
+                if (p.schema) {
+                    return builder.add_schema(p.name, *p.schema);
+                }
+                return to_gbnf(p.child);
+            } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
+                return to_gbnf(p.child);
+            } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
+                auto it = rule_name_mapping.find(p.name);
+                if (it != rule_name_mapping.end()) {
+                    return it->second;
+                }
+                return p.name;
+            } else if constexpr (std::is_same_v<T, common_chat_peg_capture_parser>) {
+                return to_gbnf(p.child);
+            } else {
+                return "";
+            }
+        }, parser);
+    };
+
+    // Generate rules
+    if (lazy) {
+        // Lazy mode: only generate reachable rules
+        for (const auto & [name, rule_id] : rules_) {
+            if (reachable_rules.find(name) == reachable_rules.end()) {
                 continue;
             }
 
-            rule->accept(*this);
-            auto rule_body = current_result_;
-            auto canonical_name = builder_.add_rule(name, rule_body);
-            rule_name_mapping_[name] = canonical_name;
+            const auto & parser = parsers_.at(rule_id);
+            if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
+                auto rule_body = to_gbnf(rule->child);
+                auto canonical_name = builder.add_rule(name, rule_body);
+                rule_name_mapping[name] = canonical_name;
+            }
         }
 
         // Generate root as alternation of trigger rule names
         std::vector<std::string> trigger_names;
-        for (const auto & [name, rule] : p.rules()) {
-            if (rule->is_trigger()) {
-                auto it = rule_name_mapping_.find(name);
-                if (it != rule_name_mapping_.end()) {
-                    trigger_names.push_back(it->second);
+        for (const auto & [name, rule_id] : rules_) {
+            const auto & parser = parsers_.at(rule_id);
+            if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
+                if (rule->trigger) {
+                    auto it = rule_name_mapping.find(name);
+                    if (it != rule_name_mapping.end()) {
+                        trigger_names.push_back(it->second);
+                    }
                 }
             }
         }
-        current_result_ = string_join(trigger_names, " | ");
+        if (!trigger_names.empty()) {
+            builder.add_rule("root", string_join(trigger_names, " | "));
+        }
+    } else {
+        // Non-lazy mode: generate all rules
+        for (const auto & [name, rule_id] : rules_) {
+            const auto & parser = parsers_.at(rule_id);
+            if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
+                auto rule_body = to_gbnf(rule->child);
+                auto canonical_name = builder.add_rule(name, rule_body);
+                rule_name_mapping[name] = canonical_name;
+            }
+        }
+
+        // Generate root
+        if (root_ != COMMON_CHAT_PEG_INVALID_PARSER_ID) {
+            auto root_body = to_gbnf(root_);
+            builder.add_rule("root", root_body);
+        }
     }
-
-    void visit(capture_parser & p) override {
-        p.child()->accept(*this);
-    }
-};
-
-// Implement accept() methods for all parser classes
-void start_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void end_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void literal_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void sequence_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void choice_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void one_or_more_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void zero_or_more_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void optional_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void repetition_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void until_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void and_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void not_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void any_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void space_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void chars_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void json_string_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void schema_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void rule_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void ref_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void root_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-void capture_parser::accept(parser_visitor & visitor) { visitor.visit(*this); }
-
-common_chat_parse_result common_chat_parse_cache::set(int id, size_t start, common_chat_parse_result result) {
-    if (id == -1) {
-        // Don't cache parsers with ID -1 (from operators and global factory functions)
-        return result;
-    }
-    results[common_chat_parse_cache_key{id, start}] = result;
-    return result;
-}
-
-std::optional<common_chat_parse_result> common_chat_parse_cache::get(int id, size_t start) {
-    if (id == -1) {
-        // Don't cache parsers with ID -1 (from operators and global factory functions)
-        return std::nullopt;
-    }
-    auto it = results.find(common_chat_parse_cache_key{id, start});
-    if (it != results.end()) {
-        return it->second;
-    }
-    return std::nullopt;
-}
-
-void common_chat_parse_cache::clear() {
-    results.clear();
-}
-
-common_chat_peg_parser::common_chat_peg_parser() {}
-common_chat_peg_parser::common_chat_peg_parser(std::shared_ptr<common_chat_peg_parser_base> parser) : ptr_(std::move(parser)) {}
-common_chat_peg_parser::common_chat_peg_parser(const std::string & literal) : ptr_(make_parser<literal_parser>(-1, literal)) {}
-common_chat_peg_parser::common_chat_peg_parser(const char * literal) : ptr_(make_parser<literal_parser>(-1, literal)) {}
-
-common_chat_peg_parser operator~(const common_chat_peg_parser & p) { return make_parser<not_parser>(-1, p); }
-
-common_chat_peg_parser operator+(const common_chat_peg_parser & lhs, const common_chat_peg_parser & rhs) {
-    return make_parser<sequence_parser>(-1, std::initializer_list<common_chat_peg_parser>{lhs, rhs});
-}
-
-common_chat_peg_parser operator|(const common_chat_peg_parser & lhs, const common_chat_peg_parser & rhs) {
-    return make_parser<choice_parser>(-1, std::initializer_list<common_chat_peg_parser>{lhs, rhs});
-}
-
-common_chat_peg_parser operator<<(const common_chat_peg_parser & lhs, const common_chat_peg_parser & rhs) {
-    auto ws = make_parser<space_parser>(-1);
-    return make_parser<sequence_parser>(-1, std::initializer_list<common_chat_peg_parser>{lhs, ws, rhs});
-}
-
-common_chat_peg_parser operator+(const char * lhs, const common_chat_peg_parser & rhs) { return common_chat_peg_parser(lhs) + rhs; }
-common_chat_peg_parser operator|(const char * lhs, const common_chat_peg_parser & rhs) { return common_chat_peg_parser(lhs) | rhs; }
-common_chat_peg_parser operator<<(const char * lhs, const common_chat_peg_parser & rhs) { return common_chat_peg_parser(lhs) << rhs; }
-
-common_chat_peg_parser operator+(const std::string & lhs, const common_chat_peg_parser & rhs) { return common_chat_peg_parser(lhs) + rhs; }
-common_chat_peg_parser operator|(const std::string & lhs, const common_chat_peg_parser & rhs) { return common_chat_peg_parser(lhs) | rhs; }
-common_chat_peg_parser operator<<(const std::string & lhs, const common_chat_peg_parser & rhs) { return common_chat_peg_parser(lhs) << rhs; }
-
-common_chat_peg_parser_base & common_chat_peg_parser::operator*() const { return *ptr_; }
-common_chat_peg_parser_base * common_chat_peg_parser::operator->() const { return ptr_.get(); }
-
-common_chat_parse_result common_chat_peg_parser::parse(common_chat_parse_context & ctx, size_t start) const {
-    return ptr_->parse(ctx, start);
-}
-
-std::string common_chat_peg_parser::dump() const { return ptr_->dump(); }
-
-void common_chat_peg_parser::build_grammar(const common_grammar_builder & builder, bool lazy) const {
-    gbnf_visitor visitor(builder, lazy);
-    ptr_->accept(visitor);
-    auto result = visitor.result();
-    if (!result.empty()) {
-        builder.add_rule("root", result);
-    }
-}
-
-using builder = common_chat_peg_parser_builder;
-
-builder::common_chat_peg_parser_builder() : root_(make_parser<root_parser>(0)) , counter_(1) {}
-
-common_chat_peg_parser builder::start() { return make_parser<start_parser>(counter_); }
-common_chat_peg_parser builder::end() { return make_parser<end_parser>(counter_); }
-common_chat_peg_parser builder::literal(const std::string & literal) { return make_parser<literal_parser>(counter_, literal); }
-common_chat_peg_parser builder::sequence(const std::vector<common_chat_peg_parser> & parsers) { return make_parser<sequence_parser>(counter_, parsers); }
-common_chat_peg_parser builder::choice(const std::vector<common_chat_peg_parser> & parsers) { return make_parser<choice_parser>(counter_, parsers); }
-common_chat_peg_parser builder::one_or_more(const common_chat_peg_parser & p) { return make_parser<one_or_more_parser>(counter_, p); }
-common_chat_peg_parser builder::zero_or_more(const common_chat_peg_parser & p) { return make_parser<zero_or_more_parser>(counter_, p); }
-common_chat_peg_parser builder::optional(const common_chat_peg_parser & p) { return make_parser<optional_parser>(counter_, p); }
-common_chat_peg_parser builder::peek(const common_chat_peg_parser & p) { return make_parser<and_parser>(counter_, p); }
-common_chat_peg_parser builder::negate(const common_chat_peg_parser & p) { return make_parser<not_parser>(counter_, p); }
-common_chat_peg_parser builder::any() { return make_parser<any_parser>(counter_); }
-common_chat_peg_parser builder::chars(const std::string & classes, int min, int max) { return make_parser<chars_parser>(counter_, classes, min, max); }
-common_chat_peg_parser builder::one(const std::string & classes) { return make_parser<chars_parser>(counter_, classes, 1, 1); }
-common_chat_peg_parser builder::json_string_content() { return make_parser<json_string_parser>(counter_); }
-common_chat_peg_parser builder::space() { return make_parser<space_parser>(counter_); }
-common_chat_peg_parser builder::until(const std::string & delimiter) { return make_parser<until_parser>(counter_, delimiter); }
-common_chat_peg_parser builder::until_one_of(const std::vector<std::string> & delimiters) { return make_parser<until_parser>(counter_, delimiters); }
-common_chat_peg_parser builder::repeat(const common_chat_peg_parser & p, int min, int max) { return make_parser<repetition_parser>(counter_, p, min, max); }
-common_chat_peg_parser builder::repeat(const common_chat_peg_parser & p, int n) { return make_parser<repetition_parser>(counter_, p, n, n); }
-
-common_chat_peg_parser builder::ref(const std::string & name) {
-    return make_parser<ref_parser>(counter_, name);
-}
-
-common_chat_peg_parser builder::schema(const common_chat_peg_parser & p, const std::string & name, const nlohmann::ordered_json & schema) {
-    return make_parser<schema_parser>(counter_, p, name, schema);
-}
-
-common_chat_peg_parser builder::capture(const std::string & key, const common_chat_peg_parser & p) {
-    return make_parser<capture_parser>(counter_, p, key);
-}
-
-common_chat_peg_parser builder::rule(const std::string & name, const common_chat_peg_parser & p, bool trigger) {
-    auto root_container = cast<root_parser>(root_);
-    auto rule_node = std::make_shared<rule_parser>(name, p, trigger, counter_.next());
-    root_container->add_rule(name, rule_node);
-    return make_parser<ref_parser>(counter_, name);
-}
-
-common_chat_peg_parser builder::rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder_fn, bool trigger) {
-    auto root_container = cast<root_parser>(root_);
-    if (root_container->rules().find(name) != root_container->rules().end()) {
-        return ref(name);
-    }
-
-    // Create placeholder rule to allow recursive references
-    auto placeholder = std::make_shared<rule_parser>(name, any(), trigger, counter_.next());
-    root_container->add_rule(name, placeholder);
-
-    // Build the actual parser
-    auto parser = builder_fn();
-
-    // Replace placeholder with actual rule
-    auto rule_node = std::make_shared<rule_parser>(name, parser, trigger, counter_.next());
-    root_container->add_rule(name, rule_node);
-
-    return make_parser<ref_parser>(counter_, name);
-}
-
-void builder::set_root(const common_chat_peg_parser & p) {
-    auto root_container = cast<root_parser>(root_);
-    root_container->set_root(p);
-
-    // Recursively issue IDs to reachable nodes
-    if (p.ptr()) {
-        p.ptr()->assign_id(counter_);
-    }
-}
-
-common_chat_peg_parser builder::json_number() {
-    return rule("json-number", [this]() {
-        auto digit1_9 = chars("[1-9]", 1, 1);
-        auto digits = chars("[0-9]");
-        auto int_part = literal("0") | (digit1_9 + chars("[0-9]", 0, -1));
-        auto frac = literal(".") + digits;
-        auto exp = (literal("e") | literal("E")) + optional(chars("[+\\-]", 1, 1)) + digits;
-        return optional(literal("-")) + int_part + optional(frac) + optional(exp);
-    });
-}
-
-common_chat_peg_parser builder::json_string() {
-    return rule("json-string", [this]() {
-        return literal("\"") + json_string_content() + literal("\"");
-    });
-}
-
-common_chat_peg_parser builder::json_bool() {
-    return rule("json-bool", [this]() {
-        return literal("true") | literal("false");
-    });
-}
-
-common_chat_peg_parser builder::json_null() {
-    return rule("json-null", [this]() {
-        return literal("null");
-    });
-}
-
-common_chat_peg_parser builder::json_object() {
-    return rule("json-object", [this]() {
-        auto ws = space();
-        auto member = json_string() + ws + literal(":") + ws + json();
-        auto members = member + zero_or_more(ws + literal(",") + ws + member);
-        return (literal("{") + ws + literal("}")) |
-               (literal("{") + ws + members + ws + literal("}"));
-    });
-}
-
-common_chat_peg_parser builder::json_array() {
-    return rule("json-array", [this]() {
-        auto ws = space();
-        auto elements = json() + zero_or_more(ws + literal(",") + ws + json());
-        return (literal("[") + ws + literal("]")) |
-               (literal("[") + ws + elements + ws + literal("]"));
-    });
-}
-
-common_chat_peg_parser builder::json() {
-    return rule("json-value", [this]() {
-        return json_object() |
-               json_array() |
-               json_string() |
-               json_number() |
-               json_bool() |
-               json_null();
-    });
-}
-
-common_chat_peg_parser builder::build() {
-    // Resolve all references
-    resolution_visitor resolver;
-    root_->accept(resolver);
-    resolver.resolve();
-
-    return root_;
-}
-
-common_chat_peg_parser build_peg_parser(const std::function<common_chat_peg_parser(builder&)> & fn) {
-    builder builder;
-    auto root = fn(builder);
-    builder.set_root(root);
-    return builder.build();
 }

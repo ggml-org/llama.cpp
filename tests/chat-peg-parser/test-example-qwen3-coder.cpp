@@ -109,7 +109,7 @@ void test_example_qwen3_coder(testing &t) {
                 std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
                 common_chat_parse_semantics semantics;
-                common_chat_parse_context   ctx(in, &semantics, it == tokens.end());
+                common_chat_parse_context   ctx(in, &semantics, it + 1 == tokens.end());
 
                 ctx.event_handler = parser_semantic_handler;
 
@@ -118,10 +118,17 @@ void test_example_qwen3_coder(testing &t) {
                     LOG_ERR("%s[failed-->]%s\n", in.substr(0, result.end).c_str(), in.substr(result.end).c_str());
                 }
 
-                // This shouldn't emit any runtime errors
-                auto msg   = semantics.to_msg();
-                auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
-                prev       = msg;
+                auto msg = semantics.to_msg();
+
+                try {
+                    // This shouldn't emit any runtime errors
+                    auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
+                } catch(const std::exception & e) {
+                    LOG_ERR("%s[failed-->]%s\n", in.substr(0, result.end).c_str(), in.substr(result.end).c_str());
+                    t.assert_true(std::string("failed with ") + e.what(), false);
+                }
+
+                prev = msg;
             }
         });
     });

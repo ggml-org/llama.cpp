@@ -7,7 +7,7 @@
 #include <string>
 #include <numeric>
 
-static common_chat_peg_parser create_command_r7b_parser() {
+static common_chat_peg_arena create_command_r7b_parser() {
     auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.rule("thinking",
             "<|START_THINKING|>" << p.rule("reasoning-content", p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
@@ -18,10 +18,10 @@ static common_chat_peg_parser create_command_r7b_parser() {
         auto json = p.rule("json", p.json());
 
         auto tool_call_id = p.rule("tool-call-id",
-            "\"tool_call_id\"" << (":" << p.rule("tool-call-id-value", "\"" + p.json_string() + "\"")));
+            "\"tool_call_id\"" << (":" << p.rule("tool-call-id-value", "\"" + p.json_string_content() + "\"")));
 
         auto tool_call_name = p.rule("tool-name",
-            "\"tool_name\"" << (":" << p.rule("tool-name-value", "\"" + p.json_string() + "\"")));
+            "\"tool_name\"" << (":" << p.rule("tool-name-value", "\"" + p.json_string_content() + "\"")));
 
         auto tool_call_args = p.rule("tool-args",
             "\"parameters\"" << (":" << p.rule("tool-args-value", json)));
@@ -75,7 +75,7 @@ static common_chat_parse_event_handler create_command_r7b_event_handler() {
     };
 }
 
-static void test_command_r7b_parser(const common_chat_peg_parser & p,
+static void test_command_r7b_parser(const common_chat_peg_arena & p,
                            const std::string &  input,
                            bool                 need_more_input,
                            bool                 print_results) {

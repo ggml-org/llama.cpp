@@ -5,7 +5,7 @@ void test_recursive_references(testing &t) {
     t.test("simple_number", [](testing &t) {
         auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
             p.rule("number", p.one_or_more(p.one("0-9")));
-            p.rule("list", p.sequence({ p.literal("["), p.ref("value"), p.literal("]") }));
+            p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
             return p.rule("value", p.ref("number") | p.ref("list"));
         });
 
@@ -19,7 +19,7 @@ void test_recursive_references(testing &t) {
     t.test("simple_list", [](testing &t) {
         auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
             p.rule("number", p.one_or_more(p.one("0-9")));
-            p.rule("list", p.sequence({ p.literal("["), p.ref("value"), p.literal("]") }));
+            p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
             return p.rule("value", p.ref("number") | p.ref("list"));
         });
 
@@ -33,7 +33,7 @@ void test_recursive_references(testing &t) {
     t.test("nested_list", [](testing &t) {
         auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
             p.rule("number", p.one_or_more(p.one("0-9")));
-            p.rule("list", p.sequence({ p.literal("["), p.ref("value"), p.literal("]") }));
+            p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
             return p.rule("value", p.ref("number") | p.ref("list"));
         });
 
@@ -47,7 +47,7 @@ void test_recursive_references(testing &t) {
     t.test("deeply_nested_list", [](testing &t) {
         auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
             p.rule("number", p.one_or_more(p.one("0-9")));
-            p.rule("list", p.sequence({ p.literal("["), p.ref("value"), p.literal("]") }));
+            p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
             return p.rule("value", p.ref("number") | p.ref("list"));
         });
 
@@ -61,7 +61,7 @@ void test_recursive_references(testing &t) {
     t.test("need_more_input_match", [](testing &t) {
         auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
             p.rule("number", p.one_or_more(p.one("0-9")));
-            p.rule("list", p.sequence({ p.literal("["), p.ref("value"), p.literal("]") }));
+            p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
             return p.rule("value", p.ref("number") | p.ref("list"));
         });
 
@@ -75,7 +75,7 @@ void test_recursive_references(testing &t) {
     t.test("no_match", [](testing &t) {
         auto value_parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
             p.rule("number", p.one_or_more(p.one("0-9")));
-            p.rule("list", p.sequence({ p.literal("["), p.ref("value"), p.literal("]") }));
+            p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
             return p.rule("value", p.ref("number") | p.ref("list"));
         });
 

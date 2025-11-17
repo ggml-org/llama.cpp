@@ -24,7 +24,13 @@ public:
         const std::string &name_attr = "name");
 };
 
-common_chat_peg_parser build_peg_parser_helper(const std::function<common_chat_peg_parser(common_chat_peg_parser_builder_helper&)> & fn);
+template<typename F>
+common_chat_peg_arena build_peg_parser_helper(F && fn) {
+    common_chat_peg_parser_builder_helper builder;
+    auto root = fn(builder);
+    builder.set_root(root);
+    return builder.build();
+}
 
 inline void parser_semantic_handler(const common_chat_parse_event & ev, common_chat_parse_semantics & semantics) {
     if (ev.rule == "reasoning-content" && ev.ending()) {
@@ -114,4 +120,3 @@ inline void parser_semantic_handler_with_printout(const common_chat_parse_event 
 
     LOG_ERR("Content: %s\nReasoning: %s\nTool calls: %lu\n", semantics.content.c_str(), semantics.reasoning_content.c_str(), semantics.tool_calls.size());
 }
-

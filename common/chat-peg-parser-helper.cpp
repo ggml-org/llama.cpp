@@ -6,7 +6,7 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::reasoning(const st
     open_tag.append("<").append(tag).append(">");
     std::string close_tag;
     close_tag.append("</").append(tag).append(">");
-    return rule("raw-reasoning", open_tag << rule("reasoning-content", until(close_tag)) << close_tag);
+    return rule("raw-reasoning", literal(open_tag) << rule("reasoning-content", until(close_tag)) << literal(close_tag));
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder_helper::content_before_tools(const std::string & tag) {
@@ -29,7 +29,7 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_no_attr(
 
         std::string param_open_after_name = ">";
 
-        auto arg_name = rule(arg_start_name, literal(param_open) + capture("arg-name", *it) + literal(param_open_after_name));
+        auto arg_name = rule(arg_start_name, literal(param_open) + capture("arg-name", literal(*it)) + literal(param_open_after_name));
 
         std::string param_close_end;
         param_close_end.append("</").append(param_tag).append(">");
@@ -39,7 +39,7 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_no_attr(
 
         std::string param_peek_open;
         param_peek_open.append("<").append(param_tag).append("=");
-        auto arg_end = rule("arg-end", param_close_end + peek(literal(param_peek_open) | param_close_peek));
+        auto arg_end = rule("arg-end", literal(param_close_end) + peek(literal(param_peek_open) | literal(param_close_peek)));
 
         std::string string_content_1;
         string_content_1.append("</").append(param_tag).append("><").append(param_tag).append("=");
@@ -76,7 +76,7 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_no_attr(
 
     std::string function_rule_name;
     function_rule_name.append("function-").append(function_name);
-    auto function = rule(function_rule_name, rule(function_start_name, function_open + capture("tool-name", function_name) + function_open_after_name) + args_sequence + function_close);
+    auto function = rule(function_rule_name, rule(function_start_name, literal(function_open) + capture("tool-name", literal(function_name)) + literal(function_open_after_name)) + args_sequence + literal(function_close));
 
     return function;
 }
@@ -108,7 +108,7 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_attr(
 
         std::string param_peek_open;
         param_peek_open.append("<").append(param_tag).append(" ").append(name_attr).append("=\"");
-        auto arg_end = rule("arg-end", param_close_end + peek(literal(param_peek_open) | param_close_peek));
+        auto arg_end = rule("arg-end", literal(param_close_end) + peek(literal(param_peek_open) | literal(param_close_peek)));
 
         std::string string_content_1;
         string_content_1.append("</").append(param_tag).append("><").append(param_tag).append("=");
@@ -145,16 +145,9 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_attr(
     std::string function_rule_name;
     function_rule_name.append("function-").append(function_name);
     auto function = rule(function_rule_name,
-        rule(function_start_name, function_open + capture("tool-name", literal(function_name)) +
-            function_open_after_name) + args_sequence + function_close);
+        rule(function_start_name, literal(function_open) + capture("tool-name", literal(function_name)) +
+            literal(function_open_after_name)) + args_sequence + literal(function_close));
 
     return function;
 }
 
-common_chat_peg_parser build_peg_parser_helper(
-    const std::function<common_chat_peg_parser(common_chat_peg_parser_builder_helper &)> & fn) {
-    common_chat_peg_parser_builder_helper builder;
-    auto                                  root = fn(builder);
-    builder.set_root(root);
-    return builder.build();
-}
