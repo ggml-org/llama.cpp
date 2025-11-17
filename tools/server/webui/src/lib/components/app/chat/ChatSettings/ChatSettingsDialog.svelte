@@ -152,6 +152,16 @@
 					key: 'samplers',
 					label: 'Samplers',
 					type: 'input'
+				},
+				{
+					key: 'backend_sampling',
+					label: 'Backend sampling',
+					type: 'checkbox'
+				},
+				{
+					key: 'backend_dist',
+					label: 'Backend dist sampling',
+					type: 'checkbox'
 				}
 			]
 		},
@@ -277,6 +287,10 @@
 
 	function handleConfigChange(key: string, value: string | boolean) {
 		localConfig[key] = value;
+
+		if (key === 'backend_sampling' && value === false) {
+			localConfig.backend_dist = false;
+		}
 	}
 
 	function handleClose() {

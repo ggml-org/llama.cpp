@@ -181,6 +181,8 @@ export interface ApiChatCompletionRequest {
 	dry_penalty_last_n?: number;
 	// Sampler configuration
 	samplers?: string[];
+	backend_sampling?: boolean;
+	backend_dist?: boolean;
 	// Custom parameters (JSON string)
 	custom?: Record<string, unknown>;
 	timings_per_token?: boolean;

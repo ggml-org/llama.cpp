@@ -298,6 +298,12 @@ class ChatStore {
 		if (currentConfig.samplers) {
 			apiOptions.samplers = currentConfig.samplers;
 		}
+		if (currentConfig.backend_sampling !== undefined) {
+			apiOptions.backend_sampling = Boolean(currentConfig.backend_sampling);
+		}
+		if (currentConfig.backend_dist !== undefined) {
+			apiOptions.backend_dist = Boolean(currentConfig.backend_dist);
+		}
 		if (currentConfig.custom) {
 			apiOptions.custom = currentConfig.custom;
 		}
