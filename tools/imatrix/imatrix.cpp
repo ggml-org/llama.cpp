@@ -360,11 +360,15 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         const auto prev_avg = compute_tensor_averages(it_prev->second);
         if (curr_avg.empty() || prev_avg.empty()) { continue; }
 
-        // Allow minor length mismatches by using the overlap
-        const size_t n = std::min(curr_avg.size(), prev_avg.size());
-        if (n == 0) { continue; }
+        if (curr_avg.size() != prev_avg.size()) {
+            LOG_WRN("%s: size mismatch between '%s' and its previous-layer tensor '%s' (%zu vs %zu) - skipping this tensor pair in layer statistics\n",
+                __func__, ts.tensor.c_str(), prev_lyr.c_str(), curr_avg.size(), prev_avg.size());
+            continue;
+        }
 
         // Compute statistics for each tensor pair individually
+        const size_t n = curr_avg.size();
+        GGML_ASSERT(n > 0);
         double dot_prod = 0.0;
         double norm1_sq = 0.0;
         double norm2_sq = 0.0;
