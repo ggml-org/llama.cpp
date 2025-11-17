@@ -133,30 +133,40 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
     std::vector<float> vec;
     vec.reserve(len);
 
+    bool has_valid = false;
     if (tstats.activations.empty()) {
-        // Mean of squares
+        // Mean of squares (legacy: only values are available)
         for (size_t m = 0; m < n_mat; ++m) {
-            const auto c = (float)tstats.counts[m];
+            const float c = (float) tstats.counts[m];
             const size_t off = m * row;
             if (c <= 0.0f) {
-                vec.insert(vec.end(), row, 0.0f); // zero-fill rows for experts with zero count to preserve shape
+                for (size_t j = 0; j < row; ++j) { vec.push_back(0.0f); }
                 continue;
             }
-            for (size_t j = 0; j < row; ++j) { vec.push_back(tstats.values[off + j] / c); }
+
+            has_valid = true;
+            for (size_t j = 0; j < row; ++j) {
+                vec.push_back(tstats.values[off + j] / c);
+            }
         }
     } else {
-        // Mean
+        // Mean (new format: activations + values)
         for (size_t m = 0; m < n_mat; ++m) {
-            const auto c = (float)tstats.counts[m];
+            const float c = (float) tstats.counts[m];
             const size_t off = m * row;
             if (c <= 0.0f) {
-                vec.insert(vec.end(), row, 0.0f); // zero-fill rows for experts with zero count to preserve shape
+                for (size_t j = 0; j < row; ++j) { vec.push_back(0.0f); }
                 continue;
             }
-            for (size_t j = 0; j < row; ++j) { vec.push_back(tstats.activations[off + j] / c); }
+
+            has_valid = true;
+            for (size_t j = 0; j < row; ++j) {
+                vec.push_back(tstats.activations[off + j] / c);
+            }
         }
     }
 
+    if (!has_valid) { return {}; }
     return vec;
 }
 
