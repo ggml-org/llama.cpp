@@ -7356,6 +7356,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_leaky_relu(type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_floor     (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_ceil      (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_ceil      (type, { 1024, 1024, 1, 1 }));
         test_cases.emplace_back(new test_round     (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_round     (type, { 1024, 1024, 1, 1 }));
         test_cases.emplace_back(new test_trunc     (type, {7, 1, 5, 3}));
