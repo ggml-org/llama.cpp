@@ -74,8 +74,8 @@ void test_example_qwen3_coder(testing &t) {
         std::vector<std::string> tokens = simple_tokenize(input);
         common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
 
-        common_chat_msg prev;
         t.test("explicit_builder", [&](testing &t) {
+            common_chat_msg prev;
             for (auto it = tokens.begin(); it != tokens.end(); it++) {
                 std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
@@ -104,6 +104,7 @@ void test_example_qwen3_coder(testing &t) {
         });
 
         t.test("helper_builder", [&](testing &t) {
+            common_chat_msg prev;
             for (auto it = tokens.begin(); it != tokens.end(); it++) {
                 std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
