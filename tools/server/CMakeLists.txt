@@ -14,6 +14,8 @@ endif()
 set(TARGET_SRCS
     server.cpp
     utils.hpp
+    server-http.cpp
+    server-http.h
 )
 set(PUBLIC_ASSETS
     index.html.gz
