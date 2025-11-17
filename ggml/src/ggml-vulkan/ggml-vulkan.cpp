@@ -669,6 +669,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_round[2];
     vk_pipeline pipeline_ceil[2];
     vk_pipeline pipeline_floor[2];
+    vk_pipeline pipeline_trunc[2];
 
     vk_pipeline pipeline_add1_f16_f16;
     vk_pipeline pipeline_add1_f16_f32;
@@ -3844,6 +3845,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     CREATE_UNARY(round)
     CREATE_UNARY(ceil)
     CREATE_UNARY(floor)
+    CREATE_UNARY(trunc)
 #undef CREATE_UNARY
 
 #define CREATE_UNARY_RTE(name)  \
@@ -8278,6 +8280,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 return ctx->device->pipeline_ceil[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_FLOOR:
                 return ctx->device->pipeline_floor[dst->type == GGML_TYPE_F16];
+            case GGML_UNARY_OP_TRUNC:
+                return ctx->device->pipeline_trunc[dst->type == GGML_TYPE_F16];
             default:
                 break;
         }
@@ -11304,6 +11308,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_ROUND:
         case GGML_UNARY_OP_CEIL:
         case GGML_UNARY_OP_FLOOR:
+        case GGML_UNARY_OP_TRUNC:
             break;
         default:
             return false;
@@ -11661,6 +11666,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_ROUND:
         case GGML_UNARY_OP_CEIL:
         case GGML_UNARY_OP_FLOOR:
+        case GGML_UNARY_OP_TRUNC:
             ggml_vk_unary(ctx, compute_ctx, src0, node);
             break;
         default:
@@ -11942,6 +11948,7 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
         case GGML_UNARY_OP_ROUND:
         case GGML_UNARY_OP_CEIL:
         case GGML_UNARY_OP_FLOOR:
+        case GGML_UNARY_OP_TRUNC:
             buf = tensor->buffer;
             break;
         default:
@@ -13549,6 +13556,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 case GGML_UNARY_OP_ROUND:
                 case GGML_UNARY_OP_CEIL:
                 case GGML_UNARY_OP_FLOOR:
+                case GGML_UNARY_OP_TRUNC:
                     return ggml_is_contiguous(op->src[0]) &&
                            (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                            (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
@@ -14476,6 +14484,9 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
                 break;
             case GGML_UNARY_OP_FLOOR:
                 tensor_clone = ggml_floor(ggml_ctx, src_clone[0]);
+                break;
+            case GGML_UNARY_OP_TRUNC:
+                tensor_clone = ggml_trunc(ggml_ctx, src_clone[0]);
                 break;
             default:
                 std::cerr << "Missing vk_check_results OP: " << ggml_op_name(tensor->op) << std::endl;
