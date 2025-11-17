@@ -3726,8 +3726,6 @@ int ggml_metal_op_argsort(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_dst,  2);
         ggml_metal_encoder_set_buffer  (enc, bid_tmp,  3);
 
-        ggml_metal_encoder_set_threadgroup_memory_size(enc, 0, 0);
-
         ggml_metal_encoder_dispatch_threadgroups(enc, nm*ne01, ne02, ne03, nth, 1, 1);
 
         std::swap(bid_dst, bid_tmp);
