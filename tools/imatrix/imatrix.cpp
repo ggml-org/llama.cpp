@@ -1455,12 +1455,13 @@ static bool show_statistics(const common_params & params) {
 
         const float zd = (float)tstat.elements * tstat.zd_score;
         if (ls.find(blk) != ls.end()) {
-            ls[blk].layer_sum += tstat.sum_values;
+            if (legacy) { ls[blk].layer_sum += tstat.sum_values; }
             ls[blk].layer_zd += zd;
             ls[blk].n += tstat.elements;
         } else {
             layer_stats temp_ls;
-            temp_ls.layer_sum = tstat.sum_values;
+            if (legacy) { temp_ls.layer_sum = tstat.sum_values; }
+            else { temp_ls.layer_sum = 0.0f; }
             temp_ls.layer_zd = zd;
             temp_ls.n = tstat.elements;
             ls[blk] = temp_ls;
