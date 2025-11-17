@@ -99,13 +99,14 @@ static std::string filter_tensor_name(const char * name) {
 }
 
 static void process_tensor_name(const std::string & input, std::string & layer, std::string & tensor) {
+    layer.clear();
+    tensor.clear();
+
     std::vector<std::string> name;
     std::istringstream stream(input);
     std::string item;
 
-    while (std::getline(stream, item, '.')) {
-        name.push_back(item);
-    }
+    while (std::getline(stream, item, '.')) { name.push_back(item); }
     for (size_t i = 0; i < name.size(); ++i) {
         if (name[i] == "blk" && i + 1 < name.size()) {
             layer = name[i + 1];
@@ -119,12 +120,8 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
         }
     }
 
-    if (tensor.empty()) {
-        tensor = input;
-    }
-    if (layer.empty()) {
-        layer = "-";
-    }
+    if (tensor.empty()) { tensor = input; }
+    if (layer.empty()) { layer = "-"; }
 }
 
 static std::vector<float> compute_tensor_averages(const Stats & tstats) {
