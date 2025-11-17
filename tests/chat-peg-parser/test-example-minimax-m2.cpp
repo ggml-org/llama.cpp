@@ -1,12 +1,9 @@
 #include "chat-peg-parser.h"
-#include "ggml.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
 #include "tests.h"
 
-#include <iostream>
 #include <numeric>
-#include <ostream>
 #include <string>
 
 static inline std::string join(const std::vector<std::string>& parts,

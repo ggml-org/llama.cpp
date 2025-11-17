@@ -14,10 +14,8 @@ void test_example_qwen3_coder(testing &t) {
         auto arg_name = p.rule("arg-start", "<parameter=" + p.capture("arg-name", p.chars("[a-zA-Z0-9_]")) + ">");
         auto arg_end = p.rule("arg-end", "</parameter>" + p.peek(p.literal("<parameter=") | "</function>"));
 
-        auto string_arg_content = p.rule("arg-string-content", p.until_one_of({
-            "</parameter><parameter=",
-            "</parameter></function>",
-        }));
+        auto string_arg_content = p.rule("arg-str-content",
+            p.until_one_of({"</parameter><parameter=", "</parameter></function>"}));
 
         auto string_arg = p.rule("arg-string", arg_name + string_arg_content + arg_end);
 
@@ -48,7 +46,7 @@ void test_example_qwen3_coder(testing &t) {
         auto tool_call = p.rule("tool-call",
             "<tool_call>" + p.one_or_more(function) + "</tool_call>", true);
 
-        return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call);
+        return thinking + p.optional(p.space() + content) + p.zero_or_more(p.space() + tool_call) + p.end();
     });
 
     t.test("qwen3_accumulation_test", [&](testing &t) {
@@ -110,12 +108,14 @@ void test_example_qwen3_coder(testing &t) {
                 std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
                 common_chat_parse_semantics semantics;
-                common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
+                common_chat_parse_context   ctx(in, &semantics, it == tokens.end());
 
                 ctx.event_handler = parser_semantic_handler;
 
                 auto result = helper_parser.parse(ctx);
-                t.assert_equal("not fail", false, result.fail());
+                if (!t.assert_equal("not fail", false, result.fail())) {
+                    LOG_ERR("%s[failed-->]%s\n", in.substr(0, result.end).c_str(), in.substr(result.end).c_str());
+                }
 
                 // This shouldn't emit any runtime errors
                 auto msg   = semantics.to_msg();

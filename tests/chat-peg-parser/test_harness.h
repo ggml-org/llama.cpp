@@ -1,14 +1,15 @@
 #pragma once
 
 #include "log.h"
-
 #include <chrono>
 #include <exception>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
 
 struct testing {
+    std::ostream &out;
     std::vector<std::string> stack;
     int tests = 0;
     int assertions = 0;
@@ -16,8 +17,12 @@ struct testing {
     int unnamed = 0;
     int exceptions = 0;
 
-    std::string indent() {
-        return std::string((stack.size() - 1) * 2, ' ');
+    explicit testing(std::ostream &os = std::cout) : out(os) {}
+
+    void indent() const {
+        for (std::size_t i = 0; i < stack.size() - 1; ++i) {
+            LOG_ERR("  ");
+        }
     }
 
     template <typename F>
@@ -27,24 +32,29 @@ struct testing {
         } catch (const std::exception &e) {
             ++failures;
             ++exceptions;
-            LOG_ERR("%sUNHANDLED EXCEPTION (%s): %s\n", indent().c_str(), ctx, e.what());
+            indent();
+            out << "UNHANDLED EXCEPTION (" << ctx << "): " << e.what() << "\n";
         } catch (...) {
             ++failures;
             ++exceptions;
-            LOG_ERR("%sUNHANDLED EXCEPTION (%s): unknown\n", indent().c_str(), ctx);
+            indent();
+            out << "UNHANDLED EXCEPTION (" << ctx << "): unknown\n";
         }
     }
 
-    void print_result(const std::string &label, const std::string &name, int new_failures, int new_assertions, const std::string &extra = "") {
-        std::string ind = indent();
-        std::string status = (new_failures == 0) ? "ok" : (std::to_string(new_failures) + " failed of");
-        std::string extra_str = extra.empty() ? "" : (", " + extra);
-
+    void print_result(const std::string &label, const std::string &name, int new_failures, int new_assertions, const std::string &extra = "") const {
+        indent();
+        LOG_ERR("%s: %s [", label.c_str(), name.c_str());
         if (new_failures == 0) {
-            LOG_INF("%s%s: %s [ok, %d assertion(s)%s]\n", ind.c_str(), label.c_str(), name.c_str(), new_assertions, extra_str.c_str());
+            LOG_ERR("ok, ");
         } else {
-            LOG_ERR("%s%s: %s [%d failed of %d assertion(s)%s]\n", ind.c_str(), label.c_str(), name.c_str(), new_failures, new_assertions, extra_str.c_str());
+            LOG_ERR("%d failed of ", new_failures);
         }
+        LOG_ERR("%d assertion(s)", new_assertions);
+        if (!extra.empty()) {
+            LOG_ERR(", %s", extra.c_str());
+        }
+        LOG_ERR("]\n");
     }
 
     // Named test
@@ -53,7 +63,8 @@ struct testing {
         ++tests;
         stack.push_back(name);
 
-        LOG_INF("%sBEGIN: %s\n", indent().c_str(), name.c_str());
+        indent();
+        LOG_ERR("BEGIN: %s\n", name.c_str());
 
         int before_failures = failures;
         int before_assertions = assertions;
@@ -79,7 +90,8 @@ struct testing {
         ++tests;
         stack.push_back(name);
 
-        LOG_INF("%sBEGIN BENCH: %s\n", indent().c_str(), name.c_str());
+        indent();
+        out << "BEGIN BENCH: " << name << "\n";
 
         int before_failures = failures;
         int before_assertions = assertions;
@@ -125,11 +137,12 @@ struct testing {
         ++assertions;
         if (!cond) {
             ++failures;
-            if (msg.empty()) {
-                LOG_ERR("%sASSERT TRUE FAILED\n", indent().c_str());
-            } else {
-                LOG_ERR("%sASSERT TRUE FAILED : %s\n", indent().c_str(), msg.c_str());
+            indent();
+            out << "ASSERT TRUE FAILED";
+            if (!msg.empty()) {
+                out << " : " << msg;
             }
+            out << "\n";
             return false;
         }
         return true;
@@ -145,32 +158,39 @@ struct testing {
         ++assertions;
         if (!(actual == expected)) {
             ++failures;
-            std::string ind = indent();
-
-            std::ostringstream exp_ss, act_ss;
-            exp_ss << expected;
-            act_ss << actual;
-
-            if (msg.empty()) {
-                LOG_ERR("%sASSERT EQUAL FAILED\n", ind.c_str());
-            } else {
-                LOG_ERR("%sASSERT EQUAL FAILED : %s\n", ind.c_str(), msg.c_str());
+            indent();
+            LOG_ERR("ASSERT EQUAL FAILED");
+            if (!msg.empty()) {
+                LOG_ERR(" : %s", msg.c_str());
             }
-            LOG_ERR("%s  expected: %s\n", ind.c_str(), exp_ss.str().c_str());
-            LOG_ERR("%s  actual  : %s\n", ind.c_str(), act_ss.str().c_str());
+            LOG_ERR("\n");
+
+            indent();
+            LOG_ERR("  expected: %s\n", to_string_convert(expected).c_str());
+            indent();
+            LOG_ERR("  actual  : %s\n", to_string_convert(actual).c_str());
             return false;
         }
         return true;
     }
 
     // Print summary and return an exit code
-    int summary() {
-        LOG_INF("\n==== TEST SUMMARY ====\n");
-        LOG_INF("tests      : %d\n", tests);
-        LOG_INF("assertions : %d\n", assertions);
-        LOG_INF("failures   : %d\n", failures);
-        LOG_INF("exceptions : %d\n", exceptions);
-        LOG_INF("======================\n");
+    int summary() const {
+        LOG_ERR("\n==== TEST SUMMARY ====\n");
+        LOG_ERR("tests      : %d\n", tests);
+        LOG_ERR("assertions : %d\n", assertions);
+        LOG_ERR("failures   : %d\n", failures);
+        LOG_ERR("exceptions : %d\n", exceptions);
+        LOG_ERR("======================\n");
         return failures == 0 ? 0 : 1;
     }
+
+private:
+    template <typename T>
+    std::string to_string_convert(const T & value) const {
+        std::ostringstream oss;
+        oss << value;
+        return oss.str();
+    }
+
 };

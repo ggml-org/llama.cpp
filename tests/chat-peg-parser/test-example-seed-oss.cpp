@@ -35,7 +35,7 @@ void test_example_seed_oss(testing &t) {
                 std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
                 common_chat_parse_semantics semantics;
-                common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
+                common_chat_parse_context   ctx(in, &semantics, it == tokens.end());
 
                 ctx.event_handler = parser_semantic_handler;
 
