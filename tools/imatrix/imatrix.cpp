@@ -274,11 +274,19 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
             tname.replace(match.position(1), match.length(1), std::to_string(blk - 1));
             auto prev_it = std::find_if(tstats.begin(), tstats.end(),
                 [tname](const tensor_statistics & t) { return t.tensor == tname; });
-            if (prev_it == tstats.end()) { continue; }
+            if (prev_it == tstats.end()) {
+                LOG_WRN("%s: missing previous-layer tensor '%s' (current: '%s'). Statistics may not be accurate\n",
+                    __func__, tname.c_str(), ts.tensor.c_str());
+                continue;
+            }
 
             const auto curr_avg = compute_tensor_averages(ts.stats);
             const auto prev_avg = compute_tensor_averages(prev_it->stats);
-            if (curr_avg.empty() || curr_avg.size() != prev_avg.size()) { continue; }
+            if (curr_avg.empty() || curr_avg.size() != prev_avg.size()) {
+                LOG_WRN("%s: size mismatch between '%s' and its previous-layer tensor '%s' (%zu vs %zu). Statistics may not be accurate\n",
+                    __func__, ts.tensor.c_str(), tname.c_str(), curr_avg.size(), prev_avg.size());
+                continue;
+            }
 
             float dot_prod = 0.0f;
             float norm1_sq = 0.0f;
