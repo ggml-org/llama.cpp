@@ -163,15 +163,15 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
     return vec;
 }
 
-static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
+static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e, bool & legacy) {
+    legacy = e.activations.empty();
     const size_t n_mat = e.counts.size();
-    const size_t len = e.activations.empty() ? e.values.size() : e.activations.size();
-    const bool legacy = e.activations.empty();
-    if (n_mat == 0) {
-        LOG_ERR("%s: there are no activations for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
+    const size_t len = legacy ? e.values.size() : e.activations.size();
+    if (n_mat == 0 || len == 0) {
+        LOG_ERR("%s: there's no data for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
         return false;
     }
-    if (len == 0 || (len % n_mat) != 0) {
+    if (len % n_mat != 0) {
         LOG_ERR("%s: activation size mismatch for tensor %s (len=%zu, counts=%zu)\n", __func__, name.c_str(), len, n_mat);
         return false;
     }
@@ -211,7 +211,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     }
 
     if (valid_n == 0) {
-        LOG_ERR("%s: there are no activations for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
+        LOG_ERR("%s: there's no data for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
         return false;
     }
 
@@ -236,13 +236,13 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     }
     if (std_deviation > 0.0f) {
         for (size_t i = 0; i < n_mat; ++i) {
-            const float c = (float)e.counts[i];
+            const auto c = (float)e.counts[i];
             if (c <= 0.0f) { continue; }
             const size_t off = i * row_size;
             for (size_t j = 0; j < row_size; ++j) {
                 const double v_avg = legacy ? 0.0 : (double)e.activations[off + j] / (double)c; // E[x]
                 const double v_energy = (double)e.values[off + j] / (double)c; // E[x^2]
-                const float v = (float)(legacy ? v_energy : v_avg);
+                const auto v = (float)(legacy ? v_energy : v_avg);
                 const float z = (v - (float)mean) / std_deviation;
                 if (std::fabs(z) > 1.0f) { zd_count += 1.0; }
             }
@@ -256,12 +256,12 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     ts.mean_values = (float)mean;
     ts.max_values = vmax;
     ts.min_values = vmin;
-    ts.elements = valid_n;
+    ts.elements = (int)valid_n;
     ts.std_deviation = std_deviation;
     ts.entropy = entropy;
     ts.zd_score = (float)(zd_count / (double)valid_n);
 
-    return e.activations.empty();
+    return true;
 }
 
 static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
@@ -747,10 +747,11 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
     // Compute per-tensor statistics (CosSim, L2 Dist, ECS) to store alongside sums
     std::vector<tensor_statistics> tstats;
     tstats.reserve(m_stats.size());
-    bool legacy_mode = true;
+    bool legacy = true;
     for (const auto & kv : m_stats) {
-        const bool is_legacy = compute_vector_statistics(tstats, kv.first, kv.second);
-        legacy_mode = legacy_mode && is_legacy;
+        if (!compute_vector_statistics(tstats, kv.first, kv.second, legacy)) {
+            LOG_WRN("%s: tensor %s has no data - skipping\n", __func__, kv.first.c_str());
+        }
     }
     if (!tstats.empty()) { compute_tensor_statistics(tstats); }
 
@@ -1328,7 +1329,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
 static bool show_statistics(const common_params & params) {
     std::vector<tensor_statistics> ts;
-    bool legacy_mode = true;
+    bool legacy = true;
 
     if (params.in_files.empty() || params.in_files.size() > 1) {
         LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
@@ -1336,8 +1337,9 @@ static bool show_statistics(const common_params & params) {
     }
     if (g_collector.load_imatrix(params.in_files[0].c_str())) {
         for (const auto & [name, stats] : g_collector.get_mstats()) {
-            const bool is_legacy = compute_vector_statistics(ts, name, stats);
-            legacy_mode = legacy_mode && is_legacy;
+            if (!compute_vector_statistics(ts, name, stats, legacy)) {
+                LOG_WRN("%s: tensor %s has no data - skipping\n", __func__, name.c_str());
+            }
         }
     } else {
         LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
@@ -1364,7 +1366,7 @@ static bool show_statistics(const common_params & params) {
                                : name_a < name_b || (name_a == name_b && a.cossim > b.cossim);
         }
     };
-    std::sort(ts.begin(), ts.end(), tensor_comparer(legacy_mode));
+    std::sort(ts.begin(), ts.end(), tensor_comparer(legacy));
 
     struct layer_stats {
         float layer_sum = 0.0f;
@@ -1377,14 +1379,14 @@ static bool show_statistics(const common_params & params) {
     LOG_INF("\n%6s\t%18s\t%13s\t%8s\t%8s\t%7s\t%15s\t%13s\t%11s\t%8s\t%5s\t%10s\n",
         "Layer",
         "Tensor",
-        legacy_mode ? "Σ E[Act²]" : "L₂ Dist",
+        legacy ? "Σ E[Act²]" : "L₂ Dist",
         "Min",
         "Max",
         "μ",
         "σ",
         "N",
         "H Norm",
-        legacy_mode ? "H" : "ECS",
+        legacy ? "H" : "ECS",
         "ZD",
         "CosSim");
     LOG_INF(
@@ -1409,18 +1411,18 @@ static bool show_statistics(const common_params & params) {
         LOG_INF("%5s\t%-20s\t%11.4f\t%10.4f\t%10.4f\t%8.4f\t%8.4f\t%7d\t%10.2f%%\t%10.4f\t%6.2f%%\t%10.4f\n",
             layer.c_str(),
             name.c_str(),
-            legacy_mode ? tstat.sum_values : tstat.l2_dist,
+            legacy ? tstat.sum_values : tstat.l2_dist,
             tstat.min_values,
             tstat.max_values,
             tstat.mean_values,
             tstat.std_deviation,
             tstat.elements,
             h_norm,
-            legacy_mode ? tstat.entropy : ecs,
+            legacy ? tstat.entropy : ecs,
             100.0f * tstat.zd_score,
             tstat.cossim);
 
-        const float zd = tstat.elements * tstat.zd_score;
+        const float zd = (float)tstat.elements * tstat.zd_score;
         if (ls.find(blk) != ls.end()) {
             ls[blk].layer_sum += tstat.sum_values;
             ls[blk].layer_zd += zd;
@@ -1442,11 +1444,11 @@ static bool show_statistics(const common_params & params) {
     LOG_INF("\nComputing layer statistics (%zu layers)\n", layers);
     LOG_INF("\n%6s\t%13s\t%6s\t%11s\t%6s\n",
         "Layer",
-        legacy_mode ? "Σ E[Act²]" : "L₂ Dist",
+        legacy ? "Σ E[Act²]" : "L₂ Dist",
         "ZD",
         "CosSim",
-        legacy_mode ? "" : "ECS");
-    if (legacy_mode) {
+        legacy ? "" : "ECS");
+    if (legacy) {
         LOG_INF("============================================\n");
     } else {
         LOG_INF("=========================================================\n");
@@ -1457,7 +1459,7 @@ static bool show_statistics(const common_params & params) {
         const float layer_cs = lcs != layer_cossim.end() ? lcs->second : 0.0f;
         const auto ll2n = layer_l2_dist.find(layer);
         const float layer_l2n = ll2n != layer_l2_dist.end() ? ll2n->second : 0.0f;
-        if (legacy_mode) {
+        if (legacy) {
             LOG_INF("%5d\t%11.4f\t%6.2f%%\t%11.4f\n",
                 layer,
                 stats.layer_sum,
