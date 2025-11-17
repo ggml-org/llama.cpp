@@ -5108,29 +5108,7 @@ class Plamo3Model(TextModel):
         if "gate_up_proj.weight" in name:
             name_up = name.replace("gate_up_proj.weight", "up_proj.weight")
             name_gate = name.replace("gate_up_proj.weight", "gate_proj.weight")
-
-            n_embd = self.hparams["hidden_size"]
-            n_ff = self.hparams["intermediate_size"]
-            two_ff = 2 * n_ff
-
-            if data_torch.shape == (two_ff, n_embd):
-                chunks = torch.chunk(data_torch, 2, dim=0)
-            elif data_torch.shape == (n_embd, two_ff):
-                chunks = torch.chunk(data_torch, 2, dim=1)
-            else:
-                raise ValueError(f"Unexpected gate_up_proj shape {tuple(data_torch.shape)}")
-
-            processed: list[Tensor] = []
-
-            for chunk in chunks:
-                if chunk.shape == (n_ff, n_embd):
-                    chunk = chunk.transpose(0, 1)
-                elif chunk.shape != (n_embd, n_ff):
-                    raise ValueError(f"Unexpected gate/up chunk shape {tuple(chunk.shape)}")
-                processed.append(chunk.transpose(0, 1).contiguous())
-
-            gate_proj_weight, up_proj_weight = processed
-
+            gate_proj_weight, up_proj_weight = torch.chunk(data_torch, 2, dim=0)
             results.append((self.map_tensor_name(name_gate), gate_proj_weight))
             results.append((self.map_tensor_name(name_up), up_proj_weight))
         else:
