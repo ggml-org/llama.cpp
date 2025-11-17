@@ -726,11 +726,20 @@ inline static void ggml_vec_scale_f16(const int n, ggml_fp16_t * y, const float 
             svst1_f16(pg, (__fp16 *)(y + np), out);
         }
     #elif defined(__riscv_v_intrinsic)
-        // todo: RVV impl
-        // scalar
-        for (int i = 0; i < n; ++i) {
-            y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(y[i])*v);
-        }
+        #if defined(__riscv_zvfh)
+            for (int i = 0, vl; i < n; i += vl) {
+                vl = __riscv_vsetvl_e16m2(n - i);
+                vfloat16m2_t vy = __riscv_vle16_v_f16m2((_Float16 *)&y[i], vl);
+                vfloat32m4_t vy32 = __riscv_vfwcvt_f_f_v_f32m4(vy, vl);
+                vy32 = __riscv_vfmul_vf_f32m4(vy32, v, vl);
+                vy = __riscv_vfncvt_f_f_w_f16m2(vy32, vl);
+                __riscv_vse16_v_f16m2((_Float16 *)&y[i], vy, vl);
+            }
+        #else
+            for (int i = 0; i < n; ++i) {
+                y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(y[i]) * v);
+            }
+        #endif
     #else
         const int np = (n & ~(GGML_F16_STEP - 1));
 
