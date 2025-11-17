@@ -229,7 +229,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 set(ARM_FEATURE "HAVE_${feature}")
                 check_cxx_source_compiles(
                     "
-                    #include <arm_neon.h>
                     #if !defined(__ARM_FEATURE_${feature})
                     #  error \"Feature ${feature} is not defined\"
                     #endif
