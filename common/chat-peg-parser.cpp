@@ -162,12 +162,10 @@ static bool is_hex_digit(const char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
-// Aho-Corasick automation for matching multiple literals.
-// This is used in until_parser and to build a GBNF exclusion grammar by
-// exploiting its trie structure.
-class aho_corasick_matcher {
+// Trie for matching multiple literals.
+// This is used in until_parser and to build a GBNF exclusion grammar
+class trie_matcher {
     struct node {
-        size_t fail = 0;
         size_t depth = 0;
         std::map<unsigned char, size_t> children;
         std::vector<size_t> word_lengths;
@@ -176,50 +174,46 @@ class aho_corasick_matcher {
     std::vector<node> trie;
 
   public:
-    aho_corasick_matcher(const std::vector<std::string> & words) {
+    trie_matcher(const std::vector<std::string> & words) {
       create_node(); // root node
       for (const auto & w : words) {
           insert(w);
       }
-      build_fail_links();
     }
 
-    struct search_result {
-        size_t pos;
-        bool found;
-        bool is_partial;
+    struct match_result {
+        enum match_type { NO_MATCH, PARTIAL_MATCH, COMPLETE_MATCH } type;
     };
 
-    search_result search(std::string_view sv, size_t start = 0) {
-      size_t current = 0;
+    // Check if a delimiter starts at the given position
+    match_result check_at(std::string_view sv, size_t start_pos) const {
+        size_t current = 0; // Start at root
+        size_t pos = start_pos;
 
-      for (auto i = start; i < sv.size(); ++i) {
-          // Aho-Corasick transition
-          while (current != 0 && trie[current].children.find(sv[i]) == trie[current].children.end()) {
-              current = trie[current].fail;
-          }
+        while (pos < sv.size()) {
+            auto it = trie[current].children.find(sv[pos]);
+            if (it == trie[current].children.end()) {
+                // Can't continue matching
+                return match_result{match_result::NO_MATCH};
+            }
 
-          auto it = trie[current].children.find(sv[i]);
-          if (it != trie[current].children.end()) {
-              current = it->second;
-          } else {
-              current = 0;
-          }
+            current = it->second;
+            pos++;
 
-          if (!trie[current].word_lengths.empty()) {
-              // Return back the longest word
-              size_t pos = sv.size();
-              for (const auto & len : trie[current].word_lengths) {
-                  pos = std::min(pos, i - len + 1);
-              }
-              return search_result{pos, true, false};
-          }
-      }
+            // Check if we've matched a complete word
+            if (!trie[current].word_lengths.empty()) {
+                return match_result{match_result::COMPLETE_MATCH};
+            }
+        }
 
-      if (trie[current].depth > 0) {
-          return search_result{sv.size() - trie[current].depth, true, true};
-      }
-      return search_result{sv.size(), false, false};
+        // Reached end of input while still in the trie (not at root)
+        if (current != 0) {
+            // We're in the middle of a potential match
+            return match_result{match_result::PARTIAL_MATCH};
+        }
+
+        // Reached end at root (no match)
+        return match_result{match_result::NO_MATCH};
     }
 
     struct prefix_and_next {
@@ -276,37 +270,6 @@ class aho_corasick_matcher {
             }
         }
         trie[current].word_lengths.push_back(word.length());
-    }
-
-    void build_fail_links() {
-        std::deque<size_t> queue;
-
-        size_t root = 0;
-        trie[root].fail = 0;
-        for (const auto & it : trie[root].children) {
-            size_t child = it.second;
-            trie[child].fail = 0;
-            queue.push_back(child);
-        }
-
-        while (!queue.empty()) {
-            size_t current = queue.front();
-            queue.pop_front();
-
-            for (const auto & p : trie[current].children) {
-                unsigned char ch = p.first;
-                size_t child = p.second;
-                queue.push_back(child);
-
-                auto fail = trie[current].fail;
-                while (fail != 0 && trie[fail].children.find(p.first) == trie[fail].children.end()) {
-                    fail = trie[fail].fail;
-                }
-
-                auto fail_it = trie[fail].children.find(ch);
-                trie[child].fail = fail_it != trie[fail].children.end() ? fail_it->second : 0;
-            }
-        }
     }
 };
 
@@ -1103,7 +1066,7 @@ class json_string_parser : public common_chat_peg_parser_base {
 //   S -> (!delim .)*
 class until_parser : public common_chat_peg_parser_base {
     std::vector<std::string> delimiters_;
-    aho_corasick_matcher matcher_;
+    trie_matcher matcher_;
 
   public:
     static constexpr parser_type type_value = UNTIL;
@@ -1116,19 +1079,15 @@ class until_parser : public common_chat_peg_parser_base {
         : until_parser(std::vector<std::string>{delimiter}, id) {}
 
     common_chat_parse_result parse_uncached(common_chat_parse_context & ctx, size_t start = 0) override {
-        // First pass: byte-based Aho-Corasick search for delimiter
-        auto search_result = matcher_.search(ctx.input, start);
-        size_t delimiter_pos = search_result.pos;
-
-        // Second pass: validate UTF-8 from start to delimiter_pos
+        // Scan input and check for delimiters
         size_t pos = start;
         size_t last_valid_pos = start;
 
-        while (pos < delimiter_pos) {
+        while (pos < ctx.input.size()) {
             auto utf8_result = parse_utf8_codepoint(ctx.input, pos);
 
             if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
-                // Incomplete UTF-8 sequence before delimiter
+                // Incomplete UTF-8 sequence
                 if (ctx.input_is_complete) {
                     // Input is complete but UTF-8 is incomplete = malformed
                     return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
@@ -1142,11 +1101,23 @@ class until_parser : public common_chat_peg_parser_base {
                 return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
             }
 
+            // Check if a delimiter starts at this position
+            auto match = matcher_.check_at(ctx.input, pos);
+
+            if (match.type == trie_matcher::match_result::COMPLETE_MATCH) {
+                // Found a complete delimiter, return everything before it
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+            }
+
+            if (match.type == trie_matcher::match_result::PARTIAL_MATCH) {
+                // Found a partial match extending to end of input, return everything before it
+                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+            }
+
             pos += utf8_result.bytes_consumed;
             last_valid_pos = pos;
         }
 
-        // All UTF-8 validated up to delimiter
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, last_valid_pos);
     }
 
@@ -1450,10 +1421,10 @@ static std::string gbnf_escape_char_class(char c) {
 
 // Create a GBNF excluding pattern
 static std::string gbnf_excluding_pattern(const std::vector<std::string> & strings) {
-    // Use the aho_corasick_matcher to grab an exhaustive list of prefixes and
+    // Use the trie_matcher to grab an exhaustive list of prefixes and
     // potential next characters. We can use this to build an exclusion for
     // multiple strings.
-    aho_corasick_matcher matcher(strings);
+    trie_matcher matcher(strings);
     auto pieces = matcher.collect_prefix_and_next();
 
     std::string pattern;
