@@ -298,14 +298,14 @@ struct parser_executor {
     parser_executor(const common_chat_peg_arena & arena, common_chat_parse_context & ctx, size_t start)
         : arena(arena), ctx(ctx), start_pos(start) {}
 
-    common_chat_parse_result operator()(const common_chat_peg_start_parser & /* p */) {
+    common_chat_parse_result operator()(const common_chat_peg_start_parser & /* p */) const {
         return common_chat_parse_result(
             start_pos == 0 ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL,
             start_pos
         );
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_end_parser & /* p */) {
+    common_chat_parse_result operator()(const common_chat_peg_end_parser & /* p */) const {
         return common_chat_parse_result(
             start_pos >= ctx.input.size() ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL,
             start_pos
@@ -432,7 +432,7 @@ struct parser_executor {
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_any_parser & /* p */) {
+    common_chat_parse_result operator()(const common_chat_peg_any_parser & /* p */) const {
         // Parse a single UTF-8 codepoint (not just a single byte)
         auto result = parse_utf8_codepoint(ctx.input, start_pos);
 
@@ -462,7 +462,7 @@ struct parser_executor {
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_chars_parser & p) {
+    common_chat_parse_result operator()(const common_chat_peg_chars_parser & p) const {
         auto pos = start_pos;
         int match_count = 0;
 
@@ -613,7 +613,7 @@ struct parser_executor {
         return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_until_parser & p) {
+    common_chat_parse_result operator()(const common_chat_peg_until_parser & p) const {
         trie_matcher matcher(p.delimiters);
 
         // Scan input and check for delimiters
@@ -1205,13 +1205,13 @@ static std::unordered_set<std::string> collect_reachable_rules(
                     visit(child);
                 }
             } else if constexpr (std::is_same_v<T, common_chat_peg_repetition_parser> ||
-                                std::is_same_v<T, common_chat_peg_one_or_more_parser> ||
-                                std::is_same_v<T, common_chat_peg_zero_or_more_parser> ||
-                                std::is_same_v<T, common_chat_peg_optional_parser> ||
-                                std::is_same_v<T, common_chat_peg_and_parser> ||
-                                std::is_same_v<T, common_chat_peg_not_parser> ||
-                                std::is_same_v<T, common_chat_peg_schema_parser> ||
-                                std::is_same_v<T, common_chat_peg_capture_parser>) {
+                                 std::is_same_v<T, common_chat_peg_one_or_more_parser> ||
+                                 std::is_same_v<T, common_chat_peg_zero_or_more_parser> ||
+                                 std::is_same_v<T, common_chat_peg_optional_parser> ||
+                                 std::is_same_v<T, common_chat_peg_and_parser> ||
+                                 std::is_same_v<T, common_chat_peg_not_parser> ||
+                                 std::is_same_v<T, common_chat_peg_schema_parser> ||
+                                 std::is_same_v<T, common_chat_peg_capture_parser>) {
                 visit(p.child);
             } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
                 if (visited.find(p.name) == visited.end()) {
@@ -1266,7 +1266,9 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
             } else if constexpr (std::is_same_v<T, common_chat_peg_sequence_parser>) {
                 std::string s;
                 for (const auto & child : p.children) {
-                    if (!s.empty()) s += " ";
+                    if (!s.empty()) {
+                        s += " ";
+                    }
                     auto child_gbnf = to_gbnf(child);
                     const auto & child_parser = parsers_.at(child);
                     if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser) ||
@@ -1280,7 +1282,9 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
             } else if constexpr (std::is_same_v<T, common_chat_peg_choice_parser>) {
                 std::string s;
                 for (const auto & child : p.children) {
-                    if (!s.empty()) s += " | ";
+                    if (!s.empty()) {
+                        s += " | ";
+                    }
                     auto child_gbnf = to_gbnf(child);
                     const auto & child_parser = parsers_.at(child);
                     if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser)) {
@@ -1335,18 +1339,20 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
                 std::string result = p.pattern;
                 if (p.min_count == 0 && p.max_count == -1) {
                     return result + "*";
-                } else if (p.min_count == 1 && p.max_count == -1) {
+                }
+                if (p.min_count == 1 && p.max_count == -1) {
                     return result + "+";
-                } else if (p.max_count == -1) {
+                }
+                if (p.max_count == -1) {
                     return result + "{" + std::to_string(p.min_count) + ",}";
-                } else if (p.min_count == p.max_count) {
+                }
+                if (p.min_count == p.max_count) {
                     if (p.min_count == 1) {
                         return result;
                     }
                     return result + "{" + std::to_string(p.min_count) + "}";
-                } else {
-                    return result + "{" + std::to_string(p.min_count) + "," + std::to_string(p.max_count) + "}";
                 }
+                return result + "{" + std::to_string(p.min_count) + "," + std::to_string(p.max_count) + "}";
             } else if constexpr (std::is_same_v<T, common_chat_peg_json_string_parser>) {
                 return R"(( [^"\\] | "\\" ( ["\\/ bfnrt] | "u" [0-9a-fA-F]{4} ) )*)";
             } else if constexpr (std::is_same_v<T, common_chat_peg_until_parser>) {
