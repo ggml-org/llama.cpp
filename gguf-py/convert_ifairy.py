@@ -105,7 +105,7 @@ def combine_complex_tensors(imag_part, real_part):
     real_32 = real_int.to(torch.int32)
     
     # 将虚部移到高16位，实部在低16位
-    merged_int = (real_32 << 16) | (imag_32 & 0xFFFF)
+    merged_int = (imag_32 << 16) | (real_32 & 0xFFFF)
     
     # 将合并后的整数重新解释为float32
     merged_tensor = merged_int.view(torch.float32)
@@ -125,9 +125,9 @@ def split_complex_tensors(merged_tensor):
     merged_int = merged_tensor.view(torch.int32)
     
     # 提取高16位（虚部）
-    imag_int = (merged_int >> 16).to(torch.int16)
+    real_int = (merged_int >> 16).to(torch.int16)
     # 提取低16位（实部）
-    real_int = (merged_int & 0xFFFF).to(torch.int16)
+    imag_int = (merged_int & 0xFFFF).to(torch.int16)
     
     # 将整数重新解释为float16
     imag_part = imag_int.view(torch.bfloat16)
@@ -321,6 +321,13 @@ def main():
                         tensor_data = f.get_tensor(key).to(torch.float32)
                         tensor_data = noquant_and_merge(key, tensor_data, f, weight_map)
                         numpy_array = tensor_data.cpu().numpy()
+                        #tensor_back = torch.from_numpy(numpy_array)
+                        #tensor_imag, tensor_real = split_complex_tensors(tensor_back)
+                        # 判断real的部分和之前的real没有差别
+                        #tensor_real = tensor_real.to(torch.float32)
+                        #if not tensor_real.allclose(f.get_tensor(key).to(torch.float32), atol=1e-3):
+                        #    print(f"Error: Embedding real part mismatch for key '{key}'")
+                        #    exit(1)
                         if '_real' in key or '_imag' in key:
                             key = key.replace('_real', '').replace('_imag', '')
                         model_arch = gguf.MODEL_ARCH.IFAIRY

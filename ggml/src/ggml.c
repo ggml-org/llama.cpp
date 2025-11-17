@@ -4057,7 +4057,7 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(
     bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;
 
     a->ne[0] = a->ne[0] * 2;
-    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    struct ggml_tensor * result = false ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
     a->ne[0] = a->ne[0] / 2;
 
     int32_t params[15] = { /*n_past*/ 0, n_dims, mode, /*n_ctx*/ 0, n_ctx_orig };

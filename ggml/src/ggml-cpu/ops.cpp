@@ -3636,7 +3636,7 @@ static void ggml_compute_forward_rms_norm_ifairy(
 
                 ggml_vec_scale_f32(ne00, y, scale);
                 for(int i=0;i<ne00;i++){
-                    if(y[i] != y[i]){
+                    if(y[i] != y[i] || isinf(y[i])){
                         GGML_ABORT("nan or > 1 discovered, rmsnorm_ifairy failed, y[%d] is %f\n", i, y[i]);
                     }
                 }
@@ -5962,7 +5962,38 @@ static void ggml_compute_forward_rope_f16(
         }
     }
 }
-
+static void rope_yarn_ifairy(
+    float theta_extrap, float freq_scale, float corr_dims[2], int64_t i0, float ext_factor, float mscale,
+    float * cos_theta, float * sin_theta) {
+    // Standard RoPE: theta = inv_freq * position_id
+    float theta = theta_extrap;
+    //printf("%f ", theta);
+    *cos_theta = cosf(theta);
+    *sin_theta = sinf(theta);
+}
+static void ggml_rope_cache_init_ifairy(
+     float theta_base, float freq_scale, const float * freq_factors, float corr_dims[2], int64_t ne0, float ext_factor, float mscale,
+     float * cache, float sin_sign, float theta_scale) {
+    // Standard RoPE: theta = inv_freq * position_id
+    // inv_freq = 1.0 / (base ^ (i / head_dim))
+    // theta_scale = base ^ (-2/n_dims), so base = theta_scale ^ (-n_dims/2)
+    int64_t head_dim = ne0 / 2;
+    float freq_base = 10000.f;//powf(theta_scale, -head_dim / 2.0f);
+    
+    for (int64_t i0 = 0; i0 < ne0; i0 += 2) {
+        int64_t head_idx = i0 / 2;
+        // Calculate inv_freq = 1.0 / (base ^ (i / head_dim))
+        float inv_freq = 1.0f / powf(freq_base, (float)head_idx / head_dim);
+        //printf("%f ", inv_freq);
+        // theta = inv_freq * position_id
+        float theta = inv_freq * theta_base;
+        
+        rope_yarn_ifairy(
+            theta, freq_scale, corr_dims, i0, ext_factor, mscale, &cache[i0 + 0], &cache[i0 + 1]
+        );
+        cache[i0 + 1] *= sin_sign;
+    }
+}
 int n_ti_rope = 0;
 // 只在line 6044开始有差异, 只处理mode==0的情况
 static void ggml_compute_forward_rope_ifairy(
@@ -6018,7 +6049,7 @@ static void ggml_compute_forward_rope_ifairy(
     const float theta_scale = powf(freq_base, -2.0f/n_dims);
 
     float corr_dims[2];
-    ggml_rope_yarn_corr_dims(n_dims * 2, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+    //ggml_rope_yarn_corr_dims(n_dims , n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
     const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
@@ -6047,7 +6078,15 @@ static void ggml_compute_forward_rope_ifairy(
             float * cache = (float *) params->wdata + (ne0 + CACHE_LINE_SIZE_F32)*ith;
             if (!is_mrope) {
                 const int64_t p = pos[i2];
-                ggml_rope_cache_init(p, freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
+                ggml_rope_cache_init_ifairy(p, freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
+                //if(i2 == 0){
+                //    for(int i=0;i<n_dims*2;i+=2){
+                //        if(cache[i] != 1.0f){
+                //            GGML_ABORT("cache[%d] = %f, expected 1.0", i, cache[i]);
+                //        }
+                //    }
+                //}
+                
             }
             else {
                 const int64_t p_t = pos[i2];
@@ -6064,6 +6103,11 @@ static void ggml_compute_forward_rope_ifairy(
                 }
             }
             GGML_ASSERT(nb0 == 4);
+            GGML_ASSERT(nb00 == 4);
+            GGML_ASSERT(ne00 == ne0 / 2);
+            GGML_ASSERT(ne01 == ne1);
+            GGML_ASSERT(ne02 == ne2);
+            GGML_ASSERT(ne03 == ne3);
             for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
                 if (ir++ < ir0) continue;
                 if (ir   > ir1) break;

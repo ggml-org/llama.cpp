@@ -13772,20 +13772,24 @@ struct llm_build_ifairy : public llm_graph_context {
             Kcur->type = GGML_TYPE_BF16;
             Kcur->ne[0] *= 2;
             Kcur->nb[0] /= 2;
+            //Vcur->type = GGML_TYPE_BF16;
+            //Vcur->ne[0] *= 2;
+            //Vcur->nb[0] /= 2;
             Qcur = ggml_cast(ctx0, Qcur, GGML_TYPE_F32);
             Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F32);
+            //Vcur = ggml_cast(ctx0, Vcur, GGML_TYPE_F32);
 
-            Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, nullptr,
-                        n_rot / 2, 0, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
+            Qcur = ggml_rope(
+                        ctx0, Qcur, inp_pos, n_rot,0
                         );
-            Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, nullptr,
-                        n_rot / 2, 0, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
+            Kcur = ggml_rope(
+                        ctx0, Kcur, inp_pos, n_rot, 0
                         );
-                        */
+*/
+            GGML_ASSERT(Qcur -> ne[0] == Kcur -> ne[0]);
+            GGML_ASSERT(Qcur -> ne[1] == Kcur -> ne[1]);
+            GGML_ASSERT(Qcur -> ne[2] == Kcur -> ne[2]);
+            GGML_ASSERT(Qcur -> ne[3] == Kcur -> ne[3]);
             Qcur = ggml_ifairy_rope(ctx0, Qcur, inp_pos, n_rot, 0);
             cb(Qcur, "Qcur_rope", il);
 
@@ -13835,8 +13839,8 @@ struct llm_build_ifairy : public llm_graph_context {
             cur = ggml_ifairy_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_res", il);
 
-            // cur = build_cvec(cur, il);
-            // cb(cur, "l_out", il);
+            //cur = build_cvec(cur, il);
+            //cb(cur, "l_out", il);
 
             inpL = cur;
         }
@@ -13846,7 +13850,7 @@ struct llm_build_ifairy : public llm_graph_context {
                 -1);
         cb(cur, "result_norm", -1);
         res->t_embd = cur;
-
+        GGML_ASSERT(model.output);
         ggml_tensor * lm_head = model.output ? model.output : model.tok_embd;
         cur = ggml_ifairy_split(ctx0, cur);
         cur = build_lora_mm(lm_head, cur);
