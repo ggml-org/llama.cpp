@@ -1190,7 +1190,7 @@ class MultiChatUI {
      * * set focus to user input
      * @param {boolean} [bClearElInUser=true]
      */
-    ui_reset_userinput(bClearElInUser=true) {
+    ui_userinput_reset(bClearElInUser=true) {
         if (bClearElInUser) {
             this.elInUser.value = "";
             this.dataurl_plus_clear()
@@ -1352,7 +1352,7 @@ class MultiChatUI {
         let chat = this.simpleChats[this.curChatId];
         if (bClear) {
             this.elDivChat.replaceChildren();
-            this.ui_reset_userinput()
+            this.ui_userinput_reset()
         }
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
@@ -1411,7 +1411,7 @@ class MultiChatUI {
         if (chat.chatId != this.curChatId) {
             return false
         }
-        this.ui_reset_userinput(false)
+        this.ui_userinput_reset(false)
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         for(let i=lastN; i > 0; i-=1) {
             let msg = chat.xchat[chat.xchat.length-i]
@@ -1639,14 +1639,13 @@ class MultiChatUI {
             } finally {
                 // TODO:MAYBE: in future if we dont want to clear up user loaded image on failure
                 // move this to end of try block
-                this.dataurl_plus_clear()
+                this.ui_userinput_reset()
             }
         }
         if (this.elInUser.dataset.placeholder) {
             this.elInUser.placeholder = this.elInUser.dataset.placeholder;
         }
 
-        this.elInUser.dataset.role = ""
         this.elInUser.value = "working...";
         this.elInUser.disabled = true;
 
@@ -1662,7 +1661,7 @@ class MultiChatUI {
                 console.debug(`DBUG:SimpleChat:MCUI:HandleUserSubmit:ChatId has changed:[${chatId}] [${this.curChatId}]`);
             }
         } finally {
-            this.ui_reset_userinput();
+            this.ui_userinput_reset();
         }
     }
 
