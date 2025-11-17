@@ -989,7 +989,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                                 return false;
                         }
                     case GGML_TYPE_I32:
-                        return op->type == GGML_TYPE_F32;
+                        return op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32;
                     default:
                         return false;
                 };
