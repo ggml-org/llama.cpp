@@ -724,7 +724,7 @@ inline static void ggml_vec_scale_f16(const int n, ggml_fp16_t * y, const float 
         svfloat16_t out = svmul_f16_m(pg, hy, vx);
         svst1_f16(pg, (__fp16 *)(y + np), out);
     }
-#elif defined(GGML_SIMD) && defined(__riscv_v_intrinsic) && defined(__riscv_zvfh)
+#elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfh)
     for (int i = 0, vl; i < n; i += vl) {
         vl = __riscv_vsetvl_e16m2(n - i);
         vfloat16m2_t vy = __riscv_vle16_v_f16m2((_Float16 *)&y[i], vl);
