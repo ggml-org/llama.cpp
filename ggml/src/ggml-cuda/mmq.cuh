@@ -1888,7 +1888,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #else
         int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/2) % mmq_y;
         {
-#endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) 
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
             if (need_check) {
                 i = min(i, i_max);
             }

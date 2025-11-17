@@ -149,7 +149,7 @@ namespace ggml_cuda_mma {
                 return -1;
             }
         }
-#elif defined(AMD_WMMA_AVAILABLE) //adjusted the mapping for RDNA 4 
+#elif defined(AMD_WMMA_AVAILABLE) //adjusted the mapping for RDNA 4
 
         static constexpr int ne = I * J / 32;
         T x[ne] = {0};
@@ -377,7 +377,7 @@ namespace ggml_cuda_mma {
         }
 
 #elif defined(AMD_WMMA_AVAILABLE)
-        if constexpr (I == 16 && J == 4) { 
+        if constexpr (I == 16 && J == 4) {
             int64_t * xi = (int64_t *) t.x;
             const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
             xi[0] = xs[0];
@@ -385,7 +385,7 @@ namespace ggml_cuda_mma {
             int64_t * xi = (int64_t *) t.x;
             const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I));
             xi[0] = xs[0];
-            
+
             const int64_t * xs1 = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I) + 2);
             xi[1] = xs1[0];
         }else{
@@ -716,11 +716,11 @@ namespace ggml_cuda_mma {
 
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(
             true,
-            a_vec[0],        
-            true,           
-            b_vec[0],                  
-            acc[0],          
-            true           
+            a_vec[0],
+            true,
+            b_vec[0],
+            acc[0],
+            true
         );
 
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(
@@ -828,7 +828,7 @@ static __device__ __forceinline__ void mma(
         GGML_UNUSED(A);
         GGML_UNUSED(B);
         NO_DEVICE_CODE;
-#endif 
+#endif
     }
 }
 
