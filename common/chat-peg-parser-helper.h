@@ -58,12 +58,12 @@ inline void parser_semantic_handler(const common_chat_parse_event & ev, common_c
         tc.arguments += "\"" + name + "\": ";
     }
 
-    if (ev.rule == "arg-str-content" && ev.ending() && ev.success()) {
+    if (ev.rule == "arg-string-content" && ev.ending() && ev.success()) {
         auto & tc = semantics.tool_calls.back();
         tc.arguments += "\"" + std::string(ev.text);
     }
 
-    if (ev.rule.find("arg-string") != std::string::npos && ev.ending() && ev.success()) {
+    if (ev.annotation == "arg-string" && ev.ending() && ev.success()) {
         auto & tc = semantics.tool_calls.back();
         tc.arguments += "\"";
     }
@@ -103,12 +103,12 @@ inline void parser_semantic_handler_with_printout(const common_chat_parse_event 
         tc.arguments += "\"" + name + "\": ";
     }
 
-    if (ev.rule == "arg-str-content" && ev.ending() && ev.success()) {
+    if (ev.rule == "arg-string-content" && ev.ending() && ev.success()) {
         auto & tc = semantics.tool_calls.back();
         tc.arguments += "\"" + std::string(ev.text);
     }
 
-    if (ev.rule.find("arg-string") != std::string::npos && ev.ending() && ev.success()) {
+    if (ev.annotation == "arg-string" && ev.ending() && ev.success()) {
         auto & tc = semantics.tool_calls.back();
         tc.arguments += "\"";
     }

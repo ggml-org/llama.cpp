@@ -14,10 +14,10 @@ void test_example_qwen3_coder(testing &t) {
         auto arg_name = p.rule("arg-start", "<parameter=" + p.capture("arg-name", p.chars("[a-zA-Z0-9_]")) + ">");
         auto arg_end = p.rule("arg-end", "</parameter>" + p.peek(p.literal("<parameter=") | "</function>"));
 
-        auto string_arg_content = p.rule("arg-str-content",
+        auto string_arg_content = p.rule("arg-string-content",
             p.until_one_of({"</parameter><parameter=", "</parameter></function>"}));
 
-        auto string_arg = p.rule("arg-string", arg_name + string_arg_content + arg_end);
+        auto string_arg = p.rule("arg-string", "arg-string", arg_name + string_arg_content + arg_end);
 
         auto json = p.json();
 

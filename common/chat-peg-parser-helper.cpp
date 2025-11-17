@@ -47,11 +47,11 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_no_attr(
         std::string string_content_2;
         string_content_2.append("</").append(param_tag).append("></").append(function_tag).append(">");
 
-        auto string_arg_content = rule("arg-str-content", until_one_of({ string_content_1, string_content_2 }));
+        auto string_arg_content = rule("arg-string-content", until_one_of({ string_content_1, string_content_2 }));
 
         std::string arg_string_name;
         arg_string_name.append("arg-string-").append(*it);
-        auto string_arg = rule(arg_string_name, arg_name + string_arg_content + arg_end);
+        auto string_arg = rule(arg_string_name, "arg-string", arg_name + string_arg_content + arg_end);
         auto json_sec   = json();
 
         std::string arg_json_name;
@@ -116,11 +116,11 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_attr(
         std::string string_content_2;
         string_content_2.append("</").append(param_tag).append("></").append(function_tag).append(">");
 
-        auto string_arg_content = rule("arg-str-content", until_one_of({ string_content_1, string_content_2 }));
+        auto string_arg_content = rule("arg-string-content", until_one_of({ string_content_1, string_content_2 }));
 
         std::string arg_string_name;
         arg_string_name.append("arg-string-").append(*it);
-        auto string_arg = rule(arg_string_name, arg_name + string_arg_content + arg_end);
+        auto string_arg = rule(arg_string_name, "arg-string", arg_name + string_arg_content + arg_end);
         auto json_sec   = json();
 
         std::string arg_json_name;

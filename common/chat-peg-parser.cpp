@@ -668,6 +668,7 @@ struct parser_executor {
             ctx.event_handler(common_chat_parse_event{
                 COMMON_CHAT_PARSE_EVENT_NODE_START,
                 p.name,
+                p.annotation,
                 start_pos,
                 start_pos,
                 "",
@@ -692,6 +693,7 @@ struct parser_executor {
             ctx.event_handler(common_chat_parse_event{
                 COMMON_CHAT_PARSE_EVENT_NODE_END,
                 p.name,
+                p.annotation,
                 result.start,
                 result.end,
                 text,
@@ -1016,12 +1018,20 @@ common_chat_peg_parser common_chat_peg_parser_builder::capture(const std::string
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, common_chat_peg_parser p, bool trigger) {
-    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, p.id(), trigger});
+    return rule(name, "", p, trigger);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::string & annotation, common_chat_peg_parser p, bool trigger) {
+    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, annotation, p.id(), trigger});
     arena_.add_rule(name, rule_id);
     return ref(name);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder_fn, bool trigger) {
+    return rule(name, "", builder_fn, trigger);
+}
+
+common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::string & annotation, const std::function<common_chat_peg_parser()> & builder_fn, bool trigger) {
     // Check if rule already exists
     if (arena_.has_rule(name)) {
         return ref(name);
@@ -1029,14 +1039,14 @@ common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & 
 
     // Create placeholder rule to allow recursive references
     auto placeholder = any();  // Temporary placeholder
-    auto placeholder_rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, placeholder.id(), trigger});
+    auto placeholder_rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, annotation, placeholder.id(), trigger});
     arena_.add_rule(name, placeholder_rule_id);
 
     // Build the actual parser
     auto parser = builder_fn();
 
     // Replace placeholder with actual rule
-    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, parser.id(), trigger});
+    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, annotation, parser.id(), trigger});
     arena_.rules_[name] = rule_id;
 
     return ref(name);

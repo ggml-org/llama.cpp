@@ -127,6 +127,7 @@ enum common_chat_parse_event_type {
 struct common_chat_parse_event {
     common_chat_parse_event_type type;
     std::string rule;
+    std::string annotation;
     size_t start;
     size_t end;
     std::string_view text;
@@ -259,6 +260,7 @@ struct common_chat_peg_schema_parser {
 
 struct common_chat_peg_rule_parser {
     std::string name;
+    std::string annotation;
     common_chat_peg_parser_id child;
     bool trigger;
 };
@@ -460,6 +462,7 @@ class common_chat_peg_parser_builder {
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
     //   auto json = p.rule("json", json_obj | json_arr | ...)
     common_chat_peg_parser rule(const std::string & name, common_chat_peg_parser p, bool trigger = false);
+    common_chat_peg_parser rule(const std::string & name, const std::string & annotation, common_chat_peg_parser p, bool trigger = false);
 
     // Creates a named rule using a builder function. This handles recursive grammars by
     // inserting a placeholder rule before invoking the builder, allowing the
@@ -468,6 +471,7 @@ class common_chat_peg_parser_builder {
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
     //   auto json = p.rule("json", [&]() { return json_object() | json_array() | ... })
     common_chat_peg_parser rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder, bool trigger = false);
+    common_chat_peg_parser rule(const std::string & name, const std::string & annotation, const std::function<common_chat_peg_parser()> & builder, bool trigger = false);
 
     void set_root(common_chat_peg_parser p);
 
