@@ -110,7 +110,6 @@ static const std::map<gguf_type, const char *> GGUF_TYPE_NAME = {
     {GGUF_TYPE_INT64,   "i64"},
     {GGUF_TYPE_FLOAT64, "f64"},
 };
-static_assert(GGUF_TYPE_NAME == 13, "GGUF_TYPE_NAME != 13");
 
 size_t gguf_type_size(enum gguf_type type) {
     auto it = GGUF_TYPE_SIZE.find(type);
