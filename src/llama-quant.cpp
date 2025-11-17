@@ -635,8 +635,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const llama_model_quantize_params * params,
     int nthread
 ) {
-    // RAII guard for signal handlers
     bpw_stop.store(false, std::memory_order_relaxed);
+    // Signal handlers
     struct signal_scope_guard {
         using handler_t = void (*)(int);
         handler_t prev_int = SIG_DFL;
@@ -1574,12 +1574,23 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         bool important = false;
 
         if (statistics_data) {
-            float ecs = 0.0f; // Euclidean-Cosine score
             const std::string key = remap_imatrix(tensor_name, mapped);
             const auto tstats = statistics_data->find(key);
             if (tstats != statistics_data->end() && !tstats->second.empty()) {
-                ecs = tstats->second.front();
-                important = ecs == 100.0f; // mark as important if ecs is 100%
+                float ecs = 0.0f; // Euclidean-Cosine score
+                float l2 = 0.0f;  // L2 Euclidean Distance
+                float cs = 0.0f;  // Cosine Similarity
+                try {
+                    // ecs = tstats->second.at(0);
+                    l2 = tstats->second.at(1);
+                    cs = tstats->second.at(2);
+                } catch (std::out_of_range &) {
+                    LLAMA_LOG_ERROR("\t%s: insufficient statistics for tensor %s\n", func, tensor_name.c_str());
+                    return false;
+                }
+                ecs = 100.0f - (100.0f / (1.0f + 0.01f * l2 * l2) * std::fabs(cs)); // ecs = 100 - (100 / (1 + (L2 Dist/p)^2) * |Cos Sim|^q)
+                // LLAMA_LOG_INFO("\t%s: tensor %s has ECS score %.4f (L2 Distance %.4f and CosSim %.4f\n", func, tensor_name.c_str(), ecs, l2, cs);
+                important = ecs >= 99.99f; // mark as important if ecs is >= 99.99%
             }
         } else {
             important = tensor_name == "output.weight" ||
