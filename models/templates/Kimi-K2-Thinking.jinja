@@ -25,7 +25,7 @@
 {%- endmacro -%}
 
 {%- set tool_response_queue = namespace(ids=[]) -%}
-{%- set tool_call_counter = namespace(value=0) -%}
+{%- set tool_call_counter = namespace(value=1) -%}
 
 {%- macro render_toolcalls(message) -%}
   <|tool_calls_section_begin|>
