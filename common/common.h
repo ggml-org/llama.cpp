@@ -322,6 +322,11 @@ struct common_params {
 
     struct common_params_model model;
 
+    // MPGGUF (mixed-precision GGUF) support
+    std::string mpgguf_file          = ""; // path to mpgguf file                                           // NOLINT
+    std::vector<char> mpgguf_activation_pattern; // activation pattern for MoE experts (H/L)               // NOLINT
+    bool use_mpgguf                  = false; // use mpgguf file instead of regular gguf                  // NOLINT
+
     std::string model_alias          = ""; // model alias                                                   // NOLINT
     std::string hf_token             = ""; // HF token                                                      // NOLINT
     std::string prompt               = "";                                                                  // NOLINT

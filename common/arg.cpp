@@ -2082,6 +2082,50 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}).set_env("LLAMA_ARG_MODEL"));
     add_opt(common_arg(
+        {"-mp", "--mpgguf"}, "FNAME",
+        "model path for mixed-precision GGUF file",
+        [](common_params & params, const std::string & value) {
+            params.mpgguf_file = value;
+            params.use_mpgguf = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"-a", "--activation"}, "PATTERN",
+        "activation pattern for MoE experts (e.g., \"H,H,L,L\" or \"[H,H,L,L]\")",
+        [](common_params & params, const std::string & value) {
+            // Parse activation pattern
+            std::string pattern = value;
+            // Remove brackets if present
+            if (!pattern.empty() && pattern.front() == '[') {
+                pattern = pattern.substr(1);
+            }
+            if (!pattern.empty() && pattern.back() == ']') {
+                pattern.pop_back();
+            }
+            // Split by comma and extract H/L characters
+            params.mpgguf_activation_pattern.clear();
+            size_t pos = 0;
+            while (pos < pattern.size()) {
+                // Skip whitespace and commas
+                while (pos < pattern.size() && (pattern[pos] == ' ' || pattern[pos] == ',')) {
+                    pos++;
+                }
+                if (pos < pattern.size()) {
+                    char c = pattern[pos];
+                    if (c == 'H' || c == 'h' || c == 'L' || c == 'l') {
+                        params.mpgguf_activation_pattern.push_back(c);
+                    } else {
+                        throw std::invalid_argument("activation pattern must contain only H or L characters");
+                    }
+                    pos++;
+                }
+            }
+            if (params.mpgguf_activation_pattern.empty()) {
+                throw std::invalid_argument("activation pattern cannot be empty");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",
         [](common_params & params, const std::string & value) {

@@ -291,6 +291,9 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // MPGGUF (mixed-precision GGUF) support
+        const char * mpgguf_activation_pattern; // activation pattern for MoE experts (e.g., "H,H,L,L"), NULL if not using mpgguf
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool use_mmap;        // use mmap if possible
@@ -298,6 +301,7 @@ extern "C" {
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
+        bool use_mpgguf;      // use mpgguf loader for mixed-precision MoE models
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

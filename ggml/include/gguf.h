@@ -37,6 +37,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define GGUF_MAGIC   "GGUF"
 #define GGUF_VERSION 3
@@ -45,9 +46,52 @@
 
 #define GGUF_DEFAULT_ALIGNMENT 32
 
+#define MPGGUF_MAX_NAME_LEN 256
+#define MPGGUF_MAX_DIMS 6
+#define MPGGUF_MAGIC "MPGGUF3"
+#define MPGGUF_VERSION 3
+
 #ifdef  __cplusplus
 extern "C" {
 #endif
+
+    // MPGGUF structures (C-compatible)
+
+    // Tensor record in the MPGGUF file
+    struct mpgguf_tensor_rec {
+        char     name[MPGGUF_MAX_NAME_LEN];
+        uint32_t n_dims;
+        int64_t  dims[MPGGUF_MAX_DIMS];
+        uint32_t flags;
+        uint32_t ggml_type_low;
+        uint32_t ggml_type_high;
+        uint32_t ggml_type_fp;
+        uint64_t offset_low;
+        uint64_t size_low;
+        uint64_t offset_high;
+        uint64_t size_high;
+        uint64_t offset_fp;
+        uint64_t size_fp;
+    };
+
+    // MPGGUF file structure
+    struct mpgguf_file {
+        struct mpgguf_tensor_rec * tensors;
+        size_t                     n_tensors;
+        uint8_t                  * kv_data;
+        size_t                     kv_size;
+        uint32_t                   kv_cnt;
+        uint64_t                   data_offset;
+        FILE                     * file;
+        char                       file_path[512];
+        char                     * activation_pattern;
+        size_t                     activation_pattern_size;
+    };
+
+    // MPGGUF helper functions
+    GGML_API struct mpgguf_file *  mpgguf_open(const char * fname);
+    GGML_API void                  mpgguf_close(struct mpgguf_file * mpgguf);
+    GGML_API bool                  mpgguf_is_moe_expert_tensor(const char * name);
 
     // types that can be stored as GGUF KV data
     enum gguf_type {
@@ -78,6 +122,8 @@ extern "C" {
 
     GGML_API struct gguf_context * gguf_init_empty(void);
     GGML_API struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_params params);
+    GGML_API struct gguf_context * gguf_init_from_mpgguf(struct mpgguf_file * mpgguf,
+                                                          struct gguf_init_params params);
     //GGML_API struct gguf_context * gguf_init_from_buffer(..);
 
     GGML_API void gguf_free(struct gguf_context * ctx);

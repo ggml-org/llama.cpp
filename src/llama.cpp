@@ -4,6 +4,7 @@
 #include "llama-mmap.h"
 #include "llama-vocab.h"
 #include "llama-model-loader.h"
+#include "llama-mpgguf-loader.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
 
@@ -16,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <memory>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -108,7 +110,34 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
     model.t_start_us = tm.t_start_us;
 
     try {
-        llama_model_loader ml(fname, splits, params.use_mmap, params.check_tensors, params.kv_overrides, params.tensor_buft_overrides);
+        // Create appropriate loader based on whether mpgguf mode is enabled
+        llama_model_loader * ml_ptr = nullptr;
+        std::unique_ptr<llama_mpgguf_loader> mpgguf_loader_ptr;
+        std::unique_ptr<llama_model_loader> regular_loader_ptr;
+        
+        if (params.use_mpgguf && params.mpgguf_activation_pattern != nullptr) {
+            // Parse activation pattern from string
+            std::vector<char> activation_pattern;
+            const char* p = params.mpgguf_activation_pattern;
+            while (*p) {
+                if (*p == 'H' || *p == 'h' || *p == 'L' || *p == 'l') {
+                    activation_pattern.push_back(*p);
+                }
+                p++;
+            }
+            
+            LLAMA_LOG_INFO("%s: using MPGGUF loader with activation pattern of %zu experts\n", __func__, activation_pattern.size());
+            mpgguf_loader_ptr.reset(new llama_mpgguf_loader(
+                fname, splits, params.use_mmap, params.check_tensors, 
+                params.kv_overrides, params.tensor_buft_overrides, 
+                activation_pattern));
+            ml_ptr = mpgguf_loader_ptr.get();
+        } else {
+            regular_loader_ptr.reset(new llama_model_loader(fname, splits, params.use_mmap, params.check_tensors, params.kv_overrides, params.tensor_buft_overrides));
+            ml_ptr = regular_loader_ptr.get();
+        }
+        
+        llama_model_loader & ml = *ml_ptr;
 
         ml.print_info();
 

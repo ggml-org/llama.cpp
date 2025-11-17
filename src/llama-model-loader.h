@@ -92,6 +92,12 @@ struct llama_model_loader {
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
 
+protected:
+    // Protected default constructor for derived classes (e.g., llama_mpgguf_loader)
+    // that need to initialize members manually
+    llama_model_loader() = default;
+
+public:
     llama_model_loader(
         const std::string & fname,
         std::vector<std::string> & splits, // optional, only need if the split does not follow naming scheme
@@ -154,7 +160,8 @@ struct llama_model_loader {
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 
     // for backwards compatibility, does not support ggml-backend
-    void load_data_for(struct ggml_tensor * cur) const;
+    // Made virtual to allow MPGGUF loader to override for precision selection
+    virtual void load_data_for(struct ggml_tensor * cur) const;
 
     // Returns false if cancelled by progress_callback
     bool load_all_data(

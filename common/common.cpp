@@ -950,10 +950,22 @@ struct common_init_result common_init_from_params(common_params & params) {
     common_init_result iparams;
     auto mparams = common_model_params_to_llama(params);
 
-    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
+    // Determine which model file to load
+    const char * model_path = nullptr;
+    if (params.use_mpgguf && !params.mpgguf_file.empty()) {
+        model_path = params.mpgguf_file.c_str();
+        LOG_INF("%s: loading mixed-precision GGUF file: %s\n", __func__, model_path);
+        LOG_INF("%s: activation pattern has %zu expert settings\n", __func__, params.mpgguf_activation_pattern.size());
+        // Note: mpgguf loading will be handled through a custom loader
+        // For now, we load it as a regular GGUF and the mpgguf format should be backward-compatible with metadata
+    } else {
+        model_path = params.model.path.c_str();
+    }
+
+    llama_model * model = llama_model_load_from_file(model_path, mparams);
     if (model == NULL) {
         LOG_ERR("%s: failed to load model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
-            __func__, params.model.path.c_str());
+            __func__, model_path);
         return iparams;
     }
 
@@ -1184,6 +1196,17 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
 
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
+
+    // MPGGUF support
+    mparams.use_mpgguf = params.use_mpgguf;
+    if (params.use_mpgguf && !params.mpgguf_activation_pattern.empty()) {
+        // Convert vector<char> to null-terminated string for C API
+        static std::string pattern_str; // static to keep it alive
+        pattern_str = std::string(params.mpgguf_activation_pattern.begin(), params.mpgguf_activation_pattern.end());
+        mparams.mpgguf_activation_pattern = pattern_str.c_str();
+    } else {
+        mparams.mpgguf_activation_pattern = nullptr;
+    }
 
     return mparams;
 }
