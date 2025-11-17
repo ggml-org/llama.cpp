@@ -475,6 +475,12 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         } else {
             ggml_cpy_flt_cuda<nv_bfloat16, float>   (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
         }
+    } else if (src0->type == GGML_TYPE_I32 && src1->type == GGML_TYPE_I32) {
+        if (can_be_transposed) {
+            ggml_cpy_flt_cuda<int32_t, int32_t, true>         (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        } else {
+            ggml_cpy_flt_cuda<int32_t, int32_t>     (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_I32) {
         if (contiguous_srcs) {
             ggml_cpy_flt_contiguous_cuda<float, int32_t>     (src0_ddc, src1_ddc, ne, main_stream);
