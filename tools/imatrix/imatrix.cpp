@@ -1043,14 +1043,21 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         int64_t nval = ggml_nelements(in_sum2);
         if (e.values.empty()) {
             e.values.resize(nval, 0.0f);
-            if (in_sum != nullptr) {
-                e.activations.resize(nval, 0.0f);
-            }
         } else if ((size_t) nval != e.values.size()) {
             LOG_ERR("%s: mismatched sums size for %s: %zu != %zu\n", __func__, name.c_str(), (size_t) nval, e.values.size());
             gguf_free(ctx_gguf);
             ggml_free(ctx);
             return false;
+        }
+        if (in_sum != nullptr) {
+            if (e.activations.empty()) {
+                e.activations.resize(nval, 0.0f);
+            } else if ((size_t) nval != e.activations.size()) {
+                LOG_ERR("%s: mismatched activations size for %s: %zu != %zu\n", __func__, name.c_str(), (size_t) nval, e.activations.size());
+                gguf_free(ctx_gguf);
+                ggml_free(ctx);
+                return false;
+            }
         }
 
         int64_t ncounts = ggml_nelements(counts);
