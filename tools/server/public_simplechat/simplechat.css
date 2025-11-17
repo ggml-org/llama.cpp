@@ -43,7 +43,7 @@ body {
     border-style: solid;
     border-color: grey;
     border-width: thin;
-    border-radius: 0.5vmin;
+    border-radius: 1vmin;
     display: flex;
     margin-bottom: 2vh;
     /* box-shadow: 1px 1px 4px lightslategray; */
@@ -111,6 +111,10 @@ body {
     padding: 0;
     border-radius: 0.5vmin;
     border-color: lightgray;
+    min-width: fit-content;
+    max-width: fit-content;
+    min-height: fit-content;
+    max-height: fit-content;
 }
 
 
@@ -146,9 +150,15 @@ body {
 #user-in[data-role="TOOL.TEMP"] {
     background-color: lightyellow;
 }
-button {
+#user-in-div button {
     padding-inline: 2vmin;
     border-radius: 2vmin;
+    min-height: 3vmin;
+}
+button {
+    padding-inline: 2vmin;
+    border-radius: 1vmin;
+    min-height: 3vmin;
 }
 
 .sameline {
