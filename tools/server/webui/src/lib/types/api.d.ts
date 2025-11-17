@@ -12,6 +12,17 @@ export interface ApiChatCompletionTool {
 	function: ApiChatCompletionToolFunction;
 }
 
+export interface ApiChatCompletionToolFunction {
+	name: string;
+	description?: string;
+	parameters: Record<string, unknown>;
+}
+
+export interface ApiChatCompletionTool {
+	type: 'function';
+	function: ApiChatCompletionToolFunction;
+}
+
 export interface ApiChatMessageContentPart {
 	type: ContentPartType;
 	text?: string;

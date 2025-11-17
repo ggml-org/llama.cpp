@@ -7,12 +7,14 @@
 		Monitor,
 		ChevronLeft,
 		ChevronRight,
-		Database
+		Database,
+		Cable
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
-		ChatSettingsFields
+		ChatSettingsFields,
+		McpSettingsSection
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -244,7 +246,28 @@
 			]
 		},
 		{
-			title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
+			title: 'MCP Client',
+			icon: Cable,
+			fields: [
+				{
+					key: 'agenticMaxTurns',
+					label: 'Agentic loop max turns',
+					type: 'input'
+				},
+				{
+					key: 'agenticMaxToolPreviewLines',
+					label: 'Max lines per tool preview',
+					type: 'input'
+				},
+				{
+					key: 'agenticFilterReasoningAfterFirstTurn',
+					label: 'Filter reasoning after first turn',
+					type: 'checkbox'
+				}
+			]
+		},
+		{
+			title: 'Import/Export',
 			icon: Database,
 			fields: []
 		},
@@ -331,6 +354,29 @@
 
 		// Convert numeric strings to numbers for numeric fields
 		const processedConfig = { ...localConfig };
+		const numericFields = [
+			'temperature',
+			'top_k',
+			'top_p',
+			'min_p',
+			'max_tokens',
+			'pasteLongTextToFileLen',
+			'dynatemp_range',
+			'dynatemp_exponent',
+			'typ_p',
+			'xtc_probability',
+			'xtc_threshold',
+			'repeat_last_n',
+			'repeat_penalty',
+			'presence_penalty',
+			'frequency_penalty',
+			'dry_multiplier',
+			'dry_base',
+			'dry_allowed_length',
+			'dry_penalty_last_n',
+			'agenticMaxTurns',
+			'agenticMaxToolPreviewLines'
+		];
 
 		for (const field of NUMERIC_FIELDS) {
 			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
@@ -481,6 +527,16 @@
 
 				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
+				{:else if currentSection.title === 'MCP Client'}
+					<div class="space-y-6">
+						<McpSettingsSection {localConfig} onConfigChange={handleConfigChange} />
+						<ChatSettingsFields
+							fields={currentSection.fields}
+							{localConfig}
+							onConfigChange={handleConfigChange}
+							onThemeChange={handleThemeChange}
+						/>
+					</div>
 				{:else}
 					<div class="space-y-6">
 						<ChatSettingsFields
