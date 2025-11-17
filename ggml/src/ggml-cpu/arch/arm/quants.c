@@ -1419,17 +1419,23 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 // Computes: result = sum((w_r + i*w_i) * (a_r + i*a_i)) 
 // 共轭乘法
 // where w_r, w_i are 2-bit quantized weights
-// and a_r, a_i are activations stored in separate q8_K blocks
-void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
-                            const void * GGML_RESTRICT vx, size_t bx,
-                            const void * GGML_RESTRICT vy, size_t by, int nrc) {
+// and a_r, a_i are activations stored in separate ifairy_q16 blocks
+
+void ggml_vec_dot_ifairy_q16_K(
+        int n,
+        float * GGML_RESTRICT s, size_t bs,
+        const void * GGML_RESTRICT vx, size_t bx,
+        const void * GGML_RESTRICT vy, size_t by,
+        int nrc) {
+
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
     UNUSED(by);
     UNUSED(bs);
 #if defined(__ARM_NEON)
-    const block_ifairy * GGML_RESTRICT w = vx;
+
+    const block_ifairy     * GGML_RESTRICT w = vx;
     const block_ifairy_q16 * GGML_RESTRICT x = vy;
 
     const int nb = n / QK_K;
@@ -1438,48 +1444,88 @@ void ggml_vec_dot_ifairy_q8_K(int n, float * GGML_RESTRICT s, size_t bs,
     float sum_imag = 0.0f;
 
     for (int i = 0; i < nb; ++i) {
-        int16x4_t sum_ac = vdup_n_s16(0);
-        int16x4_t sum_bd = vdup_n_s16(0);
-        int16x4_t sum_ad = vdup_n_s16(0);
-        int16x4_t sum_bc = vdup_n_s16(0);
+        // acc[0] = sum_ac, acc[1] = sum_bd, acc[2] = sum_ad, acc[3] = sum_bc
+        int32x4_t acc = vdupq_n_s32(0);
 
-        for (size_t j = 0; j < sizeof(w->qs); j += 32) {
+        // w[i].qs: 每个 byte 编 4 个 2-bit 权重
+        for (size_t j = 0; j < sizeof(w[i].qs); j += 32) {
             for (size_t k = 0; k < 32; ++k) {
-                // 解包权重
-                uint8_t weight = w->qs[j + k];
+                uint8_t weight = w[i].qs[j + k];
+                size_t base = (j + k) * 4; // 对应到激活数组中的起始下标
+
+                // l = 0..3，对应一个 byte 中的 4 个 2-bit 权重
                 for (size_t l = 0; l < 4; ++l) {
-                    int8_t w_val = (weight >> (l*2)) & 3;
-                    int8_t c = x[i].x_real[(j + k) * 4 + l];
-                    int8_t d = x[i].x_imag[(j + k) * 4 + l];
-                    // NEON 并行累加
-                    if      (w_val == 1) { sum_ac = vadd_s16(sum_ac, vdup_n_s16(c)); sum_ad = vadd_s16(sum_ad, vdup_n_s16(d)); }
-                    else if (w_val == 0) { sum_ac = vsub_s16(sum_ac, vdup_n_s16(c)); sum_ad = vsub_s16(sum_ad, vdup_n_s16(d)); }
-                    else if (w_val == 3) { sum_bc = vadd_s16(sum_bc, vdup_n_s16(c)); sum_bd = vadd_s16(sum_bd, vdup_n_s16(d)); }
-                    else if (w_val == 2) { sum_bc = vsub_s16(sum_bc, vdup_n_s16(c)); sum_bd = vsub_s16(sum_bd, vdup_n_s16(d)); }
+                    // a: real_w, b: imag_w, c: real_x, d: imag_x
+                    int8_t  w_val = (weight >> (l * 2)) & 3;
+                    int32_t c     = x[i].x_real[base + l];
+                    int32_t d     = x[i].x_imag[base + l];
+
+                    // delta[0] -> sum_ac, delta[1] -> sum_bd
+                    // delta[2] -> sum_ad, delta[3] -> sum_bc
+                    int32x4_t delta;
+
+                    switch (w_val) {
+                    case 1: // real +1 : sum_ac += c, sum_ad += d
+                        delta = (int32x4_t){  c,  0,  d,  0 };
+                        acc   = vaddq_s32(acc, delta);
+                        break;
+
+                    case 0: // real -1 : sum_ac -= c, sum_ad -= d
+                        delta = (int32x4_t){ -c,  0, -d,  0 };
+                        acc   = vaddq_s32(acc, delta);
+                        break;
+
+                    case 3: // imag +1 : sum_bc += c, sum_bd += d
+                        delta = (int32x4_t){  0,  d,  0,  c };
+                        acc   = vaddq_s32(acc, delta);
+                        break;
+
+                    case 2: // imag -1 : sum_bc -= c, sum_bd -= d
+                        delta = (int32x4_t){  0, -d,  0, -c };
+                        acc   = vaddq_s32(acc, delta);
+                        break;
+
+                    default:
+                        // 不会进来，这里只是防御性留空
+                        break;
+                    }
                 }
             }
         }
-        // NEON 累加到标量
-        int16_t ac = vaddv_s16(sum_ac);
-        int16_t bd = vaddv_s16(sum_bd);
-        int16_t ad = vaddv_s16(sum_ad);
-        int16_t bc = vaddv_s16(sum_bc);
 
-        // Apply scales
-        const float w_real = GGML_CPU_FP16_TO_FP32(w[i].d_real);
-        const float w_imag = GGML_CPU_FP16_TO_FP32(w[i].d_imag);
-        const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
-        const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
+        // 把 4 个累加结果取出来
+        int32_t sums[4];
+        vst1q_s32(sums, acc);
+        int32_t sum_ac = sums[0];
+        int32_t sum_bd = sums[1];
+        int32_t sum_ad = sums[2];
+        int32_t sum_bc = sums[3];
 
-        // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-        sum_real += w_real * x_real * (float)ac - w_imag * x_imag * (float)bd;
-        sum_imag += w_real * x_imag * (float)ad + w_imag * x_real * (float)bc;
+        // 与 generic 保持一致的 scale 使用方式
+        const float w_real = w[i].d_real;
+        const float w_imag = w[i].d_imag;
+        const float x_real = x[i].d_real;
+        const float x_imag = x[i].d_imag;
+
+        // (a+bi)(c+di) = (ac+bd) + (-ad+bc)i
+        sum_real += w_real * x_real * (float) sum_ac
+                  + w_imag * x_imag * (float) sum_bd;
+        if (sum_real != sum_real) {
+            GGML_ABORT("ifairy neon: real NaN discovered");
+        }
+
+        sum_imag += w_imag * x_real * (float) sum_bc
+                  - w_real * x_imag * (float) sum_ad;
+        if (sum_imag != sum_imag) {
+            GGML_ABORT("ifairy neon: imag NaN discovered");
+        }
     }
 
-    ((ggml_bf16_t*)s)[0] = GGML_FP32_TO_BF16(sum_real);
-    ((ggml_bf16_t*)s)[1] = GGML_FP32_TO_BF16(sum_imag);
+    ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real);
+    ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag);
 
-#else  // 非ARM平台，回退到标量实现
+#else
+    // 非 ARM 平台，直接走 generic
     ggml_vec_dot_ifairy_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }

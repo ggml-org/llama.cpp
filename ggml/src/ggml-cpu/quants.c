@@ -443,7 +443,7 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 // Complex 2-bit quantization dot product for Fairy±i model
 // Computes: result = sum((real_w + i*imag_w) * (real_act + i*imag_act)) (要对激活取共轭)
 // We use q8_K for both real and imaginary activation parts stored sequentially
-void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -491,7 +491,7 @@ void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
         const float x_imag = x[i].d_imag;
         //GGML_LOG("w_real: %f, w_imag: %f, x_real: %f, x_imag: %f\n", w_real, w_imag, x_real, x_imag);
 
-        // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+        // Complex multiplication: (a+bi)(c+di) = (ac+bd) + (-ad+bc)i
         sum_real += w_real * x_real * (float)sum_ac + w_imag * x_imag * (float)sum_bd;
         if(sum_real != sum_real){
             GGML_ABORT("nan discoverd, w_real is %f, w_imag is %f, x_real is %f, x_imag is %f, sum_ac is %d, sum_bd is %d\n",
