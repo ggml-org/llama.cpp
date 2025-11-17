@@ -27,8 +27,10 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
         ggml_tensor * cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "attn_post_norm", il);
 
         ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
+        cb(cur, "wqkv", il);
 
         const int32_t n_head    = hparams.n_head(il);
         const int32_t n_head_kv = hparams.n_head_kv(il);
@@ -44,8 +46,14 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
         ggml_tensor * Vcur = ggml_view_3d(ctx0, qkv, head_dim_v, n_head_kv, n_tokens,
                 head_dim_v * sizeof(float), qkv->nb[1], v_offset * ggml_element_size(qkv));
 
+        cb(Qcur, "Qcur", il);
+        cb(Kcur, "Kcur", il);
+        cb(Vcur, "Vcur", il);
+    
         Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
+        cb(Qcur, "attn_q_norm", il);
         Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
+        cb(Kcur, "attn_k_norm", il);
 
         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
                 n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
@@ -65,6 +73,7 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
                     model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, attn_scale, il);
         }
+        cb(cur, "attn_out", il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
@@ -72,25 +81,36 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
         }
 
         cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "attn_post_norm", il);
+
         cur = ggml_add(ctx0, cur, residual);
+        cb(cur, "attn_residual", il);
+
         residual = cur;
 
         cur = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "ffn_norm", il);
 
         ggml_tensor * ffn_up   = build_lora_mm(model.layers[il].ffn_up,   cur);
+        cb(ffn_up, "ffn_up", il);
+
         ggml_tensor * ffn_gate = build_lora_mm(model.layers[il].ffn_gate, cur);
+        cb(ffn_gate, "ffn_gate", il);
+
         ggml_tensor * ffn_act  = ggml_swiglu_split(ctx0, ffn_gate, ffn_up);
+        cb(ffn_act, "ffn_act", il);
 
         cur = build_lora_mm(model.layers[il].ffn_down, ffn_act);
-        cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "ffn_down", il);
 
-        if (il == n_layer - 1 && inp_out_ids) {
-            cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
-            residual = ggml_get_rows(ctx0, residual, inp_out_ids);
-        }
+        cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "ffn_post_norm", il);
 
         cur = ggml_add(ctx0, cur, residual);
+        cb(cur, "ffn_residual", il);
+
         cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
         inpL = cur;
     }
 
