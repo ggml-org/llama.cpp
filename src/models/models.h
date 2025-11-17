@@ -57,6 +57,10 @@ struct llm_build_rwkv7_base : public llm_graph_context {
                                        int                  il) const;
 };
 
+struct llm_build_afmoe : public llm_graph_context {
+    llm_build_afmoe(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_apertus : public llm_graph_context {
     llm_build_apertus(const llama_model & model, const llm_graph_params & params);
 };
@@ -359,6 +363,10 @@ struct llm_build_openelm : public llm_graph_context {
 
 struct llm_build_orion : public llm_graph_context {
     llm_build_orion(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_pangu_embedded : public llm_graph_context {
+    llm_build_pangu_embedded(const llama_model & model, const llm_graph_params & params);
 };
 
 struct llm_build_phi2 : public llm_graph_context {

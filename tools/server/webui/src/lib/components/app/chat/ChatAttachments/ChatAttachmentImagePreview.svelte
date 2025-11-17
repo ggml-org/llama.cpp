@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { X } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { RemoveButton } from '$lib/components/app';
 
 	interface Props {
 		id: string;
@@ -26,12 +25,12 @@
 		class: className = '',
 		// Default to small size for form previews
 		width = 'w-auto',
-		height = 'h-24',
+		height = 'h-16',
 		imageClass = ''
 	}: Props = $props();
 </script>
 
-<div class="relative overflow-hidden rounded-lg border border-border bg-muted {className}">
+<div class="group relative overflow-hidden rounded-lg border border-border bg-muted {className}">
 	{#if onClick}
 		<button
 			type="button"
@@ -55,17 +54,9 @@
 
 	{#if !readonly}
 		<div
-			class="absolute top-1 right-1 flex items-center justify-center opacity-0 transition-opacity hover:opacity-100"
+			class="absolute top-1 right-1 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
 		>
-			<Button
-				type="button"
-				variant="ghost"
-				size="sm"
-				class="h-6 w-6 bg-white/20 p-0 text-white hover:bg-white/30"
-				onclick={() => onRemove?.(id)}
-			>
-				<X class="h-3 w-3" />
-			</Button>
+			<RemoveButton {id} {onRemove} class="text-white" />
 		</div>
 	{/if}
 </div>

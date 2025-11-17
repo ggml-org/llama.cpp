@@ -367,7 +367,13 @@ struct ggml_backend_hexagon_buffer_context {
     ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool repack) {
         size += 4 * 1024;  // extra page for padding
 
-        this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        if (rpcmem_alloc2) {
+            this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        } else {
+            GGML_LOG_INFO("ggml-hex: %s rpcmem_alloc2 not found, falling back to rpcmem_alloc\n", sess->name.c_str());
+            this->base = (uint8_t *) rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        }
+
         if (!this->base) {
             GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer : size %zu\n", sess->name.c_str(), size);
             throw std::runtime_error("ggml-hex: rpcmem_alloc failed (see log for details)");
@@ -1679,12 +1685,13 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     }
 
     // Get session URI
-    char htp_uri[256];
-    sprintf(htp_uri, "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0", opt_arch);
 
     char session_uri[256];
     {
-        struct remote_rpc_get_uri u;
+        char htp_uri[256];
+        snprintf(htp_uri, sizeof(htp_uri), "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0", opt_arch);
+
+        struct remote_rpc_get_uri u = {};
         u.session_id      = this->session_id;
         u.domain_name     = const_cast<char *>(CDSP_DOMAIN_NAME);
         u.domain_name_len = strlen(CDSP_DOMAIN_NAME);
@@ -1695,8 +1702,12 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
         int err = remote_session_control(FASTRPC_GET_URI, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
-            GGML_LOG_ERROR("ggml-hex: failed to get URI for session %d : error 0x%x\n", dev_id, err);
-            throw std::runtime_error("ggml-hex: remote_session_control(get-uri) failed (see log for details)");
+            // fallback to single session uris
+            int htp_URI_domain_len = strlen(htp_uri) + MAX_DOMAIN_NAMELEN;
+
+            snprintf(session_uri, htp_URI_domain_len, "%s%s", htp_uri, my_domain->uri);
+
+            GGML_LOG_WARN("ggml-hex: failed to get URI for session %d : error 0x%x. Falling back to single session URI: %s\n", dev_id, err, session_uri);
         }
     }
 
@@ -3145,26 +3156,17 @@ static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op
     return (op0 && op0->src[1] == op1->src[1]);
 }
 
+static inline bool is_compute_op(ggml_tensor *node)
+{
+    return !(ggml_op_is_empty(node->op) || ggml_is_empty(node));
+}
+
 // scan the graph and figure out last compute op index
 static inline int last_compute_op(ggml_cgraph * graph) {
-    int last;
+    int last = 0;
     for (int i = 0; i < graph->n_nodes; ++i) {
-        ggml_tensor * node = graph->nodes[i];
-
-        switch (node->op) {
-            case GGML_OP_MUL_MAT:
-            case GGML_OP_MUL_MAT_ID:
-            case GGML_OP_MUL:
-            case GGML_OP_ADD:
-            case GGML_OP_SUB:
-            case GGML_OP_RMS_NORM:
-            case GGML_OP_GLU:
-            case GGML_OP_ADD_ID:
-                last = i;
-                break;
-
-            default:
-                break;
+        if (is_compute_op(graph->nodes[i])) {
+            last = i;
         }
     }
 
@@ -3182,6 +3184,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * node = graph->nodes[i];
+
+        if (!is_compute_op(node)) {
+            continue;
+        }
 
         uint32_t flags = 0;
 
@@ -3232,14 +3238,6 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_ROPE:
                 ggml_hexagon_rope(node, flags);
-                break;
-
-            // non-compute ops
-            case GGML_OP_NONE:
-            case GGML_OP_RESHAPE:
-            case GGML_OP_VIEW:
-            case GGML_OP_PERMUTE:
-            case GGML_OP_TRANSPOSE:
                 break;
 
             default:
@@ -3666,6 +3664,11 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
             GGML_LOG_ERROR("ggml-hex: failed to query HTP version (err %d) defaulting to v73\n", err);
             opt_arch = 73;
         }
+    }
+
+    if(opt_arch < 75) {
+        opt_ndev = 1;
+        GGML_LOG_WARN("ggml-hex: forcing ndev to 1 for SoCs archs lower than v75.\n");
     }
 
     GGML_LOG_INFO("ggml-hex: Hexagon Arch version v%d\n", opt_arch);

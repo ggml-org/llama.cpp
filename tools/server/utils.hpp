@@ -9,14 +9,6 @@
 #include "mtmd-helper.h"
 #include "chat.h"
 
-// increase max payload length to allow use of larger context size
-#define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
-// increase backlog size to avoid connection resets for >> 1 slots
-#define CPPHTTPLIB_LISTEN_BACKLOG 512
-// increase max URI length to handle longer prompts in query string
-#define CPPHTTPLIB_REQUEST_URI_MAX_LENGTH 32768
-// disable Nagle's algorithm
-#define CPPHTTPLIB_TCP_NODELAY true
 #include <cpp-httplib/httplib.h>
 
 #define JSON_ASSERT GGML_ASSERT
@@ -461,15 +453,29 @@ static std::string tokens_to_output_formatted_string(const llama_context * ctx, 
     return out;
 }
 
+// note: if data is a json array, it will be sent as multiple events, one per item
 static bool server_sent_event(httplib::DataSink & sink, const json & data) {
-    const std::string str =
-        "data: " +
-        data.dump(-1, ' ', false, json::error_handler_t::replace) +
-        "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
+    static auto send_single = [](httplib::DataSink & sink, const json & data) -> bool {
+        const std::string str =
+            "data: " +
+            data.dump(-1, ' ', false, json::error_handler_t::replace) +
+            "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
 
-    LOG_DBG("data stream, to_send: %s", str.c_str());
+        LOG_DBG("data stream, to_send: %s", str.c_str());
+        return sink.write(str.c_str(), str.size());
+    };
 
-    return sink.write(str.c_str(), str.size());
+    if (data.is_array()) {
+        for (const auto & item : data) {
+            if (!send_single(sink, item)) {
+                return false;
+            }
+        }
+    } else {
+        return send_single(sink, data);
+    }
+
+    return true;
 }
 
 //
@@ -1212,7 +1218,7 @@ public:
             for (auto it = tokens.map_idx_to_media.begin(); it != tokens.map_idx_to_media.end(); ) {
                 auto * chunk = tokens.map_idx_to_media[it->first].get();
                 mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
-                map_idx_to_media[start_idx+it->first] = std::move(new_chunk);
+                map_idx_to_media[start_idx + it->first] = std::move(new_chunk);
             }
         }
     }
@@ -1244,6 +1250,7 @@ public:
     }
 
     void clear() {
+        map_idx_to_media.clear();
         tokens.clear();
     }
 
