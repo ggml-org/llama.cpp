@@ -1347,6 +1347,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 }
 
 static bool show_statistics(const common_params & params) {
+    g_collector.set_params(params);
     std::vector<tensor_statistics> ts;
     if (params.in_files.empty() || params.in_files.size() > 1) {
         LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
@@ -1374,13 +1375,17 @@ static bool show_statistics(const common_params & params) {
         return false;
     }
 
-    bool legacy;
     if (has_activations && no_activations) {
         LOG_ERR("Error: %s has mixed tensors with and without activations\n\n", params.in_files[0].c_str());
         return false;
     }
 
-    legacy = !has_activations;
+    const bool legacy = !has_activations;
+    if (!legacy && no_activations) {
+        LOG_ERR("Error: %s is in new-format but some tensors are missing activations.\n\n", params.in_files[0].c_str());
+        return false;
+    }
+
     compute_tensor_statistics(ts);
 
     struct tensor_comparer {
