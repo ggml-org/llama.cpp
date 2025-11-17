@@ -5673,6 +5673,93 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+
+// SPARSEK: KQ mask builder using existing GGML ops
+struct test_sparsek_kq_mask : public test_case {
+    const int64_t n_kv;   // number of KV rows
+    const int64_t cols;   // number of columns (tokens * heads * streams)
+    const int32_t topk;   // how many rows to allow
+
+    std::string vars() override {
+        return VARS_TO_STR3(n_kv, cols, topk);
+    }
+
+    // Default: 8 rows, 4 columns, top-k = n_kv / 2
+    test_sparsek_kq_mask(int64_t n_kv = 8, int64_t cols = 4, int32_t topk = -1)
+        : n_kv(n_kv),
+          cols(cols),
+          topk(topk >= 0 ? topk : (int32_t)(n_kv / 2)) {
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // neg2d: base is all -INF, size [n_kv, cols]
+        ggml_tensor * neg2d = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_kv, cols);
+        ggml_set_name(neg2d, "neg2d");
+
+        // idx: indices of the rows we want to zero-out (top-k)
+        ggml_tensor * idx = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, topk);
+        ggml_set_name(idx, "idx");
+
+        // reshape to 3D to work with ggml_get_rows / ggml_set_rows
+        ggml_tensor * rows3d   = ggml_reshape_3d(ctx, neg2d, n_kv, 1, cols);
+        ggml_tensor * picked   = ggml_get_rows(ctx, rows3d, idx);      // [topk, 1, cols]
+
+        // zeros: create zeros without a new scalar – just picked - picked
+        ggml_tensor * zeros    = ggml_sub(ctx, picked, picked);       // [topk, 1, cols]
+
+        // merged3d: place the zero rows back into the selected indices
+        ggml_tensor * merged3d = ggml_set_rows(ctx, rows3d, zeros, idx);
+
+        // reshape back to 2D: [n_kv, cols]
+        ggml_tensor * out = ggml_reshape_2d(ctx, merged3d, n_kv, cols);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx);
+         t != nullptr;
+         t = ggml_get_next_tensor(ctx, t)) {
+
+        if (strcmp(t->name, "neg2d") == 0) {
+            // Fill neg2d with -INF
+            std::vector<float> buf(ggml_nelements(t), -INFINITY);
+            ggml_backend_tensor_set(
+                t,
+                buf.data(),
+                0,
+                buf.size() * sizeof(float)
+            );
+
+        } else if (strcmp(t->name, "idx") == 0) {
+            // idx = [0, 1, 2, ..., topk-1]
+            std::vector<int32_t> data(topk);
+            for (int32_t i = 0; i < topk; i++) {
+                data[i] = i;
+            }
+            ggml_backend_tensor_set(
+                t,
+                data.data(),
+                0,
+                data.size() * sizeof(int32_t)
+            );
+        }
+    }
+    }
+
+    // No NMSE computation (this test is fully deterministic)
+    double max_nmse_err() override {
+        return 0.0;
+    }
+
+    bool grad_precise() override {
+        // No gradient check for this test
+        return false;
+    }
+};
+
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -6364,6 +6451,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+        // === SparseK primitives: basic get_rows/set_rows pipeline ===
+
 
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX }) {
         for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
@@ -7339,6 +7429,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_timestep_embedding());
     test_cases.emplace_back(new test_leaky_relu());
+
+        // SPARSEK: KQ mask builder test
+    test_cases.emplace_back(new test_sparsek_kq_mask(
+        /*n_kv=*/8,
+        /*cols=*/4,
+        /*topk=*/4
+    ));
 
     for (bool v : {false, true}) {
         test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 1, 0, 1, 0, 0, 0, 0, v));
