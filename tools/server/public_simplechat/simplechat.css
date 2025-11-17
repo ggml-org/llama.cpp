@@ -3,6 +3,9 @@
  * by Humans for All
  */
 
+body {
+    background-color: #f8f9fa;
+}
 #fullbody {
     height: 98vh;
 }
@@ -40,7 +43,7 @@
     border-style: solid;
     border-color: grey;
     border-width: thin;
-    border-radius: 2px;
+    border-radius: 0.5vmin;
     display: flex;
     margin-bottom: 2vh;
     /* box-shadow: 1px 1px 4px lightslategray; */
@@ -106,6 +109,8 @@
 }
 #popover-chatmsg button {
     padding: 0;
+    border-radius: 0.5vmin;
+    border-color: lightgray;
 }
 
 
@@ -133,11 +138,17 @@
     flex-shrink: 1;
     min-height: 40vh;
 }
+#user-in {
+    background-color: #ffffff;
+    padding: 1.6vmin 2vmin;
+    border-radius: 2.5vmin;
+}
 #user-in[data-role="TOOL.TEMP"] {
     background-color: lightyellow;
 }
 button {
     padding-inline: 2vmin;
+    border-radius: 2vmin;
 }
 
 .sameline {
