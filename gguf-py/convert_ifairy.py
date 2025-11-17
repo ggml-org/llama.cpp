@@ -57,9 +57,13 @@ def set_vocab(gguf_writer):
             
 # 从hf上直接扒下来的
 def forward(w_real: torch.Tensor, w_imag: torch.Tensor):
-    w_imag = w_imag.to('cuda') # 本来没这两行，我这里不写不支持angle操作
-    w_real = w_real.to('cuda')
+    """
+    Quantize complex weights based on their phase. Works on any device.
+    """
+    if w_real.device != w_imag.device:
+        w_imag = w_imag.to(w_real.device)
 
+    # phase = torch.atan2(w_imag, w_real)
     phase = torch.angle(w_real + 1j * w_imag)
     real_pos = (phase >= -torch.pi / 4) & (phase < torch.pi / 4)
     real_neg = (phase >= 3 * torch.pi / 4) | (phase < -3 * torch.pi / 4)
@@ -389,8 +393,15 @@ def main():
                     # 对于一般的权重，需要量化，然后直接拼起来
                     tensor_data = f.get_tensor(key).to(torch.float32)
                     tensor_data = quant_and_merge(key, tensor_data, f, weight_map)
-                    numpy_array = tensor_data.cpu().numpy()
-                    numpy_array = gguf.quants.quantize(numpy_array, gguf.GGMLQuantizationType.F16_I2)
+                    raw_numpy = tensor_data.cpu().numpy()
+                    tensor_dtype = gguf.GGMLQuantizationType.F16_I2
+                    try:
+                        numpy_array = gguf.quants.quantize(raw_numpy, tensor_dtype)
+                    except gguf.QuantError as err:
+                        if verbose:
+                            print(f"F16_I2 quantization skipped for '{key}' due to: {err}. Falling back to F32 storage.")
+                        numpy_array = raw_numpy.astype(np.float32, copy=False)
+                        tensor_dtype = gguf.GGMLQuantizationType.F32
 
                     model_arch = gguf.MODEL_ARCH.IFAIRY
 
@@ -408,7 +419,7 @@ def main():
                         continue
 
                     # 添加张量，指定自定义的类型
-                    writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16_I2)
+                    writer.add_tensor(mapped_name, numpy_array, raw_dtype=tensor_dtype)
 
                     if verbose:
                         print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
