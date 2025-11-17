@@ -31,7 +31,6 @@ enum clip_flash_attn_type {
 
 struct clip_context_params {
     bool use_gpu;
-    enum ggml_log_level verbosity;
     enum clip_flash_attn_type flash_attn_type;
     int image_min_tokens;
     int image_max_tokens;
