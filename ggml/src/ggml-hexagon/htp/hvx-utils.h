@@ -726,7 +726,7 @@ static inline HVX_Vector hvx_vec_inverse_fp32(HVX_Vector v_sf) {
     return Q6_Vsf_equals_Vqf32(r_qf);
 }
 
-static inline HVX_Vector hvx_vec_inverse_fp32_guard_inf(HVX_Vector v_sf) {
+static inline HVX_Vector hvx_vec_inverse_fp32_guard(HVX_Vector v_sf) {
     static const float    kInf     = INFINITY;
     static const uint32_t kNanMask = 0x7fffffff;
     static const uint32_t kNanMin  = 0x7f800000;
@@ -959,7 +959,7 @@ static inline HVX_Vector hvx_vec_rsqrt_fp32(HVX_Vector in_vec) {
     return Q6_Vsf_equals_Vqf32(temp);
 }
 
-static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard_inf(HVX_Vector v) {
+static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard(HVX_Vector v) {
     static const float kMaxExp = -88.02f;  // log(INF)
 
     const HVX_Vector     max_exp  = Q6_V_vsplat_R(*((uint32_t *) &kMaxExp));
@@ -967,7 +967,6 @@ static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard_inf(HVX_Vector v) {
 
     HVX_Vector out = hvx_vec_fast_sigmoid_fp32(v);
     return Q6_V_vmux_QVV(pred_inf, out, Q6_V_vzero());
-
 }
 
 static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems) {
@@ -981,7 +980,7 @@ static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * 
 
 #pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {
-        v_dst[i] = hvx_vec_fast_sigmoid_fp32_guard_inf(v_src[i]);
+        v_dst[i] = hvx_vec_fast_sigmoid_fp32_guard(v_src[i]);
     }
 }
 
