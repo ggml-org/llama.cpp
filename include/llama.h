@@ -210,6 +210,13 @@ extern "C" {
         bool sorted;      // note: do not assume the data is sorted - always check this flag
     } llama_token_data_array;
 
+    struct llama_sampler_ggml_data {
+        struct ggml_tensor * logits;
+        struct ggml_tensor * probs;
+        struct ggml_tensor * sampled_token;
+        struct ggml_tensor * filtered_ids;
+    };
+
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
 
     // Input data for llama_encode/llama_decode
@@ -300,6 +307,11 @@ extern "C" {
         bool no_host;         // bypass host buffer allowing extra buffers to be used
     };
 
+    struct llama_sampler_seq_config {
+        llama_seq_id           seq_id;
+        struct llama_sampler * sampler;
+    };
+
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
     //       https://github.com/ggml-org/llama.cpp/pull/7544
     struct llama_context_params {
@@ -348,6 +360,10 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+
+        // backend sampler chain configuration
+        struct llama_sampler_seq_config * samplers;
+        size_t                            n_samplers;
     };
 
     // model quantization parameters
@@ -950,6 +966,29 @@ extern "C" {
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
 
+    // Get the backend sampled token for the ith token.
+    // Returns LLAMA_TOKEN_NULL if no token was sampled.
+    LLAMA_API llama_token llama_get_backend_sampled_token_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the backend sampled probabilites for the ith token
+    // The index matches llama_get_backend_sampled_token_ith().
+    // Returns NULL if no probabilites were generated.
+    LLAMA_API float * llama_get_backend_sampled_probs_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the backend sampled logits for the ith token
+    // Returns NULL if no logits were sampled.
+    LLAMA_API float * llama_get_backend_sampled_logits_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the backend sampled token ids associated with the sampled logits for the ith token
+    // Returns NULL if no logits were sampled.
+    LLAMA_API llama_token * llama_get_backend_sampled_token_ids_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the number of backend sampled logits for the ith token.
+    LLAMA_API uint32_t llama_get_backend_sampled_logits_count_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the number of backend sampled probabilites for the ith token.
+    LLAMA_API uint32_t llama_get_backend_sampled_probs_count_ith(struct llama_context * ctx, int32_t i);
+
     //
     // Vocab
     //
@@ -1135,6 +1174,22 @@ extern "C" {
         struct llama_sampler * (*clone) (const struct llama_sampler * smpl);                                 // can be NULL if ctx is NULL
         void                   (*free)  (      struct llama_sampler * smpl);                                 // can be NULL if ctx is NULL
 
+        void                   (*apply_ggml)(  struct llama_sampler           * smpl,
+                                               struct ggml_context            * ctx,
+                                               struct  ggml_cgraph            * gf,
+                                               struct llama_sampler_ggml_data * ggml_data);
+
+        void                   (*accept_ggml)( struct llama_sampler * smpl,
+                                               struct ggml_context  * ctx,
+                                               struct ggml_cgraph   * gf,
+                                               struct ggml_tensor   * selected_token);
+
+        void                   (*set_input_ggml)(struct llama_sampler * smpl);
+
+        void                   (*init_ggml)(struct llama_sampler      * smpl,
+                                            ggml_backend_buffer_type_t  buft);
+
+
         // TODO: API for internal libllama usage for appending the sampling to an existing ggml_cgraph
         //void (*apply_ggml) (struct llama_sampler * smpl, ...);
     };
@@ -1143,6 +1198,8 @@ extern "C" {
         const struct llama_sampler_i * iface;
         llama_sampler_context_t        ctx;
     };
+
+    LLAMA_API void llama_set_backend_sampler(struct llama_context * ctx, llama_seq_id seq_id, struct llama_sampler * smpl);
 
     // mirror of llama_sampler_i:
     LLAMA_API struct llama_sampler * llama_sampler_init  (const struct llama_sampler_i * iface, llama_sampler_context_t ctx);
@@ -1153,6 +1210,18 @@ extern "C" {
     LLAMA_API struct llama_sampler * llama_sampler_clone (const struct llama_sampler * smpl);
     // important: do not free if the sampler has been added to a llama_sampler_chain (via llama_sampler_chain_add)
     LLAMA_API void                   llama_sampler_free  (      struct llama_sampler * smpl);
+    LLAMA_API void                   llama_sampler_init_ggml(struct llama_sampler      * smpl,
+                                                             ggml_backend_buffer_type_t  buft);
+    LLAMA_API void                   llama_sampler_set_input_ggml(struct llama_sampler * smpl);
+    LLAMA_API void                   llama_sampler_apply_ggml(  struct llama_sampler           * smpl,
+                                                                struct ggml_context            * ctx,
+                                                                struct ggml_cgraph             * gf,
+                                                                struct llama_sampler_ggml_data * ggml_data);
+
+    LLAMA_API void                   llama_sampler_accept_ggml( struct llama_sampler * smpl,
+                                                                struct ggml_context  * ctx,
+                                                                struct  ggml_cgraph  * gf,
+                                                                struct ggml_tensor   * selected_token);
 
     // llama_sampler_chain
     // a type of llama_sampler that can chain multiple samplers one after another
@@ -1166,6 +1235,7 @@ extern "C" {
 
     // after removing a sampler, the chain will no longer own it, and it will not be freed when the chain is freed
     LLAMA_API struct llama_sampler * llama_sampler_chain_remove(   struct llama_sampler * chain, int32_t i);
+    LLAMA_API uint64_t               llama_sampler_chain_get_version(const struct llama_sampler * chain);
 
     // available samplers:
 
@@ -1299,8 +1369,28 @@ extern "C" {
     //
     LLAMA_API struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * vocab);
 
+    //
+    // Backend samplers
+    //
+
+    /// @details Greedy sampling on backend - always selects the token with the highest probability
+    LLAMA_API struct llama_sampler * llama_sampler_backend_init_greedy(void);
+
+    /// @details Temperature scaling on backend - scales logits by 1/temperature
+    LLAMA_API struct llama_sampler * llama_sampler_backend_init_temp(float temp);
+
+    /// @details Top-K filtering on backend - keeps only the k tokens with highest probabilities
+    LLAMA_API struct llama_sampler * llama_sampler_backend_init_top_k(int32_t k);
+
+    /// @details Distribution sampling on backend - final sampling step that selects a token
+    LLAMA_API struct llama_sampler * llama_sampler_backend_init_dist(uint32_t seed);
+
     // Returns the seed used by the sampler if applicable, LLAMA_DEFAULT_SEED otherwise
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);
+
+    LLAMA_API struct llama_sampler * llama_sampler_backend_init_logit_bias(int32_t   n_vocab,
+                                                                 int32_t   n_logit_bias,
+                                                  const llama_logit_bias * logit_bias);
 
     /// @details Sample and accept a token from the idx-th output of the last evaluation
     //

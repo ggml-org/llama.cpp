@@ -58,6 +58,16 @@ llama_context::llama_context(
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
+    // backend samplers
+    if (params.samplers != nullptr && params.n_samplers > 0) {
+        samplers.reserve(params.n_samplers);
+
+        for (size_t i = 0; i < params.n_samplers; ++i) {
+            const auto & config = params.samplers[i];
+            samplers[config.seq_id] = config.sampler;
+        }
+    }
+
     auto rope_scaling_type = params.rope_scaling_type;
     if (rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
         rope_scaling_type = hparams.rope_scaling_type_train;
@@ -424,6 +434,10 @@ llama_context::llama_context(
 
 llama_context::~llama_context() {
     ggml_opt_free(opt_ctx);
+    // TODO: perhaps use a smart pointer for samplers
+    for (auto const& [seq_id, sampler] : samplers) {
+        llama_sampler_free(sampler);
+    }
 }
 
 void llama_context::synchronize() {
@@ -610,6 +624,10 @@ float * llama_context::get_embeddings() {
     return embd;
 }
 
+llama_token * llama_context::get_backend_sampled_tokens() {
+    return sampled_tokens;
+}
+
 float * llama_context::get_embeddings_ith(int32_t i) {
     int64_t j = -1;
 
@@ -657,6 +675,98 @@ float * llama_context::get_embeddings_seq(llama_seq_id seq_id) {
     }
 
     return it->second.data();
+}
+
+llama_token llama_context::get_backend_sampled_token_ith(int32_t idx) {
+    // Handle special case where idx == -1 (single sequence exists) which is
+    // a valid index when using common_sampler_sample.
+    if (idx == -1) {
+        if (sampled_tokens_map.size() == 1) {
+            auto it = sampled_tokens_map.begin();
+            return it->second;
+        }
+        return LLAMA_TOKEN_NULL;
+    }
+
+    auto it = sampled_tokens_map.find(idx);
+    if (it == sampled_tokens_map.end()) {
+        return LLAMA_TOKEN_NULL;
+    }
+
+    return it->second;
+}
+
+float * llama_context::get_backend_sampled_probs_ith(int32_t idx) {
+    if (idx == -1) {
+        if (sampled_probs_map.size() == 1) {
+            return sampled_probs_map.begin()->second.data();
+        }
+    }
+
+    auto it = sampled_probs_map.find(idx);
+    if (it == sampled_probs_map.end()) {
+        return nullptr;
+    }
+
+    return it->second.data();
+}
+
+float * llama_context::get_backend_sampled_logits_ith(int32_t idx) {
+    if (idx == -1) {
+        if (sampled_logits_map.size() == 1) {
+            return sampled_logits_map.begin()->second.data();
+        }
+    }
+    auto it = sampled_logits_map.find(idx);
+    if (it == sampled_logits_map.end()) {
+        return nullptr;
+    }
+
+    return it->second.data();
+}
+
+const llama_token * llama_context::get_backend_sampled_token_ids_ith(int32_t idx) {
+    if (idx == -1) {
+        if (sampled_token_ids_map.size() == 1) {
+            return sampled_token_ids_map.begin()->second.data();
+        }
+    }
+    auto it = sampled_token_ids_map.find(idx);
+    if (it == sampled_token_ids_map.end() || it->second.empty()) {
+        return nullptr;
+    }
+
+    return it->second.data();
+}
+
+size_t llama_context::get_backend_sampled_logits_count(int32_t idx) const {
+    if (idx == -1) {
+        if (sampled_logits_map.size() == 1) {
+            return sampled_logits_map.begin()->second.size();
+        }
+    }
+    auto it = sampled_logits_map.find(idx);
+    if (it == sampled_logits_map.end()) {
+        return 0;
+    }
+
+    return it->second.size();
+}
+
+size_t llama_context::get_backend_sampled_probs_count(int32_t idx) const {
+    if (idx == -1) {
+        if (sampled_probs_map.size() == 1) {
+            return sampled_probs_map.begin()->second.size();
+        }
+        return 0;
+    }
+
+    auto it = sampled_probs_map.find(idx);
+    if (it == sampled_probs_map.end()) {
+        return 0;
+    }
+
+    return it->second.size();
 }
 
 void llama_context::attach_threadpool(
@@ -713,6 +823,37 @@ void llama_context::set_warmup(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
     cparams.warmup = value;
+}
+
+void llama_context::set_backend_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+    LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
+
+    auto it = samplers.find(seq_id);
+    if (it != samplers.end()) {
+        // If the sampler to be set is the same that is already set, do nothing.
+        if (it->second == sampler) {
+            return;
+        }
+
+        llama_sampler_free(it->second);
+
+        // If sampler is nullptr, we remove the samppler chain for this seq_id.
+        // chain for this seq_id.
+        if (sampler == nullptr) {
+            samplers.erase(it);
+            return;
+        }
+
+        // Otherwise, we replace the existing sampler with the new one.
+        it->second = sampler;
+        return;
+    }
+
+    // If there is no sampler for this seq_id and the caller provides a non-null
+    // sampler, we set it.
+    if (sampler != nullptr) {
+        samplers[seq_id] = sampler;
+    }
 }
 
 void llama_context::set_adapter_lora(
@@ -1029,6 +1170,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
+    sampled_probs_map.clear();
+    sampled_logits_map.clear();
+    sampled_tokens_map.clear();
+    sampled_token_ids_map.clear();
     output_swaps.clear();
 
     bool did_optimize = false;
@@ -1088,6 +1233,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
     };
 
     int64_t n_outputs_prev = 0;
+    // This flag indicates whether a backend sampler has actually sampled a specific
+    // token, or if it has produced probabilites. If true, we true we can skip
+    // the normal copying of logits and embeddings.
+    bool backend_has_sampled = false;
 
     do {
         const auto & ubatch = mctx->get_ubatch();
@@ -1147,80 +1296,131 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
-        auto * t_logits = res->get_logits();
-        auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
-
-        if (t_embd && res->get_embd_pooled()) {
-            t_embd = res->get_embd_pooled();
-        }
-
-        // extract logits
-        if (t_logits && n_outputs > 0) {
-            ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
-            GGML_ASSERT(backend_res != nullptr);
-            GGML_ASSERT(logits != nullptr);
-
-            float * logits_out = logits + n_outputs_prev*n_vocab;
-
-            if (n_outputs) {
-                GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
-                GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_size);
-                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+        std::unordered_map<llama_seq_id, int32_t> seq_to_idx;
+        for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
+            if (ubatch.output[i]) {
+                llama_seq_id seq_id = ubatch.seq_id[i][0];
+                seq_to_idx[seq_id] = i;
             }
         }
 
-        // extract embeddings
-        if (t_embd && n_outputs > 0) {
-            ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
-            GGML_ASSERT(backend_embd != nullptr);
+        // extract sampled tokens
+        for (const auto & [seq_id, t_token] : res->t_sampled_tokens) {
+            auto idx_it = seq_to_idx.find(seq_id);
+            GGML_ASSERT(idx_it != seq_to_idx.end());
+            const int32_t idx = idx_it->second;
+            ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t_token);
+            ggml_backend_tensor_get_async(backend, t_token, &sampled_tokens_map[idx], 0, sizeof(llama_token));
+        }
 
-            switch (cparams.pooling_type) {
-                case LLAMA_POOLING_TYPE_NONE:
-                    {
-                        // extract token embeddings
-                        GGML_ASSERT(embd != nullptr);
-                        float * embd_out = embd + n_outputs_prev*n_embd;
+        for (const auto & [seq_id, t_ids] : res->t_sampled_token_ids) {
+            auto idx_it = seq_to_idx.find(seq_id);
+            GGML_ASSERT(idx_it != seq_to_idx.end());
+            const int32_t idx = idx_it->second;
+            ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t_ids);
+            sampled_token_ids_map[idx].resize(ggml_nelements(t_ids));
+            ggml_backend_tensor_get_async(backend, t_ids, sampled_token_ids_map[idx].data(), 0, ggml_nbytes(t_ids));
+        }
 
-                        if (n_outputs) {
-                            GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
-                            GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd <= (int64_t) embd_size);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd*sizeof(float));
+        if (res->t_sampled_tokens.empty()) {
+            for (const auto & [seq_id, t_logits] : res->t_sampled_logits) {
+                auto idx_it = seq_to_idx.find(seq_id);
+                GGML_ASSERT(idx_it != seq_to_idx.end());
+                const int32_t idx = idx_it->second;
+                ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
+                sampled_logits_map[idx].resize(ggml_nelements(t_logits));
+                ggml_backend_tensor_get_async(backend, t_logits, sampled_logits_map[idx].data(), 0, ggml_nbytes(t_logits));
+            }
+
+            // extract sampled probabilities
+            for (const auto & [seq_id, t_probs] : res->t_sampled_probs) {
+                auto idx_it = seq_to_idx.find(seq_id);
+                GGML_ASSERT(idx_it != seq_to_idx.end());
+                const int32_t idx = idx_it->second;
+                ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t_probs);
+                sampled_probs_map[idx].resize(ggml_nelements(t_probs));
+                ggml_backend_tensor_get_async(backend, t_probs, sampled_probs_map[idx].data(), 0, ggml_nbytes(t_probs));
+            }
+        }
+
+        backend_has_sampled = !res->t_sampled_tokens.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
+
+        if (!backend_has_sampled) {
+            auto * t_logits = res->get_logits();
+            auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
+
+            if (t_embd && res->get_embd_pooled()) {
+                t_embd = res->get_embd_pooled();
+            }
+
+            // extract logits
+            if (t_logits && n_outputs > 0) {
+                ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
+                GGML_ASSERT(backend_res != nullptr);
+                GGML_ASSERT(logits != nullptr);
+
+                float * logits_out = logits + n_outputs_prev*n_vocab;
+
+                if (n_outputs) {
+                    GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                    GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_size);
+                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                }
+            }
+
+            // extract embeddings
+            if (t_embd && n_outputs > 0) {
+                ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
+                GGML_ASSERT(backend_embd != nullptr);
+
+                switch (cparams.pooling_type) {
+                    case LLAMA_POOLING_TYPE_NONE:
+                        {
+                            // extract token embeddings
+                            GGML_ASSERT(embd != nullptr);
+                            float * embd_out = embd + n_outputs_prev*n_embd;
+
+                            if (n_outputs) {
+                                GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                                GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd <= (int64_t) embd_size);
+                                ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd*sizeof(float));
+                            }
+                        } break;
+                    case LLAMA_POOLING_TYPE_MEAN:
+                    case LLAMA_POOLING_TYPE_CLS:
+                    case LLAMA_POOLING_TYPE_LAST:
+                        {
+                            // extract sequence embeddings (cleared before processing each batch)
+                            auto & embd_seq_out = embd_seq;
+
+                            for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+                                const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
+                                const int32_t      seq_idx = ubatch.seq_idx[seq_id];
+
+                                embd_seq_out[seq_id].resize(n_embd);
+                                ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
+                            }
+                        } break;
+                    case LLAMA_POOLING_TYPE_RANK:
+                        {
+                            // extract the rerank score - n_cls_out floats per sequence
+                            auto & embd_seq_out = embd_seq;
+
+                            const uint32_t n_cls_out = hparams.n_cls_out;
+
+                            for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+                                const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
+                                const int32_t      seq_idx = ubatch.seq_idx[seq_id];
+
+                                embd_seq_out[seq_id].resize(n_cls_out);
+                                ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_cls_out*seq_idx)*sizeof(float), n_cls_out*sizeof(float));
+                            }
+                        } break;
+                    case LLAMA_POOLING_TYPE_UNSPECIFIED:
+                        {
+                            GGML_ABORT("unknown pooling type");
                         }
-                    } break;
-                case LLAMA_POOLING_TYPE_MEAN:
-                case LLAMA_POOLING_TYPE_CLS:
-                case LLAMA_POOLING_TYPE_LAST:
-                    {
-                        // extract sequence embeddings (cleared before processing each batch)
-                        auto & embd_seq_out = embd_seq;
-
-                        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-                            const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
-                            const int32_t      seq_idx = ubatch.seq_idx[seq_id];
-
-                            embd_seq_out[seq_id].resize(n_embd);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
-                        }
-                    } break;
-                case LLAMA_POOLING_TYPE_RANK:
-                    {
-                        // extract the rerank score - n_cls_out floats per sequence
-                        auto & embd_seq_out = embd_seq;
-
-                        const uint32_t n_cls_out = hparams.n_cls_out;
-
-                        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-                            const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
-                            const int32_t      seq_idx = ubatch.seq_idx[seq_id];
-
-                            embd_seq_out[seq_id].resize(n_cls_out);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_cls_out*seq_idx)*sizeof(float), n_cls_out*sizeof(float));
-                        }
-                    } break;
-                case LLAMA_POOLING_TYPE_UNSPECIFIED:
-                    {
-                        GGML_ABORT("unknown pooling type");
-                    }
+                }
             }
         }
 
@@ -1231,7 +1431,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     n_outputs = n_outputs_all;
 
     // set output mappings
-    if (n_outputs > 0) {
+    if (n_outputs > 0 && !backend_has_sampled) {
         bool sorted_output = true;
 
         auto & out_ids = balloc->get_out_ids();
@@ -1345,9 +1545,12 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     }
 
     float * output_base = (float *) ggml_backend_buffer_get_base(buf_output.get());
+    llama_token * s_output_base = (llama_token *) ggml_backend_buffer_get_base(buf_output.get());
 
-    logits = has_logits ? output_base               : nullptr;
-    embd   = has_embd   ? output_base + logits_size : nullptr;
+    logits         = has_logits        ? output_base               : nullptr;
+    embd           = has_embd          ? output_base + logits_size : nullptr;
+    sampled_tokens = !samplers.empty() ? s_output_base             : nullptr;
+    sampled_probs  = !samplers.empty() ? embd                      : nullptr;
 
     // set all ids as invalid (negative)
     std::fill(output_ids.begin(), output_ids.end(), -1);
@@ -1456,6 +1659,7 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ &loras,
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.samplers    =*/ samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
@@ -2319,6 +2523,8 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.sampler                     =*/ nullptr,
+        /*.n_sampler                   =*/ 0,
     };
 
     return result;
@@ -2478,6 +2684,13 @@ float * llama_get_logits(llama_context * ctx) {
 float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
+    if (ctx->get_backend_sampled_token_ith(i) != LLAMA_TOKEN_NULL) {
+        return nullptr;
+    }
+    if (ctx->get_backend_sampled_probs_ith(i) != nullptr) {
+        return nullptr;
+    }
+
     return ctx->get_logits_ith(i);
 }
 
@@ -2497,6 +2710,46 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
     ctx->synchronize();
 
     return ctx->get_embeddings_seq(seq_id);
+}
+
+void llama_set_backend_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * sampler) {
+    ctx->set_backend_sampler(seq_id, sampler);
+}
+
+llama_token llama_get_backend_sampled_token_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_backend_sampled_token_ith(i);
+}
+
+float * llama_get_backend_sampled_probs_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_backend_sampled_probs_ith(i);
+}
+
+float * llama_get_backend_sampled_logits_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_backend_sampled_logits_ith(i);
+}
+
+llama_token * llama_get_backend_sampled_token_ids_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return const_cast<llama_token *>(ctx->get_backend_sampled_token_ids_ith(i));
+}
+
+uint32_t llama_get_backend_sampled_logits_count_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return static_cast<uint32_t>(ctx->get_backend_sampled_logits_count(i));
+}
+
+uint32_t llama_get_backend_sampled_probs_count_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return static_cast<uint32_t>(ctx->get_backend_sampled_probs_count(i));
 }
 
 // llama adapter API

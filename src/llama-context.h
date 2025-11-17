@@ -66,6 +66,16 @@ struct llama_context {
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
 
+    llama_token       * get_backend_sampled_tokens();
+    llama_token         get_backend_sampled_token_ith(int32_t idx);
+
+    float             * get_backend_sampled_logits_ith(int32_t idx);
+    const llama_token * get_backend_sampled_token_ids_ith(int32_t idx);
+    size_t              get_backend_sampled_logits_count(int32_t idx) const;
+
+    float             * get_backend_sampled_probs_ith(int32_t idx);
+    size_t              get_backend_sampled_probs_count(int32_t idx) const;
+
     void attach_threadpool(
             ggml_threadpool_t threadpool,
             ggml_threadpool_t threadpool_batch);
@@ -208,6 +218,8 @@ public:
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false);
 
+    void set_backend_sampler(llama_seq_id seq_id, llama_sampler * sampler);
+
 private:
     llm_graph_params graph_params(
                         llm_graph_result * res,
@@ -241,6 +253,16 @@ private:
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     size_t  logits_size = 0; // capacity (of floats) for logits
     float * logits      = nullptr;
+
+    std::unordered_map<llama_seq_id, llama_sampler*> samplers;
+    llama_token * sampled_tokens = nullptr;
+    std::unordered_map<int32_t, llama_token> sampled_tokens_map;
+
+    float * sampled_probs = nullptr;
+    std::unordered_map<int32_t, std::vector<float>> sampled_probs_map;
+
+    std::unordered_map<int32_t, std::vector<float>> sampled_logits_map;
+    std::unordered_map<int32_t, std::vector<llama_token>> sampled_token_ids_map;
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
