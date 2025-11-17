@@ -1388,11 +1388,6 @@ static bool show_statistics(const common_params & params) {
     }
 
     const bool legacy = !has_activations;
-    if (!legacy && no_activations) {
-        LOG_ERR("Error: %s is in new-format but some tensors are missing activations.\n\n", params.in_files[0].c_str());
-        return false;
-    }
-
     compute_tensor_statistics(ts);
 
     struct tensor_comparer {
