@@ -2609,7 +2609,7 @@ Hey there!<|im_end|>
     }
 
     {
-        auto tmpls = read_templates("models/templates/Kimi-K2.jinja");
+        auto tmpls = read_templates("models/templates/Kimi-K2-Thinking.jinja");
         std::vector<std::string> end_tokens{ "<|im_end|>" };
 
         assert_equals(COMMON_CHAT_FORMAT_KIMI_K2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
