@@ -786,14 +786,6 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   constexpr unsigned int MMA_M = 16;
   constexpr unsigned int MMA_N = 8;
 
-  // const unsigned int K = param.c;
-  // const uint inChannelOffset = param.c * param.w;
-  // const uint weightKOffset = param.c * param.r * param.s;
-
-  // const unsigned int PQ   = param.Ow * param.Oh;
-  // const unsigned int KPQ  = param.k * PQ;
-  // const unsigned int NKPQ = param.n * KPQ;
-
   // loop bounds, constexpr where possible allows for loop unrolling
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_RUBIN
   constexpr unsigned int mma_tiles_per_warp_k = 2;
@@ -817,6 +809,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
   unsigned int masks_a[A_K_STRID][2];
   int64_t element_offset_a[A_K_STRID];
+  int64_t element_offset_b;
 
   // calculate block/warp indices
   const unsigned int block_m = blockIdx.y;
@@ -833,7 +826,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   half* B_block_smem = &shmem[BM * BK];
   constexpr int BUFFER_SIZE = BM * BK + BK * BN;
 
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#ifdef CP_ASYNC_AVAILABLE
   half* SA1 = A_block_smem;
   half* SB1 = B_block_smem;
   half* SA2 = &shmem[BUFFER_SIZE];
@@ -841,6 +834,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 #else
   float4 A_gmem_cache_reg[4];
   float4 B_gmem_cache_reg[4];
+  int offset_direction = 1;
 #endif
   // declare register storage
   // ptx instructions expect uint32_t registers, where each uint32_t is 2 halfs packed together
@@ -883,21 +877,6 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
   prepareIteratorA<BM, BK, A_K_STRID, ROW_STEP>(thread_row, masks_a, element_offset_a, param);
 
-  // for(int kk =0; kk < A_K_STRID; kk++){
-  //     if(element_offset_a[kk] >= 327680)
-  //         printf("%d, %d, %d, %d, %d, %lld \n",
-  //         threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y, blockIdx.z,
-  //               element_offset_a[kk]);
-  // }
-
-  // if(threadIdx.x == 64 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-  //     printf("A[");
-  //     for(int kk =0; kk < A_K_STRID; kk++)
-  //        printf("%f,", element_offset_a[kk]);
-  //     printf("]\n");
-  // }
-
-
   // prefetch the first block tile of A,B into shared memory
 
   const half* A_block_gmem = input;
@@ -905,17 +884,19 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
   unsigned int curC = tileMemcpySwizzleA<BM, NUM_THREADS>(A_block_gmem, A_block_smem, 0, 0, masks_a, element_offset_a,
                                                         thread_row, thread_col, start_k, end_k, param);
-  tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, 0, 0, start_k, end_k, thread_row, thread_col, param);
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+  element_offset_b = curC;
+  tileMemcpySwizzleB<BN, NUM_THREADS>(B_block_gmem, B_block_smem, 0, 0, curC, element_offset_b, start_k, end_k, thread_row, thread_col, param);
+
+#ifdef CP_ASYNC_AVAILABLE
   asm volatile("cp.async.commit_group;\n" ::);
 #endif
-  int offset_direction = 1;
+
   unsigned int block_k = 0;
   unsigned int block_krs = 1;
-  // for (unsigned int block_k = 1; block_k <= num_block_tiles_k; block_k++){
   int s = 0;
   int r = 0;
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+
+#ifdef CP_ASYNC_AVAILABLE
   while (block_krs < num_block_tiles_krs) {
 
     asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
@@ -944,44 +925,26 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
         ++block_k;
       }
 
-      // if(threadIdx.x == 64 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-          // printf("B %d,%d,%d [", s, r, block_k);
-      // for(int kk =0; kk < A_K_STRID; kk++){
-      //     if(element_offset_a[kk] >= 327680)
-      //        printf("%d, %d, %d, %d, %d, %lld, %d, %d, %d %d, %lld\n", 
-      //         threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y, blockIdx.z,
-      //              element_offset_a[kk], r, s, block_k, next_idx, param.inc_next[next_idx]);
-      // }
-            // threadIdx.x == 64 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-            // printf("%f,", element_offset_a[kk]);
-          // printf("]\n");
-      // if(block_k == num_block_tiles_k)
-      //   break;
-
-      // if(thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0){
-      //   printf(" s = %d, r = %d, block_k = %d, next_idx = %d , %d,  %d, %d \n", s, r, block_k, next_idx, 
-      //     block_krs, num_block_tiles_k, num_block_tiles_krs);
-      // }
-
-    // if (block_k != num_block_tiles_k){
-    if (block_krs != num_block_tiles_krs){
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+    if (block_krs != num_block_tiles_krs) {
+#ifdef CP_ASYNC_AVAILABLE
       curC = tileMemcpyAsyncLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, SA2, r, s,
                                              masks_a, element_offset_a, thread_row, thread_col, block_k * BK,
                                             start_k, end_k, curC, param);
-      tileMemcpyAsyncLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, SB2, r, s, block_k * BK,
+      element_offset_b = (r*param.s+s)*param.c + curC;
+      tileMemcpyAsyncLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, SB2, r, s, curC, element_offset_b, block_k * BK,
                                      start_k, end_k, thread_row, thread_col, param);
       asm volatile("cp.async.commit_group;\n" ::);
 #else
       curC = tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, r, s,
                                              masks_a, element_offset_a, thread_row, thread_col, block_k * BK,
                                             start_k, end_k, curC, param);
-      tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, r, s, block_k * BK,
+      element_offset_b = (r*param.s+s)*param.c + curC;
+      tileMemcpyLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, B_gmem_cache_reg, r, s, curC, element_offset_b, block_k * BK,
                                      start_k, end_k, thread_row, thread_col, param);
 #endif
     }
 
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#ifdef CP_ASYNC_AVAILABLE
     half* A_warp_tile = SA1 + A_warp_tile_offset;
     half* B_warp_tile = SB1 + B_warp_tile_offset;
 #else
@@ -994,11 +957,11 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
     // outer product between mma tiles
 #pragma unroll
-    for (unsigned int mma_k = 0; mma_k < mma_tiles_per_warp_k; mma_k++){
+    for (unsigned int mma_k = 0; mma_k < mma_tiles_per_warp_k; mma_k++) {
 #pragma unroll
-      for (unsigned int mma_n = 0; mma_n < mma_tiles_per_warp_n; mma_n++){
+      for (unsigned int mma_n = 0; mma_n < mma_tiles_per_warp_n; mma_n++) {
 #pragma unroll
-        for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++){
+        for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++) {
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_RUBIN
           asm volatile (
             "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 "
@@ -1026,49 +989,11 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 #endif
         }
       }
-
-      // if(threadIdx.x >= 8 && threadIdx.x < 12 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-      //   printf("A %d, %d, %d: %f, %f \n", block_krs, mma_k, threadIdx.x,
-      //     __half2float(A_register_[1][mma_k][0]),
-      //     __half2float(A_register_[1][mma_k][1]));
-      // }
-      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-      //   printf("B  %d, %d, %d: %f, %f\n", block_krs, mma_k, threadIdx.x,
-      //     __half2float(B_register_[mma_k][1][0]),
-      //     __half2float(B_register_[mma_k][1][1]));
-      // }
-      // if(threadIdx.x == 8 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-      //   printf("C %d, %d, %d: %f, %f, %f, %f\n", block_krs, mma_k, threadIdx.x,
-      //     __half2float(acc_register_[1][1][0]),
-      //     __half2float(acc_register_[1][1][1]),
-      //     __half2float(acc_register_[1][1][2]),
-      //     __half2float(acc_register_[1][1][3]));
-      // }
-
-      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-      //   printf("A %d, %d, (%d, %d) %d: %f, %f \n", block_krs, mma_k, r, s, threadIdx.x,
-      //     __half2float(A_register_[0][mma_k][0]),
-      //     __half2float(A_register_[0][mma_k][1]));
-      // }
-      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-      //   printf("B  %d, %d, (%d, %d) %d: %f, %f\n", block_krs, mma_k, r, s, threadIdx.x,
-      //     __half2float(B_register_[mma_k][0][0]),
-      //     __half2float(B_register_[mma_k][0][1]));
-      // }
-      // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-      //   printf("C %d, %d, (%d, %d) %d: %f, %f, %f, %f\n", block_krs, mma_k, r, s, threadIdx.x,
-      //     __half2float(acc_register_[0][0][0]),
-      //     __half2float(acc_register_[0][0][1]),
-      //     __half2float(acc_register_[0][0][2]),
-      //     __half2float(acc_register_[0][0][3]));
-      // }
-
     }
 
 
-    // if (block_k != num_block_tiles_k)
     if (block_krs != num_block_tiles_krs) {
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#ifdef CP_ASYNC_AVAILABLE
       half *tmp = SA1; SA1 = SA2; SA2 = tmp;
       tmp = SB1; SB1 = SB2; SB2 = tmp;
 #else
@@ -1085,7 +1010,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
   }
 
 
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#ifdef CP_ASYNC_AVAILABLE
     asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
     __syncthreads();
     half* A_warp_tile = SA1 + A_warp_tile_offset;
@@ -1094,11 +1019,11 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     ldmatrix_b<mma_tiles_per_warp_k, mma_tiles_per_warp_n, BK>(B_warp_tile, B_register_);
     // outer product between mma tiles
 #pragma unroll
-    for (unsigned int mma_k = 0; mma_k < mma_tiles_per_warp_k; mma_k++){
+    for (unsigned int mma_k = 0; mma_k < mma_tiles_per_warp_k; mma_k++) {
 #pragma unroll
-      for (unsigned int mma_n = 0; mma_n < mma_tiles_per_warp_n; mma_n++){
+      for (unsigned int mma_n = 0; mma_n < mma_tiles_per_warp_n; mma_n++) {
 #pragma unroll
-        for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++){
+        for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++) {
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_RUBIN
           asm volatile (
             "mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 "
@@ -1126,41 +1051,9 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 #endif
         }
       }
-      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-      //   printf("A %d, %d, (%d, %d) %d: %f, %f \n", block_krs, mma_k, r, s, threadIdx.x,
-      //     __half2float(A_register_[0][mma_k][0]),
-      //     __half2float(A_register_[0][mma_k][1]));
-      // }
-      // if(threadIdx.x < 4 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-      //   printf("B  %d, %d, (%d, %d) %d: %f, %f\n", block_krs, mma_k, r, s, threadIdx.x,
-      //     __half2float(B_register_[mma_k][0][0]),
-      //     __half2float(B_register_[mma_k][0][1]));
-      // }
-      // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-      //   printf("C %d, %d, (%d, %d) %d: %f, %f, %f, %f\n", block_krs, mma_k, r, s, threadIdx.x,
-      //     __half2float(acc_register_[0][0][0]),
-      //     __half2float(acc_register_[0][0][1]),
-      //     __half2float(acc_register_[0][0][2]),
-      //     __half2float(acc_register_[0][0][3]));
-      // }
     }
 #endif
 
-
-  // if(threadIdx.x == 8 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-  //   printf(" %u, %f, %f, %f, %f\n", blockIdx.z, 
-  //     __half2float(acc_register_[1][1][0]),
-  //     __half2float(acc_register_[1][1][1]),
-  //     __half2float(acc_register_[1][1][2]),
-  //     __half2float(acc_register_[1][1][3]));
-  // }
-  // if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-  //   printf(" %u, %f, %f, %f, %f\n", blockIdx.z, 
-  //     __half2float(acc_register_[0][1][0]),
-  //     __half2float(acc_register_[0][1][1]),
-  //     __half2float(acc_register_[0][1][2]),
-  //     __half2float(acc_register_[0][1][3]));
-  // }
 
     // reuse smem
     half *smemoutput = shmem;
@@ -1174,16 +1067,13 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     const uint n_idx = block_m * BM + warp_m * WM + lane_id;
 
 #pragma unroll
-    for (int i = 0; i < 2; ++i)
-    {
+    for (int i = 0; i < 2; ++i) {
         const unsigned int i_offset = i * mma_tiles_per_warp_n/2;
         __syncthreads();
 #pragma unroll
-        for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++)
-        {
+        for (unsigned int mma_m = 0; mma_m < mma_tiles_per_warp_m; mma_m++) {
             const unsigned int mma_m_offset = output_sts_addr + mma_m * MMA_M * BN / 2;
-            for (unsigned int mma_n = i_offset; mma_n < (i+1)*mma_tiles_per_warp_n/2; mma_n++)
-            {
+            for (unsigned int mma_n = i_offset; mma_n < (i+1)*mma_tiles_per_warp_n/2; mma_n++) {
                 uint32_t (&reg_)[2] = reinterpret_cast<uint32_t(&)[2]>(acc_register_[mma_m][mma_n]);
                 uint idx = mma_m_offset  + (mma_n - i_offset) * MMA_N;
                 idx = idx ^ ((idx & 0b110000000000) >> 9);
@@ -1199,13 +1089,13 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
         const unsigned int  m_i_wn = m_idx + i * WN / 2;
 #pragma unroll
-        for (int subk = 0; subk < WN / 4; ++subk){
+        for (int subk = 0; subk < WN / 4; ++subk) {
             const uint row =  m_i_wn + subk*2;
             uint idx = output_lds_addr + subk*2;
             idx = idx ^ ((idx & 0b110000000000) >> 9);
             idx = idx ^ ((idx & 0b1110000000) >> 4);
 #pragma unroll
-            for (int j = 0; j < 4; ++j){
+            for (int j = 0; j < 4; ++j) {
                 const uint gemm_i =  n_idx + j*32;
                 const int n = fastdiv(gemm_i, param.OHOW_fastdiv);
                 const int col = fastmodulo(gemm_i, param.OHOW_fastdiv);
@@ -1213,14 +1103,10 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                 half (&res_)[2] = reinterpret_cast<half(&)[2]>(dst_ptr);
                 if (n < param.n && row < param.k && col < param.PQ) {
                   const uint outOffset = ((ksplit > 0) ? z * param.NKPQ : 0) + n * param.KPQ + row * param.PQ + col;
-                  // if(row == 8 && col == 18)
-                  //    printf("A %u, %u, %f \n", outOffset, z, ggml_cuda_cast<float>(res_[0]));
                   output[outOffset] = ggml_cuda_cast<T>(res_[0]);
                 }
                 if (n < param.n && row+1 < param.k && col < param.PQ) {
                   const uint outOffset = ((ksplit > 0) ? z * param.NKPQ : 0) + n * param.KPQ + (row+1) * param.PQ + col;
-                  // if(row+1 == 8 && col == 17)
-                  //    printf("B %u, %u, %f \n", outOffset, z, ggml_cuda_cast<float>(res_[0]));
                   output[outOffset] = ggml_cuda_cast<T>(res_[1]);
                 }
             }
@@ -1532,13 +1418,7 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const uint       PD_Y = p[3];  // padding_y
     const uint       DL_X = p[4];  // dilation_x
     const uint       DL_Y = p[5];  // dilation_y
-    // const int       LT   = p[6];  // layout
 
-    // GGML_ASSERT(LT == 0 || LT == 1);
-
-    // same number of input channels
-    // GGML_ASSERT(LT == 0 ? input->ne[0] == kernel->ne[0] : input->ne[2] == kernel->ne[2]);
-    // No cwhn
     GGML_ASSERT(p[6] == false);
 
     const uint IW = input->ne[0];   // input_w
@@ -1554,13 +1434,6 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
 
 
     int64_t pp[3] = {0};
-    //     const unsigned int K = param.c;
-//   const uint inChannelOffset = param.c * param.w;
-//   const uint weightKOffset = param.c * param.r * param.s;
-//   const unsigned int PQ   = param.Ow * param.Oh;
-//   const unsigned int KPQ  = param.k * PQ;
-//   const unsigned int NKPQ = param.n * KPQ;
-
 
     param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW,
                       init_fastdiv_values(KW*IC),

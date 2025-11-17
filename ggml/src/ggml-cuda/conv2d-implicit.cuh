@@ -1,6 +1,11 @@
 #pragma once
 #include "common.cuh"
 
+constexpr unsigned int SWIZZLE_MASK_1 = 0b10000;
+constexpr unsigned int SWIZZLE_BITS_1 = 4;
+constexpr unsigned int SWIZZLE_MASK_2 = 0b1100;
+constexpr unsigned int SWIZZLE_BITS_2 = 2;
+
 typedef struct{
     unsigned int      n;                              //batch size
     unsigned int      c;                              //number if channels
@@ -24,7 +29,6 @@ typedef struct{
     uint3 S_fastdiv;
     uint3 OHOW_fastdiv;
     int64_t inc_next[3];
-    // unsigned int K;
     unsigned int inChannelOffset;
     unsigned int weightKOffset;
     unsigned int PQ;
@@ -37,7 +41,6 @@ typedef struct{
 /// Clears the predicates
 
 template<const unsigned int K_STRID>
-// __host__ __device__ void clear_mask(unsigned int masks_[][2], bool clear = true) {
 __device__ void clear_mask(unsigned int masks_[][2], bool clear = true) {
 
 #pragma unroll
@@ -48,8 +51,7 @@ __device__ void clear_mask(unsigned int masks_[][2], bool clear = true) {
 }
 
 template<const unsigned int K_STRID>
-// __host__ __device__ void add_byte_offset(int64_t element_offset[], const int64_t offset){
-__device__ void add_byte_offset(int64_t element_offset[], const int64_t offset){
+__device__ void add_byte_offset(int64_t element_offset[], const int64_t offset) {
 #pragma unroll
     for (int s = 0; s < K_STRID; ++s) {
        element_offset[s] += offset;
@@ -63,21 +65,14 @@ template<const unsigned int TILE_ROWS,
 __device__ void prepareIteratorA(unsigned int thread_row,
                                  unsigned int masks[][2],
                                  int64_t element_offset[],
-                                 const param_t param){
+                                 const param_t param) {
     int offset_n[A_K_STRID];
     int offset_p[A_K_STRID];
     int offset_q[A_K_STRID];
 
-    // constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
-    // unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
-    // const unsigned int chw = param.c * param.h * param.w;
-
 #pragma unroll
     for (int s = 0; s < A_K_STRID; ++s) {
 
-    //   pointer_[s] = reinterpret_cast<char const *>(ptr);
-
-    //   int offset_npq = threadblock_offset.row() + thread_coord.strided() + s * ThreadMap::Delta::kStrided;
         const unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
         offset_n[s]  = fastdiv(gemm_i, param.OHOW_fastdiv);
         unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
@@ -86,19 +81,8 @@ __device__ void prepareIteratorA(unsigned int thread_row,
         const int h = offset_p[s] * (int)param.u - (int) param.p;
         const int w = offset_q[s] * (int)param.v - (int) param.q;
 
-    //   if(threadIdx.x < 32 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-    //    printf("%d, %d : %d, %d, %d, %d offset (%d, %d, %d), kele %llu Kcont %d\n ", thread_idx, s,
-    //     // printf("[%s - %d] %d, %d : %d, %d, %d, %d\n ", __FUNCTION__, __LINE__, thread_idx, s,
-    //               threadblock_offset.row(), thread_coord.strided(), ThreadMap::Delta::kStrided,
-    //             offset_npq, offset_n[s], offset_p[s], offset_q[s], AccessType::kElements, 
-    //             ThreadMap::Iterations::kContiguous);
-
         element_offset[s] =  offset_n[s] * (int64_t)param.CHW + h * (int64_t)(param.inChannelOffset) + w * (int64_t)param.c;
 
-        // if(element_offset[s] >= 327680)
-        //     printf("(%d, %d, %d, %d, %d), %d, %lld, %d, %d, %d, %d, %d, %u, %u, %u \n",
-        //     threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y, blockIdx.z,
-        //            s, element_offset[s], offset_n[s], offset_p[s], offset_q[s], h, w, chw, param.c * param.w, param.c);
         thread_row += ROW_STEP;
     }
 
@@ -126,8 +110,7 @@ __device__ void prepareIteratorA(unsigned int thread_row,
 
 template <int preload=16>
 __device__ void cp_async_zfill(void *ptr, void const *global_ptr, bool pred_guard = true) {
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
-
+#ifdef CP_ASYNC_AVAILABLE
     unsigned int smem_ptr;
     int src_in_bytes = pred_guard ? preload : 0;
 
@@ -154,19 +137,16 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     half* __restrict__ dst,
     const unsigned int curR,
     const unsigned int curS,
+    const unsigned int curC,
+    const int64_t ki,
     const unsigned int start_k,
     const unsigned int end_k,
     unsigned int thread_row,
     const unsigned int thread_col,
-    // const unsigned int src_stride,
     param_t param
-){
+) {
 #if __CUDA_ARCH__ >= GGML_CUDA_TURING
 
-    constexpr unsigned int SWIZZLE_MASK_1 = 0b10000;
-    constexpr unsigned int SWIZZLE_BITS_1 = 4;
-    constexpr unsigned int SWIZZLE_MASK_2 = 0b1100;
-    constexpr unsigned int SWIZZLE_BITS_2 = 2;
     constexpr unsigned int TILE_COLS = 32;
 
     float4* dst_float4 = reinterpret_cast<float4*>(dst);
@@ -174,39 +154,27 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     // # of threads is multiple of # of columns in the tile
     constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
-    // flatten out 2d grid of threads into in order of increasing threadIdx.x
-    // const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
 
     // assign each thread a row/column in the tile, calculate how many iterations we need
     // to cover the whole tile
     constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
-    // unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
-    // const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
-
-    // const unsigned int ki = (curR*param.s+curS)*param.c + start_k+thread_col*8;
-    // const unsigned int curR = fastdiv(ki,                                 param.SC_fastdiv); // channel offset
-    // const unsigned int curS = fastdiv(fastmodulo(ki,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    // const unsigned int curC = fastmodulo(fastmodulo(ki, param.SC_fastdiv), param.C_fastdiv); //
-    const unsigned int curC = start_k+thread_col*8;
-    const unsigned int ki = (curR*param.s+curS)*param.c + curC;
 
     #pragma unroll
-    for (unsigned int i = 0; i < NUM_ITERS; i++){
+    for (unsigned int i = 0; i < NUM_ITERS; i++) {
         // apply swizzle to the dst index
         const unsigned int src_index = thread_row * param.weightKOffset  + ki;
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
-
+#ifdef CP_ASYNC_AVAILABLE
         cp_async_zfill((void *)(&dst_float4[dst_index]), (void const *)(&src[src_index]),
                        thread_row + blockIdx.x * TILE_ROWS < param.k && curC < end_k);
 
 #else
-        if (thread_row + blockIdx.x * TILE_ROWS < param.k && curC < end_k){
+        if (thread_row + blockIdx.x * TILE_ROWS < param.k && curC < end_k) {
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[src_index])[0];
-        }else{ // read 4 halves
+        } else { // read 4 halves
             dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
         }
 #endif
@@ -217,6 +185,7 @@ __device__ __forceinline__ void tileMemcpySwizzleB(
     GGML_UNUSED(dst);
     GGML_UNUSED(curR);
     GGML_UNUSED(curS);
+    GGML_UNUSED(ki);
     GGML_UNUSED(start_k);
     GGML_UNUSED(end_k);
     GGML_UNUSED(thread_row);
@@ -242,14 +211,9 @@ __device__ __forceinline__ unsigned int tileMemcpySwizzleA(
     const unsigned int start_k,
     const unsigned int end_k,
     param_t param
-)
-{
+) {
 #if __CUDA_ARCH__ >= GGML_CUDA_TURING
 
-    constexpr unsigned int SWIZZLE_MASK_1 = 0b10000;
-    constexpr unsigned int SWIZZLE_BITS_1 = 4;
-    constexpr unsigned int SWIZZLE_MASK_2 = 0b1100;
-    constexpr unsigned int SWIZZLE_BITS_2 = 2;
     constexpr unsigned int TILE_COLS = 32;
 
     float4* dst_float4 = reinterpret_cast<float4*>(dst);
@@ -257,42 +221,26 @@ __device__ __forceinline__ unsigned int tileMemcpySwizzleA(
     // # of threads is multiple of # of columns in the tile
     constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
-    // flatten out 2d grid of threads into in order of increasing threadIdx.x
-    // const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
 
     // assign each thread a row/column in the tile, calculate how many iterations we need
     // to cover the whole tile
     constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
-    // unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
-    // const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
 
-    // const unsigned int ki = start_k+thread_col*8;
-    // const unsigned int chw = param.c * param.h * param.w;
-    // const unsigned int curR = fastdiv(ki,                                 param.SC_fastdiv); // channel offset
-    // const unsigned int curS = fastdiv(fastmodulo(ki,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    // const unsigned int curC = fastmodulo(fastmodulo(ki, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
     const unsigned int curC = start_k+thread_col*8;
     clear_mask<NUM_ITERS>(masks, curC >= end_k);
 
     #pragma unroll
-    for (unsigned int i = 0; i < NUM_ITERS; i++){
+    for (unsigned int i = 0; i < NUM_ITERS; i++) {
         bool valid = (masks[i][0] & (1u << curR)) && (masks[i][1] & (1u << curS));
         // apply swizzle to the dst index
         unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-        // if(threadIdx.x == 3 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 1){
-        //    printf(" %u, %u, %u, %u, %lld, %d\n", i, curR, curS,  curC, element_offset[i], valid?1:0);
-        //  }
-        // if (valid && curC < end_k){
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#ifdef CP_ASYNC_AVAILABLE
         cp_async_zfill((void *)(&dst_float4[dst_index]), (void const *)(&src[element_offset[i]+curC]), valid);
 #else
-        if (valid){
-        //     if(element_offset[i] >= 327680 || element_offset[i] < 0)
-        //        printf("%d, %d, %d, %d, %d, %d, %d, %d, %d \n", threadIdx.x, threadIdx.y, blockIdx.x, blockIdx.y,
-        //            i, element_offset[i], curR, curS, curC);
+        if (valid) {
             dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[element_offset[i]+curC])[0];
         } else {
             dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
@@ -300,29 +248,6 @@ __device__ __forceinline__ unsigned int tileMemcpySwizzleA(
 #endif
         thread_row += ROW_STEP;
     }
-    // #pragma unroll
-    // for (unsigned int i = 0; i < NUM_ITERS; i++){
-    //     unsigned int gemm_i = blockIdx.y * TILE_ROWS + thread_row;
-    //     unsigned int n = fastdiv(gemm_i, param.OHOW_fastdiv);
-    //     unsigned int npq_res = fastmodulo(gemm_i, param.OHOW_fastdiv);
-    //     int posh_ori = fastdiv(npq_res, param.OW_fastdiv) * param.u - param.p;
-    //     int posw_ori = fastmodulo(npq_res, param.OW_fastdiv) * param.v - param.q;
-    //     // unsigned int inOffset = n * param.c * param.h * param.w;
-    //     int curH = posh_ori + curR * param.d_h; // input h
-    //     int curW = posw_ori + curS * param.d_w; // input w
-    //     // apply swizzle to the dst index
-    //     unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
-    //     dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
-    //     dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
-    //     if (curH >= 0 && curW >= 0 && curW < param.w && curH < param.h &&
-    //         curR < param.r && curS < param.s && curC < param.c && n < param.n && ki < end_k){
-    //         const unsigned int inOffsetTmp = curH * inChannelOffset + curW * param.c + curC;
-    //         dst_float4[dst_index] = reinterpret_cast<const float4 *>(&src[n * chw + inOffsetTmp])[0];
-    //     } else{
-    //         dst_float4[dst_index] = make_float4(0.f, 0.f, 0.f, 0.f);
-    //     }
-    //     thread_row += ROW_STEP;
-    // }
     return curC;
 #else
     GGML_UNUSED(src);
@@ -357,42 +282,29 @@ __device__ __forceinline__ unsigned int tileMemcpyLoadA(
     const unsigned int start_k,
     const unsigned int end_k,
     unsigned int oldC,
-    // const unsigned int inChannelOffset,
     param_t param
-){
+) {
 #if __CUDA_ARCH__ >= GGML_CUDA_TURING
 
     // # of threads is multiple of # of columns in the tile
     constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
 
-    // flatten out 2d grid of threads into in order of increasing threadIdx.x
     // assign each thread a row/column in the tile, calculate how many iterations we need
     // to cover the whole tile
     constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
-    // unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
-    // const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
 
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
 
-    // const unsigned int ki = start_k+block_k+thread_col*8;
-    // const unsigned int chw = param.c * param.h * param.w;
-
-    // const unsigned int curR = fastdiv(ki,                                 param.SC_fastdiv); // channel offset
-    // const unsigned int curS = fastdiv(fastmodulo(ki,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    // const unsigned int curC = fastmodulo(fastmodulo(ki, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
     const unsigned int curC = start_k+block_k+thread_col*8;
     if (curC > oldC)
         clear_mask<NUM_ITERS>(masks, curC >= end_k);
 
     #pragma unroll
-    for (unsigned int i = 0; i < NUM_ITERS; i++){
+    for (unsigned int i = 0; i < NUM_ITERS; i++) {
          bool valid = (masks[i][0] & (1u << curR)) && (masks[i][1] & (1u << curS));
-        //  if(threadIdx.x == 3 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 1){
-        //    printf(" %u, %u, %u, %u, %u, %lld, %d\n", i, curR, curS, oldC, curC, element_offset[i], valid?1:0);
-        //  }
         if (valid) {
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[element_offset[i]+curC])[0];
         } else{
@@ -435,50 +347,32 @@ __device__ __forceinline__ unsigned int tileMemcpyAsyncLoadA(
     const unsigned int start_k,
     const unsigned int end_k,
     unsigned int oldC,
-    // const unsigned int inChannelOffset,
     param_t param
-){
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
-    // # of threads is multiple of # of columns in the tile
-    constexpr unsigned int SWIZZLE_MASK_1 = 0b10000;
-    constexpr unsigned int SWIZZLE_BITS_1 = 4;
-    constexpr unsigned int SWIZZLE_MASK_2 = 0b1100;
-    constexpr unsigned int SWIZZLE_BITS_2 = 2;
+) {
+#ifdef CP_ASYNC_AVAILABLE
 
     constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
 
     float4* dst_float4 = reinterpret_cast<float4*>(dst);
 
-    // flatten out 2d grid of threads into in order of increasing threadIdx.x
     // assign each thread a row/column in the tile, calculate how many iterations we need
     // to cover the whole tile
     constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
     constexpr unsigned int ITER_STEPS = ROW_STEP * TILE_COLS_VECTORIZED;
-    // unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
-    // const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
 
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
 
-    // const unsigned int ki = start_k+block_k+thread_col*8;
-    // const unsigned int chw = param.c * param.h * param.w;
-
-    // const unsigned int curR = fastdiv(ki,                                 param.SC_fastdiv); // channel offset
-    // const unsigned int curS = fastdiv(fastmodulo(ki,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    // const unsigned int curC = fastmodulo(fastmodulo(ki, param.SC_fastdiv), param.C_fastdiv); // kernel r offset
     const unsigned int curC = start_k+block_k+thread_col*8;
     if (curC > oldC)
         clear_mask<NUM_ITERS>(masks, curC >= end_k);
 
     unsigned int iter_idx = thread_row * TILE_COLS_VECTORIZED + thread_col;
     #pragma unroll
-    for (unsigned int i = 0; i < NUM_ITERS; i++){
-         bool valid = (masks[i][0] & (1u << curR)) && (masks[i][1] & (1u << curS));
-        //  if(threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 1){
-        //    printf(" %u, %u, %u, %u, %u, %lld, %d\n", i, curR, curS, oldC, curC, element_offset[i], valid?1:0);
-        //  }
+    for (unsigned int i = 0; i < NUM_ITERS; i++) {
+        bool valid = (masks[i][0] & (1u << curR)) && (masks[i][1] & (1u << curS));
         unsigned int dst_index = iter_idx;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
@@ -515,57 +409,40 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     float4 (&dst_reg)[ELEMENTS_PER_THREAD],
     const unsigned int curR,
     const unsigned int curS,
+    const unsigned int curC,
+    const int64_t ki,
     const unsigned int block_k,
     const unsigned int start_k,
     const unsigned int end_k,
     unsigned int thread_row,
     const unsigned int thread_col,
-    // const unsigned int src_stride,
     param_t param
-){
+) {
 #if __CUDA_ARCH__ >= GGML_CUDA_TURING
-
-
-    constexpr unsigned int SWIZZLE_MASK_1 = 0b10000;
-    constexpr unsigned int SWIZZLE_BITS_1 = 4;
-    constexpr unsigned int SWIZZLE_MASK_2 = 0b1100;
-    constexpr unsigned int SWIZZLE_BITS_2 = 2;
 
     // # of threads is multiple of # of columns in the tile
     constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
 
-    // flatten out 2d grid of threads into in order of increasing threadIdx.x
-    // const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
 
     // assign each thread a row/column in the tile, calculate how many iterations we need
     // to cover the whole tile
     constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
-    // unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
-    // const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
 
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
-
-    // const unsigned int curR = fastdiv(ki,                                 param.SC_fastdiv); // channel offset
-    // const unsigned int curS = fastdiv(fastmodulo(ki,    param.SC_fastdiv), param.C_fastdiv); // kernel r offset
-    // const unsigned int curC = fastmodulo(fastmodulo(ki, param.SC_fastdiv), param.C_fastdiv); //
-    const unsigned int curC = start_k+block_k+thread_col*8;
-    const unsigned int ki = (curR*param.s+curS)*param.c + curC;
 
     unsigned int iter_idx = thread_row * param.weightKOffset + ki;
     unsigned int krow_idx = thread_row + blockIdx.x * TILE_ROWS;
     const int ITER_STEPS = ROW_STEP * param.weightKOffset;
 
     #pragma unroll
-    for (unsigned int i = 0; i < NUM_ITERS; i++){
-        // const unsigned int src_index = thread_row * param.weightKOffset + ki;
+    for (unsigned int i = 0; i < NUM_ITERS; i++) {
         const unsigned int src_index = iter_idx;
-        // if (thread_row + blockIdx.x * TILE_ROWS < param.k && curC < end_k){
-        if (krow_idx < param.k && curC < end_k){
+        if (krow_idx < param.k && curC < end_k) {
             dst_reg[i] = reinterpret_cast<const float4 *>(&src[src_index])[0];
-        }else{ // read 4 halves
+        } else { // read 4 halves
             dst_reg[i] = make_float4(0.f, 0.f, 0.f, 0.f);
         }
         krow_idx += ROW_STEP;
@@ -577,6 +454,7 @@ __device__ __forceinline__ void tileMemcpyLoadB(
     GGML_UNUSED(block_k);
     GGML_UNUSED(curR);
     GGML_UNUSED(curS);
+    GGML_UNUSED(ki);
     GGML_UNUSED(start_k);
     GGML_UNUSED(end_k);
     GGML_UNUSED(thread_row);
@@ -595,27 +473,22 @@ __device__ __forceinline__ void tileMemcpyAsyncLoadB(
     half *dst,
     const unsigned int curR,
     const unsigned int curS,
+    const unsigned int curC,
+    const int64_t ki,
     const unsigned int block_k,
     const unsigned int start_k,
     const unsigned int end_k,
     unsigned int thread_row,
     const unsigned int thread_col,
     param_t param
-){
+) {
 
-#if __CUDA_ARCH__ >= GGML_CUDA_AMPERE
-
-    constexpr unsigned int SWIZZLE_MASK_1 = 0b10000;
-    constexpr unsigned int SWIZZLE_BITS_1 = 4;
-    constexpr unsigned int SWIZZLE_MASK_2 = 0b1100;
-    constexpr unsigned int SWIZZLE_BITS_2 = 2;
+#ifdef CP_ASYNC_AVAILABLE
 
     // # of threads is multiple of # of columns in the tile
     constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
 
-    // flatten out 2d grid of threads into in order of increasing threadIdx.x
-    // const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
     float4* dst_float4 = reinterpret_cast<float4*>(dst);
 
     // assign each thread a row/column in the tile, calculate how many iterations we need
@@ -627,17 +500,13 @@ __device__ __forceinline__ void tileMemcpyAsyncLoadB(
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
 
-    const unsigned int curC = start_k+block_k+thread_col*8;
-    const unsigned int ki = (curR*param.s+curS)*param.c + curC;
-
     unsigned int iter_src_idx = thread_row * param.weightKOffset + ki;
     unsigned int iter_dst_idx = thread_row * TILE_COLS_VECTORIZED + thread_col;
     unsigned int krow_idx = thread_row + blockIdx.x * TILE_ROWS;
     const int ITER_SRC_STEPS = ROW_STEP * param.weightKOffset;
 
     #pragma unroll
-    for (unsigned int i = 0; i < NUM_ITERS; i++){
-        // const unsigned int src_index = thread_row * param.weightKOffset + ki;
+    for (unsigned int i = 0; i < NUM_ITERS; i++) {
         const unsigned int src_index = iter_src_idx;
         unsigned int dst_index = iter_dst_idx;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
@@ -655,6 +524,7 @@ __device__ __forceinline__ void tileMemcpyAsyncLoadB(
     GGML_UNUSED(block_k);
     GGML_UNUSED(curR);
     GGML_UNUSED(curS);
+    GGML_UNUSED(ki);
     GGML_UNUSED(start_k);
     GGML_UNUSED(end_k);
     GGML_UNUSED(thread_row);
@@ -676,14 +546,10 @@ __device__ __forceinline__ void tileMemcpySwizzleStore(
     half* __restrict__ dst,
     unsigned int thread_row,
     const unsigned int thread_col
-)
-{
+) {
 #if __CUDA_ARCH__ >= GGML_CUDA_TURING
 
-    constexpr unsigned int SWIZZLE_MASK_1 = 0b10000;
-    constexpr unsigned int SWIZZLE_BITS_1 = 4;
-    constexpr unsigned int SWIZZLE_MASK_2 = 0b1100;
-    constexpr unsigned int SWIZZLE_BITS_2 = 2;
+    
     constexpr unsigned int TILE_COLS = 32;
 
     // reinterpret input/output as float4
@@ -693,26 +559,19 @@ __device__ __forceinline__ void tileMemcpySwizzleStore(
     constexpr unsigned int TILE_COLS_VECTORIZED = TILE_COLS / 8;
     static_assert(NUM_THREADS % TILE_COLS_VECTORIZED == 0);
 
-    // flatten out 2d grid of threads into in order of increasing threadIdx.x
-    // const unsigned int thread_idx = threadIdx.y * blockDim.x + threadIdx.x;
-
     // assign each thread a row/column in the tile, calculate how many iterations we need
     // to cover the whole tile
     constexpr unsigned int ROW_STEP = NUM_THREADS / TILE_COLS_VECTORIZED;
     constexpr unsigned int NUM_ITERS = TILE_ROWS / ROW_STEP;
     constexpr unsigned int ITER_STEPS = ROW_STEP * TILE_COLS_VECTORIZED;
-    // unsigned int thread_row = thread_idx / TILE_COLS_VECTORIZED;
-    // const unsigned int thread_col = thread_idx % TILE_COLS_VECTORIZED;
 
     // compile time check that we provided the right amount of registers for storage
     static_assert(ELEMENTS_PER_THREAD == NUM_ITERS);
 
     unsigned int iter_idx = thread_row * TILE_COLS_VECTORIZED + thread_col;
     #pragma unroll
-    for (unsigned int i = 0; i < NUM_ITERS; i++)
-    {
+    for (unsigned int i = 0; i < NUM_ITERS; i++) {
         // apply swizzle to the dst index
-        // unsigned int dst_index = thread_row * TILE_COLS_VECTORIZED + thread_col;
         unsigned int dst_index = iter_idx;
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_1) >> SWIZZLE_BITS_1);
         dst_index = dst_index ^ ((dst_index & SWIZZLE_MASK_2) >> SWIZZLE_BITS_2);
