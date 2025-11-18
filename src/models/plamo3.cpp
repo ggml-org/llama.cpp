@@ -27,7 +27,7 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
         ggml_tensor * cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-        cb(cur, "attn_post_norm", il);
+        cb(cur, "attn_norm", il);
 
         ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
         cb(cur, "wqkv", il);
@@ -49,7 +49,7 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
         cb(Vcur, "Vcur", il);
-    
+
         Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
         cb(Qcur, "attn_q_norm", il);
         Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
