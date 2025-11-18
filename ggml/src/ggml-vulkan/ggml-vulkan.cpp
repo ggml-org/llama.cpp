@@ -13644,10 +13644,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
 
                 // We can handle copying from a type to the same type if it's
-                // contiguous (memcpy). We use f16 or f32 shaders to do the copy,
+                // either not quantized or is quantized and contiguous.
+                // We use f16 or f32 shaders to do the copy,
                 // so the type/block size must be a multiple of 4.
                 if (src0_type == src1_type &&
-                    ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
+                    (!ggml_is_quantized(src0_type) || (ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op))) &&
                     (ggml_type_size(src0_type) % 2) == 0) {
                     return true;
                 }
