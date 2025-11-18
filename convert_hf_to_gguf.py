@@ -10168,7 +10168,7 @@ class JanusProModel(LlamaModel):
 
         if name.startswith('model.language_model.'):
             name = name.replace('model.language_model.', 'model.')
-        if name.startswith("mlp1."):
+        elif name.startswith('language_model.'):
             name = name.replace('language_model.', '')
 
         return super().modify_tensors(data_torch, name, bid)
