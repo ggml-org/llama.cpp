@@ -487,25 +487,20 @@ void llm_graph_result::reset() {
 
     inputs.clear();
 
-    // increase meta buffer slightly to accommodate extra nodes from SparseK
-    int64_t max_nodes_ex = max_nodes + 128; // safety headroom
-
     buf_compute_meta.resize(
-        ggml_tensor_overhead() * max_nodes_ex +
-        ggml_graph_overhead_custom(max_nodes_ex, /*grad*/ false)
+        ggml_tensor_overhead() * max_nodes +
+        ggml_graph_overhead_custom(max_nodes, /*grad*/ false)
     );
 
     ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
         /*.mem_buffer =*/ buf_compute_meta.data(),
-        /*.no_alloc   =*/ true,
+        /*.no_alloc   =*/ true, // real compute context, not meta-only
     };
 
     ctx_compute.reset(ggml_init(params));
 
-    // build graph object with the expanded node cap as well
-    gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes_ex, /*grad*/ false);
-
+    gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, /*grad*/ false);
 }
 
 void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
