@@ -145,26 +145,27 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
                 include(CheckCXXSourceRuns)
 
-                function(check_arm_feature tag code)
+                macro(check_arm_feature tag feature code)
                     set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
                     set(CMAKE_REQUIRED_FLAGS "${ARM_NATIVE_FLAG}+${tag}")
                     check_cxx_source_runs("${code}" GGML_MACHINE_SUPPORTS_${tag})
                     if (GGML_MACHINE_SUPPORTS_${tag})
-                        set(ARM_NATIVE_FLAG_FIX "${ARM_NATIVE_FLAG_FIX}+${tag}" PARENT_SCOPE)
+                        set(ARM_NATIVE_FLAG_FIX "${ARM_NATIVE_FLAG_FIX}+${tag}")
                     else()
                         set(CMAKE_REQUIRED_FLAGS "${ARM_NATIVE_FLAG}+no${tag}")
                         check_cxx_source_compiles("int main() { return 0; }" GGML_MACHINE_SUPPORTS_no${tag})
                         if (GGML_MACHINE_SUPPORTS_no${tag})
-                            set(ARM_NATIVE_FLAG_FIX "${ARM_NATIVE_FLAG_FIX}+no${tag}" PARENT_SCOPE)
+                            set(ARM_NATIVE_FLAG_FIX "${ARM_NATIVE_FLAG_FIX}+no${tag}")
+                            list(APPEND ARCH_FLAGS -U__ARM_FEATURE_${feature})
                         endif()
                     endif()
                     set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
-                endfunction()
+                endmacro()
 
-                check_arm_feature(dotprod "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }")
-                check_arm_feature(i8mm    "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vmmlaq_s32(_s, _a, _b); return 0; }")
-                check_arm_feature(sve     "#include <arm_sve.h>\nint main()  { svfloat32_t _a, _b; volatile svfloat32_t _c = svadd_f32_z(svptrue_b8(), _a, _b); return 0; }")
-                check_arm_feature(sme     "#include <arm_sme.h>\n__arm_locally_streaming int main() { __asm__ volatile(\"smstart; smstop;\"); return 0; }")
+                check_arm_feature(dotprod DOTPROD     "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }")
+                check_arm_feature(i8mm    MATMUL_INT8 "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vmmlaq_s32(_s, _a, _b); return 0; }")
+                check_arm_feature(sve     SVE         "#include <arm_sve.h>\nint main()  { svfloat32_t _a, _b; volatile svfloat32_t _c = svadd_f32_z(svptrue_b8(), _a, _b); return 0; }")
+                check_arm_feature(sme     SME         "#include <arm_sme.h>\n__arm_locally_streaming int main() { __asm__ volatile(\"smstart; smstop;\"); return 0; }")
 
                 list(APPEND ARCH_FLAGS "${ARM_NATIVE_FLAG}${ARM_NATIVE_FLAG_FIX}")
             else()
@@ -216,35 +217,27 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 endif()
             endif()
 
-            # show enabled features
-            if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
-                set(FEAT_INPUT_FILE "NUL")
-            else()
-                set(FEAT_INPUT_FILE "/dev/null")
-            endif()
+            message(STATUS "Checking for ARM features using flags:")
+            foreach(flag IN LISTS ARCH_FLAGS)
+                message(STATUS "  ${flag}")
+            endforeach()
 
-            execute_process(
-                COMMAND ${CMAKE_C_COMPILER} ${ARCH_FLAGS} -dM -E -
-                INPUT_FILE ${FEAT_INPUT_FILE}
-                OUTPUT_VARIABLE ARM_FEATURE
-                RESULT_VARIABLE ARM_FEATURE_RESULT
-            )
-            if (ARM_FEATURE_RESULT)
-                message(WARNING "Failed to get ARM features")
-            else()
-                foreach(feature DOTPROD SVE MATMUL_INT8 FMA FP16_VECTOR_ARITHMETIC SME)
-                    string(FIND "${ARM_FEATURE}" "__ARM_FEATURE_${feature} 1" feature_pos)
-                    if (NOT ${feature_pos} EQUAL -1)
-                        # Special handling for MATMUL_INT8 when machine doesn't support i8mm
-                        if ("${feature}" STREQUAL "MATMUL_INT8" AND GGML_MACHINE_SUPPORTS_noi8mm)
-                            message(STATUS "ARM feature ${feature} detected but unsetting due to machine not supporting i8mm")
-                            list(APPEND ARCH_FLAGS -U__ARM_FEATURE_MATMUL_INT8)
-                        else()
-                            message(STATUS "ARM feature ${feature} enabled")
-                        endif()
-                    endif()
-                endforeach()
-            endif()
+            include(CheckCXXSourceCompiles)
+            set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
+            set(CMAKE_REQUIRED_FLAGS "${ARCH_FLAGS}")
+            foreach(feature DOTPROD SVE MATMUL_INT8 FMA FP16_VECTOR_ARITHMETIC SME)
+                set(ARM_FEATURE "HAVE_${feature}")
+                check_cxx_source_compiles(
+                    "
+                    #if !defined(__ARM_FEATURE_${feature})
+                    #  error \"Feature ${feature} is not defined\"
+                    #endif
+                    int main() { return 0; }
+                    "
+                    ${ARM_FEATURE}
+                )
+            endforeach()
+            set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "x86")
         message(STATUS "x86 detected")
