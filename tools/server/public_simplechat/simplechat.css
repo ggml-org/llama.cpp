@@ -212,6 +212,16 @@ button {
 }
 
 
+.visibility-visible {
+    visibility: visible;
+    display: block;
+}
+.visibility-hidden {
+    visibility: hidden;
+    display: none;
+}
+
+
 * {
     margin: 0.6vmin;
     scrollbar-color: var(--background-color-contrast-vlight) var(--background-color);
