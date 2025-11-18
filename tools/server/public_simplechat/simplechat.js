@@ -1714,7 +1714,7 @@ class MultiChatUI {
         }
         elDiv.replaceChildren();
         // Btn for creating new chat session
-        let btnNew = ui.el_create_button("New CHAT", (ev)=> {
+        let btnNew = ui.el_create_button("NewCHAT", (ev)=> {
             if (this.elInUser.disabled) {
                 console.error(`ERRR:SimpleChat:MCUI:NewChat:Current session [${this.curChatId}] awaiting response, ignoring request...`);
                 alert("ERRR:SimpleChat\nMCUI:NewChat\nWait for response to pending query, before starting new chat session");
@@ -1729,7 +1729,8 @@ class MultiChatUI {
             this.new_chat_session(chatIdGot, true);
             this.create_session_btn(elDiv, chatIdGot);
             ui.el_children_config_class(elDiv, chatIdGot, "session-selected", "");
-        });
+        },"NewChat", "+");
+        btnNew.title = "start a new chat session"
         elDiv.appendChild(btnNew);
         // Btns for existing chat sessions
         let chatIds = Object.keys(this.simpleChats);
