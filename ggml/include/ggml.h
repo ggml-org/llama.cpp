@@ -2259,17 +2259,23 @@ extern "C" {
             struct ggml_tensor  * a,
             enum ggml_sort_order  order);
 
-    GGML_API struct ggml_tensor * ggml_arange(
+    // same as ggml_top_k but implemented as `argsort` + `view`
+    GGML_API struct ggml_tensor * ggml_argsort_top_k(
             struct ggml_context * ctx,
-            float                 start,
-            float                 stop,
-            float                 step);
+            struct ggml_tensor  * a,
+            int                   k);
 
     // top k elements per row
     GGML_API struct ggml_tensor * ggml_top_k(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   k);
+
+    GGML_API struct ggml_tensor * ggml_arange(
+            struct ggml_context * ctx,
+            float                 start,
+            float                 stop,
+            float                 step);
 
 #define GGML_KQ_MASK_PAD 64
 
