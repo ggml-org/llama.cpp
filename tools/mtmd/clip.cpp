@@ -292,6 +292,8 @@ ggml_tensor * clip_graph::build_vit(
             ggml_tensor * learned_pos_embd,
             std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos
         ) {
+    block_norm_t = norm_t;
+
     if (learned_pos_embd) {
         inp = ggml_add(ctx0, inp, learned_pos_embd);
         cb(inp, "pos_embed", -1);
@@ -559,6 +561,14 @@ ggml_tensor * clip_graph::build_ffn(
             } break;
     }
 
+    if (il >= 0 && il < (int) model.layers.size()) {
+        const auto & layer = model.layers[il];
+        if (layer.ffn_hidden_norm_w) {
+            cur = build_norm(cur, layer.ffn_hidden_norm_w, layer.ffn_hidden_norm_b, block_norm_t, eps, il);
+            cb(cur, "ffn_hidden_normed", il);
+        }
+    }
+
     if (down) {
         cur = ggml_mul_mat(ctx0, down, cur);
     }
@@ -627,6 +637,14 @@ ggml_tensor * clip_graph::build_attn(
     }
 
     cb(cur, "kqv_out", il);
+
+    if (il >= 0 && il < (int) model.layers.size()) {
+        const auto & layer = model.layers[il];
+        if (layer.attn_out_norm_w) {
+            cur = build_norm(cur, layer.attn_out_norm_w, layer.attn_out_norm_b, block_norm_t, eps, il);
+            cb(cur, "kqv_out_normed", il);
+        }
+    }
 
     if (wo) {
         cur = ggml_mul_mat(ctx0, wo, cur);
@@ -1204,7 +1222,7 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_JINACLIP2:
                     {
                         hparams.rope_theta = 10000.0f;
-                        get_f32(KEY_VISION_ROPE_THETA, hparams.rope_theta, /*required=*/false);
+                        get_f32(KEY_VISION_ROPE_THETA, hparams.rope_theta, false);
                     } break;
                 case PROJECTOR_TYPE_ULTRAVOX:
                 case PROJECTOR_TYPE_QWEN2A:
@@ -1364,6 +1382,7 @@ struct clip_model_loader {
             layer.qkv_w  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
             layer.k_norm = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "weight"), false);
             layer.q_norm = get_tensor(string_format(TN_ATTN_Q_NORM, prefix, il, "weight"), false);
+            layer.attn_out_norm_w = get_tensor(string_format(TN_ATTN_LN,  prefix, il, "weight"), false);
             layer.ln_1_w = get_tensor(string_format(TN_LN_1,        prefix, il, "weight"), false);
             layer.ln_2_w = get_tensor(string_format(TN_LN_2,        prefix, il, "weight"), false);
             layer.ls_1_w = get_tensor(string_format(TN_LS_1,        prefix, il, "weight"), false); // no bias
@@ -1374,6 +1393,7 @@ struct clip_model_loader {
             layer.v_b    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "bias"), false);
             layer.o_b    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"), false);
             layer.qkv_b  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "bias"), false);
+            layer.attn_out_norm_b = get_tensor(string_format(TN_ATTN_LN,  prefix, il, "bias"), false);
             layer.ln_1_b = get_tensor(string_format(TN_LN_1,        prefix, il, "bias"), false);
             layer.ln_2_b = get_tensor(string_format(TN_LN_2,        prefix, il, "bias"), false);
 
@@ -1382,6 +1402,8 @@ struct clip_model_loader {
             layer.ff_up_b   = get_tensor(string_format(TN_FFN_UP,   prefix, il, "bias"),   false);
             layer.ff_gate_w = get_tensor(string_format(TN_FFN_GATE, prefix, il, "weight"), false);
             layer.ff_gate_b = get_tensor(string_format(TN_FFN_GATE, prefix, il, "bias"),   false);
+            layer.ffn_hidden_norm_w = get_tensor(string_format(TN_FFN_NORM, prefix, il, "weight"), false);
+            layer.ffn_hidden_norm_b = get_tensor(string_format(TN_FFN_NORM, prefix, il, "bias"),   false);
             layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "weight"));
             layer.ff_down_b = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "bias"),   false);
 
@@ -1793,7 +1815,6 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_JINACLIP2:
                 {
-                    // JinaCLIP2 is a pure vision encoder without additional projection layers.
                 } break;
             case PROJECTOR_TYPE_LFM2A:
                 {
@@ -3035,7 +3056,6 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 clip_image_u8 processed_image;
                 const int sz = params.image_size;
 
-                // 1) Preserve aspect ratio: resize so that the shorter side == sz (bicubic).
                 const int in_w = img->nx;
                 const int in_h = img->ny;
                 if (in_w <= 0 || in_h <= 0) {
@@ -3055,14 +3075,12 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 clip_image_u8 resized_keep_ratio;
                 img_tool::resize(*img, resized_keep_ratio, clip_image_size{out_w, out_h}, img_tool::RESIZE_ALGO_BICUBIC);
 
-                // 2) Center-crop to sz x sz.
                 const int x0 = std::max(0, (resized_keep_ratio.nx - sz) / 2);
                 const int y0 = std::max(0, (resized_keep_ratio.ny - sz) / 2);
                 const int crop_w = std::min(sz, resized_keep_ratio.nx);
                 const int crop_h = std::min(sz, resized_keep_ratio.ny);
                 img_tool::crop(resized_keep_ratio, processed_image, x0, y0, crop_w, crop_h);
 
-                // 3) Normalize.
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
                 normalize_image_u8_to_f32(processed_image, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));
@@ -3699,19 +3717,14 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 const int half_local = d_head_local / 2;
                 std::vector<float> rope_c_first(half_local);
                 std::vector<float> rope_c_second(half_local);
-                const float odd = std::pow(hparams.rope_theta, (float) -2.0f / (float) d_head_local);
 
                 for (int k = 0; k < half_local; ++k) {
                     rope_c_first[k]  = 1.0f / s;
-                    rope_c_second[k] = 1.0f / (s * odd);
+                    rope_c_second[k] = 1.0f / s;
                 }
 
-                ggml_tensor * t1 = ggml_graph_get_tensor(gf, "rope_c_first");
-                ggml_tensor * t2 = ggml_graph_get_tensor(gf, "rope_c_second");
-                GGML_ASSERT(t1 && (t1->flags & GGML_TENSOR_FLAG_INPUT));
-                GGML_ASSERT(t2 && (t2->flags & GGML_TENSOR_FLAG_INPUT));
-                ggml_backend_tensor_set(t1, rope_c_first.data(), 0, ggml_nbytes(t1));
-                ggml_backend_tensor_set(t2, rope_c_second.data(), 0, ggml_nbytes(t2));
+                set_input_f32("rope_c_first", rope_c_first);
+                set_input_f32("rope_c_second", rope_c_second);
             } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
