@@ -566,6 +566,10 @@ int main(int argc, char ** argv) {
         embd_inp.push_back(decoder_start_token_id);
     }
 
+    // Add for --t-max-predict-ms
+    bool seen_new_line = false;
+    int64_t t_start_generation = 0;
+
     while ((n_remain != 0 && !is_antiprompt) || params.interactive) {
         // predict
         if (!embd.empty()) {
@@ -746,6 +750,17 @@ int main(int argc, char ** argv) {
 
                 // Console/Stream Output
                 LOG("%s", token_str.c_str());
+
+                if (token_str.find('\n') != std::string::npos) {
+                    if (!seen_new_line) {
+                        seen_new_line = true;
+                        t_start_generation = ggml_time_us();
+                    } else if (params.t_max_predict_ms > 0 && (ggml_time_us() - t_start_generation > 1000.0f * params.t_max_predict_ms)) {
+                        LOG_DBG("stopped by time limit, t_max_predict_ms = %d ms\n", (int) params.t_max_predict_ms);
+                        n_remain = 0;
+                        break;
+                    }
+                }
 
                 // Record Displayed Tokens To Log
                 // Note: Generated tokens are created one by one hence this check
