@@ -43,6 +43,9 @@ body {
 #UsageNote {
     margin: 0.0vmin;
 }
+.restore-details {
+    margin: 0.0vmin;
+}
 
 .chat-message {
     display: flex;
@@ -162,7 +165,7 @@ button {
     padding-inline: 2vmin;
     border-radius: 1vmin;
     min-height: 3vmin;
-    border-color: lightgray;
+    border-color: #80A0E0;
 }
 
 .sameline {
