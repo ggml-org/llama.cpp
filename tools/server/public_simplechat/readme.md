@@ -810,10 +810,13 @@ Cleanup in general
   * make the scrollbars more subtle and in the background.
   * allow user input textarea to grow vertically to some extent.
   * make things rounded across board by default. add some padding to toolcall details block, ...
-  * Auto ObjPropsEdit UI
-    * allow it to be themed by assigning id to top level block.
-    * fix a oversight (forgotten $) with use of templated literals and having variables in them.
-    * ensure full props hierarchy is accounted for when setting the id of elements.
+  * use icons without text wrt chat sessions++, new chat, clear chat and settings top level buttons.
+    * use title property/attribute to give a hint to the user about the button functionality
+* Auto ObjPropsEdit UI
+  * allow it to be themed by assigning id to top level block.
+  * fix a oversight (forgotten $) with use of templated literals and having variables in them.
+  * ensure full props hierarchy is accounted for when setting the id of elements.
+* Chat button to toggle sessions buttons and system prompt
 
 
 #### ToDo
