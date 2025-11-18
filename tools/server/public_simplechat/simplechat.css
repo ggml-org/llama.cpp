@@ -3,15 +3,21 @@
  * by Humans for All
  */
 
+:root {
+    --background-color: #f4f4f9
+}
+
 body {
-    background-color: #f8f9fa;
+    background-color: var(--background-color);
+    font-family: 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif;
 }
 #fullbody {
     height: 98vh;
 }
 
-.heading {
-    background: linear-gradient(135deg, lightblue 0%, white 100%);
+#heading {
+    background: linear-gradient(135deg, var(--background-color) 0%, lightblue 100%);
+    margin: 0;
 }
 
 .session-selected {
@@ -19,17 +25,16 @@ body {
 }
 
 .role-system {
-    background-color: lightblue;
+    background: linear-gradient(135deg, lightblue 0%, var(--background-color) 100%);
 }
 .role-user {
-    background-color: lightgray;
+    background: linear-gradient(135deg, lightgray 0%, var(--background-color) 100%);
 }
 .role-assistant {
     text-align: initial;
 }
 .role-tool {
-    /* background-color: cornsilk; */
-    background-color: lightyellow;
+    background: linear-gradient(135deg, var(--background-color) 0%, lightyellow 100%);
 }
 .role-trim {
     background-color: lightpink;
@@ -40,24 +45,22 @@ body {
 }
 
 .chat-message {
-    border-style: solid;
-    border-color: grey;
-    border-width: thin;
-    border-radius: 1vmin;
     display: flex;
+    border-radius: 1vmin;
     margin-bottom: 2vh;
-    /* box-shadow: 1px 1px 4px lightslategray; */
+    border: none;
+    padding: 0.4vmin;
+    padding-left: 0;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
 }
 .chat-message:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 .chat-message-role {
-    border-style: dotted;
-    border-color: black;
-    border-width: thin;
-    border-radius: 4px;
+    border: none;
     writing-mode: vertical-lr;
     padding-inline: 1vmin;
+    border-right: 1px solid rgba(0, 0, 0, 0.2);
 }
 .chat-message-reasoning {
     border-block-style: dashed;
@@ -159,6 +162,7 @@ button {
     padding-inline: 2vmin;
     border-radius: 1vmin;
     min-height: 3vmin;
+    border-color: lightgray;
 }
 
 .sameline {
@@ -193,25 +197,28 @@ button {
 
 @media print {
 
+    body {
+        background-color: white;
+    }
 
     #fullbody {
         height: auto;
     }
 
     .chat-message {
-        border-style: solid;
-        border-color: grey;
-        border-width: thin;
-        border-radius: 2px;
         display:inherit;
+        padding: 0.4vmin;
+        border-radius: 1vmin;
+        margin-bottom: 2vh;
+        border: none;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
     }
     .chat-message-role {
-        border-style: dotted;
-        border-color: black;
-        border-width: thin;
-        border-radius: 4px;
         writing-mode:inherit;
+        max-width: fit-content;
         padding-inline: 1vmin;
+        border: none;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.2);
     }
 
 
