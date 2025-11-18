@@ -129,12 +129,6 @@ class BailingMoeV2Model(TextModel):
         self.gguf_writer.add_expert_count(hparams["num_experts"])
         self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
         self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
-        if hparams["score_function"] == "sigmoid":
-            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
-        elif hparams["score_function"] == "softmax":
-            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
-        else:
-            raise ValueError(f"Unsupported score_function value: {hparams['score_function']}")
         if (nextn_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
             self.gguf_writer.add_nextn_predict_layers(nextn_layers)
     _experts: list[dict[str, Tensor]] | None = None

@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-@ModelBase.register("DeepseekForCausalLM", "DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM", "KimiVLForConditionalGeneration")
+@ModelBase.register("DeepseekForCausalLM")
 class DeepseekModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK
 
@@ -81,6 +81,7 @@ class DeepseekModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM", "KimiVLForConditionalGeneration")
 class DeepseekV2Model(DeepseekModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 

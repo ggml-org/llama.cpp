@@ -38,7 +38,6 @@ class SeedOssModel(TextModel):
     model_arch = gguf.MODEL_ARCH.SEED_OSS
 
 
-@ModelBase.register("Olmo3ForCausalLM")
 @ModelBase.register("Olmo2ForCausalLM", "Olmo3ForCausalLM")
 class Olmo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMO2

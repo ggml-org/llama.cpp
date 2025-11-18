@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 @ModelBase.register("T5ForConditionalGeneration")
 @ModelBase.register("MT5ForConditionalGeneration")
 @ModelBase.register("UMT5ForConditionalGeneration")
+@ModelBase.register("UMT5Model")
 class T5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.T5
 

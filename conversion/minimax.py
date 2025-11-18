@@ -18,12 +18,6 @@ class MiniMaxM2Model(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        if self.hparams["scoring_func"] == "sigmoid":
-            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
-        elif self.hparams["scoring_func"] == "softmax":
-            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
-        else:
-            raise ValueError(f"Unsupported scoring_func value: {self.hparams['scoring_func']}")
         self.gguf_writer.add_expert_feed_forward_length(self.find_hparam(["intermediate_size"]))
         self.gguf_writer.add_rope_dimension_count(self.find_hparam(["rotary_dim"]))
 

@@ -16,6 +16,7 @@ __all__ = [
 
 TEXT_MODEL_MAP = {
     # Text models - keys are the names from @ModelBase.register(...) annotations
+    "AfmoeForCausalLM": ("afmoe", "AfmoeModel"),
     "ApertusForCausalLM": ("apertus", "ApertusModel"),
     "ArceeForCausalLM": ("arcee", "ArceeModel"),
     "ArcticForCausalLM": ("arctic", "ArcticModel"),
@@ -42,8 +43,8 @@ TEXT_MODEL_MAP = {
     "DbrxForCausalLM": ("dbrx", "DbrxModel"),
     "DeciLMForCausalLM": ("deci", "DeciModel"),
     "DeepseekForCausalLM": ("deepseek", "DeepseekModel"),
-    "DeepseekV2ForCausalLM": ("deepseek", "DeepseekModel"),
-    "DeepseekV3ForCausalLM": ("deepseek", "DeepseekModel"),
+    "DeepseekV2ForCausalLM": ("deepseek", "DeepseekV2Model"),
+    "DeepseekV3ForCausalLM": ("deepseek", "DeepseekV2Model"),
     "DistilBertForMaskedLM": ("bert", "DistilBertModel"),
     "DistilBertForSequenceClassification": ("bert", "DistilBertModel"),
     "DistilBertModel": ("bert", "DistilBertModel"),
@@ -88,7 +89,7 @@ TEXT_MODEL_MAP = {
     "JanusForConditionalGeneration": ("janus_pro", "JanusProModel"),
     "JinaBertForMaskedLM": ("bert", "JinaBertV2Model"),
     "JinaBertModel": ("bert", "JinaBertV2Model"),
-    "KimiVLForConditionalGeneration": ("deepseek", "DeepseekModel"),
+    "KimiVLForConditionalGeneration": ("deepseek", "DeepseekV2Model"),
     "LFM2ForCausalLM": ("lfm2", "LFM2Model"),
     "LLaDAMoEModel": ("llada", "LLaDAMoEModel"),
     "LLaDAMoEModelLM": ("llada", "LLaDAMoEModel"),

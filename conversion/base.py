@@ -651,6 +651,14 @@ class TextModel(ModelBase):
         if (n_group_used := self.hparams.get("topk_group")) is not None:
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func"], optional=True)) is not None:
+            if score_func == "sigmoid":
+                self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+            elif score_func == "softmax":
+                self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+            else:
+                raise ValueError(f"Unsupported expert score gating function value: {score_func}")
+            logger.info(f"gguf: expert score gating function = {score_func}")
         if (head_dim := self.hparams.get("head_dim")) is not None:
             self.gguf_writer.add_key_length(head_dim)
             self.gguf_writer.add_value_length(head_dim)
@@ -1440,6 +1448,16 @@ class LazyTorchTensor(gguf.LazyBase):
         dtype = cls._dtype_str_map[st_slice.get_dtype()]
         shape: tuple[int, ...] = tuple(st_slice.get_shape())
         lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(st_slice,), func=lambda s: s[...] if len(s.get_shape()) == 0 else s[:])
+        return cast(torch.Tensor, lazy)
+
+    @classmethod
+    def from_local_tensor(cls, t: gguf.utility.LocalTensor) -> Tensor:
+        def load_tensor(tensor: gguf.utility.LocalTensor) -> Tensor:
+            dtype = cls._dtype_str_map[tensor.dtype]
+            return torch.from_numpy(tensor.mmap_bytes()).view(dtype).reshape(tensor.shape)
+        dtype = cls._dtype_str_map[t.dtype]
+        shape = t.shape
+        lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(t,), func=lambda r: load_tensor(r))
         return cast(torch.Tensor, lazy)
 
     @classmethod
