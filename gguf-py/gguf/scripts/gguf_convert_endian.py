@@ -91,6 +91,7 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
            tensor.tensor_type not in (
                 gguf.GGMLQuantizationType.F32,
                 gguf.GGMLQuantizationType.F16,
+                gguf.GGMLQuantizationType.BF16,
            ):
             raise ValueError(f"Cannot handle type {tensor.tensor_type.name} for tensor {repr(tensor.name)}")
     logger.info(f"* Preparing to convert from {file_endian} to {order}")
@@ -148,6 +149,11 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
 
             # restore old shape in case it's ever used
             tensor.data.resize(oldshape)
+        elif tensor.tensor_type == gguf.GGMLQuantizationType.BF16:
+            # Special case for BF16
+            # It is 2-bytes data, but by default view loads it as 1-byte data.
+            # Change to correct view before byteswapping.
+            tensor.data.view(dtype=np.uint16).byteswap(inplace=True)
         else:
             # Handle other tensor types
             tensor.data.byteswap(inplace=True)

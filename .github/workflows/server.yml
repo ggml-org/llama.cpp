@@ -209,7 +209,7 @@ jobs:
         working-directory: tools/server/webui
 
       - name: Run UI tests
-        run: npm run test:ui
+        run: npm run test:ui -- --testTimeout=60000
         working-directory: tools/server/webui
 
       - name: Run E2E tests

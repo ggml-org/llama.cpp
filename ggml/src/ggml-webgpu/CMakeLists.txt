@@ -50,5 +50,13 @@ if (GGML_WEBGPU_DEBUG)
     target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_DEBUG=1)
 endif()
 
+if (GGML_WEBGPU_CPU_PROFILE)
+    target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_CPU_PROFILE=1)
+endif()
+
+if (GGML_WEBGPU_GPU_PROFILE)
+    target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_GPU_PROFILE=1)
+endif()
+
 target_include_directories(ggml-webgpu PRIVATE ${SHADER_OUTPUT_DIR})
 target_link_libraries(ggml-webgpu PRIVATE ${DawnWebGPU_TARGET})

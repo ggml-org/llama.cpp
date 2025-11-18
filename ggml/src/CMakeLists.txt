@@ -145,6 +145,9 @@ endif()
 # which was introduced in POSIX.1-2008, forcing us to go higher
 if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
     add_compile_definitions(_XOPEN_SOURCE=700)
+elseif (CMAKE_SYSTEM_NAME MATCHES "AIX")
+    # Don't define _XOPEN_SOURCE.  We need _ALL_SOURCE, which is the default,
+    # in order to define _SC_PHYS_PAGES.
 else()
     add_compile_definitions(_XOPEN_SOURCE=600)
 endif()
@@ -208,6 +211,11 @@ add_library(ggml-base
             ggml-quants.h
             gguf.cpp)
 
+set_target_properties(ggml-base PROPERTIES
+    VERSION ${GGML_VERSION}
+    SOVERSION ${GGML_VERSION_MAJOR}
+)
+
 target_include_directories(ggml-base PRIVATE .)
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
@@ -216,6 +224,11 @@ endif()
 add_library(ggml
             ggml-backend-reg.cpp)
 add_library(ggml::ggml ALIAS ggml)
+
+set_target_properties(ggml PROPERTIES
+    VERSION ${GGML_VERSION}
+    SOVERSION ${GGML_VERSION_MAJOR}
+)
 
 if (GGML_BACKEND_DIR)
     if (NOT GGML_BACKEND_DL)
@@ -255,6 +268,12 @@ function(ggml_add_backend_library backend)
         target_compile_definitions(${backend} PRIVATE GGML_BACKEND_BUILD)
         target_compile_definitions(${backend} PUBLIC  GGML_BACKEND_SHARED)
     endif()
+
+    # Set versioning properties for all backend libraries
+    set_target_properties(${backend} PROPERTIES
+        VERSION ${GGML_VERSION}
+        SOVERSION ${GGML_VERSION_MAJOR}
+    )
 
     if(NOT GGML_AVAILABLE_BACKENDS)
         set(GGML_AVAILABLE_BACKENDS "${backend}"
@@ -301,6 +320,14 @@ function(ggml_add_cpu_backend_variant tag_name)
             set(GGML_INTERNAL_${feat} ON)
         endforeach()
     elseif (GGML_SYSTEM_ARCH STREQUAL "PowerPC")
+        foreach (feat ${ARGN})
+            set(GGML_INTERNAL_${feat} ON)
+        endforeach()
+    elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
+        foreach (feat VXE2 NNPA)
+            set(GGML_INTERNAL_${feat} OFF)
+        endforeach()
+
         foreach (feat ${ARGN})
             set(GGML_INTERNAL_${feat} ON)
         endforeach()
@@ -368,6 +395,13 @@ if (GGML_CPU_ALL_VARIANTS)
         else()
             message(FATAL_ERROR "Unsupported PowerPC target OS: ${CMAKE_SYSTEM_NAME}")
         endif()
+    elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
+        if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+            ggml_add_cpu_backend_variant(z15    Z15 VXE2)
+            ggml_add_cpu_backend_variant(z16    Z16 VXE2 NNPA)
+        else()
+            message(FATAL_ERROR "Unsupported s390x target OS: ${CMAKE_SYSTEM_NAME}")
+        endif()
     else()
         message(FATAL_ERROR "GGML_CPU_ALL_VARIANTS not yet supported with ${GGML_SYSTEM_ARCH} on ${CMAKE_SYSTEM_NAME}")
     endif()
@@ -387,6 +421,7 @@ ggml_add_backend(Vulkan)
 ggml_add_backend(WebGPU)
 ggml_add_backend(zDNN)
 ggml_add_backend(OpenCL)
+ggml_add_backend(Hexagon)
 
 foreach (target ggml-base ggml)
     target_include_directories(${target} PUBLIC    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> $<INSTALL_INTERFACE:include>)

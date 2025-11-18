@@ -4,7 +4,6 @@
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { buttonVariants } from '$lib/components/ui/button/index.js';
 	import { Card } from '$lib/components/ui/card';
-	import { MarkdownContent } from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
@@ -59,7 +58,9 @@
 		<Collapsible.Content>
 			<div class="border-t border-muted px-3 pb-3">
 				<div class="pt-3">
-					<MarkdownContent content={reasoningContent || ''} class="text-xs leading-relaxed" />
+					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
+						{reasoningContent ?? ''}
+					</div>
 				</div>
 			</div>
 		</Collapsible.Content>

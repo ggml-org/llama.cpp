@@ -7,18 +7,19 @@
 
 	const processingState = useProcessingState();
 
+	let isCurrentConversationLoading = $derived(isLoading());
 	let processingDetails = $derived(processingState.getProcessingDetails());
+	let showSlotsInfo = $derived(isCurrentConversationLoading || config().keepStatsVisible);
 
-	let showSlotsInfo = $derived(isLoading() || config().keepStatsVisible);
-
+	// Track loading state reactively by checking if conversation ID is in loading conversations array
 	$effect(() => {
 		const keepStatsVisible = config().keepStatsVisible;
 
-		if (keepStatsVisible || isLoading()) {
+		if (keepStatsVisible || isCurrentConversationLoading) {
 			processingState.startMonitoring();
 		}
 
-		if (!isLoading() && !keepStatsVisible) {
+		if (!isCurrentConversationLoading && !keepStatsVisible) {
 			setTimeout(() => {
 				if (!config().keepStatsVisible) {
 					processingState.stopMonitoring();
@@ -27,18 +28,20 @@
 		}
 	});
 
+	// Update processing state from stored timings
 	$effect(() => {
-		activeConversation();
-
+		const conversation = activeConversation();
 		const messages = activeMessages() as DatabaseMessage[];
 		const keepStatsVisible = config().keepStatsVisible;
 
-		if (keepStatsVisible) {
+		if (keepStatsVisible && conversation) {
 			if (messages.length === 0) {
-				slotsService.clearState();
+				slotsService.clearConversationState(conversation.id);
 				return;
 			}
 
+			// Search backwards through messages to find most recent assistant message with timing data
+			// Using reverse iteration for performance - avoids array copy and stops at first match
 			let foundTimingData = false;
 
 			for (let i = messages.length - 1; i >= 0; i--) {
@@ -47,15 +50,18 @@
 					foundTimingData = true;
 
 					slotsService
-						.updateFromTimingData({
-							prompt_n: message.timings.prompt_n || 0,
-							predicted_n: message.timings.predicted_n || 0,
-							predicted_per_second:
-								message.timings.predicted_n && message.timings.predicted_ms
-									? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
-									: 0,
-							cache_n: message.timings.cache_n || 0
-						})
+						.updateFromTimingData(
+							{
+								prompt_n: message.timings.prompt_n || 0,
+								predicted_n: message.timings.predicted_n || 0,
+								predicted_per_second:
+									message.timings.predicted_n && message.timings.predicted_ms
+										? (message.timings.predicted_n / message.timings.predicted_ms) * 1000
+										: 0,
+								cache_n: message.timings.cache_n || 0
+							},
+							conversation.id
+						)
 						.catch((error) => {
 							console.warn('Failed to update processing state from stored timings:', error);
 						});
@@ -64,16 +70,16 @@
 			}
 
 			if (!foundTimingData) {
-				slotsService.clearState();
+				slotsService.clearConversationState(conversation.id);
 			}
 		}
 	});
 </script>
 
-<div class="chat-processing-info-container" class:visible={showSlotsInfo}>
+<div class="chat-processing-info-container pointer-events-none" class:visible={showSlotsInfo}>
 	<div class="chat-processing-info-content">
 		{#each processingDetails as detail (detail)}
-			<span class="chat-processing-info-detail">{detail}</span>
+			<span class="chat-processing-info-detail pointer-events-auto">{detail}</span>
 		{/each}
 	</div>
 </div>
@@ -86,7 +92,6 @@
 		padding: 1.5rem 1rem;
 		opacity: 0;
 		transform: translateY(50%);
-		pointer-events: none;
 		transition:
 			opacity 300ms ease-out,
 			transform 300ms ease-out;
@@ -94,7 +99,6 @@
 
 	.chat-processing-info-container.visible {
 		opacity: 1;
-		pointer-events: auto;
 		transform: translateY(0);
 	}
 

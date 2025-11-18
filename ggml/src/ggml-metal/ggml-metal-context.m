@@ -35,7 +35,6 @@ struct ggml_metal {
     // additional, inference-time compiled pipelines
     ggml_metal_pipelines_t pipelines_ext;
 
-    bool use_bfloat;
     bool use_fusion;
     bool use_concurrency;
     bool use_graph_optimize;
@@ -121,11 +120,10 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
         }
     }
 
-    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
+    //const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
 
     res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
-    res->use_bfloat      = props_dev->has_bfloat;
     res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
     res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
@@ -147,7 +145,6 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
     memset(res->fuse_cnt, 0, sizeof(res->fuse_cnt));
 
-    GGML_LOG_INFO("%s: use bfloat         = %s\n", __func__, res->use_bfloat         ? "true" : "false");
     GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, res->use_fusion         ? "true" : "false");
     GGML_LOG_INFO("%s: use concurrency    = %s\n", __func__, res->use_concurrency    ? "true" : "false");
     GGML_LOG_INFO("%s: use graph optimize = %s\n", __func__, res->use_graph_optimize ? "true" : "false");
@@ -222,7 +219,28 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
         ctx->cmd_buf_last = nil;
     }
 
-    // release any completed command buffers
+    // check status of all command buffers
+    {
+        const int n_cb = ctx->n_cb;
+
+        for (int cb_idx = 0; cb_idx <= n_cb; ++cb_idx) {
+            id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
+            if (!cmd_buf) {
+                continue;
+            }
+
+            MTLCommandBufferStatus status = [cmd_buf status];
+            if (status != MTLCommandBufferStatusCompleted) {
+                GGML_LOG_ERROR("%s: error: command buffer %d failed with status %d\n", __func__, cb_idx, (int) status);
+                if (status == MTLCommandBufferStatusError) {
+                    GGML_LOG_ERROR("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
+                }
+                GGML_ABORT("fatal error");
+            }
+        }
+    }
+
+    // release any completed extra command buffers
     if (ctx->cmd_bufs_ext.count > 0) {
         for (size_t i = 0; i < ctx->cmd_bufs_ext.count; ++i) {
             id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs_ext[i];
@@ -260,6 +278,8 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
                                                          length:size
                                                         options:MTLResourceStorageModeShared];
 
+        GGML_ASSERT(buf_src);
+
         struct ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(tensor);
         if (bid_dst.metal == nil) {
             GGML_ABORT("%s: failed to find buffer for tensor '%s'\n", __func__, tensor->name);
@@ -269,7 +289,7 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
 
         // queue the copy operation into the queue of the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
-        id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+        id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:buf_src
@@ -280,6 +300,7 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
 
         [encoder endEncoding];
         [cmd_buf commit];
+        [buf_src release];
 
         // do not wait here for completion
         //[cmd_buf waitUntilCompleted];
@@ -299,6 +320,8 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
 
+        GGML_ASSERT(buf_dst);
+
         struct ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(tensor);
         if (bid_src.metal == nil) {
             GGML_ABORT("%s: failed to find buffer for tensor '%s'\n", __func__, tensor->name);
@@ -308,7 +331,7 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
 
         // queue the copy operation into the queue of the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
-        id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+        id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBuffer];
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:bid_src.metal
@@ -319,6 +342,7 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
 
         [encoder endEncoding];
         [cmd_buf commit];
+        [buf_dst release];
 
         // do not wait here for completion
         //[cmd_buf waitUntilCompleted];
@@ -542,13 +566,13 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->debug_graph,
             ctx->debug_fusion);
 
-        for (int idx = idx_start; idx < idx_end;) {
+        for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);
             if (res == 0) {
                 break;
             }
 
-            idx += res;
+            idx += res - 1;
         }
 
         ggml_metal_op_free(ctx_op);

@@ -19,8 +19,8 @@ def create_server():
         (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.", 77, 8, "length", True,  None),
         (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.", 77, 8, "length", True, 'chatml'),
         (None, "Book", "What is the best book", 8, "^ blue",                    23, 8, "length", True, "This is not a chat template, it is"),
-        ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 64, "length", False, None),
-        ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 64, "length", True, None),
+        ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 128, "length", False, None),
+        ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 128, "length", True, None),
         (None, "Book", [{"type": "text", "text": "What is"}, {"type": "text", "text": "the best book"}], 8, "Whillicter", 79, 8, "length", False, None),
         (None, "Book", [{"type": "text", "text": "What is"}, {"type": "text", "text": "the best book"}], 8, "Whillicter", 79, 8, "length", True, None),
     ]
@@ -54,7 +54,7 @@ def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_conte
     "system_prompt,user_prompt,max_tokens,re_content,n_prompt,n_predicted,finish_reason",
     [
         ("Book", "What is the best book", 8, "(Suddenly)+", 77, 8, "length"),
-        ("You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 64, "length"),
+        ("You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 128, "length"),
     ]
 )
 def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_content, n_prompt, n_predicted, finish_reason):
@@ -408,24 +408,46 @@ def test_context_size_exceeded():
     assert res.body["error"]["n_ctx"] == server.n_ctx // server.n_slots
 
 
+def test_context_size_exceeded_stream():
+    global server
+    server.start()
+    try:
+        for _ in server.make_stream_request("POST", "/chat/completions", data={
+            "messages": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ] * 100, # make the prompt too long
+            "stream": True}):
+                pass
+        assert False, "Should have failed"
+    except ServerError as e:
+        assert e.code == 400
+        assert "error" in e.body
+        assert e.body["error"]["type"] == "exceed_context_size_error"
+        assert e.body["error"]["n_prompt_tokens"] > 0
+        assert server.n_ctx is not None
+        assert server.n_slots is not None
+        assert e.body["error"]["n_ctx"] == server.n_ctx // server.n_slots
+
+
 @pytest.mark.parametrize(
     "n_batch,batch_count,reuse_cache",
     [
-        (64, 15, False),
+        (64, 3, False),
         (64, 1, True),
     ]
 )
-def test_return_progresssss(n_batch, batch_count, reuse_cache):
+def test_return_progress(n_batch, batch_count, reuse_cache):
     global server
     server.n_batch = n_batch
-    server.n_ctx = 2048
+    server.n_ctx = 256
     server.n_slots = 1
     server.start()
     def make_cmpl_request():
         return server.make_stream_request("POST", "/chat/completions", data={
             "max_tokens": 10,
             "messages": [
-                {"role": "user", "content": "This is a test" * 100},
+                {"role": "user", "content": "This is a test" * 10},
             ],
             "stream": True,
             "return_progress": True,

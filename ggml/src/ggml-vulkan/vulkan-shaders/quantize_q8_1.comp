@@ -17,7 +17,7 @@ layout (push_constant) uniform parameter
     uint ne;
 } p;
 
-#include "types.comp"
+#include "types.glsl"
 
 layout(constant_id = 0) const uint GROUP_SIZE = 32;
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
@@ -61,7 +61,7 @@ void quantize() {
 
     const uint a_idx = ib * 8 + iqs;
 
-    vec4 vals = a_idx < p.ne ? data_a[a_idx] : vec4(0.0f);
+    vec4 vals = a_idx < p.ne / 4 ? data_a[a_idx] : vec4(0.0f);
     const vec4 abs_vals = abs(vals);
 
     // Find absolute max for each block

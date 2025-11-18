@@ -48,31 +48,33 @@ aclDataType ggml_cann_type_mapping(ggml_type type) {
         default:
             return ACL_DT_UNDEFINED;
     }
-    return ACL_DT_UNDEFINED;
 }
 
-aclTensor* ggml_cann_create_tensor(const ggml_tensor* tensor, int64_t* ne,
-                                   size_t* nb, int64_t dims, aclFormat format,
-                                   size_t offset) {
+acl_tensor_ptr ggml_cann_create_tensor(const ggml_tensor * tensor,
+                                       int64_t *           ne,
+                                       size_t *            nb,
+                                       int64_t             dims,
+                                       aclFormat           format,
+                                       size_t              offset) {
     // If tensor is bcasted, Up to GGML_MAX_DIMS additional dimensions will be
     // added.
     int64_t acl_ne[GGML_MAX_DIMS * 2], acl_stride[GGML_MAX_DIMS * 2];
 
     if (ne == nullptr) {
         for (int i = 0; i < GGML_MAX_DIMS; i++) {
-            acl_ne[i] = tensor->ne[i];
+            acl_ne[i]     = tensor->ne[i];
             // The step size of acl is in elements.
             acl_stride[i] = tensor->nb[i] / ggml_element_size(tensor);
         }
     } else {
         // With bcast
         for (int i = 0; i < dims; i++) {
-            acl_ne[i] = ne[i];
+            acl_ne[i]     = ne[i];
             acl_stride[i] = nb[i] / ggml_element_size(tensor);
         }
     }
 
-    int64_t final_dims = (dims == 0 ? GGML_MAX_DIMS : dims);
+    int64_t final_dims      = (dims == 0 ? GGML_MAX_DIMS : dims);
     int64_t acl_storage_len = 1;
     for (int i = 0; i < final_dims; i++) {
         acl_storage_len += (acl_ne[i] - 1) * acl_stride[i];
@@ -84,15 +86,23 @@ aclTensor* ggml_cann_create_tensor(const ggml_tensor* tensor, int64_t* ne,
     std::reverse(acl_ne, acl_ne + final_dims);
     std::reverse(acl_stride, acl_stride + final_dims);
 
-    aclTensor* acl_tensor = aclCreateTensor(
-        acl_ne, final_dims, ggml_cann_type_mapping(tensor->type), acl_stride,
-        elem_offset, format, &acl_storage_len, 1,
-        tensor->data);
+    aclTensor * raw = aclCreateTensor(acl_ne, final_dims, ggml_cann_type_mapping(tensor->type), acl_stride, elem_offset,
+                                      format, &acl_storage_len, 1, tensor->data);
 
-    return acl_tensor;
+    return acl_tensor_ptr(raw);
 }
 
-bool ggml_cann_need_bcast(const ggml_tensor* t0, const ggml_tensor* t1) {
+acl_int_array_ptr ggml_cann_create_int_array(const int64_t * value, uint64_t size) {
+    aclIntArray * raw = aclCreateIntArray(value, size);
+    return acl_int_array_ptr(raw);
+}
+
+acl_scalar_ptr ggml_cann_create_scalar(void * value, aclDataType dataType) {
+    aclScalar * raw = aclCreateScalar(value, dataType);
+    return acl_scalar_ptr(raw);
+}
+
+bool ggml_cann_need_bcast(const ggml_tensor * t0, const ggml_tensor * t1) {
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         if (t1->ne[i] != t0->ne[i] && t1->ne[i] != 1) {
             return true;
@@ -101,15 +111,16 @@ bool ggml_cann_need_bcast(const ggml_tensor* t0, const ggml_tensor* t1) {
     return false;
 }
 
-int64_t ggml_cann_get_bcast_shape(const ggml_tensor* src0,
-                                  const ggml_tensor* src1,
-                                  int64_t* bcast_src0_ne,
-                                  int64_t* bcast_src1_ne, size_t* bcast_src0_nb,
-                                  size_t* bcast_src1_nb) {
+int64_t ggml_cann_get_bcast_shape(const ggml_tensor * src0,
+                                  const ggml_tensor * src1,
+                                  int64_t *           bcast_src0_ne,
+                                  int64_t *           bcast_src1_ne,
+                                  size_t *            bcast_src0_nb,
+                                  size_t *            bcast_src1_nb) {
     GGML_ASSERT(ggml_can_repeat(src1, src0));
     int bcast_dim_cnt = 0;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
-        int64_t nr = src0->ne[i] / src1->ne[i];
+        int64_t nr                   = src0->ne[i] / src1->ne[i];
         bcast_src0_ne[bcast_dim_cnt] = src0->ne[i] / nr;
         bcast_src1_ne[bcast_dim_cnt] = src1->ne[i];
         bcast_src0_nb[bcast_dim_cnt] = src0->nb[i];
@@ -119,21 +130,26 @@ int64_t ggml_cann_get_bcast_shape(const ggml_tensor* src0,
             // Need to add an extra dim.
             bcast_src0_ne[bcast_dim_cnt] = nr;
             bcast_src1_ne[bcast_dim_cnt] = 1;
-            bcast_src0_nb[bcast_dim_cnt] = bcast_src0_nb[bcast_dim_cnt - 1] *
-                                           bcast_src0_ne[bcast_dim_cnt - 1];
-            bcast_src1_nb[bcast_dim_cnt] = bcast_src1_nb[bcast_dim_cnt - 1] *
-                                           bcast_src1_ne[bcast_dim_cnt - 1];
+            bcast_src0_nb[bcast_dim_cnt] = bcast_src0_nb[bcast_dim_cnt - 1] * bcast_src0_ne[bcast_dim_cnt - 1];
+            bcast_src1_nb[bcast_dim_cnt] = bcast_src1_nb[bcast_dim_cnt - 1] * bcast_src1_ne[bcast_dim_cnt - 1];
             bcast_dim_cnt++;
         }
     }
     return bcast_dim_cnt;
 }
 
-int64_t ggml_cann_get_mulmat_bcast_shape(
-    const int64_t* input_ne, const int64_t* weight_ne, const int64_t* dst_ne,
-    const size_t* input_nb, const size_t* weight_nb, const size_t* dst_nb,
-    int64_t* bcast_input_ne, int64_t* bcast_weight_ne, int64_t* bcast_dst_ne,
-    size_t* bcast_input_nb, size_t* bcast_weight_nb, size_t* bcast_dst_nb) {
+int64_t ggml_cann_get_mulmat_bcast_shape(const int64_t * input_ne,
+                                         const int64_t * weight_ne,
+                                         const int64_t * dst_ne,
+                                         const size_t *  input_nb,
+                                         const size_t *  weight_nb,
+                                         const size_t *  dst_nb,
+                                         int64_t *       bcast_input_ne,
+                                         int64_t *       bcast_weight_ne,
+                                         int64_t *       bcast_dst_ne,
+                                         size_t *        bcast_input_nb,
+                                         size_t *        bcast_weight_nb,
+                                         size_t *        bcast_dst_nb) {
     // input and dst shoule in same shape, except first two dims.
     GGML_ASSERT(input_ne[2] == dst_ne[2]);
     GGML_ASSERT(input_ne[3] == dst_ne[3]);
@@ -148,34 +164,30 @@ int64_t ggml_cann_get_mulmat_bcast_shape(
         // Do not use bcast in the first two dimensions because we only support
         // the bcast batch dimension. Just copy them.
         if (i < 2 || nr == 1) {
-            bcast_input_ne[bcast_dim_cnt] = input_ne[i];
+            bcast_input_ne[bcast_dim_cnt]  = input_ne[i];
             bcast_weight_ne[bcast_dim_cnt] = weight_ne[i];
-            bcast_dst_ne[bcast_dim_cnt] = dst_ne[i];
+            bcast_dst_ne[bcast_dim_cnt]    = dst_ne[i];
 
-            bcast_input_nb[bcast_dim_cnt] = input_nb[i];
+            bcast_input_nb[bcast_dim_cnt]  = input_nb[i];
             bcast_weight_nb[bcast_dim_cnt] = weight_nb[i];
-            bcast_dst_nb[bcast_dim_cnt] = dst_nb[i];
+            bcast_dst_nb[bcast_dim_cnt]    = dst_nb[i];
             bcast_dim_cnt++;
         } else {
             // Need to add an extra dim.
-            bcast_input_ne[bcast_dim_cnt] = nr;
-            bcast_dst_ne[bcast_dim_cnt] = nr;
+            bcast_input_ne[bcast_dim_cnt]  = nr;
+            bcast_dst_ne[bcast_dim_cnt]    = nr;
             bcast_weight_ne[bcast_dim_cnt] = 1;
-            bcast_input_nb[bcast_dim_cnt] = input_nb[i];
-            bcast_dst_nb[bcast_dim_cnt] = dst_nb[i];
+            bcast_input_nb[bcast_dim_cnt]  = input_nb[i];
+            bcast_dst_nb[bcast_dim_cnt]    = dst_nb[i];
             bcast_weight_nb[bcast_dim_cnt] = weight_nb[i];
             bcast_dim_cnt++;
 
-            bcast_input_ne[bcast_dim_cnt] = input_ne[i] / nr;
-            bcast_dst_ne[bcast_dim_cnt] = dst_ne[i] / nr;
+            bcast_input_ne[bcast_dim_cnt]  = input_ne[i] / nr;
+            bcast_dst_ne[bcast_dim_cnt]    = dst_ne[i] / nr;
             bcast_weight_ne[bcast_dim_cnt] = weight_ne[i];
-            bcast_input_nb[bcast_dim_cnt] = bcast_input_nb[bcast_dim_cnt - 1] *
-                                            bcast_input_ne[bcast_dim_cnt - 1];
-            bcast_dst_nb[bcast_dim_cnt] = bcast_dst_nb[bcast_dim_cnt - 1] *
-                                          bcast_dst_ne[bcast_dim_cnt - 1];
-            bcast_weight_nb[bcast_dim_cnt] =
-                bcast_weight_nb[bcast_dim_cnt - 1] *
-                bcast_weight_ne[bcast_dim_cnt - 1];
+            bcast_input_nb[bcast_dim_cnt]  = bcast_input_nb[bcast_dim_cnt - 1] * bcast_input_ne[bcast_dim_cnt - 1];
+            bcast_dst_nb[bcast_dim_cnt]    = bcast_dst_nb[bcast_dim_cnt - 1] * bcast_dst_ne[bcast_dim_cnt - 1];
+            bcast_weight_nb[bcast_dim_cnt] = bcast_weight_nb[bcast_dim_cnt - 1] * bcast_weight_ne[bcast_dim_cnt - 1];
             bcast_dim_cnt++;
         }
     }

@@ -151,72 +151,50 @@ static __dpct_inline__ T op_clamp(T x, float min_val, float max_val) {
 }
 
 template<typename T>
-static void unary_op_sgn_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_sgn(x[i]);
-    }
+static __dpct_inline__ T op_floor(T x) {
+    return sycl::floor(x);
 }
 
 template<typename T>
-static void unary_op_abs_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_abs(x[i]);
-    }
+static __dpct_inline__ T op_ceil(T x) {
+    return sycl::ceil(x);
 }
 
 template<typename T>
-static void unary_op_elu_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_elu(x[i]);
-    }
+static __dpct_inline__ T op_round(T x) {
+    return sycl::round(x);
 }
 
 template<typename T>
-static void unary_op_gelu_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_gelu(x[i]);
-    }
+static __dpct_inline__ T op_trunc(T x) {
+    return sycl::trunc(x);
 }
 
-template<typename T>
-static void unary_op_silu_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_silu(x[i]);
-    }
-}
+template<typename T, typename F>
+static void unary_op_generic_kernel(
+        const T * x,
+        T * dst,
+        const int k,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3,
+        const size_t nb0,  const size_t nb1,  const size_t nb2,  const size_t nb3,
+        const size_t nbd0, const size_t nbd1, const size_t nbd2, const size_t nbd3,
+        const sycl::nd_item<1> & item_ct1,
+        F func) {
 
-template<typename T>
-static void unary_op_gelu_quick_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
+        (void) ne3;
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_gelu_quick(x[i]);
-    }
-}
+        const int64_t i0 =  i % ne0;
+        const int64_t i1 = (i / ne0)        % ne1;
+        const int64_t i2 = (i / (ne0*ne1))  % ne2;
+        const int64_t i3 =  i / (ne0*ne1*ne2);
 
-template<typename T>
-static void unary_op_gelu_erf_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_gelu_erf(x[i]);
-    }
-}
+        const char * src_base = (const char *) x;
+        char       * dst_base = (char *) dst;
 
-template<typename T>
-static void unary_op_tanh_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_tanh(x[i]);
-    }
-}
+        const T * srcp = (const T *)(src_base + i0*nb0  + i1*nb1  + i2*nb2  + i3*nb3 );
+        T *       dstp = (T *)(dst_base + i0*nbd0 + i1*nbd1 + i2*nbd2 + i3*nbd3);
 
-template<typename T>
-static void unary_op_relu_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_relu(x[i]);
-    }
-}
-
-template<typename T>
-static void unary_op_sigmoid_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_sigmoid(x[i]);
+        *dstp = func(*srcp);
     }
 }
 
@@ -242,46 +220,12 @@ static void unary_op_cos_kernel(const T * x, T * dst, const int k, const sycl::n
 }
 
 template<typename T>
-static void unary_op_hardsigmoid_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_hardsigmoid(x[i]);
-    }
-}
-
-template<typename T>
-static void unary_op_hardswish_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_hardswish(x[i]);
-    }
-}
-
-template<typename T>
-static void unary_op_exp_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_exp(x[i]);
-    }
-}
-
-template<typename T>
 static void unary_op_log_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         dst[i] = op_log(x[i]);
     }
 }
 
-template<typename T>
-static void unary_op_neg_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_neg(x[i]);
-    }
-}
-
-template<typename T>
-static void unary_op_step_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_step(x[i]);
-    }
-}
 
 template<typename T>
 static void unary_op_leaky_relu_kernel(const T * x, T * dst, const int k, float negative_slope, const sycl::nd_item<1> &item_ct1) {
@@ -301,6 +245,34 @@ template<typename T>
 static void unary_op_clamp_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1, float min_val, float max_val) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         dst[i] = op_clamp(x[i], min_val, max_val);
+    }
+}
+
+template<typename T>
+static void unary_op_floor_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op_floor(x[i]);
+    }
+}
+
+template<typename T>
+static void unary_op_ceil_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op_ceil(x[i]);
+    }
+}
+
+template<typename T>
+static void unary_op_round_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op_round(x[i]);
+    }
+}
+
+template<typename T>
+static void unary_op_trunc_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op_trunc(x[i]);
     }
 }
 
@@ -326,26 +298,6 @@ static void upscale(const T  *x, T *dst, const int nb00, const int nb01,
     int i03 = static_cast<int>(i13 / sf3);
 
     dst[index] = *(const T *)((const char *)x + i03 * nb03 + i02 * nb02 + i01 * nb01 + i00 * nb00);
-}
-
-template <typename T>
-static void pad(const T  *x, T *dst, const int ne0, const int ne00, const int ne01, const int ne02,
-                    const sycl::nd_item<3> &item_ct1) {
-    int nidx = SYCL_LOCAL_ID_CALC(item_ct1, 2);
-    if (nidx >= ne0) {
-        return;
-    }
-
-    // operation
-    int offset_dst = nidx + item_ct1.get_group(1) * ne0 +
-                     item_ct1.get_group(0) * ne0 * item_ct1.get_group_range(1);
-    if (nidx < ne00 && item_ct1.get_group(1) < (size_t) ne01 && item_ct1.get_group(0) < (size_t) ne02) {
-        int offset_src = nidx + item_ct1.get_group(1) * ne00 +
-                         item_ct1.get_group(0) * ne00 * ne01;
-            dst[offset_dst] = x[offset_src];
-    } else {
-        dst[offset_dst] = static_cast<T>(0.0f);
-    }
 }
 
 template<typename T>
@@ -418,6 +370,14 @@ static void acc_f32_sycl(const float *x, const float *y, float *dst,
 }
 
 template<typename T>
+static void arange_kernel(T * dst, const int k, T start, T step,
+                         const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = start + static_cast<T>(i) * step;
+    }
+}
+
+template<typename T>
 static void upscale_sycl(const T *x, T *dst, const int nb00, const int nb01,
                              const int nb02, const int nb03, const int ne10, const int ne11,
                              const int ne12, const int ne13, const float sf0, const float sf1,
@@ -429,18 +389,6 @@ static void upscale_sycl(const T *x, T *dst, const int nb00, const int nb01,
         sycl::nd_range<1>(gridDim, sycl::range<1>(SYCL_UPSCALE_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) {
             upscale(x, dst, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3, item_ct1);
         });
-}
-
-template<typename T>
-static void pad_sycl(const T *x, T *dst, const int ne00,
-                         const int ne01, const int ne02, const int ne0,
-                         const int ne1, const int ne2, queue_ptr stream) {
-    int num_blocks = ceil_div(ne0, SYCL_PAD_BLOCK_SIZE);
-    sycl::range<3> gridDim(ne2, ne1, num_blocks);
-    stream->parallel_for(
-                      sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_PAD_BLOCK_SIZE),
-                                        sycl::range<3>(1, 1, SYCL_PAD_BLOCK_SIZE)),
-                      [=](sycl::nd_item<3> item_ct1) { pad(x, dst, ne0, ne00, ne01, ne02, item_ct1); });
 }
 
 template<typename KernelInvoker, typename... Args>
@@ -596,39 +544,66 @@ static inline void dispatch_ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx
     }
 }
 
-template<typename KernelInvoker, typename... Args>
-static inline void dispatch_ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst, KernelInvoker kernel_invoker, Args&&... args) {
-#if defined (GGML_SYCL_F16)
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
-#else
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+template<typename F>
+static inline void ggml_sycl_op_unary(
+        ggml_backend_sycl_context & ctx, ggml_tensor * dst, F func) {
+
+    ggml_tensor * src0 = dst->src[0];
+
+    const int64_t ne0  = dst->ne[0];
+    const int64_t ne1  = dst->ne[1];
+    const int64_t ne2  = dst->ne[2];
+    const int64_t ne3  = dst->ne[3];
+
+    const size_t  nb0  = src0->nb[0];
+    const size_t  nb1  = src0->nb[1];
+    const size_t  nb2  = src0->nb[2];
+    const size_t  nb3  = src0->nb[3];
+
+    const size_t  nbd0 = dst->nb[0];
+    const size_t  nbd1 = dst->nb[1];
+    const size_t  nbd2 = dst->nb[2];
+    const size_t  nbd3 = dst->nb[3];
+
+    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+        [=](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
+
+            const int num_blocks = ceil_div(k_elements, 256);
+
+            stream->parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                  sycl::range<1>(256)),
+                [=](sycl::nd_item<1> item_ct1) {
+                    unary_op_generic_kernel(
+                        src, dst_ptr, k_elements,
+                        ne0, ne1, ne2, ne3,
+                        nb0, nb1, nb2, nb3,
+                        nbd0, nbd1, nbd2, nbd3,
+                        item_ct1,
+                        func
+                    );
+                });
+        });
+}
+
+
+static inline void ggml_sycl_op_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
-#endif
-    GGML_ASSERT(dst->src[0]->type == dst->type);
-    GGML_ASSERT(dst->src[0]->ne[3] == 1 && dst->ne[3] == 1); // just 3D tensors
-    dpct::queue_ptr main_stream = ctx.stream();
+    float start, stop, step;
+    memcpy(&start, dst->op_params, sizeof(float));
+    memcpy(&stop, (float *) dst->op_params + 1, sizeof(float));
+    memcpy(&step, (float *) dst->op_params + 2, sizeof(float));
+    dpct::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    switch (dst->type) {
-#if defined (GGML_SYCL_F16)
-        case GGML_TYPE_F16:
-            {
-                auto data_pts = cast_data<sycl::half>(dst);
-                kernel_invoker(data_pts.src, data_pts.dst, (int)dst->src[0]->ne[0], (int)dst->src[0]->ne[1], (int)dst->src[0]->ne[2], (int)dst->ne[0],
-                               (int)dst->ne[1], (int)dst->ne[2], main_stream, std::forward<Args>(args)...);
-                break;
-            }
-#endif
-        case GGML_TYPE_F32:
-            {
-                auto data_pts = cast_data<float>(dst);
-                kernel_invoker(data_pts.src, data_pts.dst, (int)dst->src[0]->ne[0], (int)dst->src[0]->ne[1], (int)dst->src[0]->ne[2], (int)dst->ne[0],
-                               (int)dst->ne[1], (int)dst->ne[2], main_stream, std::forward<Args>(args)...);
-                break;
-            }
-        default:
-            GGML_ABORT("GGML tensor type not supported!\n");
-    }
+    float * dst_ptr = (float *)dst->data;
+    const int k = (int)ggml_nelements(dst);
+    const int num_blocks = ceil_div(k, SYCL_ARANGE_BLOCK_SIZE);
+    stream->parallel_for(
+        sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_ARANGE_BLOCK_SIZE),
+                          sycl::range<1>(SYCL_ARANGE_BLOCK_SIZE)),
+        [=](sycl::nd_item<1> item_ct1) {
+            arange_kernel(dst_ptr, k, start, step, item_ct1);
+        });
 }
 
 } // namespace ggml_sycl_detail
@@ -636,159 +611,75 @@ static inline void dispatch_ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, gg
 
 
 static inline void ggml_sycl_op_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, 256);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
-                                  sycl::range<1>(256)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_sgn_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_sgn(x);
+    });
 }
 
+
 static inline void ggml_sycl_op_abs(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, 256);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
-                                  sycl::range<1>(256)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_abs_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_abs(x);
+    });
 }
 
 static inline void ggml_sycl_op_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, 256);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
-                                  sycl::range<1>(256)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_elu_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_elu(x);
+    });
 }
-
 static inline void ggml_sycl_op_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_SILU_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_SILU_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_SILU_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_silu_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_silu(x);
+    });
 }
 
 static inline void ggml_sycl_op_gelu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_GELU_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_GELU_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_GELU_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_gelu_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_gelu(x);
+    });
 }
 
-static inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_GELU_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_GELU_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_GELU_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_gelu_quick_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+static inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_gelu_quick(x);
+    });
 }
 
-static inline void ggml_sycl_op_gelu_erf(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_GELU_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_GELU_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_GELU_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_gelu_erf_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+static inline void ggml_sycl_op_gelu_erf(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_gelu_erf(x);
+    });
 }
 
 static inline void ggml_sycl_op_tanh(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_TANH_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_TANH_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_TANH_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_tanh_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_tanh(x);
+    });
 }
 
 static inline void ggml_sycl_op_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_RELU_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_RELU_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_RELU_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_relu_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_relu(x);
+    });
 }
 
 static inline void ggml_sycl_op_hardsigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_HARDSIGMOID_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_HARDSIGMOID_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_HARDSIGMOID_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_hardsigmoid_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_hardsigmoid(x);
+    });
 }
 
 static inline void ggml_sycl_op_hardswish(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_HARDSWISH_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_HARDSWISH_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_HARDSWISH_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_hardswish_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_hardswish(x);
+    });
 }
 
 static inline void ggml_sycl_op_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_EXP_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_EXP_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_EXP_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_exp_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_exp(x);
+    });
 }
 
 static inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -805,42 +696,22 @@ static inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, ggml_tensor
 }
 
 static inline void ggml_sycl_op_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_NEG_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_NEG_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_NEG_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_neg_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_neg(x);
+    });
 }
 
+
 static inline void ggml_sycl_op_step(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_NEG_BLOCK_SIZE); // Using NEG block size
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_NEG_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_NEG_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_step_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_step(x);
+    });
 }
 
 static inline void ggml_sycl_op_sigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
-            const int num_blocks = ceil_div(k_elements, SYCL_SIGMOID_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_SIGMOID_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_SIGMOID_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) {
-                    unary_op_sigmoid_kernel(src, dst_ptr, k_elements, item_ct1);
-                });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_sigmoid(x);
+    });
 }
 
 static inline void ggml_sycl_op_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -919,14 +790,6 @@ static inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_te
         });
 }
 
-static inline void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_pad(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int ne00, int ne01, int ne02, int ne0, int ne1, int ne2,
-           queue_ptr stream) {
-            ggml_sycl_detail::pad_sycl(src, dst_ptr, ne00, ne01, ne02, ne0, ne1, ne2, stream);
-        });
-}
-
 static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     float min_val;
     float max_val;
@@ -942,6 +805,58 @@ static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tens
                     clamp(src, dst_ptr, min_arg, max_arg, k_elements, item_ct1);
                 });
         }, min_val, max_val);
+}
+
+static inline void ggml_sycl_op_floor(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
+            const int num_blocks = ceil_div(k_elements, 256);
+            stream->parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                  sycl::range<1>(256)),
+                [=](sycl::nd_item<1> item_ct1) {
+                    unary_op_floor_kernel(src, dst_ptr, k_elements, item_ct1);
+                });
+        });
+}
+
+static inline void ggml_sycl_op_ceil(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
+            const int num_blocks = ceil_div(k_elements, 256);
+            stream->parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                  sycl::range<1>(256)),
+                [=](sycl::nd_item<1> item_ct1) {
+                    unary_op_ceil_kernel(src, dst_ptr, k_elements, item_ct1);
+                });
+        });
+}
+
+static inline void ggml_sycl_op_round(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
+            const int num_blocks = ceil_div(k_elements, 256);
+            stream->parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                  sycl::range<1>(256)),
+                [=](sycl::nd_item<1> item_ct1) {
+                    unary_op_round_kernel(src, dst_ptr, k_elements, item_ct1);
+                });
+        });
+}
+
+static inline void ggml_sycl_op_trunc(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
+            const int num_blocks = ceil_div(k_elements, 256);
+            stream->parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                  sycl::range<1>(256)),
+                [=](sycl::nd_item<1> item_ct1) {
+                    unary_op_trunc_kernel(src, dst_ptr, k_elements, item_ct1);
+                });
+        });
 }
 
 static inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
@@ -1119,10 +1034,6 @@ void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_op_upscale(ctx, dst);
 }
 
-void ggml_sycl_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
-    ggml_sycl_op_pad(ctx, dst);
-}
 
 void ggml_sycl_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
@@ -1167,4 +1078,29 @@ void ggml_sycl_geglu_erf(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_geglu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_geglu_quick(ctx, dst);
+}
+
+void ggml_sycl_arange(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/0);
+    ggml_sycl_detail::ggml_sycl_op_arange(ctx, dst);
+}
+
+void ggml_sycl_floor(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_floor(ctx, dst);
+}
+
+void ggml_sycl_ceil(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_ceil(ctx, dst);
+}
+
+void ggml_sycl_round(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_round(ctx, dst);
+}
+
+void ggml_sycl_trunc(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_trunc(ctx, dst);
 }

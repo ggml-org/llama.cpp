@@ -23,28 +23,28 @@
 #ifndef CANN_COMMON_H
 #define CANN_COMMON_H
 
-#include <acl/acl.h>
-
-#include <cstdio>
-#include <iostream>
-#include <map>
-#include <memory>
-#include <string>
-#include <vector>
-#include <atomic>
-#include <condition_variable>
-#include <mutex>
-#include <thread>
-#include <unistd.h>
-#include <functional>
-#include <optional>
-#include <list>
-
+#include "../ggml-impl.h"
 #include "../include/ggml-cann.h"
 #include "../include/ggml.h"
-#include "../ggml-impl.h"
 
-#define MATRIX_ROW_PADDING 512
+#include <acl/acl.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <condition_variable>
+#include <cstdio>
+#include <functional>
+#include <iostream>
+#include <list>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
+
+#define MATRIX_ROW_PADDING    512
 #define GGML_CANN_MAX_STREAMS 8
 
 /**
@@ -56,8 +56,7 @@
  * @param line The line number at which the error occurred.
  * @param msg The error message.
  */
-[[noreturn]] void ggml_cann_error(const char* stmt, const char* func,
-                                  const char* file, int line, const char* msg);
+[[noreturn]] void ggml_cann_error(const char * stmt, const char * func, const char * file, int line, const char * msg);
 
 /**
  * @brief Checks the result of a CANN function call and invokes the error
@@ -89,25 +88,24 @@ struct ggml_cann_device_info {
      * @brief Information about a single CANN device.
      */
     struct cann_device_info {
-        int cc;                 /**< Compute capability.                   */
+        int    cc;              /**< Compute capability.                   */
         size_t smpb;            /**< Maximum shared memory per block.      */
-        bool vmm;               /**< Virtual memory support.               */
+        bool   vmm;             /**< Virtual memory support.               */
         size_t vmm_granularity; /**< Granularity of virtual memory.        */
         size_t total_vram;      /**< Total video RAM available on the device. */
     };
 
-    cann_device_info devices[GGML_CANN_MAX_DEVICES] =
-        {}; /**< Array of CANN device information. */
+    cann_device_info devices[GGML_CANN_MAX_DEVICES] = {}; /**< Array of CANN device information. */
 };
 
-const ggml_cann_device_info& ggml_cann_info();
+const ggml_cann_device_info & ggml_cann_info();
 
-void ggml_cann_set_device(int32_t device);
+void    ggml_cann_set_device(int32_t device);
 int32_t ggml_cann_get_device();
 
-std::optional<std::string> get_env(const std::string& name);
-bool parse_bool(const std::string& value);
-int parse_integer(const std::string& value);
+std::optional<std::string> get_env(const std::string & name);
+bool                       parse_bool(const std::string & value);
+int                        parse_integer(const std::string & value);
 
 /**
  * @brief Abstract base class for memory pools used by CANN.
@@ -126,7 +124,7 @@ struct ggml_cann_pool {
      *                     will be stored.
      * @return             Pointer to the allocated memory block.
      */
-    virtual void* alloc(size_t size, size_t* actual_size) = 0;
+    virtual void * alloc(size_t size, size_t * actual_size) = 0;
 
     /**
      * @brief Frees a previously allocated memory block.
@@ -136,16 +134,16 @@ struct ggml_cann_pool {
      * @note Note that all CANN opertors are running async. Make sure memory is
      *       still avaiable before this operator finished.
      */
-    virtual void free(void* ptr, size_t size) = 0;
+    virtual void free(void * ptr, size_t size) = 0;
 };
 
 /**
  * @brief RAII wrapper for managing memory allocations from a CANN memory pool.
  */
 struct ggml_cann_pool_alloc {
-    ggml_cann_pool* pool = nullptr; /**< Pointer to the memory pool. */
-    void* ptr = nullptr;    /**< Pointer to the allocated memory block. */
-    size_t actual_size = 0; /**< Actual size of the allocated memory block. */
+    ggml_cann_pool * pool        = nullptr; /**< Pointer to the memory pool. */
+    void *           ptr         = nullptr; /**< Pointer to the allocated memory block. */
+    size_t           actual_size = 0;       /**< Actual size of the allocated memory block. */
 
     /**
      * @brief Default constructor.
@@ -156,16 +154,14 @@ struct ggml_cann_pool_alloc {
      * @brief Constructor that initializes the memory pool.
      * @param pool Reference to the memory pool.
      */
-    explicit ggml_cann_pool_alloc(ggml_cann_pool& pool) : pool(&pool) {}
+    explicit ggml_cann_pool_alloc(ggml_cann_pool & pool) : pool(&pool) {}
 
     /**
      * @brief Constructor that initializes the memory pool and allocates memory.
      * @param pool Reference to the memory pool.
      * @param size Size of the memory block to allocate.
      */
-    ggml_cann_pool_alloc(ggml_cann_pool& pool, size_t size) : pool(&pool) {
-        alloc(size);
-    }
+    ggml_cann_pool_alloc(ggml_cann_pool & pool, size_t size) : pool(&pool) { alloc(size); }
 
     /**
      * @brief Destructor that frees the allocated memory block.
@@ -181,7 +177,7 @@ struct ggml_cann_pool_alloc {
      * @param size Size of the memory block to allocate.
      * @return Pointer to the allocated memory block.
      */
-    void* alloc(size_t size) {
+    void * alloc(size_t size) {
         GGML_ASSERT(pool != nullptr);
         GGML_ASSERT(ptr == nullptr);
         ptr = pool->alloc(size, &this->actual_size);
@@ -194,7 +190,7 @@ struct ggml_cann_pool_alloc {
      * @param size Size of the memory block to allocate.
      * @return Pointer to the allocated memory block.
      */
-    void* alloc(ggml_cann_pool& pool, size_t size) {
+    void * alloc(ggml_cann_pool & pool, size_t size) {
         this->pool = &pool;
         return alloc(size);
     }
@@ -203,149 +199,35 @@ struct ggml_cann_pool_alloc {
      * @brief Gets the pointer to the allocated memory block.
      * @return Pointer to the allocated memory block.
      */
-    void* get() { return ptr; }
+    void * get() { return ptr; }
 
     // Deleted copy constructor
-    ggml_cann_pool_alloc(const ggml_cann_pool_alloc&) = delete;
+    ggml_cann_pool_alloc(const ggml_cann_pool_alloc &) = delete;
 
     // Deleted move constructor
-    ggml_cann_pool_alloc(ggml_cann_pool_alloc&&) = delete;
+    ggml_cann_pool_alloc(ggml_cann_pool_alloc &&) = delete;
 
     // Deleted copy assignment operator
-    ggml_cann_pool_alloc& operator=(const ggml_cann_pool_alloc&) = delete;
+    ggml_cann_pool_alloc & operator=(const ggml_cann_pool_alloc &) = delete;
 
     // Deleted move assignment operator
-    ggml_cann_pool_alloc& operator=(ggml_cann_pool_alloc&&) = delete;
-};
-
-/**
- * @brief Function pointer type for ACLNN operator calls.
- */
-using aclnn_func_t = aclnnStatus (*)(void*, uint64_t, aclOpExecutor*, aclrtStream);
-
-/**
- * @brief Base class for all CANN tasks to be submitted to the task queue.
- *
- * Users should override the run_task() method with actual task logic.
- */
-class cann_task {
-public:
-    virtual void run_task() {}
-};
-
-/**
- * @brief A lock-free ring-buffer based task queue for asynchronously executing cann_task instances.
- */
-class cann_task_queue {
-public:
-    /**
-     * @brief Constructs a task queue with a fixed power-of-two capacity for a specific device.
-     *
-     * @param capacity Queue capacity. Must be a power of 2.
-     * @param device Target device ID (used for context setting).
-     */
-    explicit cann_task_queue(size_t capacity, int32_t device)
-        : buffer_(capacity), capacity_(capacity), head_(0), tail_(0),
-          running_(false), device_(device) {
-        GGML_ASSERT((capacity & (capacity - 1)) == 0 && "capacity must be power of 2");
-        mask_ = capacity_ - 1;
-    }
-
-    /**
-     * @brief Attempts to enqueue a task into the queue.
-     *
-     * @param item Unique pointer to the task.
-     * @return true if the task was successfully enqueued, false if the queue was full.
-     */
-    bool enqueue(std::unique_ptr<cann_task>&& item) {
-        size_t next_tail = (tail_ + 1) & mask_;
-
-        if (next_tail == head_) {
-            return false;
-        }
-
-        buffer_[tail_] = std::move(item);
-        std::atomic_thread_fence(std::memory_order_release);
-        tail_ = next_tail;
-
-        return true;
-    }
-
-    /**
-     * @brief Submits a task to the queue, and starts the worker thread if not already running.
-     *
-     * @param task Task to be submitted.
-     */
-    void submit_task(std::unique_ptr<cann_task>&& task) {
-        while(!enqueue(std::move(task))) {
-            std::this_thread::yield();
-            continue;
-        }
-
-        if (!running_) {
-            running_ = true;
-            thread_ = std::thread(&cann_task_queue::execute, this);
-        }
-
-    }
-
-    /**
-     * @brief Waits until the queue is completely empty and no tasks are being processed.
-     */
-    void wait() {
-        while (running_ && head_ != tail_) {
-            std::this_thread::yield();
-            continue;
-        }
-    }
-
-    /**
-     * @brief Stops the task queue and joins the worker thread.
-     */
-    void stop() {
-        running_ = false;
-        if (thread_.joinable()) {
-            thread_.join();
-        }
-    }
-
-private:
-    /**
-     * @brief Worker thread function that continuously dequeues and executes tasks.
-     */
-    void execute() {
-        ggml_cann_set_device(device_);
-
-        while (running_) {
-            if(head_ == tail_) {
-                std::this_thread::yield();
-                continue;
-            }
-
-            std::atomic_thread_fence(std::memory_order_acquire);
-            buffer_[head_]->run_task();
-            buffer_[head_].reset();
-            head_ = (head_ + 1) & mask_;
-        }
-    }
-
-    std::vector<std::unique_ptr<cann_task>> buffer_;
-    const size_t capacity_;
-    size_t mask_;
-    size_t head_;
-    size_t tail_;
-    bool running_;
-    std::thread thread_;
-    int32_t device_;
+    ggml_cann_pool_alloc & operator=(ggml_cann_pool_alloc &&) = delete;
 };
 
 #ifdef USE_ACL_GRAPH
 struct ggml_graph_node_properties {
-    void * node_address;
-    ggml_op node_op;
+    // dst tensor
+    void *  node_address;
     int64_t ne[GGML_MAX_DIMS];
-    size_t nb[GGML_MAX_DIMS];
-    void * src_address[GGML_MAX_SRC];
+    size_t  nb[GGML_MAX_DIMS];
+
+    // src tensor
+    void *  src_address[GGML_MAX_SRC];
+    int64_t src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+    size_t  src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+
+    // op
+    ggml_op node_op;
     int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
 };
 
@@ -369,13 +251,11 @@ struct ggml_cann_graph {
  * move existing graphs to the front (most recently used), and clear the cache.
  */
 struct ggml_cann_graph_lru_cache {
-    size_t capacity;  /**< Maximum number of graphs in the cache. */
+    size_t capacity;                         /**< Maximum number of graphs in the cache. */
 
-    std::list<ggml_cann_graph*> cache_list; /**< List storing cached graphs as raw pointers. */
+    std::list<ggml_cann_graph *> cache_list; /**< List storing cached graphs as raw pointers. */
 
-    ggml_cann_graph_lru_cache() {
-        capacity = parse_integer(get_env("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12"));
-    }
+    ggml_cann_graph_lru_cache() { capacity = parse_integer(get_env("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12")); }
 
     /**
      * @brief Push a new graph to the front of the cache.
@@ -383,11 +263,11 @@ struct ggml_cann_graph_lru_cache {
      * @param new_node Pointer to the new ggml_cann_graph to cache.
      *        Ownership is transferred to the cache (cache will delete it).
      */
-    void push(ggml_cann_graph* new_node) {
+    void push(ggml_cann_graph * new_node) {
         if (cache_list.size() >= capacity) {
-            ggml_cann_graph* old = cache_list.back();
+            ggml_cann_graph * old = cache_list.back();
             cache_list.pop_back();
-            delete old; // free the old graph
+            delete old;  // free the old graph
         }
         cache_list.push_front(new_node);
     }
@@ -396,7 +276,7 @@ struct ggml_cann_graph_lru_cache {
      * @brief Move an existing graph to the front of the cache.
      * @param node Pointer to the ggml_cann_graph to move.
      */
-    void move_to_front(ggml_cann_graph* node) {
+    void move_to_front(ggml_cann_graph * node) {
         cache_list.remove(node);
         cache_list.push_front(node);
     }
@@ -414,92 +294,83 @@ struct ggml_cann_graph_lru_cache {
     /**
      * @brief Destructor that clears the cache and frees all cached graphs.
      */
-    ~ggml_cann_graph_lru_cache() {
-        clear();
-    }
+    ~ggml_cann_graph_lru_cache() { clear(); }
 };
 #endif  // USE_ACL_GRAPH
 
 struct ggml_cann_rope_cache {
     ~ggml_cann_rope_cache() {
-        if(theta_scale_cache != nullptr) {
+        if (theta_scale_cache != nullptr) {
             ACL_CHECK(aclrtFree(theta_scale_cache));
         }
-        if(sin_cache != nullptr) {
+        if (sin_cache != nullptr) {
             ACL_CHECK(aclrtFree(sin_cache));
         }
-        if(cos_cache != nullptr) {
+        if (cos_cache != nullptr) {
             ACL_CHECK(aclrtFree(cos_cache));
         }
     }
 
-    void* theta_scale_cache = nullptr;
+    void *  theta_scale_cache  = nullptr;
     int64_t theta_scale_length = 0;
     // sin/cos cache, used only to accelerate first layer on each device
-    void* sin_cache = nullptr;
-    void* cos_cache = nullptr;
-    int64_t position_length = 0;
+    void *  sin_cache          = nullptr;
+    void *  cos_cache          = nullptr;
+    int64_t position_length    = 0;
     // Properties to check before reusing the sincos cache
-    bool cached = false;
-    float ext_factor = 0.0f;
-    float theta_scale = 0.0f;
-    float freq_scale = 0.0f;
-    float attn_factor = 0.0f;
-    bool is_neox = false;
+    bool    cached             = false;
+    float   ext_factor         = 0.0f;
+    float   theta_scale        = 0.0f;
+    float   freq_scale         = 0.0f;
+    float   attn_factor        = 0.0f;
+    bool    is_neox            = false;
 };
 
 struct ggml_cann_tensor_cache {
     ~ggml_cann_tensor_cache() {
-        if(cache != nullptr) {
+        if (cache != nullptr) {
             ACL_CHECK(aclrtFree(cache));
         }
     }
 
-    void* cache = nullptr;
-    int64_t size = 0;
+    void *  cache = nullptr;
+    int64_t size  = 0;
 };
 
 /**
  * @brief Context for managing CANN backend operations.
  */
 struct ggml_backend_cann_context {
-    int32_t device;                  /**< Device ID. */
-    std::string name;                /**< Name of the device. */
-    std::string description;         /**< Description of the device. */
-    aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
+    int32_t     device;               /**< Device ID. */
+    std::string name;                 /**< Name of the device. */
+    std::string description;          /**< Description of the device. */
+    aclrtEvent  copy_event = nullptr; /**< Event for managing copy operations. */
 #ifdef USE_ACL_GRAPH
     /// Cached CANN ACL graph used for executing the current ggml computation graph.
     ggml_cann_graph_lru_cache graph_lru_cache;
-    bool acl_graph_mode = true;
+    bool                      acl_graph_mode = true;
 #endif
-    cann_task_queue task_queue;
-    bool async_mode;
+    bool                   async_mode;
     // Rope Cache
-    ggml_cann_rope_cache rope_cache;
+    ggml_cann_rope_cache   rope_cache;
     // Constant Pool
     ggml_cann_tensor_cache rms_norm_one_tensor_cache;
     ggml_cann_tensor_cache rms_norm_zero_tensor_cache;
 
-    aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
+    aclrtStream streams[GGML_CANN_MAX_STREAMS] = { nullptr }; /**< Array of streams for the device. */
 
     /**
      * @brief Constructor for initializing the context with a given device.
      * @param device Device ID.
      */
-    explicit ggml_backend_cann_context(int device)
-        : device(device), name("CANN" + std::to_string(device)), task_queue(1024, device) {
+    explicit ggml_backend_cann_context(int device) : device(device), name("CANN" + std::to_string(device)) {
         ggml_cann_set_device(device);
         description = aclrtGetSocName();
 
-        async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
-        GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
-            device, async_mode ? "ON" : "OFF");
 #ifdef USE_ACL_GRAPH
         acl_graph_mode = parse_bool(get_env("GGML_CANN_ACL_GRAPH").value_or("on"));
-        GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n",
-              __func__, device,
-              acl_graph_mode ? "GRAPH" : "EAGER",
-              acl_graph_mode ? "acl graph enabled" : "acl graph disabled");
+        GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n", __func__, device, acl_graph_mode ? "GRAPH" : "EAGER",
+                      acl_graph_mode ? "acl graph enabled" : "acl graph disabled");
 #endif
     }
 
@@ -508,7 +379,6 @@ struct ggml_backend_cann_context {
      */
     ~ggml_backend_cann_context() {
         ggml_cann_set_device(device);
-        task_queue.stop();
         if (copy_event != nullptr) {
             ACL_CHECK(aclrtDestroyEvent(copy_event));
         }
@@ -542,8 +412,7 @@ struct ggml_backend_cann_context {
     aclrtStream stream() { return stream(0); }
 
     // TODO: each stream should have a memory pool.
-    std::unique_ptr<ggml_cann_pool>
-        mem_pool; /**< Memory pool for the device. */
+    std::unique_ptr<ggml_cann_pool> mem_pool; /**< Memory pool for the device. */
 
     /**
      * @brief Create a new memory pool for a given device.
@@ -556,7 +425,7 @@ struct ggml_backend_cann_context {
      * @brief Get or create the memory pool for the context.
      * @return Reference to the memory pool.
      */
-    ggml_cann_pool& pool() {
+    ggml_cann_pool & pool() {
         if (mem_pool == nullptr) {
             mem_pool = new_pool_for_device(device);
         }

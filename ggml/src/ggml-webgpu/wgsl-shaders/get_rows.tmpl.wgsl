@@ -2,9 +2,9 @@
 
 [
   {
+    "SHADER_SUFFIX": "f32_vec",
     "REPLS": {
       "TYPE" : "vec4<f32>",
-      "TYPE_SUFFIX": "f32_vec",
       "DST_TYPE": "vec4<f32>",
       "BLOCK_SIZE": 4
     },

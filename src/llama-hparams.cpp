@@ -60,6 +60,16 @@ uint32_t llama_hparams::n_gqa(uint32_t il) const {
     return n_head/n_head_kv;
 }
 
+uint32_t llama_hparams::n_embd_inp() const {
+    uint32_t n_embd_inp = n_embd;
+
+    if (n_deepstack_layers > 0) {
+        n_embd_inp += n_embd * n_deepstack_layers;
+    }
+
+    return n_embd_inp;
+}
+
 uint32_t llama_hparams::n_embd_k_gqa(uint32_t il) const {
     const uint32_t n_head_kv = this->n_head_kv(il);
 
@@ -140,11 +150,15 @@ uint32_t llama_hparams::n_embd_s() const {
 }
 
 bool llama_hparams::is_recurrent(uint32_t il) const {
-    return recurrent_layer_arr[il];
+    if (il < n_layer) {
+        return recurrent_layer_arr[il];
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer: %u)\n", __func__, il, n_layer);
 }
 
 uint32_t llama_hparams::n_pos_per_embd() const {
-    return rope_type == LLAMA_ROPE_TYPE_MROPE ? 4 : 1;
+    return rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
 }
 
 bool llama_hparams::is_swa(uint32_t il) const {
