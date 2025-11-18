@@ -5743,7 +5743,7 @@ struct test_sparsek_kq_mask : public test_case {
         ggml_set_name(neg2d, "neg2d");
 
         // idx: per-column indices of the rows we want to zero-out (top-k)
-        // shape: [topk, cols] – כמו top_k האמיתי ב-sparsek
+        // shape: [topk, cols] – same convention as real SparseK top-k index tensor
         ggml_tensor * idx = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, topk, cols);
         ggml_set_name(idx, "idx");
 
@@ -5751,7 +5751,7 @@ struct test_sparsek_kq_mask : public test_case {
         ggml_tensor * rows3d   = ggml_reshape_3d(ctx, neg2d, n_kv, 1, cols);
         ggml_tensor * picked   = ggml_get_rows(ctx, rows3d, idx);      // [topk, 1, cols]
 
-        // zeros: create zeros without a new scalar – just picked - picked
+        // zeros: create zeros without a scalar node – just picked - picked
         ggml_tensor * zeros    = ggml_sub(ctx, picked, picked);       // [topk, 1, cols]
 
         // merged3d: place the zero rows back into the selected indices
@@ -5766,39 +5766,40 @@ struct test_sparsek_kq_mask : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx);
-         t != nullptr;
-         t = ggml_get_next_tensor(ctx, t)) {
+             t != nullptr;
+             t = ggml_get_next_tensor(ctx, t)) {
 
-        if (strcmp(t->name, "neg2d") == 0) {
-            // Fill neg2d with -INF
-            std::vector<float> buf(ggml_nelements(t), -INFINITY);
-            ggml_backend_tensor_set(
-                t,
-                buf.data(),
-                0,
-                buf.size() * sizeof(float)
-            );
+            if (strcmp(t->name, "neg2d") == 0) {
+                // Fill neg2d with -INF
+                std::vector<float> buf(ggml_nelements(t), -INFINITY);
+                ggml_backend_tensor_set(
+                    t,
+                    buf.data(),
+                    0,
+                    buf.size() * sizeof(float)
+                );
 
-        } else if (strcmp(t->name, "idx") == 0) {
-            // idx shape: [topk, cols]
-            const int64_t topk  = t->ne[0];
-            const int64_t cols  = t->ne[1];
+            } else if (strcmp(t->name, "idx") == 0) {
+                // idx shape: [topk, cols]
+                const int64_t topk  = t->ne[0];
+                const int64_t cols  = t->ne[1];
 
-            std::vector<int32_t> data(topk * cols);
-            for (int64_t c = 0; c < cols; ++c) {
-                for (int64_t r = 0; r < topk; ++r) {
-                    data[c * topk + r] = (int32_t) r;  // row index
+                std::vector<int32_t> data(topk * cols);
+                for (int64_t c = 0; c < cols; ++c) {
+                    for (int64_t r = 0; r < topk; ++r) {
+                        // row index along dim-0; identical pattern per column
+                        data[c * topk + r] = (int32_t) r;
+                    }
                 }
-            }
 
-            ggml_backend_tensor_set(
-                t,
-                data.data(),
-                0,
-                data.size() * sizeof(int32_t)
-            );
+                ggml_backend_tensor_set(
+                    t,
+                    data.data(),
+                    0,
+                    data.size() * sizeof(int32_t)
+                );
+            }
         }
-    }
     }
 
     // No NMSE computation (this test is fully deterministic)
