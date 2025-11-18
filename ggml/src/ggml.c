@@ -5158,7 +5158,8 @@ struct ggml_tensor * ggml_top_k(
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, k, a->ne[1], a->ne[2], a->ne[3]);
 
-    ggml_set_op_params_i32(result, 0, (int32_t) k);
+    // TODO: tmp
+    ggml_set_op_params_i32(result, 0, (int32_t) GGML_SORT_ORDER_DESC);
 
     result->op     = GGML_OP_TOP_K;
     result->src[0] = a;

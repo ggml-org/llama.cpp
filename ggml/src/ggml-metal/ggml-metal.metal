@@ -4670,11 +4670,12 @@ kernel void kernel_argsort_f32_i32(
         ushort3   ntg[[threads_per_threadgroup]]) {
     // bitonic sort
     const int col = tpitg[0];
+    const int ib  = tgpig[0] / args.ne01;
 
-    const int i00 = (tgpig[0]/args.ne01)*ntg.x;
-    const int i01 =  tgpig[0]%args.ne01;
-    const int i02 =  tgpig[1];
-    const int i03 =  tgpig[2];
+    const int i00 = ib*ntg.x;
+    const int i01 = tgpig[0] % args.ne01;
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
 
     device const float * src0_row = (device const float *) (src0 + args.nb01*i01 + args.nb02*i02 + args.nb03*i03);
 
@@ -4710,9 +4711,11 @@ kernel void kernel_argsort_f32_i32(
         }
     }
 
+    const int64_t i0 = ib*args.top_k;
+
     // copy the result to dst without the padding
-    if (i00 + col < args.ne00) {
-        dst += i00 + args.ne00*i01 + args.ne00*args.ne01*i02 + args.ne00*args.ne01*args.ne02*i03;
+    if (i0 + col < args.ne0 && col < args.top_k) {
+        dst += i0 + args.ne0*i01 + args.ne0*args.ne1*i02 + args.ne0*args.ne1*args.ne2*i03;
 
         dst[col] = shmem_i32[col];
     }
@@ -4747,22 +4750,22 @@ kernel void kernel_argsort_merge_f32_i32(
 
     const int start = im * (2 * args.len);
 
-    const int len0 = MIN(args.len, MAX(0, args.ne00 - (int)(start)));
-    const int len1 = MIN(args.len, MAX(0, args.ne00 - (int)(start + args.len)));
+    const int len0 = MIN(args.len, MAX(0, args.ne0 - (int)(start)));
+    const int len1 = MIN(args.len, MAX(0, args.ne0 - (int)(start + args.len)));
 
     const int total = len0 + len1;
 
     device const int32_t * tmp0 = tmp + start
-        + i01*args.ne00
-        + i02*args.ne00*args.ne01
-        + i03*args.ne00*args.ne01*args.ne02;
+        + i01*args.ne0
+        + i02*args.ne0*args.ne01
+        + i03*args.ne0*args.ne01*args.ne02;
 
     device const int32_t * tmp1 = tmp0 + args.len;
 
     dst += start
-        + i01*args.ne00
-        + i02*args.ne00*args.ne01
-        + i03*args.ne00*args.ne01*args.ne02;
+        + i01*args.top_k
+        + i02*args.top_k*args.ne01
+        + i03*args.top_k*args.ne01*args.ne02;
 
     device const float * src0_row = (device const float *)(src0
         + args.nb01*i01
@@ -4827,16 +4830,16 @@ kernel void kernel_argsort_merge_f32_i32(
         val1 = src0_row[idx1];
     }
 
-    for (int k = k0; k < k1; ++k) {
+    for (int k = k0; k < k1 && k < args.top_k; ++k) {
         int32_t out_idx;
 
         if (i >= len0) {
-            while (k < k1) {
+            while (k < k1 && k < args.top_k) {
                 dst[k++] = tmp1[j++];
             }
             break;
         } else if (j >= len1) {
-            while (k < k1) {
+            while (k < k1 && k < args.top_k) {
                 dst[k++] = tmp0[i++];
             }
             break;
