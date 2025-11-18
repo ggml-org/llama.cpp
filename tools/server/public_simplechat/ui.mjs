@@ -329,8 +329,9 @@ export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sL
         }
         let val = oObj[k];
         let type = typeof(val);
+        let id = `Set${propsTreeRootNew.replaceAll(':','-')}`
         if (((type == "string") || (type == "number"))) {
-            let inp = el_creatediv_input(`Set${k}`, k, typeDict[type], oObj[k], (val)=>{
+            let inp = el_creatediv_input(`${id}`, k, typeDict[type], oObj[k], (val)=>{
                 if (type == "number") {
                     val = Number(val);
                 }
@@ -341,7 +342,7 @@ export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sL
             }
             elFS.appendChild(inp.div);
         } else if (type == "boolean") {
-            let bbtn = el_creatediv_boolbutton(`Set{k}`, k, {true: "true", false: "false"}, val, (userVal)=>{
+            let bbtn = el_creatediv_boolbutton(`${id}`, k, {true: "true", false: "false"}, val, (userVal)=>{
                 oObj[k] = userVal;
             });
             if (fRefiner) {

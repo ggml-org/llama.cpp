@@ -800,15 +800,20 @@ Cleanup in general
   * avoid borders and instead give a box effect through light shadows
     * also avoid allround border around chat message role block and instead have to only one side
   * timeout close popover menu
-  * update usage notes wrt vision and toggling of sessions and system prompt through main title area
+  * usage notes
+    * update wrt vision and toggling of sessions and system prompt through main title area
+    * fix issue with sliding window size not reflecting properly in context window entry
   * make restore block into details based block, and anchor its position independent of db check.
   * avoid unneeded outer overall scrollbar by adjusting fullbody height in screen mode.
   * user css variable to define the overall background color and inturn use same to merge gradients
     to the background, as well as to help switch the same seemlessly between screen and print modes.
   * make the scrollbars more subtle and in the background.
   * allow user input textarea to grow vertically to some extent.
-  * make things rounded across board by default. add some padding to toolcall details block.
-  * allow Auto ObjPropsEdit UI to be themed by assigning id to top level block.
+  * make things rounded across board by default. add some padding to toolcall details block, ...
+  * Auto ObjPropsEdit UI
+    * allow it to be themed by assigning id to top level block.
+    * fix a oversight (forgotten $) with use of templated literals and having variables in them.
+    * ensure full props hierarchy is accounted for when setting the id of elements.
 
 
 #### ToDo
