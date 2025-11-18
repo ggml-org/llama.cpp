@@ -72,7 +72,6 @@ void test_example_qwen3_coder(testing &t) {
             "</tool_call>";
 
         std::vector<std::string> tokens = simple_tokenize(input);
-        common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
 
         t.test("explicit_builder", [&](testing &t) {
             common_chat_msg prev;

@@ -30,20 +30,14 @@ static const std::vector<TestEntry> all_tests = {
 
 // Function to list all available tests
 static void list_available_tests() {
-    LOG_ERR("Available tests:\n");
+    std::cout << "Available tests:\n";
     for (const auto& test : all_tests) {
-        LOG_ERR("  %s", test.codename.c_str());
-        // Format spacing for alignment
-        for (size_t i = test.codename.length(); i < 25; ++i) {
-            LOG_ERR(" ");
-        }
-        LOG_ERR("- %s\n", test.function_name.c_str());
+        std::cout << std::left << std::setw(25) << test.codename << "- " << test.function_name << "\n";
     }
-    LOG_ERR("\n");
-    LOG_ERR("Usage:\n");
-    LOG_ERR("  test-chat-peg-parser                 # Run all tests\n");
-    LOG_ERR("  test-chat-peg-parser test1 test2     # Run specific tests\n");
-    LOG_ERR("  test-chat-peg-parser --tests         # List available tests\n");
+    std::cout << "\nUsage:\n";
+    std::cout << "  test-chat-peg-parser                 # Run all tests\n";
+    std::cout << "  test-chat-peg-parser test1 test2     # Run specific tests\n";
+    std::cout << "  test-chat-peg-parser --tests         # List available tests\n";
 }
 
 // Function to check if a codename matches the provided arguments

@@ -63,10 +63,6 @@ void test_example_minimax_m2(testing &t) {
                 common_chat_parse_semantics semantics;
                 common_chat_parse_context   ctx(in, &semantics, it + 1 == tokens.end());
 
-                if (it + 1 == tokens.end()) {
-                    common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
-                }
-
                 ctx.event_handler = it + 1 == tokens.end() ? parser_semantic_handler_with_printout : parser_semantic_handler;
 
                 auto result = helper_parser.parse(ctx);
@@ -81,6 +77,5 @@ void test_example_minimax_m2(testing &t) {
             LOG_ERR("Last message: %s\n", prev.to_json_oaicompat<nlohmann::ordered_json>().dump().c_str());
             t.assert_true("last_result_should_be_success", last_result.success());
         });
-        common_log_set_verbosity_thold(LOG_DEFAULT_LLAMA);
     });
 }
