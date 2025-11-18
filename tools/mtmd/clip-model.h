@@ -117,6 +117,9 @@ struct clip_layer {
     ggml_tensor * k_norm = nullptr;
     ggml_tensor * q_norm = nullptr;
 
+    ggml_tensor * attn_out_norm_w = nullptr;
+    ggml_tensor * attn_out_norm_b = nullptr;
+
     // layernorm 1
     ggml_tensor * ln_1_w = nullptr;
     ggml_tensor * ln_1_b = nullptr;
@@ -125,6 +128,8 @@ struct clip_layer {
     ggml_tensor * ff_up_b = nullptr;
     ggml_tensor * ff_gate_w = nullptr;
     ggml_tensor * ff_gate_b = nullptr;
+    ggml_tensor * ffn_hidden_norm_w = nullptr;
+    ggml_tensor * ffn_hidden_norm_b = nullptr;
     ggml_tensor * ff_down_w = nullptr;
     ggml_tensor * ff_down_b = nullptr;
 
