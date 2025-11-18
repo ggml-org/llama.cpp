@@ -1416,10 +1416,15 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 // Complex 2-bit quantization dot product with ARM NEON acceleration for iFairy
-// Computes: result = sum((w_r + i*w_i) * (a_r + i*a_i)) 
+// Computes: result = sum((w_r + i*w_i) * (a_r + i*a_i))
 // 共轭乘法
 // where w_r, w_i are 2-bit quantized weights
 // and a_r, a_i are activations stored in separate ifairy_q16 blocks
+// 辅助函数：横向累加 int32x4 到单个 int32
+static inline int32_t hadd_s32(int32x4_t v) {
+    return vgetq_lane_s32(v, 0) + vgetq_lane_s32(v, 1) +
+           vgetq_lane_s32(v, 2) + vgetq_lane_s32(v, 3);
+}
 
 void ggml_vec_dot_ifairy_q16_K(
         int n,
@@ -1427,105 +1432,157 @@ void ggml_vec_dot_ifairy_q16_K(
         const void * GGML_RESTRICT vx, size_t bx,
         const void * GGML_RESTRICT vy, size_t by,
         int nrc) {
-
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
     UNUSED(by);
     UNUSED(bs);
 #if defined(__ARM_NEON)
-
-    const block_ifairy     * GGML_RESTRICT w = vx;
+    const block_ifairy * GGML_RESTRICT w = vx;
     const block_ifairy_q16 * GGML_RESTRICT x = vy;
-
     const int nb = n / QK_K;
-
-    float sum_real = 0.0f;
-    float sum_imag = 0.0f;
-
+    float sum_real_total = 0.0f;
+    float sum_imag_total = 0.0f;
+    // 常量向量初始化
+    const int8x16_t v_zero = vdupq_n_s8(0);
+    const uint8x16_t v_mask_lsb = vdupq_n_u8(0x1); // 用于提取 bit 0 (sign)
+    const uint8x16_t v_mask_msb = vdupq_n_u8(0x2); // 用于提取 bit 1 (real/imag selector)
+    // 00 -1 ; 01 1 ; 10 -i; 11 i
     for (int i = 0; i < nb; ++i) {
-        // acc[0] = sum_ac, acc[1] = sum_bd, acc[2] = sum_ad, acc[3] = sum_bc
-        int32x4_t acc = vdupq_n_s32(0);
-
-        // w[i].qs: 每个 byte 编 4 个 2-bit 权重
-        for (size_t j = 0; j < sizeof(w[i].qs); j += 32) {
-            for (size_t k = 0; k < 32; ++k) {
-                uint8_t weight = w[i].qs[j + k];
-                size_t base = (j + k) * 4; // 对应到激活数组中的起始下标
-
-                // l = 0..3，对应一个 byte 中的 4 个 2-bit 权重
-                for (size_t l = 0; l < 4; ++l) {
-                    // a: real_w, b: imag_w, c: real_x, d: imag_x
-                    int8_t  w_val = (weight >> (l * 2)) & 3;
-                    int32_t c     = x[i].x_real[base + l];
-                    int32_t d     = x[i].x_imag[base + l];
-
-                    // delta[0] -> sum_ac, delta[1] -> sum_bd
-                    // delta[2] -> sum_ad, delta[3] -> sum_bc
-                    int32x4_t delta;
-
-                    switch (w_val) {
-                    case 1: // real +1 : sum_ac += c, sum_ad += d
-                        delta = (int32x4_t){  c,  0,  d,  0 };
-                        acc   = vaddq_s32(acc, delta);
-                        break;
-
-                    case 0: // real -1 : sum_ac -= c, sum_ad -= d
-                        delta = (int32x4_t){ -c,  0, -d,  0 };
-                        acc   = vaddq_s32(acc, delta);
-                        break;
-
-                    case 3: // imag +1 : sum_bc += c, sum_bd += d
-                        delta = (int32x4_t){  0,  d,  0,  c };
-                        acc   = vaddq_s32(acc, delta);
-                        break;
-
-                    case 2: // imag -1 : sum_bc -= c, sum_bd -= d
-                        delta = (int32x4_t){  0, -d,  0, -c };
-                        acc   = vaddq_s32(acc, delta);
-                        break;
-
-                    default:
-                        // 不会进来，这里只是防御性留空
-                        break;
-                    }
-                }
+        // 4个累加器：AC, AD, BC, BD
+        int32x4_t acc_ac = vdupq_n_s32(0);
+        int32x4_t acc_ad = vdupq_n_s32(0);
+        int32x4_t acc_bc = vdupq_n_s32(0);
+        int32x4_t acc_bd = vdupq_n_s32(0);
+        const uint8_t * w_ptr = w[i].qs;
+        const int8_t * x_r_ptr = x[i].x_real;
+        const int8_t * x_i_ptr = x[i].x_imag;
+        // 每个 block 处理 QK_K 个元素。假设 QK_K=256
+        // 每次循环处理 16 个元素 (128-bit)
+        for (int j = 0; j < QK_K; j += 16) {
+            // 1. 加载激活值 (16个 int8)
+            int8x16_t xr = vld1q_s8(x_r_ptr + j);
+            int8x16_t xi = vld1q_s8(x_i_ptr + j);
+            // 2. 加载并展开权重
+            // 16个权重对应 32 bits = 4 bytes。
+            // 我们需要将这 4 bytes 里的 2-bit 组展开成 16 bytes
+            uint32_t packed_w_val = *(const uint32_t *)(w_ptr + (j / 4));
+           
+            // 将 32-bit 广播到所有 lane，准备移位提取
+            uint32x4_t w_packed_v = vdupq_n_u32(packed_w_val);
+            uint8x16_t w_raw = vreinterpretq_u8_u32(w_packed_v);
+           
+            // 这种展开方式有点绕，更直接的方式是利用查表或者简单的位移逻辑
+            // 这里使用最通用的位移+掩码方式构建 16 个字节的权重向量
+            // 实际上，因为 NEON 处理的是 byte，直接构造一个查找表或者临时数组可能更快
+            // 但为了纯寄存器操作，我们手动构造 shifts:
+           
+            // 这里的逻辑是：w_raw 每个 32bit lane 都是 packed 数据
+            // 我们需要第 0, 0, 0, 0, 1, 1, 1, 1... 个字节
+            // 更高效的做法：预计算好的 shift table 或者手动展开
+            // 鉴于代码复杂度，这里使用一个简化逻辑：
+           
+            uint8_t w_expanded_arr[16];
+            for(int k=0; k<4; ++k) { // Unroll me by compiler
+                uint8_t wb = w_ptr[(j/4) + k];
+                w_expanded_arr[k*4 + 0] = (wb >> 0) & 3;
+                w_expanded_arr[k*4 + 1] = (wb >> 2) & 3;
+                w_expanded_arr[k*4 + 2] = (wb >> 4) & 3;
+                w_expanded_arr[k*4 + 3] = (wb >> 6) & 3;
+            }
+            uint8x16_t w_vec = vld1q_u8(w_expanded_arr);
+            // 3. 提取控制位
+            // Bit 0: Sign (1=Pos, 0=Neg)
+            // Bit 1: Component (0=Real, 1=Imag)
+            uint8x16_t is_imag = vtstq_u8(w_vec, v_mask_msb); // 0x2 set?
+            uint8x16_t is_pos = vtstq_u8(w_vec, v_mask_lsb); // 0x1 set?
+            // 4. 应用符号 (Branchless sign application)
+            // 如果 is_pos 为真，保持原值；否则取反
+            // NEON 没有 vcond_select，使用 vbsl (Bitwise Select)
+            // 需要先计算 -xr 和 -xi
+            int8x16_t xr_neg = vsubq_s8(v_zero, xr);
+            int8x16_t xi_neg = vsubq_s8(v_zero, xi);
+            int8x16_t sxr = vbslq_s8(is_pos, xr, xr_neg);
+            int8x16_t sxi = vbslq_s8(is_pos, xi, xi_neg);
+            // 5. 累加分流
+            // 如果 is_imag 为真 (mask all 1s)，累加到 BC/BD
+            // 如果 is_imag 为假 (mask all 0s)，累加到 AC/AD
+           
+            // 掩码操作: val & mask.
+            // 对于 AC/AD，我们想要的是 val & (~mask)
+            int8x16_t sxr_real = vandq_s8(sxr, vmvnq_s8((int8x16_t)is_imag));
+            int8x16_t sxi_real = vandq_s8(sxi, vmvnq_s8((int8x16_t)is_imag));
+           
+            int8x16_t sxr_imag = vandq_s8(sxr, (int8x16_t)is_imag);
+            int8x16_t sxi_imag = vandq_s8(sxi, (int8x16_t)is_imag);
+            // 6. 累加到 32-bit 累加器
+            // vaddw_s16 (Add Widening): int16 + int32 -> int32
+            // 这里简化演示，直接转换并加到 int32 (虽然略慢，但比标量快得多)
+           
+            // 对于每个累加器，添加所有16个元素，通过4次添加（每个添加4个）
+            // AC:
+            {
+                int8x8_t low8 = vget_low_s8(sxr_real);
+                int8x8_t high8 = vget_high_s8(sxr_real);
+                int16x8_t low16 = vmovl_s8(low8);
+                int16x8_t high16 = vmovl_s8(high8);
+                acc_ac = vaddw_s16(acc_ac, vget_low_s16(low16));
+                acc_ac = vaddw_s16(acc_ac, vget_high_s16(low16));
+                acc_ac = vaddw_s16(acc_ac, vget_low_s16(high16));
+                acc_ac = vaddw_s16(acc_ac, vget_high_s16(high16));
+            }
+            // AD:
+            {
+                int8x8_t low8 = vget_low_s8(sxi_real);
+                int8x8_t high8 = vget_high_s8(sxi_real);
+                int16x8_t low16 = vmovl_s8(low8);
+                int16x8_t high16 = vmovl_s8(high8);
+                acc_ad = vaddw_s16(acc_ad, vget_low_s16(low16));
+                acc_ad = vaddw_s16(acc_ad, vget_high_s16(low16));
+                acc_ad = vaddw_s16(acc_ad, vget_low_s16(high16));
+                acc_ad = vaddw_s16(acc_ad, vget_high_s16(high16));
+            }
+            // BC:
+            {
+                int8x8_t low8 = vget_low_s8(sxr_imag);
+                int8x8_t high8 = vget_high_s8(sxr_imag);
+                int16x8_t low16 = vmovl_s8(low8);
+                int16x8_t high16 = vmovl_s8(high8);
+                acc_bc = vaddw_s16(acc_bc, vget_low_s16(low16));
+                acc_bc = vaddw_s16(acc_bc, vget_high_s16(low16));
+                acc_bc = vaddw_s16(acc_bc, vget_low_s16(high16));
+                acc_bc = vaddw_s16(acc_bc, vget_high_s16(high16));
+            }
+            // BD:
+            {
+                int8x8_t low8 = vget_low_s8(sxi_imag);
+                int8x8_t high8 = vget_high_s8(sxi_imag);
+                int16x8_t low16 = vmovl_s8(low8);
+                int16x8_t high16 = vmovl_s8(high8);
+                acc_bd = vaddw_s16(acc_bd, vget_low_s16(low16));
+                acc_bd = vaddw_s16(acc_bd, vget_high_s16(low16));
+                acc_bd = vaddw_s16(acc_bd, vget_low_s16(high16));
+                acc_bd = vaddw_s16(acc_bd, vget_high_s16(high16));
             }
         }
-
-        // 把 4 个累加结果取出来
-        int32_t sums[4];
-        vst1q_s32(sums, acc);
-        int32_t sum_ac = sums[0];
-        int32_t sum_bd = sums[1];
-        int32_t sum_ad = sums[2];
-        int32_t sum_bc = sums[3];
-
-        // 与 generic 保持一致的 scale 使用方式
+        // Horizontal Sum
+        int32_t sum_ac = hadd_s32(acc_ac);
+        int32_t sum_ad = hadd_s32(acc_ad);
+        int32_t sum_bc = hadd_s32(acc_bc);
+        int32_t sum_bd = hadd_s32(acc_bd);
         const float w_real = w[i].d_real;
         const float w_imag = w[i].d_imag;
         const float x_real = x[i].d_real;
         const float x_imag = x[i].d_imag;
-
-        // (a+bi)(c+di) = (ac+bd) + (-ad+bc)i
-        sum_real += w_real * x_real * (float) sum_ac
-                  + w_imag * x_imag * (float) sum_bd;
-        if (sum_real != sum_real) {
-            GGML_ABORT("ifairy neon: real NaN discovered");
-        }
-
-        sum_imag += w_imag * x_real * (float) sum_bc
-                  - w_real * x_imag * (float) sum_ad;
-        if (sum_imag != sum_imag) {
-            GGML_ABORT("ifairy neon: imag NaN discovered");
-        }
+        // 这里的公式保持不变
+        sum_real_total += w_real * x_real * (float) sum_ac
+                        + w_imag * x_imag * (float) sum_bd;
+        sum_imag_total += w_imag * x_real * (float) sum_bc
+                        - w_real * x_imag * (float) sum_ad;
     }
-
-    ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real);
-    ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag);
-
+    ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
+    ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
 #else
-    // 非 ARM 平台，直接走 generic
     ggml_vec_dot_ifairy_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }

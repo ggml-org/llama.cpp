@@ -475,7 +475,8 @@ void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs
                     // todo_tbr: q8k 激活量化方式
                     int8_t c = x[i].x_real[(j + k) * 4 + l];
                     int8_t d = x[i].x_imag[(j + k) * 4 + l];
-
+                    
+                    // 0 represent -1 , 1 represent 1 , 2 represent -i , 3 represent i
                     if      (w_val == 1) sum_ac += c, sum_ad += d;
                     else if (w_val == 0) sum_ac -= c, sum_ad -= d;
                     else if (w_val == 3) sum_bc += c, sum_bd += d;
