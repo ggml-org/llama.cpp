@@ -303,6 +303,8 @@ static std::string format_literal(const std::string & literal) {
     return "\"" + escaped + "\"";
 }
 
+std::string gbnf_format_literal(const std::string & literal) { return format_literal(literal); }
+
 class SchemaConverter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);

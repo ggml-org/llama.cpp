@@ -50,6 +50,8 @@ add_library(${TARGET} STATIC
     base64.hpp
     chat-parser.cpp
     chat-parser.h
+    chat-parser-xml-toolcall.h
+    chat-parser-xml-toolcall.cpp
     chat.cpp
     chat.h
     common.cpp
