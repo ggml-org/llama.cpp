@@ -1,0 +1,450 @@
+# Kubernetes deployment manifests for LLM inference service
+# This includes: Deployment, Service, HPA, Ingress, ConfigMap, Secret
+
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm-inference
+  labels:
+    name: llm-inference
+
+---
+# ConfigMap for llama-server configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llama-config
+  namespace: llm-inference
+data:
+  context_size: "4096"
+  parallel_slots: "4"
+  gpu_layers: "35"
+
+---
+# Secret for API keys and credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llama-secrets
+  namespace: llm-inference
+type: Opaque
+stringData:
+  api-key: "your-secret-api-key-change-in-production"
+  jwt-secret: "your-jwt-secret-change-in-production"
+
+---
+# PersistentVolumeClaim for model storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc
+  namespace: llm-inference
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: efs-sc  # Use appropriate storage class
+
+---
+# Deployment for llama-server (GPU nodes)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama-server
+  namespace: llm-inference
+  labels:
+    app: llama-server
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  selector:
+    matchLabels:
+      app: llama-server
+
+  template:
+    metadata:
+      labels:
+        app: llama-server
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+
+    spec:
+      # Anti-affinity to spread pods across nodes
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - llama-server
+              topologyKey: kubernetes.io/hostname
+
+      # Node selector for GPU nodes
+      nodeSelector:
+        nvidia.com/gpu: "true"
+
+      # Tolerations for GPU taints
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+
+      containers:
+      - name: llama-server
+        image: llama-server:v1.0.0
+        imagePullPolicy: IfNotPresent
+
+        command:
+          - /usr/local/bin/llama-server
+        args:
+          - --host
+          - "0.0.0.0"
+          - --port
+          - "8080"
+          - -m
+          - /models/llama-2-7b-chat.Q4_K_M.gguf
+          - -c
+          - $(CONTEXT_SIZE)
+          - -ngl
+          - $(GPU_LAYERS)
+          - --parallel
+          - $(PARALLEL_SLOTS)
+          - --cont-batching
+          - --metrics
+          - --log-format
+          - json
+
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+
+        env:
+        - name: CONTEXT_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: llama-config
+              key: context_size
+        - name: GPU_LAYERS
+          valueFrom:
+            configMapKeyRef:
+              name: llama-config
+              key: gpu_layers
+        - name: PARALLEL_SLOTS
+          valueFrom:
+            configMapKeyRef:
+              name: llama-config
+              key: parallel_slots
+        - name: LLAMA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: llama-secrets
+              key: api-key
+
+        resources:
+          requests:
+            nvidia.com/gpu: 1
+            memory: "16Gi"
+            cpu: "4"
+          limits:
+            nvidia.com/gpu: 1
+            memory: "32Gi"
+            cpu: "8"
+
+        volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+
+        # Startup probe - wait for model to load
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+
+        # Liveness probe - restart if unhealthy
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # Readiness probe - remove from load balancer if not ready
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: models-pvc
+
+      # Graceful shutdown
+      terminationGracePeriodSeconds: 60
+
+---
+# Service for llama-server
+apiVersion: v1
+kind: Service
+metadata:
+  name: llama-server
+  namespace: llm-inference
+  labels:
+    app: llama-server
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: llama-server
+
+  # Session affinity for stateful requests
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 300
+
+---
+# HorizontalPodAutoscaler for auto-scaling
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: llama-server-hpa
+  namespace: llm-inference
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llama-server
+
+  minReplicas: 2
+  maxReplicas: 20
+
+  metrics:
+  # Scale based on CPU utilization
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+  # Scale based on memory utilization
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+  # Scale based on custom metric (requests per second)
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "50"
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max
+
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+      selectPolicy: Min
+
+---
+# PodDisruptionBudget - ensure availability during updates
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: llama-server-pdb
+  namespace: llm-inference
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: llama-server
+
+---
+# Ingress for external access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: llama-ingress
+  namespace: llm-inference
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  tls:
+  - hosts:
+    - api.example.com
+    secretName: llama-tls
+
+  rules:
+  - host: api.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: llama-server
+            port:
+              number: 80
+
+---
+# ServiceMonitor for Prometheus (if using Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: llama-server
+  namespace: llm-inference
+  labels:
+    app: llama-server
+spec:
+  selector:
+    matchLabels:
+      app: llama-server
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+
+---
+# NetworkPolicy - restrict traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llama-server-netpol
+  namespace: llm-inference
+spec:
+  podSelector:
+    matchLabels:
+      app: llama-server
+
+  policyTypes:
+  - Ingress
+  - Egress
+
+  ingress:
+  # Allow from ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  # Allow from prometheus
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+
+  # Allow external HTTPS (for model downloads if needed)
+  - to:
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# ResourceQuota - limit resource usage per namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: llm-quota
+  namespace: llm-inference
+spec:
+  hard:
+    requests.cpu: "100"
+    requests.memory: "500Gi"
+    requests.nvidia.com/gpu: "20"
+    limits.cpu: "200"
+    limits.memory: "1000Gi"
+    limits.nvidia.com/gpu: "20"
+    pods: "50"
+
+---
+# LimitRange - default resource limits
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: llm-limits
+  namespace: llm-inference
+spec:
+  limits:
+  - max:
+      cpu: "16"
+      memory: "64Gi"
+    min:
+      cpu: "1"
+      memory: "4Gi"
+    type: Container

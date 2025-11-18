@@ -1,0 +1,272 @@
+# Prometheus configuration for LLaMA inference monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'llama-production'
+    environment: 'prod'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load alert rules
+rule_files:
+  - 'alerts/*.yml'
+
+# Scrape configurations
+scrape_configs:
+  # LLaMA inference servers
+  - job_name: 'llama-inference'
+    static_configs:
+      - targets:
+          - 'llama-server-1:8080'
+          - 'llama-server-2:8080'
+          - 'llama-server-3:8080'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Kubernetes service discovery
+  - job_name: 'kubernetes-pods'
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - production
+            - staging
+
+    relabel_configs:
+      # Only scrape pods with prometheus.io/scrape: "true" annotation
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+
+      # Use custom metrics path if specified
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+
+      # Use custom port if specified
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+
+      # Add pod labels
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: kubernetes_pod_name
+
+  # Node exporter (system metrics)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets:
+          - 'node-exporter:9100'
+
+  # NVIDIA GPU metrics
+  - job_name: 'nvidia-dcgm'
+    static_configs:
+      - targets:
+          - 'dcgm-exporter:9400'
+
+  # Blackbox exporter (endpoint monitoring)
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - https://inference.example.com/health
+        - https://staging.inference.example.com/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+# Remote write (for long-term storage)
+remote_write:
+  - url: 'http://prometheus-remote-storage:9201/write'
+    queue_config:
+      capacity: 10000
+      max_shards: 10
+      min_shards: 1
+      max_samples_per_send: 1000
+      batch_send_deadline: 5s
+
+---
+# Alert rules
+# File: alerts/llama-inference.yml
+
+groups:
+  - name: llama_inference_alerts
+    interval: 30s
+    rules:
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          (
+            rate(http_requests_total{status=~"5..",job="llama-inference"}[5m])
+            /
+            rate(http_requests_total{job="llama-inference"}[5m])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          component: inference
+        annotations:
+          summary: "High error rate on {{ $labels.instance }}"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+          runbook_url: "https://wiki.example.com/runbooks/high-error-rate"
+
+      # High latency
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(request_duration_seconds_bucket{job="llama-inference"}[5m])
+          ) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: inference
+        annotations:
+          summary: "High latency on {{ $labels.instance }}"
+          description: "P95 latency is {{ $value }}s (threshold: 10s)"
+
+      # Service down
+      - alert: ServiceDown
+        expr: up{job="llama-inference"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: infrastructure
+        annotations:
+          summary: "Instance {{ $labels.instance }} is down"
+          description: "{{ $labels.instance }} has been down for more than 1 minute"
+
+      # High GPU memory usage
+      - alert: GPUMemoryHigh
+        expr: |
+          (
+            DCGM_FI_DEV_FB_USED
+            /
+            DCGM_FI_DEV_FB_FREE
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "GPU memory usage high on {{ $labels.gpu }}"
+          description: "GPU memory usage is {{ $value | humanizePercentage }}"
+
+      # High GPU temperature
+      - alert: GPUTemperatureHigh
+        expr: DCGM_FI_DEV_GPU_TEMP > 85
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "GPU temperature high on {{ $labels.gpu }}"
+          description: "GPU temperature is {{ $value }}°C"
+
+      # Request queue growing
+      - alert: QueueDepthGrowing
+        expr: |
+          deriv(request_queue_depth{job="llama-inference"}[10m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: inference
+        annotations:
+          summary: "Request queue is growing on {{ $labels.instance }}"
+          description: "Queue growing at {{ $value }} requests/minute"
+
+      # Slow model inference
+      - alert: SlowModelInference
+        expr: |
+          histogram_quantile(0.95,
+            rate(model_inference_duration_seconds_bucket[5m])
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: inference
+        annotations:
+          summary: "Model inference slow on {{ $labels.instance }}"
+          description: "P95 inference time is {{ $value }}s"
+
+      # Low throughput
+      - alert: LowThroughput
+        expr: |
+          rate(tokens_generated_total[5m]) < 100
+        for: 10m
+        labels:
+          severity: warning
+          component: inference
+        annotations:
+          summary: "Low throughput on {{ $labels.instance }}"
+          description: "Throughput is {{ $value }} tokens/sec (expected: >100)"
+
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value }}%"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value }}%"
+
+      # Disk space low
+      - alert: DiskSpaceLow
+        expr: |
+          (1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Disk space low on {{ $labels.instance }}"
+          description: "Disk usage is {{ $value }}%"
+
+      # Endpoint down
+      - alert: EndpointDown
+        expr: probe_success{job="blackbox"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: infrastructure
+        annotations:
+          summary: "Endpoint {{ $labels.instance }} is down"
+          description: "Endpoint has been down for more than 2 minutes"

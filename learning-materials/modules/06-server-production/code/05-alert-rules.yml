@@ -1,0 +1,365 @@
+# Prometheus Alert Rules for LLM Inference Service
+
+groups:
+  # ==================================================
+  # Service Health Alerts
+  # ==================================================
+  - name: service_health
+    interval: 30s
+    rules:
+      # Service is down
+      - alert: ServiceDown
+        expr: up{job="llama-server"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: llm-inference
+        annotations:
+          summary: "LLaMA server instance is down"
+          description: "{{ $labels.instance }} has been down for more than 1 minute"
+          runbook_url: "https://docs.example.com/runbooks/service-down"
+
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(llama_request_errors_total[5m])) /
+            sum(rate(llama_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: llm-inference
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+          runbook_url: "https://docs.example.com/runbooks/high-error-rate"
+
+      # No traffic
+      - alert: NoTraffic
+        expr: |
+          sum(rate(llama_requests_total[5m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "No requests received"
+          description: "No traffic detected for 10 minutes"
+
+  # ==================================================
+  # Performance Alerts
+  # ==================================================
+  - name: performance
+    interval: 30s
+    rules:
+      # High latency
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(llm_request_duration_seconds_bucket[5m])
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "High request latency"
+          description: "P95 latency is {{ $value }}s (threshold: 5s)"
+          dashboard_url: "https://grafana.example.com/d/llm-performance"
+
+      # Very high latency
+      - alert: VeryHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(llm_request_duration_seconds_bucket[5m])
+          ) > 30
+        for: 5m
+        labels:
+          severity: critical
+          service: llm-inference
+        annotations:
+          summary: "Critical latency detected"
+          description: "P95 latency is {{ $value }}s (threshold: 30s)"
+
+      # Low throughput
+      - alert: LowThroughput
+        expr: |
+          rate(llama_tokens_generated_total[5m]) < 10
+        for: 10m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "Low token generation throughput"
+          description: "Generating only {{ $value }} tokens/s (expected: >10)"
+
+  # ==================================================
+  # Resource Utilization Alerts
+  # ==================================================
+  - name: resources
+    interval: 30s
+    rules:
+      # No available slots
+      - alert: NoAvailableSlots
+        expr: llama_slots_available == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "All inference slots occupied"
+          description: "{{ $labels.instance }} has no available slots for 5 minutes"
+          action: "Consider scaling up replicas"
+
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: |
+          (
+            100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+          ) > 90
+        for: 10m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value }}%"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) /
+            node_memory_MemTotal_bytes * 100
+          ) > 90
+        for: 5m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value }}%"
+
+  # ==================================================
+  # GPU Alerts
+  # ==================================================
+  - name: gpu
+    interval: 30s
+    rules:
+      # GPU utilization too low (underutilization)
+      - alert: LowGPUUtilization
+        expr: |
+          avg(DCGM_FI_DEV_GPU_UTIL) < 20
+        for: 30m
+        labels:
+          severity: info
+          service: llm-inference
+        annotations:
+          summary: "Low GPU utilization"
+          description: "Average GPU utilization is {{ $value }}% (expected: >20%)"
+          action: "Consider reducing GPU resources or increasing load"
+
+      # GPU memory critical
+      - alert: GPUMemoryCritical
+        expr: |
+          (
+            DCGM_FI_DEV_FB_USED /
+            (DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE)
+          ) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+          service: llm-inference
+        annotations:
+          summary: "GPU memory usage critical"
+          description: "GPU {{ $labels.gpu }} memory at {{ $value | humanizePercentage }}"
+          action: "Reduce batch size or context length"
+
+      # GPU temperature high
+      - alert: GPUTemperatureHigh
+        expr: DCGM_FI_DEV_GPU_TEMP > 85
+        for: 10m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "GPU temperature high"
+          description: "GPU {{ $labels.gpu }} temperature is {{ $value }}°C"
+
+      # GPU throttling
+      - alert: GPUThrottling
+        expr: DCGM_FI_DEV_CLOCK_THROTTLE_REASONS > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "GPU is throttling"
+          description: "GPU {{ $labels.gpu }} is throttling (reason code: {{ $value }})"
+
+  # ==================================================
+  # Capacity Planning Alerts
+  # ==================================================
+  - name: capacity
+    interval: 1m
+    rules:
+      # High slot utilization
+      - alert: HighSlotUtilization
+        expr: |
+          (
+            llama_slots_processing /
+            (llama_slots_processing + llama_slots_available)
+          ) > 0.8
+        for: 15m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "High slot utilization"
+          description: "Slot utilization is {{ $value | humanizePercentage }}"
+          action: "Consider scaling up"
+
+      # Approaching capacity
+      - alert: ApproachingCapacity
+        expr: |
+          (
+            llama_slots_processing /
+            (llama_slots_processing + llama_slots_available)
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          service: llm-inference
+        annotations:
+          summary: "Approaching capacity limits"
+          description: "Slot utilization is {{ $value | humanizePercentage }}"
+          action: "Scale up immediately"
+
+  # ==================================================
+  # SLO Alerts (Service Level Objectives)
+  # ==================================================
+  - name: slo
+    interval: 5m
+    rules:
+      # Availability SLO (99.9%)
+      - alert: AvailabilitySLOViolation
+        expr: |
+          (
+            sum(rate(llama_requests_total{status="success"}[7d])) /
+            sum(rate(llama_requests_total[7d]))
+          ) < 0.999
+        for: 1h
+        labels:
+          severity: critical
+          service: llm-inference
+          slo: availability
+        annotations:
+          summary: "Availability SLO violated"
+          description: "Availability is {{ $value | humanizePercentage }} (target: 99.9%)"
+
+      # Latency SLO (95% of requests < 2s)
+      - alert: LatencySLOViolation
+        expr: |
+          histogram_quantile(0.95,
+            rate(llm_request_duration_seconds_bucket[7d])
+          ) > 2.0
+        for: 1h
+        labels:
+          severity: critical
+          service: llm-inference
+          slo: latency
+        annotations:
+          summary: "Latency SLO violated"
+          description: "P95 latency is {{ $value }}s (target: <2s)"
+
+      # Error budget burn rate (fast burn)
+      - alert: FastErrorBudgetBurn
+        expr: |
+          (
+            1 - (
+              sum(rate(llama_requests_total{status="success"}[1h])) /
+              sum(rate(llama_requests_total[1h]))
+            )
+          ) > 0.001 * 14.4
+        labels:
+          severity: critical
+          service: llm-inference
+          slo: error_budget
+        annotations:
+          summary: "Fast error budget burn rate"
+          description: "Error budget will exhaust in {{ $value }} hours at current rate"
+          action: "Investigate and mitigate issues immediately"
+
+      # Error budget burn rate (slow burn)
+      - alert: SlowErrorBudgetBurn
+        expr: |
+          (
+            1 - (
+              sum(rate(llama_requests_total{status="success"}[24h])) /
+              sum(rate(llama_requests_total[24h]))
+            )
+          ) > 0.001 * 6
+        for: 2h
+        labels:
+          severity: warning
+          service: llm-inference
+          slo: error_budget
+        annotations:
+          summary: "Slow error budget burn rate"
+          description: "Error budget burning faster than expected"
+
+  # ==================================================
+  # Cost Alerts
+  # ==================================================
+  - name: cost
+    interval: 1h
+    rules:
+      # Unexpected cost spike
+      - alert: CostSpike
+        expr: |
+          (
+            rate(llama_tokens_generated_total[1h]) /
+            rate(llama_tokens_generated_total[1h] offset 24h)
+          ) > 2.0
+        for: 30m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "Unexpected cost spike"
+          description: "Token usage is {{ $value }}x higher than yesterday"
+          action: "Investigate unusual usage patterns"
+
+  # ==================================================
+  # Data Quality Alerts
+  # ==================================================
+  - name: data_quality
+    interval: 5m
+    rules:
+      # High request failure rate
+      - alert: HighRequestFailureRate
+        expr: |
+          (
+            sum(rate(llama_requests_total{status=~"4..|5.."}[5m])) /
+            sum(rate(llama_requests_total[5m]))
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "High request failure rate"
+          description: "{{ $value | humanizePercentage }} of requests are failing"
+
+      # Timeout rate high
+      - alert: HighTimeoutRate
+        expr: |
+          rate(llama_request_errors_total{error_type="timeout"}[5m]) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          service: llm-inference
+        annotations:
+          summary: "High timeout rate"
+          description: "{{ $value }} timeouts per second"

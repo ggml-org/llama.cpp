@@ -1,0 +1,235 @@
+# Prometheus configuration for LLM inference monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'production'
+    region: 'us-east-1'
+    service: 'llm-inference'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+      timeout: 10s
+
+# Load alerting rules
+rule_files:
+  - 'alerts.yml'
+
+# Scrape configurations
+scrape_configs:
+  # ==================================================
+  # LLaMA Server Metrics
+  # ==================================================
+  - job_name: 'llama-server'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+    static_configs:
+      - targets:
+        - 'llama-server-1:8080'
+        - 'llama-server-2:8080'
+        - 'llama-server-3:8080'
+        labels:
+          env: 'production'
+          service: 'llama-server'
+
+    # Relabel to customize metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [__address__]
+        regex: '([^:]+).*'
+        target_label: server
+        replacement: '$1'
+
+  # ==================================================
+  # API Server Metrics
+  # ==================================================
+  - job_name: 'api-server'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+    static_configs:
+      - targets:
+        - 'api-server:9090'
+        labels:
+          env: 'production'
+          service: 'api'
+
+  # ==================================================
+  # Node Exporter (System Metrics)
+  # ==================================================
+  - job_name: 'node-exporter'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+        - 'server1:9100'
+        - 'server2:9100'
+        - 'server3:9100'
+        labels:
+          env: 'production'
+
+  # ==================================================
+  # NVIDIA GPU Metrics (DCGM Exporter)
+  # ==================================================
+  - job_name: 'nvidia-gpu'
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+        - 'gpu-server1:9400'
+        - 'gpu-server2:9400'
+        - 'gpu-server3:9400'
+        labels:
+          env: 'production'
+          hardware: 'nvidia-gpu'
+
+  # ==================================================
+  # Kubernetes Metrics (if using K8s)
+  # ==================================================
+  - job_name: 'kubernetes-pods'
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - llm-inference
+
+    relabel_configs:
+      # Only scrape pods with prometheus.io/scrape annotation
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+
+      # Use custom metrics path if specified
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+
+      # Use custom port if specified
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+
+      # Add pod metadata
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: kubernetes_pod_name
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+
+  # ==================================================
+  # Kubernetes Services
+  # ==================================================
+  - job_name: 'kubernetes-services'
+    kubernetes_sd_configs:
+      - role: service
+        namespaces:
+          names:
+            - llm-inference
+
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+        action: replace
+        target_label: __address__
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+
+  # ==================================================
+  # Redis Exporter
+  # ==================================================
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          env: 'production'
+
+  # ==================================================
+  # PostgreSQL Exporter
+  # ==================================================
+  - job_name: 'postgresql'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          env: 'production'
+
+  # ==================================================
+  # Blackbox Exporter (Endpoint Monitoring)
+  # ==================================================
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - https://api.example.com/health
+        - https://api.example.com/v1/models
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+# ==================================================
+# Recording Rules (Pre-compute common queries)
+# ==================================================
+# These are defined in a separate rules file, but here's an example:
+---
+groups:
+  - name: llm_recording_rules
+    interval: 30s
+    rules:
+      # Request rate by endpoint
+      - record: job:llm_request_rate:5m
+        expr: |
+          rate(llama_requests_total[5m])
+
+      # Error rate
+      - record: job:llm_error_rate:5m
+        expr: |
+          rate(llama_request_errors_total[5m]) /
+          rate(llama_requests_total[5m])
+
+      # Average latency
+      - record: job:llm_request_latency_seconds:p95
+        expr: |
+          histogram_quantile(0.95,
+            rate(llm_request_duration_seconds_bucket[5m])
+          )
+
+      # Tokens per second
+      - record: job:llm_tokens_per_second:5m
+        expr: |
+          rate(llama_tokens_generated_total[5m])
+
+      # Slot utilization
+      - record: job:llm_slot_utilization:ratio
+        expr: |
+          llama_slots_processing /
+          (llama_slots_processing + llama_slots_available)
+
+      # GPU utilization average
+      - record: job:gpu_utilization:avg
+        expr: |
+          avg(DCGM_FI_DEV_GPU_UTIL)
+
+      # GPU memory usage percentage
+      - record: job:gpu_memory_usage:percentage
+        expr: |
+          (DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_FREE) * 100

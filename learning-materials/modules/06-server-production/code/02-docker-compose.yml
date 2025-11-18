@@ -1,0 +1,360 @@
+version: '3.8'
+
+# Production Docker Compose configuration for LLM inference stack
+# Includes: llama-server, API wrapper, monitoring (Prometheus, Grafana), logging (Loki)
+
+services:
+  # ===================================================================
+  # LLaMA Server - Core inference engine
+  # ===================================================================
+  llama-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.llama
+    image: llama-server:latest
+    container_name: llama-inference
+    restart: unless-stopped
+
+    # GPU support (uncomment for NVIDIA GPUs)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 16G
+          cpus: '8'
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - ./models:/models:ro
+      - ./data:/data
+
+    command: >
+      --host 0.0.0.0
+      --port 8080
+      -m /models/llama-2-7b-chat.Q4_K_M.gguf
+      -c 4096
+      -ngl 35
+      --parallel 4
+      --cont-batching
+      --metrics
+      --log-format json
+
+    environment:
+      - LLAMA_API_KEY=${LLAMA_API_KEY:-secret}
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===================================================================
+  # API Server - Custom API wrapper with auth and rate limiting
+  # ===================================================================
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: llm-api:latest
+    container_name: llm-api
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      - LLAMA_SERVER_URL=http://llama-server:8080
+      - JWT_SECRET=${JWT_SECRET:-change-me}
+      - LOG_LEVEL=info
+
+    depends_on:
+      llama-server:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===================================================================
+  # Nginx - Reverse proxy and load balancer
+  # ===================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-lb
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+
+    depends_on:
+      - api-server
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===================================================================
+  # Prometheus - Metrics collection
+  # ===================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+
+    ports:
+      - "9090:9090"
+
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===================================================================
+  # Grafana - Metrics visualization
+  # ===================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+
+    ports:
+      - "3000:3000"
+
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+
+    depends_on:
+      - prometheus
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===================================================================
+  # Loki - Log aggregation
+  # ===================================================================
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: unless-stopped
+
+    ports:
+      - "3100:3100"
+
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+
+    command: -config.file=/etc/loki/local-config.yaml
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===================================================================
+  # Promtail - Log shipper
+  # ===================================================================
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    restart: unless-stopped
+
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./promtail-config.yaml:/etc/promtail/config.yaml:ro
+
+    command: -config.file=/etc/promtail/config.yaml
+
+    depends_on:
+      - loki
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===================================================================
+  # Redis - Caching and rate limiting
+  # ===================================================================
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: unless-stopped
+
+    ports:
+      - "6379:6379"
+
+    volumes:
+      - redis-data:/data
+
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===================================================================
+  # PostgreSQL - Usage tracking and analytics
+  # ===================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-llm}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-llm123}
+      - POSTGRES_DB=${POSTGRES_DB:-llm_analytics}
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-llm}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===================================================================
+  # Alert Manager - Alert routing
+  # ===================================================================
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    restart: unless-stopped
+
+    ports:
+      - "9093:9093"
+
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+
+    networks:
+      - llm-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ===================================================================
+# Networks
+# ===================================================================
+networks:
+  llm-network:
+    driver: bridge
+
+# ===================================================================
+# Volumes
+# ===================================================================
+volumes:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  redis-data:
+  postgres-data:
+  alertmanager-data:

@@ -1,0 +1,100 @@
+# Multi-stage Dockerfile for production llama.cpp inference
+
+# Stage 1: Build environment
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS builder
+
+ARG BUILD_TYPE=Release
+ARG CUDA_VERSION=12.2
+ARG CMAKE_ARGS=""
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    cmake \
+    build-essential \
+    git \
+    wget \
+    curl \
+    libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Build llama.cpp with CUDA support
+RUN mkdir build && cd build && \
+    cmake .. \
+    -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+    -DLLAMA_CUDA=ON \
+    -DLLAMA_CUDA_F16=ON \
+    -DLLAMA_CURL=ON \
+    -DLLAMA_BUILD_SERVER=ON \
+    -DLLAMA_BUILD_TESTS=OFF \
+    ${CMAKE_ARGS} && \
+    cmake --build . --config ${BUILD_TYPE} -j$(nproc)
+
+# Strip binaries to reduce size
+RUN strip build/bin/llama-server build/bin/llama-cli
+
+# Stage 2: Runtime environment
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y \
+    libcurl4 \
+    wget \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -u 1000 -s /bin/bash llama && \
+    mkdir -p /models /app /data && \
+    chown -R llama:llama /models /app /data
+
+# Switch to non-root user
+USER llama
+WORKDIR /app
+
+# Copy binaries from builder
+COPY --from=builder --chown=llama:llama /build/build/bin/llama-server /app/
+COPY --from=builder --chown=llama:llama /build/build/bin/llama-cli /app/
+
+# Copy scripts
+COPY --chown=llama:llama scripts/healthcheck.sh /app/
+COPY --chown=llama:llama scripts/entrypoint.sh /app/
+RUN chmod +x /app/healthcheck.sh /app/entrypoint.sh
+
+# Environment variables
+ENV MODEL_PATH=/models/model.gguf
+ENV HOST=0.0.0.0
+ENV PORT=8080
+ENV CTX_SIZE=2048
+ENV N_GPU_LAYERS=-1
+ENV THREADS=8
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD ["/app/healthcheck.sh"]
+
+# Labels
+LABEL org.opencontainers.image.title="LLaMA Inference Server"
+LABEL org.opencontainers.image.description="Production-ready llama.cpp inference server"
+LABEL org.opencontainers.image.vendor="LLaMA Community"
+LABEL org.opencontainers.image.source="https://github.com/ggerganov/llama.cpp"
+
+# Entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
+
+# Default command
+CMD ["/app/llama-server", \
+     "--host", "${HOST}", \
+     "--port", "${PORT}", \
+     "--model", "${MODEL_PATH}", \
+     "--ctx-size", "${CTX_SIZE}", \
+     "--n-gpu-layers", "${N_GPU_LAYERS}", \
+     "--threads", "${THREADS}"]

@@ -369,3 +369,533 @@ An attention variant that reduces the number of KV heads compared to query heads
 **Status**: Living document - expanding with new modules
 
 Found a term that's missing or unclear? Suggest additions to improve this glossary!
+
+---
+
+## W
+
+### Weight
+A learnable parameter in a neural network, typically a value in a matrix that is multiplied with input during forward pass. Model size is determined by the number of weights. See also: [Parameter](#parameter), [Quantization](#quantization).
+
+### WMMA (Warp Matrix Multiply-Accumulate)
+CUDA API for using Tensor Cores to accelerate matrix multiplication. Operates on warp-sized matrix fragments for high throughput. See also: [Tensor Cores](#tensor-cores), [CUDA](#cuda).
+
+---
+
+## X
+
+### XLA (Accelerated Linear Algebra)
+Google's compiler for optimizing tensor computations. Not used directly by llama.cpp but relevant for understanding compilation-based optimization. See also: [Kernel](#kernel).
+
+---
+
+## Z
+
+### Zero-Copy
+Memory optimization technique where data is accessed directly without copying. Enabled by memory mapping in llama.cpp for efficient model loading. See also: [Memory Mapping](#memory-mapping-mmap).
+
+---
+
+## Advanced Topics (Cross-Module)
+
+### API Gateway
+A server that routes requests to backend services, handles authentication, rate limiting, and monitoring. Used in production LLM deployments. See also: [Load Balancing](#load-balancing).
+
+### Asynchronous Inference
+Non-blocking inference where requests are queued and processed asynchronously, improving concurrency. Critical for high-throughput servers. See also: [Continuous Batching](#continuous-batching).
+
+### Auto-Scaling
+Automatic adjustment of compute resources based on load. Kubernetes HPA (Horizontal Pod Autoscaler) commonly used for LLM serving. See also: [Kubernetes](#kubernetes).
+
+### Bits Per Weight (BPW)
+Metric measuring average storage per weight after quantization. Q4_K_M typically achieves ~4.5 bpw. See also: [Quantization](#quantization), [K-Quants](#k-quants).
+
+### Cache Locality
+Property where data accessed together in time is stored close in memory, improving performance. Critical for matrix operations in LLMs. See also: [Memory](#memory).
+
+### Causal Attention
+Attention mechanism where each token can only attend to previous tokens, not future ones. Essential for autoregressive generation. See also: [Attention Mechanism](#attention-mechanism).
+
+### Chat Template
+Format string defining how to structure conversation history into a prompt. Model-specific (e.g., ChatML, Llama-2 format). See also: [Prompt](#prompt), [Special Tokens](#special-tokens).
+
+### Checkpointing
+Saving model state during training or for deployment. llama.cpp loads from checkpoints converted to GGUF. See also: [Model Conversion](#model-conversion).
+
+### Classifier-Free Guidance (CFG)
+Technique for controlling generation by mixing conditional and unconditional predictions. Used in image generation, applicable to text. See also: [Sampling](#sampling).
+
+### CLIP (Contrastive Language-Image Pre-training)
+Vision-language model that learns joint embeddings of images and text. Used as vision encoder in multimodal models like LLaVA. See also: [LLaVA](#llava), [Embedding](#embedding).
+
+### Context Length
+See [Context Window](#context-window).
+
+### Continual Learning
+Training models to learn new tasks without forgetting old ones. Not directly relevant to llama.cpp (inference-only) but important concept. See also: [Fine-tuning](#fine-tuning).
+
+### CoreML
+Apple's machine learning framework for iOS/macOS. llama.cpp can export to CoreML for Apple Neural Engine acceleration. See also: [Metal](#metal), [Apple Neural Engine](#apple-neural-engine).
+
+### CORS (Cross-Origin Resource Sharing)
+Web security mechanism for controlling access to APIs from different domains. Important for web-deployed LLM APIs. See also: [API](#api).
+
+### Cosine Similarity
+Metric measuring similarity between vectors, commonly used in retrieval and embedding search. See also: [Embedding](#embedding), [Vector Database](#vector-database).
+
+### CUDA Streams
+Mechanism for concurrent kernel execution on NVIDIA GPUs. Used to overlap computation and memory transfers. See also: [CUDA](#cuda), [Kernel](#kernel).
+
+### Data Parallelism
+Distributing different data samples across multiple devices, processing in parallel. Contrasts with tensor/pipeline parallelism. See also: [Multi-GPU](#multi-gpu).
+
+### Dead Neuron
+Neuron that always outputs zero or never activates, contributing nothing to the model. Can result from poor initialization or ReLU. See also: [Activation](#activation).
+
+### Dequantization
+Converting quantized (low-precision) values back to floating-point for computation. llama.cpp dequantizes on-the-fly during inference. See also: [Quantization](#quantization).
+
+### Distributed Tracing
+Tracking requests across multiple services to debug latency and failures. OpenTelemetry commonly used. See also: [Observability](#observability).
+
+### Docker
+Containerization platform for packaging applications with dependencies. Commonly used to deploy llama.cpp servers. See also: [Kubernetes](#kubernetes).
+
+### Dropout
+Regularization technique that randomly drops neurons during training. Not used during inference. See also: [Inference](#inference).
+
+### ELK Stack (Elasticsearch, Logstash, Kibana)
+Suite of tools for logging, search, and visualization. Used for centralized logging in production. See also: [Observability](#observability).
+
+### End-to-End Latency
+Total time from request submission to final response. Includes queuing, inference, and network time. See also: [Latency](#latency).
+
+### FastAPI
+Modern Python web framework for building APIs. Commonly used for llama.cpp serving due to async support and auto-docs. See also: [API](#api).
+
+### Few-Shot Learning
+Providing few examples in the prompt to guide model behavior. Effective for task specification. See also: [Prompt](#prompt), [In-Context Learning](#in-context-learning).
+
+### Fine-tuning
+Training a pre-trained model on specific data to adapt it for a task. llama.cpp is for inference; fine-tuning done in PyTorch/etc. See also: [Training](#training).
+
+### Flash Attention
+Memory-efficient attention algorithm that uses tiling to reduce memory access. Achieves significant speedup for long contexts. See also: [Attention Mechanism](#attention-mechanism).
+
+### Floating-Point Operations (FLOPs)
+Measure of computational work. LLM inference requires billions of FLOPs per token. See also: [Throughput](#throughput).
+
+### Function Calling
+Feature where LLM can output structured function invocations (like OpenAI function calling). Requires parsing and validation. See also: [Constrained Generation](#constrained-generation).
+
+### GEMM (General Matrix Multiply)
+Fundamental linear algebra operation (C = A × B) that dominates LLM inference computation. Heavily optimized in llama.cpp. See also: [Matrix Multiplication](#matrix-multiplication).
+
+### Georgi Gerganov
+Creator of llama.cpp and GGML. Also created whisper.cpp and other C/C++ ML inference tools. See also: [llama.cpp](#llamacpp), [GGML](#ggml).
+
+### Graceful Degradation
+System design principle where performance degrades gradually under load rather than failing catastrophically. See also: [Reliability](#reliability).
+
+### Gradient
+Derivative of loss with respect to weights, used in training to update parameters. Not computed during inference. See also: [Training](#training).
+
+### Grafana
+Visualization and dashboarding platform, commonly used with Prometheus for monitoring. See also: [Prometheus](#prometheus), [Observability](#observability).
+
+### Hallucination
+When an LLM generates plausible-sounding but false information. Major challenge in production deployments. See also: [Quality](#quality).
+
+### Head (Attention)
+One of multiple parallel attention computations in Multi-Head Attention. Each head learns different token relationships. See also: [Multi-Head Attention](#multi-head-attention-mha).
+
+### Health Check
+Endpoint or mechanism for monitoring service availability. Kubernetes uses liveness/readiness probes. See also: [Kubernetes](#kubernetes), [Monitoring](#monitoring).
+
+### HuggingFace Transformers
+Popular library for transformer models. Models often converted from HuggingFace to GGUF for llama.cpp. See also: [Model Conversion](#model-conversion).
+
+### Hyperparameter
+Configuration value (not learned during training) like learning rate, temperature, top-k. llama.cpp uses hyperparameters for sampling. See also: [Sampling](#sampling).
+
+### Idempotency
+Property where repeating an operation produces the same result. Important for API design. See also: [API](#api).
+
+### Importance Quantization (IQ)
+Advanced quantization method in GGUF (IQ2, IQ3, IQ4) that preserves important weights at higher precision. See also: [K-Quants](#k-quants), [Quantization](#quantization).
+
+### In-Context Learning
+LLM's ability to learn from examples provided in the prompt without weight updates. See also: [Few-Shot Learning](#few-shot-learning), [Prompt](#prompt).
+
+### Inference Optimization
+Techniques to accelerate inference: quantization, kernel fusion, batching, caching. Core focus of llama.cpp. See also: [Optimization](#optimization).
+
+### Ingress
+Kubernetes resource for managing external access to services. Provides load balancing, SSL termination. See also: [Kubernetes](#kubernetes).
+
+### INT4 / INT8
+Integer data types with 4 or 8 bits. Used for quantized weights and activations. See also: [Quantization](#quantization).
+
+### Jaeger
+Distributed tracing system for monitoring microservices. Part of observability stack. See also: [Distributed Tracing](#distributed-tracing).
+
+### JIT (Just-In-Time) Compilation
+Compiling code at runtime for optimization. PyTorch uses JIT; llama.cpp uses ahead-of-time compilation. See also: [Optimization](#optimization).
+
+### JSON Mode
+Feature to constrain LLM output to valid JSON. Can use grammars or post-processing. See also: [GBNF](#gbnf-ggml-bnf), [Constrained Generation](#constrained-generation).
+
+### Kernel Fusion
+Combining multiple GPU operations into one kernel to reduce memory transfers. Key optimization in llama.cpp. See also: [Kernel](#kernel), [CUDA](#cuda).
+
+### Key-Value (KV) Heads
+In GQA/MQA, the number of K/V projections (fewer than query heads). Reduces KV cache size. See also: [Grouped-Query Attention](#grouped-query-attention-gqa), [KV Cache](#kv-cache).
+
+### Kubernetes
+Container orchestration platform for deploying and scaling applications. Common for production LLM serving. See also: [Docker](#docker).
+
+### LangChain
+Framework for building LLM applications with chains, agents, and tools. Can integrate with llama.cpp. See also: [Integration](#integration), [RAG](#rag-retrieval-augmented-generation).
+
+### Layer Offloading
+Running some model layers on GPU and others on CPU when full model doesn't fit in VRAM. llama.cpp supports via `-ngl` parameter. See also: [Offloading](#offloading).
+
+### LlamaIndex
+Framework for connecting LLMs with external data, similar to LangChain. Supports llama.cpp backends. See also: [RAG](#rag-retrieval-augmented-generation).
+
+### LLaVA (Large Language and Vision Assistant)
+Multimodal model combining vision encoder (CLIP) with language model. Supported by llama.cpp. See also: [CLIP](#clip-contrastive-language-image-pre-training), [Multimodal](#multimodal).
+
+### Load Balancer
+System distributing traffic across multiple servers. Nginx, HAProxy commonly used for LLM APIs. See also: [API Gateway](#api-gateway).
+
+### Local Deployment
+Running models on-premises or on-device rather than cloud. Key use case for llama.cpp. See also: [Edge Deployment](#edge-deployment).
+
+### Locally Typical Sampling
+Sampling strategy based on information theory, selecting tokens with typical information content. See also: [Sampling](#sampling).
+
+### Lora (Low-Rank Adaptation)
+Parameter-efficient fine-tuning method. llama.cpp supports LoRA adapters for inference. See also: [Fine-tuning](#fine-tuning).
+
+### Matrix Multiplication
+Core operation in neural networks (y = x × W). Dominates LLM inference computation. See also: [GEMM](#gemm-general-matrix-multiply).
+
+### Memory Bandwidth
+Rate of data transfer between memory and processor. Often the bottleneck in LLM inference. See also: [Bandwidth](#bandwidth).
+
+### Microservices
+Architectural pattern with independent, loosely coupled services. LLM serving often uses microservices architecture. See also: [Architecture](#architecture).
+
+### Mixtral
+Mixture-of-Experts language model. llama.cpp supports MoE architectures. See also: [MoE](#moe-mixture-of-experts).
+
+### Model Architecture
+Structure of neural network: layer types, dimensions, connectivity. llama.cpp supports many architectures. See also: [Transformer](#transformer).
+
+### Model Registry
+System for storing and versioning ML models. Production deployments use registries for model management. See also: [MLOps](#mlops).
+
+### MoE (Mixture of Experts)
+Architecture with multiple "expert" sub-networks, routing inputs to subset of experts. More parameters, same compute. See also: [Mixtral](#mixtral).
+
+### Multi-GPU
+Using multiple GPUs for inference via tensor, pipeline, or data parallelism. See also: [Tensor Parallelism](#tensor-parallelism).
+
+### Multimodal
+Models processing multiple input types (text, image, audio). LLaVA is multimodal. See also: [LLaVA](#llava-large-language-and-vision-assistant).
+
+### NCCL (NVIDIA Collective Communications Library)
+Library for multi-GPU communication. Optimized for NVIDIA GPUs with NVLink. See also: [Multi-GPU](#multi-gpu).
+
+### Ngrok
+Tool for exposing local servers to the internet. Useful for demos and testing. See also: [API](#api).
+
+### Nsight Compute
+NVIDIA profiling tool for CUDA kernels. Essential for GPU optimization. See also: [Profiling](#profiling).
+
+### Nucleus Sampling
+See [Top-P Sampling](#top-p-sampling-nucleus-sampling).
+
+### NVLink
+High-bandwidth interconnect between NVIDIA GPUs, much faster than PCIe. Critical for multi-GPU. See also: [Multi-GPU](#multi-gpu).
+
+### Observability
+Practice of understanding system internals via metrics, logs, and traces. Critical for production. See also: [Monitoring](#monitoring).
+
+### ONNX (Open Neural Network Exchange)
+Format for representing ML models. llama.cpp uses GGUF; ONNX less common for LLMs. See also: [Model Conversion](#model-conversion).
+
+### Optimization
+Improving performance (speed, memory, cost) without changing functionality. Core focus of llama.cpp. See also: [Inference Optimization](#inference-optimization).
+
+### Outlier
+Value significantly different from the norm. Activation outliers challenge quantization. See also: [Quantization](#quantization).
+
+### PagedAttention
+Attention implementation using paged KV cache for better memory management. Used in vLLM. See also: [KV Cache](#kv-cache).
+
+### Pipeline Parallelism
+Distributing model layers across devices, processing in pipeline stages. See also: [Multi-GPU](#multi-gpu).
+
+### Pinecone
+Cloud vector database for similarity search. Common in RAG systems. See also: [Vector Database](#vector-database).
+
+### Pre-training
+Initial training of an LLM on large corpus. llama.cpp uses pre-trained models for inference. See also: [Training](#training).
+
+### Prefix Caching
+Caching KV cache for common prompt prefixes to avoid recomputation. Improves multi-turn conversation efficiency. See also: [KV Cache](#kv-cache).
+
+### Profiling
+Measuring program performance to identify bottlenecks. Essential for optimization. See also: [Nsight Compute](#nsight-compute).
+
+### Prometheus
+Open-source monitoring system for collecting and querying metrics. Standard for Kubernetes. See also: [Monitoring](#monitoring), [Grafana](#grafana).
+
+### Prompt Engineering
+Crafting effective prompts to get desired LLM behavior. Important skill for LLM applications. See also: [Prompt](#prompt).
+
+### PyTorch
+Popular deep learning framework. Models often trained in PyTorch then converted to GGUF. See also: [Model Conversion](#model-conversion).
+
+### QLoRA
+Quantized LoRA for parameter-efficient fine-tuning with reduced memory. See also: [LoRA](#lora-low-rank-adaptation).
+
+### Quality Assurance (QA)
+Testing and validation processes ensuring software quality. Important for production LLM deployments. See also: [Testing](#testing).
+
+### RAG (Retrieval-Augmented Generation)
+Technique combining retrieval from knowledge base with LLM generation. Common pattern for Q&A systems. See also: [Vector Database](#vector-database).
+
+### Rate Limiting
+Controlling request rate per user/IP to prevent abuse and ensure fairness. Essential for APIs. See also: [API](#api).
+
+### Rectified Linear Unit (ReLU)
+Activation function f(x) = max(0, x). Simple but can cause dead neurons. LLMs use alternatives like SwiGLU. See also: [Activation](#activation).
+
+### Redis
+In-memory data store, often used for caching and rate limiting in LLM systems. See also: [Caching](#caching).
+
+### Reliability
+System's ability to function correctly over time. Measured by uptime, error rate. See also: [SLA](#sla-service-level-agreement).
+
+### Request Queue
+Buffer holding pending requests before processing. Important for load management. See also: [Continuous Batching](#continuous-batching).
+
+### Response Streaming
+Sending output tokens as generated rather than waiting for completion. Improves perceived latency. See also: [Server-Sent Events](#server-sent-events-sse).
+
+### Retrieval
+Finding relevant documents/information from a corpus, typically using vector similarity. Core of RAG. See also: [RAG](#rag-retrieval-augmented-generation).
+
+### RMSNorm (Root Mean Square Normalization)
+Simpler alternative to LayerNorm used in LLaMA models. Slightly faster, similar performance. See also: [Layer Normalization](#layer-normalization).
+
+### ROCm (Radeon Open Compute)
+AMD's GPU computing platform, similar to CUDA. llama.cpp supports ROCm backend. See also: [Backend](#backend).
+
+### Safetensors
+Safe, fast serialization format for tensors. Alternative to PyTorch pickles. See also: [Model Conversion](#model-conversion).
+
+### Scaling Law
+Empirical relationships between model size, data, compute, and performance. Guide model selection. See also: [Model Architecture](#model-architecture).
+
+### Server-Sent Events (SSE)
+Web standard for server-to-client streaming. Used for streaming LLM responses. See also: [Response Streaming](#response-streaming).
+
+### Sigmoid
+Activation function f(x) = 1/(1 + e^(-x)), outputs 0 to 1. Used in gates (e.g., SwiGLU). See also: [Activation](#activation).
+
+### SigLIP
+Google's improved CLIP variant. Used in some multimodal models. See also: [CLIP](#clip-contrastive-language-image-pre-training).
+
+### SIMD (Single Instruction Multiple Data)
+Parallel processing instruction set (AVX2, AVX-512, NEON). llama.cpp uses SIMD for CPU inference. See also: [Vectorization](#vectorization).
+
+### SLA (Service Level Agreement)
+Contract defining expected service quality (uptime, latency). Critical for production. See also: [SLO](#slo-service-level-objective).
+
+### SLO (Service Level Objective)
+Specific measurable target (e.g., 99.9% uptime, p99 < 1s). See also: [SLA](#sla-service-level-agreement).
+
+### Sparse Attention
+Attention mechanism attending to subset of tokens, reducing O(n²) complexity. Research topic. See also: [Attention Mechanism](#attention-mechanism).
+
+### Stop Sequence
+String that when generated, terminates generation early. Useful for formatting control. See also: [Sampling](#sampling).
+
+### Swish
+Activation function f(x) = x * sigmoid(x). Used in SwiGLU. See also: [SwiGLU](#swiglu).
+
+### SwiGLU
+Gated activation function used in LLaMA FFN: SwiGLU(x, W, V) = Swish(xW) ⊙ (xV). Better than ReLU. See also: [Feed-Forward Network](#feed-forward-network-ffn).
+
+### SYCL
+Cross-platform abstraction for heterogeneous computing. llama.cpp supports SYCL for Intel GPUs. See also: [Backend](#backend).
+
+### System Prompt
+Initial instruction given to chat models to set behavior/role. Part of prompt engineering. See also: [Prompt](#prompt), [Chat Template](#chat-template).
+
+### Tensor Cores
+Specialized hardware in NVIDIA GPUs for fast matrix multiplication. Accelerate INT8/FP16 inference. See also: [CUDA](#cuda).
+
+### Tensor Parallelism
+Splitting individual layers across GPUs, computing parts in parallel. See also: [Multi-GPU](#multi-gpu).
+
+### TensorRT
+NVIDIA's inference optimization library. Alternative to llama.cpp, focused on NVIDIA GPUs. See also: [Optimization](#optimization).
+
+### Testing
+Validating software correctness through unit, integration, and end-to-end tests. See also: [Quality Assurance](#quality-assurance-qa).
+
+### Tiling
+Breaking computation into blocks (tiles) that fit in fast memory. Critical for cache efficiency. See also: [Cache Locality](#cache-locality).
+
+### TLS/SSL
+Encryption protocols for secure communication. HTTPS uses TLS. See also: [Security](#security).
+
+### Token Bucket
+Rate limiting algorithm allowing bursts up to capacity, refilling at constant rate. See also: [Rate Limiting](#rate-limiting).
+
+### Token Healing
+Re-tokenizing at boundaries to fix tokenization artifacts. Improves output quality. See also: [Tokenization](#tokenization).
+
+### Training
+Process of learning model weights from data. llama.cpp is for inference; training done elsewhere. See also: [Fine-tuning](#fine-tuning).
+
+### Truncation
+Cutting context or sequence to fit limits. Important for managing context window. See also: [Context Window](#context-window).
+
+### Unified Memory
+Memory architecture where CPU and GPU share address space. Simplifies programming on Apple Silicon. See also: [Metal](#metal).
+
+### Uptime
+Percentage of time service is available. 99.9% uptime = ~8.7 hours downtime/year. See also: [SLO](#slo-service-level-objective).
+
+### Vector Database
+Database optimized for storing and searching high-dimensional vectors. Used in RAG. Examples: Pinecone, Chroma, Weaviate. See also: [Embedding](#embedding), [RAG](#rag-retrieval-augmented-generation).
+
+### Vectorization
+Using SIMD instructions to process multiple data points in parallel. See also: [SIMD](#simd-single-instruction-multiple-data).
+
+### vLLM
+High-throughput LLM serving system using PagedAttention. Alternative to llama.cpp, focused on throughput. See also: [Continuous Batching](#continuous-batching).
+
+### VRAM (Video RAM)
+GPU memory. Model must fit in VRAM (or use offloading). A100 has 40/80GB. See also: [GPU](#gpu-graphics-processing-unit).
+
+### Warmup
+Initial period where system performance is lower (loading models, filling caches). Important for auto-scaling. See also: [Auto-Scaling](#auto-scaling).
+
+### Weight Decay
+Regularization technique adding penalty for large weights. Training concept, not relevant for inference. See also: [Training](#training).
+
+### Weight Sharing
+Multiple parts of model sharing same weights. Reduces parameters. See also: [Parameter](#parameter).
+
+### Zero-Shot
+Model performing task without task-specific examples, using only instruction. Contrasts with few-shot. See also: [Few-Shot Learning](#few-shot-learning).
+
+---
+
+## Acronyms Reference
+
+- **API**: Application Programming Interface
+- **AWS**: Amazon Web Services
+- **BNF**: Backus-Naur Form
+- **BOS**: Beginning of Sequence
+- **BPE**: Byte Pair Encoding
+- **BPW**: Bits Per Weight
+- **CFG**: Classifier-Free Guidance
+- **CLIP**: Contrastive Language-Image Pre-training
+- **CORS**: Cross-Origin Resource Sharing
+- **CPU**: Central Processing Unit
+- **CUDA**: Compute Unified Device Architecture
+- **DPO**: Direct Preference Optimization
+- **ELK**: Elasticsearch, Logstash, Kibana
+- **EOS**: End of Sequence
+- **FFN**: Feed-Forward Network
+- **FLOP**: Floating-Point Operation
+- **FP16/FP32**: 16/32-bit Floating Point
+- **GBNF**: GGML Backus-Naur Form
+- **GEMM**: General Matrix Multiply
+- **GGML**: Georgi Gerganov Machine Learning
+- **GGUF**: GGML Unified Format
+- **GPU**: Graphics Processing Unit
+- **GQA**: Grouped-Query Attention
+- **HPA**: Horizontal Pod Autoscaler
+- **HTTP**: Hypertext Transfer Protocol
+- **INT4/INT8**: 4/8-bit Integer
+- **IQ**: Importance Quantization
+- **JIT**: Just-In-Time
+- **JSON**: JavaScript Object Notation
+- **KV**: Key-Value
+- **LoRA**: Low-Rank Adaptation
+- **LLM**: Large Language Model
+- **MHA**: Multi-Head Attention
+- **MLOps**: Machine Learning Operations
+- **MoE**: Mixture of Experts
+- **MQA**: Multi-Query Attention
+- **NCCL**: NVIDIA Collective Communications Library
+- **NER**: Named Entity Recognition
+- **ONNX**: Open Neural Network Exchange
+- **OOM**: Out Of Memory
+- **PII**: Personally Identifiable Information
+- **QA**: Quality Assurance
+- **QLoRA**: Quantized LoRA
+- **RAG**: Retrieval-Augmented Generation
+- **ReLU**: Rectified Linear Unit
+- **REST**: Representational State Transfer
+- **RMSE**: Root Mean Square Error
+- **RMSNorm**: Root Mean Square Normalization
+- **ROCm**: Radeon Open Compute
+- **RoPE**: Rotary Position Embedding
+- **RPO**: Recovery Point Objective
+- **RTO**: Recovery Time Objective
+- **SIMD**: Single Instruction Multiple Data
+- **SLA**: Service Level Agreement
+- **SLO**: Service Level Objective
+- **SSE**: Server-Sent Events
+- **SSL/TLS**: Secure Sockets Layer / Transport Layer Security
+- **SYCL**: C++ abstraction for heterogeneous computing
+- **TTFT**: Time To First Token
+- **VRAM**: Video RAM
+- **WMMA**: Warp Matrix Multiply-Accumulate
+
+---
+
+## Module Coverage Summary
+
+**Module 1 (Foundations)**: llama.cpp, GGUF, GGML, Backend, Inference, Token, Tokenization, Vocabulary, Context Window, Model Conversion, Memory Mapping
+
+**Module 2 (Core Implementation)**: Transformer, Attention, Self-Attention, Multi-Head Attention, Grouped-Query Attention, Feed-Forward Network, Layer, RMSNorm, RoPE, SwiGLU, KV Cache, Forward Pass, Embedding, Causal Attention
+
+**Module 3 (Quantization)**: Quantization, K-Quants, IQ Formats, Bits Per Weight, Perplexity, Precision, Float16, INT4, INT8, GPTQ, AWQ, Dequantization, Outlier
+
+**Module 4 (GPU Acceleration)**: GPU, CUDA, Metal, ROCm, SYCL, Kernel, Tensor Cores, WMMA, NCCL, NVLink, Multi-GPU, Tensor Parallelism, Pipeline Parallelism, Data Parallelism, SIMD, Vectorization, Memory Bandwidth
+
+**Module 5 (Advanced Inference)**: Speculative Decoding, Continuous Batching, Beam Search, Constrained Generation, GBNF, Grammar, Mirostat, Locally Typical Sampling, Prefix Caching, Flash Attention
+
+**Module 6 (Server & Production)**: API, REST, FastAPI, Server-Sent Events, Load Balancer, Health Check, Prometheus, Grafana, Docker, Kubernetes, Ingress, Auto-Scaling, Rate Limiting, Response Streaming
+
+**Module 7 (Multimodal)**: Multimodal, LLaVA, CLIP, SigLIP, Vision Encoder, Image Preprocessing, Cross-Modal Attention
+
+**Module 8 (Integration)**: LangChain, LlamaIndex, RAG, Vector Database, Function Calling, LoRA, Embedding Search, Retrieval
+
+**Module 9 (Production Engineering)**: SLA, SLO, Observability, Monitoring, Distributed Tracing, Reliability, Uptime, Security, TLS, CORS, Testing, Quality Assurance, Graceful Degradation
+
+---
+
+**Total Terms**: 200+
+**Last Expanded**: 2025-11-18
+**Maintained By**: Agent 8 (Integration Coordinator)
+
+**Usage Notes**:
+- Terms are cross-referenced with "See also" links
+- Organized alphabetically for easy lookup
+- Module mapping helps contextualize learning
+- Acronym reference for quick translation
+- Living document - continues to expand
+
+Found a missing term? Suggest additions to improve this glossary!
