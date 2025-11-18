@@ -430,6 +430,16 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=1)\n", __func__, n_splits_pp, n_tokens, n_splits_tg);
         }
     }
+
+    // Initialize the full vocabulary token ids for backend samplers.
+    {
+        const llama_vocab * vocab = llama_model_get_vocab(&model);
+        const int n_vocab = llama_vocab_n_tokens(vocab);
+        sampled_token_ids_full_vocab.resize(n_vocab);
+        for (int i = 0; i < n_vocab; ++i) {
+            sampled_token_ids_full_vocab[i] = i;
+        }
+    }
 }
 
 llama_context::~llama_context() {
@@ -728,15 +738,18 @@ float * llama_context::get_backend_sampled_logits_ith(int32_t idx) {
 const llama_token * llama_context::get_backend_sampled_token_ids_ith(int32_t idx) {
     if (idx == -1) {
         if (sampled_token_ids_map.size() == 1) {
-            return sampled_token_ids_map.begin()->second.data();
+            const auto & vec = sampled_token_ids_map.begin()->second;
+            if (!vec.empty()) {
+                return vec.data();
+            }
         }
     }
     auto it = sampled_token_ids_map.find(idx);
-    if (it == sampled_token_ids_map.end() || it->second.empty()) {
-        return nullptr;
+    if (it != sampled_token_ids_map.end() && !it->second.empty()) {
+        return it->second.data();
     }
 
-    return it->second.data();
+    return sampled_token_ids_full_vocab.data();
 }
 
 size_t llama_context::get_backend_sampled_logits_count(int32_t idx) const {

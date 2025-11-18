@@ -263,6 +263,7 @@ private:
 
     std::unordered_map<int32_t, std::vector<float>> sampled_logits_map;
     std::unordered_map<int32_t, std::vector<llama_token>> sampled_token_ids_map;
+    std::vector<llama_token> sampled_token_ids_full_vocab;
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE

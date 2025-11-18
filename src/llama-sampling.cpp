@@ -460,28 +460,14 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
     if (sampled_probs) {
         const uint32_t sampled_probs_count = llama_get_backend_sampled_probs_count_ith(ctx, idx);
         cur.reserve(sampled_probs_count);
-        // The backend sampler has filtered the probabilities so we need to use the sampled ids.
-        if (sampled_ids != nullptr) {
-            for (uint32_t i = 0; i < sampled_probs_count; ++i) {
-                cur.emplace_back(llama_token_data{sampled_ids[i], 0.0f, sampled_probs[i]});
-            }
-        } else {
-            for (llama_token token_id = 0; token_id < (int) sampled_probs_count; token_id++) {
-                cur.emplace_back(llama_token_data{token_id, 0.0f, sampled_probs[token_id]});
-            }
+        for (uint32_t i = 0; i < sampled_probs_count; ++i) {
+            cur.emplace_back(llama_token_data{sampled_ids[i], 0.0f, sampled_probs[i]});
         }
     } else if (sampled_logits) {
         const uint32_t sampled_logits_count = llama_get_backend_sampled_logits_count_ith(ctx, idx);
         cur.reserve(sampled_logits_count);
-        // The backend sampler has filtered the logits so we need to use the sampled ids.
-        if (sampled_ids != nullptr) {
-            for (llama_token i = 0; i < (int)sampled_logits_count; i++) {
-                cur.emplace_back(llama_token_data{sampled_ids[i], sampled_logits[i], 0.0f});
-            }
-        } else {
-            for (llama_token token_id = 0; token_id < (int)sampled_logits_count; token_id++) {
-                cur.emplace_back(llama_token_data{token_id, sampled_logits[token_id], 0.0f});
-            }
+        for (llama_token i = 0; i < (int)sampled_logits_count; i++) {
+            cur.emplace_back(llama_token_data{sampled_ids[i], sampled_logits[i], 0.0f});
         }
     } else {
         const auto * logits = llama_get_logits_ith(ctx, idx);
