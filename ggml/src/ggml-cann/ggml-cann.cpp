@@ -2272,7 +2272,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 #ifdef USE_ACL_GRAPH
     if (use_cann_graph) {
         ggml_cann_graph * matched_graph = cann_ctx->graph_lru_cache.cache_list.front();
-        
+
         if (cann_graph_update_required) {  // End CANN graph capture
             ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &matched_graph->graph));
         }
