@@ -639,10 +639,10 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "greedy",          test_backend_greedy_sampling,         true  },
     { "logit_bias",      test_backend_logit_bias_sampling,     true  },
     { "temp",            test_backend_temp_sampling,           true  },
-    { "top_k",           test_backend_top_k_sampling,          false },
-    { "multi_sequence",  test_backend_multi_sequence_sampling, false },
-    { "dist",            test_backend_dist_sampling,           false },
-    { "dist_and_cpu",    test_backend_dist_sampling_and_cpu,   false },
+    { "top_k",           test_backend_top_k_sampling,          true  },
+    { "multi_sequence",  test_backend_multi_sequence_sampling, true  },
+    { "dist",            test_backend_dist_sampling,           true  },
+    { "dist_and_cpu",    test_backend_dist_sampling_and_cpu,   true  },
     { "set_sampler",     test_backend_set_sampler,             true  },
 };
 
