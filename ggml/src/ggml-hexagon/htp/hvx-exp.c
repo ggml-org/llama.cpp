@@ -16,7 +16,7 @@
 #include "hvx-utils.h"
 #include "ops-utils.h"
 
-static inline HVX_Vector hvx_vec_exp_fp32_guard_inf(HVX_Vector in_vec) {
+static inline HVX_Vector hvx_vec_exp_fp32_guard(HVX_Vector in_vec) {
     static const float kInf    = INFINITY;
     static const float kMaxExp = 88.02f;  // log(INF)
 
@@ -55,9 +55,9 @@ void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             if (true == negate) {
                 HVX_Vector neg_vec_in = hvx_vec_neg_fp32(*p_vec_in1++);
-                *p_vec_out++          = hvx_vec_exp_fp32_guard_inf(neg_vec_in);
+                *p_vec_out++          = hvx_vec_exp_fp32_guard(neg_vec_in);
             } else {
-                *p_vec_out++ = hvx_vec_exp_fp32_guard_inf(*p_vec_in1++);
+                *p_vec_out++ = hvx_vec_exp_fp32_guard(*p_vec_in1++);
             }
         }
     } else {
@@ -67,9 +67,9 @@ void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int
 
             if (true == negate) {
                 HVX_Vector neg_vec_in                    = hvx_vec_neg_fp32(in);
-                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard_inf(neg_vec_in);
+                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard(neg_vec_in);
             } else {
-                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard_inf(in);
+                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard(in);
             }
         }
     }
@@ -83,9 +83,9 @@ void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int
         if (true == negate) {
             HVX_Vector neg_vec_in = hvx_vec_neg_fp32(in);
 
-            vec_out = hvx_vec_exp_fp32_guard_inf(neg_vec_in);
+            vec_out = hvx_vec_exp_fp32_guard(neg_vec_in);
         } else {
-            vec_out = hvx_vec_exp_fp32_guard_inf(in);
+            vec_out = hvx_vec_exp_fp32_guard(in);
         }
 
         hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, vec_out);
