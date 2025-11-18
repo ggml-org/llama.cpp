@@ -1,7 +1,6 @@
 #include "clip.h"
 #include "clip-impl.h"
 #include "mtmd.h"
-#include "mtmd-helper.h"
 #include "mtmd-audio.h"
 
 #include "llama.h"
@@ -426,22 +425,20 @@ void mtmd_free(mtmd_context * ctx) {
     delete ctx;
 }
 
-// ------------------------------
-// Projector-only (mmproj-only) utilities
-// ------------------------------
-
 struct mtmd_mmproj_context {
     clip_ctx * ctx_v = nullptr;
 };
 
-mtmd_mmproj_context * mtmd_mmproj_init(const char * mmproj_fname,
+mtmd_mmproj_context_t mtmd_mmproj_init(const char * mmproj_fname,
                                        const struct mtmd_context_params ctx_params) {
-    clip_context_params clip_params {
-        /* use_gpu           */ ctx_params.use_gpu,
-        /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
-        /* image_min_tokens  */ ctx_params.image_min_tokens,
-        /* image_max_tokens  */ ctx_params.image_max_tokens,
-    };
+    clip_context_params clip_params{};
+    clip_params.use_gpu          = ctx_params.use_gpu;
+    clip_params.flash_attn_type  = CLIP_FLASH_ATTN_TYPE_AUTO;
+    clip_params.image_min_tokens = ctx_params.image_min_tokens;
+    clip_params.image_max_tokens = ctx_params.image_max_tokens;
+    clip_params.warmup           = ctx_params.warmup;
+    clip_params.cb_eval          = nullptr;
+    clip_params.cb_eval_user_data = nullptr;
     auto res = clip_init(mmproj_fname, clip_params);
     if (!res.ctx_v) {
         return nullptr;
@@ -451,50 +448,24 @@ mtmd_mmproj_context * mtmd_mmproj_init(const char * mmproj_fname,
     return ctx;
 }
 
-void mtmd_mmproj_free(struct mtmd_mmproj_context * ctx) {
+void mtmd_mmproj_free(mtmd_mmproj_context_t ctx) {
     if (!ctx) return;
     clip_free(ctx->ctx_v);
     delete ctx;
 }
 
-int mtmd_mmproj_get_image_size(struct mtmd_mmproj_context * ctx) {
-    return ctx && ctx->ctx_v ? clip_get_image_size(ctx->ctx_v) : -1;
-}
-
-int mtmd_mmproj_get_patch_size(struct mtmd_mmproj_context * ctx) {
-    return ctx && ctx->ctx_v ? clip_get_patch_size(ctx->ctx_v) : -1;
-}
-
-int mtmd_mmproj_get_hidden_size(struct mtmd_mmproj_context * ctx) {
-    return ctx && ctx->ctx_v ? clip_get_hidden_size(ctx->ctx_v) : -1;
-}
-
-bool mtmd_mmproj_is_jinaclip(struct mtmd_mmproj_context * ctx) {
-    return ctx && ctx->ctx_v ? clip_get_projector_type(ctx->ctx_v) == PROJECTOR_TYPE_JINACLIP2 : false;
-}
-
-bool mtmd_mmproj_is_supported(struct mtmd_mmproj_context * ctx) {
-    if (!ctx || !ctx->ctx_v) return false;
-    projector_type proj = clip_get_projector_type(ctx->ctx_v);
-    // extendable: list of projectors supported by this mmproj-only path
-    switch (proj) {
-        case PROJECTOR_TYPE_JINACLIP2: return true;
-        default: return false;
-    }
-}
-
-int mtmd_mmproj_encode_bitmap(struct mtmd_mmproj_context * ctx,
-                              const mtmd_bitmap * bmp,
-                              int n_threads,
-                              float ** out_data,
-                              size_t * out_count) {
+int32_t mtmd_mmproj_encode_bitmap(mtmd_mmproj_context_t ctx,
+                                  const mtmd_bitmap * bmp,
+                                  int32_t n_threads,
+                                  float ** out_data,
+                                  size_t * out_count) {
     if (!ctx || !ctx->ctx_v || !bmp || !out_data || !out_count) {
         LOG_ERR("%s: invalid args: ctx=%p ctx_v=%p bmp=%p out_data=%p out_count=%p\n",
                 __func__, (void*) ctx, ctx ? (void*) ctx->ctx_v : (void*) nullptr,
                 (void*) bmp, (void*) out_data, (void*) out_count);
         return 1;
     }
-    // convert mtmd_bitmap to clip_image_u8
+
     clip_image_u8_ptr img_u8(clip_image_u8_init());
     img_u8->nx = bmp->nx;
     img_u8->ny = bmp->ny;

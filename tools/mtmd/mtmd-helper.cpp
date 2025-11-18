@@ -520,7 +520,6 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char *
     return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size());
 }
 
-// image-only helper, no mtmd_context required
 mtmd_bitmap * mtmd_helper_bitmap_init_from_file_noctx(const char * fname) {
     int nx = 0, ny = 0, nc = 0;
     unsigned char * data = stbi_load(fname, &nx, &ny, &nc, 3);
