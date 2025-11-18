@@ -817,6 +817,7 @@ Cleanup in general
   * fix a oversight (forgotten $) with use of templated literals and having variables in them.
   * ensure full props hierarchy is accounted for when setting the id of elements.
 * Chat button to toggle sessions buttons and system prompt
+* Use unix date format markers wrt sys_date_time toolcall, also add w (day of week)
 
 
 #### ToDo
