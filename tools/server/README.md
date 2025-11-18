@@ -277,7 +277,7 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 
 ## Web UI
 
-The project includes a web-based user interface that enables interaction with the model through the `/chat/completions` endpoint.
+The project includes a web-based user interface that enables interaction with the model through the `/v1/chat/completions` endpoint.
 
 The web UI is developed using:
 - `react` framework for frontend development
@@ -512,7 +512,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
 
-`return_progress`: Include prompt processing progress in `stream` mode. The progress will be contained inside `prompt_progress` with 3 values: `total`, `cache` and `processed`. The overall progress is `processed/total`, while the actual timed progress is `(processed-cache)/(total-cache)`. Default: `false`
+`return_progress`: Include prompt processing progress in `stream` mode. The progress will be contained inside `prompt_progress` with 4 values: `total`, `cache`, `processed`, and `time_ms`. The overall progress is `processed/total`, while the actual timed progress is `(processed-cache)/(total-cache)`. The `time_ms` field contains the elapsed time in milliseconds since prompt processing started. Default: `false`
 
 `post_sampling_probs`: Returns the probabilities of top `n_probs` tokens after applying sampling chain.
 

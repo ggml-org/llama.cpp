@@ -4,6 +4,7 @@
 #include "htp-ctx.h"
 #include "htp-msg.h"
 #include "worker-pool.h"
+#include "ops-utils.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -37,6 +38,16 @@ struct htp_ops_context {
 
     uint32_t src0_nrows_per_thread;
     uint32_t src1_nrows_per_thread;
+
+    struct fastdiv_values src0_div1;  // fastdiv values for ne1
+    struct fastdiv_values src0_div2;  // fastdiv values for ne2
+    struct fastdiv_values src0_div3;  // fastdiv values for ne3
+    struct fastdiv_values src0_div21; // fastdiv values for ne2 * ne1
+
+    struct fastdiv_values src1_div1;  // fastdiv values for ne1
+    struct fastdiv_values src1_div2;  // fastdiv values for ne2
+    struct fastdiv_values src1_div3;  // fastdiv values for ne3
+    struct fastdiv_values src1_div21; // fastdiv values for ne2 * ne1
 
     uint32_t flags;
 };

@@ -53,6 +53,11 @@
 					]
 				},
 				{
+					key: 'showMessageStats',
+					label: 'Show message generation statistics',
+					type: 'checkbox'
+				},
+				{
 					key: 'showTokensPerSecond',
 					label: 'Show tokens per second',
 					type: 'checkbox'

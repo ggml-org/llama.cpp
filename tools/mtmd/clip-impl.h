@@ -154,8 +154,9 @@ enum projector_type {
     PROJECTOR_TYPE_LFM2,
     PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_LIGHTONOCR,
-    PROJECTOR_TYPE_UNKNOWN,
     PROJECTOR_TYPE_COGVLM,
+    PROJECTOR_TYPE_JANUS_PRO,
+    PROJECTOR_TYPE_UNKNOWN,
 };
 
 static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
@@ -180,6 +181,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
+    { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -222,7 +224,6 @@ static void clip_log_callback_default(enum ggml_log_level level, const char * te
 }
 
 struct clip_logger_state {
-    ggml_log_level verbosity_thold;
     ggml_log_callback log_callback;
     void * log_callback_user_data;
 };
@@ -256,17 +257,11 @@ static void clip_log_internal(enum ggml_log_level level, const char * format, ..
     va_end(args);
 }
 
-#define LOG_TMPL(level, ...) \
-    do { \
-        if ((level) >= g_logger_state.verbosity_thold) { \
-            clip_log_internal((level), __VA_ARGS__); \
-        } \
-    } while (0)
-#define LOG_INF(...) LOG_TMPL(GGML_LOG_LEVEL_INFO,  __VA_ARGS__)
-#define LOG_WRN(...) LOG_TMPL(GGML_LOG_LEVEL_WARN,  __VA_ARGS__)
-#define LOG_ERR(...) LOG_TMPL(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
-#define LOG_DBG(...) LOG_TMPL(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
-#define LOG_CNT(...) LOG_TMPL(GGML_LOG_LEVEL_CONT,  __VA_ARGS__)
+#define LOG_INF(...) clip_log_internal(GGML_LOG_LEVEL_INFO,  __VA_ARGS__)
+#define LOG_WRN(...) clip_log_internal(GGML_LOG_LEVEL_WARN,  __VA_ARGS__)
+#define LOG_ERR(...) clip_log_internal(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
+#define LOG_DBG(...) clip_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
+#define LOG_CNT(...) clip_log_internal(GGML_LOG_LEVEL_CONT,  __VA_ARGS__)
 
 //
 // cpp wrappers

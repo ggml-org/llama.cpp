@@ -121,7 +121,12 @@ fi
 if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
     echo ">>===== Enabling KleidiAI support"
 
-    CANDIDATES=("armv9-a+dotprod+i8mm" "armv8.6-a+dotprod+i8mm" "armv8.2-a+dotprod")
+    CANDIDATES=(
+        "armv9-a+dotprod+i8mm+sve2"
+        "armv9-a+dotprod+i8mm"
+        "armv8.6-a+dotprod+i8mm"
+        "armv8.2-a+dotprod"
+    )
     CPU=""
 
     for cpu in "${CANDIDATES[@]}"; do

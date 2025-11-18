@@ -716,10 +716,23 @@ void ggml_cuda_op_mul_mat_vec_f(
     GGML_UNUSED_VARS(ctx, src1, dst, src1_ddq_i, src1_ncols, src1_padded_row_size);
 }
 
-bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, const int64_t * src0_ne, int64_t ne11) {
+bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, const int64_t * src0_ne, const size_t * src0_nb, int64_t ne11) {
     if (src0_ne[0] % 2 != 0) {
         return false;
     }
+
+    const size_t ts = ggml_type_size(type);
+    if (src0_nb[0] != ts) {
+        return false;
+    }
+
+    // Pointers not aligned to the size of half2/nv_bfloat162/float2 would result in a crash:
+    for (size_t i = 1; i < GGML_MAX_DIMS; ++i) {
+        if (src0_nb[i] % (2*ts) != 0) {
+            return false;
+        }
+    }
+
     switch (type) {
         case GGML_TYPE_F32:
             if (GGML_CUDA_CC_IS_NVIDIA(cc)) {

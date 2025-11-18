@@ -186,6 +186,7 @@ export interface ApiChatCompletionRequest {
 }
 
 export interface ApiChatCompletionStreamChunk {
+	object?: string;
 	model?: string;
 	choices: Array<{
 		model?: string;

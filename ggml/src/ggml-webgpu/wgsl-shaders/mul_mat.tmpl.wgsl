@@ -864,8 +864,8 @@ struct MulMatParams {
     broadcast3: u32
 };
 
-@group(0) @binding(0) var<storage, read_write> src0: array<{{SRC0_TYPE}}>; // N rows, K columns
-@group(0) @binding(1) var<storage, read_write> src1: array<{{SRC1_TYPE}}>; // M rows, K columns (transposed)
+@group(0) @binding(0) var<storage, read_write> src0: array<{{SRC0_TYPE}}>; // M rows, K columns
+@group(0) @binding(1) var<storage, read_write> src1: array<{{SRC1_TYPE}}>; // K rows, N columns (transposed)
 @group(0) @binding(2) var<storage, read_write> dst: array<f32>; // M rows, N columns
 
 @group(0) @binding(3) var<uniform> params: MulMatParams;
@@ -891,8 +891,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let dst2_rem = dst3_rem % dst2_stride;
 
-    let row = dst2_rem / params.n; // output row
-    let col = dst2_rem % params.n; // output column
+    let row = dst2_rem / params.m; // output row
+    let col = dst2_rem % params.m; // output column
 
     let src0_idx_base = params.offset_src0 + src03_idx * params.stride_03 + src02_idx * params.stride_02 + col * params.stride_01;
     let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12 + row * params.stride_11;
@@ -901,7 +901,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var i: u32 = 0u; i < params.k/{{BLOCK_SIZE}}; i = i + 1u) {
         sum += multiply_add(src0_idx_base, src1_idx_base, i);
     }
-    dst[params.offset_dst + dst3_idx * dst3_stride + dst2_idx * dst2_stride + row * params.n + col] = sum;
+    dst[params.offset_dst + dst3_idx * dst3_stride + dst2_idx * dst2_stride + row * params.m + col] = sum;
 }
 
 #end(SHADER)

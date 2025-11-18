@@ -367,7 +367,13 @@ struct ggml_backend_hexagon_buffer_context {
     ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool repack) {
         size += 4 * 1024;  // extra page for padding
 
-        this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        if (rpcmem_alloc2) {
+            this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        } else {
+            GGML_LOG_INFO("ggml-hex: %s rpcmem_alloc2 not found, falling back to rpcmem_alloc\n", sess->name.c_str());
+            this->base = (uint8_t *) rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        }
+
         if (!this->base) {
             GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer : size %zu\n", sess->name.c_str(), size);
             throw std::runtime_error("ggml-hex: rpcmem_alloc failed (see log for details)");
@@ -676,6 +682,15 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to read more data than is available in the source buffer 'data'
+    // or write more than the tensor can hold.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -687,13 +702,33 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     init_row_q4x4x2((block_q4_0 *) buf_pd, t->ne[0]);  // init padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) data + (i * row_size);
         uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         repack_row_q4x4x2((uint8_t *) buf_rp, (const block_q4_0 *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
+
+        // re-init the row because we are potentially copying a partial row
+        init_row_q4x4x2((block_q4_0 *) buf_pd, t->ne[0]);
+
+        // Copy only the remaining bytes from the source.
+        memcpy(buf_pd, src, n_rem_bytes);
+
+        // Repack the entire buffer
+        repack_row_q4x4x2((uint8_t *) buf_rp, (const block_q4_0 *) buf_pd, t->ne[0]);
+
+        // Write only the corresponding remaining bytes to the destination tensor.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -708,6 +743,14 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to copy more data than the tensor actually contains.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -719,13 +762,28 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
 
     memset(buf_pd, 0, row_size_pd);  // clear-out padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
         uint8_t *       dst = (uint8_t *) data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         unpack_row_q4x4x2((block_q4_0 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) data + (i * row_size);
+
+        // We still need to read and unpack the entire source row because quantization is block-based.
+        memcpy(buf_pd, src, row_size);
+        unpack_row_q4x4x2((block_q4_0 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
+
+        // But we only copy the remaining number of bytes to the destination.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -950,6 +1008,15 @@ static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) 
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q8_0x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to read more data than is available in the source buffer 'data'
+    // or write more than the tensor can hold.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -961,13 +1028,33 @@ static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     init_row_q8x4x2((block_q8_0 *) buf_pd, t->ne[0]);  // init padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) data + (i * row_size);
         uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         repack_row_q8x4x2((uint8_t *) buf_rp, (const block_q8_0 *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
+
+        // re-init the row because we are potentially copying a partial row
+        init_row_q8x4x2((block_q8_0 *) buf_pd, t->ne[0]);
+
+        // Copy only the remaining bytes from the source.
+        memcpy(buf_pd, src, n_rem_bytes);
+
+        // Repack the entire buffer
+        repack_row_q8x4x2((uint8_t *) buf_rp, (const block_q8_0 *) buf_pd, t->ne[0]);
+
+        // Write only the corresponding remaining bytes to the destination tensor.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -982,6 +1069,14 @@ static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) 
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q8_0x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to copy more data than the tensor actually contains.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -993,13 +1088,28 @@ static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) 
 
     memset(buf_pd, 0, row_size_pd);  // clear-out padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
         uint8_t *       dst = (uint8_t *) data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         unpack_row_q8x4x2((block_q8_0 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) data + (i * row_size);
+
+        // We still need to read and unpack the entire source row because quantization is block-based.
+        memcpy(buf_pd, src, row_size);
+        unpack_row_q8x4x2((block_q8_0 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
+
+        // But we only copy the remaining number of bytes to the destination.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -1249,6 +1359,15 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to read more data than is available in the source buffer 'data'
+    // or write more than the tensor can hold.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -1260,13 +1379,33 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
 
     init_row_mxfp4x4x2((block_mxfp4 *) buf_pd, t->ne[0]);  // init padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) data + (i * row_size);
         uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         repack_row_mxfp4x4x2((uint8_t *) buf_rp, (const block_mxfp4 *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
+
+        // re-init the row because we are potentially copying a partial row
+        init_row_mxfp4x4x2((block_mxfp4 *) buf_pd, t->ne[0]);
+
+        // Copy only the remaining bytes from the source.
+        memcpy(buf_pd, src, n_rem_bytes);
+
+        // Repack the entire buffer (partial data + zero padding).
+        repack_row_mxfp4x4x2((uint8_t *) buf_rp, (const block_mxfp4 *) buf_pd, t->ne[0]);
+
+        // Write only the corresponding remaining bytes to the destination tensor.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -1281,6 +1420,14 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to copy more data than the tensor actually contains.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -1292,13 +1439,28 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
 
     memset(buf_pd, 0, row_size_pd);  // clear-out padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
         uint8_t *       dst = (uint8_t *) data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         unpack_row_mxfp4x4x2((block_mxfp4 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) data + (i * row_size);
+
+        // We still need to read and unpack the entire source row because the format is block-based.
+        memcpy(buf_pd, src, row_size);
+        unpack_row_mxfp4x4x2((block_mxfp4 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
+
+        // But we only copy the remaining number of bytes to the destination to respect the size limit.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -1319,19 +1481,19 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q4_0_q4x4x2(tensor, data, size);
             break;
 
         case GGML_TYPE_Q8_0:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q8_0_q8x4x2(tensor, data, size);
             break;
 
         case GGML_TYPE_MXFP4:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_mxfp4_mxfp4x4x2(tensor, data, size);
             break;
 
@@ -1355,19 +1517,19 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q4x4x2_q4_0(data, tensor, size);
             break;
 
         case GGML_TYPE_Q8_0:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q8x4x2_q8_0(data, tensor, size);
             break;
 
         case GGML_TYPE_MXFP4:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_mxfp4x4x2_mxfp4(data, tensor, size);
             break;
 
@@ -1523,12 +1685,13 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     }
 
     // Get session URI
-    char htp_uri[256];
-    sprintf(htp_uri, "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0", opt_arch);
 
     char session_uri[256];
     {
-        struct remote_rpc_get_uri u;
+        char htp_uri[256];
+        snprintf(htp_uri, sizeof(htp_uri), "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0", opt_arch);
+
+        struct remote_rpc_get_uri u = {};
         u.session_id      = this->session_id;
         u.domain_name     = const_cast<char *>(CDSP_DOMAIN_NAME);
         u.domain_name_len = strlen(CDSP_DOMAIN_NAME);
@@ -1539,8 +1702,12 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
         int err = remote_session_control(FASTRPC_GET_URI, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
-            GGML_LOG_ERROR("ggml-hex: failed to get URI for session %d : error 0x%x\n", dev_id, err);
-            throw std::runtime_error("ggml-hex: remote_session_control(get-uri) failed (see log for details)");
+            // fallback to single session uris
+            int htp_URI_domain_len = strlen(htp_uri) + MAX_DOMAIN_NAMELEN;
+
+            snprintf(session_uri, htp_URI_domain_len, "%s%s", htp_uri, my_domain->uri);
+
+            GGML_LOG_WARN("ggml-hex: failed to get URI for session %d : error 0x%x. Falling back to single session URI: %s\n", dev_id, err, session_uri);
         }
     }
 
@@ -2989,26 +3156,17 @@ static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op
     return (op0 && op0->src[1] == op1->src[1]);
 }
 
+static inline bool is_compute_op(ggml_tensor *node)
+{
+    return !(ggml_op_is_empty(node->op) || ggml_is_empty(node));
+}
+
 // scan the graph and figure out last compute op index
 static inline int last_compute_op(ggml_cgraph * graph) {
-    int last;
+    int last = 0;
     for (int i = 0; i < graph->n_nodes; ++i) {
-        ggml_tensor * node = graph->nodes[i];
-
-        switch (node->op) {
-            case GGML_OP_MUL_MAT:
-            case GGML_OP_MUL_MAT_ID:
-            case GGML_OP_MUL:
-            case GGML_OP_ADD:
-            case GGML_OP_SUB:
-            case GGML_OP_RMS_NORM:
-            case GGML_OP_GLU:
-            case GGML_OP_ADD_ID:
-                last = i;
-                break;
-
-            default:
-                break;
+        if (is_compute_op(graph->nodes[i])) {
+            last = i;
         }
     }
 
@@ -3026,6 +3184,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * node = graph->nodes[i];
+
+        if (!is_compute_op(node)) {
+            continue;
+        }
 
         uint32_t flags = 0;
 
@@ -3076,14 +3238,6 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_ROPE:
                 ggml_hexagon_rope(node, flags);
-                break;
-
-            // non-compute ops
-            case GGML_OP_NONE:
-            case GGML_OP_RESHAPE:
-            case GGML_OP_VIEW:
-            case GGML_OP_PERMUTE:
-            case GGML_OP_TRANSPOSE:
                 break;
 
             default:
@@ -3510,6 +3664,11 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
             GGML_LOG_ERROR("ggml-hex: failed to query HTP version (err %d) defaulting to v73\n", err);
             opt_arch = 73;
         }
+    }
+
+    if(opt_arch < 75) {
+        opt_ndev = 1;
+        GGML_LOG_WARN("ggml-hex: forcing ndev to 1 for SoCs archs lower than v75.\n");
     }
 
     GGML_LOG_INFO("ggml-hex: Hexagon Arch version v%d\n", opt_arch);

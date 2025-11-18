@@ -1,7 +1,7 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatForm from '$lib/components/app/chat/ChatForm/ChatForm.svelte';
-	import { expect } from 'storybook/internal/test';
+	import { expect } from 'storybook/test';
 	import { mockServerProps, mockConfigs } from './fixtures/storybook-mocks';
 	import jpgAsset from './fixtures/assets/1.jpg?url';
 	import svgAsset from './fixtures/assets/hf-logo.svg?url';
