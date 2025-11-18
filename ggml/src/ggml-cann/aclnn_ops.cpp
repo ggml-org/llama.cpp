@@ -2620,7 +2620,8 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
         ggml_cann_create_tensor(input_roll_buffer, ggml_cann_type_mapping(src0->type), ggml_type_size(src0->type),
                                 src0->ne, input_nb, GGML_MAX_DIMS);
 
-    aclnn_mul(ctx, acl_input_roll_reshape_tensor.get(), acl_minus_one_tensor.get(), acl_input_roll_mul_scale_tensor.get());
+    aclnn_mul(ctx, acl_input_roll_reshape_tensor.get(), acl_minus_one_tensor.get(),
+              acl_input_roll_mul_scale_tensor.get());
 
     // output
     void * output_fp32_buffer;
