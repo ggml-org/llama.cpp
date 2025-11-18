@@ -23,21 +23,22 @@
     <body>
         <div class="samecolumn" id="fullbody">
 
-            <details open>
-                <summary class="sameline" id="heading">
-                    <div class="heading flex-grow" > <b> SimpleChat </b> </div>
-                    <div class="flex-nogrow">
+            <div class="sameline" id="heading">
+                <div class="heading flex-grow" > <b> SimpleChat </b> </div>
+                <div class="flex-nogrow">
+                    <button id="sessionsprompts" title="sessions, system prompts" popovertarget="popover-sessionsprompts">&#x1F4AC;</button>
                     <button id="clearchat" title="clear current chat">&#x1F9F9;</button>
                     <button id="settings" title="change settings">&#x2699;</button>
-                    </div>
-                </summary>
-            <div id="sessions-div" class="sameline"></div>
-            <hr>
-            <div class="sameline">
-                <label for="system-in">System</label>
-                <textarea name="system" id="system-in" rows="2" placeholder="e.g. you are a helpful ai assistant, who provides concise answers" class="flex-grow"></textarea>
+                </div>
             </div>
-            </details>
+            <div id="popover-sessionsprompts" popover="auto">
+                <div id="sessions-div" class="sameline"></div>
+                <hr>
+                <div class="sameline">
+                    <label for="system-in">System</label>
+                    <textarea name="system" id="system-in" rows="2" placeholder="e.g. you are a helpful ai assistant, who provides concise answers" class="flex-grow"></textarea>
+                </div>
+            </div>
 
             <hr>
             <div id="chat-div">
