@@ -698,10 +698,9 @@ jobs:
       matrix:
         arch: [x86, aarch64]
         chip_type: ['910b', '310p']
-        build:
-          - 'Release'
+        build: ['Release']
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    container: ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.3.rc1.alpha001-910b-openeuler22.03-py3.11' || '8.3.rc1.alpha001-310p-openeuler22.03-py3.11' }}
+    container: ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.3.rc1.alpha001-910b-openeuler22.03-py3.11' || '8.2.rc1-310p-openeuler22.03-py3.11' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -737,7 +736,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.zip
-          name: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}
+          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.zip
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
