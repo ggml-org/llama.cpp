@@ -5742,8 +5742,9 @@ struct test_sparsek_kq_mask : public test_case {
         ggml_tensor * neg2d = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_kv, cols);
         ggml_set_name(neg2d, "neg2d");
 
-        // idx: indices of the rows we want to zero-out (top-k)
-        ggml_tensor * idx = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, topk);
+        // idx: per-column indices of the rows we want to zero-out (top-k)
+        // shape: [topk, cols] – כמו top_k האמיתי ב-sparsek
+        ggml_tensor * idx = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, topk, cols);
         ggml_set_name(idx, "idx");
 
         // reshape to 3D to work with ggml_get_rows / ggml_set_rows
@@ -5779,11 +5780,17 @@ struct test_sparsek_kq_mask : public test_case {
             );
 
         } else if (strcmp(t->name, "idx") == 0) {
-            // idx = [0, 1, 2, ..., topk-1]
-            std::vector<int32_t> data(topk);
-            for (int32_t i = 0; i < topk; i++) {
-                data[i] = i;
+            // idx shape: [topk, cols]
+            const int64_t topk  = t->ne[0];
+            const int64_t cols  = t->ne[1];
+
+            std::vector<int32_t> data(topk * cols);
+            for (int64_t c = 0; c < cols; ++c) {
+                for (int64_t r = 0; r < topk; ++r) {
+                    data[c * topk + r] = (int32_t) r;  // row index
+                }
             }
+
             ggml_backend_tensor_set(
                 t,
                 data.data(),
