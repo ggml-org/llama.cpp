@@ -629,6 +629,46 @@ static void test_backend_set_sampler(const char * model_path) {
     printf("dist sampled token = %d, string='%s'\n", new_backend_token, new_backend_token_str.c_str());
 }
 
+static void test_backend_max_outputs(const char * model_path) {
+    test_model_context test_ctx;
+
+    const int seq_id = 0;
+    const int32_t seed = 88;
+    llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
+    llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_dist(seed));
+    std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
+
+    if (!test_ctx.setup(model_path, backend_sampler_configs)) {
+        return;
+    }
+
+    llama_batch batch = llama_batch_init(512, 0, 1);
+    std::string prompt = "Hello";
+
+    std::vector<llama_token> tokens;
+    tokens.push_back(llama_vocab_bos(test_ctx.vocab));
+
+    std::vector<llama_token> prompt_tokens(32);
+    int n_tokens = llama_tokenize(test_ctx.vocab, prompt.c_str(), prompt.length(),
+                                   prompt_tokens.data(), prompt_tokens.size(),
+                                   false, false);
+    for (int i = 0; i < n_tokens; i++) {
+        tokens.push_back(prompt_tokens[i]);
+    }
+
+    for (size_t i = 0; i < tokens.size(); i++) {
+        // set all tokens as output to trigger error
+        common_batch_add(batch, tokens[i], i, { seq_id }, true);
+    }
+
+    printf(">>> test_max_outputs expected error start:\n");
+    const int ret = llama_decode(test_ctx.ctx, batch);
+    GGML_ASSERT(ret != 0 && "llama_decode should not succeed multiple outputs per sequence");
+    printf("<<< test_max_outputs expected error end.\n");
+    llama_batch_free(batch);
+}
+
 struct backend_test_case {
     const char * name;
     void (*fn)(const char *);
@@ -644,6 +684,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "dist",            test_backend_dist_sampling,           true  },
     { "dist_and_cpu",    test_backend_dist_sampling_and_cpu,   true  },
     { "set_sampler",     test_backend_set_sampler,             true  },
+    { "max_outputs",     test_backend_max_outputs,             true  },
 };
 
 struct backend_cli_args {

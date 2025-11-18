@@ -1155,7 +1155,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // when computing embeddings, all tokens are output
     const bool output_all = cparams.embeddings;
 
-    if (!balloc->init(batch_inp, vocab, memory.get(), n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, output_all)) {
+    if (!balloc->init(batch_inp, vocab, memory.get(), n_embd,
+                      cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max,
+                      output_all,
+                      !samplers.empty())) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
