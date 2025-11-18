@@ -796,6 +796,12 @@ Cleanup in general
 * ui cleanup
   * more rounded buttons, chat messages and input area elements
   * make the body very very lightly gray in color, while the user input area is made whiter.
+  * gradients wrt heading, individual chat message blocks
+  * avoid borders and instead give a box effect through light shadows
+    * also avoid allround border around chat message role block and instead have to only one side
+  * timeout close popover menu
+  * update usage notes wrt vision and toggling of sessions and system prompt through main title area
+  * make restore block into details based block, and anchor its position independent of db check.
 
 
 #### ToDo

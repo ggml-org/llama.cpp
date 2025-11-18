@@ -453,6 +453,8 @@ function usage_note(iRecentUserMsgCnt) {
         <li> If ai assistant requests a tool call, verify same before triggering.</li>
         <li> submit tool response placed into user query/response text area</li>
         </ul>
+    <li> Use image button for vision models, submitting or switching session clears same </li>
+    <li> Clicking main title, toggles chat session buttons and system prompt </li>
     <li> ContextWindow = [System, Last[${iRecentUserMsgCnt}] User Query/Resp, Cur Query].</li>
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
@@ -1024,7 +1026,8 @@ class MultiChatUI {
         this.curChatId = "";
 
         this.TimePeriods = {
-            ToolCallAutoSecsTimeUnit: 1000
+            ToolCallAutoSecsTimeUnit: 1000,
+            PopoverCloseTimeout: 8000,
         }
 
         this.timers = {
@@ -1042,7 +1045,12 @@ class MultiChatUI {
              * Used to auto submit tool call response, after a set time, if enabled.
              * @type {number | undefined}
              */
-            toolcallResponseSubmitClick: undefined
+            toolcallResponseSubmitClick: undefined,
+            /**
+             * Used to auto close popover menu, after a set time, if still open.
+             * @type {number | undefined}
+             */
+            popoverClose: undefined,
         }
 
         /**
@@ -1255,6 +1263,10 @@ class MultiChatUI {
         secMain.classList.add('chat-message')
         secMain.addEventListener('mouseenter', (ev)=>{
             console.debug(`DBUG:MCUI:ChatMessageMEnter:${msg.uniqId}`)
+            clearTimeout(this.timers.popoverClose)
+            this.timers.popoverClose = setTimeout(()=>{
+                this.elPopoverChatMsg.hidePopover()
+            }, this.TimePeriods.PopoverCloseTimeout);
             if (this.uniqIdChatMsgPO != msg.uniqId) {
                 this.elPopoverChatMsg.hidePopover()
             }
@@ -1882,6 +1894,12 @@ export class Me {
      */
     setup_load(div, chat) {
         let tag = `Me:Load:${chat.chatId}`;
+        let elRestore = document.createElement("details")
+        elRestore.className = "restore-details"
+        elRestore.hidden = true
+        elRestore.open = true
+        elRestore.innerHTML += '<summary class="role-system">Restore</summary>\n';
+        div.appendChild(elRestore)
         mIdb.db_getkeys(DB_NAME, DB_STORE, tag, (status, related)=>{
             if (!status || (related == null)) {
                 return
@@ -1892,8 +1910,7 @@ export class Me {
             if (/** @type {IDBValidKey[]} */(related).indexOf(chat.ods_key()) == -1) {
                 return;
             }
-            div.innerHTML += `<p class="role-system">Restore</p>
-            <p>Load previously saved chat session, if available</p>`;
+            elRestore.innerHTML += `<p>Load previously saved chat session, if available</p>`;
             let btn = ui.el_create_button(chat.ods_key(), (ev)=>{
                 console.log(`DBUG:${tag}`, chat);
                 this.multiChat.elInUser.value = `Loading ${chat.ods_key()}...`
@@ -1909,7 +1926,8 @@ export class Me {
                     });
                 });
             });
-            div.appendChild(btn);
+            elRestore.appendChild(btn);
+            elRestore.hidden = false;
         })
     }
 
