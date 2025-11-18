@@ -150,7 +150,7 @@ int64_t ggml_cann_get_mulmat_bcast_shape(const int64_t * input_ne,
                                          size_t *        bcast_input_nb,
                                          size_t *        bcast_weight_nb,
                                          size_t *        bcast_dst_nb) {
-    // input and dst shoule in same shape, except first two dims.
+    // input and dst should in same shape, except first two dims.
     GGML_ASSERT(input_ne[2] == dst_ne[2]);
     GGML_ASSERT(input_ne[3] == dst_ne[3]);
 
