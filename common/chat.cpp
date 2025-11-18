@@ -3359,7 +3359,7 @@ static common_chat_params common_chat_templates_apply_legacy(
     const struct common_chat_templates * tmpls,
     const struct common_chat_templates_inputs & inputs)
 {
-    int alloc_size = 0;
+    size_t alloc_size = 0;
     std::vector<llama_chat_message> chat;
     std::vector<std::string> contents;
 
@@ -3381,7 +3381,8 @@ static common_chat_params common_chat_templates_apply_legacy(
         const auto & msg = inputs.messages[i];
         const auto & content = contents[i];
         chat.push_back({msg.role.c_str(), content.c_str()});
-        alloc_size += (msg.role.size() + content.size()) * 1.25;
+        size_t msg_size = msg.role.size() + content.size();
+        alloc_size += msg_size + (msg_size / 4); // == msg_size * 1.25 but avoiding float ops
     }
 
     std::vector<char> buf(alloc_size);
@@ -3401,6 +3402,11 @@ static common_chat_params common_chat_templates_apply_legacy(
     if ((size_t) res > buf.size()) {
         buf.resize(res);
         res = llama_chat_apply_template(src.c_str(), chat.data(), chat.size(), inputs.add_generation_prompt, buf.data(), buf.size());
+    }
+
+    // for safety, we check the result again
+    if (res < 0 || (size_t) res > buf.size()) {
+        throw std::runtime_error("failed to apply chat template, try using --jinja");
     }
 
     common_chat_params params;
