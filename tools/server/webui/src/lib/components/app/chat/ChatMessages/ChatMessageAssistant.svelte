@@ -2,6 +2,7 @@
 	import { ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
+	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
 	import { fade } from 'svelte/transition';
 	import {
 		Check,
@@ -109,6 +110,12 @@
 		void copyToClipboard(model ?? '');
 	}
 
+	$effect(() => {
+		if (isEditing && textareaElement) {
+			autoResizeTextarea(textareaElement);
+		}
+	});
+
 	function formatToolCallBadge(toolCall: ApiChatCompletionToolCall, index: number) {
 		const callNumber = index + 1;
 		const functionName = toolCall.function?.name?.trim();
@@ -192,7 +199,10 @@
 				bind:value={editedContent}
 				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
 				onkeydown={onEditKeydown}
-				oninput={(e) => onEditedContentChange?.(e.currentTarget.value)}
+				oninput={(e) => {
+					autoResizeTextarea(e.currentTarget);
+					onEditedContentChange?.(e.currentTarget.value);
+				}}
 				placeholder="Edit assistant message..."
 			></textarea>
 

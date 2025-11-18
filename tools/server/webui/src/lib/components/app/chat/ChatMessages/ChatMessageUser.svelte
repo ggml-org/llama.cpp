@@ -5,6 +5,7 @@
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { config } from '$lib/stores/settings.svelte';
+	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 
 	interface Props {
@@ -61,6 +62,12 @@
 	const currentConfig = config();
 
 	$effect(() => {
+		if (isEditing && textareaElement) {
+			autoResizeTextarea(textareaElement);
+		}
+	});
+
+	$effect(() => {
 		if (!messageElement || !message.content.trim()) return;
 
 		if (message.content.includes('\n')) {
@@ -97,7 +104,10 @@
 				bind:value={editedContent}
 				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
 				onkeydown={onEditKeydown}
-				oninput={(e) => onEditedContentChange(e.currentTarget.value)}
+				oninput={(e) => {
+					autoResizeTextarea(e.currentTarget);
+					onEditedContentChange(e.currentTarget.value);
+				}}
 				placeholder="Edit your message..."
 			></textarea>
 
