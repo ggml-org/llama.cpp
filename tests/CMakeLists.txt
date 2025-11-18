@@ -108,6 +108,48 @@ function(llama_build_and_test source)
     set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
 endfunction()
 
+# Builds and runs a test source file.
+# Optional args:
+# - NAME: name of the executable & test target (defaults to the source file name without extension)
+# - LABEL: label for the test (defaults to main)
+# - ARGS: arguments to pass to the test executable
+# - WORKING_DIRECTORY
+function(llama_build_and_test_teuken source)
+    include(CMakeParseArguments)
+    set(options)
+    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
+    set(multiValueArgs ARGS)
+    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if (NOT DEFINED LLAMA_TEST_LABEL)
+        set(LLAMA_TEST_LABEL "main")
+    endif()
+    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
+        set(LLAMA_TEST_WORKING_DIRECTORY .)
+    endif()
+    if (DEFINED LLAMA_TEST_NAME)
+        set(TEST_TARGET ${LLAMA_TEST_NAME})
+    else()
+        get_filename_component(TEST_TARGET ${source} NAME_WE)
+    endif()
+
+    add_executable(${TEST_TARGET} ${source} get-model.cpp)
+    install(TARGETS ${TEST_TARGET} RUNTIME)
+
+    target_include_directories(${TEST_TARGET} PUBLIC "C:/NHKI/llama/llama.cpp/common" "C:/NHKI/llama/sentencepiece/src" "C:/NHKI/llama/sentencepiece")
+    target_link_directories(${TEST_TARGET} PUBLIC "C:/NHKI/llama/sentencepiece/build/src/Debug")
+
+    target_link_libraries(${TEST_TARGET} PRIVATE common sentencepiece )
+
+    add_test(
+        NAME ${TEST_TARGET}
+        WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
+        COMMAND $<TARGET_FILE:${TEST_TARGET}>
+        ${LLAMA_TEST_ARGS})
+
+    set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
+endfunction()
+
 # build test-tokenizer-0 target once and add many tests
 llama_build(test-tokenizer-0.cpp)
 

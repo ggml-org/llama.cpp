@@ -4,7 +4,7 @@
 #include "gguf.h"
 #include "llama-impl.h"
 #include "llama-model-loader.h"
-
+#include "llama-vocab-sentencepiece.h"
 #include "unicode.h"
 
 #include <algorithm>
@@ -1103,6 +1103,44 @@ private:
     const llm_tokenizer_ugm & tokenizer;
 };
 
+
+
+//
+// Spie tokenizer
+//
+
+struct llm_tokenizer_spie : llm_tokenizer {
+    llm_tokenizer_spie(const llama_vocab & vocab) {
+       //sp_init();
+    }
+};
+
+struct llm_tokenizer_spie_session {
+    llm_tokenizer_spie_session(const llama_vocab & vocab, const llm_tokenizer_spie & tokenizer) : vocab(vocab), tokenizer(tokenizer) {}
+
+    /* This implementation is based on SentencePiece optimized Viterbi algorithm for
+     * unigram language models. The general idea is to:
+     * - move along the input sequence in steps of one UTF code point,
+     * - at each step find all possible tokenizations of the prefix by
+     *   traversing the tokens trie,
+     * - for each tokenization store the best one so far (by higher score)
+     * - use the position in sequence after given token as an index to store
+     *   results
+     * - if there was no valid tokenization of the current UTF code point
+     *   then use unknown token with additional score penalty
+     * After processing the whole sequence we backtrack from the end to get
+     * the best tokenization.
+    */
+    void tokenize(const std::string & text, std::vector<llama_token> & output) {
+        sp_encode(text,output);
+    }
+
+    const llama_vocab & vocab;
+    const llm_tokenizer_spie & tokenizer;
+};
+
+
+
 //
 // RWKV tokenizer
 //
@@ -1592,6 +1630,8 @@ struct llama_vocab::impl {
 
     std::vector<char> precompiled_charsmap;
 
+    std::string sentencepiece_model;
+
     impl(const llama_vocab & vocab) : vocab(vocab) {
     }
 
@@ -1708,8 +1748,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_sep_id  = LLAMA_TOKEN_NULL;
             special_pad_id  = LLAMA_TOKEN_NULL;
             special_mask_id = LLAMA_TOKEN_NULL;
-       } else if (tokenizer_model == "teuken") {
-            type = LLAMA_VOCAB_TYPE_UGM;
+       } else if (tokenizer_model == "sentencepiece") {
+            type = LLAMA_VOCAB_TYPE_SPIE;
             // default special tokens
             special_bos_id  = 1;
             special_eos_id  = 2;
@@ -1717,6 +1757,31 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_sep_id  = LLAMA_TOKEN_NULL;
             special_pad_id  = LLAMA_TOKEN_NULL;
             special_mask_id = LLAMA_TOKEN_NULL;
+
+            const int sentencepiece_model_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SENTENCEPIECE_MODEL).c_str());
+            if (sentencepiece_model_keyidx != -1) {
+                const gguf_type pc_type = gguf_get_arr_type(ctx, sentencepiece_model_keyidx);
+                GGML_ASSERT(pc_type == GGUF_TYPE_INT8 || pc_type == GGUF_TYPE_UINT8);
+
+                const size_t n_sentencepiece_model = gguf_get_arr_n(ctx, sentencepiece_model_keyidx);
+                const char * pc = (const char *) gguf_get_arr_data(ctx, sentencepiece_model_keyidx);
+                sentencepiece_model.assign(pc, pc + n_sentencepiece_model);
+                sp_init(sentencepiece_model);
+
+
+           
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+                // correct endiannes of data in precompiled_charsmap binary blob
+                uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
+                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
+                assert(*xcda_blob_size + sizeof(uint32_t) < n_precompiled_charsmap);
+                size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
+                uint32_t * xcda_array = (uint32_t *) &precompiled_charsmap[sizeof(uint32_t)];
+                for (size_t i = 0; i < xcda_array_size; ++i) {
+                    xcda_array[i] = __builtin_bswap32(xcda_array[i]);
+                }
+#endif
+            }
         } else if (tokenizer_model == "bert") {
             type = LLAMA_VOCAB_TYPE_WPM;
 
@@ -1782,6 +1847,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 const size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
                 const char * pc = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
                 precompiled_charsmap.assign(pc, pc + n_precompiled_charsmap);
+
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
                 // correct endiannes of data in precompiled_charsmap binary blob
                 uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
@@ -2021,7 +2087,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             add_bos = false;
             add_eos = true;
-        } else if (type == LLAMA_VOCAB_TYPE_RWKV) {
+        } else if (type == LLAMA_VOCAB_TYPE_SPIE) {
+            pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
+            add_bos = false;
+            add_eos = true;
+        }
+        else if (type == LLAMA_VOCAB_TYPE_RWKV) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             add_space_prefix = false;
             clean_spaces = false;
@@ -2532,6 +2603,7 @@ std::string llama_vocab::impl::type_name() const{
         case LLAMA_VOCAB_TYPE_UGM:    return "UGM";
         case LLAMA_VOCAB_TYPE_RWKV:   return "RWKV";
         case LLAMA_VOCAB_TYPE_PLAMO2: return "PLaMo2";
+        case LLAMA_VOCAB_TYPE_SPIE:   return "SPIE";
         default:                      return "unknown";
     }
 }
@@ -2576,6 +2648,7 @@ uint8_t llama_vocab::impl::token_to_byte(llama_token id) const {
     const auto & token_data = id_to_token.at(id);
     switch (get_type()) {
         case LLAMA_VOCAB_TYPE_SPM:
+        case LLAMA_VOCAB_TYPE_SPIE:
         case LLAMA_VOCAB_TYPE_UGM: {
             auto buf = token_data.text.substr(3, 2);
             return strtol(buf.c_str(), NULL, 16);
@@ -2611,6 +2684,9 @@ void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
             break;
         case LLAMA_VOCAB_TYPE_UGM:
             tokenizer = std::make_unique<llm_tokenizer_ugm>(vocab, precompiled_charsmap);
+            break;
+       case LLAMA_VOCAB_TYPE_SPIE:
+            tokenizer = std::make_unique<llm_tokenizer_spie>(vocab);
             break;
         case LLAMA_VOCAB_TYPE_RWKV:
             tokenizer = std::make_unique<llm_tokenizer_rwkv>(vocab);
@@ -2943,6 +3019,39 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                     output.push_back(special_eos_id);
                 }
             } break;
+       case LLAMA_VOCAB_TYPE_SPIE:
+            {
+                if (add_special && add_bos) {
+                    GGML_ASSERT(special_bos_id != LLAMA_TOKEN_NULL);
+                    output.push_back(special_bos_id);
+                }
+
+                llm_tokenizer_spie_session session(vocab, *static_cast<const llm_tokenizer_spie *>(tokenizer.get()));
+
+                for (const auto & fragment : fragment_buffer) {
+                    if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
+                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+#ifdef PRETOKENIZERDEBUG
+                        LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
+#endif
+                        session.tokenize(text, output);
+                    } else { // if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN)
+                        output.push_back(fragment.token);
+                    }
+                }
+
+                if (add_special && add_bos && output.size() >= 2 && output[1] == special_bos_id) {
+                    LLAMA_LOG_WARN(
+                        "%s: Added a BOS token to the prompt as specified by the model but the prompt "
+                        "also starts with a BOS token. So now the final prompt starts with 2 BOS tokens. "
+                        "Are you sure this is what you want?\n", __FUNCTION__);
+                }
+
+                if (add_special && add_eos) {
+                    GGML_ASSERT(special_eos_id != LLAMA_TOKEN_NULL);
+                    output.push_back(special_eos_id);
+                }
+            } break;
         case LLAMA_VOCAB_TYPE_RWKV:
             {
                 llm_tokenizer_rwkv_session session(vocab, *static_cast<const llm_tokenizer_rwkv *>(tokenizer.get()));
@@ -3025,6 +3134,7 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
         switch (get_type()) {
             case LLAMA_VOCAB_TYPE_WPM:
             case LLAMA_VOCAB_TYPE_SPM:
+            case LLAMA_VOCAB_TYPE_SPIE:
             case LLAMA_VOCAB_TYPE_UGM: {
                 // NOTE: we accept all unsupported token types,
                 // suppressing them like CONTROL tokens.
@@ -3313,6 +3423,7 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
     static const char * hex = "0123456789ABCDEF";
     switch (get_type()) {
         case LLAMA_VOCAB_TYPE_SPM:
+        case LLAMA_VOCAB_TYPE_SPIE:
         case LLAMA_VOCAB_TYPE_UGM: {
             const char buf[7] = { '<', '0', 'x', hex[ch >> 4], hex[ch & 15], '>', 0 };
             auto token = pimpl->token_to_id.find(buf);

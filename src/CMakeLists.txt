@@ -32,16 +32,19 @@ add_library(llama
             llama-quant.cpp
             llama-sampling.cpp
             llama-vocab.cpp
+            llama-vocab-sentencepiece.cpp
             unicode-data.cpp
             unicode.cpp
             unicode.h
             )
 
 target_include_directories(llama PRIVATE .)
-target_include_directories(llama PUBLIC ../include)
+target_include_directories(llama PUBLIC ../include "C:/NHKI/llama/llama.cpp/common" "C:/NHKI/llama/sentencepiece/src" "C:/NHKI/llama/sentencepiece")
+#target_link_directories(${TEST_TARGET} PRIVATE "C:/NHKI/llama/sentencepiece/build/src/Debug")
+
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
-target_link_libraries(llama PUBLIC ggml)
+target_link_libraries(llama PUBLIC ggml "C:/NHKI/llama/sentencepiece/build/src/Debug/sentencepiece.lib")
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)

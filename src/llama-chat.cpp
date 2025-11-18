@@ -457,27 +457,36 @@ int32_t llm_chat_apply_template(
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_TEUKEN) {
         // eachadea/vicuna-13b-1.1 (and Orca variant)
+        bool isSysOut=false;
         for (auto message : chat) {
             std::string role(message->role);
             if (role == "system") {
                const std::string lang=trim( message->content);
                if(LLM_TEUKEN_SYSTEM.find(lang)==LLM_TEUKEN_SYSTEM.end())
                {
-                    ss << "System: " << message->content << "\n";
+                   std::string teuken_system=(*(LLM_TEUKEN_SYSTEM.find("EN"))).second;
+                   ss << "System: " << teuken_system << "\n";
                }
                else
                {
                    std::string teuken_system=(*(LLM_TEUKEN_SYSTEM.find(lang))).second;
                    ss << "System: " << teuken_system << "\n";
                }
+              isSysOut=true;
             } else if (role == "user") {
+                if (!isSysOut)
+                {
+                   std::string teuken_system=(*(LLM_TEUKEN_SYSTEM.find("EN"))).second;
+                   ss << "System: " << teuken_system << "\n";
+                   isSysOut=true;
+                }
                 ss << "User: " << message->content << "\n";
             } else if (role == "assistant") {
                 ss << "Assistant: " << message->content << "</s>\n";
             }
         }
         if (add_ass) {
-            ss << "Assistant:";
+            ss << "Assistant: ";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_DEEPSEEK) {
         // deepseek-ai/deepseek-coder-33b-instruct

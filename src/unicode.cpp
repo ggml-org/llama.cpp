@@ -4,6 +4,7 @@
 
 #include "unicode.h"
 #include "unicode-data.h"
+#include "llama-vocab-sentencepiece.h"
 
 #include <algorithm>
 #include <cassert>
