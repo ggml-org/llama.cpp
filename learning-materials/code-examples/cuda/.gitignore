@@ -1,0 +1,28 @@
+# CUDA Example Build Artifacts
+# Ignore compiled binaries
+vector_add
+matmul
+quantized_matmul
+
+# Profiling outputs
+*.nsys-rep
+*.ncu-rep
+*.qdrep
+*.sqlite
+
+# CUDA compilation artifacts
+*.o
+*.ptx
+*.cubin
+*.fatbin
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

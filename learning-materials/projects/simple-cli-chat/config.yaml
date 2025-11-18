@@ -1,0 +1,69 @@
+# Simple CLI Chat Configuration File
+# This file configures the chat application behavior
+
+# Model Configuration
+model:
+  # Path to your GGUF model file
+  path: ./models/llama-2-7b-chat.Q4_K_M.gguf
+
+  # Context size (number of tokens the model can process)
+  context_size: 2048
+
+  # Number of CPU threads to use
+  threads: 4
+
+  # Number of layers to offload to GPU (0 = CPU only)
+  # Increase this if you have a GPU with sufficient VRAM
+  gpu_layers: 0
+
+# Text Generation Parameters
+generation:
+  # Temperature: controls randomness (0.0 = deterministic, 1.0+ = creative)
+  temperature: 0.7
+
+  # Top-p (nucleus sampling): probability threshold for token selection
+  top_p: 0.9
+
+  # Top-k: limit token selection to k most likely tokens
+  top_k: 40
+
+  # Repeat penalty: penalize repetition (1.0 = no penalty)
+  repeat_penalty: 1.1
+
+  # Maximum tokens to generate per response
+  max_tokens: 512
+
+# System Prompts
+# Define different personalities/modes for the assistant
+system_prompts:
+  default: "You are a helpful AI assistant."
+
+  coding: |
+    You are an expert programmer with deep knowledge of multiple programming languages.
+    Provide clear, concise code examples with explanations.
+    Follow best practices and write production-quality code.
+
+  creative: |
+    You are a creative writing assistant.
+    Help with storytelling, character development, and creative content.
+    Be imaginative and engaging in your responses.
+
+  technical: |
+    You are a technical expert with deep knowledge of computer science and engineering.
+    Provide detailed, accurate technical information.
+    Explain complex concepts clearly and thoroughly.
+
+  tutor: |
+    You are a patient and knowledgeable tutor.
+    Break down complex topics into simple, understandable parts.
+    Use analogies and examples to aid understanding.
+    Encourage learning through questions and exploration.
+
+  researcher: |
+    You are a research assistant with expertise in analysis and summarization.
+    Provide well-structured, factual information.
+    Cite reasoning and be thorough in your explanations.
+
+# Path to llama.cpp executable
+# Update this to match your llama.cpp installation
+llama_cpp_path: ./llama-cli

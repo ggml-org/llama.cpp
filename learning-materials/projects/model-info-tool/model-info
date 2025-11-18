@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""
+Model Info Tool - Entry point script
+"""
+
+import sys
+from model_info_tool.cli import main
+
+if __name__ == "__main__":
+    sys.exit(main())

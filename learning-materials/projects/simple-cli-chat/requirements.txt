@@ -1,0 +1,11 @@
+# Simple CLI Chat Requirements
+# Python 3.8+
+
+# Configuration management
+PyYAML>=6.0.1
+
+# Optional: Enhanced terminal output
+colorama>=0.4.6
+
+# Optional: Rich text formatting for better CLI experience
+rich>=13.7.0

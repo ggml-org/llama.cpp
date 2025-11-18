@@ -1,0 +1,9 @@
+# Model Info Tool Requirements
+# Python 3.8+
+
+# No external dependencies required!
+# This tool uses only Python standard library for maximum compatibility
+
+# Optional: For enhanced output formatting
+# colorama>=0.4.6
+# rich>=13.7.0
