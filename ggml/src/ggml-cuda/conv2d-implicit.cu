@@ -871,6 +871,11 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
 
   prepareIteratorA<BM, BK, A_K_STRID, ROW_STEP>(thread_row, masks_a, element_offset_a, param);
+  unsigned int iter_src_idx = thread_row * param.weightKOffset;
+  unsigned int iter_dst_idx = thread_row * TILE_COLS_VECTORIZED + thread_col;
+  unsigned int krow_idx = thread_row + blockIdx.x * BN;
+  const int ITER_SRC_STEPS = ROW_STEP * param.weightKOffset;
+
 
   // prefetch the first block tile of A,B into shared memory
 
@@ -923,11 +928,13 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
     if (block_krs != num_block_tiles_krs) {
 #ifdef CP_ASYNC_AVAILABLE
       curC = tileMemcpyAsyncLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, SA2, r, s,
-                                             masks_a, element_offset_a, thread_row, thread_col, block_k * BK,
+                                             masks_a, element_offset_a, thread_row, thread_col,
+                                             iter_dst_idx, block_k * BK,
                                             start_k, end_k, curC, param);
       element_offset_b = (r*param.s+s)*param.c + curC;
       tileMemcpyAsyncLoadB<BN, BK, NUM_THREADS, 4>(B_block_gmem, SB2, r, s, curC, element_offset_b, block_k * BK,
-                                     start_k, end_k, thread_row, thread_col, param);
+                                     start_k, end_k, thread_row, thread_col,
+                                     iter_src_idx, iter_dst_idx, krow_idx,  ITER_SRC_STEPS,param);
       asm volatile("cp.async.commit_group;\n" ::);
 #else
       curC = tileMemcpyLoadA<BM, BK, NUM_THREADS, 4>(A_block_gmem, A_gmem_cache_reg, r, s,
