@@ -545,15 +545,12 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                 }
                 builder.move_to(json_end);
                 auto [val_end_size, tc] = try_find_val_end();
-                if (tc && value_json->healing_marker.marker.empty()) {
+                if (tc && all_space(tc->prelude) && value_json->healing_marker.marker.empty()) {
                     if (tc->groups[0].end - tc->groups[0].begin != val_end_size) {
                         gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
                         LOG_DBG("Possible terminated JSON arg_value: %s\n", value_json->json.dump().c_str());
                         throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.val_end) + (form.last_val_end ? gbnf_format_literal(*form.last_val_end) : ""));
-                    }
-                    if (all_space(tc->prelude)) {
-                        arguments[key] = value_json->json;
-                    }
+                    } else arguments[key] = value_json->json;
                 } else builder.move_to(val_start);
             }
 

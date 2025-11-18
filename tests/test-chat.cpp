@@ -2562,6 +2562,30 @@ Hey there!<|im_end|>
                     /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
             }); });
+            test_parser_with_streaming(
+                simple_assist_msg("", "", "complex_function", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}"),
+                "<tool_call>complex_function\n"
+                "<arg_key>name</arg_key>\n"
+                "<arg_value>John Doe</arg_value>\n"
+                "<arg_key>age</arg_key>\n"
+                "<arg_value>30</arg_value>\n"
+                "<arg_key>active</arg_key>\n"
+                "<arg_value>true</arg_value>\n"
+                "<arg_key>score</arg_key>\n"
+                "<arg_value>95.5</arg_value>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_GLM_4_5}); });
+        test_parser_with_streaming(
+                simple_assist_msg("", "", "web_search", "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}"),
+                "<tool_call>web_search\n"
+                "<arg_key>query</arg_key>\n"
+                "<arg_value>\"From Zero\" Linkin Park album tracklist complete songs</arg_value>\n"
+                "<arg_key>limit</arg_key>\n"
+                "<arg_value>3</arg_value>\n"
+                "<arg_key>type</arg_key>\n"
+                "<arg_value>text</arg_value>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_GLM_4_5}); });
 
         // Test interleaved thinking
         test_parser_with_streaming(simple_assist_msg("Hello, world!\n\nWhat's up?", "I'm\nthinkingThinking2", "special_function", "{\"arg1\": 1}"),
