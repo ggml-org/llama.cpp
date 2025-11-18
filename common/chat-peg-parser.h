@@ -331,6 +331,10 @@ class common_chat_peg_arena {
     // Dump for debugging
     std::string dump(common_chat_peg_parser_id id) const;
 
+    // Serialization
+    nlohmann::json to_json() const;
+    static common_chat_peg_arena from_json(const nlohmann::json & j);
+
     // Builder access (for adding parsers)
     friend class common_chat_peg_parser_builder;
 

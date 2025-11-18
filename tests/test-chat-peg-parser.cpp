@@ -24,7 +24,8 @@ static const std::vector<TestEntry> all_tests = {
     {"qwen3_coder", "test_example_qwen3_coder", test_example_qwen3_coder},
     {"seed_oss", "test_example_seed_oss", test_example_seed_oss},
     {"minimax_m2", "test_example_minimax_m2", test_example_minimax_m2},
-    {"command7_parser_compare", "test_command7_parser_compare", test_command7_parser_compare}
+    {"command7_parser_compare", "test_command7_parser_compare", test_command7_parser_compare},
+    {"serialization", "test_json_serialization", test_json_serialization}
 };
 
 // Function to list all available tests

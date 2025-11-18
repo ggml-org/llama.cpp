@@ -193,6 +193,7 @@ llama_build_and_test(
     chat-peg-parser/test-example-seed-oss.cpp
     chat-peg-parser/test-gbnf-generation.cpp
     chat-peg-parser/test-json-parser.cpp
+    chat-peg-parser/test-json-serialization.cpp
     chat-peg-parser/test-one.cpp
     chat-peg-parser/test-optional.cpp
     chat-peg-parser/test-partial-parsing.cpp

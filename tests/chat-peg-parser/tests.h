@@ -29,3 +29,4 @@ void test_example_seed_oss(testing &t);
 void test_example_minimax_m2(testing &t);
 void test_command7_parser_compare(testing &t);
 void test_unicode(testing &t);
+void test_json_serialization(testing &t);

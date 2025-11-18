@@ -1438,3 +1438,293 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
         }
     }
 }
+
+// Serialization helper: convert parser variant to JSON
+static nlohmann::json serialize_parser_variant(const common_chat_peg_parser_variant & variant) {
+    return std::visit([](const auto & p) -> nlohmann::json {
+        using T = std::decay_t<decltype(p)>;
+
+        nlohmann::json j;
+
+        if constexpr (std::is_same_v<T, common_chat_peg_start_parser>) {
+            j["type"] = "start";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_end_parser>) {
+            j["type"] = "end";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_literal_parser>) {
+            j["type"] = "literal";
+            j["literal"] = p.literal;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_sequence_parser>) {
+            j["type"] = "sequence";
+            j["children"] = p.children;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_choice_parser>) {
+            j["type"] = "choice";
+            j["children"] = p.children;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_repetition_parser>) {
+            j["type"] = "repetition";
+            j["child"] = p.child;
+            j["min_count"] = p.min_count;
+            j["max_count"] = p.max_count;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_one_or_more_parser>) {
+            j["type"] = "one_or_more";
+            j["child"] = p.child;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_zero_or_more_parser>) {
+            j["type"] = "zero_or_more";
+            j["child"] = p.child;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_optional_parser>) {
+            j["type"] = "optional";
+            j["child"] = p.child;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_and_parser>) {
+            j["type"] = "and";
+            j["child"] = p.child;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_not_parser>) {
+            j["type"] = "not";
+            j["child"] = p.child;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_any_parser>) {
+            j["type"] = "any";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_space_parser>) {
+            j["type"] = "space";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_chars_parser>) {
+            j["type"] = "chars";
+            j["pattern"] = p.pattern;
+            nlohmann::json ranges = nlohmann::json::array();
+            for (const auto & range : p.ranges) {
+                ranges.push_back({
+                    {"start", range.start},
+                    {"end", range.end}
+                });
+            }
+            j["ranges"] = ranges;
+            j["negated"] = p.negated;
+            j["min_count"] = p.min_count;
+            j["max_count"] = p.max_count;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_json_string_parser>) {
+            j["type"] = "json_string";
+        } else if constexpr (std::is_same_v<T, common_chat_peg_until_parser>) {
+            j["type"] = "until";
+            j["delimiters"] = p.delimiters;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_schema_parser>) {
+            j["type"] = "schema";
+            j["child"] = p.child;
+            j["name"] = p.name;
+            if (p.schema) {
+                j["schema"] = *p.schema;
+            } else {
+                j["schema"] = nullptr;
+            }
+        } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
+            j["type"] = "rule";
+            j["name"] = p.name;
+            j["annotation"] = p.annotation;
+            j["child"] = p.child;
+            j["trigger"] = p.trigger;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
+            j["type"] = "ref";
+            j["name"] = p.name;
+        } else if constexpr (std::is_same_v<T, common_chat_peg_capture_parser>) {
+            j["type"] = "capture";
+            j["child"] = p.child;
+            j["key"] = p.key;
+        }
+
+        return j;
+    }, variant);
+}
+
+nlohmann::json common_chat_peg_arena::to_json() const {
+    nlohmann::json j;
+
+    auto parsers = nlohmann::json::array();
+    for (const auto & parser : parsers_) {
+        parsers.push_back(serialize_parser_variant(parser));
+    }
+
+    j["parsers"] = parsers;
+    j["rules"] = rules_;
+    j["root"] = root_;
+    return j;
+}
+
+// Deserialization helper: convert JSON to parser variant
+static common_chat_peg_parser_variant deserialize_parser_variant(const nlohmann::json & j) {
+    if (!j.contains("type") || !j["type"].is_string()) {
+        throw std::runtime_error("Parser variant JSON missing or invalid 'type' field");
+    }
+
+    std::string type = j["type"];
+
+    if (type == "start") {
+        return common_chat_peg_start_parser{};
+    }
+    if (type == "end") {
+        return common_chat_peg_end_parser{};
+    }
+    if (type == "literal") {
+        if (!j.contains("literal") || !j["literal"].is_string()) {
+            throw std::runtime_error("literal parser missing or invalid 'literal' field");
+        }
+        return common_chat_peg_literal_parser{j["literal"]};
+    }
+    if (type == "sequence") {
+        if (!j.contains("children") || !j["children"].is_array()) {
+            throw std::runtime_error("sequence parser missing or invalid 'children' field");
+        }
+        return common_chat_peg_sequence_parser{j["children"].get<std::vector<common_chat_peg_parser_id>>()};
+    }
+    if (type == "choice") {
+        if (!j.contains("children") || !j["children"].is_array()) {
+            throw std::runtime_error("choice parser missing or invalid 'children' field");
+        }
+        return common_chat_peg_choice_parser{j["children"].get<std::vector<common_chat_peg_parser_id>>()};
+    }
+    if (type == "repetition") {
+        if (!j.contains("child") || !j.contains("min_count") || !j.contains("max_count")) {
+            throw std::runtime_error("repetition parser missing required fields");
+        }
+        return common_chat_peg_repetition_parser{
+            j["child"].get<common_chat_peg_parser_id>(),
+            j["min_count"].get<int>(),
+            j["max_count"].get<int>()
+        };
+    }
+    if (type == "one_or_more") {
+        if (!j.contains("child")) {
+            throw std::runtime_error("one_or_more parser missing 'child' field");
+        }
+        return common_chat_peg_one_or_more_parser{j["child"].get<common_chat_peg_parser_id>()};
+    }
+    if (type == "zero_or_more") {
+        if (!j.contains("child")) {
+            throw std::runtime_error("zero_or_more parser missing 'child' field");
+        }
+        return common_chat_peg_zero_or_more_parser{j["child"].get<common_chat_peg_parser_id>()};
+    }
+    if (type == "optional") {
+        if (!j.contains("child")) {
+            throw std::runtime_error("optional parser missing 'child' field");
+        }
+        return common_chat_peg_optional_parser{j["child"].get<common_chat_peg_parser_id>()};
+    }
+    if (type == "and") {
+        if (!j.contains("child")) {
+            throw std::runtime_error("and parser missing 'child' field");
+        }
+        return common_chat_peg_and_parser{j["child"].get<common_chat_peg_parser_id>()};
+    }
+    if (type == "not") {
+        if (!j.contains("child")) {
+            throw std::runtime_error("not parser missing 'child' field");
+        }
+        return common_chat_peg_not_parser{j["child"].get<common_chat_peg_parser_id>()};
+    }
+    if (type == "any") {
+        return common_chat_peg_any_parser{};
+    }
+    if (type == "space") {
+        return common_chat_peg_space_parser{};
+    }
+    if (type == "chars") {
+        if (!j.contains("pattern") || !j.contains("ranges") || !j.contains("negated") ||
+            !j.contains("min_count") || !j.contains("max_count")) {
+            throw std::runtime_error("chars parser missing required fields");
+        }
+        common_chat_peg_chars_parser parser;
+        parser.pattern = j["pattern"];
+        parser.negated = j["negated"];
+        parser.min_count = j["min_count"];
+        parser.max_count = j["max_count"];
+        for (const auto & range_json : j["ranges"]) {
+            if (!range_json.contains("start") || !range_json.contains("end")) {
+                throw std::runtime_error("char_range missing 'start' or 'end' field");
+            }
+            parser.ranges.push_back({
+                range_json["start"].get<uint32_t>(),
+                range_json["end"].get<uint32_t>()
+            });
+        }
+        return parser;
+    }
+    if (type == "json_string") {
+        return common_chat_peg_json_string_parser{};
+    }
+    if (type == "until") {
+        if (!j.contains("delimiters") || !j["delimiters"].is_array()) {
+            throw std::runtime_error("until parser missing or invalid 'delimiters' field");
+        }
+        return common_chat_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
+    }
+    if (type == "schema") {
+        if (!j.contains("child") || !j.contains("name") || !j.contains("schema")) {
+            throw std::runtime_error("schema parser missing required fields");
+        }
+        common_chat_peg_schema_parser parser;
+        parser.child = j["child"].get<common_chat_peg_parser_id>();
+        parser.name = j["name"];
+        if (!j["schema"].is_null()) {
+            parser.schema = std::make_shared<nlohmann::ordered_json>(j["schema"]);
+        }
+        return parser;
+    }
+    if (type == "rule") {
+        if (!j.contains("name") || !j.contains("annotation") || !j.contains("child") || !j.contains("trigger")) {
+            throw std::runtime_error("rule parser missing required fields");
+        }
+        return common_chat_peg_rule_parser{
+            j["name"].get<std::string>(),
+            j["annotation"].get<std::string>(),
+            j["child"].get<common_chat_peg_parser_id>(),
+            j["trigger"].get<bool>()
+        };
+    }
+    if (type == "ref") {
+        if (!j.contains("name") || !j["name"].is_string()) {
+            throw std::runtime_error("ref parser missing or invalid 'name' field");
+        }
+        return common_chat_peg_ref_parser{j["name"]};
+    }
+    if (type == "capture") {
+        if (!j.contains("child") || !j.contains("key")) {
+            throw std::runtime_error("capture parser missing required fields");
+        }
+        return common_chat_peg_capture_parser{
+            j["child"].get<common_chat_peg_parser_id>(),
+            j["key"].get<std::string>()
+        };
+    }
+
+    throw std::runtime_error("Unknown parser type: " + type);
+}
+
+common_chat_peg_arena common_chat_peg_arena::from_json(const nlohmann::json & j) {
+    if (!j.contains("parsers") || !j["parsers"].is_array()) {
+        throw std::runtime_error("JSON missing or invalid 'parsers' array");
+    }
+    if (!j.contains("rules") || !j["rules"].is_object()) {
+        throw std::runtime_error("JSON missing or invalid 'rules' object");
+    }
+    if (!j.contains("root")) {
+        throw std::runtime_error("JSON missing 'root' field");
+    }
+
+    common_chat_peg_arena arena;
+
+    const auto & parsers_json = j["parsers"];
+    arena.parsers_.reserve(parsers_json.size());
+    for (const auto & parser_json : parsers_json) {
+        arena.parsers_.push_back(deserialize_parser_variant(parser_json));
+    }
+
+    arena.rules_ = j["rules"].get<std::unordered_map<std::string, common_chat_peg_parser_id>>();
+
+    for (const auto & [name, id] : arena.rules_) {
+        if (id >= arena.parsers_.size()) {
+            throw std::runtime_error("Rule '" + name + "' references invalid parser ID: " + std::to_string(id));
+        }
+    }
+
+    arena.root_ = j["root"].get<common_chat_peg_parser_id>();
+    if (arena.root_ != COMMON_CHAT_PEG_INVALID_PARSER_ID && arena.root_ >= arena.parsers_.size()) {
+        throw std::runtime_error("Root references invalid parser ID: " + std::to_string(arena.root_));
+    }
+
+    return arena;
+}
