@@ -442,6 +442,7 @@ function usage_note(sRecentUserMsgCnt) {
     <details>
     <summary id="UsageNote" class="role-system">Usage Note</summary>
     <ul class="ul1">
+    <li> Clicking chat icon, toggles chat session buttons and system prompt block </li>
     <li> System prompt above, helps control ai response characteristics.</li>
         <ul class="ul2">
         <li> Completion mode - no system prompt normally.</li>
@@ -454,7 +455,6 @@ function usage_note(sRecentUserMsgCnt) {
         <li> submit tool response placed into user query/response text area</li>
         </ul>
     <li> Use image button for vision models, submitting or switching session clears same </li>
-    <li> Clicking main title, toggles chat session buttons and system prompt </li>
     <li> ContextWindow = [System, ${sRecentUserMsgCnt} User Query/Resp, Cur Query].</li>
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
@@ -1068,6 +1068,8 @@ class MultiChatUI {
         this.elDivSessions = /** @type{HTMLDivElement} */(document.getElementById("sessions-div"));
         this.elBtnSettings = /** @type{HTMLButtonElement} */(document.getElementById("settings"));
         this.elBtnClearChat = /** @type{HTMLButtonElement} */(document.getElementById("clearchat"));
+        this.elBtnSessionsPrompts = /** @type{HTMLButtonElement} */(document.getElementById("sessionsprompts"));
+        this.elDivSessionsPrompts = /** @type{HTMLDivElement} */(document.getElementById("sessionsprompts-div"));
         this.elDivTool = /** @type{HTMLDivElement} */(document.getElementById("tool-div"));
         this.elBtnTool = /** @type{HTMLButtonElement} */(document.getElementById("tool-btn"));
         this.elInToolName = /** @type{HTMLInputElement} */(document.getElementById("toolname-in"));
@@ -1109,6 +1111,8 @@ class MultiChatUI {
         this.validate_element(this.elInToolName, "toolname-in");
         this.validate_element(this.elInToolArgs, "toolargs-in");
         this.validate_element(this.elBtnTool, "tool-btn");
+        this.validate_element(this.elBtnSessionsPrompts, "sessionsprompts-btn");
+        this.validate_element(this.elDivSessionsPrompts, "sessionsprompts-div");
     }
 
     /**
@@ -1497,6 +1501,13 @@ class MultiChatUI {
             this.simpleChats[this.curChatId].clear()
             this.chat_show(this.curChatId)
         });
+        this.elBtnSessionsPrompts.addEventListener("click", (ev)=>{
+            if (this.elDivSessionsPrompts.classList.contains("visibility-visible")) {
+                this.elDivSessionsPrompts.classList.replace("visibility-visible", "visibility-hidden")
+            } else {
+                this.elDivSessionsPrompts.classList.replace("visibility-hidden", "visibility-visible")
+            }
+        })
 
         this.elBtnUser.addEventListener("click", (ev)=>{
             clearTimeout(this.timers.toolcallResponseSubmitClick)
