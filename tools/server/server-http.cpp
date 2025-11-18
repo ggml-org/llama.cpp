@@ -46,25 +46,26 @@ bool server_http_context::init(const common_params & params) {
     port = params.port;
     hostname = params.hostname;
 
+    auto & srv = pimpl->srv;
+
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
         LOG_INF("Running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
-        svr.reset(
+        srv.reset(
             new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
         );
     } else {
         LOG_INF("Running without SSL\n");
-        svr.reset(new httplib::Server());
+        srv.reset(new httplib::Server());
     }
 #else
     if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
         LOG_ERR("Server is built without SSL support\n");
         return false;
     }
-    pimpl->srv.reset(new httplib::Server());
+    srv.reset(new httplib::Server());
 #endif
 
-    auto & srv = pimpl->srv;
     srv->set_default_headers({{"Server", "llama.cpp"}});
     srv->set_logger(log_server_request);
     srv->set_exception_handler([](const httplib::Request &, httplib::Response & res, const std::exception_ptr & ep) {
