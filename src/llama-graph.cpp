@@ -3,7 +3,6 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
-#include "llama-model.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -610,6 +609,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     rope_type        (hparams.rope_type),
     sched            (params.sched),
     backend_cpu      (params.backend_cpu),
+    dev_out          (params.dev_out),
     cvec             (params.cvec),
     loras            (params.loras),
     mctx             (params.mctx),
@@ -2049,8 +2049,7 @@ void llm_graph_context::build_pooling(
     ggml_build_forward_expand(gf, cur);
 }
 
-void llm_graph_context::build_sampling(const llama_model & model, const llm_graph_params & params) const {
-    GGML_UNUSED(params);
+void llm_graph_context::build_sampling() const {
     if (samplers.empty()) {
         return;
     }
@@ -2074,11 +2073,9 @@ void llm_graph_context::build_sampling(const llama_model & model, const llm_grap
     ggml_tensor * logits_t = res->t_logits;
     GGML_ASSERT(res->t_logits != nullptr && "missing t_logits tensor");
 
-    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(&model));
-    GGML_ASSERT(logits_t->ne[0] == n_vocab);
+    const int64_t n_vocab = logits_t->ne[0];
 
-    ggml_backend_dev_t device = model.dev_output();
-    ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(device);
+    ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev_out);
 
     std::unordered_map<llama_seq_id, llama_sampler*> active_samplers;
 

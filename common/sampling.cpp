@@ -113,9 +113,9 @@ struct common_sampler {
     llama_token_data_array cur_p;
 
     void set_logits(struct llama_context * ctx, int idx) {
-        const float *       sampled_probs        = llama_get_backend_sampled_probs_ith(ctx, idx);
-        const float *       sampled_logits       = llama_get_backend_sampled_logits_ith(ctx, idx);
-        const llama_token * sampled_ids          = llama_get_backend_sampled_token_ids_ith(ctx, idx);
+        const float *       sampled_probs  = llama_get_backend_sampled_probs_ith    (ctx, idx);
+        const float *       sampled_logits = llama_get_backend_sampled_logits_ith   (ctx, idx);
+        const llama_token * sampled_ids    = llama_get_backend_sampled_token_ids_ith(ctx, idx);
 
         const llama_model * model = llama_get_model(ctx);
         const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -143,11 +143,11 @@ struct common_sampler {
             cur.reserve(sampled_logits_count);
             // The backend sampler has filtered the logits so we need to use the sampled ids.
             if (sampled_ids != nullptr) {
-                for (llama_token i = 0; i < (int)sampled_logits_count; i++) {
+                for (uint32_t i = 0; i < sampled_logits_count; i++) {
                     cur.emplace_back(llama_token_data{sampled_ids[i], sampled_logits[i], 0.0f});
                 }
             } else {
-                for (llama_token token_id = 0; token_id < (int)sampled_logits_count; token_id++) {
+                for (llama_token token_id = 0; token_id < (int) sampled_logits_count; token_id++) {
                     cur.emplace_back(llama_token_data{token_id, sampled_logits[token_id], 0.0f});
                 }
             }
@@ -414,10 +414,12 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
     // Check if a backend sampler has already sampled a token in which case we
     // return that token id directly.
-    const llama_token backend_sampled_token = llama_get_backend_sampled_token_ith(ctx, idx);
-    if (backend_sampled_token != LLAMA_TOKEN_NULL) {
-        LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, backend_sampled_token);
-        return backend_sampled_token;
+    {
+        const llama_token id = llama_get_backend_sampled_token_ith(ctx, idx);
+        if (id != LLAMA_TOKEN_NULL) {
+            LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, id);
+            return id;
+        }
     }
 
     gsmpl->set_logits(ctx, idx);

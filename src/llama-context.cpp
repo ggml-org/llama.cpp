@@ -1233,9 +1233,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
     };
 
     int64_t n_outputs_prev = 0;
+
     // This flag indicates whether a backend sampler has actually sampled a specific
-    // token, or if it has produced probabilites. If true, we true we can skip
-    // the normal copying of logits and embeddings.
+    // token, or if it has produced probabilites. If true, we can skip the normal copying of logits and embeddings.
     bool backend_has_sampled = false;
 
     do {
@@ -1655,6 +1655,7 @@ llm_graph_params llama_context::graph_params(
         /*.gtype       =*/ gtype,
         /*.sched       =*/ sched.get(),
         /*.backend_cpu =*/ backend_cpu,
+        /*.dev_out     =*/ model.dev_output(),
         /*.cvec        =*/ &cvec,
         /*.loras       =*/ &loras,
         /*.mctx        =*/ mctx,
@@ -2712,8 +2713,8 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
     return ctx->get_embeddings_seq(seq_id);
 }
 
-void llama_set_backend_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * sampler) {
-    ctx->set_backend_sampler(seq_id, sampler);
+void llama_set_backend_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
+    ctx->set_backend_sampler(seq_id, smpl);
 }
 
 llama_token llama_get_backend_sampled_token_ith(llama_context * ctx, int32_t i) {

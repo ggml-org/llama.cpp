@@ -436,6 +436,7 @@ struct llm_graph_params {
 
     ggml_backend_sched_t sched;
     ggml_backend_t backend_cpu;
+    ggml_backend_dev_t dev_out;
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
@@ -445,8 +446,8 @@ struct llm_graph_params {
     std::unordered_map<llama_seq_id, llama_sampler*> samplers;
 
     static bool samplers_equal(
-          const std::unordered_map<llama_seq_id, llama_sampler*> & lhs,
-          const std::unordered_map<llama_seq_id, llama_sampler*> & rhs) {
+          const std::unordered_map<llama_seq_id, llama_sampler *> & lhs,
+          const std::unordered_map<llama_seq_id, llama_sampler *> & rhs) {
         if (lhs.size() != rhs.size()) {
             return false;
         }
@@ -623,6 +624,8 @@ struct llm_graph_context {
     ggml_backend_sched_t sched;
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
+
+    ggml_backend_dev_t dev_out;
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
@@ -875,7 +878,7 @@ struct llm_graph_context {
     // sampling (backend sampling)
     //
 
-    void build_sampling(const llama_model & model, const llm_graph_params & params) const;
+    void build_sampling() const;
 
     //
     // dense (out)

@@ -7413,7 +7413,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
 
     // add backend sampling layers (if any)
-    llm->build_sampling(*this, params);
+    llm->build_sampling();
 
     // if the gguf model was converted with --sentence-transformers-dense-modules
     // there will be two additional dense projection layers
