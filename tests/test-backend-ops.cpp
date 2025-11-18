@@ -2776,51 +2776,34 @@ struct test_cpy : public test_case {
 struct test_cont : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
+    bool use_view_slice;
 
     std::string vars() override {
-        return VARS_TO_STR2(type, ne);
+        return VARS_TO_STR3(type, ne, use_view_slice);
     }
 
     test_cont(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {10, 10, 10, 1})
-        : type(type), ne(ne) {}
+            std::array<int64_t, 4> ne = {10, 10, 10, 1},
+            bool use_view_slice = false)
+        : type(type), ne(ne), use_view_slice(use_view_slice) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(src);
         ggml_set_name(src, "src");
 
-        src = ggml_transpose(ctx, src);
-        ggml_set_name(src, "src_transposed");
 
-        ggml_tensor * out = ggml_cont(ctx, src);
-        ggml_set_name(out, "out");
+        ggml_tensor * dst;
+        if (use_view_slice) {
+            dst = ggml_view_4d(ctx, src, src->ne[0], 1, src->ne[2], src->ne[3],
+                src->nb[1], src->nb[2], src->nb[3], src->nb[0] * (src->ne[1] - 1));
+            ggml_set_name(dst, "src_view_slice");
+        } else {
+            dst = ggml_transpose(ctx, src);
+            ggml_set_name(dst, "src_transposed");
+        }
 
-        return out;
-    }
-};
-
-struct test_irregular_cont : public test_case {
-    const ggml_type type;
-    const std::array<int64_t, 4> ne;
-
-    std::string vars() override {
-        return VARS_TO_STR2(type, ne);
-    }
-
-    test_irregular_cont(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {1, 4, 2, 1})
-        : type(type), ne(ne) {}
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * src = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(src);
-        ggml_set_name(src, "src");
-
-        ggml_tensor * view = ggml_view_4d(ctx, src, src->ne[0], 1, src->ne[2], src->ne[3],
-                                src->nb[1], src->nb[2], src->nb[3], src->nb[0] * (src->ne[1] - 1));
-
-        ggml_tensor * out = ggml_cont(ctx, view);
+        ggml_tensor * out = ggml_cont(ctx, dst);
         ggml_set_name(out, "out");
 
         return out;
@@ -6983,10 +6966,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {2, 1, 3 ,5}));
     test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {2, 3, 5 ,7}));
 
-    test_cases.emplace_back(new test_irregular_cont());
-    test_cases.emplace_back(new test_irregular_cont(GGML_TYPE_F32, {1, 8, 17, 1}));
-    test_cases.emplace_back(new test_irregular_cont(GGML_TYPE_BF16, {1, 4, 2, 1}));
-    test_cases.emplace_back(new test_irregular_cont(GGML_TYPE_BF16, {1, 8, 17, 1}));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {2, 1, 1 ,1}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {2, 1, 3 ,5}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {2, 3, 5 ,7}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {2, 1, 1 ,1}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {2, 1, 3 ,5}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {2, 3, 5 ,7}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {2, 1, 1 ,1}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {2, 1, 3 ,5}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {2, 3, 5 ,7}, true));
+
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {1, 4, 2, 1}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {1, 8, 17, 1}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {1, 4, 2, 1}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {1, 8, 17, 1}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {1, 4, 2, 1}, true));
+    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {1, 8, 17, 1}, true));
 
     auto add_test_bin_bcast = [&](ggml_type type, std::array<int64_t, 4> ne, std::array<int, 4> nr) {
         for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div}) {
