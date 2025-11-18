@@ -351,8 +351,6 @@ export class ChatService {
 				return;
 			}
 
-			hasReceivedData = true;
-
 			if (!abortSignal?.aborted) {
 				onToolCallChunk?.(serializedToolCalls);
 			}
@@ -442,15 +440,6 @@ export class ChatService {
 
 			if (streamFinished) {
 				finalizeOpenToolCallBatch();
-
-				if (
-					!hasReceivedData &&
-					aggregatedContent.length === 0 &&
-					aggregatedToolCalls.length === 0
-				) {
-					const noResponseError = new Error('No response received from server. Please try again.');
-					throw noResponseError;
-				}
 
 				const finalToolCalls =
 					aggregatedToolCalls.length > 0 ? JSON.stringify(aggregatedToolCalls) : undefined;
