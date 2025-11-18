@@ -808,6 +808,7 @@ Cleanup in general
   * make the scrollbars more subtle and in the background.
   * allow user input textarea to grow vertically to some extent.
   * make things rounded across board by default. add some padding to toolcall details block.
+  * allow Auto ObjPropsEdit UI to be themed by assigning id to top level block.
 
 
 #### ToDo
