@@ -736,11 +736,10 @@ static inline HVX_Vector hvx_vec_inverse_fp32_guard(HVX_Vector v_sf) {
 
     HVX_Vector out = hvx_vec_inverse_fp32(v_sf);
 
-    const HVX_Vector nan_mask = Q6_V_vsplat_R(kNanMask);
-    const HVX_Vector nan_min  = Q6_V_vsplat_R(kNanMin);
-    out                       = Q6_V_vand_VV(out, nan_mask);
-
-    const HVX_VectorPred pred = Q6_Q_vcmp_gtand_QVuwVuw(pred_inf, nan_min, out);
+    const HVX_Vector     nan_mask   = Q6_V_vsplat_R(kNanMask);
+    const HVX_Vector     nan_min    = Q6_V_vsplat_R(kNanMin);
+    HVX_Vector           masked_out = Q6_V_vand_VV(out, nan_mask);
+    const HVX_VectorPred pred       = Q6_Q_vcmp_gtand_QVuwVuw(pred_inf, nan_min, masked_out);
 
     return Q6_V_vmux_QVV(pred, out, Q6_V_vzero());
 }
