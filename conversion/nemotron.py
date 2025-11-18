@@ -1,6 +1,6 @@
 from __future__ import annotations
 from .base import (
-    ModelBase, gguf
+    ModelBase, gguf, TextModel
 )
 from typing import TYPE_CHECKING, Iterable
 if TYPE_CHECKING:
@@ -9,7 +9,7 @@ from .granite import GraniteHybridModel
 
 
 @ModelBase.register("NemotronForCausalLM")
-class NemotronModel(GraniteHybridModel):
+class NemotronModel(TextModel):
     model_arch = gguf.MODEL_ARCH.NEMOTRON
 
     def set_vocab(self):

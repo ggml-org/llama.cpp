@@ -8,7 +8,8 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-@ModelBase.register("ChameleonForConditionalGeneration", "ChameleonForCausalLM")
+@ModelBase.register("ChameleonForConditionalGeneration")
+@ModelBase.register("ChameleonForCausalLM")
 class ChameleonModel(TextModel):
     model_arch = gguf.MODEL_ARCH.CHAMELEON
 

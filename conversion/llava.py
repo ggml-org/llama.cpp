@@ -9,7 +9,7 @@ from .llama import LlamaModel
 import json
 
 
-@ModelBase.register("LlavaForConditionalGeneration", "Mistral3ForConditionalGeneration", "LightOnOCRForConditionalGeneration", "CogVLMForCausalLM", "JanusForConditionalGeneration")
+@ModelBase.register("LlavaForConditionalGeneration", "Mistral3ForConditionalGeneration")
 class LlavaVisionModel(MmprojModel):
     img_break_tok_id = -1
     use_break_tok = True

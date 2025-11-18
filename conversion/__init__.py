@@ -210,6 +210,7 @@ _MMPROJ_MODEL_MODULES = sorted(list(set(y[0] for (_, y) in MMPROJ_MODEL_MAP.item
 _loaded_text_modules = set()
 _loaded_mmproj_modules = set()
 
+
 # Function to load all model modules
 def _load_all_models():
     """Import all model modules to trigger registration."""
@@ -252,6 +253,7 @@ def get_model_class(name: str, mmproj: bool = False) -> Type[ModelBase]:
     module_name, class_name = relevant_map[name]
     module = __import__(f"conversion.{module_name}", fromlist=[class_name])
     return getattr(module, class_name)
+
 
 def print_registered_models():
     logger.error("TEXT models:")

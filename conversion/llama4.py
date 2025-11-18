@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 from .llama import LlamaModel
 
 
-@ModelBase.register("Llama4ForCausalLM", "Llama4ForConditionalGeneration")
+@ModelBase.register("Llama4ForConditionalGeneration", "Llama4ForCausalLM")
 class Llama4Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA4
     undo_permute = False
@@ -29,18 +29,27 @@ class Llama4Model(LlamaModel):
         if "layer_types" in self.hparams:
             if all(lt == "full_attention" for lt in self.hparams["layer_types"]):
                 # all layers are full attention (for MobileLLM), disable swa
-                self.gguf_writer.add_expert_swa(False)
-            else:
-                self.gguf_writer.add_expert_swa(True)
-        else:
-            self.gguf_writer.add_expert_swa(True)
-        self.gguf_writer.add_leading_dense_block_count(self.hparams["leading_dense_block_count"])
-        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+                self.gguf_writer.add_sliding_window(0)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("language_model."):
+            name = name.replace("language_model.", "")
+
+        # split the gate_up into gate and up
+        if "gate_up_proj" in name:
+            name_up = name.replace("gate_up_proj", "up_proj.weight")
+            name_gate = name.replace("gate_up_proj", "gate_proj.weight")
+            dim_half = data_torch.shape[-1] // 2
+            gate_proj_weight, up_proj_weight = data_torch.transpose(-1, -2).split(dim_half, dim=-2)
+            return [
+                (self.map_tensor_name(name_gate), gate_proj_weight),
+                (self.map_tensor_name(name_up), up_proj_weight)
+            ]
+
         if name.endswith("down_proj"):
             name += ".weight"
             data_torch = data_torch.transpose(-1, -2)
+
         if "multi_modal_projector" in name or "vision_model" in name:
             return []
         return super().modify_tensors(data_torch, name, bid)
@@ -57,12 +66,13 @@ class Llama4VisionModel(MmprojModel):
         self.gguf_writer.add_vision_use_gelu(True)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-        valid_prefixes = (
-            "multi_modal_projector.",
-            "vision_tower.",
-            "vision_encoder.",
-        )
-        if any(name.startswith(prefix) for prefix in valid_prefixes):
+        del bid # unused
+        if "multi_modal_projector" in name or "vision_model" in name:
+            # process vision tensors
+            if "positional_embedding_vlm" in name and ".weight" not in name:
+                name += ".weight"
+            if "multi_modal_projector.linear_1" in name:
+                # despite the name with number postfix, this is a single fully connected layer
+                return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MMPROJ_FC] + '.weight', data_torch)]
             return [(self.map_tensor_name(name), data_torch)]
-        return [] # skip other tensors
+        return []
