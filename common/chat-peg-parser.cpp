@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <regex>
 #include <unordered_set>
 #include <map>
 
@@ -199,7 +200,6 @@ static std::pair<uint32_t, size_t> parse_char_class_char(const std::string & con
             case 'r':  return {'\r', 2};
             case '\\': return {'\\', 2};
             case ']':  return {']', 2};
-            case '-':  return {'-', 2};
             case '[':  return {'[', 2};
             default:   return {static_cast<uint32_t>(content[pos + 1]), 2};
         }
@@ -851,6 +851,12 @@ common_chat_peg_parser operator<<(const std::string & str, const common_chat_peg
     return operator<<(str.c_str(), p);
 }
 
+// Rule name helper, intended to produce valid GBNF rule names
+static std::string rule_name(const std::string & name) {
+    static const std::regex invalid_rule_chars_re("[^a-zA-Z0-9-]+");
+    return std::regex_replace(name, invalid_rule_chars_re, "-");
+}
+
 // Builder implementation
 common_chat_peg_parser_builder::common_chat_peg_parser_builder() {}
 
@@ -952,7 +958,7 @@ common_chat_peg_parser common_chat_peg_parser_builder::one(const std::string & c
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::ref(const std::string & name) {
-    return wrap(arena_.add_parser(common_chat_peg_ref_parser{name}));
+    return wrap(arena_.add_parser(common_chat_peg_ref_parser{rule_name(name)}));
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::space() {
@@ -1004,9 +1010,10 @@ common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & 
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::string & annotation, common_chat_peg_parser p, bool trigger) {
-    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, annotation, p.id(), trigger});
-    arena_.add_rule(name, rule_id);
-    return ref(name);
+    auto clean_name = rule_name(name);
+    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{clean_name, annotation, p.id(), trigger});
+    arena_.add_rule(clean_name, rule_id);
+    return ref(clean_name);
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder_fn, bool trigger) {
@@ -1014,24 +1021,24 @@ common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & 
 }
 
 common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::string & annotation, const std::function<common_chat_peg_parser()> & builder_fn, bool trigger) {
-    // Check if rule already exists
-    if (arena_.has_rule(name)) {
-        return ref(name);
+    auto clean_name = rule_name(name);
+    if (arena_.has_rule(clean_name)) {
+        return ref(clean_name);
     }
 
     // Create placeholder rule to allow recursive references
     auto placeholder = any();  // Temporary placeholder
-    auto placeholder_rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, annotation, placeholder.id(), trigger});
-    arena_.add_rule(name, placeholder_rule_id);
+    auto placeholder_rule_id = arena_.add_parser(common_chat_peg_rule_parser{clean_name, annotation, placeholder.id(), trigger});
+    arena_.add_rule(clean_name, placeholder_rule_id);
 
     // Build the actual parser
     auto parser = builder_fn();
 
     // Replace placeholder with actual rule
-    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{name, annotation, parser.id(), trigger});
-    arena_.rules_[name] = rule_id;
+    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{clean_name, annotation, parser.id(), trigger});
+    arena_.rules_[clean_name] = rule_id;
 
-    return ref(name);
+    return ref(clean_name);
 }
 
 void common_chat_peg_parser_builder::set_root(common_chat_peg_parser p) {
@@ -1049,7 +1056,7 @@ common_chat_peg_parser common_chat_peg_parser_builder::json_number() {
         auto digits = chars("[0-9]");
         auto int_part = choice({literal("0"), sequence({digit1_9, chars("[0-9]", 0, -1)})});
         auto frac = sequence({literal("."), digits});
-        auto exp = sequence({choice({literal("e"), literal("E")}), optional(chars("[+\\-]", 1, 1)), digits});
+        auto exp = sequence({choice({literal("e"), literal("E")}), optional(chars("[+-]", 1, 1)), digits});
         return sequence({optional(literal("-")), int_part, optional(frac), optional(exp)});
     };
     return rule("json-number", builder);
@@ -1139,8 +1146,7 @@ static std::string gbnf_escape_char_class(char c) {
         case '\r': return "\\r";
         case '\\': return "\\\\";
         case ']':  return "\\]";
-        case '-':  return "\\-";
-        case '^':  return "\\^";
+        case '[':  return "\\[";
         default:   return std::string(1, c);
     }
 }
@@ -1333,6 +1339,7 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
                 return gbnf_excluding_pattern(p.delimiters);
             } else if constexpr (std::is_same_v<T, common_chat_peg_schema_parser>) {
                 if (p.schema) {
+                    builder.resolve_refs(*p.schema);
                     return builder.add_schema(p.name, *p.schema);
                 }
                 return to_gbnf(p.child);
@@ -1364,7 +1371,7 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
             if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
                 auto rule_body = to_gbnf(rule->child);
                 auto canonical_name = builder.add_rule(name, rule_body);
-                rule_name_mapping[name] = canonical_name;
+                //rule_name_mapping[name] = canonical_name;
             }
         }
 
@@ -1391,7 +1398,7 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
             if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
                 auto rule_body = to_gbnf(rule->child);
                 auto canonical_name = builder.add_rule(name, rule_body);
-                rule_name_mapping[name] = canonical_name;
+                //rule_name_mapping[name] = canonical_name;
             }
         }
 
