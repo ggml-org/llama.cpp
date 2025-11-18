@@ -4,49 +4,49 @@ on:
   workflow_call:
 
 jobs:
-  ubuntu-24-riscv64-cpu-cross:
-    runs-on: ubuntu-24.04
+  # ubuntu-24-riscv64-cpu-cross:
+  #   runs-on: ubuntu-24.04
 
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Riscv
-        run: |
-          sudo dpkg --add-architecture riscv64
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Setup Riscv
+  #       run: |
+  #         sudo dpkg --add-architecture riscv64
 
-          # Add arch-specific repositories for non-amd64 architectures
-          cat << EOF | sudo tee /etc/apt/sources.list.d/riscv64-ports.list
-          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
-          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
-          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
-          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
-          EOF
+  #         # Add arch-specific repositories for non-amd64 architectures
+  #         cat << EOF | sudo tee /etc/apt/sources.list.d/riscv64-ports.list
+  #         deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+  #         deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+  #         deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+  #         deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+  #         EOF
 
-          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+  #         sudo apt-get update || true    ;# Prevent failure due to missing URLs.
 
-          sudo apt-get install -y --no-install-recommends \
-                  build-essential \
-                  gcc-14-riscv64-linux-gnu \
-                  g++-14-riscv64-linux-gnu
+  #         sudo apt-get install -y --no-install-recommends \
+  #                 build-essential \
+  #                 gcc-14-riscv64-linux-gnu \
+  #                 g++-14-riscv64-linux-gnu
 
-      - name: Build
-        run: |
-          cmake -B build -DLLAMA_CURL=OFF \
-                         -DCMAKE_BUILD_TYPE=Release \
-                         -DGGML_OPENMP=OFF \
-                         -DLLAMA_BUILD_EXAMPLES=ON \
-                         -DLLAMA_BUILD_TOOLS=ON \
-                         -DLLAMA_BUILD_TESTS=OFF \
-                         -DCMAKE_SYSTEM_NAME=Linux \
-                         -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
-                         -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
-                         -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
-                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+  #     - name: Build
+  #       run: |
+  #         cmake -B build -DLLAMA_CURL=OFF \
+  #                        -DCMAKE_BUILD_TYPE=Release \
+  #                        -DGGML_OPENMP=OFF \
+  #                        -DLLAMA_BUILD_EXAMPLES=ON \
+  #                        -DLLAMA_BUILD_TOOLS=ON \
+  #                        -DLLAMA_BUILD_TESTS=OFF \
+  #                        -DCMAKE_SYSTEM_NAME=Linux \
+  #                        -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
+  #                        -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+  #                        -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
+  #                        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  #                        -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
+  #                        -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+  #                        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+  #                        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
 
-          cmake --build build --config Release -j $(nproc)
+  #         cmake --build build --config Release -j $(nproc)
 
   # ubuntu-24-riscv64-vulkan-cross:
   #   runs-on: ubuntu-24.04

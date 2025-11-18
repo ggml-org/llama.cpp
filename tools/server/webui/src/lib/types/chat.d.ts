@@ -11,6 +11,29 @@ export interface ChatUploadedFile {
 	textContent?: string;
 }
 
+export interface ChatAttachmentDisplayItem {
+	id: string;
+	name: string;
+	size?: number;
+	preview?: string;
+	type: string;
+	isImage: boolean;
+	uploadedFile?: ChatUploadedFile;
+	attachment?: DatabaseMessageExtra;
+	attachmentIndex?: number;
+	textContent?: string;
+}
+
+export interface ChatAttachmentPreviewItem {
+	uploadedFile?: ChatUploadedFile;
+	attachment?: DatabaseMessageExtra;
+	preview?: string;
+	name?: string;
+	type?: string;
+	size?: number;
+	textContent?: string;
+}
+
 export interface ChatMessageSiblingInfo {
 	message: DatabaseMessage;
 	siblingIds: string[];

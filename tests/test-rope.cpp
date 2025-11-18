@@ -138,7 +138,7 @@ int main(int /*argc*/, const char ** /*argv*/) {
     struct ggml_tensor * x;
 
     // rope f32
-    for (int m = 0; m < 6; ++m) {
+    for (int m = 0; m < 5; ++m) {
         const int ndims = 4;
 
         const int64_t n_rot = 128;
@@ -153,7 +153,7 @@ int main(int /*argc*/, const char ** /*argv*/) {
         x = get_random_tensor_f32(ctx0, ndims, ne, -1.0f, 1.0f);
         int mode = -1;
 
-        if (m < 3) {
+        if (m < 2) {
             struct ggml_tensor * p0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ne[2]);
             struct ggml_tensor * p1 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ne[2]);
             struct ggml_tensor * p2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ne[2]);
@@ -163,8 +163,8 @@ int main(int /*argc*/, const char ** /*argv*/) {
                 ((int32_t *) p1->data)[i] = n_past_2 - n_past_0;
                 ((int32_t *) p2->data)[i] = n_past_2 + i;
             }
-            // test mode 0, 2, 4 (standard, GPT-NeoX, GLM)
-            mode = m == 0 ? 0 : m == 1 ? 2 : 4;
+            // test mode 0, 2  (standard, GPT-NeoX)
+            mode = m == 0 ? GGML_ROPE_TYPE_NORMAL : GGML_ROPE_TYPE_NEOX;
 
             // 100, 101, 102, ..., 172
             r0 = ggml_rope(ctx0, x,  p0, n_rot, mode);
@@ -180,7 +180,8 @@ int main(int /*argc*/, const char ** /*argv*/) {
             struct ggml_tensor * p2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ne[2] * 4);
 
             int sections[4] = {16, 24, 24, 0};
-            mode = (m == 3) ? GGML_ROPE_TYPE_MROPE : (m == 4) ? GGML_ROPE_TYPE_VISION : GGML_ROPE_TYPE_IMROPE;
+
+            mode = (m == 2) ? GGML_ROPE_TYPE_MROPE : (m == 3) ? GGML_ROPE_TYPE_VISION : GGML_ROPE_TYPE_IMROPE;
 
             for (int i = 0; i < ne[2]; ++i) {
                 for (int j = 0; j < 4; ++j) {

@@ -333,7 +333,7 @@
 		ondrop={handleDrop}
 		role="main"
 	>
-		<div class="w-full max-w-2xl px-4">
+		<div class="w-full max-w-[48rem] px-4">
 			<div class="mb-8 text-center" in:fade={{ duration: 300 }}>
 				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
 
@@ -368,7 +368,7 @@
 	<AlertDialog.Portal>
 		<AlertDialog.Overlay />
 
-		<AlertDialog.Content class="max-w-md">
+		<AlertDialog.Content class="flex max-w-md flex-col">
 			<AlertDialog.Header>
 				<AlertDialog.Title>File Upload Error</AlertDialog.Title>
 
@@ -377,7 +377,7 @@
 				</AlertDialog.Description>
 			</AlertDialog.Header>
 
-			<div class="space-y-4">
+			<div class="!max-h-[50vh] min-h-0 flex-1 space-y-4 overflow-y-auto">
 				{#if fileErrorData.generallyUnsupported.length > 0}
 					<div class="space-y-2">
 						<h4 class="text-sm font-medium text-destructive">Unsupported File Types</h4>
@@ -398,8 +398,6 @@
 
 				{#if fileErrorData.modalityUnsupported.length > 0}
 					<div class="space-y-2">
-						<h4 class="text-sm font-medium text-destructive">Model Compatibility Issues</h4>
-
 						<div class="space-y-1">
 							{#each fileErrorData.modalityUnsupported as file (file.name)}
 								<div class="rounded-md bg-destructive/10 px-3 py-2">
@@ -415,14 +413,14 @@
 						</div>
 					</div>
 				{/if}
+			</div>
 
-				<div class="rounded-md bg-muted/50 p-3">
-					<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
+			<div class="rounded-md bg-muted/50 p-3">
+				<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
 
-					<p class="text-sm text-muted-foreground">
-						{fileErrorData.supportedTypes.join(', ')}
-					</p>
-				</div>
+				<p class="text-sm text-muted-foreground">
+					{fileErrorData.supportedTypes.join(', ')}
+				</p>
 			</div>
 
 			<AlertDialog.Footer>

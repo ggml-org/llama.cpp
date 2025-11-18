@@ -1,6 +1,7 @@
 import { DatabaseStore } from '$lib/stores/database';
 import { chatService, slotsService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
 import { normalizeModelName } from '$lib/utils/model-names';
 import { filterByLeafNodeId, findLeafNode, findDescendantMessages } from '$lib/utils/branching';
 import { browser } from '$app/environment';
@@ -204,6 +205,7 @@ class ChatStore {
 					type,
 					timestamp: Date.now(),
 					thinking: '',
+					toolCalls: '',
 					children: [],
 					extra: extras
 				},
@@ -359,12 +361,45 @@ class ChatStore {
 	): Promise<void> {
 		let streamedContent = '';
 		let streamedReasoningContent = '';
+		let streamedToolCallContent = '';
 
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
+		const currentConfig = config();
+		const preferServerPropsModel = !currentConfig.modelSelectorEnabled;
+		let serverPropsRefreshed = false;
+		let updateModelFromServerProps: ((persistImmediately?: boolean) => void) | null = null;
 
-		const recordModel = (modelName: string, persistImmediately = true): void => {
-			const normalizedModel = normalizeModelName(modelName);
+		const refreshServerPropsOnce = () => {
+			if (serverPropsRefreshed) {
+				return;
+			}
+
+			serverPropsRefreshed = true;
+
+			const hasExistingProps = serverStore.serverProps !== null;
+
+			serverStore
+				.fetchServerProps({ silent: hasExistingProps })
+				.then(() => {
+					updateModelFromServerProps?.(true);
+				})
+				.catch((error) => {
+					console.warn('Failed to refresh server props after streaming started:', error);
+				});
+		};
+
+		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
+			const serverModelName = serverStore.modelName;
+			const preferredModelSource = preferServerPropsModel
+				? (serverModelName ?? modelName ?? null)
+				: (modelName ?? serverModelName ?? null);
+
+			if (!preferredModelSource) {
+				return;
+			}
+
+			const normalizedModel = normalizeModelName(preferredModelSource);
 
 			if (!normalizedModel || normalizedModel === resolvedModel) {
 				return;
@@ -388,6 +423,20 @@ class ChatStore {
 			}
 		};
 
+		if (preferServerPropsModel) {
+			updateModelFromServerProps = (persistImmediately = true) => {
+				const currentServerModel = serverStore.modelName;
+
+				if (!currentServerModel) {
+					return;
+				}
+
+				recordModel(currentServerModel, persistImmediately);
+			};
+
+			updateModelFromServerProps(false);
+		}
+
 		slotsService.startStreaming();
 		slotsService.setActiveConversation(assistantMessage.convId);
 
@@ -396,6 +445,9 @@ class ChatStore {
 			{
 				...this.getApiOptions(),
 
+				onFirstValidChunk: () => {
+					refreshServerPropsOnce();
+				},
 				onChunk: (chunk: string) => {
 					streamedContent += chunk;
 					this.setConversationStreaming(
@@ -418,6 +470,20 @@ class ChatStore {
 					this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
 				},
 
+				onToolCallChunk: (toolCallChunk: string) => {
+					const chunk = toolCallChunk.trim();
+
+					if (!chunk) {
+						return;
+					}
+
+					streamedToolCallContent = chunk;
+
+					const messageIndex = this.findMessageIndex(assistantMessage.id);
+
+					this.updateMessageAtIndex(messageIndex, { toolCalls: streamedToolCallContent });
+				},
+
 				onModel: (modelName: string) => {
 					recordModel(modelName);
 				},
@@ -425,18 +491,21 @@ class ChatStore {
 				onComplete: async (
 					finalContent?: string,
 					reasoningContent?: string,
-					timings?: ChatMessageTimings
+					timings?: ChatMessageTimings,
+					toolCallContent?: string
 				) => {
 					slotsService.stopStreaming();
 
 					const updateData: {
 						content: string;
 						thinking: string;
+						toolCalls: string;
 						timings?: ChatMessageTimings;
 						model?: string;
 					} = {
 						content: finalContent || streamedContent,
 						thinking: reasoningContent || streamedReasoningContent,
+						toolCalls: toolCallContent || streamedToolCallContent,
 						timings: timings
 					};
 
@@ -449,12 +518,20 @@ class ChatStore {
 
 					const messageIndex = this.findMessageIndex(assistantMessage.id);
 
-					const localUpdateData: { timings?: ChatMessageTimings; model?: string } = {
+					const localUpdateData: {
+						timings?: ChatMessageTimings;
+						model?: string;
+						toolCalls?: string;
+					} = {
 						timings: timings
 					};
 
 					if (updateData.model) {
 						localUpdateData.model = updateData.model;
+					}
+
+					if (updateData.toolCalls !== undefined) {
+						localUpdateData.toolCalls = updateData.toolCalls;
 					}
 
 					this.updateMessageAtIndex(messageIndex, localUpdateData);
@@ -570,6 +647,7 @@ class ChatStore {
 				content: '',
 				timestamp: Date.now(),
 				thinking: '',
+				toolCalls: '',
 				children: [],
 				model: null
 			},
@@ -1393,6 +1471,7 @@ class ChatStore {
 						role: messageToEdit.role,
 						content: newContent,
 						thinking: messageToEdit.thinking || '',
+						toolCalls: messageToEdit.toolCalls || '',
 						children: [],
 						model: messageToEdit.model // Preserve original model info when branching
 					},
@@ -1468,6 +1547,7 @@ class ChatStore {
 					role: messageToEdit.role,
 					content: newContent,
 					thinking: messageToEdit.thinking || '',
+					toolCalls: messageToEdit.toolCalls || '',
 					children: [],
 					extra: messageToEdit.extra ? JSON.parse(JSON.stringify(messageToEdit.extra)) : undefined,
 					model: messageToEdit.model // Preserve original model info when branching
@@ -1539,6 +1619,7 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
+					toolCalls: '',
 					children: [],
 					model: null
 				},
@@ -1597,6 +1678,7 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
+					toolCalls: '',
 					children: [],
 					model: null
 				},

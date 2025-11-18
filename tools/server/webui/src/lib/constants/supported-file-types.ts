@@ -69,6 +69,10 @@ export const TEXT_FILE_TYPES = {
 		extensions: [FileExtensionText.MD],
 		mimeTypes: [MimeTypeText.MARKDOWN]
 	},
+	[FileTypeText.ASCIIDOC]: {
+		extensions: [FileExtensionText.ADOC],
+		mimeTypes: [MimeTypeText.ASCIIDOC]
+	},
 	[FileTypeText.JAVASCRIPT]: {
 		extensions: [FileExtensionText.JS],
 		mimeTypes: [MimeTypeText.JAVASCRIPT, MimeTypeText.JAVASCRIPT_APP]

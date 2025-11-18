@@ -354,7 +354,11 @@ int main(int argc, char ** argv) {
         }
 
         // remove any "future" tokens that we might have inherited from the previous session
-        llama_memory_seq_rm(mem, -1, n_matching_session_tokens, -1);
+        if (!llama_memory_seq_rm(mem, -1, n_matching_session_tokens, -1)) {
+            LOG_INF("%s: unable to resuse common prefix\n", __func__);
+            n_matching_session_tokens = 0;
+            llama_memory_seq_rm(mem, -1, -1, -1);
+        }
     }
 
     LOG_DBG("recalculate the cached logits (check): embd_inp.size() %zu, n_matching_session_tokens %zu, embd_inp.size() %zu, session_tokens.size() %zu\n",

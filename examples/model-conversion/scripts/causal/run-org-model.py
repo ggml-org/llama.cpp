@@ -138,6 +138,9 @@ if model_path is None:
         "Model path must be specified either via --model-path argument or MODEL_PATH environment variable"
     )
 
+
+print("Loading model and tokenizer using AutoTokenizer:", model_path)
+tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 
 print("Model type:       ", config.model_type)
@@ -146,10 +149,6 @@ print("Hidden size:      ", config.hidden_size)
 print("Number of layers: ", config.num_hidden_layers)
 print("BOS token id:     ", config.bos_token_id)
 print("EOS token id:     ", config.eos_token_id)
-
-print("Loading model and tokenizer using AutoTokenizer:", model_path)
-tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 
 if unreleased_model_name:
     model_name_lower = unreleased_model_name.lower()
@@ -171,7 +170,7 @@ if unreleased_model_name:
         exit(1)
 else:
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, device_map="auto", offload_folder="offload", trust_remote_code=True
+        model_path, device_map="auto", offload_folder="offload", trust_remote_code=True, config=config
     )
 
 for name, module in model.named_modules():

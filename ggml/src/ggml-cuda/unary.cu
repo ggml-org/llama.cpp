@@ -81,8 +81,32 @@ static __device__ __forceinline__ float op_log(float x) {
     return logf(x);
 }
 
+static __device__ __forceinline__ float op_expm1(float x) {
+    return expm1f(x);
+}
+
+static __device__ __forceinline__ float op_softplus(float x) {
+    return (x > 20.0f) ? x : logf(1.0f + expf(x));
+}
+
 static __device__ __forceinline__ float op_elu(float x) {
     return (x > 0.f) ? x : expm1f(x);
+}
+
+static __device__ __forceinline__ float op_floor(float x) {
+    return floorf(x);
+}
+
+static __device__ __forceinline__ float op_ceil(float x) {
+    return ceilf(x);
+}
+
+static __device__ __forceinline__ float op_round(float x) {
+    return round(x);
+}
+
+static __device__ __forceinline__ float op_trunc(float x) {
+    return trunc(x);
 }
 
 template <float (*op)(float), typename T>
@@ -200,6 +224,30 @@ void ggml_cuda_op_log(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 void ggml_cuda_op_elu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_elu>(ctx, dst);
+}
+
+void ggml_cuda_op_floor(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_floor>(ctx, dst);
+}
+
+void ggml_cuda_op_ceil(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_ceil>(ctx, dst);
+}
+
+void ggml_cuda_op_round(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_round>(ctx, dst);
+}
+
+void ggml_cuda_op_trunc(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_trunc>(ctx, dst);
+}
+
+void ggml_cuda_op_expm1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_expm1>(ctx, dst);
+}
+
+void ggml_cuda_op_softplus(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_softplus>(ctx, dst);
 }
 /* gated ops */
 

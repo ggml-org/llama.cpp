@@ -31,6 +31,39 @@ static inline uint32_t htp_round_up(uint32_t n, uint32_t m) {
     return m * ((n + m - 1) / m);
 }
 
+// See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
+// Precompute mp (m' in the paper) and L such that division
+// can be computed using a multiply (high 32b of 64b result)
+// and a shift:
+//
+// n/d = (mulhi(n, mp) + n) >> L;
+struct fastdiv_values {
+    uint32_t mp;
+    uint32_t l;
+};
+
+static inline struct fastdiv_values init_fastdiv_values(uint32_t d) {
+    struct fastdiv_values result = { 0, 0 };
+    // compute L = ceil(log2(d));
+    while (result.l < 32 && ((uint32_t) 1 << result.l) < d) {
+        ++(result.l);
+    }
+
+    result.mp = (uint32_t) (((uint64_t) 1 << 32) * (((uint64_t) 1 << result.l) - d) / d + 1);
+    return result;
+}
+
+static inline uint32_t fastdiv(uint32_t n, const struct fastdiv_values * vals) {
+    // Compute high 32 bits of n * mp
+    const uint32_t hi = (uint32_t) (((uint64_t) n * vals->mp) >> 32);  // mulhi(n, mp)
+    // add n, apply bit shift
+    return (hi + n) >> vals->l;
+}
+
+static inline uint32_t fastmodulo(uint32_t n, uint32_t d, const struct fastdiv_values * vals) {
+    return n - fastdiv(n, vals) * d;
+}
+
 static inline void htp_l2fetch(const void * p, uint32_t height, uint32_t width, uint32_t stride) {
     const uint64_t control = Q6_P_combine_RR(stride, Q6_R_combine_RlRl(width, height));
     asm volatile(" l2fetch(%0,%1) " : : "r"(p), "r"(control));
@@ -43,46 +76,46 @@ static inline int32_t htp_is_one_chunk(void * addr, uint32_t n, uint32_t chunk_s
 }
 
 static inline void htp_dump_int8_line(char * pref, const int8_t * x, int n) {
-    char str[1024], *p = str;
-    p += sprintf(p, "%s: ", pref);
-    for (int i = 0; i < 16; i++) {
-        p += sprintf(p, "%d, ", x[i]);
+    char str[1024], *p = str, *p_end = str + sizeof(str);
+    p += snprintf(p, p_end - p, "%s: ", pref);
+    for (int i = 0; i < n && p < p_end; i++) {
+        p += snprintf(p, p_end - p, "%d, ", x[i]);
     }
     FARF(HIGH, "%s\n", str);
 }
 
 static inline void htp_dump_uint8_line(char * pref, const uint8_t * x, uint32_t n) {
-    char str[1024], *p = str;
-    p += sprintf(p, "%s: ", pref);
-    for (int i = 0; i < n; i++) {
-        p += sprintf(p, "%d, ", x[i]);
+    char str[1024], *p = str, *p_end = str + sizeof(str);
+    p += snprintf(p, p_end - p, "%s: ", pref);
+    for (int i = 0; i < n && p < p_end; i++) {
+        p += snprintf(p, p_end - p, "%d, ", x[i]);
     }
     FARF(HIGH, "%s\n", str);
 }
 
 static inline void htp_dump_int32_line(char * pref, const int32_t * x, uint32_t n) {
-    char str[1024], *p = str;
-    p += sprintf(p, "%s: ", pref);
+    char str[1024], *p = str, *p_end = str + sizeof(str);
+    p += snprintf(p, p_end - p, "%s: ", pref);
     for (int i = 0; i < n; i++) {
-        p += sprintf(p, "%d, ", (int) x[i]);
+        p += snprintf(p, p_end - p, "%d, ", (int) x[i]);
     }
     FARF(HIGH, "%s\n", str);
 }
 
 static inline void htp_dump_fp16_line(char * pref, const __fp16 * x, uint32_t n) {
-    char str[1024], *p = str;
-    p += sprintf(p, "%s: ", pref);
+    char str[1024], *p = str, *p_end = str + sizeof(str);
+    p += snprintf(p, p_end - p, "%s: ", pref);
     for (int i = 0; i < n; i++) {
-        p += sprintf(p, "%.6f, ", (float) x[i]);
+        p += snprintf(p, p_end - p, "%.6f, ", (float) x[i]);
     }
     FARF(HIGH, "%s\n", str);
 }
 
 static inline void htp_dump_fp32_line(char * pref, const float * x, uint32_t n) {
-    char str[1024], *p = str;
-    p += sprintf(p, "%s: ", pref);
+    char str[1024], *p = str, *p_end = str + sizeof(str);
+    p += snprintf(p, p_end - p, "%s: ", pref);
     for (int i = 0; i < n; i++) {
-        p += sprintf(p, "%.6f, ", x[i]);
+        p += snprintf(p, p_end - p, "%.6f, ", x[i]);
     }
     FARF(HIGH, "%s\n", str);
 }

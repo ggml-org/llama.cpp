@@ -114,6 +114,7 @@ export class DatabaseStore {
 				...message,
 				id: uuid(),
 				parent: parentId,
+				toolCalls: message.toolCalls ?? '',
 				children: []
 			};
 
@@ -154,6 +155,7 @@ export class DatabaseStore {
 			content: '',
 			parent: null,
 			thinking: '',
+			toolCalls: '',
 			children: []
 		};
 

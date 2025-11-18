@@ -27,7 +27,7 @@ struct block_a_cache {
 #elif defined(DATA_A_Q8_0)
 #define QUANT_R_MMQ 1
 // AMD likes 4, Intel likes 1 and Nvidia likes 2
-#define BK_STEP 1
+// #define BK_STEP 1
 struct block_a_cache {
     int32_t qs[32/4];
     FLOAT_TYPE dm;

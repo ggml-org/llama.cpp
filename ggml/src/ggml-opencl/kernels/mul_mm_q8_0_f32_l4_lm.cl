@@ -78,7 +78,7 @@ kernel void kernel_mul_mm_q8_0_f32_l4_lm(
 
     for (int block = 0; block < ne00; block += BK) {
         for (int l = 0; l < BM; l += loadstride_a) {
-            if (loadc_a + l < ne01) {
+            if (ir*BM + loadc_a + l < ne01) {
                 int idx = pos_a + (loadc_a + l) * stride_a / LOAD_VEC_A + loadr_a;
                 int ib  = idx / 8;
                 int iqs = idx % 8;
@@ -101,7 +101,7 @@ kernel void kernel_mul_mm_q8_0_f32_l4_lm(
         }
 
         for (int l = 0; l < BN; l += loadstride_b) {
-            if (loadc_b + l < ne11) {
+            if (ic*BN + loadc_b + l < ne11) {
                 int idx = pos_b + (loadc_b + l) * stride_b / LOAD_VEC_B + loadr_b;
                 buf_b[(loadr_b * LOAD_VEC_B + 0) * BN + loadc_b + l] = src1[idx].s0;
                 buf_b[(loadr_b * LOAD_VEC_B + 1) * BN + loadc_b + l] = src1[idx].s1;
