@@ -205,6 +205,7 @@ class ChatStore {
 					type,
 					timestamp: Date.now(),
 					thinking: '',
+					toolCalls: '',
 					children: [],
 					extra: extras
 				},
@@ -360,6 +361,7 @@ class ChatStore {
 	): Promise<void> {
 		let streamedContent = '';
 		let streamedReasoningContent = '';
+		let streamedToolCallContent = '';
 
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
@@ -468,6 +470,20 @@ class ChatStore {
 					this.updateMessageAtIndex(messageIndex, { thinking: streamedReasoningContent });
 				},
 
+				onToolCallChunk: (toolCallChunk: string) => {
+					const chunk = toolCallChunk.trim();
+
+					if (!chunk) {
+						return;
+					}
+
+					streamedToolCallContent = chunk;
+
+					const messageIndex = this.findMessageIndex(assistantMessage.id);
+
+					this.updateMessageAtIndex(messageIndex, { toolCalls: streamedToolCallContent });
+				},
+
 				onModel: (modelName: string) => {
 					recordModel(modelName);
 				},
@@ -475,18 +491,21 @@ class ChatStore {
 				onComplete: async (
 					finalContent?: string,
 					reasoningContent?: string,
-					timings?: ChatMessageTimings
+					timings?: ChatMessageTimings,
+					toolCallContent?: string
 				) => {
 					slotsService.stopStreaming();
 
 					const updateData: {
 						content: string;
 						thinking: string;
+						toolCalls: string;
 						timings?: ChatMessageTimings;
 						model?: string;
 					} = {
 						content: finalContent || streamedContent,
 						thinking: reasoningContent || streamedReasoningContent,
+						toolCalls: toolCallContent || streamedToolCallContent,
 						timings: timings
 					};
 
@@ -499,12 +518,20 @@ class ChatStore {
 
 					const messageIndex = this.findMessageIndex(assistantMessage.id);
 
-					const localUpdateData: { timings?: ChatMessageTimings; model?: string } = {
+					const localUpdateData: {
+						timings?: ChatMessageTimings;
+						model?: string;
+						toolCalls?: string;
+					} = {
 						timings: timings
 					};
 
 					if (updateData.model) {
 						localUpdateData.model = updateData.model;
+					}
+
+					if (updateData.toolCalls !== undefined) {
+						localUpdateData.toolCalls = updateData.toolCalls;
 					}
 
 					this.updateMessageAtIndex(messageIndex, localUpdateData);
@@ -620,6 +647,7 @@ class ChatStore {
 				content: '',
 				timestamp: Date.now(),
 				thinking: '',
+				toolCalls: '',
 				children: [],
 				model: null
 			},
@@ -1443,6 +1471,7 @@ class ChatStore {
 						role: messageToEdit.role,
 						content: newContent,
 						thinking: messageToEdit.thinking || '',
+						toolCalls: messageToEdit.toolCalls || '',
 						children: [],
 						model: messageToEdit.model // Preserve original model info when branching
 					},
@@ -1518,6 +1547,7 @@ class ChatStore {
 					role: messageToEdit.role,
 					content: newContent,
 					thinking: messageToEdit.thinking || '',
+					toolCalls: messageToEdit.toolCalls || '',
 					children: [],
 					extra: messageToEdit.extra ? JSON.parse(JSON.stringify(messageToEdit.extra)) : undefined,
 					model: messageToEdit.model // Preserve original model info when branching
@@ -1589,6 +1619,7 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
+					toolCalls: '',
 					children: [],
 					model: null
 				},
@@ -1647,6 +1678,7 @@ class ChatStore {
 					role: 'assistant',
 					content: '',
 					thinking: '',
+					toolCalls: '',
 					children: [],
 					model: null
 				},
