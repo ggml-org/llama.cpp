@@ -24,12 +24,13 @@ let sysdatetime_meta = {
                      "template": {
                         "type": "string",
                         "description": `Template is used to control what is included in the returned date time string.
-                            It can be any combination of Y,M,D,h,m,s. Here
-                            Y - FullYear 4 digits, M - Month 2 digits, D - Day 2 digits,
-                            h - hour 2 digits, m - minutes 2 digits, s - seconds 2 digits,
+                            It can be any combination of Y,m,d,H,M,S,w. Here
+                            Y - FullYear 4 digits, m - Month 2 digits, d - Day 2 digits,
+                            H - hour 2 digits 24 hours format, M - minutes 2 digits, S - seconds 2 digits,
+                            w - day of week (0(sunday)..6(saturday))
                             any other char will be returned as is.
 
-                            If no template is given, it defaults to YMDThm.
+                            If no template is given, it defaults to YmdTHMS.
                             Remember that the template characters are case sensitive.
                             `
                     }
@@ -51,7 +52,7 @@ function sysdatetime_run(chatid, toolcallid, toolname, obj) {
     let dt = new Date()
     let tmpl = obj['template'];
     if ((tmpl == undefined) || (tmpl == "")) {
-        tmpl = 'YMDThm';
+        tmpl = 'YmdTHMS';
     }
     let sDT = ""
     for (const c of tmpl) {
@@ -59,20 +60,23 @@ function sysdatetime_run(chatid, toolcallid, toolname, obj) {
             case 'Y':
                 sDT += dt.getFullYear().toString().padStart(4, '0')
                 break;
-            case 'M':
+            case 'm':
                 sDT += (dt.getMonth()+1).toString().padStart(2, '0')
                 break;
-            case 'D':
+            case 'd':
                 sDT += dt.getDate().toString().padStart(2, '0')
                 break;
-            case 'h':
+            case 'H':
                 sDT += dt.getHours().toString().padStart(2, '0')
                 break;
-            case 'm':
+            case 'M':
                 sDT += dt.getMinutes().toString().padStart(2, '0')
                 break;
-            case 's':
+            case 'S':
                 sDT += dt.getSeconds().toString().padStart(2, '0')
+                break;
+            case 'w':
+                sDT += dt.getDay().toString()
                 break;
             default:
                 sDT += c;
