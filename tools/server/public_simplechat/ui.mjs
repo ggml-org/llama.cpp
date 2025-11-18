@@ -310,6 +310,9 @@ export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sL
         "number": "number",
     };
     let elFS = document.createElement("fieldset");
+    if (propsTreeRoot == "") {
+        elFS.id = `ObjPropsEdit-${sLegend.replaceAll(' ', '')}`
+    }
     let elLegend = document.createElement("legend");
     elLegend.innerText = sLegend;
     elFS.appendChild(elLegend);

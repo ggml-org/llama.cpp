@@ -435,9 +435,9 @@ class ChatMessageEx {
 
 
 /**
- * @param {number} iRecentUserMsgCnt
+ * @param {string} sRecentUserMsgCnt
  */
-function usage_note(iRecentUserMsgCnt) {
+function usage_note(sRecentUserMsgCnt) {
     let sUsageNote = `
     <details>
     <summary id="UsageNote" class="role-system">Usage Note</summary>
@@ -455,7 +455,7 @@ function usage_note(iRecentUserMsgCnt) {
         </ul>
     <li> Use image button for vision models, submitting or switching session clears same </li>
     <li> Clicking main title, toggles chat session buttons and system prompt </li>
-    <li> ContextWindow = [System, Last[${iRecentUserMsgCnt}] User Query/Resp, Cur Query].</li>
+    <li> ContextWindow = [System, ${sRecentUserMsgCnt} User Query/Resp, Cur Query].</li>
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
         </ul>
@@ -1381,7 +1381,7 @@ class MultiChatUI {
             this.scroll_el_into_view(this.elLastChatMessage)
         } else {
             if (bClear) {
-                this.elDivChat.innerHTML = usage_note(this.me.chatProps.iRecentUserMsgCnt-1);
+                this.elDivChat.innerHTML = usage_note(this.me.get_sRecentUserMsgCnt());
                 this.me.setup_load(this.elDivChat, chat);
                 this.me.show_info(this.elDivChat, bShowInfoAll);
             }
@@ -1844,7 +1844,7 @@ export class Me {
             bTrimGarbage: true,
         };
         /** @type {Object<string, number>} */
-        this.sRecentUserMsgCnt = {
+        this.sRecentUserMsgCntDict = {
             "Full": -1,
             "Last0": 1,
             "Last1": 2,
@@ -1972,12 +1972,25 @@ export class Me {
                 elParent.appendChild(sel.div);
             }
             if (propWithPath == ":chatProps:iRecentUserMsgCnt") {
-                let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.chatProps.iRecentUserMsgCnt, (val)=>{
-                    this.chatProps.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
+                let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCntDict, this.chatProps.iRecentUserMsgCnt, (val)=>{
+                    this.chatProps.iRecentUserMsgCnt = this.sRecentUserMsgCntDict[val];
                 });
                 elParent.appendChild(sel.div);
             }
         })
+    }
+
+    get_sRecentUserMsgCnt() {
+        let sRecentUserMsgCnt = Object.keys(this.sRecentUserMsgCntDict).find((key)=>{
+            if (this.sRecentUserMsgCntDict[key] == this.chatProps.iRecentUserMsgCnt) {
+                return true
+            }
+            return false
+        });
+        if (sRecentUserMsgCnt) {
+            return sRecentUserMsgCnt;
+        }
+        return "Unknown";
     }
 
 }

@@ -25,8 +25,13 @@ body {
     background-color: lightblue;
 }
 
+#system-in {
+    padding-inline: 0.5rem;
+}
+
 .role-system {
     background: linear-gradient(135deg, lightblue 0%, var(--background-color) 100%);
+    border-radius: 0.1vmin;
 }
 .role-user {
     background: linear-gradient(135deg, #D0F0FF 0%, var(--background-color) 100%);
@@ -194,6 +199,16 @@ button {
 }
 [class^=SectionObjPropsInfoL] {
     margin-left: 2vmin;
+}
+#ObjPropsEdit-Settings * {
+    border-radius: 0.2rem;
+    padding-inline: 0.5rem;
+}
+#ObjPropsEdit-Settings button, #ObjPropsEdit-Settings select, #ObjPropsEdit-Settings input {
+    border-radius: 0.2rem;
+    padding-inline: 0.5rem;
+    min-height: 2vmin;
+    border-width: thin;
 }
 
 
