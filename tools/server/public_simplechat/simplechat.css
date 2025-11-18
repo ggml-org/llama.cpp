@@ -4,7 +4,8 @@
  */
 
 :root {
-    --background-color: #f4f4f9
+    --background-color: #f4f4f9;
+    --background-color-contrast-vlight: #e8e8e8;
 }
 
 body {
@@ -12,7 +13,7 @@ body {
     font-family: 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif;
 }
 #fullbody {
-    height: 98vh;
+    height: 97vh;
 }
 
 #heading {
@@ -28,16 +29,17 @@ body {
     background: linear-gradient(135deg, lightblue 0%, var(--background-color) 100%);
 }
 .role-user {
-    background: linear-gradient(135deg, lightgray 0%, var(--background-color) 100%);
+    background: linear-gradient(135deg, #D0F0FF 0%, var(--background-color) 100%);
 }
 .role-assistant {
     text-align: initial;
+    background: linear-gradient(135deg, #F7FAFC 0%, var(--background-color) 100%)
 }
 .role-tool {
     background: linear-gradient(135deg, var(--background-color) 0%, lightyellow 100%);
 }
 .role-trim {
-    background-color: lightpink;
+    background: linear-gradient(135deg, lightpink 0%, transparent 100%);
 }
 
 #UsageNote {
@@ -75,13 +77,13 @@ body {
     border-style: solid;
     border-color: grey;
     border-width: thin;
-    border-radius: 2px;
+    padding: 0.5vmin;
 }
 .chat-message-toolcall-arg {
     border-style: solid;
     border-color: grey;
     border-width: thin;
-    border-radius: 2px;
+    padding: inherit;
 }
 .chat-message-content {
     overflow-wrap: break-word;
@@ -152,6 +154,8 @@ body {
     background-color: #ffffff;
     padding: 1.6vmin 2vmin;
     border-radius: 2.5vmin;
+    field-sizing: content;
+    max-height: 16vh;
 }
 #user-in[data-role="TOOL.TEMP"] {
     background-color: lightyellow;
@@ -195,13 +199,16 @@ button {
 
 * {
     margin: 0.6vmin;
+    scrollbar-color: var(--background-color-contrast-vlight) var(--background-color);
+    scrollbar-width: thin;
+    border-radius: 0.5rem;
 }
 
 
 @media print {
 
-    body {
-        background-color: white;
+    :root {
+        --background-color: white;
     }
 
     #fullbody {
