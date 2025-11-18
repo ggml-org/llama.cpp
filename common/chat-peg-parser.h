@@ -208,18 +208,6 @@ struct common_chat_peg_repetition_parser {
     int max_count;  // -1 for unbounded
 };
 
-struct common_chat_peg_one_or_more_parser {
-    common_chat_peg_parser_id child;
-};
-
-struct common_chat_peg_zero_or_more_parser {
-    common_chat_peg_parser_id child;
-};
-
-struct common_chat_peg_optional_parser {
-    common_chat_peg_parser_id child;
-};
-
 struct common_chat_peg_and_parser {
     common_chat_peg_parser_id child;
 };
@@ -282,9 +270,6 @@ using common_chat_peg_parser_variant = std::variant<
     common_chat_peg_sequence_parser,
     common_chat_peg_choice_parser,
     common_chat_peg_repetition_parser,
-    common_chat_peg_one_or_more_parser,
-    common_chat_peg_zero_or_more_parser,
-    common_chat_peg_optional_parser,
     common_chat_peg_and_parser,
     common_chat_peg_not_parser,
     common_chat_peg_any_parser,
