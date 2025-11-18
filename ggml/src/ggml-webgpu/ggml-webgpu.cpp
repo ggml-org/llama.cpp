@@ -25,6 +25,9 @@
 #include <string>
 #include <vector>
 
+#define ROUNDUP_POW2(x, pow2) (((x) + ((pow2) - 1)) & ~((pow2) - 1))
+#define CEIL_DIV(M, N)        (((M) + (N) - 1) / (N))
+
 #ifdef GGML_WEBGPU_DEBUG
 #    define WEBGPU_LOG_DEBUG(msg)  std::cout << msg << std::endl
 #    define WEBGPU_DEBUG_BUF_ELEMS 32
@@ -63,6 +66,9 @@
 #endif
 
 /* Constants */
+
+// Track https://github.com/gpuweb/gpuweb/issues/5315 for fixes to implementations so this can be removed.
+#define WEBGPU_MAX_WG_SIZE 288
 
 #define WEBGPU_MUL_MAT_WG_SIZE               256
 #define WEBGPU_NUM_PARAM_BUFS                32u
@@ -272,36 +278,32 @@ struct webgpu_context_struct {
     wgpu::SubgroupMatrixConfig subgroup_matrix_config;
 #endif
 
-    // Separate this out from limits since on some Metal systems, the limit returned by
-    // querying the limits is higher than the actual allowed maximum.
-    uint32_t max_wg_size_x;
-
     std::recursive_mutex mutex;
     std::atomic_uint     inflight_threads = 0;
 
     webgpu_buf_pool param_buf_pool;
     webgpu_buf_pool set_rows_error_buf_pool;
 
-    webgpu_pipeline memset_pipeline;
+    std::map<int, webgpu_pipeline> memset_pipelines;                                 // variant or type index
 
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> mul_mat_pipelines;  // src0_type, src1_type, vectorized
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>>
         mul_mat_vec_pipelines;                                                       // src0_type, src1_type, vectorized
 
-    webgpu_pipeline mul_mat_pipeline[30][2];
-    webgpu_pipeline set_rows_pipeline[1][2];  // dst->type, vectorized
-    webgpu_pipeline get_rows_pipeline[30];
-    webgpu_pipeline get_rows_f32_no_vec_pipeline;
-    webgpu_pipeline cpy_pipeline[2][2];          // src type, dst type
-    webgpu_pipeline add_pipeline[2][2];          // type, inplace
-    webgpu_pipeline sub_pipeline[2][2];          // type, inplace
-    webgpu_pipeline mul_pipeline[2][2];          // type, inplace
-    webgpu_pipeline div_pipeline[2][2];          // type, inplace
-    webgpu_pipeline rms_norm_pipeline[2];        // inplace
-    webgpu_pipeline rope_pipeline[2][2][2];      // type, ff, inplace
-    webgpu_pipeline glu_pipeline[7][2][2];       // glu-op, type, split
-    webgpu_pipeline scale_pipeline[2];           // inplace
-    webgpu_pipeline soft_max_pipeline[3][2][2];  // (no_mask, f32_mask, f16_mask), has_sink, inplace
+    std::map<int, std::map<int, webgpu_pipeline>> set_rows_pipelines;                // dst_type, vectorized
+    std::map<int, std::map<int, webgpu_pipeline>> get_rows_pipelines;                // src_type, vectorized
+
+    std::map<int, std::map<int, webgpu_pipeline>> cpy_pipelines;                     // src_type, dst_type
+    std::map<int, std::map<int, webgpu_pipeline>> add_pipelines;                     // type, inplace
+    std::map<int, std::map<int, webgpu_pipeline>> sub_pipelines;                     // type, inplace
+    std::map<int, std::map<int, webgpu_pipeline>> mul_pipelines;                     // type, inplace
+    std::map<int, std::map<int, webgpu_pipeline>> div_pipelines;                     // type, inplace
+
+    std::map<int, webgpu_pipeline>                               rms_norm_pipelines;  // inplace
+    std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> rope_pipelines;      // type, ff, inplace
+    std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> glu_pipelines;       // glu_op, type, split
+    std::map<int, webgpu_pipeline>                               scale_pipelines;     // inplace
+    std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> soft_max_pipelines;  // mask_type, has_sink, inplace
 
     size_t memset_bytes_per_thread;
 
@@ -381,35 +383,10 @@ static std::string ggml_webgpu_process_shader_repls(const char *                
     return s;
 }
 
-static void ggml_webgpu_create_pipeline(wgpu::Device &                           device,
-                                        webgpu_pipeline &                        pipeline,
-                                        const char *                             shader_code,
-                                        const char *                             label,
-                                        const std::vector<wgpu::ConstantEntry> & constants = {}) {
-    wgpu::ShaderSourceWGSL shader_source;
-    shader_source.code = shader_code;
-
-    wgpu::ShaderModuleDescriptor shader_desc;
-    shader_desc.nextInChain = &shader_source;
-
-    wgpu::ShaderModule shader_module = device.CreateShaderModule(&shader_desc);
-
-    wgpu::ComputePipelineDescriptor pipeline_desc;
-    pipeline_desc.label              = label;
-    pipeline_desc.compute.module     = shader_module;
-    pipeline_desc.compute.entryPoint = "main";   // Entry point in the WGSL code
-    pipeline_desc.layout             = nullptr;  // nullptr means auto layout
-    if (constants.size() > 0) {
-        pipeline_desc.compute.constants     = constants.data();
-        pipeline_desc.compute.constantCount = constants.size();
-    }
-    pipeline = { device.CreateComputePipeline(&pipeline_desc), label };
-}
-
-static webgpu_pipeline ggml_webgpu_create_pipeline2(wgpu::Device &                           device,
-                                                    const char *                             shader_code,
-                                                    const char *                             label,
-                                                    const std::vector<wgpu::ConstantEntry> & constants = {}) {
+static webgpu_pipeline ggml_webgpu_create_pipeline(wgpu::Device &                           device,
+                                                   const char *                             shader_code,
+                                                   const char *                             label,
+                                                   const std::vector<wgpu::ConstantEntry> & constants = {}) {
     wgpu::ShaderSourceWGSL shader_source;
     shader_source.code = shader_code;
 
@@ -678,10 +655,10 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_context & ctx,
     std::vector<wgpu::BindGroupEntry> entries = {
         { .binding = 0, .buffer = buf, .offset = 0, .size = buf.GetSize() }
     };
-    size_t   bytes_per_wg = ctx->max_wg_size_x * ctx->memset_bytes_per_thread;
-    uint32_t wg_x         = ((size + 3) + bytes_per_wg - 1) / bytes_per_wg;
+    size_t   bytes_per_wg = WEBGPU_MAX_WG_SIZE * ctx->memset_bytes_per_thread;
+    uint32_t wg_x         = CEIL_DIV(size + 3, bytes_per_wg);
 
-    webgpu_command command = ggml_backend_webgpu_build(ctx, ctx->memset_pipeline, params, entries, wg_x);
+    webgpu_command command = ggml_backend_webgpu_build(ctx, ctx->memset_pipelines[0], params, entries, wg_x);
     std::vector<webgpu_submission_futures> futures = { ggml_backend_webgpu_submit(ctx, { command }) };
     ggml_backend_webgpu_wait(ctx, futures);
 }
@@ -763,8 +740,7 @@ static size_t ggml_webgpu_tensor_align_offset(webgpu_context & ctx, ggml_tensor 
 }
 
 static size_t ggml_webgpu_tensor_binding_size(webgpu_context & ctx, ggml_tensor * t) {
-    return (ggml_nbytes(t) + ggml_webgpu_tensor_misalignment(ctx, t) + WEBGPU_STORAGE_BUF_BINDING_MULT - 1) &
-           ~(WEBGPU_STORAGE_BUF_BINDING_MULT - 1);
+    return ROUNDUP_POW2(ggml_nbytes(t) + ggml_webgpu_tensor_misalignment(ctx, t), WEBGPU_STORAGE_BUF_BINDING_MULT);
 }
 
 // Used to determine if two tensors are the same for in-place operations
@@ -800,9 +776,8 @@ static webgpu_command ggml_webgpu_cpy(webgpu_context & ctx, ggml_tensor * src, g
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
     };
 
-    size_t   max_wg_size = ctx->max_wg_size_x;
-    uint32_t wg_x        = (ne + max_wg_size - 1) / max_wg_size;
-    return ggml_backend_webgpu_build(ctx, ctx->cpy_pipeline[src->type][dst->type], params, entries, wg_x);
+    uint32_t wg_x = CEIL_DIV(ne, WEBGPU_MAX_WG_SIZE);
+    return ggml_backend_webgpu_build(ctx, ctx->cpy_pipelines[src->type][dst->type], params, entries, wg_x);
 }
 
 static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
@@ -851,10 +826,8 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
         { .binding = 3, .buffer = error_bufs.dev_buf, .offset = 0, .size = error_bufs.dev_buf.GetSize() }
     };
 
-    size_t max_wg_size = ctx->max_wg_size_x;
-
     int             vectorized = src->ne[0] % 4 == 0;
-    webgpu_pipeline pipeline   = ctx->set_rows_pipeline[0][vectorized];
+    webgpu_pipeline pipeline   = ctx->set_rows_pipelines[0][vectorized];
     uint32_t        threads;
     if (vectorized) {
         threads = (src->ne[1] * src->ne[2] * src->ne[3]) * (src->ne[0] / 4);
@@ -862,7 +835,7 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
         threads = src->ne[0] * src->ne[1] * src->ne[2] * src->ne[3];
     }
 
-    uint32_t wg_x = (threads + max_wg_size - 1) / max_wg_size;
+    uint32_t wg_x = CEIL_DIV(threads, WEBGPU_MAX_WG_SIZE);
 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, 1, error_bufs);
 }
@@ -902,13 +875,10 @@ static webgpu_command ggml_webgpu_get_rows(webgpu_context & ctx,
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
     };
 
-    size_t   max_wg_size = ctx->max_wg_size_x;
-    uint32_t wg_x        = (dst->ne[1] * dst->ne[2] * dst->ne[3] + max_wg_size - 1) / max_wg_size;
+    uint32_t wg_x = CEIL_DIV(dst->ne[1] * dst->ne[2] * dst->ne[3], WEBGPU_MAX_WG_SIZE);
 
-    webgpu_pipeline pipeline = ctx->get_rows_pipeline[src->type];
-    if (src->type == GGML_TYPE_F32 && dst->ne[0] % 4 != 0) {
-        pipeline = ctx->get_rows_f32_no_vec_pipeline;
-    }
+    uint32_t        vectorized = src->type == GGML_TYPE_F32 && dst->ne[0] % 4 == 0;
+    webgpu_pipeline pipeline   = ctx->get_rows_pipelines[src->type][vectorized];
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
@@ -950,10 +920,9 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  },
     };
 
-    webgpu_pipeline pipeline = ctx->mul_mat_pipeline[src0->type][src1->type];
+    webgpu_pipeline pipeline = ctx->mul_mat_pipelines[src0->type][src1->type][0];
 
-    uint32_t wg_x =
-        (dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3] + WEBGPU_MUL_MAT_WG_SIZE - 1) / WEBGPU_MUL_MAT_WG_SIZE;
+    uint32_t wg_x = CEIL_DIV(dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3], WEBGPU_MUL_MAT_WG_SIZE);
     uint32_t wg_y = 1;
 
     bool use_fast = false;
@@ -980,15 +949,13 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
         int vectorized = src0->ne[0] % 4 == 0 && dst->ne[0] % 4 == 0 && dst->ne[1] % 4 == 0;
         if (dst->ne[1] == 1) {
             // We don't support vectorized mul_mat_vec for quantized types
-            vectorized       = vectorized && (src0->type < 2);
-            pipeline         = ctx->mul_mat_vec_pipelines[src0->type][src1->type][vectorized];
-            uint32_t batches = dst->ne[2] * dst->ne[3];
-            uint32_t output_groups =
-                (dst->ne[0] + WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG - 1) / WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG;
-            uint32_t total_wg = output_groups * batches;
-            wg_x              = total_wg % ctx->limits.maxComputeWorkgroupsPerDimension;
-            wg_y              = (total_wg + ctx->limits.maxComputeWorkgroupsPerDimension - 1) /
-                   ctx->limits.maxComputeWorkgroupsPerDimension;
+            vectorized             = vectorized && (src0->type < 2);
+            pipeline               = ctx->mul_mat_vec_pipelines[src0->type][src1->type][vectorized];
+            uint32_t batches       = dst->ne[2] * dst->ne[3];
+            uint32_t output_groups = CEIL_DIV(dst->ne[0], WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG);
+            uint32_t total_wg      = output_groups * batches;
+            wg_x                   = total_wg % ctx->limits.maxComputeWorkgroupsPerDimension;
+            wg_y                   = CEIL_DIV(total_wg, ctx->limits.maxComputeWorkgroupsPerDimension);
         } else {
             pipeline = ctx->mul_mat_pipelines[src0->type][src1->type][vectorized];
             uint32_t wg_m;
@@ -998,16 +965,16 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
                 // The total number of subgroups/workgroups needed per matrix.
                 uint32_t wg_m_sg_tile =
                     WEBGPU_MUL_MAT_SUBGROUP_M * WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M * ctx->subgroup_matrix_config.M;
-                wg_m = (dst->ne[0] + wg_m_sg_tile - 1) / wg_m_sg_tile;
+                wg_m = CEIL_DIV(dst->ne[0], wg_m_sg_tile);
                 uint32_t wg_n_sg_tile =
                     WEBGPU_MUL_MAT_SUBGROUP_N * WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N * ctx->subgroup_matrix_config.N;
-                wg_n = (dst->ne[1] + wg_n_sg_tile - 1) / wg_n_sg_tile;
+                wg_n = CEIL_DIV(dst->ne[1], wg_n_sg_tile);
             } else {
 #endif
                 uint32_t tile_m_s = WEBGPU_MUL_MAT_TILE_M * WEBGPU_MUL_MAT_WG_SIZE_M;
                 uint32_t tile_n_s = WEBGPU_MUL_MAT_TILE_N * WEBGPU_MUL_MAT_WG_SIZE_N;
-                wg_m              = (dst->ne[0] + tile_m_s - 1) / tile_m_s;
-                wg_n              = (dst->ne[1] + tile_n_s - 1) / tile_n_s;
+                wg_m              = CEIL_DIV(dst->ne[0], tile_m_s);
+                wg_n              = CEIL_DIV(dst->ne[1], tile_n_s);
 #ifndef __EMSCRIPTEN__
             }
 #endif
@@ -1059,8 +1026,7 @@ static webgpu_command ggml_webgpu_binary_op(webgpu_context &  ctx,
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    size_t   max_wg_size = ctx->max_wg_size_x;
-    uint32_t wg_x        = (ggml_nelements(dst) + max_wg_size - 1) / max_wg_size;
+    uint32_t wg_x = CEIL_DIV(ggml_nelements(dst), WEBGPU_MAX_WG_SIZE);
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
@@ -1096,7 +1062,7 @@ static webgpu_command ggml_webgpu_rms_norm(webgpu_context & ctx, ggml_tensor * s
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    return ggml_backend_webgpu_build(ctx, ctx->rms_norm_pipeline[inplace], params, entries, ggml_nrows(src));
+    return ggml_backend_webgpu_build(ctx, ctx->rms_norm_pipelines[inplace], params, entries, ggml_nrows(src));
 }
 
 static webgpu_command ggml_webgpu_rope(webgpu_context & ctx,
@@ -1181,9 +1147,8 @@ static webgpu_command ggml_webgpu_rope(webgpu_context & ctx,
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    webgpu_pipeline pipeline    = ctx->rope_pipeline[dst->type][has_freq_factor][inplace];
-    size_t          max_wg_size = ctx->max_wg_size_x;
-    uint32_t        wg_x        = (ggml_nelements(src0) / 2 + max_wg_size - 1) / max_wg_size;
+    webgpu_pipeline pipeline = ctx->rope_pipelines[dst->type][has_freq_factor][inplace];
+    uint32_t        wg_x     = CEIL_DIV(ggml_nelements(dst), WEBGPU_MAX_WG_SIZE);
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
@@ -1234,9 +1199,8 @@ static webgpu_command ggml_webgpu_glu(webgpu_context & ctx, ggml_tensor * src0, 
                         .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
                         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
 
-    webgpu_pipeline pipeline    = ctx->glu_pipeline[ggml_get_glu_op(dst)][dst->type][split];
-    size_t          max_wg_size = ctx->max_wg_size_x;
-    uint32_t        wg_x        = (ggml_nelements(dst) + max_wg_size - 1) / max_wg_size;
+    webgpu_pipeline pipeline = ctx->glu_pipelines[ggml_get_glu_op(dst)][dst->type][split];
+    uint32_t        wg_x     = CEIL_DIV(ggml_nelements(dst), WEBGPU_MAX_WG_SIZE);
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
@@ -1273,9 +1237,8 @@ static webgpu_command ggml_webgpu_scale(webgpu_context & ctx, ggml_tensor * src,
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    size_t   max_wg_size = ctx->max_wg_size_x;
-    uint32_t wg_x        = (ggml_nelements(dst) + max_wg_size - 1) / max_wg_size;
-    return ggml_backend_webgpu_build(ctx, ctx->scale_pipeline[inplace], params, entries, wg_x);
+    uint32_t wg_x = CEIL_DIV(ggml_nelements(dst), WEBGPU_MAX_WG_SIZE);
+    return ggml_backend_webgpu_build(ctx, ctx->scale_pipelines[inplace], params, entries, wg_x);
 }
 
 static webgpu_command ggml_webgpu_soft_max(webgpu_context & ctx,
@@ -1347,7 +1310,7 @@ static webgpu_command ggml_webgpu_soft_max(webgpu_context & ctx,
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    return ggml_backend_webgpu_build(ctx, ctx->soft_max_pipeline[mask_type][has_sink][inplace], params, entries,
+    return ggml_backend_webgpu_build(ctx, ctx->soft_max_pipelines[mask_type][has_sink][inplace], params, entries,
                                      ggml_nrows(dst));
 }
 
@@ -1382,22 +1345,22 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
         case GGML_OP_ADD:
             {
                 int inplace = ggml_webgpu_tensor_equal(src0, node);
-                return ggml_webgpu_binary_op(ctx, src0, src1, node, ctx->add_pipeline[node->type][inplace], inplace);
+                return ggml_webgpu_binary_op(ctx, src0, src1, node, ctx->add_pipelines[node->type][inplace], inplace);
             }
         case GGML_OP_SUB:
             {
                 int inplace = ggml_webgpu_tensor_equal(src0, node);
-                return ggml_webgpu_binary_op(ctx, src0, src1, node, ctx->sub_pipeline[node->type][inplace], inplace);
+                return ggml_webgpu_binary_op(ctx, src0, src1, node, ctx->sub_pipelines[node->type][inplace], inplace);
             }
         case GGML_OP_MUL:
             {
                 int inplace = ggml_webgpu_tensor_equal(src0, node);
-                return ggml_webgpu_binary_op(ctx, src0, src1, node, ctx->mul_pipeline[node->type][inplace], inplace);
+                return ggml_webgpu_binary_op(ctx, src0, src1, node, ctx->mul_pipelines[node->type][inplace], inplace);
             }
         case GGML_OP_DIV:
             {
                 int inplace = ggml_webgpu_tensor_equal(src0, node);
-                return ggml_webgpu_binary_op(ctx, src0, src1, node, ctx->div_pipeline[node->type][inplace], inplace);
+                return ggml_webgpu_binary_op(ctx, src0, src1, node, ctx->div_pipelines[node->type][inplace], inplace);
             }
         case GGML_OP_RMS_NORM:
             return ggml_webgpu_rms_norm(ctx, src0, node);
@@ -1641,8 +1604,7 @@ static ggml_backend_buffer_t ggml_backend_webgpu_buffer_type_alloc_buffer(ggml_b
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
 
     wgpu::Buffer buf;
-    ggml_webgpu_create_buffer(ctx->webgpu_ctx->device, buf,
-                              (size + WEBGPU_STORAGE_BUF_BINDING_MULT - 1) & ~(WEBGPU_STORAGE_BUF_BINDING_MULT - 1),
+    ggml_webgpu_create_buffer(ctx->webgpu_ctx->device, buf, ROUNDUP_POW2(size, WEBGPU_STORAGE_BUF_BINDING_MULT),
                               wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst,
                               buf_name.c_str());
 
@@ -1717,58 +1679,64 @@ static std::vector<wgpu::ConstantEntry> ggml_webgpu_wg_size_entry(uint32_t wg_si
 
 static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
     // we use the maximum workgroup size for the memset pipeline
-    size_t max_wg_size = webgpu_ctx->max_wg_size_x;
-    size_t max_threads = max_wg_size * webgpu_ctx->limits.maxComputeWorkgroupsPerDimension;
+    size_t max_threads                  = WEBGPU_MAX_WG_SIZE * webgpu_ctx->limits.maxComputeWorkgroupsPerDimension;
     // Size the bytes_per_thread so that the largest buffer size can be handled
-    webgpu_ctx->memset_bytes_per_thread =
-        (webgpu_ctx->limits.maxStorageBufferBindingSize + max_threads - 1) / max_threads;
+    webgpu_ctx->memset_bytes_per_thread = CEIL_DIV(webgpu_ctx->limits.maxStorageBufferBindingSize, max_threads);
     std::vector<wgpu::ConstantEntry> constants(2);
-    constants[0].key   = "wg_size";
-    constants[0].value = max_wg_size;
-    constants[1].key   = "bytes_per_thread";
-    constants[1].value = webgpu_ctx->memset_bytes_per_thread;
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->memset_pipeline, wgsl_memset, "memset", constants);
+    constants[0].key                = "wg_size";
+    constants[0].value              = WEBGPU_MAX_WG_SIZE;
+    constants[1].key                = "bytes_per_thread";
+    constants[1].value              = webgpu_ctx->memset_bytes_per_thread;
+    webgpu_ctx->memset_pipelines[0] = ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_memset, "memset", constants);
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q4_0][GGML_TYPE_F32],
-                                wgsl_mul_mat_q4_0_f32, "mul_mat_q4_0_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q4_1][GGML_TYPE_F32],
-                                wgsl_mul_mat_q4_1_f32, "mul_mat_q4_1_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q5_0][GGML_TYPE_F32],
-                                wgsl_mul_mat_q5_0_f32, "mul_mat_q5_0_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q5_1][GGML_TYPE_F32],
-                                wgsl_mul_mat_q5_1_f32, "mul_mat_q5_1_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q8_0][GGML_TYPE_F32],
-                                wgsl_mul_mat_q8_0_f32, "mul_mat_q8_0_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q2_K][GGML_TYPE_F32],
-                                wgsl_mul_mat_q2_k_f32, "mul_mat_q2_k_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q3_K][GGML_TYPE_F32],
-                                wgsl_mul_mat_q3_k_f32, "mul_mat_q3_k_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q4_K][GGML_TYPE_F32],
-                                wgsl_mul_mat_q4_k_f32, "mul_mat_q4_k_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q5_K][GGML_TYPE_F32],
-                                wgsl_mul_mat_q5_k_f32, "mul_mat_q5_k_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q6_K][GGML_TYPE_F32],
-                                wgsl_mul_mat_q6_k_f32, "mul_mat_q6_k_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ2_XXS][GGML_TYPE_F32],
-                                wgsl_mul_mat_iq2_xxs_f32, "mul_mat_iq2_xxs_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ2_XS][GGML_TYPE_F32],
-                                wgsl_mul_mat_iq2_xs_f32, "mul_mat_iq2_xs_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ2_S][GGML_TYPE_F32],
-                                wgsl_mul_mat_iq2_s_f32, "mul_mat_iq2_s_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ3_XXS][GGML_TYPE_F32],
-                                wgsl_mul_mat_iq3_xxs_f32, "mul_mat_iq3_xxs_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ3_S][GGML_TYPE_F32],
-                                wgsl_mul_mat_iq3_s_f32, "mul_mat_iq3_s_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ1_S][GGML_TYPE_F32],
-                                wgsl_mul_mat_iq1_s_f32, "mul_mat_iq1_s_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ1_M][GGML_TYPE_F32],
-                                wgsl_mul_mat_iq1_m_f32, "mul_mat_iq1_m_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ4_NL][GGML_TYPE_F32],
-                                wgsl_mul_mat_iq4_nl_f32, "mul_mat_iq4_nl_f32");
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ4_XS][GGML_TYPE_F32],
-                                wgsl_mul_mat_iq4_xs_f32, "mul_mat_iq4_xs_f32");
+    // Q4/Q5/Q8 classic quantizations
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q4_0_f32, "mul_mat_q4_0_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_1][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q4_1_f32, "mul_mat_q4_1_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q5_0][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q5_0_f32, "mul_mat_q5_0_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q5_1][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q5_1_f32, "mul_mat_q5_1_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q8_0][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q8_0_f32, "mul_mat_q8_0_f32");
+
+    // K-quantizations
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q2_K][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q2_k_f32, "mul_mat_q2_k_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q3_K][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q3_k_f32, "mul_mat_q3_k_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_K][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q4_k_f32, "mul_mat_q4_k_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q5_K][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q5_k_f32, "mul_mat_q5_k_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q6_K][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_q6_k_f32, "mul_mat_q6_k_f32");
+
+    // IQ quantizations (2-, 3-, 4-bit variants)
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_IQ2_XXS][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_iq2_xxs_f32, "mul_mat_iq2_xxs_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_IQ2_XS][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_iq2_xs_f32, "mul_mat_iq2_xs_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_IQ2_S][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_iq2_s_f32, "mul_mat_iq2_s_f32");
+
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_IQ3_XXS][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_iq3_xxs_f32, "mul_mat_iq3_xxs_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_IQ3_S][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_iq3_s_f32, "mul_mat_iq3_s_f32");
+
+    // 1-bit and 4-bit IQ variants
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_IQ1_S][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_iq1_s_f32, "mul_mat_iq1_s_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_IQ1_M][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_iq1_m_f32, "mul_mat_iq1_m_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_IQ4_NL][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_iq4_nl_f32, "mul_mat_iq4_nl_f32");
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_IQ4_XS][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_mat_iq4_xs_f32, "mul_mat_iq4_xs_f32");
 
     std::string proc_mul_mat_f32_f32;
     std::string proc_mul_mat_f32_f32_vec;
@@ -1828,21 +1796,21 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
     }
 #endif
 
-    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, proc_mul_mat_f32_f32.c_str(), "mul_mat_f32_f32", mul_mat_constants);
-    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, proc_mul_mat_f32_f32_vec.c_str(), "mul_mat_f32_f32_vec", mul_mat_constants);
-    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, proc_mul_mat_f16_f32.c_str(), "mul_mat_f16_f32", mul_mat_constants);
-    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, proc_mul_mat_f16_f32_vec.c_str(), "mul_mat_f16_f32_vec", mul_mat_constants);
-    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][0] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][0] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, proc_mul_mat_f16_f16.c_str(), "mul_mat_f16_f16", mul_mat_constants);
-    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][1] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][1] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, proc_mul_mat_f16_f16_vec.c_str(), "mul_mat_f16_f16_vec", mul_mat_constants);
-    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, proc_mul_mat_q4_0_f32.c_str(), "mul_mat_q4_0_f32", mul_mat_constants);
-    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, proc_mul_mat_q4_0_f32_vec.c_str(), "mul_mat_q4_0_f32_vec", mul_mat_constants);
 
     std::vector<wgpu::ConstantEntry> mul_mat_vec_constants(3);
@@ -1853,257 +1821,280 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
     mul_mat_vec_constants[2].key   = "OUTPUTS_PER_WG";
     mul_mat_vec_constants[2].value = WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG;
 
-    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, wgsl_mul_mat_vec_f32_f32, "mul_mat_vec_f32_f32", mul_mat_vec_constants);
-    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F32][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, wgsl_mul_mat_vec_f32_f32_vec, "mul_mat_vec_f32_f32_vec", mul_mat_vec_constants);
-    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, wgsl_mul_mat_vec_f16_f32, "mul_mat_vec_f16_f32", mul_mat_vec_constants);
-    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F32][1] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, wgsl_mul_mat_vec_f16_f32_vec, "mul_mat_vec_f16_f32_vec", mul_mat_vec_constants);
-    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][0] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][0] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, wgsl_mul_mat_vec_f16_f16, "mul_mat_vec_f16_f16", mul_mat_vec_constants);
-    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][1] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_F16][GGML_TYPE_F16][1] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, wgsl_mul_mat_vec_f16_f16_vec, "mul_mat_vec_f16_f16_vec", mul_mat_vec_constants);
-    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline2(
+    webgpu_ctx->mul_mat_vec_pipelines[GGML_TYPE_Q4_0][GGML_TYPE_F32][0] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, wgsl_mul_mat_vec_q4_0_f32, "mul_mat_vec_q4_0_f32", mul_mat_vec_constants);
 }
 
 static void ggml_webgpu_init_set_rows_pipeline(webgpu_context & webgpu_ctx) {
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->set_rows_pipeline[0][0], wgsl_set_rows_f16,
-                                "set_rows_f16", ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x));
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->set_rows_pipeline[0][1], wgsl_set_rows_f16_vec,
-                                "set_rows_f16_vec", ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x));
+    webgpu_ctx->set_rows_pipelines[0][0] = ggml_webgpu_create_pipeline(
+        webgpu_ctx->device, wgsl_set_rows_f16, "set_rows_f16", ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE));
+    webgpu_ctx->set_rows_pipelines[0][1] = ggml_webgpu_create_pipeline(
+        webgpu_ctx->device, wgsl_set_rows_f16_vec, "set_rows_f16_vec", ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE));
 }
 
 static void ggml_webgpu_init_get_rows_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_F32], wgsl_get_rows_f32_vec,
-                                "get_rows_f32_vec", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_f32_no_vec_pipeline, wgsl_get_rows_f32,
-                                "get_rows_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_F16], wgsl_get_rows_f16,
-                                "get_rows_f16", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_I32], wgsl_get_rows_i32,
-                                "get_rows_i32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q4_0], wgsl_get_rows_q4_0,
-                                "get_rows_q4_0", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q4_1], wgsl_get_rows_q4_1,
-                                "get_rows_q4_1", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q5_0], wgsl_get_rows_q5_0,
-                                "get_rows_q5_0", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q5_1], wgsl_get_rows_q5_1,
-                                "get_rows_q5_1", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q8_0], wgsl_get_rows_q8_0,
-                                "get_rows_q8_0", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q2_K], wgsl_get_rows_q2_k,
-                                "get_rows_q2_k", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q3_K], wgsl_get_rows_q3_k,
-                                "get_rows_q3_k", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q4_K], wgsl_get_rows_q4_k,
-                                "get_rows_q4_k", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q5_K], wgsl_get_rows_q5_k,
-                                "get_rows_q5_k", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_Q6_K], wgsl_get_rows_q6_k,
-                                "get_rows_q6_k", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_IQ2_XXS],
-                                wgsl_get_rows_iq2_xxs, "get_rows_iq2_xxs", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_IQ2_XS],
-                                wgsl_get_rows_iq2_xs, "get_rows_iq2_xs", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_IQ2_S], wgsl_get_rows_iq2_s,
-                                "get_rows_iq2_s", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_IQ3_XXS],
-                                wgsl_get_rows_iq3_xxs, "get_rows_iq3_xxs", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_IQ3_S], wgsl_get_rows_iq3_s,
-                                "get_rows_iq3_s", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_IQ1_S], wgsl_get_rows_iq1_s,
-                                "get_rows_iq1_s", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_IQ1_M], wgsl_get_rows_iq1_m,
-                                "get_rows_iq1_m", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_IQ4_NL],
-                                wgsl_get_rows_iq4_nl, "get_rows_iq4_nl", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->get_rows_pipeline[GGML_TYPE_IQ4_XS],
-                                wgsl_get_rows_iq4_xs, "get_rows_iq4_xs", constants);
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
+
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_f32, "get_rows_f32", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_f32_vec, "get_rows_f32_vec", constants);
+
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_f16, "get_rows_f16", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_I32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_i32, "get_rows_i32", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q4_0][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q4_0, "get_rows_q4_0", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q4_1][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q4_1, "get_rows_q4_1", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q5_0][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q5_0, "get_rows_q5_0", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q5_1][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q5_1, "get_rows_q5_1", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q8_0][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q8_0, "get_rows_q8_0", constants);
+
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q2_K][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q2_k, "get_rows_q2_k", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q3_K][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q3_k, "get_rows_q3_k", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q4_K][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q4_k, "get_rows_q4_k", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q5_K][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q5_k, "get_rows_q5_k", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_Q6_K][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_q6_k, "get_rows_q6_k", constants);
+
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_IQ2_XXS][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_iq2_xxs, "get_rows_iq2_xxs", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_IQ2_XS][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_iq2_xs, "get_rows_iq2_xs", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_IQ2_S][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_iq2_s, "get_rows_iq2_s", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_IQ3_XXS][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_iq3_xxs, "get_rows_iq3_xxs", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_IQ3_S][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_iq3_s, "get_rows_iq3_s", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_IQ1_S][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_iq1_s, "get_rows_iq1_s", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_IQ1_M][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_iq1_m, "get_rows_iq1_m", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_IQ4_NL][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_iq4_nl, "get_rows_iq4_nl", constants);
+    webgpu_ctx->get_rows_pipelines[GGML_TYPE_IQ4_XS][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_get_rows_iq4_xs, "get_rows_iq4_xs", constants);
 }
 
 static void ggml_webgpu_init_cpy_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->cpy_pipeline[GGML_TYPE_F32][GGML_TYPE_F32],
-                                wgsl_cpy_f32_f32, "cpy_f32_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->cpy_pipeline[GGML_TYPE_F32][GGML_TYPE_F16],
-                                wgsl_cpy_f32_f16, "cpy_f32_f16", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->cpy_pipeline[GGML_TYPE_F16][GGML_TYPE_F32],
-                                wgsl_cpy_f16_f32, "cpy_f16_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->cpy_pipeline[GGML_TYPE_F16][GGML_TYPE_F16],
-                                wgsl_cpy_f16_f16, "cpy_f16_f16", constants);
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
+
+    webgpu_ctx->cpy_pipelines[GGML_TYPE_F32][GGML_TYPE_F32] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_cpy_f32_f32, "cpy_f32_f32", constants);
+    webgpu_ctx->cpy_pipelines[GGML_TYPE_F32][GGML_TYPE_F16] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_cpy_f32_f16, "cpy_f32_f16", constants);
+    webgpu_ctx->cpy_pipelines[GGML_TYPE_F16][GGML_TYPE_F32] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_cpy_f16_f32, "cpy_f16_f32", constants);
+    webgpu_ctx->cpy_pipelines[GGML_TYPE_F16][GGML_TYPE_F16] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_cpy_f16_f16, "cpy_f16_f16", constants);
 }
 
 static void ggml_webgpu_init_add_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->add_pipeline[GGML_TYPE_F32][0], wgsl_add_f32, "add_f32",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->add_pipeline[GGML_TYPE_F16][0], wgsl_add_f16, "add_f16",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->add_pipeline[GGML_TYPE_F32][1], wgsl_add_f32_inplace,
-                                "add_f32_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->add_pipeline[GGML_TYPE_F16][1], wgsl_add_f16_inplace,
-                                "add_f16_inplace", constants);
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
+
+    webgpu_ctx->add_pipelines[GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_add_f32, "add_f32", constants);
+    webgpu_ctx->add_pipelines[GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_add_f16, "add_f16", constants);
+    webgpu_ctx->add_pipelines[GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_add_f32_inplace, "add_f32_inplace", constants);
+    webgpu_ctx->add_pipelines[GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_add_f16_inplace, "add_f16_inplace", constants);
 }
 
 static void ggml_webgpu_init_sub_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->sub_pipeline[GGML_TYPE_F32][0], wgsl_sub_f32, "sub_f32",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->sub_pipeline[GGML_TYPE_F16][0], wgsl_sub_f16, "sub_f16",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->sub_pipeline[GGML_TYPE_F32][1], wgsl_sub_f32_inplace,
-                                "sub_f32_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->sub_pipeline[GGML_TYPE_F16][1], wgsl_sub_f16_inplace,
-                                "sub_f16_inplace", constants);
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
+
+    webgpu_ctx->sub_pipelines[GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_sub_f32, "sub_f32", constants);
+    webgpu_ctx->sub_pipelines[GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_sub_f16, "sub_f16", constants);
+    webgpu_ctx->sub_pipelines[GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_sub_f32_inplace, "sub_f32_inplace", constants);
+    webgpu_ctx->sub_pipelines[GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_sub_f16_inplace, "sub_f16_inplace", constants);
 }
 
 static void ggml_webgpu_init_mul_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_pipeline[GGML_TYPE_F32][0], wgsl_mul_f32, "mul_f32",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_pipeline[GGML_TYPE_F16][0], wgsl_mul_f16, "mul_f16",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_pipeline[GGML_TYPE_F32][1], wgsl_mul_f32_inplace,
-                                "mul_f32_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_pipeline[GGML_TYPE_F16][1], wgsl_mul_f16_inplace,
-                                "mul_f16_inplace", constants);
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
+
+    webgpu_ctx->mul_pipelines[GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_f32, "mul_f32", constants);
+    webgpu_ctx->mul_pipelines[GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_f16, "mul_f16", constants);
+    webgpu_ctx->mul_pipelines[GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_f32_inplace, "mul_f32_inplace", constants);
+    webgpu_ctx->mul_pipelines[GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_mul_f16_inplace, "mul_f16_inplace", constants);
 }
 
 static void ggml_webgpu_init_div_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->div_pipeline[GGML_TYPE_F32][0], wgsl_div_f32, "div_f32",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->div_pipeline[GGML_TYPE_F16][0], wgsl_div_f16, "div_f16",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->div_pipeline[GGML_TYPE_F32][1], wgsl_div_f32_inplace,
-                                "div_f32_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->div_pipeline[GGML_TYPE_F16][1], wgsl_div_f16_inplace,
-                                "div_f16_inplace", constants);
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
+
+    webgpu_ctx->div_pipelines[GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_div_f32, "div_f32", constants);
+    webgpu_ctx->div_pipelines[GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_div_f16, "div_f16", constants);
+    webgpu_ctx->div_pipelines[GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_div_f32_inplace, "div_f32_inplace", constants);
+    webgpu_ctx->div_pipelines[GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_div_f16_inplace, "div_f16_inplace", constants);
 }
 
 static void ggml_webgpu_init_rms_norm_pipeline(webgpu_context & webgpu_ctx) {
     std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_ROW_SPLIT_WG_SIZE);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rms_norm_pipeline[0], wgsl_rms_norm, "rms_norm",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rms_norm_pipeline[1], wgsl_rms_norm_inplace,
-                                "rms_norm_inplace", constants);
+
+    webgpu_ctx->rms_norm_pipelines[0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rms_norm, "rms_norm", constants);
+    webgpu_ctx->rms_norm_pipelines[1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rms_norm_inplace, "rms_norm_inplace", constants);
 }
 
 static void ggml_webgpu_init_rope_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rope_pipeline[GGML_TYPE_F32][0][0], wgsl_rope_f32,
-                                "rope_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rope_pipeline[GGML_TYPE_F32][0][1],
-                                wgsl_rope_f32_inplace, "rope_f32_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rope_pipeline[GGML_TYPE_F32][1][0], wgsl_rope_f32_ff,
-                                "rope_f32_ff", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rope_pipeline[GGML_TYPE_F32][1][1],
-                                wgsl_rope_f32_ff_inplace, "rope_f32_ff_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rope_pipeline[GGML_TYPE_F16][0][0], wgsl_rope_f16,
-                                "rope_f16", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rope_pipeline[GGML_TYPE_F16][0][1],
-                                wgsl_rope_f16_inplace, "rope_f16_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rope_pipeline[GGML_TYPE_F16][1][0], wgsl_rope_f16_ff,
-                                "rope_f16_ff", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->rope_pipeline[GGML_TYPE_F16][1][1],
-                                wgsl_rope_f16_ff_inplace, "rope_f16_ff_inplace", constants);
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
+
+    webgpu_ctx->rope_pipelines[GGML_TYPE_F32][0][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rope_f32, "rope_f32", constants);
+    webgpu_ctx->rope_pipelines[GGML_TYPE_F32][0][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rope_f32_inplace, "rope_f32_inplace", constants);
+    webgpu_ctx->rope_pipelines[GGML_TYPE_F32][1][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rope_f32_ff, "rope_f32_ff", constants);
+    webgpu_ctx->rope_pipelines[GGML_TYPE_F32][1][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rope_f32_ff_inplace, "rope_f32_ff_inplace", constants);
+
+    webgpu_ctx->rope_pipelines[GGML_TYPE_F16][0][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rope_f16, "rope_f16", constants);
+    webgpu_ctx->rope_pipelines[GGML_TYPE_F16][0][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rope_f16_inplace, "rope_f16_inplace", constants);
+    webgpu_ctx->rope_pipelines[GGML_TYPE_F16][1][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rope_f16_ff, "rope_f16_ff", constants);
+    webgpu_ctx->rope_pipelines[GGML_TYPE_F16][1][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_rope_f16_ff_inplace, "rope_f16_ff_inplace", constants);
 }
 
 static void ggml_webgpu_init_glu_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x);
-    // reglu
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_REGLU][GGML_TYPE_F32][0],
-                                wgsl_reglu_f32, "reglu_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_REGLU][GGML_TYPE_F16][0],
-                                wgsl_reglu_f16, "reglu_f16", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_REGLU][GGML_TYPE_F32][1],
-                                wgsl_reglu_f32_split, "reglu_f32_split", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_REGLU][GGML_TYPE_F16][1],
-                                wgsl_reglu_f16_split, "reglu_f16_split", constants);
-    // geglu
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU][GGML_TYPE_F32][0],
-                                wgsl_geglu_f32, "geglu_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU][GGML_TYPE_F16][0],
-                                wgsl_geglu_f16, "geglu_f16", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU][GGML_TYPE_F32][1],
-                                wgsl_geglu_f32_split, "geglu_f32_split", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU][GGML_TYPE_F16][1],
-                                wgsl_geglu_f16_split, "geglu_f16_split", constants);
-    // swiglu
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_SWIGLU][GGML_TYPE_F32][0],
-                                wgsl_swiglu_f32, "swiglu_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_SWIGLU][GGML_TYPE_F16][0],
-                                wgsl_swiglu_f16, "swiglu_f16", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_SWIGLU][GGML_TYPE_F32][1],
-                                wgsl_swiglu_f32_split, "swiglu_f32_split", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_SWIGLU][GGML_TYPE_F16][1],
-                                wgsl_swiglu_f16_split, "swiglu_f16_split", constants);
-    // swiglu_oai
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_SWIGLU_OAI][GGML_TYPE_F32][0],
-                                wgsl_swiglu_oai_f32, "swiglu_oai_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_SWIGLU_OAI][GGML_TYPE_F32][1],
-                                wgsl_swiglu_oai_f32_split, "swiglu_oai_f32_split", constants);
-    // geglu_erf
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU_ERF][GGML_TYPE_F32][0],
-                                wgsl_geglu_erf_f32, "geglu_erf_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU_ERF][GGML_TYPE_F16][0],
-                                wgsl_geglu_erf_f16, "geglu_erf_f16", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU_ERF][GGML_TYPE_F32][1],
-                                wgsl_geglu_erf_f32_split, "geglu_erf_f32_split", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU_ERF][GGML_TYPE_F16][1],
-                                wgsl_geglu_erf_f16_split, "geglu_erf_f16_split", constants);
-    // geglu_quick
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU_QUICK][GGML_TYPE_F32][0],
-                                wgsl_geglu_quick_f32, "geglu_quick_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU_QUICK][GGML_TYPE_F16][0],
-                                wgsl_geglu_quick_f16, "geglu_quick_f16", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU_QUICK][GGML_TYPE_F32][1],
-                                wgsl_geglu_quick_f32_split, "geglu_quick_f32_split", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->glu_pipeline[GGML_GLU_OP_GEGLU_QUICK][GGML_TYPE_F16][1],
-                                wgsl_geglu_quick_f16_split, "geglu_quick_f16_split", constants);
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
+
+    // REGLU
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_REGLU][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_reglu_f32, "reglu_f32", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_REGLU][GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_reglu_f16, "reglu_f16", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_REGLU][GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_reglu_f32_split, "reglu_f32_split", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_REGLU][GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_reglu_f16_split, "reglu_f16_split", constants);
+
+    // GEGLU
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_f32, "geglu_f32", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU][GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_f16, "geglu_f16", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU][GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_f32_split, "geglu_f32_split", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU][GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_f16_split, "geglu_f16_split", constants);
+
+    // SWIGLU
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_SWIGLU][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_swiglu_f32, "swiglu_f32", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_SWIGLU][GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_swiglu_f16, "swiglu_f16", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_SWIGLU][GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_swiglu_f32_split, "swiglu_f32_split", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_SWIGLU][GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_swiglu_f16_split, "swiglu_f16_split", constants);
+
+    // SWIGLU_OAI
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_SWIGLU_OAI][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_swiglu_oai_f32, "swiglu_oai_f32", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_SWIGLU_OAI][GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_swiglu_oai_f32_split, "swiglu_oai_f32_split", constants);
+
+    // GEGLU_ERF
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU_ERF][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_erf_f32, "geglu_erf_f32", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU_ERF][GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_erf_f16, "geglu_erf_f16", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU_ERF][GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_erf_f32_split, "geglu_erf_f32_split", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU_ERF][GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_erf_f16_split, "geglu_erf_f16_split", constants);
+
+    // GEGLU_QUICK
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU_QUICK][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_quick_f32, "geglu_quick_f32", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU_QUICK][GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_quick_f16, "geglu_quick_f16", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU_QUICK][GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_quick_f32_split, "geglu_quick_f32_split", constants);
+    webgpu_ctx->glu_pipelines[GGML_GLU_OP_GEGLU_QUICK][GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_geglu_quick_f16_split, "geglu_quick_f16_split", constants);
 }
 
 static void ggml_webgpu_init_scale_pipeline(webgpu_context & webgpu_ctx) {
-    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(webgpu_ctx->max_wg_size_x);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->scale_pipeline[0], wgsl_scale_f32, "scale_f32",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->scale_pipeline[1], wgsl_scale_f32_inplace,
-                                "scale_f32_inplace", constants);
+    std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE);
+
+    webgpu_ctx->scale_pipelines[0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_scale_f32, "scale_f32", constants);
+    webgpu_ctx->scale_pipelines[1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_scale_f32_inplace, "scale_f32_inplace", constants);
 }
 
 static void ggml_webgpu_init_soft_max_pipeline(webgpu_context & webgpu_ctx) {
     std::vector<wgpu::ConstantEntry> constants = ggml_webgpu_wg_size_entry(WEBGPU_ROW_SPLIT_WG_SIZE);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[2][0][0], wgsl_soft_max_f32,
-                                "soft_max_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[2][0][1], wgsl_soft_max_f32_inplace,
-                                "soft_max_f32_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[2][1][0], wgsl_soft_max_f32_sink,
-                                "soft_max_f32_sink", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[2][1][1],
-                                wgsl_soft_max_f32_sink_inplace, "soft_max_f32_sink_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[0][0][0], wgsl_soft_max_f32_mask_f32,
-                                "soft_max_f32_mask_f32", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[0][0][1],
-                                wgsl_soft_max_f32_mask_f32_inplace, "soft_max_f32_mask_f32_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[1][0][0], wgsl_soft_max_f32_mask_f16,
-                                "soft_max_f32_mask_f16", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[1][0][1],
-                                wgsl_soft_max_f32_mask_f16_inplace, "soft_max_f32_mask_f16_inplace", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[0][1][0],
-                                wgsl_soft_max_f32_mask_f32_sink, "soft_max_f32_mask_f32_sink", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[0][1][1],
-                                wgsl_soft_max_f32_mask_f32_sink_inplace, "soft_max_f32_mask_f32_sink_inplace",
-                                constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[1][1][0],
-                                wgsl_soft_max_f32_mask_f16_sink, "soft_max_f32_mask_f16_sink", constants);
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->soft_max_pipeline[1][1][1],
-                                wgsl_soft_max_f32_mask_f16_sink_inplace, "soft_max_f32_mask_f16_sink_inplace",
-                                constants);
+
+    // f32 (no mask)
+    webgpu_ctx->soft_max_pipelines[2][0][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_soft_max_f32, "soft_max_f32", constants);
+    webgpu_ctx->soft_max_pipelines[2][0][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_soft_max_f32_inplace, "soft_max_f32_inplace", constants);
+    webgpu_ctx->soft_max_pipelines[2][1][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_soft_max_f32_sink, "soft_max_f32_sink", constants);
+    webgpu_ctx->soft_max_pipelines[2][1][1] = ggml_webgpu_create_pipeline(
+        webgpu_ctx->device, wgsl_soft_max_f32_sink_inplace, "soft_max_f32_sink_inplace", constants);
+
+    // f32 mask (mask_type = 0)
+    webgpu_ctx->soft_max_pipelines[0][0][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_soft_max_f32_mask_f32, "soft_max_f32_mask_f32", constants);
+    webgpu_ctx->soft_max_pipelines[0][0][1] = ggml_webgpu_create_pipeline(
+        webgpu_ctx->device, wgsl_soft_max_f32_mask_f32_inplace, "soft_max_f32_mask_f32_inplace", constants);
+    webgpu_ctx->soft_max_pipelines[0][1][0] = ggml_webgpu_create_pipeline(
+        webgpu_ctx->device, wgsl_soft_max_f32_mask_f32_sink, "soft_max_f32_mask_f32_sink", constants);
+    webgpu_ctx->soft_max_pipelines[0][1][1] = ggml_webgpu_create_pipeline(
+        webgpu_ctx->device, wgsl_soft_max_f32_mask_f32_sink_inplace, "soft_max_f32_mask_f32_sink_inplace", constants);
+
+    // f16 mask (mask_type = 1)
+    webgpu_ctx->soft_max_pipelines[1][0][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_soft_max_f32_mask_f16, "soft_max_f32_mask_f16", constants);
+    webgpu_ctx->soft_max_pipelines[1][0][1] = ggml_webgpu_create_pipeline(
+        webgpu_ctx->device, wgsl_soft_max_f32_mask_f16_inplace, "soft_max_f32_mask_f16_inplace", constants);
+    webgpu_ctx->soft_max_pipelines[1][1][0] = ggml_webgpu_create_pipeline(
+        webgpu_ctx->device, wgsl_soft_max_f32_mask_f16_sink, "soft_max_f32_mask_f16_sink", constants);
+    webgpu_ctx->soft_max_pipelines[1][1][1] = ggml_webgpu_create_pipeline(
+        webgpu_ctx->device, wgsl_soft_max_f32_mask_f16_sink_inplace, "soft_max_f32_mask_f16_sink_inplace", constants);
 }
 
 static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, const char * params) {
@@ -2388,7 +2379,6 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     GGML_ASSERT(ctx->adapter != nullptr);
 
     ctx->adapter.GetLimits(&ctx->limits);
-    ctx->max_wg_size_x = 288;  // default value
 
     wgpu::AdapterInfo info{};
 #ifndef __EMSCRIPTEN__
