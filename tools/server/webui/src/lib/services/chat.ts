@@ -312,7 +312,6 @@ export class ChatService {
 		let aggregatedContent = '';
 		let fullReasoningContent = '';
 		let aggregatedToolCalls: ApiChatCompletionToolCall[] = [];
-		let hasReceivedData = false;
 		let lastTimings: ChatMessageTimings | undefined;
 		let streamFinished = false;
 		let modelEmitted = false;
@@ -415,7 +414,6 @@ export class ChatService {
 
 							if (content) {
 								finalizeOpenToolCallBatch();
-								hasReceivedData = true;
 								aggregatedContent += content;
 								if (!abortSignal?.aborted) {
 									onChunk?.(content);
@@ -424,7 +422,6 @@ export class ChatService {
 
 							if (reasoningContent) {
 								finalizeOpenToolCallBatch();
-								hasReceivedData = true;
 								fullReasoningContent += reasoningContent;
 								if (!abortSignal?.aborted) {
 									onReasoningChunk?.(reasoningContent);
