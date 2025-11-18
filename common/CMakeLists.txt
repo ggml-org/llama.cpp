@@ -50,6 +50,10 @@ add_library(${TARGET} STATIC
     base64.hpp
     chat-parser.cpp
     chat-parser.h
+    chat-peg-parser.cpp
+    chat-peg-parser.h
+    chat-peg-parser-helper.cpp
+    chat-peg-parser-helper.h
     chat.cpp
     chat.h
     common.cpp
@@ -73,6 +77,8 @@ add_library(${TARGET} STATIC
     sampling.h
     speculative.cpp
     speculative.h
+    unicode.cpp
+    unicode.h
     )
 
 if (BUILD_SHARED_LIBS)
