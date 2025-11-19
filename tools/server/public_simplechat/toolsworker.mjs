@@ -20,7 +20,7 @@ self.onmessage = async function (ev) {
     try {
         await xpromise.evalWithPromiseTracking(ev.data.code);
     } catch (/** @type {any} */error) {
-        console.log(`\n\nTool/Function call "${ev.data.name}" raised an exception:${error.name}:${error.message}\n\n`)
+        console.log(`\nTool/Function call "${ev.data.name}" raised an exception:${error.name}:${error.message}`)
     }
     tconsole.console_revert()
     self.postMessage({ cid: ev.data.cid, tcid: ev.data.tcid, name: ev.data.name, data: tconsole.gConsoleStr})
