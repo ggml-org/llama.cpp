@@ -25,6 +25,10 @@ body {
     background-color: lightblue;
 }
 
+#sessionsprompts-div .role-system {
+    border-radius: 1vmin;
+}
+
 #system-in {
     padding-inline: 0.5rem;
 }
@@ -41,6 +45,9 @@ body {
     background: linear-gradient(135deg, #F7FAFC 0%, var(--background-color) 100%)
 }
 .role-tool {
+    background: linear-gradient(135deg, var(--background-color) 0%, lightyellow 100%);
+}
+.role-TOOL-TEMP {
     background: linear-gradient(135deg, var(--background-color) 0%, lightyellow 100%);
 }
 .role-trim {
@@ -155,6 +162,17 @@ body {
     flex-shrink: 1;
     min-height: 40vh;
 }
+#tool-div {
+    border-width: thin;
+    border-color: yellow;
+    border-style: ridge;
+    background-color: antiquewhite;
+}
+#user-in-div {
+    border-width: thin;
+    border-color: black;
+    border-style: solid;
+}
 #user-in {
     background-color: #ffffff;
     padding: 1.6vmin 2vmin;
@@ -162,7 +180,7 @@ body {
     field-sizing: content;
     max-height: 16vh;
 }
-#user-in[data-role="TOOL.TEMP"] {
+#user-in[data-role="TOOL-TEMP"] {
     background-color: lightyellow;
 }
 #user-in-div button {

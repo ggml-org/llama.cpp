@@ -812,6 +812,17 @@ Cleanup in general
   * make things rounded across board by default. add some padding to toolcall details block, ...
   * use icons without text wrt chat sessions++, new chat, clear chat and settings top level buttons.
     * use title property/attribute to give a hint to the user about the button functionality
+  * add role specific background gradients wrt the tool call trigger and user input block as well as
+    fix wrt the tool temp message block. also wrt system input block at top.
+    * also rename the TEMP role tags to use -TEMP instead of .TEMP, so that CSS rule selectors will
+      treat such tags like role-TOOL-TEMP as say a proper css class name rather than messing up with
+      something like role-TOOL.TEMP which will get split to role-TOOL and TEMP and inturn corresponding
+      css rule doesnt/wont get applied.
+    * given that now there is a proper visual cue based seperation of the tool call trigger block from
+      surrounding content, using proper seperate tool call specific coloring, so remove the <HR> horiz
+      line seperation wrt tool call trigger block.
+    * however retain the horizontal line seperation between the tool trigger block and user input block,
+      given that some users and some ai dont seem to identify the difference very easily.
 * Auto ObjPropsEdit UI
   * allow it to be themed by assigning id to top level block.
   * fix a oversight (forgotten $) with use of templated literals and having variables in them.
@@ -842,15 +853,17 @@ Have a seperate helper to show the user input area, based on set state. And have
 if the models support same. It should also take care of some aspects of the tool call response edit / submit,
 potentially.
 
-Make chat show messages by default only appends new chat messages to existing list of shown messages in ui,
-instead of clearing ui and recreating each message ui element again. Have forgotten what I had originally
-implemented, need to cross check.
-
 Should I force a chat_show which clears usage and current settings info from chat session ui block at the
 begining like before the new optimised uirefresh based flow?
 
 Updating system prompt, will reset user input area fully now, which seems a good enough behaviour, while
 keeping the code flow also simple and straight, do I need to change it, I dont think so as of now.
+
+Should I have a toggle to control whether show only the messages sent to ai server based on sliding window
+or show all the messages (ie even beyond the sliding window)?
+* rather previously with chat_show only whats in current sliding window was being shown, but now with
+  the uirefresh based logic, all messages from last chat_show will be shown irrespective of whether still
+  in ai server handshake related sliding window or not.
 
 
 ### Debuging the handshake and beyond
