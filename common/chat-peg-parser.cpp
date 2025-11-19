@@ -40,7 +40,7 @@ struct trie {
     struct node {
         size_t depth = 0;
         std::map<unsigned char, size_t> children;
-        std::vector<size_t> word_lengths;
+        bool is_word;
     };
 
     std::vector<node> nodes;
@@ -70,7 +70,7 @@ struct trie {
             pos++;
 
             // Check if we've matched a complete word
-            if (!nodes[current].word_lengths.empty()) {
+            if (nodes[current].is_word) {
                 return match_result{match_result::COMPLETE_MATCH};
             }
         }
@@ -99,7 +99,7 @@ struct trie {
 
   private:
     void collect_prefix_and_next(size_t index, std::string & prefix, std::vector<prefix_and_next> & out) {
-        if (nodes[index].word_lengths.empty()) {
+        if (!nodes[index].is_word) {
             if (!nodes[index].children.empty()) {
                 std::string chars;
                 chars.reserve(nodes[index].children.size());
@@ -138,7 +138,7 @@ struct trie {
                 current = it->second;
             }
         }
-        nodes[current].word_lengths.push_back(word.length());
+        nodes[current].is_word = true;
     }
 };
 
