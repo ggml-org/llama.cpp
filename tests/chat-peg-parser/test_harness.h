@@ -51,7 +51,7 @@ struct testing {
         indent();
         out << label << ": " << name;
         if (new_failures == 0) {
-            out << "ok, ";
+            out << " ok, ";
         } else {
             out << new_failures << " failed of ";
         }
