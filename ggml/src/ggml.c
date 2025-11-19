@@ -5429,7 +5429,7 @@ struct ggml_tensor * ggml_win_part(
     const int np  = npx*npy*bs;
 
     const int64_t ne[4] = { a->ne[0], w, w, np, };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, 4, ne);
 
     int32_t params[] = { npx, npy, bs, w };
     ggml_set_op_params(result, params, sizeof(params));
@@ -5459,7 +5459,7 @@ struct ggml_tensor * ggml_win_unpart_ext(
         int                   b0,
         int                   w) {
     const int64_t ne[4] = { a->ne[0], w0, h0, b0 };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, 4, ne);
 
     GGML_ASSERT(ggml_is_contiguous(a));
 
@@ -5482,7 +5482,7 @@ struct ggml_tensor * ggml_get_rel_pos(
     GGML_ASSERT(qh + kh - 1 <= a->ne[1]);
 
     const int64_t ne[4] = { a->ne[0], kh, qh, 1, };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F16, 3, ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, 3, ne);
 
     result->op     = GGML_OP_GET_REL_POS;
     result->src[0] = a;

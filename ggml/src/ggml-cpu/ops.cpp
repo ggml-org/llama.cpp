@@ -8863,13 +8863,13 @@ static void ggml_compute_forward_win_part_f32(
                     const int64_t i01 = px*w + i1;
                     const int64_t i00 = i0;
 
-                    void * sp = ((void *) src0->data) + i03*nb03 + i02*nb02  + i01*nb01 + i00*nb00;
-                    void * dp = ((void *) dst->data)  + i3*nb3   + i2*nb2    + i1*nb1   + i0*nb0; 
+                    const char * sp = ((const char *) src0->data) + i03*nb03 + i02*nb02  + i01*nb01 + i00*nb00;
+                    char * dp = ((char *) dst->data)  + i3*nb3   + i2*nb2    + i1*nb1   + i0*nb0; 
 
                     if (py*w + i2 >= ne02 || px*w + i1 >= ne01) {
                         *((float *) dp) = 0;
                     } else {
-                        *((float *) dp) = *((float *) sp);
+                        *((float *) dp) = *((const float *) sp);
                     }
                 }
             }
@@ -8907,13 +8907,13 @@ static void ggml_compute_forward_win_part_f16(
                     const int64_t i01 = px*w + i1;
                     const int64_t i00 = i0;
 
-                    void * sp = ((void *) src0->data) + i03*nb03 + i02*nb02  + i01*nb01 + i00*nb00;
-                    void * dp = ((void *) dst->data)  + i3*nb3   + i2*nb2    + i1*nb1   + i0*nb0; 
+                    const char * sp = ((const char *) src0->data) + i03*nb03 + i02*nb02  + i01*nb01 + i00*nb00;
+                    char * dp = ((char *) dst->data)  + i3*nb3   + i2*nb2    + i1*nb1   + i0*nb0; 
 
                     if (py*w + i2 >= ne02 || px*w + i1 >= ne01) {
                         *((ggml_fp16_t *) dp) = 0;
                     } else {
-                        *((ggml_fp16_t *) dp) = *((ggml_fp16_t *) sp);
+                        *((ggml_fp16_t *) dp) = *((const ggml_fp16_t *) sp);
                     }
                 }
             }
@@ -8981,10 +8981,10 @@ static void ggml_compute_forward_win_unpart_f32(
                     const int64_t i01 = i1%w;
                     const int64_t i00 = i0;
     
-                    void * sp = ((void *) src0->data) + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00;
-                    void * dp = ((void *) dst->data)  + i3*nb3   + i2*nb2   + i1*nb1   + i0*nb0;
+                    const char * sp = ((const char *) src0->data) + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00;
+                    char * dp = ((char *) dst->data)  + i3*nb3   + i2*nb2   + i1*nb1   + i0*nb0;
 
-                    *((float *) dp) = *((float *) sp);
+                    *((float *) dp) = *((const float *) sp);
                 }
             }
         }
@@ -9025,10 +9025,10 @@ static void ggml_compute_forward_win_unpart_f16(
                     const int64_t i01 = i1%w;
                     const int64_t i00 = i0;
     
-                    void * sp = ((void *) src0->data) + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00;
-                    void * dp = ((void *) dst->data)  + i3*nb3   + i2*nb2   + i1*nb1   + i0*nb0;
+                    const char * sp = ((const char *) src0->data) + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00;
+                    char * dp = ((char *) dst->data)  + i3*nb3   + i2*nb2   + i1*nb1   + i0*nb0;
 
-                    *((ggml_fp16_t *) dp) = *((ggml_fp16_t *) sp);
+                    *((ggml_fp16_t *) dp) = *((const ggml_fp16_t *) sp);
                 }
             }
         }
@@ -9216,14 +9216,14 @@ static void ggml_compute_forward_get_rel_pos_f32(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
-    const int64_t w = ne1;
+    const int64_t kh = ne1;
 
     float * src0_data = (float *) src0->data;
     float * dst_data  = (float *) dst->data;
 
     for (int64_t i2 = 0; i2 < ne2; ++i2) {
         for (int64_t i1 = 0; i1 < ne1; ++i1) {
-            const int64_t pos = (w - i1 - 1) + i2;
+            const int64_t pos = (kh - i1 - 1) + i2;
             for (int64_t i0 = 0; i0 < ne0; ++i0) {
                 dst_data[i2*ne1*ne0 + i1*ne0 + i0] = src0_data[pos*ne00 + i0];
             }
@@ -9242,14 +9242,14 @@ static void ggml_compute_forward_get_rel_pos_f16(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
-    const int64_t w = ne1;
+    const int64_t kh = ne1;
 
     ggml_fp16_t * src0_data = (ggml_fp16_t *) src0->data;
     ggml_fp16_t * dst_data  = (ggml_fp16_t *) dst->data;
 
     for (int64_t i2 = 0; i2 < ne2; ++i2) {
         for (int64_t i1 = 0; i1 < ne1; ++i1) {
-            const int64_t pos = (w - i1 - 1) + i2;
+            const int64_t pos = (kh - i1 - 1) + i2;
             for (int64_t i0 = 0; i0 < ne0; ++i0) {
                 dst_data[i2*ne1*ne0 + i1*ne0 + i0] = src0_data[pos*ne00 + i0];
             }

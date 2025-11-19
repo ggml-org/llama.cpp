@@ -2346,6 +2346,20 @@ extern "C" {
             int                   h0,
             int                   w);
 
+    // reverse of ggml_win_part with explicit output dimensions
+    // a:      [C, w, w, B*NPY*NPX]
+    // result: [C, w0, h0, b0]
+    // w0, h0: output width and height (may differ from input due to padding removal)
+    // b0: output batch size
+    // w: window size (must match the one used in ggml_win_part)
+    GGML_API struct ggml_tensor * ggml_win_unpart_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   w0,
+            int                   h0,
+            int                   b0,
+            int                   w);
+
     GGML_API struct ggml_tensor * ggml_unary(
             struct ggml_context * ctx,
              struct ggml_tensor * a,
@@ -2356,6 +2370,12 @@ extern "C" {
         struct ggml_tensor  * a,
         enum ggml_unary_op op);
 
+    // relative position encoding
+    // a:   [C, rel_pos_size]
+    // res: [C, kh, qh]
+    // where rel_pos_size >= qh + kh - 1
+    // extracts relative position embeddings for attention
+    // ref: https://github.com/facebookresearch/segment-anything/blob/main/segment_anything/modeling/image_encoder.py#L292-L322
     GGML_API struct ggml_tensor * ggml_get_rel_pos(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
