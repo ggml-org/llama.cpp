@@ -36,6 +36,7 @@ if (LLAMA_BUILD_BORINGSSL)
         boringssl
         GIT_REPOSITORY ${BORINGSSL_GIT}
         GIT_TAG        ${BORINGSSL_VERSION}
+        PATCH_COMMAND  ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/patch-boringssl.cmake"
     )
 
     set(SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
@@ -48,12 +49,6 @@ if (LLAMA_BUILD_BORINGSSL)
 
     set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
     set(BUILD_TESTING ${SAVED_BUILD_TESTING})
-
-    # skip bssl
-    if(TARGET bssl)
-        set_target_properties(bssl PROPERTIES EXCLUDE_FROM_ALL TRUE)
-        set_target_properties(bssl PROPERTIES EXCLUDE_FROM_DEFAULT_BUILD TRUE)
-    endif()
 
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
