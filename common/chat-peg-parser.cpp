@@ -36,17 +36,16 @@ static bool is_hex_digit(const char c) {
 
 // Trie for matching multiple literals.
 // This is used in common_chat_peg_until_parser and to build a GBNF exclusion grammar
-class trie_matcher {
+struct trie {
     struct node {
         size_t depth = 0;
         std::map<unsigned char, size_t> children;
         std::vector<size_t> word_lengths;
     };
 
-    std::vector<node> trie;
+    std::vector<node> nodes;
 
-  public:
-    trie_matcher(const std::vector<std::string> & words) {
+    trie(const std::vector<std::string> & words) {
       create_node(); // root node
       for (const auto & w : words) {
           insert(w);
@@ -61,8 +60,8 @@ class trie_matcher {
         size_t pos = start_pos;
 
         while (pos < sv.size()) {
-            auto it = trie[current].children.find(sv[pos]);
-            if (it == trie[current].children.end()) {
+            auto it = nodes[current].children.find(sv[pos]);
+            if (it == nodes[current].children.end()) {
                 // Can't continue matching
                 return match_result{match_result::NO_MATCH};
             }
@@ -71,7 +70,7 @@ class trie_matcher {
             pos++;
 
             // Check if we've matched a complete word
-            if (!trie[current].word_lengths.empty()) {
+            if (!nodes[current].word_lengths.empty()) {
                 return match_result{match_result::COMPLETE_MATCH};
             }
         }
@@ -100,18 +99,18 @@ class trie_matcher {
 
   private:
     void collect_prefix_and_next(size_t index, std::string & prefix, std::vector<prefix_and_next> & out) {
-        if (trie[index].word_lengths.empty()) {
-            if (!trie[index].children.empty()) {
+        if (nodes[index].word_lengths.empty()) {
+            if (!nodes[index].children.empty()) {
                 std::string chars;
-                chars.reserve(trie[index].children.size());
-                for (const auto & p : trie[index].children) {
+                chars.reserve(nodes[index].children.size());
+                for (const auto & p : nodes[index].children) {
                     chars.push_back(p.first);
                 }
                 out.emplace_back(prefix_and_next{prefix, chars});
             }
         }
 
-        for (const auto & p : trie[index].children) {
+        for (const auto & p : nodes[index].children) {
             unsigned char ch = p.first;
             auto child = p.second;
             prefix.push_back(ch);
@@ -121,25 +120,25 @@ class trie_matcher {
     }
 
     size_t create_node() {
-        size_t index = trie.size();
-        trie.emplace_back();
+        size_t index = nodes.size();
+        nodes.emplace_back();
         return index;
     }
 
     void insert(const std::string & word) {
         size_t current = 0;
         for (unsigned char ch : word) {
-            auto it = trie[current].children.find(ch);
-            if (it == trie[current].children.end()) {
+            auto it = nodes[current].children.find(ch);
+            if (it == nodes[current].children.end()) {
                 size_t child = create_node();
-                trie[child].depth = trie[current].depth + 1;
-                trie[current].children[ch] = child;
+                nodes[child].depth = nodes[current].depth + 1;
+                nodes[current].children[ch] = child;
                 current = child;
             } else {
                 current = it->second;
             }
         }
-        trie[current].word_lengths.push_back(word.length());
+        nodes[current].word_lengths.push_back(word.length());
     }
 };
 
@@ -602,7 +601,7 @@ struct parser_executor {
     }
 
     common_chat_parse_result operator()(const common_chat_peg_until_parser & p) const {
-        trie_matcher matcher(p.delimiters);
+        trie matcher(p.delimiters);
 
         // Scan input and check for delimiters
         size_t pos = start_pos;
@@ -629,12 +628,12 @@ struct parser_executor {
             // Check if a delimiter starts at this position
             auto match = matcher.check_at(ctx.input, pos);
 
-            if (match == trie_matcher::COMPLETE_MATCH) {
+            if (match == trie::COMPLETE_MATCH) {
                 // Found a complete delimiter, return everything before it
                 return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
-            if (match == trie_matcher::PARTIAL_MATCH) {
+            if (match == trie::PARTIAL_MATCH) {
                 // Found a partial match extending to end of input, return everything before it
                 return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
@@ -1152,7 +1151,7 @@ static std::string gbnf_escape_char_class(char c) {
 }
 
 static std::string gbnf_excluding_pattern(const std::vector<std::string> & strings) {
-    trie_matcher matcher(strings);
+    trie matcher(strings);
     auto pieces = matcher.collect_prefix_and_next();
 
     std::string pattern;
