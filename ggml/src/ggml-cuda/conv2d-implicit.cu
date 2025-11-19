@@ -871,10 +871,13 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
 
 
   prepareIteratorA<BM, BK, A_K_STRID, ROW_STEP>(thread_row, masks_a, element_offset_a, param);
+
+#ifdef CP_ASYNC_AVAILABLE
   unsigned int iter_src_idx = thread_row * param.weightKOffset;
   unsigned int iter_dst_idx = thread_row * TILE_COLS_VECTORIZED + thread_col;
   unsigned int krow_idx = thread_row + blockIdx.x * BN;
   const int ITER_SRC_STEPS = ROW_STEP * param.weightKOffset;
+#endif
 
 
   // prefetch the first block tile of A,B into shared memory
