@@ -387,13 +387,7 @@ class llm_graph_input_sampling : public llm_graph_input_i {
 public:
     llm_graph_input_sampling(int32_t n_vocab, bool sorted,
             std::unordered_map<llama_seq_id, llama_sampler*> samplers) :
-        n_vocab(n_vocab), sorted_value(sorted), samplers(samplers) {
-
-        sampler_versions.reserve(samplers.size());
-        for (const auto & [seq_id, sampler] : samplers) {
-            sampler_versions[seq_id] = llama_sampler_chain_get_version(sampler);
-        }
-    }
+        n_vocab(n_vocab), sorted_value(sorted), samplers(samplers) { }
     virtual ~llm_graph_input_sampling() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -404,8 +398,6 @@ public:
     ggml_tensor * size           = nullptr; // I32 [1]
     ggml_tensor * sorted         = nullptr; // I32 [1]
 
-    // Track sampler chain version for reuse
-    std::unordered_map<llama_seq_id, uint64_t> sampler_versions;
     std::unordered_map<llama_seq_id, llama_sampler*> samplers;
 };
 

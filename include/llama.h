@@ -1235,7 +1235,6 @@ extern "C" {
 
     // after removing a sampler, the chain will no longer own it, and it will not be freed when the chain is freed
     LLAMA_API struct llama_sampler * llama_sampler_chain_remove(   struct llama_sampler * chain, int32_t i);
-    LLAMA_API uint64_t               llama_sampler_chain_get_version(const struct llama_sampler * chain);
 
     // available samplers:
 

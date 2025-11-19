@@ -477,7 +477,7 @@ bool llm_graph_input_sampling::can_reuse(const llm_graph_params & params) {
     }
 
     for (const auto & [seq_id, sampler] : params.samplers) {
-        if (sampler_versions[seq_id] != llama_sampler_chain_get_version(sampler)) {
+        if (samplers[seq_id] != sampler) {
            return false;
         }
     }
