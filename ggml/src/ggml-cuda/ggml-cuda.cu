@@ -3200,6 +3200,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
     const auto try_launch_concurrent_event = [&](const ggml_tensor * node) {
         if (stream_ctx.concurrent_events.find(node) != stream_ctx.concurrent_events.end()) {
             concurrent_event = &stream_ctx.concurrent_events[node];
+            is_concurrent_event_active = true;
 
             GGML_LOG_DEBUG("Launching %d streams at %s\n", concurrent_event->n_streams, node->name);
 
@@ -3249,10 +3250,15 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", stream_mapping, node->name);
                     }
                 } else if (i - prev_i > 1) {
-
                     //the previous node was fused
                     const ggml_tensor * prev_node = cgraph->nodes[i - 1];
                     try_launch_concurrent_event(prev_node);
+
+                    if (is_concurrent_event_active) {
+                        const int stream_mapping = concurrent_event->stream_mapping[node];
+                        cuda_ctx->curr_stream_no = stream_mapping;
+                        GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", stream_mapping, node->name);
+                    }
                 }
                 prev_i = i;
 
@@ -3761,7 +3767,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         }
         for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
             const ggml_tensor * node = cgraph->nodes[node_idx]->src[src_idx];
-            //TODO: check why nrows > 1 fails, probably related to CUDA graphs
+            //TODO: check why nrows > 1 fails
             if (node && !is_empty(node) && ggml_nrows(node) <= 1) {
                 fan_out[node] += 1;
             }
