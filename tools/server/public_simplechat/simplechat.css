@@ -84,6 +84,7 @@ body {
     overflow-wrap: break-word;
     word-break: break-word;
     hyphens: auto;
+    border-width: thin;
 }
 .chat-message-toolcall {
     border-style: solid;

@@ -1027,7 +1027,7 @@ class MultiChatUI {
 
         this.TimePeriods = {
             ToolCallAutoSecsTimeUnit: 1000,
-            PopoverCloseTimeout: 8000,
+            PopoverCloseTimeout: 4000,
         }
 
         this.timers = {
