@@ -2684,24 +2684,24 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
 
     for (int i = 0; i < nb; i++) {
 
-        float max_real = 1e-5, max_imag = 1e-5;
+        float max_real = 1e-5;
+        float max_imag = 1e-5;
 
         for (int j = 0; j < QK_K; ++j) {
-            float* x_com = x + j;
+            const float* x_com = x + j;
 
-            ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
+            ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t*)(x_com))[0];
             //GGML_ASSERT(sizeof(ggml_bf16_t) == 2);
-            //GGML_ASSERT((void*)((ggml_bf16_t*)(x_com)) == (void*)x_com);
-            //GGML_ASSERT((void*)((ggml_bf16_t*)(x_com) + 1) == (void*)((char*)x_com + 2));
-            ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
+            //GGML_ASSERT((void*)((const ggml_bf16_t*)(x_com)) == (void*)x_com);
+            //GGML_ASSERT((void*)((const ggml_bf16_t*)(x_com) + 1) == (void*)((const char*)x_com + 2));
+            ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t*)(x_com))[1];
 
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);
             float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
 
-            if(x_real != x_real){
-                //GGML_ABORT("nan discovered, x_com in binary32 format: [%08x]", (x_com)[0]);
-
-                GGML_ABORT("nan discovered, x_com in binary32 format: [%08x] [%04x %04x]",((uint32_t*)(x_com))[0], ((ggml_bf16_t*)(x_com))[0].bits, ((ggml_bf16_t*)(x_com))[1].bits);
+            // todo_liweitao 是不是可以删了
+            if(__builtin_expect(!!(x_real!=x_real), 0)){
+                GGML_ABORT("nan discovered, x_com in binary32 format: [%08x] [%04x %04x]", ((const uint32_t*)(x_com))[0], ((const ggml_bf16_t*)(x_com))[0].bits, ((const ggml_bf16_t*)(x_com))[1].bits);
             }
 
             max_real = MAX(max_real, fabsf(x_real));
@@ -2712,10 +2712,10 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
         const float iscale_imag = 127.f / max_imag;
         //GGML_LOG("max_real = %f, iscale_real = %f, max_imag = %f, iscale_imag = %f\n", max_real, iscale_real, max_imag, iscale_imag);
         for (int j = 0; j < QK_K; ++j) {
-            float* x_com = x + j;
+            const float* x_com = x + j;
 
-            ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
-            ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
+            ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t*)(x_com))[1];
+            ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t*)(x_com))[0];
 
             float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);

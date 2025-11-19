@@ -5486,6 +5486,8 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_I32:
         case GGML_TYPE_I64:
         case GGML_TYPE_F64:
+        case GGML_TYPE_IFAIRY:
+        case GGML_TYPE_IFAIRY_Q16:
         case GGML_TYPE_COUNT:
             {
                 GGML_ABORT("fatal error");
@@ -5962,6 +5964,7 @@ static void ggml_compute_forward_rope_f16(
         }
     }
 }
+// todo_liweitao 看一下是不是要删除
 static void rope_yarn_ifairy(
     float theta_extrap, float freq_scale, float corr_dims[2], int64_t i0, float ext_factor, float mscale,
     float * cos_theta, float * sin_theta) {
@@ -5994,6 +5997,7 @@ static void ggml_rope_cache_init_ifairy(
         cache[i0 + 1] *= sin_sign;
     }
 }
+// todo_liweitao 这个写法看不懂
 int n_ti_rope = 0;
 // 只在line 6044开始有差异, 只处理mode==0的情况
 static void ggml_compute_forward_rope_ifairy(
@@ -6121,8 +6125,8 @@ static void ggml_compute_forward_rope_ifairy(
                           float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
                         
 
-                    const float x0 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[0]); //real
-                    const float x1 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[1]); //imag
+                    const float x0 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[0]); //real
+                    const float x1 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[1]); //imag
 
                     dst_data[0]      = x0*cos_theta - x1*sin_theta;
                     dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
@@ -6178,8 +6182,8 @@ static void ggml_compute_forward_ifairy_split_impl(
                     const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
                           float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
-                    const float x0 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[0]); //real
-                    const float x1 = GGML_BF16_TO_FP32(((ggml_bf16_t*)(src))[1]); //imag
+                    const float x0 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[0]); //real
+                    const float x1 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[1]); //imag
 
                     if(x0 != x0 || x0 > 65504.f || x0 < -65504.f){
                         GGML_ABORT("nan discovered, src0 is nan, value: %f, at time %d", x0, n_ti_split);

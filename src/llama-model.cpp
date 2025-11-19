@@ -19677,6 +19677,7 @@ int32_t llama_n_head(const llama_model * model) {
     return llama_model_n_head(model);
 }
 
+// todo_liweitao 要改吧？
 llama_rope_type llama_model_rope_type(const llama_model * model) {
     switch (model->arch) {
         // these models do not use RoPE

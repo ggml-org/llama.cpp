@@ -4048,7 +4048,7 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(
         float                 attn_factor,
         float                 beta_fast,
         float                 beta_slow,
-        bool                  inplace) {
+        bool                  inplace) { // todo_liweitao 可以删了？
     GGML_ASSERT((mode & 1) == 0 && "mode & 1 == 1 is no longer supported");
 
     GGML_ASSERT(ggml_is_vector(b));

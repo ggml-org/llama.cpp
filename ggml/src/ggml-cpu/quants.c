@@ -113,10 +113,10 @@ void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
     float * x_imag = (float *)malloc(k * sizeof(float));
 
     for (int64_t i = 0; i < k; ++i) {
-        float* x_com = x + i;
+        const float* x_com = x + i;
 
-        ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
-        ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
+        ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t*)(x_com))[0];
+        ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t*)(x_com))[1];
 
         x_real[i] = GGML_BF16_TO_FP32(x_real_bf16);
         x_imag[i] = GGML_BF16_TO_FP32(x_imag_bf16);
