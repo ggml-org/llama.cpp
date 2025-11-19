@@ -3746,7 +3746,7 @@ static const char * ggml_backend_cuda_device_get_description(ggml_backend_dev_t 
 
 #if defined(__linux__)
 // Helper function to get available memory from /proc/meminfo for UMA systems
-static bool ggml_backend_cuda_get_available_uma_memory(long * availableMemoryKb, long * freeSwapKb) {
+static bool ggml_backend_cuda_get_available_uma_memory(long * available_memory_kb, long * free_swap_kb) {
     FILE * meminfo_file = nullptr;
     // 2KB buffer for reading /proc/meminfo since it does not report size info, should be enough
     const size_t BUFFER_SIZE = 2048;
@@ -3756,7 +3756,7 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * availableMemoryKb,
     long huge_tlb_free_pages = -1;
     long huge_tlb_page_size = -1;
 
-    if (availableMemoryKb == nullptr || freeSwapKb == nullptr) {
+    if (available_memory_kb == nullptr || free_swap_kb == nullptr) {
         return false;
     }
 
@@ -3776,8 +3776,8 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * availableMemoryKb,
     }
     file_buffer[bytes_read] = '\0';
 
-    *availableMemoryKb = -1;
-    *freeSwapKb = -1;
+    *available_memory_kb = -1;
+    *free_swap_kb = -1;
 
     // Parse the file buffer line by line
     char * line = file_buffer.get();
@@ -3794,9 +3794,9 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * availableMemoryKb,
 
         long value;
         if (sscanf(line, "MemAvailable: %ld kB", &value) == 1) {
-            *availableMemoryKb = value;
+            *available_memory_kb = value;
         } else if (sscanf(line, "SwapFree: %ld kB", &value) == 1) {
-            *freeSwapKb = value;
+            *free_swap_kb = value;
         } else if (sscanf(line, "HugePages_Total: %ld", &value) == 1) {
             huge_tlb_total_pages = value;
         } else if (sscanf(line, "HugePages_Free: %ld", &value) == 1) {
@@ -3809,13 +3809,13 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * availableMemoryKb,
     }
 
     if (huge_tlb_total_pages != 0 && huge_tlb_total_pages != -1) {
-        *availableMemoryKb = huge_tlb_free_pages * huge_tlb_page_size;
+        *available_memory_kb = huge_tlb_free_pages * huge_tlb_page_size;
 
         // Hugetlbfs pages are not swappable.
-        *freeSwapKb = 0;
+        *free_swap_kb = 0;
     }
 
-    GGML_LOG_DEBUG("%s: final availableMemoryKb: %ld\n", __func__, *availableMemoryKb);
+    GGML_LOG_DEBUG("%s: final available_memory_kb: %ld\n", __func__, *available_memory_kb);
     return true;
 }
 #endif // defined(__linux__)
