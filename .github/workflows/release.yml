@@ -693,6 +693,51 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
           name: llama-${{ steps.tag.outputs.name }}-xcframework
 
+  openEuler-cann:
+    strategy:
+      matrix:
+        arch: [x86, aarch64]
+        chip_type: ['910b', '310p']
+        build: ['Release']
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    container: ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.3.rc1.alpha001-910b-openeuler22.03-py3.11' || '8.2.rc1-310p-openeuler22.03-py3.11' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Dependencies
+        run: |
+          yum update -y
+          yum install -y git gcc gcc-c++ make cmake libcurl-devel
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build
+        run: |
+          export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
+
+          cmake -S . -B build \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+              -DGGML_CANN=on \
+              -DSOC_TYPE=ascend${{ matrix.chip_type }}
+          cmake --build build -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.zip ./build/bin/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.zip
+          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.zip
+
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
 
@@ -714,6 +759,7 @@ jobs:
       - macOS-arm64
       - macOS-x64
       - ios-xcode-build
+      - openEuler-cann
 
     steps:
       - name: Clone

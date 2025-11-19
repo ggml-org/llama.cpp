@@ -2544,7 +2544,7 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
 
         int64_t shifts[] = { 1 };
         int64_t dims[]   = { 3 };
-        aclnn_roll(ctx, acl_input_tensor, acl_input_roll_tensor, shifts, dims);
+        aclnn_roll(ctx, acl_input_tensor.get(), acl_input_roll_tensor.get(), shifts, dims);
 
         // init [-1, 1, -1, 1, ...]
         minus_one_scale_buffer = minus_one_scale_allocator.get();
@@ -2564,7 +2564,7 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
         }
         int64_t index_num = src0->ne[0];
         float   value     = -1;
-        aclnn_index_fill_tensor(ctx, acl_minus_one_tensor, dim, index, index_num, value);
+        aclnn_index_fill_tensor(ctx, acl_minus_one_tensor.get(), dim, index, index_num, value);
     } else {
         // roll input: [q0,q1,q2,...] ->
         // [q_half,q_half+1,...,q_end,q0,q1,...q_half-1]
@@ -2576,7 +2576,7 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
 
         int64_t shifts[] = { src0->ne[0] / 2 };
         int64_t dims[]   = { 3 };
-        aclnn_roll(ctx, acl_input_tensor, acl_input_roll_tensor, shifts, dims);
+        aclnn_roll(ctx, acl_input_tensor.get(), acl_input_roll_tensor.get(), shifts, dims);
 
         // init [-1, -1, -1, 1, 1，1，...]
         minus_one_scale_buffer  = minus_one_scale_allocator.get();
@@ -2599,7 +2599,7 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
                                                                        first_half_ne, first_half_nb, GGML_MAX_DIMS);
         bool           inplace               = true;
         float          scale                 = -1;
-        aclnn_muls(ctx, acl_first_half_tensor, scale, nullptr, inplace);
+        aclnn_muls(ctx, acl_first_half_tensor.get(), scale, nullptr, inplace);
     }
 
     // TODO: n_dims < ne0
@@ -2620,14 +2620,15 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
         ggml_cann_create_tensor(input_roll_buffer, ggml_cann_type_mapping(src0->type), ggml_type_size(src0->type),
                                 src0->ne, input_nb, GGML_MAX_DIMS);
 
-    aclnn_mul(ctx, acl_input_roll_reshape_tensor, acl_minus_one_tensor, acl_input_roll_mul_scale_tensor);
+    aclnn_mul(ctx, acl_input_roll_reshape_tensor.get(), acl_minus_one_tensor.get(),
+              acl_input_roll_mul_scale_tensor.get());
 
     // output
     void * output_fp32_buffer;
     if (src0->type == GGML_TYPE_F32) {
-        aclnn_mul(ctx, acl_src, acl_cos_reshape_tensor);
-        aclnn_mul(ctx, acl_input_roll_mul_scale_tensor, acl_sin_reshape_tensor);
-        aclnn_add(ctx, acl_src, acl_input_roll_mul_scale_tensor, acl_dst);
+        aclnn_mul(ctx, acl_src.get(), acl_cos_reshape_tensor.get());
+        aclnn_mul(ctx, acl_input_roll_mul_scale_tensor.get(), acl_sin_reshape_tensor.get());
+        aclnn_add(ctx, acl_src.get(), acl_input_roll_mul_scale_tensor.get(), acl_dst.get());
         // TODO: ne0 != n_dims in mode2
     } else if (src0->type == GGML_TYPE_F16) {
         size_t input_fp32_nb[GGML_MAX_DIMS];
@@ -2648,10 +2649,10 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
         output_fp32_buffer                = fp32_allocator.get();
         acl_tensor_ptr output_fp32_tensor = ggml_cann_create_tensor(output_fp32_buffer, ACL_FLOAT, sizeof(float),
                                                                     dst->ne, input_fp32_nb, GGML_MAX_DIMS);
-        aclnn_mul(ctx, acl_src, acl_cos_reshape_tensor, input_fp32_tensor1);
-        aclnn_mul(ctx, acl_input_roll_mul_scale_tensor, acl_sin_reshape_tensor, input_fp32_tensor2);
-        aclnn_add(ctx, input_fp32_tensor1, input_fp32_tensor2, output_fp32_tensor);
-        aclnn_cast(ctx, output_fp32_tensor, acl_dst, ACL_FLOAT16);
+        aclnn_mul(ctx, acl_src.get(), acl_cos_reshape_tensor.get(), input_fp32_tensor1.get());
+        aclnn_mul(ctx, acl_input_roll_mul_scale_tensor.get(), acl_sin_reshape_tensor.get(), input_fp32_tensor2.get());
+        aclnn_add(ctx, input_fp32_tensor1.get(), input_fp32_tensor2.get(), output_fp32_tensor.get());
+        aclnn_cast(ctx, output_fp32_tensor.get(), acl_dst.get(), ACL_FLOAT16);
     }
     return;
 #endif
