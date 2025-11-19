@@ -14,7 +14,7 @@
 {%- endmacro %}
 
 {%- set tool_response_queue = namespace(ids=[]) -%}
-{%- set tool_call_counter = namespace(value=1) -%}
+{%- set tool_call_counter = namespace(value=0) -%}
 
 {%- if tools -%}
   <|im_system|>tool_declare<|im_middle|>{{ tools | tojson }}<|im_end|>

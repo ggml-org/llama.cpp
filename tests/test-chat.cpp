@@ -2659,14 +2659,14 @@ Hey there!<|im_end|>
         // Test parsing tool calls
         assert_msg_equals(message_assist_call,
             common_chat_parse(
-                "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
                 /* is_partial= */ false,
                 {COMMON_CHAT_FORMAT_KIMI_K2}));
 
         // Test parsing tool calls with thinking
         assert_msg_equals(message_assist_call_thoughts,
             common_chat_parse(
-                "<think>I'm\nthinking</think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+                "<think>I'm\nthinking</think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
                 /* is_partial= */ false,
                 {
                     /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
@@ -2676,7 +2676,7 @@ Hey there!<|im_end|>
         // Test tool calls with extra content
         assert_msg_equals(message_assist_call_content,
             common_chat_parse(
-                "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>Hello, world!\nWhat's up?",
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>Hello, world!\nWhat's up?",
                 /* is_partial= */ false,
                 {COMMON_CHAT_FORMAT_KIMI_K2}
             ));
@@ -2684,7 +2684,7 @@ Hey there!<|im_end|>
         // Test tool calls with extra content AND thinking
         assert_msg_equals(message_assist_call_thoughts_content,
             common_chat_parse(
-                "<think>I'm\nthinking</think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>Hello, world!\nWhat's up?",
+                "<think>I'm\nthinking</think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>Hello, world!\nWhat's up?",
                 /* is_partial= */ false,
                 {
                     /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
@@ -2693,47 +2693,65 @@ Hey there!<|im_end|>
 
         // Test streaming
         test_parser_with_streaming(message_assist_call_thoughts_content,
-            "<think>I'm\nthinking\n</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+            "<think>I'm\nthinking\n</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
             [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
                     /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
             }); });
         test_parser_with_streaming(message_assist_call_thoughts_unparsed,
-            "<think>I'm\nthinking</think>\n\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+            "<think>I'm\nthinking</think>\n\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
             [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
                     /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
             }); });
         test_parser_with_streaming(message_assist_call_thoughts_content,
-            "<think>I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?\n\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>\n",
+            "<think>I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?\n\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>\n",
             [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
                     /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
             }); });
         test_parser_with_streaming(message_assist_call_withopt,
-            "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function_with_opt:1<|tool_call_argument_begin|>{\"arg1\": 1, \"arg2\": 2}<|tool_call_end|><|tool_calls_section_end|>",
+            "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function_with_opt:0<|tool_call_argument_begin|>{\"arg1\": 1, \"arg2\": 2}<|tool_call_end|><|tool_calls_section_end|>",
             [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
                     /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
             }); });
         test_parser_with_streaming(simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking", "special_function", "{\"arg1\": \"123456\"}"),
-            "<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": \"123456\"}<|tool_call_end|><|tool_calls_section_end|>",
+            "<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": \"123456\"}<|tool_call_end|><|tool_calls_section_end|>",
             [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
                     /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
             }); });
         test_parser_with_streaming(simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking", "special_function", "{\"arg1\": [1, 2, \"345\", 6]}"),
-            "<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": [1, 2, \"345\", 6]}<|tool_call_end|><|tool_calls_section_end|>",
+            "<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": [1, 2, \"345\", 6]}<|tool_call_end|><|tool_calls_section_end|>",
             [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
                     /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
             }); });
         test_parser_with_streaming(simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking", "special_function", "{\"arg1\": {\"12\": 34, \"5\": [67, 8], \"9\": \"10\"}}"),
-            "<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": {\"12\": 34, \"5\": [67, 8], \"9\": \"10\"}}<|tool_call_end|><|tool_calls_section_end|>",
+            "<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": {\"12\": 34, \"5\": [67, 8], \"9\": \"10\"}}<|tool_call_end|><|tool_calls_section_end|>",
             [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
                     /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
             }); });
+        test_parser_with_streaming(
+                simple_assist_msg("", "", "complex_function", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}"),
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.complex_function:0<|tool_call_argument_begin|>"
+                "{\"name\": \"John Doe\", \"age\": 30, \"active\": true, \"score\": 95.5}"
+                "<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_KIMI_K2}); });
+        test_parser_with_streaming(
+                simple_assist_msg("", "", "web_search", "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}"),
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.web_search:0<|tool_call_argument_begin|>"
+                "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}"
+                "<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_KIMI_K2}); });
+        test_parser_with_streaming(
+                simple_assist_msg("", "", "read_file", "{\"args\": [{\"path\": \"src/providers/ThemeProvider.tsx\"}, {\"path\": \"src/components/Header.tsx\"}, {\"path\": \"src/components/ThemeToggle.tsx\"}, {\"path\": \"src/app/globals.css\"}, {\"path\": \"src/app/layout.tsx\"}]}"),
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>"
+                "{\"args\": [{\"path\": \"src/providers/ThemeProvider.tsx\"}, {\"path\": \"src/components/Header.tsx\"}, {\"path\": \"src/components/ThemeToggle.tsx\"}, {\"path\": \"src/app/globals.css\"}, {\"path\": \"src/app/layout.tsx\"}]}"
+                "<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_KIMI_K2}); });
 
         // Test template generation for regular content
         test_templates(tmpls.get(), end_tokens, message_assist, tools,
@@ -2742,7 +2760,7 @@ Hey there!<|im_end|>
 
         // Test template generation for tool calls
         test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
-                      "<think></think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:1<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+                      "<think></think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
                       /* expect_grammar_triggered= */ true,
                       /* test_grammar_if_triggered= */ true,
                       /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
@@ -2751,14 +2769,14 @@ Hey there!<|im_end|>
 
         // Test template generation for tools with optional parameters
         test_templates(tmpls.get(), end_tokens, message_assist_call_noopt, tools,
-                      "<think></think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function_with_opt:1<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+                      "<think></think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function_with_opt:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
                       /* expect_grammar_triggered= */ true,
                       /* test_grammar_if_triggered= */ true,
                       /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
                       /* ignore_whitespace_differences= */ true
         );
         test_templates(tmpls.get(), end_tokens, message_assist_call_withopt, tools,
-                      "<think></think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function_with_opt:1<|tool_call_argument_begin|>{\"arg1\": 1, \"arg2\": 2}<|tool_call_end|><|tool_calls_section_end|>",
+                      "<think></think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function_with_opt:0<|tool_call_argument_begin|>{\"arg1\": 1, \"arg2\": 2}<|tool_call_end|><|tool_calls_section_end|>",
                       /* expect_grammar_triggered= */ true,
                       /* test_grammar_if_triggered= */ true,
                       /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
