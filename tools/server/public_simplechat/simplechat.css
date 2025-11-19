@@ -117,9 +117,7 @@ body {
 }
 #popover-chatmsg {
     position:fixed;
-    /*
-    position-area: span-bottom center;
-    */
+    position-area: span-top span-left;
     inset-block-start: anchor(start);
     inset-inline-start: anchor(center);
     background-color: transparent;
