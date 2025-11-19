@@ -65,8 +65,8 @@ extern "C" void ggml_graph_profile_start(struct ggml_cgraph *cg, int n_threads)
 
 static inline int ggml_profile_format_tensor_dims(char *str, struct ggml_tensor *t)
 {
-    return sprintf(str, "%d:%d:%d:%d",
-        (int) t->ne[0], (int) t->ne[1], (int) t->ne[3], (int) t->ne[3]);
+    return sprintf(str, "%ld:%ld:%ld:%ld",
+        (long) t->ne[0], (long) t->ne[1], (long) t->ne[2], (long) t->ne[3]);
 }
 
 static inline void ggml_profile_format_op_dims(char *str, struct ggml_tensor *t)
