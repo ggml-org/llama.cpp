@@ -8449,7 +8449,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_CONV_TRANSPOSE_2D:
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
             ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
-            std::array<uint32_t, 3> elements;
+            std::array<uint32_t, 3> elements{};
             if (op == GGML_OP_CONV_2D) elements = ggml_vk_get_conv_elements(dst);
             else if (op == GGML_OP_CONV_TRANSPOSE_2D) elements = ggml_vk_get_conv_transpose_2d_elements(dst);
             vk_conv_shapes shape;
