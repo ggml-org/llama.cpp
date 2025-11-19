@@ -5419,21 +5419,19 @@ struct ggml_tensor * ggml_win_part(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         int                   w) {
-    GGML_ASSERT(a->ne[3] == 1);
-    GGML_ASSERT(a->type  == GGML_TYPE_F32);
-
     // padding
     const int px = (w - a->ne[1]%w)%w;
     const int py = (w - a->ne[2]%w)%w;
 
+    const int bs = a->ne[3];
     const int npx = (px + a->ne[1])/w;
     const int npy = (py + a->ne[2])/w;
-    const int np  = npx*npy;
+    const int np  = npx*npy*bs;
 
     const int64_t ne[4] = { a->ne[0], w, w, np, };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
-    int32_t params[] = { npx, npy, w };
+    int32_t params[] = { npx, npy, bs, w };
     ggml_set_op_params(result, params, sizeof(params));
 
     result->op     = GGML_OP_WIN_PART;
@@ -5450,10 +5448,20 @@ struct ggml_tensor * ggml_win_unpart(
         int                   w0,
         int                   h0,
         int                   w) {
-    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    return ggml_win_unpart_ext(ctx, a, w0, h0, 1, w);
+}
 
-    const int64_t ne[4] = { a->ne[0], w0, h0, 1, };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 3, ne);
+struct ggml_tensor * ggml_win_unpart_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   w0,
+        int                   h0,
+        int                   b0,
+        int                   w) {
+    const int64_t ne[4] = { a->ne[0], w0, h0, b0 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    GGML_ASSERT(ggml_is_contiguous(a));
 
     int32_t params[] = { w };
     ggml_set_op_params(result, params, sizeof(params));
@@ -5471,8 +5479,7 @@ struct ggml_tensor * ggml_get_rel_pos(
         struct ggml_tensor  * a,
         int                   qh,
         int                   kh) {
-    GGML_ASSERT(qh == kh);
-    GGML_ASSERT(2*MAX(qh, kh) - 1 == a->ne[1]);
+    GGML_ASSERT(qh + kh - 1 <= a->ne[1]);
 
     const int64_t ne[4] = { a->ne[0], kh, qh, 1, };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F16, 3, ne);
@@ -6560,6 +6567,7 @@ static void ggml_compute_backward(
         } break;
         case GGML_OP_WIN_PART:
         case GGML_OP_WIN_UNPART:
+        case GGML_OP_GET_REL_POS:
         case GGML_OP_UNARY: {
             switch (ggml_get_unary_op(tensor)) {
                 case GGML_UNARY_OP_ABS: {
