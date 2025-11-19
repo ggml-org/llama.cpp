@@ -23,6 +23,8 @@ target_compile_definitions(${TARGET} PRIVATE
 )
 
 if (LLAMA_BUILD_BORINGSSL)
+    set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code")
+
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
     set(BORINGSSL_VERSION "0.20251002.0" CACHE STRING "BoringSSL version")
 
@@ -36,9 +38,15 @@ if (LLAMA_BUILD_BORINGSSL)
     )
 
     set(SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+    set(SAVED_BUILD_TESTING ${BUILD_TESTING})
+
     set(BUILD_SHARED_LIBS OFF)
+    set(BUILD_TESTING OFF)
+
     FetchContent_MakeAvailable(boringssl)
+
     set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
+    set(BUILD_TESTING ${SAVED_BUILD_TESTING})
 
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
