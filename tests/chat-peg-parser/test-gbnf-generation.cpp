@@ -195,4 +195,56 @@ void test_gbnf_generation(testing &t) {
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
+
+    t.test("emit only reachable rules", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+            p.rule("orphan", p.literal("orphan"));
+            return p.literal("hello") + p.rule("child", p.literal(" world"));
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            child ::= " world"
+            root ::= "hello" child
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
+    t.test("emit only trigger rules (and references)", [](testing &t) {
+        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+            auto rule1 = p.rule("rule-1", p.literal("a") + p.ref("rule-2"));
+            p.rule("rule-2", p.literal("b") + p.ref("rule-3"), true);
+            p.rule("rule-3", p.literal("c") + p.ref("rule-4"));
+            p.rule("rule-4", p.literal("d"), true);
+            return rule1;
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= rule-1
+            rule-1 ::= "a" rule-2
+            rule-2 ::= "b" rule-3
+            rule-3 ::= "c" rule-4
+            rule-4 ::= "d"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+
+        auto gbnf_lazy = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder, true);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= rule-2 | rule-4
+            rule-2 ::= "b" rule-3
+            rule-3 ::= "c" rule-4
+            rule-4 ::= "d"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf_lazy);
+    });
 }

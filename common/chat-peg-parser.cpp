@@ -1180,10 +1180,10 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
     return "(" + pattern + ")*";
 }
 
-// Collect all rule parsers reachable from triggers (for lazy mode)
+// Collect reachable rules from a given rule
 static std::unordered_set<std::string> collect_reachable_rules(
     const common_chat_peg_arena & arena,
-    const std::unordered_map<std::string, common_chat_peg_parser_id> & all_rules
+    const common_chat_peg_parser_id & rule
 ) {
     std::unordered_set<std::string> reachable;
     std::unordered_set<std::string> visited;
@@ -1215,38 +1215,19 @@ static std::unordered_set<std::string> collect_reachable_rules(
                     visit(p.child);
                 }
             } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
-                reachable.insert(p.name);
+                // Traverse rules so we pick up everything
+                auto referenced_rule = arena.get_rule(p.name);
+                visit(referenced_rule);
             }
         }, parser);
     };
 
-    // Find trigger rules and traverse from them
-    for (const auto & [name, rule_id] : all_rules) {
-        const auto & parser = arena.get(rule_id);
-        if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
-            if (rule->trigger) {
-                visit(rule_id);
-            }
-        }
-    }
-
+    visit(rule);
     return reachable;
 }
 
 // GBNF generation implementation
 void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
-    std::unordered_map<std::string, std::string> rule_name_mapping;
-    std::unordered_set<std::string> reachable_rules;
-
-    // Collect all rules
-    if (lazy) {
-        reachable_rules = collect_reachable_rules(*this, rules_);
-        if (reachable_rules.empty()) {
-            LOG_ERR("Lazy grammar generation enabled but no trigger rules found\n");
-            return;
-        }
-    }
-
     // Generate GBNF for a parser
     std::function<std::string(common_chat_peg_parser_id)> to_gbnf = [&](common_chat_peg_parser_id id) -> std::string {
         const auto & parser = parsers_.at(id);
@@ -1339,17 +1320,12 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
                 return gbnf_excluding_pattern(p.delimiters);
             } else if constexpr (std::is_same_v<T, common_chat_peg_schema_parser>) {
                 if (p.schema) {
-                    builder.resolve_refs(*p.schema);
                     return builder.add_schema(p.name, *p.schema);
                 }
                 return to_gbnf(p.child);
             } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
                 return to_gbnf(p.child);
             } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
-                auto it = rule_name_mapping.find(p.name);
-                if (it != rule_name_mapping.end()) {
-                    return it->second;
-                }
                 return p.name;
             } else if constexpr (std::is_same_v<T, common_chat_peg_capture_parser>) {
                 return to_gbnf(p.child);
@@ -1359,54 +1335,54 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
         }, parser);
     };
 
-    // Generate rules
-    if (lazy) {
-        // Lazy mode: only generate reachable rules
-        for (const auto & [name, rule_id] : rules_) {
-            if (reachable_rules.find(name) == reachable_rules.end()) {
-                continue;
-            }
+    // Collect reachable rules
+    std::unordered_set<std::string> reachable_rules;
 
-            const auto & parser = parsers_.at(rule_id);
+    if (lazy) {
+        // Collect rules reachable from trigger rules
+        for (const auto & [name, id] : rules_) {
+            const auto & parser = parsers_.at(id);
             if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
-                auto rule_body = to_gbnf(rule->child);
-                auto canonical_name = builder.add_rule(name, rule_body);
-                //rule_name_mapping[name] = canonical_name;
+                if (rule->trigger) {
+                    // Mark trigger as reachable and visit it
+                    reachable_rules.insert(name);
+                    auto add_rules = collect_reachable_rules(*this, id);
+                    reachable_rules.insert(add_rules.begin(), add_rules.end());
+                }
             }
         }
+    } else {
+        // Collect rules reachable from root
+        reachable_rules = collect_reachable_rules(*this, root_);
+    }
 
-        // Generate root as alternation of trigger rule names
+    // Create GBNF rules for all reachable rules
+    for (const auto & [name, rule_id] : rules_) {
+        if (reachable_rules.find(name) == reachable_rules.end()) {
+            continue;
+        }
+
+        const auto & parser = parsers_.at(rule_id);
+        if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
+            builder.add_rule(rule->name, to_gbnf(rule->child));
+        }
+    }
+
+    if (lazy) {
+        // Generate root rule from trigger rules only
         std::vector<std::string> trigger_names;
         for (const auto & [name, rule_id] : rules_) {
             const auto & parser = parsers_.at(rule_id);
             if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
                 if (rule->trigger) {
-                    auto it = rule_name_mapping.find(name);
-                    if (it != rule_name_mapping.end()) {
-                        trigger_names.push_back(it->second);
-                    }
+                    trigger_names.push_back(rule->name);
                 }
             }
         }
-        if (!trigger_names.empty()) {
-            builder.add_rule("root", string_join(trigger_names, " | "));
-        }
-    } else {
-        // Non-lazy mode: generate all rules
-        for (const auto & [name, rule_id] : rules_) {
-            const auto & parser = parsers_.at(rule_id);
-            if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
-                auto rule_body = to_gbnf(rule->child);
-                auto canonical_name = builder.add_rule(name, rule_body);
-                //rule_name_mapping[name] = canonical_name;
-            }
-        }
 
-        // Generate root
-        if (root_ != COMMON_CHAT_PEG_INVALID_PARSER_ID) {
-            auto root_body = to_gbnf(root_);
-            builder.add_rule("root", root_body);
-        }
+        builder.add_rule("root", string_join(trigger_names, " | "));
+    } else if (root_ != COMMON_CHAT_PEG_INVALID_PARSER_ID) {
+        builder.add_rule("root", to_gbnf(root_));
     }
 }
 
