@@ -368,7 +368,9 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
 
         const double t_end_ms = 1e-3 * ggml_time_us();
 
-        const double t_unacc_ms = (t_end_ms - data.t_start_ms) - (t_sampling_ms + data.t_p_eval_ms + data.t_eval_ms);
+        const double t_total_ms = t_end_ms - data.t_start_ms;
+        const double t_unacc_ms = t_total_ms - (t_sampling_ms + data.t_p_eval_ms + data.t_eval_ms);
+        const double t_unacc_pc = 100.0 * t_unacc_ms /  t_total_ms;
 
         LOG_INF("%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
         LOG_INF("%s: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
@@ -376,7 +378,7 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
         LOG_INF("%s:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
                 __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
         LOG_INF("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
-        LOG_INF("%s: unaccounted time = %10.2f ms                (total - sampling - peval - eval)\n", __func__, t_unacc_ms);
+        LOG_INF("%s: unaccounted time = %10.2f ms / %5.1f %%      (total - sampling - peval - eval) / (total)\n", __func__, t_unacc_ms, t_unacc_pc);
         LOG_INF("%s:    graphs reused = %10d\n", __func__, data.n_reused);
 
         llama_memory_breakdown_print(ctx);
