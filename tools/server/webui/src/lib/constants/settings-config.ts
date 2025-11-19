@@ -38,7 +38,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	max_tokens: -1,
 	custom: '', // custom json-stringified object
 	// experimental features
-	pyInterpreterEnabled: false
+	pyInterpreterEnabled: false,
+	enableContinueGeneration: false
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -96,5 +97,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	modelSelectorEnabled:
 		'Enable the model selector in the chat input to choose the inference model. Sends the associated model field in API requests.',
 	pyInterpreterEnabled:
-		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.'
+		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
+	enableContinueGeneration:
+		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
 };

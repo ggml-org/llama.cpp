@@ -25,3 +25,4 @@ vite.config.ts.timestamp-*
 
 *storybook.log
 storybook-static
+*.code-workspace

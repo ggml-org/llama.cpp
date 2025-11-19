@@ -10,6 +10,7 @@
 		class?: string;
 		message: DatabaseMessage;
 		onCopy?: (message: DatabaseMessage) => void;
+		onContinueAssistantMessage?: (message: DatabaseMessage) => void;
 		onDelete?: (message: DatabaseMessage) => void;
 		onEditWithBranching?: (message: DatabaseMessage, newContent: string) => void;
 		onEditWithReplacement?: (
@@ -17,6 +18,7 @@
 			newContent: string,
 			shouldBranch: boolean
 		) => void;
+		onEditUserMessagePreserveResponses?: (message: DatabaseMessage, newContent: string) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerateWithBranching?: (message: DatabaseMessage) => void;
 		siblingInfo?: ChatMessageSiblingInfo | null;
@@ -26,9 +28,11 @@
 		class: className = '',
 		message,
 		onCopy,
+		onContinueAssistantMessage,
 		onDelete,
 		onEditWithBranching,
 		onEditWithReplacement,
+		onEditUserMessagePreserveResponses,
 		onNavigateToSibling,
 		onRegenerateWithBranching,
 		siblingInfo = null
@@ -133,15 +137,31 @@
 		onRegenerateWithBranching?.(message);
 	}
 
+	function handleContinue() {
+		onContinueAssistantMessage?.(message);
+	}
+
 	function handleSaveEdit() {
 		if (message.role === 'user') {
+			// For user messages, trim to avoid accidental whitespace
 			onEditWithBranching?.(message, editedContent.trim());
 		} else {
-			onEditWithReplacement?.(message, editedContent.trim(), shouldBranchAfterEdit);
+			// For assistant messages, preserve exact content including trailing whitespace
+			// This is important for the Continue feature to work properly
+			onEditWithReplacement?.(message, editedContent, shouldBranchAfterEdit);
 		}
 
 		isEditing = false;
 		shouldBranchAfterEdit = false;
+	}
+
+	function handleSaveEditOnly() {
+		if (message.role === 'user') {
+			// For user messages, trim to avoid accidental whitespace
+			onEditUserMessagePreserveResponses?.(message, editedContent.trim());
+		}
+
+		isEditing = false;
 	}
 
 	function handleShowDeleteDialogChange(show: boolean) {
@@ -166,6 +186,7 @@
 		onEditedContentChange={handleEditedContentChange}
 		{onNavigateToSibling}
 		onSaveEdit={handleSaveEdit}
+		onSaveEditOnly={handleSaveEditOnly}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
@@ -181,6 +202,7 @@
 		messageContent={message.content}
 		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
+		onContinue={handleContinue}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}

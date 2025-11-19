@@ -7,6 +7,7 @@ export interface SettingsFieldConfig {
 	key: string;
 	label: string;
 	type: 'input' | 'textarea' | 'checkbox' | 'select';
+	isExperimental?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof import('@lucide/svelte').Icon }>;
 }

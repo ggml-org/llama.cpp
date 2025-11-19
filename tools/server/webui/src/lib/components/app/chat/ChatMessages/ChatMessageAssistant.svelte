@@ -2,6 +2,7 @@
 	import { ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
+	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
 	import { fade } from 'svelte/transition';
 	import {
 		Check,
@@ -39,6 +40,7 @@
 		onCancelEdit?: () => void;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
+		onContinue?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
 		onEditKeydown?: (event: KeyboardEvent) => void;
@@ -65,6 +67,7 @@
 		messageContent,
 		onCancelEdit,
 		onConfirmDelete,
+		onContinue,
 		onCopy,
 		onDelete,
 		onEdit,
@@ -106,6 +109,12 @@
 
 		void copyToClipboard(model ?? '');
 	}
+
+	$effect(() => {
+		if (isEditing && textareaElement) {
+			autoResizeTextarea(textareaElement);
+		}
+	});
 
 	function formatToolCallBadge(toolCall: ApiChatCompletionToolCall, index: number) {
 		const callNumber = index + 1;
@@ -190,7 +199,10 @@
 				bind:value={editedContent}
 				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
 				onkeydown={onEditKeydown}
-				oninput={(e) => onEditedContentChange?.(e.currentTarget.value)}
+				oninput={(e) => {
+					autoResizeTextarea(e.currentTarget);
+					onEditedContentChange?.(e.currentTarget.value);
+				}}
 				placeholder="Edit assistant message..."
 			></textarea>
 
@@ -335,6 +347,9 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
+			onContinue={currentConfig.enableContinueGeneration && !thinkingContent
+				? onContinue
+				: undefined}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}
