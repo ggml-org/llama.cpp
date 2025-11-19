@@ -53,6 +53,11 @@
 					]
 				},
 				{
+					key: 'pasteLongTextToFileLen',
+					label: 'Paste long text to file length',
+					type: 'input'
+				},
+				{
 					key: 'showMessageStats',
 					label: 'Show message generation statistics',
 					type: 'checkbox'
@@ -68,14 +73,15 @@
 					type: 'checkbox'
 				},
 				{
-					key: 'askForTitleConfirmation',
-					label: 'Ask for confirmation before changing conversation title',
+					key: 'showModelInfo',
+					label: 'Show model information',
 					type: 'checkbox'
 				},
 				{
-					key: 'pasteLongTextToFileLen',
-					label: 'Paste long text to file length',
-					type: 'input'
+					key: 'enableContinueGeneration',
+					label: 'Enable "Continue" button',
+					type: 'checkbox',
+					isExperimental: true
 				},
 				{
 					key: 'pdfAsImage',
@@ -83,13 +89,13 @@
 					type: 'checkbox'
 				},
 				{
-					key: 'showModelInfo',
-					label: 'Show model information',
+					key: 'renderUserContentAsMarkdown',
+					label: 'Render user content as Markdown',
 					type: 'checkbox'
 				},
 				{
-					key: 'renderUserContentAsMarkdown',
-					label: 'Render user content as Markdown',
+					key: 'askForTitleConfirmation',
+					label: 'Ask for confirmation before changing conversation title',
 					type: 'checkbox'
 				}
 			]
