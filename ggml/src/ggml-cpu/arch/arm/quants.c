@@ -1438,121 +1438,306 @@ static inline int32_t hadd_s32(int32x4_t v) {
 #endif
 }
 
+// void ggml_vec_dot_ifairy_q16_K(
+//         int n,
+//         float * GGML_RESTRICT s, size_t bs,
+//         const void * GGML_RESTRICT vx, size_t bx,
+//         const void * GGML_RESTRICT vy, size_t by,
+//         int nrc) {
+    
+//     // 参数规避
+//     (void)nrc; (void)bx; (void)by; (void)bs;
+
+// #if defined(__ARM_NEON)
+//     const block_ifairy * GGML_RESTRICT w = vx;
+//     const block_ifairy_q16 * GGML_RESTRICT x = vy;
+//     const int nb = n / QK_K;
+
+//     float sum_real_total = 0.0f;
+//     float sum_imag_total = 0.0f;
+
+//     // --- 预计算常量表 (LUTs & Masks) ---
+    
+//     // 1. Shuffle Mask: 将 32位(4字节)数据广播扩展为 128位(16字节)
+//     // 模式: 0000 1111 2222 3333 (每个字节重复4次)
+//     // 这允许我们把 packed 2-bit 数据摊开到每个 byte
+//     static const uint8_t perm_mask_data[16] = {
+//         0,0,0,0, 1,1,1,1, 2,2,2,2, 3,3,3,3
+//     };
+//     const uint8x16_t v_perm_mask = vld1q_u8(perm_mask_data);
+
+//     // 2. Shift Mask: 用于移位提取 2-bit。NEON负数表示右移。
+//     // 模式: 0, -2, -4, -6 ... 对应每个字节内提取不同的 bit pair
+//     static const int8_t shift_mask_data[16] = {
+//         0, -2, -4, -6, 0, -2, -4, -6, 0, -2, -4, -6, 0, -2, -4, -6
+//     };
+//     const int8x16_t v_shift_mask = vld1q_s8(shift_mask_data);
+
+//     // 3. Bitmask: 提取移位后的低2位
+//     const uint8x16_t v_mask_3 = vdupq_n_u8(0x3);
+
+//     // 4. 解码查找表 (LUT)
+//     // Index: 00(-1), 01(1), 10(-i), 11(i)
+//     // Real part mapping: -1, 1,  0,  0
+//     // Imag part mapping:  0, 0, -1,  1
+//     static const int8_t lut_real_data[16] = { -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0 };
+//     static const int8_t lut_imag_data[16] = {  0, 0, -1, 1,  0, 0, -1, 1,  0, 0, -1, 1,  0, 0, -1, 1 };
+//     const int8x16_t v_lut_real = vld1q_s8(lut_real_data);
+//     const int8x16_t v_lut_imag = vld1q_s8(lut_imag_data);
+
+//     for (int i = 0; i < nb; ++i) {
+//         // 4个累加器初始化
+//         int32x4_t acc_ac = vdupq_n_s32(0);
+//         int32x4_t acc_ad = vdupq_n_s32(0);
+//         int32x4_t acc_bc = vdupq_n_s32(0);
+//         int32x4_t acc_bd = vdupq_n_s32(0);
+
+//         const uint8_t * w_ptr = w[i].qs;
+//         const int8_t * x_r_ptr = x[i].x_real;
+//         const int8_t * x_i_ptr = x[i].x_imag;
+
+//         // 循环展开：每次处理 64 个元素 (4个 128位向量)
+//         // QK_K = 256, 所以 256 / 64 = 4 次循环
+//         // 倒序循环有助于某些微架构的分支预测
+//         for (int j = 0; j < QK_K; j += 64) {
+            
+//             // === 极致优化点：一次性加载 64 个权重 (16字节) 到向量寄存器 ===
+//             // 避免了 4 次 scalar load + 4 次 dup
+//             uint8x16_t w_all_64 = vld1q_u8(w_ptr + (j / 4));
+
+//             // 预取数据 (可选，视 Cache 压力而定，通常 LLM 推理在 Memory Bound 时有用)
+//             __builtin_prefetch(x_r_ptr + j + 128);
+
+//             // --- 处理第 1 组 (0-15) ---
+//             // 提取 Lane 0 (前4字节) 并广播 -> Shuffle -> Shift -> Mask
+//             // 注意：vdupq_laneq_u32 是零开销或极低开销指令
+//             uint8x16_t w_vec0 = vreinterpretq_u8_u32(vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 0));
+//             uint8x16_t w_idx0 = vandq_u8(vshlq_u8(vqtbl1q_u8(w_vec0, v_perm_mask), v_shift_mask), v_mask_3);
+            
+//             int8x16_t wr0 = vqtbl1q_s8(v_lut_real, w_idx0);
+//             int8x16_t wi0 = vqtbl1q_s8(v_lut_imag, w_idx0);
+//             int8x16_t xr0 = vld1q_s8(x_r_ptr + j);
+//             int8x16_t xi0 = vld1q_s8(x_i_ptr + j);
+
+//             // --- 处理第 2 组 (16-31) ---
+//             uint8x16_t w_vec1 = vreinterpretq_u8_u32(vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 1));
+//             uint8x16_t w_idx1 = vandq_u8(vshlq_u8(vqtbl1q_u8(w_vec1, v_perm_mask), v_shift_mask), v_mask_3);
+            
+//             int8x16_t wr1 = vqtbl1q_s8(v_lut_real, w_idx1);
+//             int8x16_t wi1 = vqtbl1q_s8(v_lut_imag, w_idx1);
+//             int8x16_t xr1 = vld1q_s8(x_r_ptr + j + 16);
+//             int8x16_t xi1 = vld1q_s8(x_i_ptr + j + 16);
+
+//             // --- 处理第 3 组 (32-47) ---
+//             uint8x16_t w_vec2 = vreinterpretq_u8_u32(vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 2));
+//             uint8x16_t w_idx2 = vandq_u8(vshlq_u8(vqtbl1q_u8(w_vec2, v_perm_mask), v_shift_mask), v_mask_3);
+            
+//             int8x16_t wr2 = vqtbl1q_s8(v_lut_real, w_idx2);
+//             int8x16_t wi2 = vqtbl1q_s8(v_lut_imag, w_idx2);
+//             int8x16_t xr2 = vld1q_s8(x_r_ptr + j + 32);
+//             int8x16_t xi2 = vld1q_s8(x_i_ptr + j + 32);
+
+//             // --- 处理第 4 组 (48-63) ---
+//             uint8x16_t w_vec3 = vreinterpretq_u8_u32(vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 3));
+//             uint8x16_t w_idx3 = vandq_u8(vshlq_u8(vqtbl1q_u8(w_vec3, v_perm_mask), v_shift_mask), v_mask_3);
+            
+//             int8x16_t wr3 = vqtbl1q_s8(v_lut_real, w_idx3);
+//             int8x16_t wi3 = vqtbl1q_s8(v_lut_imag, w_idx3);
+//             int8x16_t xr3 = vld1q_s8(x_r_ptr + j + 48);
+//             int8x16_t xi3 = vld1q_s8(x_i_ptr + j + 48);
+
+//             // ==========================
+//             // 计算核心 (Compute Kernel)
+//             // ==========================
+// #if USE_SDOT
+//             // 路径 A: 使用 vdotq_s32 (SDOT) - 极致性能 (Apple M1/M2, ARMv8.2+)
+//             // SDOT 指令可以在一个周期内完成 4x4=16 次乘加运算
+            
+//             acc_ac = vdotq_s32(acc_ac, xr0, wr0);
+//             acc_ad = vdotq_s32(acc_ad, xi0, wr0);
+//             acc_bc = vdotq_s32(acc_bc, xr0, wi0);
+//             acc_bd = vdotq_s32(acc_bd, xi0, wi0);
+
+//             acc_ac = vdotq_s32(acc_ac, xr1, wr1);
+//             acc_ad = vdotq_s32(acc_ad, xi1, wr1);
+//             acc_bc = vdotq_s32(acc_bc, xr1, wi1);
+//             acc_bd = vdotq_s32(acc_bd, xi1, wi1);
+
+//             acc_ac = vdotq_s32(acc_ac, xr2, wr2);
+//             acc_ad = vdotq_s32(acc_ad, xi2, wr2);
+//             acc_bc = vdotq_s32(acc_bc, xr2, wi2);
+//             acc_bd = vdotq_s32(acc_bd, xi2, wi2);
+
+//             acc_ac = vdotq_s32(acc_ac, xr3, wr3);
+//             acc_ad = vdotq_s32(acc_ad, xi3, wr3);
+//             acc_bc = vdotq_s32(acc_bc, xr3, wi3);
+//             acc_bd = vdotq_s32(acc_bd, xi3, wi3);
+// #else
+//             // 路径 B: 通用 NEON (vmull + vpadal) - 兼容标准 ARMv8
+//             // 编译器通常会很好地重排这些指令以隐藏延迟
+//             #define ACC_BLOCK(ACC, A, B) \
+//                 ACC = vpadalq_s16(ACC, vmull_s8(vget_low_s8(A), vget_low_s8(B))); \
+//                 ACC = vpadalq_s16(ACC, vmull_s8(vget_high_s8(A), vget_high_s8(B)))
+
+//             ACC_BLOCK(acc_ac, xr0, wr0); ACC_BLOCK(acc_ad, xi0, wr0);
+//             ACC_BLOCK(acc_bc, xr0, wi0); ACC_BLOCK(acc_bd, xi0, wi0);
+
+//             ACC_BLOCK(acc_ac, xr1, wr1); ACC_BLOCK(acc_ad, xi1, wr1);
+//             ACC_BLOCK(acc_bc, xr1, wi1); ACC_BLOCK(acc_bd, xi1, wi1);
+
+//             ACC_BLOCK(acc_ac, xr2, wr2); ACC_BLOCK(acc_ad, xi2, wr2);
+//             ACC_BLOCK(acc_bc, xr2, wi2); ACC_BLOCK(acc_bd, xi2, wi2);
+
+//             ACC_BLOCK(acc_ac, xr3, wr3); ACC_BLOCK(acc_ad, xi3, wr3);
+//             ACC_BLOCK(acc_bc, xr3, wi3); ACC_BLOCK(acc_bd, xi3, wi3);
+//             #undef ACC_BLOCK
+// #endif
+//         }
+
+//         // 水平求和
+//         int32_t sum_ac = hadd_s32(acc_ac);
+//         int32_t sum_ad = hadd_s32(acc_ad);
+//         int32_t sum_bc = hadd_s32(acc_bc);
+//         int32_t sum_bd = hadd_s32(acc_bd);
+
+//         const float w_real = w[i].d_real;
+//         const float w_imag = w[i].d_imag;
+//         const float x_real = x[i].d_real;
+//         const float x_imag = x[i].d_imag;
+
+//         // 最终结果合成
+//         sum_real_total += w_real * x_real * (float)sum_ac + w_imag * x_imag * (float)sum_bd;
+//         sum_imag_total += w_imag * x_real * (float)sum_bc - w_real * x_imag * (float)sum_ad;
+//     }
+
+//     ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
+//     ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
+
+// #else
+//     // Fallback for non-ARM-NEON platforms
+//     ggml_vec_dot_ifairy_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+// #endif
+// }
+
 void ggml_vec_dot_ifairy_q16_K(
         int n,
         float * GGML_RESTRICT s, size_t bs,
         const void * GGML_RESTRICT vx, size_t bx,
         const void * GGML_RESTRICT vy, size_t by,
         int nrc) {
-    
-    // 参数规避
     (void)nrc; (void)bx; (void)by; (void)bs;
 
 #if defined(__ARM_NEON)
-    const block_ifairy * GGML_RESTRICT w = vx;
+    const block_ifairy     * GGML_RESTRICT w = vx;
     const block_ifairy_q16 * GGML_RESTRICT x = vy;
     const int nb = n / QK_K;
 
     float sum_real_total = 0.0f;
     float sum_imag_total = 0.0f;
 
-    // --- 预计算常量表 (LUTs & Masks) ---
-    
-    // 1. Shuffle Mask: 将 32位(4字节)数据广播扩展为 128位(16字节)
-    // 模式: 0000 1111 2222 3333 (每个字节重复4次)
-    // 这允许我们把 packed 2-bit 数据摊开到每个 byte
+    // ------------ 常量 & LUT，只装载一次 ------------
+
+    // 将 4 个字节扩成 16 个字节：每个原字节重复 4 次
     static const uint8_t perm_mask_data[16] = {
         0,0,0,0, 1,1,1,1, 2,2,2,2, 3,3,3,3
     };
     const uint8x16_t v_perm_mask = vld1q_u8(perm_mask_data);
 
-    // 2. Shift Mask: 用于移位提取 2-bit。NEON负数表示右移。
-    // 模式: 0, -2, -4, -6 ... 对应每个字节内提取不同的 bit pair
+    // 每 4 个元素用不同 shift 抽取 2bit：0, -2, -4, -6
     static const int8_t shift_mask_data[16] = {
-        0, -2, -4, -6, 0, -2, -4, -6, 0, -2, -4, -6, 0, -2, -4, -6
+         0, -2, -4, -6,  0, -2, -4, -6,
+         0, -2, -4, -6,  0, -2, -4, -6
     };
     const int8x16_t v_shift_mask = vld1q_s8(shift_mask_data);
 
-    // 3. Bitmask: 提取移位后的低2位
     const uint8x16_t v_mask_3 = vdupq_n_u8(0x3);
+    const int32x4_t  vzero    = vdupq_n_s32(0);
 
-    // 4. 解码查找表 (LUT)
-    // Index: 00(-1), 01(1), 10(-i), 11(i)
-    // Real part mapping: -1, 1,  0,  0
-    // Imag part mapping:  0, 0, -1,  1
-    static const int8_t lut_real_data[16] = { -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0 };
-    static const int8_t lut_imag_data[16] = {  0, 0, -1, 1,  0, 0, -1, 1,  0, 0, -1, 1,  0, 0, -1, 1 };
+    // 2bit index → {real, imag} 查表
+    // 约定编码：00(-1) 01(1) 10(-i) 11(i)
+    static const int8_t lut_real_data[16] = {
+        -1, 1, 0, 0,  -1, 1, 0, 0,
+        -1, 1, 0, 0,  -1, 1, 0, 0
+    };
+    static const int8_t lut_imag_data[16] = {
+         0, 0,-1, 1,   0, 0,-1, 1,
+         0, 0,-1, 1,   0, 0,-1, 1
+    };
     const int8x16_t v_lut_real = vld1q_s8(lut_real_data);
     const int8x16_t v_lut_imag = vld1q_s8(lut_imag_data);
 
     for (int i = 0; i < nb; ++i) {
-        // 4个累加器初始化
-        int32x4_t acc_ac = vdupq_n_s32(0);
-        int32x4_t acc_ad = vdupq_n_s32(0);
-        int32x4_t acc_bc = vdupq_n_s32(0);
-        int32x4_t acc_bd = vdupq_n_s32(0);
 
-        const uint8_t * w_ptr = w[i].qs;
-        const int8_t * x_r_ptr = x[i].x_real;
-        const int8_t * x_i_ptr = x[i].x_imag;
+        // 4 个累加器：对应 ac/ad/bc/bd
+        int32x4_t acc_ac = vzero;
+        int32x4_t acc_ad = vzero;
+        int32x4_t acc_bc = vzero;
+        int32x4_t acc_bd = vzero;
 
-        // 循环展开：每次处理 64 个元素 (4个 128位向量)
-        // QK_K = 256, 所以 256 / 64 = 4 次循环
-        // 倒序循环有助于某些微架构的分支预测
+        const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
+        const int8_t  * GGML_RESTRICT x_r_ptr = x[i].x_real;
+        const int8_t  * GGML_RESTRICT x_i_ptr = x[i].x_imag;
+
+        // QK_K = 256，按 64 元素一组 → 4 轮
         for (int j = 0; j < QK_K; j += 64) {
-            
-            // === 极致优化点：一次性加载 64 个权重 (16字节) 到向量寄存器 ===
-            // 避免了 4 次 scalar load + 4 次 dup
-            uint8x16_t w_all_64 = vld1q_u8(w_ptr + (j / 4));
 
-            // 预取数据 (可选，视 Cache 压力而定，通常 LLM 推理在 Memory Bound 时有用)
+            // 一次性加载 16 bytes = 64 个 2bit 权重
+            // 每个 32-bit lane 对应 4 bytes → 16 个权重
+            const uint8x16_t w_all_64 = vld1q_u8(w_ptr + (j >> 2));
+
+            // 预取下一小段 x（可选）
             __builtin_prefetch(x_r_ptr + j + 128);
+            __builtin_prefetch(x_i_ptr + j + 128);
 
-            // --- 处理第 1 组 (0-15) ---
-            // 提取 Lane 0 (前4字节) 并广播 -> Shuffle -> Shift -> Mask
-            // 注意：vdupq_laneq_u32 是零开销或极低开销指令
-            uint8x16_t w_vec0 = vreinterpretq_u8_u32(vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 0));
-            uint8x16_t w_idx0 = vandq_u8(vshlq_u8(vqtbl1q_u8(w_vec0, v_perm_mask), v_shift_mask), v_mask_3);
-            
+            // --- lane 0: 权重 0..15 ---
+            uint8x16_t w_vec0  = vreinterpretq_u8_u32(
+                                     vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 0));
+            uint8x16_t w_idx0  = vqtbl1q_u8(w_vec0, v_perm_mask);
+            w_idx0             = vandq_u8(vshlq_u8(w_idx0, v_shift_mask), v_mask_3);
+
             int8x16_t wr0 = vqtbl1q_s8(v_lut_real, w_idx0);
             int8x16_t wi0 = vqtbl1q_s8(v_lut_imag, w_idx0);
             int8x16_t xr0 = vld1q_s8(x_r_ptr + j);
             int8x16_t xi0 = vld1q_s8(x_i_ptr + j);
 
-            // --- 处理第 2 组 (16-31) ---
-            uint8x16_t w_vec1 = vreinterpretq_u8_u32(vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 1));
-            uint8x16_t w_idx1 = vandq_u8(vshlq_u8(vqtbl1q_u8(w_vec1, v_perm_mask), v_shift_mask), v_mask_3);
-            
+            // --- lane 1: 权重 16..31 ---
+            uint8x16_t w_vec1  = vreinterpretq_u8_u32(
+                                     vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 1));
+            uint8x16_t w_idx1  = vqtbl1q_u8(w_vec1, v_perm_mask);
+            w_idx1             = vandq_u8(vshlq_u8(w_idx1, v_shift_mask), v_mask_3);
+
             int8x16_t wr1 = vqtbl1q_s8(v_lut_real, w_idx1);
             int8x16_t wi1 = vqtbl1q_s8(v_lut_imag, w_idx1);
             int8x16_t xr1 = vld1q_s8(x_r_ptr + j + 16);
             int8x16_t xi1 = vld1q_s8(x_i_ptr + j + 16);
 
-            // --- 处理第 3 组 (32-47) ---
-            uint8x16_t w_vec2 = vreinterpretq_u8_u32(vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 2));
-            uint8x16_t w_idx2 = vandq_u8(vshlq_u8(vqtbl1q_u8(w_vec2, v_perm_mask), v_shift_mask), v_mask_3);
-            
+            // --- lane 2: 权重 32..47 ---
+            uint8x16_t w_vec2  = vreinterpretq_u8_u32(
+                                     vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 2));
+            uint8x16_t w_idx2  = vqtbl1q_u8(w_vec2, v_perm_mask);
+            w_idx2             = vandq_u8(vshlq_u8(w_idx2, v_shift_mask), v_mask_3);
+
             int8x16_t wr2 = vqtbl1q_s8(v_lut_real, w_idx2);
             int8x16_t wi2 = vqtbl1q_s8(v_lut_imag, w_idx2);
             int8x16_t xr2 = vld1q_s8(x_r_ptr + j + 32);
             int8x16_t xi2 = vld1q_s8(x_i_ptr + j + 32);
 
-            // --- 处理第 4 组 (48-63) ---
-            uint8x16_t w_vec3 = vreinterpretq_u8_u32(vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 3));
-            uint8x16_t w_idx3 = vandq_u8(vshlq_u8(vqtbl1q_u8(w_vec3, v_perm_mask), v_shift_mask), v_mask_3);
-            
+            // --- lane 3: 权重 48..63 ---
+            uint8x16_t w_vec3  = vreinterpretq_u8_u32(
+                                     vdupq_laneq_u32(vreinterpretq_u32_u8(w_all_64), 3));
+            uint8x16_t w_idx3  = vqtbl1q_u8(w_vec3, v_perm_mask);
+            w_idx3             = vandq_u8(vshlq_u8(w_idx3, v_shift_mask), v_mask_3);
+
             int8x16_t wr3 = vqtbl1q_s8(v_lut_real, w_idx3);
             int8x16_t wi3 = vqtbl1q_s8(v_lut_imag, w_idx3);
             int8x16_t xr3 = vld1q_s8(x_r_ptr + j + 48);
             int8x16_t xi3 = vld1q_s8(x_i_ptr + j + 48);
 
-            // ==========================
-            // 计算核心 (Compute Kernel)
-            // ==========================
+            // -----------------------------
+            // 复杂点积：ac/ad/bc/bd 四路累加
+            // -----------------------------
 #if USE_SDOT
-            // 路径 A: 使用 vdotq_s32 (SDOT) - 极致性能 (Apple M1/M2, ARMv8.2+)
-            // SDOT 指令可以在一个周期内完成 4x4=16 次乘加运算
-            
+            // 这里可以替换为 ggml_vdotq_s32 统一封装
             acc_ac = vdotq_s32(acc_ac, xr0, wr0);
             acc_ad = vdotq_s32(acc_ad, xi0, wr0);
             acc_bc = vdotq_s32(acc_bc, xr0, wi0);
@@ -1573,11 +1758,11 @@ void ggml_vec_dot_ifairy_q16_K(
             acc_bc = vdotq_s32(acc_bc, xr3, wi3);
             acc_bd = vdotq_s32(acc_bd, xi3, wi3);
 #else
-            // 路径 B: 通用 NEON (vmull + vpadal) - 兼容标准 ARMv8
-            // 编译器通常会很好地重排这些指令以隐藏延迟
-            #define ACC_BLOCK(ACC, A, B) \
-                ACC = vpadalq_s16(ACC, vmull_s8(vget_low_s8(A), vget_low_s8(B))); \
-                ACC = vpadalq_s16(ACC, vmull_s8(vget_high_s8(A), vget_high_s8(B)))
+    #define ACC_BLOCK(ACC, A, B)                                            \
+        do {                                                                \
+            ACC = vpadalq_s16(ACC, vmull_s8(vget_low_s8(A),  vget_low_s8(B)));  \
+            ACC = vpadalq_s16(ACC, vmull_s8(vget_high_s8(A), vget_high_s8(B))); \
+        } while (0)
 
             ACC_BLOCK(acc_ac, xr0, wr0); ACC_BLOCK(acc_ad, xi0, wr0);
             ACC_BLOCK(acc_bc, xr0, wi0); ACC_BLOCK(acc_bd, xi0, wi0);
@@ -1590,22 +1775,22 @@ void ggml_vec_dot_ifairy_q16_K(
 
             ACC_BLOCK(acc_ac, xr3, wr3); ACC_BLOCK(acc_ad, xi3, wr3);
             ACC_BLOCK(acc_bc, xr3, wi3); ACC_BLOCK(acc_bd, xi3, wi3);
-            #undef ACC_BLOCK
+    #undef ACC_BLOCK
 #endif
-        }
+        } // j loop
 
-        // 水平求和
-        int32_t sum_ac = hadd_s32(acc_ac);
-        int32_t sum_ad = hadd_s32(acc_ad);
-        int32_t sum_bc = hadd_s32(acc_bc);
-        int32_t sum_bd = hadd_s32(acc_bd);
+        // 水平求和：vaddvq_s32 在 ARMv8.1+ 上是单指令
+        const int32_t sum_ac = vaddvq_s32(acc_ac);
+        const int32_t sum_ad = vaddvq_s32(acc_ad);
+        const int32_t sum_bc = vaddvq_s32(acc_bc);
+        const int32_t sum_bd = vaddvq_s32(acc_bd);
 
         const float w_real = w[i].d_real;
         const float w_imag = w[i].d_imag;
         const float x_real = x[i].d_real;
         const float x_imag = x[i].d_imag;
 
-        // 最终结果合成
+        // (w_real + i w_imag) * (x_real + i x_imag) 与 Σ(ac,ad,bc,bd) 组合
         sum_real_total += w_real * x_real * (float)sum_ac + w_imag * x_imag * (float)sum_bd;
         sum_imag_total += w_imag * x_real * (float)sum_bc - w_real * x_imag * (float)sum_ad;
     }
@@ -1614,7 +1799,7 @@ void ggml_vec_dot_ifairy_q16_K(
     ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
 
 #else
-    // Fallback for non-ARM-NEON platforms
+    // 非 NEON 平台走 generic
     ggml_vec_dot_ifairy_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
