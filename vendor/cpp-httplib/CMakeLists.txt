@@ -23,7 +23,8 @@ target_compile_definitions(${TARGET} PRIVATE
 )
 
 if (LLAMA_BUILD_BORINGSSL)
-    set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code")
+    set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code (BoringSSL)")
+    set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
     set(BORINGSSL_VERSION "0.20251002.0" CACHE STRING "BoringSSL version")
