@@ -6,9 +6,9 @@
 template <typename T>
 __global__ static void get_rel_pos_kernel(const void * src, void * dst, int C) {
     int kh = gridDim.x;
-    int qh = gridDim.x;
-    float k_scale = MAX(qh / kh, 1.0f);
-    float q_scale = MAX(kh / qh, 1.0f);
+    int qh = gridDim.y;
+    float k_scale = MAX((float)qh / kh, 1.0f);
+    float q_scale = MAX((float)kh / qh, 1.0f);
     int ki = blockIdx.x;
     int qi = blockIdx.y;
     int pos = int(qi*q_scale - ki*k_scale + (kh - 1)*k_scale);

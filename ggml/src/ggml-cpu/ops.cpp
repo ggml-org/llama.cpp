@@ -9218,8 +9218,8 @@ static void ggml_compute_forward_get_rel_pos_f32(
 
     const int64_t kh = ne1;
     const int64_t qh = ne2;
-    const float k_scale = MAX(qh / kh, 1.0f);
-    const float q_scale = MAX(kh / qh, 1.0f);
+    const float k_scale = MAX((float)qh / kh, 1.0f);
+    const float q_scale = MAX((float)kh / qh, 1.0f);
 
     float * src0_data = (float *) src0->data;
     float * dst_data  = (float *) dst->data;
@@ -9247,8 +9247,8 @@ static void ggml_compute_forward_get_rel_pos_f16(
 
     const int64_t kh = ne1;
     const int64_t qh = ne2;
-    const float k_scale = MAX(qh / kh, 1.0f);
-    const float q_scale = MAX(kh / qh, 1.0f);
+    const float k_scale = MAX((float)qh / kh, 1.0f);
+    const float q_scale = MAX((float)kh / qh, 1.0f);
 
     ggml_fp16_t * src0_data = (ggml_fp16_t *) src0->data;
     ggml_fp16_t * dst_data  = (ggml_fp16_t *) dst->data;
