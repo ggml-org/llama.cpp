@@ -794,15 +794,15 @@ Cleanup in general
     also ensuring user input area has the right needed associated role setup.
   * partial version from uirefresh, inturn adding user or tool call response messages.
 * ui cleanup
-  * more rounded buttons, chat messages and input area elements
+  * more rounded buttons, chat messages and input area elements.
   * make the body very very lightly gray in color, while the user input area is made whiter.
-  * gradients wrt heading, role-specific individual chat message blocks
-  * avoid borders and instead give a box effect through light shadows
-    * also avoid allround border around chat message role block and instead have to only one side
-  * timeout close popover menu
+  * gradients wrt heading, role-specific individual chat message blocks.
+  * avoid borders and instead give a box effect through light shadows.
+    * also avoid allround border around chat message role block and instead have to only one side.
+  * timeout close popover menu.
   * usage notes
-    * update wrt vision and toggling of sessions and system prompt through main title area
-    * fix issue with sliding window size not reflecting properly in context window entry
+    * update wrt vision and toggling of sessions and system prompt through main title area.
+    * fix issue with sliding window size not reflecting properly in context window entry.
   * make restore block into details based block, and anchor its position independent of db check.
   * avoid unneeded outer overall scrollbar by adjusting fullbody height in screen mode.
   * user css variable to define the overall background color and inturn use same to merge gradients
@@ -811,7 +811,7 @@ Cleanup in general
   * allow user input textarea to grow vertically to some extent.
   * make things rounded across board by default. add some padding to toolcall details block, ...
   * use icons without text wrt chat sessions++, new chat, clear chat and settings top level buttons.
-    * use title property/attribute to give a hint to the user about the button functionality
+    * use title property/attribute to give a hint to the user about the button functionality.
   * add role specific background gradients wrt the tool call trigger and user input block as well as
     fix wrt the tool temp message block. also wrt system input block at top.
     * also rename the TEMP role tags to use -TEMP instead of .TEMP, so that CSS rule selectors will
@@ -823,12 +823,13 @@ Cleanup in general
       line seperation wrt tool call trigger block.
     * however retain the horizontal line seperation between the tool trigger block and user input block,
       given that some users and some ai dont seem to identify the difference very easily.
+  * work around firefox currently not yet supporting anchor based relative positioning of popover.
 * Auto ObjPropsEdit UI
   * allow it to be themed by assigning id to top level block.
   * fix a oversight (forgotten $) with use of templated literals and having variables in them.
   * ensure full props hierarchy is accounted for when setting the id of elements.
-* Chat button to toggle sessions buttons and system prompt
-* Use unix date format markers wrt sys_date_time toolcall, also add w (day of week)
+* Chat button to toggle sessions buttons and system prompt.
+* Use unix date format markers wrt sys_date_time toolcall, also add w (day of week).
 
 
 #### ToDo
@@ -848,6 +849,7 @@ Save used config entries along with the auto saved chat sessions and inturn give
 same when saved chat is loaded.
 
 MAYBE make the settings in general chat session specific, rather than the current global config flow.
+Rather for now having a global settings seems to make more sense, so dont change for now.
 
 Have a seperate helper to show the user input area, based on set state. And have support for multiple images
 if the models support same. It should also take care of some aspects of the tool call response edit / submit,
@@ -864,6 +866,19 @@ or show all the messages (ie even beyond the sliding window)?
 * rather previously with chat_show only whats in current sliding window was being shown, but now with
   the uirefresh based logic, all messages from last chat_show will be shown irrespective of whether still
   in ai server handshake related sliding window or not.
+
+Add support for submitting multiple images in a single user query/response.
+
+Allow ai to use a independent session of itself/ai as a tool call, with a custom system prompt it generates,
+in order to get any job it deems necessary to be done in a uncluttered independent session. Could be used by
+ai to summarise a large text content, where it could using the context of the text to generate a suitable
+system prompt for summarising things suitably or so and so and so ...
+
+For now amn't bringing in mozilla/github/standard-entities pdf, md, mathslatex etal javascript libraries for
+their respective functionalities.
+
+Add support for base64 encoded pdf passing to ai models, when the models and llama engine gain that capability
+in turn using openai file - file-data type sub block within content array or so ...
 
 
 ### Debuging the handshake and beyond

@@ -1263,6 +1263,7 @@ class MultiChatUI {
         }
         // Create main section
         let secMain = document.createElement('section')
+        secMain.id = `cmuid${msg.uniqId}`
         secMain.classList.add(`role-${msg.ns.role}`)
         secMain.classList.add('chat-message')
         secMain.addEventListener('mouseenter', (ev)=>{
@@ -1277,6 +1278,11 @@ class MultiChatUI {
             this.uniqIdChatMsgPO = msg.uniqId
             // @ts-ignore
             this.elPopoverChatMsg.showPopover({source: secMain})
+            // ALERT: helps account for firefox which doesnt support anchor based auto positioning currently
+            let trect = secMain.getBoundingClientRect();
+            let prect = this.elPopoverChatMsg.getBoundingClientRect();
+            this.elPopoverChatMsg.style.top = `${trect.bottom - (prect.height*1.2)}px`
+            this.elPopoverChatMsg.style.left = `${trect.width - (prect.width*1.2)}px`
         })
         secMain.addEventListener('mouseleave', (ev)=>{
             console.debug(`DBUG:MCUI:ChatMessageMLeave:${msg.uniqId}`)
