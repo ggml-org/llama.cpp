@@ -638,6 +638,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_contig_cpy_f32_f32, pipeline_contig_cpy_f32_f16, pipeline_contig_cpy_f16_f16, pipeline_contig_cpy_f16_f32, pipeline_contig_cpy_f32_bf16, pipeline_contig_cpy_f32_i32, pipeline_contig_cpy_i32_f32;
     vk_pipeline pipeline_cpy_f32_quant[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_quant_f32[GGML_TYPE_COUNT];
+    vk_pipeline pipeline_cpy_transpose_16, pipeline_cpy_transpose_32;
     vk_pipeline pipeline_set_rows_i32[GGML_TYPE_COUNT];
     vk_pipeline pipeline_set_rows_i64[GGML_TYPE_COUNT];
     vk_pipeline pipeline_norm_f32;
@@ -3697,6 +3698,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_contig_cpy_i32_f32, "contig_cpy_i32_f32", contig_cpy_i32_f32_len, contig_cpy_i32_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_contig_cpy_f32_i32, "contig_cpy_f32_i32", contig_cpy_f32_i32_len, contig_cpy_f32_i32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
+    ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_32, "cpy_transpose_32", cpy_transpose_32_len, cpy_transpose_32_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_16, "cpy_transpose_16", cpy_transpose_16_len, cpy_transpose_16_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
+
     if (device->float_controls_rte_fp16) {
         ggml_vk_create_pipeline(device, device->pipeline_cpy_f32_quant[GGML_TYPE_Q4_0], "cpy_f32_q4_0", cpy_f32_q4_0_rte_len, cpy_f32_q4_0_rte_data, "main", 2, sizeof(vk_op_unary_push_constants), {32, 1, 1}, {}, 1);
         ggml_vk_create_pipeline(device, device->pipeline_cpy_f32_quant[GGML_TYPE_Q4_1], "cpy_f32_q4_1", cpy_f32_q4_1_rte_len, cpy_f32_q4_1_rte_data, "main", 2, sizeof(vk_op_unary_push_constants), {32, 1, 1}, {}, 1);
@@ -6246,6 +6250,17 @@ static vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const
 
     // Choose "contiguous copy" shader if src/dst are contiguous
     bool contig = ggml_is_contiguous(src) && (!dst || ggml_is_contiguous(dst));
+
+    // Use optimized "transpose" shader if src dim1 is the innermost dimension.
+    bool transpose = dst && src->nb[1] == ggml_type_size(to) && ggml_are_same_shape(dst, src);
+
+    if (transpose && src->type == to) {
+        if (ggml_type_size(to) == 4) {
+            return ctx->device->pipeline_cpy_transpose_32;
+        } else if (ggml_type_size(to) == 2) {
+            return ctx->device->pipeline_cpy_transpose_16;
+        }
+    }
 
     if (src->type == GGML_TYPE_F32 && to == GGML_TYPE_F32) {
         if (contig) {
@@ -8857,6 +8872,17 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 elements = { 512, CEIL_DIV(ne, 512), 1 };
             } else {
                 elements = { ne, 1, 1 };
+            }
+
+            if (pipeline == ctx->device->pipeline_cpy_transpose_32 ||
+                pipeline == ctx->device->pipeline_cpy_transpose_16) {
+                // 32x32 tiles
+                elements[0] = (uint32_t)CEIL_DIV(dst->ne[0], 32);
+                elements[1] = (uint32_t)CEIL_DIV(dst->ne[1], 32);
+                elements[2] = (uint32_t)(dst->ne[2]*dst->ne[3]);
+                elements[0] = std::min(elements[0], ctx->device->properties.limits.maxComputeWorkGroupCount[0]);
+                elements[1] = std::min(elements[1], ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
+                elements[2] = std::min(elements[2], ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
             }
         } break;
     case GGML_OP_ADD_ID:
