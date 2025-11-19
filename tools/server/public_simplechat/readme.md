@@ -824,6 +824,10 @@ Cleanup in general
     * however retain the horizontal line seperation between the tool trigger block and user input block,
       given that some users and some ai dont seem to identify the difference very easily.
   * work around firefox currently not yet supporting anchor based relative positioning of popover.
+  * ensure the new uirefresh flow handles the following situations in a clean way like
+    * a new chat session clearing out usagenote+restore+currentconfig, as user starts chatting
+    * the settings ui getting cleared out as user starts/continues chatting directly into user input
+      without using chat session button to switch back to the chat.
 * Auto ObjPropsEdit UI
   * allow it to be themed by assigning id to top level block.
   * fix a oversight (forgotten $) with use of templated literals and having variables in them.
@@ -855,8 +859,11 @@ Have a seperate helper to show the user input area, based on set state. And have
 if the models support same. It should also take care of some aspects of the tool call response edit / submit,
 potentially.
 
-Should I force a chat_show which clears usage and current settings info from chat session ui block at the
-begining like before the new optimised uirefresh based flow?
+MAYBE add a special ClientSideOnly role for use wrt Chat history to maintain things to be shown in a chat
+session to the end user, but inturn not to be sent to the ai server. Ex current settings or so ...
+
+Update UIRefresh helper to optionally remove messages no longer in the sliding window, so user only sees
+what is sent to the ai server in the chat session messages ui.
 
 Updating system prompt, will reset user input area fully now, which seems a good enough behaviour, while
 keeping the code flow also simple and straight, do I need to change it, I dont think so as of now.

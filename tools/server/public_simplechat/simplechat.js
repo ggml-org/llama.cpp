@@ -1425,6 +1425,9 @@ class MultiChatUI {
      * Also tool call & response edit/trigger/submit ui will be
      * updated as needed, provided lastN is atleast 2.
      *
+     * If the houseKeeping.clear flag is set then fallback to
+     * the brute force full on chat_show.
+     *
      * @param {string} chatId
      * @param {number} lastN
      */
@@ -1432,6 +1435,10 @@ class MultiChatUI {
         let chat = this.simpleChats[chatId];
         if (chat.chatId != this.curChatId) {
             return false
+        }
+        if (this.me.houseKeeping.clear) {
+            this.me.houseKeeping.clear = false
+            return this.chat_show(chatId, true, true)
         }
         this.ui_userinput_reset(false)
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
@@ -1502,6 +1509,7 @@ class MultiChatUI {
         this.elBtnSettings.addEventListener("click", (ev)=>{
             this.elDivChat.replaceChildren();
             this.me.show_settings(this.elDivChat);
+            this.me.houseKeeping.clear = true;
         });
         this.elBtnClearChat.addEventListener("click", (ev)=>{
             this.simpleChats[this.curChatId].clear()
@@ -1797,6 +1805,7 @@ class MultiChatUI {
         this.curChatId = chatId;
         this.chat_show(chatId, true, true);
         this.elInUser.focus();
+        this.me.houseKeeping.clear = true;
         console.log(`INFO:SimpleChat:MCUI:HandleSessionSwitch:${chatId} entered...`);
     }
 
@@ -1893,6 +1902,9 @@ export class Me {
          * @type {(string | ArrayBuffer | null)[]}
          */
         this.dataURLs = []
+        this.houseKeeping = {
+            clear: true,
+        }
     }
 
     /**
