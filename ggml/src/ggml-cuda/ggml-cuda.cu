@@ -3747,49 +3747,49 @@ static const char * ggml_backend_cuda_device_get_description(ggml_backend_dev_t 
 #if defined(__linux__)
 // Helper function to get available memory from /proc/meminfo for UMA systems
 static bool ggml_backend_cuda_get_available_uma_memory(long * availableMemoryKb, long * freeSwapKb) {
-    FILE * meminfoFile = nullptr;
+    FILE * meminfo_file = nullptr;
     // 2KB buffer for reading /proc/meminfo since it does not report size info, should be enough
     const size_t BUFFER_SIZE = 2048;
-    auto fileBuffer = std::make_unique<char[]>(BUFFER_SIZE);
-    size_t bytesRead = 0;
-    long hugeTlbTotalPages = -1;
-    long hugeTlbFreePages = -1;
-    long hugeTlbPageSize = -1;
+    auto file_buffer = std::make_unique<char[]>(BUFFER_SIZE);
+    size_t bytes_read = 0;
+    long huge_tlb_total_pages = -1;
+    long huge_tlb_free_pages = -1;
+    long huge_tlb_page_size = -1;
 
     if (availableMemoryKb == nullptr || freeSwapKb == nullptr) {
         return false;
     }
 
-    meminfoFile = fopen("/proc/meminfo", "r");
-    if (meminfoFile == nullptr) {
+    meminfo_file = fopen("/proc/meminfo", "r");
+    if (meminfo_file == nullptr) {
         GGML_LOG_ERROR("%s: failed to open /proc/meminfo\n", __func__);
         return false;
     }
 
     // Read file into buffer
-    bytesRead = fread(fileBuffer.get(), 1, BUFFER_SIZE - 1, meminfoFile);
-    fclose(meminfoFile);
+    bytes_read = fread(file_buffer.get(), 1, BUFFER_SIZE - 1, meminfo_file);
+    fclose(meminfo_file);
 
-    if (bytesRead == 0) {
+    if (bytes_read == 0) {
         GGML_LOG_ERROR("%s: failed to read from /proc/meminfo\n", __func__);
         return false;
     }
-    fileBuffer[bytesRead] = '\0';
+    file_buffer[bytes_read] = '\0';
 
     *availableMemoryKb = -1;
     *freeSwapKb = -1;
 
     // Parse the file buffer line by line
-    char * line = fileBuffer.get();
+    char * line = file_buffer.get();
     char * nextLine;
-    while (line < fileBuffer.get() + bytesRead) {
+    while (line < file_buffer.get() + bytes_read) {
         // Find the end of the current line
         nextLine = strchr(line, '\n');
-        if (nextLine != NULL) {
+        if (nextLine != nullptr) {
             *nextLine = '\0';
             nextLine++;
         } else {
-            nextLine = fileBuffer.get() + bytesRead;
+            nextLine = file_buffer.get() + bytes_read;
         }
 
         long value;
@@ -3798,24 +3798,18 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * availableMemoryKb,
         } else if (sscanf(line, "SwapFree: %ld kB", &value) == 1) {
             *freeSwapKb = value;
         } else if (sscanf(line, "HugePages_Total: %ld", &value) == 1) {
-            hugeTlbTotalPages = value;
+            huge_tlb_total_pages = value;
         } else if (sscanf(line, "HugePages_Free: %ld", &value) == 1) {
-            hugeTlbFreePages = value;
+            huge_tlb_free_pages = value;
         } else if (sscanf(line, "Hugepagesize: %ld kB", &value) == 1) {
-            hugeTlbPageSize = value;
+            huge_tlb_page_size = value;
         }
 
         line = nextLine;
     }
 
-    GGML_LOG_DEBUG("%s: hugeTlbTotalPages: %ld\n", __func__, hugeTlbTotalPages);
-    GGML_LOG_DEBUG("%s: hugeTlbFreePages: %ld\n", __func__, hugeTlbFreePages);
-    GGML_LOG_DEBUG("%s: hugeTlbPageSize: %ld\n", __func__, hugeTlbPageSize);
-    GGML_LOG_DEBUG("%s: availableMemoryKb: %ld\n", __func__, *availableMemoryKb);
-    GGML_LOG_DEBUG("%s: freeSwapKb: %ld\n", __func__, *freeSwapKb);
-
-    if (hugeTlbTotalPages != 0 && hugeTlbTotalPages != -1) {
-        *availableMemoryKb = hugeTlbFreePages * hugeTlbPageSize;
+    if (huge_tlb_total_pages != 0 && huge_tlb_total_pages != -1) {
+        *availableMemoryKb = huge_tlb_free_pages * huge_tlb_page_size;
 
         // Hugetlbfs pages are not swappable.
         *freeSwapKb = 0;
@@ -3835,31 +3829,22 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
     // Check if this is a UMA (Unified Memory Architecture) system
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, ctx->device));
-
-    GGML_LOG_DEBUG("%s: prop.name: %s\n", __func__, prop.name);
-    GGML_LOG_DEBUG("%s: prop.unifiedAddressing: %d\n", __func__, prop.unifiedAddressing);
-
+    
     // Check if UMA is explicitly enabled via environment variable
-    const char * uma_env = getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY");
-
-    bool is_uma = prop.unifiedAddressing > 0 || (uma_env != nullptr && uma_env[0] == '1');
-
-    GGML_LOG_DEBUG("%s: is_uma: %d\n", __func__, is_uma);
-
+    bool uma_env = getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr;
+    bool is_uma = prop.unifiedAddressing > 0 || uma_env;
+    
     if (is_uma) {
         // For UMA systems (like DGX Spark), use system memory info
-        long availableMemoryKb = 0;
-        long freeSwapKb = 0;
+        long available_memory_kb = 0;
+        long free_swap_kb = 0;
 
-        if (ggml_backend_cuda_get_available_uma_memory(&availableMemoryKb, &freeSwapKb) && availableMemoryKb > 0) {
-            *free = (size_t)availableMemoryKb * 1024;
+        if (ggml_backend_cuda_get_available_uma_memory(&available_memory_kb, &free_swap_kb) && available_memory_kb > 0) {
+            *free = (size_t)available_memory_kb * 1024;
         } else {
             GGML_LOG_ERROR("%s: /proc/meminfo reading failed, using cudaMemGetInfo\n", __func__);
         }
     }
-
-    GGML_LOG_DEBUG("%s: free:  %8.2f MB\n", __func__, *free / (1024.0 * 1024.0));
-    GGML_LOG_DEBUG("%s: total: %8.2f MB\n", __func__, *total / (1024.0 * 1024.0));
 #endif // defined(__linux__)
 
 }
