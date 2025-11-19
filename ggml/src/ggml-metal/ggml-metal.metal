@@ -1833,6 +1833,117 @@ template [[host_name("kernel_sum_rows_f32")]] kernel kernel_sum_rows_t kernel_su
 template [[host_name("kernel_mean_f32")]]     kernel kernel_sum_rows_t kernel_sum_rows<true>;
 
 template<typename T>
+kernel void kernel_cumsum_blk(
+        constant ggml_metal_kargs_cumsum_blk & args,
+        device const char * src0,
+        device       char * tmp,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int ib = tgpig[0]/args.ne01;
+
+    const int i00 = ib*ntg.x;
+    const int i01 = tgpig[0]%args.ne01;
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
+
+    device const float * src0_row = (device const float *) (src0 +
+            args.nb01*i01 +
+            args.nb02*i02 +
+            args.nb03*i03);
+
+    threadgroup float * shmem_f32 = (threadgroup float *) shmem;
+
+    float v = 0.0f;
+
+    if (i00 + tpitg.x < args.ne00) {
+        v = src0_row[i00 + tpitg.x];
+    }
+
+    float s = simd_prefix_inclusive_sum(v);
+
+    if (tiisg == N_SIMDWIDTH - 1) {
+        shmem_f32[sgitg] = s;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0) {
+        shmem_f32[tiisg] = simd_prefix_exclusive_sum(shmem_f32[tiisg]);
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    s += shmem_f32[sgitg];
+
+    device float * dst_row = (device float *) dst +
+        args.ne00*i01 +
+        args.ne00*args.ne01*i02 +
+        args.ne00*args.ne01*args.ne02*i03;
+
+    if (i00 + tpitg.x < args.ne00) {
+        dst_row[i00 + tpitg.x] = s;
+    }
+
+    if (args.outb && tpitg.x == ntg.x - 1) {
+        device float * tmp_row = (device float *) tmp +
+            args.net0*i01 +
+            args.net0*args.net1*i02 +
+            args.net0*args.net1*args.net2*i03;
+
+        tmp_row[ib] = s;
+    }
+}
+
+typedef decltype(kernel_cumsum_blk<float>) kernel_cumsum_blk_t;
+
+template [[host_name("kernel_cumsum_blk_f32")]] kernel kernel_cumsum_blk_t kernel_cumsum_blk<float>;
+
+template<typename T>
+kernel void kernel_cumsum_add(
+        constant ggml_metal_kargs_cumsum_add & args,
+        device const char * tmp,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int ib = tgpig[0]/args.ne01;
+
+    if (ib == 0) {
+        return;
+    }
+
+    const int i00 = ib*ntg.x;
+    const int i01 = tgpig[0]%args.ne01;
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
+
+    device const float * tmp_row = (device const float *) (tmp +
+            args.nbt1*i01 +
+            args.nbt2*i02 +
+            args.nbt3*i03);
+
+    device float * dst_row = (device float *) dst +
+        args.ne00*i01 +
+        args.ne00*args.ne01*i02 +
+        args.ne00*args.ne01*args.ne02*i03;
+
+    if (i00 + tpitg.x < args.ne00) {
+        dst_row[i00 + tpitg.x] += tmp_row[ib - 1];
+    }
+}
+
+typedef decltype(kernel_cumsum_add<float>) kernel_cumsum_add_t;
+
+template [[host_name("kernel_cumsum_add_f32")]] kernel kernel_cumsum_add_t kernel_cumsum_add<float>;
+
+template<typename T>
 kernel void kernel_soft_max(
         constant ggml_metal_kargs_soft_max & args,
         device const  char * src0,
@@ -4541,68 +4652,226 @@ kernel void kernel_timestep_embedding_f32(
 // bitonic sort implementation following the CUDA kernels as reference
 typedef void (argsort_t)(
         constant   ggml_metal_kargs_argsort & args,
-        device  const float * x,
+        device   const char * src0,
         device      int32_t * dst,
-        threadgroup int32_t * shared_values [[threadgroup(0)]],
-        uint3 tgpig[[threadgroup_position_in_grid]],
-        uint3 tpitg[[thread_position_in_threadgroup]]);
+        threadgroup int32_t * shmem_i32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]);
 
 template<ggml_sort_order order>
 kernel void kernel_argsort_f32_i32(
         constant   ggml_metal_kargs_argsort & args,
-        device const float  * x,
+        device   const char * src0,
         device      int32_t * dst,
-        threadgroup int32_t * shared_values [[threadgroup(0)]],
-        uint3 tgpig[[threadgroup_position_in_grid]],
-        uint3 tpitg[[thread_position_in_threadgroup]]) {
+        threadgroup int32_t * shmem_i32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
     // bitonic sort
-    int col = tpitg[0];
-    int row = tgpig[1];
+    const int col = tpitg[0];
 
-    if (col >= args.ncols_pad) return;
+    const int i00 = (tgpig[0]/args.ne01)*ntg.x;
+    const int i01 =  tgpig[0]%args.ne01;
+    const int i02 =  tgpig[1];
+    const int i03 =  tgpig[2];
 
-    device const float   * x_row   = x + row * args.ncols;
-    threadgroup int32_t  * dst_row = shared_values;
+    device const float * src0_row = (device const float *) (src0 + args.nb01*i01 + args.nb02*i02 + args.nb03*i03);
 
     // initialize indices
-    dst_row[col] = col;
+    shmem_i32[col] = i00 + col;
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (int k = 2; k <= args.ncols_pad; k *= 2) {
+    for (int k = 2; k <= ntg.x; k *= 2) {
         for (int j = k / 2; j > 0; j /= 2) {
             int ixj = col ^ j;
             if (ixj > col) {
                 if ((col & k) == 0) {
-                    if (dst_row[col] >= args.ncols ||
-                        (dst_row[ixj] < args.ncols && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]]))
+                    if (shmem_i32[col] >= args.ne00 ||
+                       (shmem_i32[ixj] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
+                            src0_row[shmem_i32[col]] > src0_row[shmem_i32[ixj]] :
+                            src0_row[shmem_i32[col]] < src0_row[shmem_i32[ixj]]))
                     ) {
-                        SWAP(dst_row[col], dst_row[ixj]);
+                        SWAP(shmem_i32[col], shmem_i32[ixj]);
                     }
                 } else {
-                    if (dst_row[ixj] >= args.ncols ||
-                        (dst_row[col] < args.ncols && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]]))
+                    if (shmem_i32[ixj] >= args.ne00 ||
+                       (shmem_i32[col] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
+                            src0_row[shmem_i32[col]] < src0_row[shmem_i32[ixj]] :
+                            src0_row[shmem_i32[col]] > src0_row[shmem_i32[ixj]]))
                     ) {
-                        SWAP(dst_row[col], dst_row[ixj]);
+                        SWAP(shmem_i32[col], shmem_i32[ixj]);
                     }
                 }
             }
+
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
     }
 
     // copy the result to dst without the padding
-    if (col < args.ncols) {
-        dst[row * args.ncols + col] = dst_row[col];
+    if (i00 + col < args.ne00) {
+        dst += i00 + args.ne00*i01 + args.ne00*args.ne01*i02 + args.ne00*args.ne01*args.ne02*i03;
+
+        dst[col] = shmem_i32[col];
     }
 }
 
 template [[host_name("kernel_argsort_f32_i32_asc")]]  kernel argsort_t kernel_argsort_f32_i32<GGML_SORT_ORDER_ASC>;
 template [[host_name("kernel_argsort_f32_i32_desc")]] kernel argsort_t kernel_argsort_f32_i32<GGML_SORT_ORDER_DESC>;
+
+typedef void (argsort_merge_t)(
+        constant   ggml_metal_kargs_argsort_merge & args,
+        device const char    * src0,
+        device const int32_t * tmp,
+        device       int32_t * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]);
+
+template<ggml_sort_order order>
+kernel void kernel_argsort_merge_f32_i32(
+        constant   ggml_metal_kargs_argsort_merge & args,
+        device const char    * src0,
+        device const int32_t * tmp,
+        device       int32_t * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+
+    const int im  = tgpig[0] / args.ne01;
+    const int i01 = tgpig[0] % args.ne01;
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
+
+    const int start = im * (2 * args.len);
+
+    const int len0 = MIN(args.len, MAX(0, args.ne00 - (int)(start)));
+    const int len1 = MIN(args.len, MAX(0, args.ne00 - (int)(start + args.len)));
+
+    const int total = len0 + len1;
+
+    device const int32_t * tmp0 = tmp + start
+        + i01*args.ne00
+        + i02*args.ne00*args.ne01
+        + i03*args.ne00*args.ne01*args.ne02;
+
+    device const int32_t * tmp1 = tmp0 + args.len;
+
+    dst += start
+        + i01*args.ne00
+        + i02*args.ne00*args.ne01
+        + i03*args.ne00*args.ne01*args.ne02;
+
+    device const float * src0_row = (device const float *)(src0
+        + args.nb01*i01
+        + args.nb02*i02
+        + args.nb03*i03);
+
+    if (total == 0) {
+        return;
+    }
+
+    const int chunk = (total + ntg.x - 1) / ntg.x;
+
+    const int k0 = tpitg.x * chunk;
+    const int k1 = min(k0 + chunk, total);
+
+    if (k0 >= total) {
+        return;
+    }
+
+    int low  = k0 > len1 ? k0 - len1 : 0;
+    int high = MIN(k0, len0);
+
+    // binary-search partition (i, j) such that i + j = k
+    while (low < high) {
+        const int mid = (low + high) >> 1;
+
+        const int32_t idx0 = tmp0[mid];
+        const int32_t idx1 = tmp1[k0 - mid - 1];
+
+        const float val0 = src0_row[idx0];
+        const float val1 = src0_row[idx1];
+
+        bool take_left;
+        if (order == GGML_SORT_ORDER_ASC) {
+            take_left = (val0 <= val1);
+        } else {
+            take_left = (val0 >= val1);
+        }
+
+        if (take_left) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+
+    int i = low;
+    int j = k0 - i;
+
+    // keep the merge fronts into registers
+    int32_t idx0 = 0;
+    float   val0 = 0.0f;
+    if (i < len0) {
+        idx0 = tmp0[i];
+        val0 = src0_row[idx0];
+    }
+
+    int32_t idx1 = 0;
+    float   val1 = 0.0f;
+    if (j < len1) {
+        idx1 = tmp1[j];
+        val1 = src0_row[idx1];
+    }
+
+    for (int k = k0; k < k1; ++k) {
+        int32_t out_idx;
+
+        if (i >= len0) {
+            while (k < k1) {
+                dst[k++] = tmp1[j++];
+            }
+            break;
+        } else if (j >= len1) {
+            while (k < k1) {
+                dst[k++] = tmp0[i++];
+            }
+            break;
+        } else {
+            bool take_left;
+
+            if (order == GGML_SORT_ORDER_ASC) {
+                take_left = (val0 <= val1);
+            } else {
+                take_left = (val0 >= val1);
+            }
+
+            if (take_left) {
+                out_idx = idx0;
+                ++i;
+                if (i < len0) {
+                    idx0 = tmp0[i];
+                    val0 = src0_row[idx0];
+                }
+            } else {
+                out_idx = idx1;
+                ++j;
+                if (j < len1) {
+                    idx1 = tmp1[j];
+                    val1 = src0_row[idx1];
+                }
+            }
+        }
+
+        dst[k] = out_idx;
+    }
+}
+
+template [[host_name("kernel_argsort_merge_f32_i32_asc")]]  kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_ASC>;
+template [[host_name("kernel_argsort_merge_f32_i32_desc")]] kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_DESC>;
 
 kernel void kernel_leaky_relu_f32(
         constant     ggml_metal_kargs_leaky_relu & args,
@@ -6291,6 +6560,7 @@ template [[host_name("kernel_cpy_f32_f32")]]   kernel kernel_cpy_t kernel_cpy_t_
 template [[host_name("kernel_cpy_f32_f16")]]   kernel kernel_cpy_t kernel_cpy_t_t<float,   half>;
 template [[host_name("kernel_cpy_f32_i32")]]   kernel kernel_cpy_t kernel_cpy_t_t<float,   int32_t>;
 template [[host_name("kernel_cpy_i32_f32")]]   kernel kernel_cpy_t kernel_cpy_t_t<int32_t, float>;
+template [[host_name("kernel_cpy_i32_i32")]]   kernel kernel_cpy_t kernel_cpy_t_t<int32_t, int32_t>;
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_cpy_f32_bf16")]]  kernel kernel_cpy_t kernel_cpy_t_t<float,   bfloat>;
 #endif

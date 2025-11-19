@@ -48,15 +48,14 @@ aclDataType ggml_cann_type_mapping(ggml_type type) {
         default:
             return ACL_DT_UNDEFINED;
     }
-    return ACL_DT_UNDEFINED;
 }
 
-aclTensor * ggml_cann_create_tensor(const ggml_tensor * tensor,
-                                    int64_t *           ne,
-                                    size_t *            nb,
-                                    int64_t             dims,
-                                    aclFormat           format,
-                                    size_t              offset) {
+acl_tensor_ptr ggml_cann_create_tensor(const ggml_tensor * tensor,
+                                       int64_t *           ne,
+                                       size_t *            nb,
+                                       int64_t             dims,
+                                       aclFormat           format,
+                                       size_t              offset) {
     // If tensor is bcasted, Up to GGML_MAX_DIMS additional dimensions will be
     // added.
     int64_t acl_ne[GGML_MAX_DIMS * 2], acl_stride[GGML_MAX_DIMS * 2];
@@ -87,10 +86,20 @@ aclTensor * ggml_cann_create_tensor(const ggml_tensor * tensor,
     std::reverse(acl_ne, acl_ne + final_dims);
     std::reverse(acl_stride, acl_stride + final_dims);
 
-    aclTensor * acl_tensor = aclCreateTensor(acl_ne, final_dims, ggml_cann_type_mapping(tensor->type), acl_stride,
-                                             elem_offset, format, &acl_storage_len, 1, tensor->data);
+    aclTensor * raw = aclCreateTensor(acl_ne, final_dims, ggml_cann_type_mapping(tensor->type), acl_stride, elem_offset,
+                                      format, &acl_storage_len, 1, tensor->data);
 
-    return acl_tensor;
+    return acl_tensor_ptr(raw);
+}
+
+acl_int_array_ptr ggml_cann_create_int_array(const int64_t * value, uint64_t size) {
+    aclIntArray * raw = aclCreateIntArray(value, size);
+    return acl_int_array_ptr(raw);
+}
+
+acl_scalar_ptr ggml_cann_create_scalar(void * value, aclDataType dataType) {
+    aclScalar * raw = aclCreateScalar(value, dataType);
+    return acl_scalar_ptr(raw);
 }
 
 bool ggml_cann_need_bcast(const ggml_tensor * t0, const ggml_tensor * t1) {
