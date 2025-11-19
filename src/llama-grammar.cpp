@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
 
 //
@@ -478,10 +479,10 @@ const char * llama_grammar_parser::parse_sequence(
                 throw std::runtime_error(std::string("expecting an int at ") + pos);
             }
             const char * int_end = parse_int(pos);
-            int min_times = std::stoul(std::string(pos, int_end - pos));
+            unsigned long min_times = std::stoul(std::string(pos, int_end - pos));
             pos = parse_space(int_end, is_nested);
 
-            int max_times = -1;
+            std::optional<unsigned long> max_times = std::optional<unsigned long>();
 
             if (*pos == '}') {
                 max_times = min_times;
@@ -502,7 +503,10 @@ const char * llama_grammar_parser::parse_sequence(
             } else {
                 throw std::runtime_error(std::string("expecting ',' at ") + pos);
             }
-            handle_repetitions(min_times, max_times);
+            if (min_times > MAX_REPETITION_THRESHOLD || (max_times.has_value() && max_times.value() > MAX_REPETITION_THRESHOLD)) {
+                throw std::runtime_error(std::string("number of repetitions exceeds sane defaults, please reduce the number of repetitions"));
+            }
+            handle_repetitions(min_times, max_times.value_or(-1));
         } else {
             break;
         }
