@@ -98,6 +98,25 @@ class ChatStore {
 		this.activeConversation = conversation;
 		this.activeMessages = [];
 
+		// Create root message
+		const rootId = await DatabaseStore.createRootMessage(conversation.id);
+
+		// Create system message if system prompt is configured in settings
+		// This uses the systemMessage from localStorage as a template for new conversations
+		// Once created, the conversation uses its own system message from IndexedDB
+		const currentConfig = config();
+		const systemPrompt = currentConfig.systemMessage?.toString().trim();
+
+		if (systemPrompt) {
+			const systemMessage = await DatabaseStore.createSystemMessage(
+				conversation.id,
+				systemPrompt,
+				rootId
+			);
+
+			this.activeMessages.push(systemMessage);
+		}
+
 		slotsService.setActiveConversation(conversation.id);
 
 		const isConvLoading = this.isConversationLoading(conversation.id);
