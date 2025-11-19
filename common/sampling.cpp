@@ -129,7 +129,7 @@ struct common_sampler {
             const uint32_t sampled_probs_count = llama_get_backend_sampled_probs_count_ith(ctx, idx);
             cur.reserve(sampled_probs_count);
             for (uint32_t i = 0; i < sampled_probs_count; ++i) {
-                cur.emplace_back(llama_token_data{sampled_ids[i], 0.0f, sampled_probs[i]});
+                cur.emplace_back(llama_token_data{sampled_ids[i], sampled_logits[i], sampled_probs[i]});
             }
         } else if (sampled_logits) {
             const uint32_t sampled_logits_count = llama_get_backend_sampled_logits_count_ith(ctx, idx);
