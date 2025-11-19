@@ -89,6 +89,7 @@
 /src/llama-model-loader.*               @slaren
 /src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
+/src/models/                            @CISC
 /tests/                                 @ggerganov
 /tests/test-backend-ops.cpp             @slaren
 /tests/test-thread-safety.cpp           @slaren

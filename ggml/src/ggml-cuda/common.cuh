@@ -224,6 +224,11 @@ static const char * cu_get_error_str(CUresult err) {
 #define AMD_MFMA_AVAILABLE
 #endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 
+// The Volta instructions are in principle available on Turing or newer but they are effectively unusable:
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
+#define VOLTA_MMA_AVAILABLE
+#endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
+
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 #define TURING_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
@@ -278,7 +283,10 @@ static bool amd_mfma_available(const int cc) {
 #endif //!defined(GGML_HIP_NO_MMQ_MFMA)
 }
 
-// Volta technically had FP16 tensor cores but they work very differently compared to Turing and later.
+static bool volta_mma_available(const int cc) {
+    return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_VOLTA;
+}
+
 static bool turing_mma_available(const int cc) {
     return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_TURING;
 }
@@ -578,6 +586,12 @@ static __device__ __forceinline__ void ggml_cuda_mad(half2 & acc, const half2 v,
 //     If dst and src point at different address spaces then they are guaranteed to not be aliased.
 template <int nbytes, int alignment = 0>
 static __device__ __forceinline__ void ggml_cuda_memcpy_1(void * __restrict__ dst, const void * __restrict__ src) {
+    static_assert(
+        nbytes <= ggml_cuda_get_max_cpy_bytes() || alignment == 0,
+        "You are misusing the alignment parameter for ggml_cuda_memcpy_1. "
+        "The intent is for the parameter is only as a workaround if either one of the pointers is not properly aligned. "
+        "If you use it to do more bytes per copy than ggml_cuda_max_cpy_bytes() the reads and writes may not be coalesced. "
+        "Call ggml_cuda_memcpy_1 in a loop instead.");
     if constexpr (alignment != 0) {
         static_assert(nbytes % alignment == 0, "bad alignment");
     }

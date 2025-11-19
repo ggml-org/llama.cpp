@@ -314,6 +314,10 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.sinks", # openai-moe
         ),
 
+        MODEL_TENSOR.ATTN_GATE: (
+            "model.layers.{bid}.self_attn.gate_proj", # afmoe
+        ),
+
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
@@ -340,11 +344,12 @@ class TensorNameMap:
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
         ),
 
-        # Post feed-forward norm
+        # Pre feed-forward norm
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
             "layers.{bid}.pre_feedforward_layernorm",       # embeddinggemma
             "model.layers.{bid}.pre_ff_layernorm.weight",
+            "model.layers.{bid}.pre_mlp_layernorm",        # afmoe
         ),
 
         # Post feed-forward norm
@@ -370,6 +375,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate.wg",                   # hunyuan
             "model.layers.{bid}.block_sparse_moe.primary_router", # smallthinker
             "model.layers.{bid}.feed_forward.gate",               # lfm2moe
+            "model.layers.{bid}.mlp.router.gate",               # afmoe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -380,7 +386,9 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate.e_score_correction",               # deepseek-v3 dots1
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",        # ernie4.5-moe
             "model.layers.{bid}.mlp.gate.expert_bias",                      # bailingmoe2
+            "model.layers.{bid}.mlp.expert_bias",                           # afmoe
             "model.layers.{bid}.feed_forward.expert_bias",                  # lfm2moe
+            "model.layers.{bid}.block_sparse_moe.e_score_correction",       # minimax-m2
         ),
 
         # Feed-forward up
@@ -1182,6 +1190,7 @@ class TensorNameMap:
             "model.mm_projector.mlp.mlp.{bid}",
             "vision_model.vision_adapter.mlp.fc{bid}", # llama 4
             "mlp1.{bid}", # InternVL
+            "model.aligner.fc1.hidden_layers.{bid}", # Janus Pro
         ),
 
         MODEL_TENSOR.V_MMPROJ_PEG: (
@@ -1215,10 +1224,12 @@ class TensorNameMap:
             "model.vision_model.embeddings.position_embedding", # SmolVLM
             "vision_model.positional_embedding_vlm", # llama 4
             "vision_tower.patch_embed.pos_emb", # kimi-vl
+            "visual.pos_embed", # qwen3vl
             "model.vision.patch_embedding.position_embedding", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
+            "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
         ),
 
@@ -1288,6 +1299,7 @@ class TensorNameMap:
             "model.vision_tower.encoder.layer.{bid}.attention.projection_layer", # Intern-S1
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
+            "model.vision_model.encoder.layers.{bid}.self_attn.projection_layer", # Janus Pro
             "vision_model.model.layers.{bid}.self_attn.o_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.attention.wo", # pixtral
@@ -1320,6 +1332,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.mlp.fc1", # llama4
             "visual.blocks.{bid}.mlp.fc1", # qwen2vl
             "visual.blocks.{bid}.mlp.up_proj", # qwen2.5vl
+            "visual.blocks.{bid}.mlp.linear_fc1", # qwen3vl
             "vision_tower.encoder.blocks.{bid}.mlp.fc0", # kimi-vl (fc0/fc1)
             "model.vision.transformer.layers.{bid}.mlp.fc1", # cogvlm
         ),
@@ -1340,6 +1353,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.mlp.fc2", # llama4
             "visual.blocks.{bid}.mlp.fc2", # qwen2vl
             "visual.blocks.{bid}.mlp.down_proj", # qwen2.5vl
+            "visual.blocks.{bid}.mlp.linear_fc2", # qwen3vl
             "vision_tower.encoder.blocks.{bid}.mlp.fc1", # kimi-vl (fc0/fc1)
             "model.vision.transformer.layers.{bid}.mlp.fc2", # cogvlm
         ),
@@ -1436,6 +1450,18 @@ class TensorNameMap:
         MODEL_TENSOR.V_MM_PATCH_MERGER: (
             "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1 - hf
             "patch_merger.merging_layer", # mistral
+        ),
+
+        MODEL_TENSOR.V_DS_NORM: (
+            "model.visual.deepstack_merger_list.{bid}.norm", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_FC1: (
+            "model.visual.deepstack_merger_list.{bid}.linear_fc1", # deepstack in qwen3vl
+        ),
+
+        MODEL_TENSOR.V_DS_FC2: (
+            "model.visual.deepstack_merger_list.{bid}.linear_fc2", # deepstack in qwen3vl
         ),
 
         MODEL_TENSOR.V_MM_POST_FC_NORM: (

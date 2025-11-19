@@ -33,6 +33,7 @@ export enum FileTypePdf {
 export enum FileTypeText {
 	PLAIN_TEXT = 'plainText',
 	MARKDOWN = 'markdown',
+	ASCIIDOC = 'asciidoc',
 	JAVASCRIPT = 'javascript',
 	TYPESCRIPT = 'typescript',
 	JSX = 'jsx',
@@ -86,6 +87,7 @@ export enum FileExtensionPdf {
 export enum FileExtensionText {
 	TXT = '.txt',
 	MD = '.md',
+	ADOC = '.adoc',
 	JS = '.js',
 	TS = '.ts',
 	JSX = '.jsx',
@@ -147,6 +149,7 @@ export enum MimeTypeImage {
 export enum MimeTypeText {
 	PLAIN = 'text/plain',
 	MARKDOWN = 'text/markdown',
+	ASCIIDOC = 'text/asciidoc',
 	JAVASCRIPT = 'text/javascript',
 	JAVASCRIPT_APP = 'application/javascript',
 	TYPESCRIPT = 'text/typescript',

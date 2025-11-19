@@ -53,6 +53,11 @@
 					]
 				},
 				{
+					key: 'showMessageStats',
+					label: 'Show message generation statistics',
+					type: 'checkbox'
+				},
+				{
 					key: 'showTokensPerSecond',
 					label: 'Show tokens per second',
 					type: 'checkbox'
@@ -219,6 +224,11 @@
 				{
 					key: 'modelSelectorEnabled',
 					label: 'Enable model selector',
+					type: 'checkbox'
+				},
+				{
+					key: 'showToolCalls',
+					label: 'Show tool call labels',
 					type: 'checkbox'
 				},
 				{
