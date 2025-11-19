@@ -238,25 +238,11 @@ void test_command7_parser_compare(testing &t) {
 
     // Run tests
     t.test("legacy_parse", [&](testing & t) {
-        bool no_error = true;
-        try {
-            test_command_r7b_legacy_parser(input, false, false);
-        } catch (std::exception &e) {
-            no_error = false;
-            std::cerr << "Error during legacy run: " << e.what() << "\n";
-        }
-        t.assert_equal("no_errors", true, no_error);
+        test_command_r7b_legacy_parser(input, false, false);
     });
 
     t.test("current_parse", [&](testing & t) {
-        bool no_error = true;
-        try {
-            test_command_r7b_parser(parser, input, false, false);
-        } catch (std::exception &e) {
-            no_error = false;
-            std::cerr << "Error during current run: " << e.what() << "\n";
-        }
-        t.assert_equal("no_errors", true, no_error);
+        test_command_r7b_parser(parser, input, false, false);
     });
 
     // Run benchmarks

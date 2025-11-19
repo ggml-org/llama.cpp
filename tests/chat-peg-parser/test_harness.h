@@ -16,12 +16,19 @@ struct testing {
     int unnamed = 0;
     int exceptions = 0;
 
+    static constexpr std::size_t status_column = 80;
+
     explicit testing(std::ostream &os = std::cout) : out(os) {}
 
-    void indent() const {
-        for (std::size_t i = 0; i < stack.size() - 1; ++i) {
-            out << "  ";
+    std::string indent() const {
+        if (stack.empty()) {
+            return "";
         }
+        return std::string((stack.size() - 1) * 2, ' ');
+    }
+
+    void log(const std::string & msg) {
+        out << indent() << "  " << msg << "\n";
     }
 
     template <typename F>
@@ -31,74 +38,87 @@ struct testing {
         } catch (const std::exception &e) {
             ++failures;
             ++exceptions;
-            indent();
-            out << "UNHANDLED EXCEPTION (" << ctx << "): " << e.what() << "\n";
+            out << indent() << "UNHANDLED EXCEPTION (" << ctx << "): " << e.what() << "\n";
             if (throw_exception) {
                 throw;
             }
         } catch (...) {
             ++failures;
             ++exceptions;
-            indent();
-            out << "UNHANDLED EXCEPTION (" << ctx << "): unknown\n";
+            out << indent() << "UNHANDLED EXCEPTION (" << ctx << "): unknown\n";
             if (throw_exception) {
                 throw;
             }
         }
     }
 
-    void print_result(const std::string &label, const std::string &name, int new_failures, int new_assertions, const std::string &extra = "") const {
-        indent();
-        out << label << ": " << name;
-        if (new_failures == 0) {
-            out << " ok, ";
-        } else {
-            out << new_failures << " failed of ";
+    void print_result(const std::string &label, int new_failures, int new_assertions, const std::string &extra = "") const {
+        std::string line = indent() + label;
+
+        std::string details;
+        if (new_assertions > 0) {
+            if (new_failures == 0) {
+                details = std::to_string(new_assertions) + " assertion(s)";
+            } else {
+                details = std::to_string(new_failures) + " of " +
+                          std::to_string(new_assertions) + " assertion(s) failed";
+            }
         }
-        out << new_assertions << " assertion(s)";
         if (!extra.empty()) {
-            out << ", " << extra;
+            if (!details.empty()) {
+                details += ", ";
+            }
+            details += extra;
         }
-        out << "\n";
+
+        if (!details.empty()) {
+            line += " (" + details + ")";
+        }
+
+        std::string status = (new_failures == 0) ? "[PASS]" : "[FAIL]";
+
+        if (line.size() + 1 < status_column) {
+            line.append(status_column - line.size(), ' ');
+        } else {
+            line.push_back(' ');
+        }
+
+        out << line << status << "\n";
     }
 
-    // Named test
     template <typename F>
     void test(const std::string &name, F f) {
         ++tests;
         stack.push_back(name);
 
-        indent();
-        out << "BEGIN: " << name << "\n";
+        out << indent() << name << "\n";
 
-        int before_failures = failures;
+        int before_failures   = failures;
         int before_assertions = assertions;
 
         run_with_exceptions([&] { f(*this); }, "test");
 
-        print_result("END", name,
-            failures - before_failures,
-            assertions - before_assertions);
+        int new_failures   = failures   - before_failures;
+        int new_assertions = assertions - before_assertions;
+
+        print_result(name, new_failures, new_assertions);
 
         stack.pop_back();
     }
 
-    // Unnamed test
     template <typename F>
     void test(F f) {
         test("test #" + std::to_string(++unnamed), f);
     }
 
-    // Named benchmark
     template <typename F>
     void bench(const std::string &name, F f, int iterations = 100) {
         ++tests;
         stack.push_back(name);
 
-        indent();
-        out << "BEGIN BENCH: " << name << "\n";
+        out << indent() << "[bench] " << name << "\n";
 
-        int before_failures = failures;
+        int before_failures   = failures;
         int before_assertions = assertions;
 
         using clock = std::chrono::high_resolution_clock;
@@ -113,21 +133,23 @@ struct testing {
             }
         }, "bench");
 
-        auto avg_elapsed = duration.count() / iterations;
+        auto avg_elapsed   = duration.count() / iterations;
         auto avg_elapsed_s = std::chrono::duration_cast<std::chrono::duration<double>>(duration).count() / iterations;
         auto rate = (avg_elapsed_s > 0.0) ? (1.0 / avg_elapsed_s) : 0.0;
 
-        print_result("END BENCH", name,
-            failures - before_failures,
-            assertions - before_assertions,
-            std::to_string(iterations) + " iteration(s), " +
-            "avg elapsed " + std::to_string(avg_elapsed) +
-            " us (" + std::to_string(rate) + " /s)");
+        int new_failures   = failures   - before_failures;
+        int new_assertions = assertions - before_assertions;
+
+        std::string extra =
+            "n=" + std::to_string(iterations) +
+            " avg=" + std::to_string(avg_elapsed) + "us" +
+            " rate=" + std::to_string(int(rate)) + "/s";
+
+        print_result("[bench] " + name, new_failures, new_assertions, extra);
 
         stack.pop_back();
     }
 
-    // Unnamed benchmark
     template <typename F>
     void bench(F f, int iterations = 100) {
         bench("bench #" + std::to_string(++unnamed), f, iterations);
@@ -142,8 +164,7 @@ struct testing {
         ++assertions;
         if (!cond) {
             ++failures;
-            indent();
-            out << "ASSERT TRUE FAILED";
+            out << indent() << "ASSERT TRUE FAILED";
             if (!msg.empty()) {
                 out << " : " << msg;
             }
@@ -154,26 +175,23 @@ struct testing {
     }
 
     template <typename A, typename B>
-    bool assert_equal(const A & expected, const B & actual) {
+    bool assert_equal(const A &expected, const B &actual) {
         return assert_equal("", expected, actual);
     }
 
     template <typename A, typename B>
-    bool assert_equal(const std::string & msg, const A & expected, const B & actual) {
+    bool assert_equal(const std::string &msg, const A &expected, const B &actual) {
         ++assertions;
         if (!(actual == expected)) {
             ++failures;
-            indent();
-            out << "ASSERT EQUAL FAILED";
+            out << indent() << "ASSERT EQUAL FAILED";
             if (!msg.empty()) {
                 out << " : " << msg;
             }
             out << "\n";
 
-            indent();
-            out << "  expected: " << expected << "\n";
-            indent();
-            out << "  actual  : " << actual << "\n";
+            out << indent() << "  expected: " << expected << "\n";
+            out << indent() << "  actual  : " << actual << "\n";
             return false;
         }
         return true;
@@ -181,12 +199,11 @@ struct testing {
 
     // Print summary and return an exit code
     int summary() const {
-        out << "\n==== TEST SUMMARY ====\n";
+        out << "\n";
         out << "tests      : " << tests << "\n";
         out << "assertions : " << assertions << "\n";
         out << "failures   : " << failures << "\n";
         out << "exceptions : " << exceptions << "\n";
-        out << "======================\n";
         return failures == 0 ? 0 : 1;
     }
 };

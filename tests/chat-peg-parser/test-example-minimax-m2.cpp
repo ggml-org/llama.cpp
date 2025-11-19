@@ -1,29 +1,10 @@
+#include "common.h"
 #include "chat-peg-parser.h"
-#include "log.h"
 #include "nlohmann/json.hpp"
 #include "tests.h"
 
 #include <numeric>
 #include <string>
-
-static inline std::string join(const std::vector<std::string>& parts,
-                        const std::string& sep = ", ") {
-    if (parts.empty()) { return {}; }
-
-    // Reserve an approximate size to avoid many reallocations.
-    std::size_t total_len = sep.size() * (parts.size() - 1);
-    for (const auto& s : parts) { total_len += s.size(); }
-
-    std::string result;
-    result.reserve(total_len);
-    result += parts[0];
-
-    for (std::size_t i = 1; i < parts.size(); ++i) {
-        result += sep;
-        result += parts[i];
-    }
-    return result;
-}
 
 void test_example_minimax_m2(testing &t) {
     auto helper_parser = build_peg_parser_helper([](common_chat_peg_parser_builder_helper & p) {
@@ -51,19 +32,20 @@ void test_example_minimax_m2(testing &t) {
             "</minimax:tool_call>";
 
         std::vector<std::string> tokens = simple_tokenize(input);
-        LOG_ERR("Tokens: %s\n", join(tokens).c_str());
+        // t.log("Tokens: " + string_join(tokens, ", "));
 
         common_chat_msg prev;
         common_chat_parse_result last_result;
         t.test("helper_builder", [&](testing &t) {
             for (auto it = tokens.begin(); it != tokens.end(); it++) {
                 std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
-                LOG_ERR("Current input: %s\n", in.c_str());
+                // t.log("Current input: " + in);
 
                 common_chat_parse_semantics semantics;
                 common_chat_parse_context   ctx(in, &semantics, it + 1 == tokens.end());
 
-                ctx.event_handler = it + 1 == tokens.end() ? parser_semantic_handler_with_printout : parser_semantic_handler;
+                common_chat_parse_simple_handler handler;
+                ctx.set_event_handler(handler);
 
                 auto result = helper_parser.parse(ctx);
                 last_result = result;
@@ -74,7 +56,7 @@ void test_example_minimax_m2(testing &t) {
                 auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
                 prev       = msg;
             }
-            LOG_ERR("Last message: %s\n", prev.to_json_oaicompat<nlohmann::ordered_json>().dump().c_str());
+            // t.log("Last message: " + prev.to_json_oaicompat<nlohmann::ordered_json>().dump());
             t.assert_true("last_result_should_be_success", last_result.success());
         });
     });

@@ -180,6 +180,13 @@ struct common_chat_parse_context {
 
     common_chat_parse_context(const std::string & input, common_chat_parse_semantics * semantics, common_chat_parse_event_handler handler, bool complete = true)
         : input(input), input_is_complete(complete), cache(), semantics(semantics), event_handler(std::move(handler)), current_depth(0), parse_depth(0) {}
+
+    template <typename T>
+    void set_event_handler(const T & handler) {
+        event_handler = [&](const common_chat_parse_event & ev, common_chat_parse_semantics & semantics) {
+            handler(ev, semantics);
+        };
+    }
 };
 
 // Forward declaration

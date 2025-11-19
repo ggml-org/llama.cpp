@@ -37,7 +37,8 @@ void test_example_seed_oss(testing &t) {
                 common_chat_parse_semantics semantics;
                 common_chat_parse_context   ctx(in, &semantics, it == tokens.end());
 
-                ctx.event_handler = parser_semantic_handler;
+                common_chat_parse_simple_handler handler;
+                ctx.set_event_handler(handler);
 
                 auto result = helper_parser.parse(ctx);
                 t.assert_equal("not fail", false, result.fail());

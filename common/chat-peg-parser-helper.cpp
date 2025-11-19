@@ -1,5 +1,6 @@
 #include "chat-peg-parser-helper.h"
 #include "chat-peg-parser.h"
+#include <sstream>
 
 common_chat_peg_parser common_chat_peg_parser_builder_helper::reasoning(const std::string & tag) {
     std::string open_tag;
@@ -151,3 +152,69 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_attr(
     return function;
 }
 
+void common_chat_parse_simple_handler::operator()(const common_chat_parse_event & ev, common_chat_parse_semantics & semantics) const {
+    if (log) {
+        std::stringstream ss;
+        ss << "Event: type=" << (ev.type == COMMON_CHAT_PARSE_EVENT_NODE_START ? "start" : "end  ");
+        ss << " rule=" << ev.rule;
+        ss << " result=" << common_chat_parse_result_type_name(ev.status);
+        ss << " text=" << ev.text;
+        log(ss.str());
+    }
+
+    if (ev.rule == "reasoning-content" && ev.ending()) {
+        semantics.reasoning_content = ev.text;
+        if (log) {
+            log("  reasoning_content=" + semantics.reasoning_content);
+        }
+    }
+
+    if (ev.rule == "content" && ev.ending()) {
+        semantics.content = ev.text;
+        if (log) {
+            log("  content=" + semantics.content);
+        }
+    }
+
+    if (ev.rule.find("function-start") != std::string::npos && ev.ending() && ev.success()) {
+        semantics.tool_calls.emplace_back();
+        auto & tc = semantics.tool_calls.back();
+        tc.name = semantics.captures["tool-name"];
+        if (log) {
+            log("  tool call added");
+            log("    name=" + tc.name);
+        }
+    }
+
+    if (ev.rule.find("arg-start") != std::string::npos && ev.ending() && ev.success()) {
+        auto & tc = semantics.tool_calls.back();
+        auto name = semantics.captures["arg-name"];
+        if (tc.arguments.empty()) {
+            tc.arguments += "{";
+        } else {
+            tc.arguments += ", ";
+        }
+        tc.arguments += "\"" + name + "\": ";
+    }
+
+    if (ev.rule == "arg-string-content" && ev.ending() && ev.success()) {
+        auto & tc = semantics.tool_calls.back();
+        tc.arguments += "\"" + std::string(ev.text);
+    }
+
+    if (ev.annotation == "arg-string" && ev.ending() && ev.success()) {
+        auto & tc = semantics.tool_calls.back();
+        tc.arguments += "\"";
+        if (log) {
+            log("    args=" + tc.arguments);
+        }
+    }
+
+    if (ev.rule == "arg-json-content" && ev.ending() && (ev.success() || ev.need_more_input())) {
+        auto & tc = semantics.tool_calls.back();
+        tc.arguments += std::string(ev.text);
+        if (log) {
+            log("    args=" + tc.arguments);
+        }
+    }
+}

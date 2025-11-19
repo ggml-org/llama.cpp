@@ -81,7 +81,12 @@ void test_example_qwen3_coder(testing &t) {
                 common_chat_parse_semantics semantics;
                 common_chat_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
 
-                ctx.event_handler = parser_semantic_handler;
+                common_chat_parse_simple_handler handler;
+                // handler.log = [&](const std::string & msg) {
+                //     t.log(msg);
+                // };
+
+                ctx.set_event_handler(handler);
 
                 auto result = explicit_parser.parse(ctx);
                 if (!t.assert_equal("not fail", false, result.fail())) {
@@ -110,7 +115,8 @@ void test_example_qwen3_coder(testing &t) {
                 common_chat_parse_semantics semantics;
                 common_chat_parse_context   ctx(in, &semantics, it + 1 == tokens.end());
 
-                ctx.event_handler = parser_semantic_handler;
+                common_chat_parse_simple_handler handler;
+                ctx.set_event_handler(handler);
 
                 auto result = helper_parser.parse(ctx);
                 if (!t.assert_equal("not fail", false, result.fail())) {
