@@ -472,7 +472,6 @@ void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs
                 for (size_t l = 0; l < 4; ++l) {
                     // a: real_w, b: imag_w, c: real_x, d: imag_x
                     int8_t w_val = (weight >> (l*2)) & 3;
-                    // todo_tbr: q8k 激活量化方式
                     int8_t c = x[i].x_real[(j + k) * 4 + l];
                     int8_t d = x[i].x_imag[(j + k) * 4 + l];
                     
