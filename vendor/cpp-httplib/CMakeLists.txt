@@ -23,7 +23,7 @@ target_compile_definitions(${TARGET} PRIVATE
 )
 
 if (LLAMA_BUILD_BORINGSSL)
-    set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BorginSSL git repository")
+    set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
     set(BORINGSSL_VERSION "0.20251002.0" CACHE STRING "BoringSSL version")
 
     message(STATUS "Fetching BoringSSL version ${BORINGSSL_VERSION}")
