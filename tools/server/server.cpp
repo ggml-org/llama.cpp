@@ -4442,6 +4442,10 @@ struct server_res_generator : server_http_res {
         status = 200;
         data = safe_json_to_str(response_data);
     }
+    void ok(const std::string & response_data) {
+        status = 200;
+        data = response_data;
+    }
     void error(const json & error_data) {
         status = json_value(error_data, "code", 500);
         data = safe_json_to_str({{ "error", error_data }});
