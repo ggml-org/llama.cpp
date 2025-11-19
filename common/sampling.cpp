@@ -139,8 +139,8 @@ struct common_sampler {
         cur_p = { cur.data(), cur.size(), -1, false };
     }
 
-    time_meas tm() {
-        return time_meas(t_total_us, params.no_perf);
+    common_time_meas tm() {
+        return common_time_meas(t_total_us, params.no_perf);
     }
 
     mutable int64_t t_total_us = 0;

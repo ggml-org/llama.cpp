@@ -28,9 +28,9 @@
 
 #define DEFAULT_MODEL_PATH "models/7B/ggml-model-f16.gguf"
 
-struct time_meas {
-    time_meas(int64_t & t_acc, bool disable = false);
-    ~time_meas();
+struct common_time_meas {
+    common_time_meas(int64_t & t_acc, bool disable = false);
+    ~common_time_meas();
 
     const int64_t t_start_us;
 
