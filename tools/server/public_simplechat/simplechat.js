@@ -12,7 +12,7 @@ import * as mIdb from "./idb.mjs"
 const DB_NAME = "SimpleChatTCRV"
 const DB_STORE = "Sessions"
 
-const ROLES_TEMP_ENDSWITH = ".TEMP"
+const ROLES_TEMP_ENDSWITH = "-TEMP"
 
 class Roles {
     static System = "system";
