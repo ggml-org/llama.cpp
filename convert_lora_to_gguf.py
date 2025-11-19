@@ -323,15 +323,18 @@ if __name__ == '__main__':
         lparams: dict[str, Any] = json.load(f)
 
     # load base model
+    remote_base_model_id: str | None = None
     if base_model_id is not None:
         logger.info(f"Loading base model from Hugging Face: {base_model_id}")
         hparams = load_hparams_from_hf(base_model_id)
+        remote_base_model_id = base_model_id
     elif dir_base_model is None:
         if "base_model_name_or_path" in lparams:
             model_id = lparams["base_model_name_or_path"]
             logger.info(f"Loading base model from Hugging Face: {model_id}")
             try:
                 hparams = load_hparams_from_hf(model_id)
+                remote_base_model_id = model_id
             except OSError as e:
                 logger.error(f"Failed to load base model config: {e}")
                 logger.error("Please try downloading the base model and add its path to --base")
@@ -469,8 +472,12 @@ if __name__ == '__main__':
 
         alpha: float = lparams["lora_alpha"]
 
+        # Use local path if --base is provided,
+        # otherwise use dummy path when loading from Hugging Face
+        dir_model = dir_base_model if dir_base_model is not None else Path(".")
+
         model_instance = LoraModel(
-            dir_base_model,
+            dir_model,
             ftype,
             fname_out,
             is_big_endian=args.bigendian,
@@ -480,6 +487,7 @@ if __name__ == '__main__':
             dir_lora_model=dir_lora,
             lora_alpha=alpha,
             hparams=hparams,
+            remote_hf_model_id=remote_base_model_id,
         )
 
         logger.info("Exporting model...")
