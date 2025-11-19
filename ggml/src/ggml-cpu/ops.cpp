@@ -8847,8 +8847,8 @@ static void ggml_compute_forward_win_part_f32(
     const int32_t bs   = ((const int32_t *)(dst->op_params))[2];
     const int32_t w    = ((const int32_t *)(dst->op_params))[3];
 
-    assert(ne00 == ne0);
-    assert(ne3  == nep0*nep1*bs);
+    GGML_ASSERT(ne00 == ne0);
+    GGML_ASSERT(ne3  == nep0*nep1*bs);
 
     // TODO: optimize / multi-thread
     for (int64_t i3 = 0; i3 < ne3; i3++) {
@@ -8891,8 +8891,8 @@ static void ggml_compute_forward_win_part_f16(
     const int32_t bs   = ((const int32_t *)(dst->op_params))[2];
     const int32_t w    = ((const int32_t *)(dst->op_params))[3];
 
-    assert(ne00 == ne0);
-    assert(ne3  == nep0*nep1*bs);
+    GGML_ASSERT(ne00 == ne0);
+    GGML_ASSERT(ne3  == nep0*nep1*bs);
 
     // TODO: optimize / multi-thread
     for (int64_t i3 = 0; i3 < ne3; i3++) {
