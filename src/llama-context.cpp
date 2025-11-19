@@ -1361,7 +1361,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
-        const bool backend_has_sampled = !res->t_sampled_tokens.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
+        backend_has_sampled = !res->t_sampled_tokens.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
 
         if (has_backend_samplers && backend_has_sampled) {
             const auto seq_to_batch_idx = build_seq_to_batch_idx(ubatch);
