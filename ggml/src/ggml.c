@@ -5479,7 +5479,8 @@ struct ggml_tensor * ggml_get_rel_pos(
         struct ggml_tensor  * a,
         int                   qh,
         int                   kh) {
-    GGML_ASSERT(qh + kh - 1 <= a->ne[1]);
+    GGML_ASSERT(qh >= 1 && kh >= 1);
+    GGML_ASSERT(2*MAX(qh, kh) - 1 == a->ne[1]);
 
     const int64_t ne[4] = { a->ne[0], kh, qh, 1, };
     struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, 3, ne);
