@@ -652,10 +652,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     } signal_guard;
 
     struct candidate_types {
-        ggml_type type;
-        float bpw;
-        size_t bytes;
-        double error;
+        ggml_type type = GGML_TYPE_COUNT;
+        float bpw = 0.0f;
+        size_t bytes = 0;
+        double error = 0.0;
         double mse = 0.0;
         double proj = 0.0;
     };
@@ -751,7 +751,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t n_elements = 0;
     };
 
-    auto djb2_hash = [](const uint8_t * data, size_t n) -> uint64_t {
+    auto djb2_hash = [&](const uint8_t * data, const size_t n) -> uint64_t {
         uint64_t h = 5381;
         for (size_t i = 0; i < n; ++i) {
             h = (h << 5) + h + data[i];
