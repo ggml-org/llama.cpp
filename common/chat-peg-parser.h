@@ -350,12 +350,6 @@ class common_chat_peg_parser_builder {
     //   S -> "hello"
     common_chat_peg_parser literal(const std::string & literal);
 
-    // Implicit conversion: const char* -> parser (literal)
-    common_chat_peg_parser operator()(const char * str) { return literal(str); }
-
-    // Implicit conversion: std::string -> parser (literal)
-    common_chat_peg_parser operator()(const std::string & str) { return literal(str); }
-
     // Matches a sequence of parsers in order, all must succeed.
     //   S -> A B C
     common_chat_peg_parser sequence(const std::vector<common_chat_peg_parser_id> & parsers);
