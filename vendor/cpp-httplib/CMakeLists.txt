@@ -48,6 +48,12 @@ if (LLAMA_BUILD_BORINGSSL)
     set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
     set(BUILD_TESTING ${SAVED_BUILD_TESTING})
 
+    # skip bssl
+    if(TARGET bssl)
+        set_target_properties(bssl PROPERTIES EXCLUDE_FROM_ALL TRUE)
+        set_target_properties(bssl PROPERTIES EXCLUDE_FROM_DEFAULT_BUILD TRUE)
+    endif()
+
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
 
