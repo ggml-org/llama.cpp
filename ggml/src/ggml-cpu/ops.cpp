@@ -7602,7 +7602,7 @@ static void ggml_compute_forward_pad_f32(
                             src_i2*nb02 +
                             src_i1*nb01 +
                             src_i0*nb00;
-                        
+
                         const float * src_ptr = (const float *)((char *) src0->data + src_idx);
                         dst_ptr[dst_idx] = *src_ptr;
                     }

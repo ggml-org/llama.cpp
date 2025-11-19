@@ -25,7 +25,7 @@ static __global__ void pad_f32(const float * src, float * dst,
     if (i0 >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3) {
         return;
     }
-    
+
     const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
 
     if (circular == 0) {
@@ -94,7 +94,7 @@ void ggml_cuda_op_pad(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int32_t rp2 = ((const int32_t*)(dst->op_params))[5];
     const int32_t lp3 = ((const int32_t*)(dst->op_params))[6];
     const int32_t rp3 = ((const int32_t*)(dst->op_params))[7];
-    const int32_t circular = ((const int32_t*)(dst->op_params))[8]; 
+    const int32_t circular = ((const int32_t*)(dst->op_params))[8];
 
     pad_f32_cuda(src0_d, dst_d,
                  lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3,

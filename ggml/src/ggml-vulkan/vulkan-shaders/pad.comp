@@ -60,6 +60,6 @@ void main() {
                             i3 >= p.lp3 && i3 < p.ne13 - p.rp3;
         data_d[get_doffset() + dst_idx] = D_TYPE(is_src0 ? data_a[get_aoffset() + src0_idx] : 0.0f);
     }
-    
+
 
 }
