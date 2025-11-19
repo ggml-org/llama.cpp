@@ -3830,11 +3830,11 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
     // Check if this is a UMA (Unified Memory Architecture) system
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, ctx->device));
-    
+
     // Check if UMA is explicitly enabled via environment variable
     bool uma_env = getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr;
     bool is_uma = prop.unifiedAddressing > 0 || uma_env;
-    
+
     if (is_uma) {
         // For UMA systems (like DGX Spark), use system memory info
         long available_memory_kb = 0;
