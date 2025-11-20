@@ -26,7 +26,6 @@
 #include <sstream>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -59,6 +58,14 @@
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
+
+common_time_meas::common_time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
+
+common_time_meas::~common_time_meas() {
+    if (t_start_us >= 0) {
+        t_acc += ggml_time_us() - t_start_us;
+    }
+}
 
 //
 // CPU utils
