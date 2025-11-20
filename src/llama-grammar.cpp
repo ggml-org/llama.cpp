@@ -347,7 +347,7 @@ const char * llama_grammar_parser::parse_sequence(
     size_t last_sym_start = rule.size();
     const char * pos = src;
 
-    // use INT64_MAX as the empty value because we aligned to the proper unsigned long type so -1 can't be used 
+    // use INT64_MAX as the empty value because we aligned to the proper unsigned long type so -1 can't be used
     // (though it's technically the same as -1 now)
     auto handle_repetitions = [&](unsigned long min_times, unsigned long max_times) {
 
