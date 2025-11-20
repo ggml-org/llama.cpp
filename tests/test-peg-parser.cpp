@@ -1,4 +1,4 @@
-#include "chat-peg-parser/tests.h"
+#include "peg-parser/tests.h"
 #include "log.h"
 #include <vector>
 #include <string>

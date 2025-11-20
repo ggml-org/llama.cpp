@@ -8,7 +8,7 @@
 #include <numeric>
 
 static common_peg_arena create_command_r7b_parser() {
-    auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+    auto parser = build_chat_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.rule("thinking",
             "<|START_THINKING|>" << p.rule("reasoning-content", p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
 

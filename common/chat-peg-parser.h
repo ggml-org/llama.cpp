@@ -1,11 +1,10 @@
+#pragma once
+
 #include "peg-parser.h"
 #include "log.h"
 
-class common_peg_parser_builder_helper : public common_peg_parser_builder {
-
-public:
-    // Helper methods for common patterns
-
+class common_chat_peg_parser_builder : public common_peg_parser_builder {
+  public:
     // Adds raw-reasoning for the entire reasoning block plus reasoning-content for the contents, by default thinking tag is "think"
     common_peg_parser reasoning(const std::string & tag = "think");
 
@@ -25,14 +24,14 @@ public:
 };
 
 template<typename F>
-common_peg_arena build_peg_parser_helper(F && fn) {
-    common_peg_parser_builder_helper builder;
+common_peg_arena build_chat_peg_parser(F && fn) {
+    common_chat_peg_parser_builder builder;
     auto root = fn(builder);
     builder.set_root(root);
     return builder.build();
 }
 
-struct common_peg_parse_simple_handler {
+struct common_chat_peg_simple_handler {
     std::function<void(const std::string & msg)> log;
     void operator()(const common_peg_parse_event & ev, common_peg_parse_semantics & semantics) const;
 };

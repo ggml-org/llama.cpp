@@ -185,22 +185,22 @@ endif()
 
 llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(
-    test-chat-peg-parser.cpp
-    chat-peg-parser/simple_tokenizer.cpp
-    chat-peg-parser/test-command7-parser-compare.cpp
-    chat-peg-parser/test-example-qwen3-coder.cpp
-    chat-peg-parser/test-example-minimax-m2.cpp
-    chat-peg-parser/test-example-seed-oss.cpp
-    chat-peg-parser/test-gbnf-generation.cpp
-    chat-peg-parser/test-json-parser.cpp
-    chat-peg-parser/test-json-serialization.cpp
-    chat-peg-parser/test-one.cpp
-    chat-peg-parser/test-optional.cpp
-    chat-peg-parser/test-partial-parsing.cpp
-    chat-peg-parser/test-recursive-references.cpp
-    chat-peg-parser/test-unicode.cpp
-    chat-peg-parser/test_harness.h
-    chat-peg-parser/tests.h
+    test-peg-parser.cpp
+    peg-parser/simple_tokenizer.cpp
+    peg-parser/test-command7-parser-compare.cpp
+    peg-parser/test-example-qwen3-coder.cpp
+    peg-parser/test-example-minimax-m2.cpp
+    peg-parser/test-example-seed-oss.cpp
+    peg-parser/test-gbnf-generation.cpp
+    peg-parser/test-json-parser.cpp
+    peg-parser/test-json-serialization.cpp
+    peg-parser/test-one.cpp
+    peg-parser/test-optional.cpp
+    peg-parser/test-partial-parsing.cpp
+    peg-parser/test-recursive-references.cpp
+    peg-parser/test-unicode.cpp
+    peg-parser/test_harness.h
+    peg-parser/tests.h
 )
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)

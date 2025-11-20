@@ -1,8 +1,8 @@
-#include "chat-peg-parser-helper.h"
+#include "chat-peg-parser.h"
 #include "peg-parser.h"
 #include <sstream>
 
-common_peg_parser common_peg_parser_builder_helper::reasoning(const std::string & tag) {
+common_peg_parser common_chat_peg_parser_builder::reasoning(const std::string & tag) {
     std::string open_tag;
     open_tag.append("<").append(tag).append(">");
     std::string close_tag;
@@ -10,11 +10,11 @@ common_peg_parser common_peg_parser_builder_helper::reasoning(const std::string 
     return rule("raw-reasoning", literal(open_tag) << rule("reasoning-content", until(close_tag)) << literal(close_tag));
 }
 
-common_peg_parser common_peg_parser_builder_helper::content_before_tools(const std::string & tag) {
+common_peg_parser common_chat_peg_parser_builder::content_before_tools(const std::string & tag) {
     return rule("content", until(tag));
 }
 
-common_peg_parser common_peg_parser_builder_helper::quasi_xml_no_attr(
+common_peg_parser common_chat_peg_parser_builder::quasi_xml_no_attr(
     const std::string &              function_name,
     const std::vector<std::string> & parameters,
     const std::string &              function_tag,
@@ -82,7 +82,7 @@ common_peg_parser common_peg_parser_builder_helper::quasi_xml_no_attr(
     return function;
 }
 
-common_peg_parser common_peg_parser_builder_helper::quasi_xml_attr(
+common_peg_parser common_chat_peg_parser_builder::quasi_xml_attr(
     const std::string &              function_name,
     const std::vector<std::string> & parameters,
     const std::string &              function_tag,
@@ -152,7 +152,7 @@ common_peg_parser common_peg_parser_builder_helper::quasi_xml_attr(
     return function;
 }
 
-void common_peg_parse_simple_handler::operator()(const common_peg_parse_event & ev, common_peg_parse_semantics & semantics) const {
+void common_chat_peg_simple_handler::operator()(const common_peg_parse_event & ev, common_peg_parse_semantics & semantics) const {
     if (log) {
         std::stringstream ss;
         ss << "Event: type=" << (ev.type == COMMON_PEG_PARSE_EVENT_NODE_START ? "start" : "end  ");

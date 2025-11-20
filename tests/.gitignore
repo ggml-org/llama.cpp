@@ -1,6 +1,6 @@
 *
-!chat-peg-parser
 !*.*
 *.o
 ggml-common.h
 **/*.swp
+!peg-parser

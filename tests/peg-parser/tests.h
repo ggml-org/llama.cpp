@@ -4,7 +4,7 @@
 #include "test_harness.h"
 #include <nlohmann/json.hpp>
 #include "peg-parser.h"
-#include "chat-peg-parser-helper.h"
+#include "chat-peg-parser.h"
 #include <memory>
 #include <vector>
 #include <string>

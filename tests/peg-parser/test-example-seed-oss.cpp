@@ -1,10 +1,11 @@
+#include "chat-peg-parser.h"
 #include "tests.h"
 
 #include <numeric>
 #include <string>
 
 void test_example_seed_oss(testing &t) {
-    auto helper_parser = build_peg_parser_helper([](common_peg_parser_builder_helper & p) {
+    auto helper_parser = build_chat_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.reasoning("seed:think");
         auto content = p.content_before_tools("<seed:tool_call>");
         auto function = p.quasi_xml_no_attr("get_weather",
@@ -37,7 +38,7 @@ void test_example_seed_oss(testing &t) {
                 common_peg_parse_semantics semantics;
                 common_peg_parse_context   ctx(in, &semantics, it == tokens.end());
 
-                common_peg_parse_simple_handler handler;
+                common_chat_peg_simple_handler handler;
                 ctx.set_event_handler(handler);
 
                 auto result = helper_parser.parse(ctx);

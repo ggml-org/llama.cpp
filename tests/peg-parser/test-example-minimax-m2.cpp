@@ -1,3 +1,4 @@
+#include "chat-peg-parser.h"
 #include "common.h"
 #include "peg-parser.h"
 #include "nlohmann/json.hpp"
@@ -7,7 +8,7 @@
 #include <string>
 
 void test_example_minimax_m2(testing &t) {
-    auto helper_parser = build_peg_parser_helper([](common_peg_parser_builder_helper & p) {
+    auto helper_parser = build_chat_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.reasoning();
         auto content = p.content_before_tools("<minimax:tool_call>");
         auto function = p.quasi_xml_attr("generate_joke",
@@ -44,7 +45,7 @@ void test_example_minimax_m2(testing &t) {
                 common_peg_parse_semantics semantics;
                 common_peg_parse_context   ctx(in, &semantics, it + 1 == tokens.end());
 
-                common_peg_parse_simple_handler handler;
+                common_chat_peg_simple_handler handler;
                 ctx.set_event_handler(handler);
 
                 auto result = helper_parser.parse(ctx);

@@ -5,7 +5,7 @@
 #include <string>
 
 void test_example_qwen3_coder(testing &t) {
-    auto explicit_parser = build_peg_parser([](common_peg_parser_builder & p) {
+    auto explicit_parser = build_chat_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.rule("raw-reasoning",
             "<think>" << p.rule("reasoning-content", p.until("</think>")) << "</think>");
 
@@ -35,7 +35,7 @@ void test_example_qwen3_coder(testing &t) {
     });
 
 
-    auto helper_parser = build_peg_parser_helper([](common_peg_parser_builder_helper & p) {
+    auto helper_parser = build_chat_peg_parser([](common_chat_peg_parser_builder & p) {
         auto thinking = p.reasoning();
         auto content = p.content_before_tools("<tool_call>");
         auto function = p.quasi_xml_no_attr("search_files",
@@ -81,7 +81,7 @@ void test_example_qwen3_coder(testing &t) {
                 common_peg_parse_semantics semantics;
                 common_peg_parse_context   ctx(in, &semantics, it == tokens.end() - 1);
 
-                common_peg_parse_simple_handler handler;
+                common_chat_peg_simple_handler handler;
                 // handler.log = [&](const std::string & msg) {
                 //     t.log(msg);
                 // };
@@ -115,7 +115,7 @@ void test_example_qwen3_coder(testing &t) {
                 common_peg_parse_semantics semantics;
                 common_peg_parse_context   ctx(in, &semantics, it + 1 == tokens.end());
 
-                common_peg_parse_simple_handler handler;
+                common_chat_peg_simple_handler handler;
                 ctx.set_event_handler(handler);
 
                 auto result = helper_parser.parse(ctx);
