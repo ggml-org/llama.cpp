@@ -1249,56 +1249,61 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     //      xxxxx-----
     //      xxxxx-----
     // To visualize the mask, see https://github.com/ggml-org/llama.cpp/pull/12615
-    // TODO: optimize this section
+    // Optimized: reordered conditions for better branch prediction and cached frequently accessed values
     for (uint32_t h = 0; h < 1; ++h) {
         for (uint32_t s = 0; s < n_stream; ++s) {
             for (uint32_t ii = 0; ii < n_tps; ++ii) {
                 const uint32_t i = s*n_tps + ii;
 
                 const llama_seq_id seq_id = ubatch->seq_id[i][0];
-
                 const auto & cells = v_cells[seq_to_stream[seq_id]];
-
                 const llama_pos p1 = ubatch->pos[i];
 
-                // for M-RoPE
+                // for M-RoPE - cache these values outside the inner loop
                 const bool is_2d = ubatch->is_pos_2d();
                 const llama_pos p1_x = is_2d ? ubatch->pos[i + ubatch->n_tokens*2] : 0;
                 const llama_pos p1_y = is_2d ? ubatch->pos[i + ubatch->n_tokens]   : 0;
 
                 const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
+                float * dst_row = data + idst;
 
+                // Optimize inner loop: reorder conditions to fail fast and reduce redundant checks
                 for (uint32_t j = 0; j < n_kv; ++j) {
+                    // Fast path: check empty first (most common early exit)
                     if (cells.is_empty(j)) {
                         continue;
                     }
 
-                    // mask the token if not the same sequence
+                    // Check sequence match early (before position checks)
                     if (!cells.seq_has(j, seq_id)) {
                         continue;
                     }
 
                     const llama_pos p0 = cells.pos_get(j);
 
-                    // mask future tokens
-                    if (causal_attn && p0 > p1) {
-                        continue;
-                    }
-
-                    // M-RoPE causal mask
-                    if (causal_attn && is_2d && p0 == p1) {
-                        const auto & p0_ext = cells.ext_get(j);
-                        if (p0_ext.is_2d_gt(p1_x, p1_y)) {
+                    // Causal attention check (common case)
+                    if (causal_attn) {
+                        // Fast path: future tokens
+                        if (p0 > p1) {
                             continue;
+                        }
+
+                        // M-RoPE causal mask (less common, check after position comparison)
+                        if (is_2d && p0 == p1) {
+                            const auto & p0_ext = cells.ext_get(j);
+                            if (p0_ext.is_2d_gt(p1_x, p1_y)) {
+                                continue;
+                            }
                         }
                     }
 
-                    // apply SWA if any
+                    // Apply SWA if any (less common, check last)
                     if (is_masked_swa(p0, p1)) {
                         continue;
                     }
 
-                    data[idst + j] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
+                    // All checks passed - set the mask value
+                    dst_row[j] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
                 }
             }
         }

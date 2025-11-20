@@ -414,8 +414,6 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
 ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const float mean) {
     int i = 0;
     ggml_float sum = 0;
-// TODO: optimize to process the remaining elements in groups using the smaller vector sizes from AVX2 and SSE
-// ref: https://github.com/ggml-org/llama.cpp/pull/15953#pullrequestreview-3310928344
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
     for (; i + 15 < n; i += 16) {
         __m512 val = _mm512_sub_ps(_mm512_loadu_ps(x + i),
@@ -423,6 +421,32 @@ ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const floa
         _mm512_storeu_ps(y + i, val);
         sum += (ggml_float)_mm512_reduce_add_ps(_mm512_mul_ps(val, val));
     }
+    // Process remaining elements with AVX2 (8 elements at a time)
+    #if defined(__AVX2__) && defined(__FMA__)
+    for (; i + 7 < n; i += 8) {
+        __m256 val = _mm256_sub_ps(_mm256_loadu_ps(x + i),
+                                   _mm256_set1_ps(mean));
+        _mm256_storeu_ps(y + i, val);
+        val = _mm256_mul_ps(val,val);
+        __m128 val2 = _mm_add_ps(_mm256_extractf128_ps(val, 1),
+                                 _mm256_castps256_ps128(val));
+        val2 = _mm_add_ps(val2, _mm_movehl_ps(val2, val2));
+        val2 = _mm_add_ss(val2, _mm_movehdup_ps(val2));
+        sum += (ggml_float)_mm_cvtss_f32(val2);
+    }
+    #endif
+    // Process remaining elements with SSE (4 elements at a time)
+    #if defined(__SSE2__)
+    for (; i + 3 < n; i += 4) {
+        __m128 val = _mm_sub_ps(_mm_loadu_ps(x + i),
+                                _mm_set1_ps(mean));
+        _mm_storeu_ps(y + i, val);
+        val = _mm_mul_ps(val, val);
+        val = _mm_add_ps(val, _mm_movehl_ps(val, val));
+        val = _mm_add_ss(val, _mm_movehdup_ps(val));
+        sum += (ggml_float)_mm_cvtss_f32(val);
+    }
+    #endif
 #elif defined(__AVX2__) && defined(__FMA__)
     for (; i + 7 < n; i += 8) {
         __m256 val = _mm256_sub_ps(_mm256_loadu_ps(x + i),
@@ -435,6 +459,18 @@ ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const floa
         val2 = _mm_add_ss(val2, _mm_movehdup_ps(val2));
         sum += (ggml_float)_mm_cvtss_f32(val2);
     }
+    // Process remaining elements with SSE (4 elements at a time)
+    #if defined(__SSE2__)
+    for (; i + 3 < n; i += 4) {
+        __m128 val = _mm_sub_ps(_mm_loadu_ps(x + i),
+                                _mm_set1_ps(mean));
+        _mm_storeu_ps(y + i, val);
+        val = _mm_mul_ps(val, val);
+        val = _mm_add_ps(val, _mm_movehl_ps(val, val));
+        val = _mm_add_ss(val, _mm_movehdup_ps(val));
+        sum += (ggml_float)_mm_cvtss_f32(val);
+    }
+    #endif
 #elif defined(__SSE2__)
     for (; i + 3 < n; i += 4) {
         __m128 val = _mm_sub_ps(_mm_loadu_ps(x + i),
@@ -478,6 +514,7 @@ ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const floa
     }
     sum = (ggml_float)__riscv_vfmv_f_s_f64m1_f64(vsum);
 #endif
+    // Process remaining elements with scalar code
     for (; i < n; ++i) {
         float val = x[i] - mean;
         y[i] = val;
@@ -569,4 +606,190 @@ ggml_float ggml_vec_log_soft_max_f32(const int n, float * y, const float * x, fl
         sum += (ggml_float)expf(val);
     }
     return sum = (ggml_float)logf(sum);
+}
+
+void ggml_vec_hardswish_f32(const int n, float * y, const float * x) {
+    // hardswish(x) = x * min(1, max(0, (x + 3) / 6))
+    const float three = 3.0f;
+    const float six = 6.0f;
+    const float one = 1.0f;
+    const float zero = 0.0f;
+
+    int i = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+    const __m512 v_three = _mm512_set1_ps(three);
+    const __m512 v_six = _mm512_set1_ps(six);
+    const __m512 v_one = _mm512_set1_ps(one);
+    const __m512 v_zero = _mm512_set1_ps(zero);
+
+    for (; i + 15 < n; i += 16) {
+        __m512 vx = _mm512_loadu_ps(x + i);
+        __m512 vx_plus_3 = _mm512_add_ps(vx, v_three);
+        __m512 v_div_6 = _mm512_div_ps(vx_plus_3, v_six);
+        __m512 v_clamped = _mm512_max_ps(v_zero, _mm512_min_ps(v_one, v_div_6));
+        __m512 result = _mm512_mul_ps(vx, v_clamped);
+        _mm512_storeu_ps(y + i, result);
+    }
+#elif defined(__AVX2__) && defined(__FMA__)
+    const __m256 v_three = _mm256_set1_ps(three);
+    const __m256 v_six = _mm256_set1_ps(six);
+    const __m256 v_one = _mm256_set1_ps(one);
+    const __m256 v_zero = _mm256_set1_ps(zero);
+
+    for (; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 vx_plus_3 = _mm256_add_ps(vx, v_three);
+        __m256 v_div_6 = _mm256_div_ps(vx_plus_3, v_six);
+        __m256 v_clamped = _mm256_max_ps(v_zero, _mm256_min_ps(v_one, v_div_6));
+        __m256 result = _mm256_mul_ps(vx, v_clamped);
+        _mm256_storeu_ps(y + i, result);
+    }
+#elif defined(__SSE2__)
+    const __m128 v_three = _mm_set1_ps(three);
+    const __m128 v_six = _mm_set1_ps(six);
+    const __m128 v_one = _mm_set1_ps(one);
+    const __m128 v_zero = _mm_set1_ps(zero);
+
+    for (; i + 3 < n; i += 4) {
+        __m128 vx = _mm_loadu_ps(x + i);
+        __m128 vx_plus_3 = _mm_add_ps(vx, v_three);
+        __m128 v_div_6 = _mm_div_ps(vx_plus_3, v_six);
+        __m128 v_clamped = _mm_max_ps(v_zero, _mm_min_ps(v_one, v_div_6));
+        __m128 result = _mm_mul_ps(vx, v_clamped);
+        _mm_storeu_ps(y + i, result);
+    }
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    const int vlen = svcntw();
+    const svfloat32_t v_three = svdup_n_f32(three);
+    const svfloat32_t v_six = svdup_n_f32(six);
+    const svfloat32_t v_one = svdup_n_f32(one);
+    const svfloat32_t v_zero = svdup_n_f32(zero);
+
+    for (; i < n; i += vlen) {
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
+        svfloat32_t vx = svld1_f32(pg, x + i);
+        svfloat32_t vx_plus_3 = svadd_f32_x(pg, vx, v_three);
+        svfloat32_t v_div_6 = svdiv_f32_x(pg, vx_plus_3, v_six);
+        svfloat32_t v_clamped = svmax_f32_x(pg, v_zero, svmin_f32_x(pg, v_one, v_div_6));
+        svfloat32_t result = svmul_f32_x(pg, vx, v_clamped);
+        svst1_f32(pg, y + i, result);
+    }
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    const float32x4_t v_three = vdupq_n_f32(three);
+    const float32x4_t v_six = vdupq_n_f32(six);
+    const float32x4_t v_one = vdupq_n_f32(one);
+    const float32x4_t v_zero = vdupq_n_f32(zero);
+
+    for (; i + 3 < n; i += 4) {
+        float32x4_t vx = vld1q_f32(x + i);
+        float32x4_t vx_plus_3 = vaddq_f32(vx, v_three);
+        float32x4_t v_div_6 = vdivq_f32(vx_plus_3, v_six);
+        float32x4_t v_clamped = vmaxq_f32(v_zero, vminq_f32(v_one, v_div_6));
+        float32x4_t result = vmulq_f32(vx, v_clamped);
+        vst1q_f32(y + i, result);
+    }
+#elif defined(__riscv_v_intrinsic)
+    for (int vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
+        vfloat32m2_t vx_plus_3 = __riscv_vfadd_vf_f32m2(vx, three, vl);
+        vfloat32m2_t v_div_6 = __riscv_vfdiv_vf_f32m2(vx_plus_3, six, vl);
+        vfloat32m2_t v_clamped = __riscv_vfmax_vf_f32m2(__riscv_vfmin_vf_f32m2(v_div_6, one, vl), zero, vl);
+        vfloat32m2_t result = __riscv_vfmul_vv_f32m2(vx, v_clamped, vl);
+        __riscv_vse32_v_f32m2(&y[i], result, vl);
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = x[i] * fminf(one, fmaxf(zero, (x[i] + three) / six));
+    }
+}
+
+void ggml_vec_hardsigmoid_f32(const int n, float * y, const float * x) {
+    // hardsigmoid(x) = min(1, max(0, (x + 3) / 6))
+    const float three = 3.0f;
+    const float six = 6.0f;
+    const float one = 1.0f;
+    const float zero = 0.0f;
+
+    int i = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+    const __m512 v_three = _mm512_set1_ps(three);
+    const __m512 v_six = _mm512_set1_ps(six);
+    const __m512 v_one = _mm512_set1_ps(one);
+    const __m512 v_zero = _mm512_set1_ps(zero);
+
+    for (; i + 15 < n; i += 16) {
+        __m512 vx = _mm512_loadu_ps(x + i);
+        __m512 vx_plus_3 = _mm512_add_ps(vx, v_three);
+        __m512 v_div_6 = _mm512_div_ps(vx_plus_3, v_six);
+        __m512 result = _mm512_max_ps(v_zero, _mm512_min_ps(v_one, v_div_6));
+        _mm512_storeu_ps(y + i, result);
+    }
+#elif defined(__AVX2__) && defined(__FMA__)
+    const __m256 v_three = _mm256_set1_ps(three);
+    const __m256 v_six = _mm256_set1_ps(six);
+    const __m256 v_one = _mm256_set1_ps(one);
+    const __m256 v_zero = _mm256_set1_ps(zero);
+
+    for (; i + 7 < n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 vx_plus_3 = _mm256_add_ps(vx, v_three);
+        __m256 v_div_6 = _mm256_div_ps(vx_plus_3, v_six);
+        __m256 result = _mm256_max_ps(v_zero, _mm256_min_ps(v_one, v_div_6));
+        _mm256_storeu_ps(y + i, result);
+    }
+#elif defined(__SSE2__)
+    const __m128 v_three = _mm_set1_ps(three);
+    const __m128 v_six = _mm_set1_ps(six);
+    const __m128 v_one = _mm_set1_ps(one);
+    const __m128 v_zero = _mm_set1_ps(zero);
+
+    for (; i + 3 < n; i += 4) {
+        __m128 vx = _mm_loadu_ps(x + i);
+        __m128 vx_plus_3 = _mm_add_ps(vx, v_three);
+        __m128 v_div_6 = _mm_div_ps(vx_plus_3, v_six);
+        __m128 result = _mm_max_ps(v_zero, _mm_min_ps(v_one, v_div_6));
+        _mm_storeu_ps(y + i, result);
+    }
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    const int vlen = svcntw();
+    const svfloat32_t v_three = svdup_n_f32(three);
+    const svfloat32_t v_six = svdup_n_f32(six);
+    const svfloat32_t v_one = svdup_n_f32(one);
+    const svfloat32_t v_zero = svdup_n_f32(zero);
+
+    for (; i < n; i += vlen) {
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
+        svfloat32_t vx = svld1_f32(pg, x + i);
+        svfloat32_t vx_plus_3 = svadd_f32_x(pg, vx, v_three);
+        svfloat32_t v_div_6 = svdiv_f32_x(pg, vx_plus_3, v_six);
+        svfloat32_t result = svmax_f32_x(pg, v_zero, svmin_f32_x(pg, v_one, v_div_6));
+        svst1_f32(pg, y + i, result);
+    }
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    const float32x4_t v_three = vdupq_n_f32(three);
+    const float32x4_t v_six = vdupq_n_f32(six);
+    const float32x4_t v_one = vdupq_n_f32(one);
+    const float32x4_t v_zero = vdupq_n_f32(zero);
+
+    for (; i + 3 < n; i += 4) {
+        float32x4_t vx = vld1q_f32(x + i);
+        float32x4_t vx_plus_3 = vaddq_f32(vx, v_three);
+        float32x4_t v_div_6 = vdivq_f32(vx_plus_3, v_six);
+        float32x4_t result = vmaxq_f32(v_zero, vminq_f32(v_one, v_div_6));
+        vst1q_f32(y + i, result);
+    }
+#elif defined(__riscv_v_intrinsic)
+    for (int vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
+        vfloat32m2_t vx_plus_3 = __riscv_vfadd_vf_f32m2(vx, three, vl);
+        vfloat32m2_t v_div_6 = __riscv_vfdiv_vf_f32m2(vx_plus_3, six, vl);
+        vfloat32m2_t result = __riscv_vfmax_vf_f32m2(__riscv_vfmin_vf_f32m2(v_div_6, one, vl), zero, vl);
+        __riscv_vse32_v_f32m2(&y[i], result, vl);
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = fminf(one, fmaxf(zero, (x[i] + three) / six));
+    }
 }
