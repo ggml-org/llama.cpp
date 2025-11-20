@@ -698,60 +698,61 @@ inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
 }
 
 inline static void ggml_vec_scale_f16(const int n, ggml_fp16_t * y, const float v) {
-#if defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
-        const int sve_register_length = svcntb() * 8;
-        const int ggml_f16_epr = sve_register_length / 16;
-        const int ggml_f16_step = 2 * ggml_f16_epr;
+#if defined(GGML_SIMD) && defined(__ARM_FEATURE_SVE)
+    const int sve_register_length = svcntb() * 8;
+    const int ggml_f16_epr = sve_register_length / 16;
+    const int ggml_f16_step = 2 * ggml_f16_epr;
 
-        GGML_F16x_VEC vx =  GGML_F16x_VEC_SET1(v);
-        const int np = (n & ~(ggml_f16_step - 1));
-        svfloat16_t ay1, ay2;
+    GGML_F16x_VEC vx =  GGML_F16x_VEC_SET1(v);
+    const int np = (n & ~(ggml_f16_step - 1));
+    svfloat16_t ay1, ay2;
 
-        for (int i = 0; i < np; i += ggml_f16_step) {
-            ay1 = GGML_F16x_VEC_LOAD(y + i + 0*ggml_f16_epr, 0);
-            ay1 = GGML_F16x_VEC_MUL(ay1, vx);
-            GGML_F16x_VEC_STORE(y + i + 0*ggml_f16_epr, ay1, 0);
+    for (int i = 0; i < np; i += ggml_f16_step) {
+        ay1 = GGML_F16x_VEC_LOAD(y + i + 0*ggml_f16_epr, 0);
+        ay1 = GGML_F16x_VEC_MUL(ay1, vx);
+        GGML_F16x_VEC_STORE(y + i + 0*ggml_f16_epr, ay1, 0);
 
-            ay2 = GGML_F16x_VEC_LOAD(y + i + 1*ggml_f16_epr, 1);
-            ay2 = GGML_F16x_VEC_MUL(ay2, vx);
-            GGML_F16x_VEC_STORE(y + i + 1*ggml_f16_epr, ay2, 1);
+        ay2 = GGML_F16x_VEC_LOAD(y + i + 1*ggml_f16_epr, 1);
+        ay2 = GGML_F16x_VEC_MUL(ay2, vx);
+        GGML_F16x_VEC_STORE(y + i + 1*ggml_f16_epr, ay2, 1);
+    }
+    // leftovers
+    // maximum number of leftover elements will be less that ggmlF_16x_epr. Apply predicated svmad on available elements only
+    if (np < n) {
+        svbool_t pg = svwhilelt_b16(np, n);
+        svfloat16_t hy = svld1_f16(pg, (__fp16 *)(y + np));
+        svfloat16_t out = svmul_f16_m(pg, hy, vx);
+        svst1_f16(pg, (__fp16 *)(y + np), out);
+    }
+#elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfh)
+    for (int i = 0, vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e16m2(n - i);
+        vfloat16m2_t vy = __riscv_vle16_v_f16m2((_Float16 *)&y[i], vl);
+        vfloat32m4_t vy32 = __riscv_vfwcvt_f_f_v_f32m4(vy, vl);
+        vy32 = __riscv_vfmul_vf_f32m4(vy32, v, vl);
+        vy = __riscv_vfncvt_f_f_w_f16m2(vy32, vl);
+        __riscv_vse16_v_f16m2((_Float16 *)&y[i], vy, vl);
+    }
+#elif defined(GGML_SIMD)
+    const int np = (n & ~(GGML_F16_STEP - 1));
+
+    GGML_F16_VEC vx = GGML_F16_VEC_SET1(v);
+
+    GGML_F16_VEC ay[GGML_F16_ARR];
+
+    for (int i = 0; i < np; i += GGML_F16_STEP) {
+        for (int j = 0; j < GGML_F16_ARR; j++) {
+            ay[j] = GGML_F16_VEC_LOAD(y + i + j*GGML_F16_EPR, j);
+            ay[j] = GGML_F16_VEC_MUL(ay[j], vx);
+
+            GGML_F16_VEC_STORE(y + i + j*GGML_F16_EPR, ay, j);
         }
-        // leftovers
-        // maximum number of leftover elements will be less that ggmlF_16x_epr. Apply predicated svmad on available elements only
-        if (np < n) {
-            svbool_t pg = svwhilelt_b16(np, n);
-            svfloat16_t hy = svld1_f16(pg, (__fp16 *)(y + np));
-            svfloat16_t out = svmul_f16_m(pg, hy, vx);
-            svst1_f16(pg, (__fp16 *)(y + np), out);
-        }
-    #elif defined(__riscv_v_intrinsic)
-        // todo: RVV impl
-        // scalar
-        for (int i = 0; i < n; ++i) {
-            y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(y[i])*v);
-        }
-    #else
-        const int np = (n & ~(GGML_F16_STEP - 1));
+    }
 
-        GGML_F16_VEC vx = GGML_F16_VEC_SET1(v);
-
-        GGML_F16_VEC ay[GGML_F16_ARR];
-
-        for (int i = 0; i < np; i += GGML_F16_STEP) {
-            for (int j = 0; j < GGML_F16_ARR; j++) {
-                ay[j] = GGML_F16_VEC_LOAD(y + i + j*GGML_F16_EPR, j);
-                ay[j] = GGML_F16_VEC_MUL(ay[j], vx);
-
-                GGML_F16_VEC_STORE(y + i + j*GGML_F16_EPR, ay, j);
-            }
-        }
-
-        // leftovers
-        for (int i = np; i < n; ++i) {
-            y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(y[i])*v);
-        }
-    #endif
+    // leftovers
+    for (int i = np; i < n; ++i) {
+        y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(y[i])*v);
+    }
 #else
     // scalar
     for (int i = 0; i < n; ++i) {
