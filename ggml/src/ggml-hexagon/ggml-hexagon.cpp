@@ -1912,20 +1912,13 @@ static bool hex_supported_dims(const struct ggml_tensor * x, const struct ggml_t
     return true;
 }
 
-static inline bool hex_supported_buffer(const struct ggml_hexagon_session * sess) {
-    return true;
-}
-
 template <typename... _TTensor>
-static inline bool hex_supported_buffer(const struct ggml_hexagon_session * sess,
-                                        const ggml_tensor *                 t,
-                                        _TTensor... tensors) {
-    if (t && t->buffer &&
-        (!ggml_backend_buffer_is_hexagon(t->buffer) || ggml_backend_hexagon_buffer_get_sess(t->buffer) != sess)) {
-        return false;
-    }
-
-    return hex_supported_buffer(sess, tensors...);
+static inline bool hex_supported_buffer(const struct ggml_hexagon_session * sess, _TTensor... tensors) {
+    return ([&]() -> bool {
+        return !tensors || !tensors->buffer ||
+               (ggml_backend_buffer_is_hexagon(tensors->buffer) &&
+                ggml_backend_hexagon_buffer_get_sess(tensors->buffer) == sess);
+    }() && ...);
 }
 
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
