@@ -9696,13 +9696,12 @@ static void ggml_compute_forward_solve_tri_f32(const struct ggml_compute_params 
         for (int64_t i00 = 0; i00 < n; ++i00) {
             float sum = 0.0f;
             for (int64_t t = 0; t < i00; ++t) {
-                sum += A_batch[i00 * n + t] * X_batch[i01 * n + t];
+                sum += A_batch[i00 * n + t] * X_batch[t * k + i01];
             }
 
             const float diag = A_batch[i00 * n + i00];
             GGML_ASSERT(diag != 0.0f && "Zero diagonal in triangular matrix");
-
-            X_batch[i01 * n + i00] = (B_batch[i00 * k + i01] - sum) / diag;
+            X_batch[i00 * k + i01] = (B_batch[i00 * k + i01] - sum) / diag;
         }
     }
 }
