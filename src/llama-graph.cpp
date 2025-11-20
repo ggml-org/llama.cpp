@@ -930,20 +930,34 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     ggml_tensor * topk_idx = ggml_top_k(ctx0, scores2d, topk_safe); // [topk, cols_scores]
     cb(topk_idx, "sparsek_topk_idx", il);
 
-    // ---------------------------------------------------------------------
+       // ---------------------------------------------------------------------
     // 4) Build SparseK mask:
-    //    Start from all -INF [n_kv_scores, cols_scores] then set selected
-    //    rows to 0.
+    //    Start from all large negative [n_kv_scores, cols_scores] then set
+    //    selected rows to 0.
     // ---------------------------------------------------------------------
-    ggml_tensor * neg2d = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32,
-                                         n_kv_scores, cols_scores);
-    ggml_set_f32(neg2d, -INFINITY);
-   ggml_tensor * rows3d   = ggml_reshape_3d(ctx0, neg2d, n_kv_scores, 1, cols_scores);
-   ggml_tensor * picked   = ggml_get_rows(ctx0, rows3d, topk_idx); // [topk, 1, cols]
+    // Use a large finite negative instead of -INF to avoid NaNs in
+    // expressions like (x - x).
+    const float sparsek_neg = -1e9f;
 
-   // Create zeros without introducing a scalar node: picked - picked = 0
-   ggml_tensor * zeros    = ggml_sub(ctx0, picked, picked);
-   ggml_tensor * merged3d = ggml_set_rows(ctx0, rows3d, zeros, topk_idx);
+    // zeros2d = 0
+    ggml_tensor * zeros2d = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32,
+                                               n_kv_scores, cols_scores);
+    zeros2d = ggml_set_zero(zeros2d);
+
+    // neg2d = sparsek_neg + zeros2d  → constant matrix with sparsek_neg
+    ggml_tensor * neg2d = ggml_add(ctx0,
+                                   ggml_new_f32(ctx0, sparsek_neg),
+                                   zeros2d);
+
+    ggml_tensor * rows3d = ggml_reshape_3d(ctx0, neg2d,
+                                           n_kv_scores, 1, cols_scores);
+
+    ggml_tensor * picked = ggml_get_rows(ctx0, rows3d, topk_idx); // [topk, 1, cols]
+
+    // Create true zeros: (sparsek_neg - sparsek_neg) = 0
+    ggml_tensor * zeros = ggml_sub(ctx0, picked, picked);
+
+    ggml_tensor * merged3d = ggml_set_rows(ctx0, rows3d, zeros, topk_idx);
 
     // ---------------------------------------------------------------------
     // 5) Broadcast into [n_kv, n_rows, hs] and combine with base_mask.
@@ -995,30 +1009,6 @@ ggml_tensor * llm_graph_context::maybe_apply_sparsek_mask(
     // If SparseK is disabled or misconfigured, it will simply return base_mask.
     return build_sparsek_mask(q, k, base_mask, il);
 }
-
-// //Force disable SparseK: always return base_mask as-is
-
-// ggml_tensor * llm_graph_context::maybe_apply_sparsek_mask(
-//         ggml_tensor * base_mask,
-//         ggml_tensor * q,
-//         ggml_tensor * k,
-//         int64_t      n_kv,
-//         int64_t      n_rows,
-//         int64_t      n_stream,
-//         int          il) const {
-//     GGML_UNUSED(q);
-//     GGML_UNUSED(k);
-//     GGML_UNUSED(n_kv);
-//     GGML_UNUSED(n_rows);
-//     GGML_UNUSED(n_stream);
-//     GGML_UNUSED(il);
-
-//     // Force disable SparseK: always return base_mask as-is
-//     cb(base_mask, "sparsek_forced_passthrough", il);
-//     return base_mask;
-// }
-
-// ============================================================================
 
 ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * cur,
