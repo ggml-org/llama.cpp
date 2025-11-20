@@ -485,6 +485,7 @@ if __name__ == '__main__':
             dir_lora_model=dir_lora,
             lora_alpha=alpha,
             hparams=hparams,
+            remote_hf_model_id=base_model_id,
         )
 
         logger.info("Exporting model...")
