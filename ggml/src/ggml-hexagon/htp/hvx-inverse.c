@@ -38,13 +38,13 @@ void hvx_inverse_f32(const uint8_t * restrict src, uint8_t * restrict dst, const
 
         #pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-            *p_vec_out++ = hvx_vec_inverse_fp32(*p_vec_in++);
+            *p_vec_out++ = hvx_vec_inverse_fp32_guard(*p_vec_in++);
         }
     } else {
         #pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in                            = *(HVX_UVector *) (src + i * SIZEOF_FP32);
-            *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_inverse_fp32(in);
+            *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_inverse_fp32_guard(in);
         }
     }
 
@@ -53,7 +53,7 @@ void hvx_inverse_f32(const uint8_t * restrict src, uint8_t * restrict dst, const
         float *       dstf = (float *) dst + num_elems_whole;
 
         HVX_Vector in  = *(HVX_UVector *) srcf;
-        HVX_Vector out = hvx_vec_inverse_fp32(in);
+        HVX_Vector out = hvx_vec_inverse_fp32_guard(in);
 
         hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, out);
     }

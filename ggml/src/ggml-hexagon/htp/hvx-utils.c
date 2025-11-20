@@ -401,7 +401,9 @@ void hvx_add_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
         FARF(HIGH, "hvx_add_scalar_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
-    HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    static const float kInf    = INFINITY;
+    const HVX_Vector   inf     = hvx_vec_splat_fp32(kInf);
+    HVX_Vector         val_vec = hvx_vec_splat_fp32(val);
 
     if (0 == unaligned_loop) {
         HVX_Vector * restrict vec_in1 = (HVX_Vector *) src;
@@ -409,17 +411,24 @@ void hvx_add_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
 
         #pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-            HVX_Vector v = Q6_Vqf32_vadd_VsfVsf(*vec_in1++, val_vec);
-            *vec_out++   = Q6_Vsf_equals_Vqf32(v);
+            HVX_Vector           in       = *vec_in1++;
+            const HVX_VectorPred pred_inf = Q6_Q_vcmp_eq_VwVw(inf, in);
+            HVX_Vector           v        = Q6_Vqf32_vadd_VsfVsf(in, val_vec);
+            v                             = Q6_Vsf_equals_Vqf32(v);
+            v                             = Q6_V_vmux_QVV(pred_inf, inf, v);
+            *vec_out++                    = v;
         }
     } else {
         #pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
 
-            HVX_Vector out = Q6_Vqf32_vadd_VsfVsf(in, val_vec);
+            const HVX_VectorPred pred_inf = Q6_Q_vcmp_eq_VwVw(inf, in);
+            HVX_Vector           out      = Q6_Vqf32_vadd_VsfVsf(in, val_vec);
+            out                           = Q6_Vsf_equals_Vqf32(out);
+            out                           = Q6_V_vmux_QVV(pred_inf, inf, out);
 
-            *(HVX_UVector *) (dst + i * SIZEOF_FP32) = Q6_Vsf_equals_Vqf32(out);
+            *(HVX_UVector *) (dst + i * SIZEOF_FP32) = out;
         }
     }
 
@@ -429,8 +438,12 @@ void hvx_add_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
 
         HVX_Vector in = *(HVX_UVector *) srcf;
 
-        HVX_Vector out = Q6_Vqf32_vadd_VsfVsf(in, val_vec);
-        hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, Q6_Vsf_equals_Vqf32(out));
+        const HVX_VectorPred pred_inf = Q6_Q_vcmp_eq_VwVw(inf, in);
+        HVX_Vector           out      = Q6_Vqf32_vadd_VsfVsf(in, val_vec);
+        out                           = Q6_Vsf_equals_Vqf32(out);
+        out                           = Q6_V_vmux_QVV(pred_inf, inf, out);
+
+        hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, out);
     }
 }
 
