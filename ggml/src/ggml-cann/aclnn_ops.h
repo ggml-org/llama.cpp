@@ -1125,3 +1125,23 @@ void ggml_cann_op_unary_gated(std::function<void(ggml_backend_cann_context &, ac
     } while (0)
 
 #endif  // CANN_ACLNN_OPS
+
+/**
+ * @brief Performs outer product operation on two ggml tensors using the CANN backend.
+ *
+ * @details This function computes the outer product of two input tensors (src0 and src1)
+ * and stores the result in the destination tensor. The outer product operation is defined as:
+ * dst[i,j,k,l] = sum_m (src0[i,m,k,l] * src1[j,m,k,l])
+ *
+ * The function supports multiple data types including F32, F16. For floating-point
+ * types, it uses batch matrix multiplication for efficient computation.
+ *
+ * The implementation handles 4D tensor broadcasting and batch processing automatically.
+ *
+ * @param ctx The CANN backend context for operation execution and memory management.
+ * @param dst The destination ggml_tensor where the outer product result will be stored.
+ *            The input tensors are assumed to be `dst->src[0]` and `dst->src[1]`.
+ *
+ * @see GGML_CANN_CALL_ACLNN_OP for CANN operator invocation
+ */
+void ggml_cann_out_prod(ggml_backend_cann_context & ctx, ggml_tensor * dst);
