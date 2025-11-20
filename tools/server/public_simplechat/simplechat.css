@@ -21,7 +21,14 @@ body {
     margin: 0;
 }
 #sessions-div {
+    display: flex;
+    gap: 0.4vmin;
     overflow: auto;
+    scrollbar-width: none;
+}
+#icons-div {
+    display: flex;
+    gap: 0.4vmin;
 }
 
 .session-selected {
@@ -199,9 +206,9 @@ body {
 }
 
 button {
-    padding-inline: 2vmin;
+    padding-inline: 1vmin;
     border-radius: 1vmin;
-    min-height: 3vmin;
+    min-height: 2vmin;
     border-color: #80A0E0;
 }
 
