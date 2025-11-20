@@ -1,7 +1,7 @@
 #include "tests.h"
 #include "test_harness.h"
 
-#include "chat-peg-parser.h"
+#include "peg-parser.h"
 
 #include <string>
 #include <sstream>

@@ -1,5 +1,5 @@
 #include "chat-peg-parser-helper.h"
-#include "chat-peg-parser.h"
+#include "peg-parser.h"
 #include <sstream>
 
 common_peg_parser common_peg_parser_builder_helper::reasoning(const std::string & tag) {

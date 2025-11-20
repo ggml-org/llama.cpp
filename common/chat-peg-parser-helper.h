@@ -1,4 +1,4 @@
-#include "chat-peg-parser.h"
+#include "peg-parser.h"
 #include "log.h"
 
 class common_peg_parser_builder_helper : public common_peg_parser_builder {

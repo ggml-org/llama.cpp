@@ -50,8 +50,6 @@ add_library(${TARGET} STATIC
     base64.hpp
     chat-parser.cpp
     chat-parser.h
-    chat-peg-parser.cpp
-    chat-peg-parser.h
     chat-peg-parser-helper.cpp
     chat-peg-parser-helper.h
     chat.cpp
@@ -71,6 +69,8 @@ add_library(${TARGET} STATIC
     log.h
     ngram-cache.cpp
     ngram-cache.h
+    peg-parser.cpp
+    peg-parser.h
     regex-partial.cpp
     regex-partial.h
     sampling.cpp

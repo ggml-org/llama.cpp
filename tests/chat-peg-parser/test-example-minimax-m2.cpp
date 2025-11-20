@@ -1,5 +1,5 @@
 #include "common.h"
-#include "chat-peg-parser.h"
+#include "peg-parser.h"
 #include "nlohmann/json.hpp"
 #include "tests.h"
 
