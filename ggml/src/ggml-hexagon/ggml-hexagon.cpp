@@ -240,6 +240,23 @@ struct ggml_hexagon_session {
     uint32_t         prof_pkts;
 };
 
+static inline void hex_print_op_info(const ggml_tensor * op, ggml_hexagon_session * sess, const uint32_t req_flags) {
+    char dims[64 * GGML_MAX_SRC];
+    char strides[64 * GGML_MAX_SRC];
+    char types[16 * GGML_MAX_SRC];
+    char buffs[64 * GGML_MAX_SRC];
+    char names[64 * GGML_MAX_SRC];
+
+    hex_format_op_dims(dims, op);
+    hex_format_op_strides(strides, op);
+    hex_format_op_types(types, op);
+    hex_format_op_buffs(buffs, op);
+    hex_format_op_names(names, op);
+
+    HEX_VERBOSE("ggml-hex: %s %s: %s : %s : %s : %s : %s: flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
+                names, dims, types, strides, buffs, req_flags);
+}
+
 void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync) {
     // Bump pending flag (cleared in the session::flush once we get the responce)
     this->op_pending++;  // atomic inc
@@ -2375,20 +2392,7 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[64 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s: %s : %s : %s : %s : %s: flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
-                    names, dims, types, strides, buffs, req.flags);
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             hex_dump_dspbuf(src1, &bufs[1]);
@@ -2462,20 +2466,7 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[64 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s: %s : %s : %s : %s : %s: flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
-                    names, dims, types, strides, buffs, req.flags);
-
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             hex_dump_dspbuf(src1, &bufs[1]);
@@ -2564,20 +2555,7 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[16 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s : %s : %s : %s : %s : %s : flags 0x%x\n", sess->name.c_str(),
-                    ggml_op_name(node->op), names, dims, types, strides, buffs, req.flags);
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             hex_dump_dspbuf(src1, &bufs[1]);
@@ -2648,21 +2626,7 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[16 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s : %s : %s : %s : %s : %s : flags 0x%x\n", sess->name.c_str(),
-                    ggml_op_name(node->op), names, dims, types, strides, buffs, req.flags);
-
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             hex_dump_dspbuf(src1, &bufs[1]);
@@ -2779,20 +2743,7 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
     auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[64 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s : %s : %s : %s : %s : %s : flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
-                    names, dims, types, strides, buffs, req.flags);
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             if (src1) {
@@ -2894,20 +2845,7 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[64 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s : %s : %s : %s : %s : %s : flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
-                    names, dims, types, strides, buffs, req.flags);
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             if (src1) {
