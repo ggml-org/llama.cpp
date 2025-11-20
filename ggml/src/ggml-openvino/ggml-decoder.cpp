@@ -66,9 +66,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
     m_model_weights(model_weights),
     m_is_static(is_static) {
     if (auto * env = getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS"); env && std::string(env) != "0") {
-    /*    unsetenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS");
-        print_tensor_address_map(cgraph);
-    }*/
+    //    unsetenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS");
         #ifdef _WIN32
 		    _putenv_s("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS", "");
 	    #else
