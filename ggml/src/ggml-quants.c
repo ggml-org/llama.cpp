@@ -2720,6 +2720,7 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
             float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);
 
+            // todo_liweitao 是否需要分开？
             int v = nearest_int(iscale_real * x_real);
             y[i].x_real[j] = MIN(127, v);
             v = nearest_int(iscale_imag * x_imag);
