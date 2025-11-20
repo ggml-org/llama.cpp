@@ -3,7 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import ChatFormActionFileAttachments from './ChatFormActionFileAttachments.svelte';
 	import ChatFormActionRecord from './ChatFormActionRecord.svelte';
-	import ChatFormModelSelector from './ChatFormModelSelector.svelte';
+	import ChatFormModelSelector from '../ChatFormModelSelector.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import type { FileTypeCategory } from '$lib/enums/files';
 

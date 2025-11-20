@@ -4,8 +4,8 @@
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { FileTypeCategory } from '$lib/enums/files';
 	import { getFileTypeCategory } from '$lib/utils/file-type';
-	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
-	import ChatAttachmentsViewAllDialog from './ChatAttachmentsViewAllDialog.svelte';
+	import DialogChatAttachmentPreview from '$lib/components/app/dialogs/DialogChatAttachmentPreview.svelte';
+	import DialogChatAttachmentsViewAll from '$lib/components/app/dialogs/DialogChatAttachmentsViewAll.svelte';
 	import type { ChatAttachmentDisplayItem, ChatAttachmentPreviewItem } from '$lib/types/chat';
 
 	interface Props {
@@ -256,7 +256,7 @@
 {/if}
 
 {#if previewItem}
-	<ChatAttachmentPreviewDialog
+	<DialogChatAttachmentPreview
 		bind:open={previewDialogOpen}
 		uploadedFile={previewItem.uploadedFile}
 		attachment={previewItem.attachment}
@@ -268,7 +268,7 @@
 	/>
 {/if}
 
-<ChatAttachmentsViewAllDialog
+<DialogChatAttachmentsViewAll
 	bind:open={viewAllDialogOpen}
 	{uploadedFiles}
 	{attachments}

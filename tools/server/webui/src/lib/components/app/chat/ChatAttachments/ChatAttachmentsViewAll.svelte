@@ -1,13 +1,11 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog';
 	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums/files';
 	import { getFileTypeCategory } from '$lib/utils/file-type';
-	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
+	import DialogChatAttachmentPreview from '$lib/components/app/dialogs/DialogChatAttachmentPreview.svelte';
 	import type { ChatAttachmentDisplayItem, ChatAttachmentPreviewItem } from '$lib/types/chat';
 
 	interface Props {
-		open?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		attachments?: DatabaseMessageExtra[];
 		readonly?: boolean;
@@ -18,7 +16,6 @@
 	}
 
 	let {
-		open = $bindable(false),
 		uploadedFiles = [],
 		attachments = [],
 		readonly = false,
@@ -127,70 +124,62 @@
 	}
 </script>
 
-<Dialog.Root bind:open>
-	<Dialog.Portal>
-		<Dialog.Overlay />
+<div class="space-y-4">
+	<div class="mb-4">
+		<h2 class="text-lg font-semibold">All Attachments ({displayItems.length})</h2>
+		<p class="text-sm text-muted-foreground">View and manage all attached files</p>
+	</div>
 
-		<Dialog.Content class="flex !max-h-[90vh] !max-w-6xl flex-col">
-			<Dialog.Header>
-				<Dialog.Title>All Attachments ({displayItems.length})</Dialog.Title>
-				<Dialog.Description class="text-sm text-muted-foreground">
-					View and manage all attached files
-				</Dialog.Description>
-			</Dialog.Header>
-
-			<div class="min-h-0 flex-1 space-y-6 overflow-y-auto px-1">
-				{#if fileItems.length > 0}
-					<div>
-						<h3 class="mb-3 text-sm font-medium text-foreground">Files ({fileItems.length})</h3>
-						<div class="flex flex-wrap items-start gap-3">
-							{#each fileItems as item (item.id)}
-								<ChatAttachmentFilePreview
-									class="cursor-pointer"
-									id={item.id}
-									name={item.name}
-									type={item.type}
-									size={item.size}
-									{readonly}
-									onRemove={onFileRemove}
-									textContent={item.textContent}
-									onClick={(event) => openPreview(item, event)}
-								/>
-							{/each}
-						</div>
-					</div>
-				{/if}
-
-				{#if imageItems.length > 0}
-					<div>
-						<h3 class="mb-3 text-sm font-medium text-foreground">Images ({imageItems.length})</h3>
-						<div class="flex flex-wrap items-start gap-3">
-							{#each imageItems as item (item.id)}
-								{#if item.preview}
-									<ChatAttachmentImagePreview
-										class="cursor-pointer"
-										id={item.id}
-										name={item.name}
-										preview={item.preview}
-										{readonly}
-										onRemove={onFileRemove}
-										height={imageHeight}
-										width={imageWidth}
-										{imageClass}
-										onClick={(event) => openPreview(item, event)}
-									/>
-								{/if}
-							{/each}
-						</div>
-					</div>
-				{/if}
+	<div class="min-h-0 flex-1 space-y-6 overflow-y-auto px-1">
+		{#if fileItems.length > 0}
+			<div>
+				<h3 class="mb-3 text-sm font-medium text-foreground">Files ({fileItems.length})</h3>
+				<div class="flex flex-wrap items-start gap-3">
+					{#each fileItems as item (item.id)}
+						<ChatAttachmentFilePreview
+							class="cursor-pointer"
+							id={item.id}
+							name={item.name}
+							type={item.type}
+							size={item.size}
+							{readonly}
+							onRemove={onFileRemove}
+							textContent={item.textContent}
+							onClick={(event) => openPreview(item, event)}
+						/>
+					{/each}
+				</div>
 			</div>
-		</Dialog.Content>
-	</Dialog.Portal>
-</Dialog.Root>
+		{/if}
+
+		{#if imageItems.length > 0}
+			<div>
+				<h3 class="mb-3 text-sm font-medium text-foreground">Images ({imageItems.length})</h3>
+				<div class="flex flex-wrap items-start gap-3">
+					{#each imageItems as item (item.id)}
+						{#if item.preview}
+							<ChatAttachmentImagePreview
+								class="cursor-pointer"
+								id={item.id}
+								name={item.name}
+								preview={item.preview}
+								{readonly}
+								onRemove={onFileRemove}
+								height={imageHeight}
+								width={imageWidth}
+								{imageClass}
+								onClick={(event) => openPreview(item, event)}
+							/>
+						{/if}
+					{/each}
+				</div>
+			</div>
+		{/if}
+	</div>
+</div>
 
 {#if previewItem}
-	<ChatAttachmentPreviewDialog
+	<DialogChatAttachmentPreview
 		bind:open={previewDialogOpen}
 		uploadedFile={previewItem.uploadedFile}
 		attachment={previewItem.attachment}
