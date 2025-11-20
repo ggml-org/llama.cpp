@@ -122,9 +122,9 @@ body {
     max-width: fit-content;
     max-height: 20vh;
 }
-.user-in-img {
-    max-width: 20vmin;
-    max-height: 20vmin;
+#user-in-imgs img {
+    max-width: 12vmin;
+    max-height: 12vmin;
 }
 #popover-chatmsg {
     position:fixed;

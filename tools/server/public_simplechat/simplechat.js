@@ -1064,6 +1064,7 @@ class MultiChatUI {
         this.elDivChat = /** @type{HTMLDivElement} */(document.getElementById("chat-div"));
         this.elBtnUser = /** @type{HTMLButtonElement} */(document.getElementById("user-btn"));
         this.elInUser = /** @type{HTMLInputElement} */(document.getElementById("user-in"));
+        this.elDivUserInImgs = /** @type{HTMLSelectElement} */(document.getElementById("user-in-imgs"));
         this.elDivHeading = /** @type{HTMLSelectElement} */(document.getElementById("heading"));
         this.elDivSessions = /** @type{HTMLDivElement} */(document.getElementById("sessions-div"));
         this.elBtnSettings = /** @type{HTMLButtonElement} */(document.getElementById("settings"));
@@ -1172,26 +1173,28 @@ class MultiChatUI {
      */
     dataurl_plus_add(dataUrl) {
         if (typeof(dataUrl) == 'string') {
-            //this.me.dataURLs.push(dataUrl)
+            this.me.dataURLs.push(dataUrl)
             this.me.dataURLs[0] = dataUrl
-            this.elInFileX.elImg.src = dataUrl
+            let elImg = document.createElement('img')
+            elImg.src = dataUrl
+            this.elDivUserInImgs.appendChild(elImg)
         }
     }
 
     /**
      * Get the stored dataUrl
+     * @param {number} index
      */
-    dataurl_get() {
-        //this.me.dataURLs.pop()
-        return /** @type{string} */(this.me.dataURLs[0])
+    dataurl_get(index) {
+        return /** @type{string} */(this.me.dataURLs[index])
     }
 
     /**
      * Clear dataUrls, as well as clear Image.
      */
     dataurl_plus_clear() {
-        this.elInFileX.elImg.src = "";
         this.me.dataURLs.length = 0;
+        this.elDivUserInImgs.replaceChildren()
     }
 
     /**
@@ -1669,7 +1672,7 @@ class MultiChatUI {
             try {
                 let image = undefined
                 if (this.me.dataURLs.length > 0) {
-                    image = this.dataurl_get()
+                    image = this.dataurl_get(0)
                 }
                 this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
             } catch (err) {
