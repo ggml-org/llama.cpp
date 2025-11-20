@@ -14,7 +14,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
-import com.arm.aichat.TierDetection
 import com.arm.aichat.gguf.GgufMetadata
 import com.arm.aichat.gguf.GgufMetadataReader
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -30,18 +29,16 @@ import java.util.UUID
 class MainActivity : AppCompatActivity() {
 
     // Android views
-    private lateinit var tierTv: TextView
-    private lateinit var pickerBtn: FloatingActionButton
     private lateinit var ggufTv: TextView
     private lateinit var messagesRv: RecyclerView
     private lateinit var userInputEt: EditText
-    private lateinit var userSendBtn: FloatingActionButton
+    private lateinit var userActionFab: FloatingActionButton
 
-    // Arm AI Chat engine and utils
-    private lateinit var detection: TierDetection
+    // Arm AI Chat inference engine
     private lateinit var engine: InferenceEngine
 
     // Conversation states
+    private var isModelReady = false
     private val messages = mutableListOf<Message>()
     private val lastAssistantMsg = StringBuilder()
     private val messageAdapter = MessageAdapter(messages)
@@ -52,35 +49,27 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         // Find views
-        tierTv = findViewById(R.id.tier)
-        pickerBtn = findViewById(R.id.pick_model)
         ggufTv = findViewById(R.id.gguf)
         messagesRv = findViewById(R.id.messages)
         messagesRv.layoutManager = LinearLayoutManager(this)
         messagesRv.adapter = messageAdapter
         userInputEt = findViewById(R.id.user_input)
-        userSendBtn = findViewById(R.id.user_send)
+        userActionFab = findViewById(R.id.fab)
 
         // Arm AI Chat initialization
         lifecycleScope.launch(Dispatchers.Default) {
-            // Obtain the device's CPU feature tier
-            detection = AiChat.getTierDetection(applicationContext)
-            withContext(Dispatchers.Main) {
-                tierTv.text = detection.getDetectedTier()?.description ?: "N/A"
-            }
-
-            // Obtain the inference engine
             engine = AiChat.getInferenceEngine(applicationContext)
         }
 
-        // Upon file picker button tapped, prompt user to select a GGUF metadata on the device
-        pickerBtn.setOnClickListener {
-            getContent.launch(arrayOf("*/*"))
-        }
-
-        // Upon user send button tapped, validate input and send to engine
-        userSendBtn.setOnClickListener {
-            handleUserInput()
+        // Upon CTA button tapped
+        userActionFab.setOnClickListener {
+            if (isModelReady) {
+                // If model is ready, validate input and send to engine
+                handleUserInput()
+            } else {
+                // Otherwise, prompt user to select a GGUF metadata on the device
+                getContent.launch(arrayOf("*/*"))
+            }
         }
     }
 
@@ -96,7 +85,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun handleSelectedModel(uri: Uri) {
         // Update UI states
-        pickerBtn.isEnabled = false
+        userActionFab.isEnabled = false
         userInputEt.hint = "Parsing GGUF..."
         ggufTv.text = "Parsing metadata from selected file \n$uri"
 
@@ -120,9 +109,11 @@ class MainActivity : AppCompatActivity() {
                     loadModel(modelName, modelFile)
 
                     withContext(Dispatchers.Main) {
+                        isModelReady = true
                         userInputEt.hint = "Type and send a message!"
                         userInputEt.isEnabled = true
-                        userSendBtn.isEnabled = true
+                        userActionFab.setImageResource(R.drawable.outline_send_24)
+                        userActionFab.isEnabled = true
                     }
                 }
             }
@@ -171,7 +162,7 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Input message is empty!", Toast.LENGTH_SHORT).show()
             } else {
                 userInputEt.text = null
-                userSendBtn.isEnabled = false
+                userActionFab.isEnabled = false
 
                 // Update message states
                 messages.add(Message(UUID.randomUUID().toString(), userSsg, true))
@@ -182,7 +173,7 @@ class MainActivity : AppCompatActivity() {
                     engine.sendUserPrompt(userSsg)
                         .onCompletion {
                             withContext(Dispatchers.Main) {
-                                userSendBtn.isEnabled = true
+                                userActionFab.isEnabled = true
                             }
                         }.collect { token ->
                             val messageCount = messages.size

@@ -1,3 +1,0 @@
-[submodule "include/cpu_features"]
-	path = include/cpu_features
-	url = https://github.com/google/cpu_features

@@ -12,19 +12,7 @@ set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}"   CACHE STRING "" FORCE)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" CACHE STRING "" FORCE)
 
 # --------------------------------------------------------------------------
-# 1. CPU feature detection library
-# --------------------------------------------------------------------------
-add_subdirectory(
-        ${CMAKE_CURRENT_LIST_DIR}/../../../../../../include/cpu_features
-        ${CMAKE_BINARY_DIR}/cpu_features_build)
-add_library(cpu-detector SHARED cpu_detector.cpp)
-target_link_libraries(cpu-detector
-        PRIVATE CpuFeatures::cpu_features
-        android
-        log)
-
-# --------------------------------------------------------------------------
-# 2. AI Chat library
+# AI Chat library
 # --------------------------------------------------------------------------
 
 if(DEFINED ANDROID_ABI)

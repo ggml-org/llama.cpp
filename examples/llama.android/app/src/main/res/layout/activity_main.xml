@@ -13,48 +13,28 @@
         android:orientation="vertical"
         tools:context=".MainActivity">
 
-        <LinearLayout
-            android:orientation="horizontal"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content">
-
-            <TextView
-                android:id="@+id/tier"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_margin="16dp"
-                android:layout_gravity="center"
-                android:maxLines="3"
-                android:text="Checking your device's CPU features"
-                style="@style/TextAppearance.MaterialComponents.Body1" />
-
-            <com.google.android.material.floatingactionbutton.FloatingActionButton
-                android:id="@+id/pick_model"
-                style="@style/Widget.Material3.FloatingActionButton.Primary"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_margin="8dp"
-                android:src="@drawable/outline_folder_open_24" />
-
-        </LinearLayout>
-
-        <ScrollView
+        <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1"
-            android:fadeScrollbars="false">
+            android:layout_weight="1">
 
-            <TextView
-                android:id="@+id/gguf"
+            <ScrollView
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:layout_margin="16dp"
-                android:text="Selected GGUF model's metadata will show here."
-                style="@style/TextAppearance.MaterialComponents.Body2"
-                android:maxLines="100" />
+                android:layout_height="wrap_content"
+                android:fadeScrollbars="false">
 
-        </ScrollView>
+                <TextView
+                    android:id="@+id/gguf"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_margin="16dp"
+                    android:text="Selected GGUF model's metadata will show here."
+                    style="@style/TextAppearance.MaterialComponents.Body2"
+                    android:maxLines="100" />
+
+            </ScrollView>
+
+        </FrameLayout>
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/messages"
@@ -82,13 +62,13 @@
                 android:hint="Please first pick a GGUF model file to import." />
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
-                android:id="@+id/user_send"
-                android:enabled="false"
+                android:id="@+id/fab"
+                android:enabled="true"
                 style="@style/Widget.Material3.FloatingActionButton.Primary"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_margin="8dp"
-                android:src="@drawable/outline_send_24" />
+                android:src="@drawable/outline_folder_open_24" />
 
         </LinearLayout>
 

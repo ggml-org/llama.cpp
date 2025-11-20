@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.jetbrains.kotlin.android)
-    `maven-publish`
 }
 
 android {
@@ -66,31 +65,6 @@ android {
     publishing {
         singleVariant("release") {
             withJavadocJar()
-        }
-    }
-}
-
-publishing {
-    publications {
-        register<MavenPublication>("release") {
-            groupId = "com.arm"
-            artifactId = "ai-chat"
-            version = "0.1.0"
-
-            afterEvaluate {
-                from(components["release"])
-            }
-        }
-    }
-
-    repositories {
-        maven {
-            name = "artifactory"
-            url = uri(project.findProperty("artifactoryUrl") as? String ?: "")
-            credentials {
-                username = project.findProperty("artifactoryUsername") as? String ?: ""
-                password = project.findProperty("artifactoryPassword") as? String ?: ""
-            }
         }
     }
 }
