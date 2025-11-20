@@ -442,7 +442,8 @@ function usage_note(sRecentUserMsgCnt) {
     <details id="DefaultUsage">
     <summary class="role-system">Usage Note</summary>
     <ul class="ul1">
-    <li> Clicking chat icon, toggles chat session buttons and system prompt block </li>
+    <li> New button creates new chat session, with its own system prompt.</li>
+    <li> Prompt button toggles system prompt entry.</li>
     <li> System prompt above, helps control ai response characteristics.</li>
         <ul class="ul2">
         <li> Completion mode - no system prompt normally.</li>
@@ -1762,7 +1763,7 @@ class MultiChatUI {
             this.new_chat_session(chatIdGot, true);
             this.create_session_btn(elDiv, chatIdGot);
             ui.el_children_config_class(elDiv, chatIdGot, "session-selected", "");
-        },"NewChat", "+");
+        },"NewChat", "+ new");
         btnNew.title = "start a new chat session"
         elDiv.appendChild(btnNew);
         // Btns for existing chat sessions
