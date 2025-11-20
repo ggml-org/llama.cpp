@@ -4779,7 +4779,11 @@ kernel void kernel_argsort_merge_f32_i32(
     const int chunk = (total + ntg.x - 1) / ntg.x;
 
     const int k0 = tpitg.x * chunk;
-    const int k1 = min(k0 + chunk, total);
+    const int k1 = MIN(MIN(k0 + chunk, total), args.top_k);
+
+    if (k0 >= args.top_k) {
+        return;
+    }
 
     if (k0 >= total) {
         return;
@@ -4830,16 +4834,16 @@ kernel void kernel_argsort_merge_f32_i32(
         val1 = src0_row[idx1];
     }
 
-    for (int k = k0; k < k1 && k < args.top_k; ++k) {
+    for (int k = k0; k < k1; ++k) {
         int32_t out_idx;
 
         if (i >= len0) {
-            while (k < k1 && k < args.top_k) {
+            while (k < k1) {
                 dst[k++] = tmp1[j++];
             }
             break;
         } else if (j >= len1) {
-            while (k < k1 && k < args.top_k) {
+            while (k < k1) {
                 dst[k++] = tmp0[i++];
             }
             break;

@@ -3764,7 +3764,7 @@ int ggml_metal_op_top_k(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
-    ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_argsort(lib, op);
+    ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_top_k(lib, op);
 
     // bitonic sort requires the number of elements to be power of 2
     int nth = 1;
@@ -3772,10 +3772,9 @@ int ggml_metal_op_top_k(ggml_metal_op_t ctx, int idx) {
         nth *= 2;
     }
 
+    // blocks per row
     const int npr = (ne00 + nth - 1)/nth;
 
-    // Metal kernels require the buffer size to be multiple of 16 bytes
-    // https://developer.apple.com/documentation/metal/mtlcomputecommandencoder/1443142-setthreadgroupmemorylength
     const size_t smem = GGML_PAD(nth*sizeof(int32_t), 16);
 
     ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
@@ -3803,7 +3802,7 @@ int ggml_metal_op_top_k(ggml_metal_op_t ctx, int idx) {
         /*.ne1   =*/ ne1,
         /*.ne2   =*/ ne2,
         /*.ne3   =*/ ne3,
-        /*.top_k =*/ std::min(nth, top_k),
+        /*.top_k =*/ std::min(nth, top_k), // for each block, keep just the top_k indices
     };
 
     if (npr > 1) {
@@ -3819,12 +3818,17 @@ int ggml_metal_op_top_k(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_dispatch_threadgroups(enc, npr*ne01, ne02, ne03, nth, 1, 1);
 
-    ggml_metal_pipeline_t pipeline_merge = ggml_metal_library_get_pipeline_argsort_merge(lib, op);
+    ggml_metal_pipeline_t pipeline_merge = ggml_metal_library_get_pipeline_top_k_merge(lib, op);
 
     int len = args.top_k;
 
     while (len < args.ne0) {
         ggml_metal_op_concurrency_reset(ctx);
+
+        // merges per row
+        const int nm = (args.ne0 + 2*len - 1) / (2*len);
+
+        const int nth = std::min(512, std::min(len, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_merge)));
 
         ggml_metal_kargs_argsort_merge args_merge = {
             /*.ne00  =*/ ne00,
@@ -3839,14 +3843,9 @@ int ggml_metal_op_top_k(ggml_metal_op_t ctx, int idx) {
             /*.ne1   =*/ ne1,
             /*.ne2   =*/ ne2,
             /*.ne3   =*/ ne3,
-            /*.top_k =*/ 2*len >= args.ne0 ? top_k : args.ne0,
+            /*.top_k =*/ nm == 1 ? top_k : args.ne0, // the final merge outputs top_k elements
             /*.len   =*/ len,
         };
-
-        // merges per row
-        const int nm = (args.ne0 + 2*len - 1) / (2*len);
-
-        const int nth = std::min(512, std::min(len, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_merge)));
 
         ggml_metal_encoder_set_pipeline(enc, pipeline_merge);
         ggml_metal_encoder_set_bytes   (enc, &args_merge, sizeof(args_merge), 0);
