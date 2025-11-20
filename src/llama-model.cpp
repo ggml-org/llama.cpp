@@ -13740,7 +13740,7 @@ struct llm_build_ifairy : public llm_graph_context {
         auto * inp_attn = build_attn_inp_kv();
 
         const float kq_scale = hparams.f_attention_scale == 0.0f
-                ? 1.0f/sqrtf(float(n_embd_head/2))
+                ? 1.0f/sqrtf(float(n_embd_head)/2)
                 : hparams.f_attention_scale;
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
@@ -13765,6 +13765,7 @@ struct llm_build_ifairy : public llm_graph_context {
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head/2, n_head,    n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head/2, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head/2, n_head_kv, n_tokens);
+            // todo_liweitao 是不是可以删了
 /*
             Qcur->type = GGML_TYPE_BF16;
             Qcur->ne[0] *= 2;

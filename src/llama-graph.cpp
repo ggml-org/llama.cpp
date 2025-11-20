@@ -1323,6 +1323,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         // this can happen when KV cache is not used (e.g. an embedding model with non-causal attn)
+        // todo_liweitao 这里会被cast 么？
         if (k->type == GGML_TYPE_F32) {
             k = ggml_cast(ctx0, k, GGML_TYPE_F16);
         }

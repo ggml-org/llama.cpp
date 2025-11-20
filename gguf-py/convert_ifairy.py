@@ -348,9 +348,8 @@ def main():
                         if verbose:
                             print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
                         continue
-                    # 这个不做量化，直接bf32存储
                     if 'lm_head' in key :
-                        tensor_data = f.get_tensor(key).to(torch.float32)
+                        tensor_data = f.get_tensor(key).to(torch.float16)
                         numpy_array = tensor_data.cpu().numpy()
                         model_arch = gguf.MODEL_ARCH.IFAIRY
                         mapper = gguf.get_tensor_name_map(model_arch, config["num_hidden_layers"])
@@ -362,7 +361,8 @@ def main():
                         except Exception as e:
                             print(f"Error mapping tensor name '{key}': {e}")
                             exit(1)
-                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F32)
+                        # 输出矩阵改为 fp16 存储以加快推理
+                        writer.add_tensor(mapped_name, numpy_array, raw_dtype=gguf.GGMLQuantizationType.F16)
                         if verbose:
                             print(f"添加张量: {mapped_name} (形状: {numpy_array.shape}")
                         continue

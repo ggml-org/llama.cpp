@@ -1429,14 +1429,14 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 
 // 辅助函数：横向累加 int32x4 到单个 int32
-static inline int32_t hadd_s32(int32x4_t v) {
-#if defined(__aarch64__)
-    return vaddvq_s32(v); // AArch64 专用指令，更快
-#else
-    return vgetq_lane_s32(v, 0) + vgetq_lane_s32(v, 1) +
-           vgetq_lane_s32(v, 2) + vgetq_lane_s32(v, 3);
-#endif
-}
+// static inline int32_t hadd_s32(int32x4_t v) {
+// #if defined(__aarch64__)
+//     return vaddvq_s32(v); // AArch64 专用指令，更快
+// #else
+//     return vgetq_lane_s32(v, 0) + vgetq_lane_s32(v, 1) +
+//            vgetq_lane_s32(v, 2) + vgetq_lane_s32(v, 3);
+// #endif
+// }
 
 // void ggml_vec_dot_ifairy_q16_K(
 //         int n,
