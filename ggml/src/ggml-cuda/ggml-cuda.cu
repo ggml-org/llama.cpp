@@ -3781,15 +3781,15 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * available_memory_k
 
     // Parse the file buffer line by line
     char * line = file_buffer.get();
-    char * nextLine;
+    char * line_next;
     while (line < file_buffer.get() + bytes_read) {
         // Find the end of the current line
-        nextLine = strchr(line, '\n');
-        if (nextLine != nullptr) {
-            *nextLine = '\0';
-            nextLine++;
+        line_next = strchr(line, '\n');
+        if (line_next != nullptr) {
+            *line_next = '\0';
+            line_next++;
         } else {
-            nextLine = file_buffer.get() + bytes_read;
+            line_next = file_buffer.get() + bytes_read;
         }
 
         long value;
@@ -3805,7 +3805,7 @@ static bool ggml_backend_cuda_get_available_uma_memory(long * available_memory_k
             huge_tlb_page_size = value;
         }
 
-        line = nextLine;
+        line = line_next;
     }
 
     if (huge_tlb_total_pages != 0 && huge_tlb_total_pages != -1) {
