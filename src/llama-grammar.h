@@ -7,8 +7,6 @@
 #include <string>
 #include <vector>
 
-#define MAX_REPETITION_THRESHOLD 5000
-
 struct llama_vocab;
 
 // grammar element type
