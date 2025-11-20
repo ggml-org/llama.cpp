@@ -20,6 +20,9 @@ body {
     background: linear-gradient(135deg, var(--background-color) 0%, lightblue 100%);
     margin: 0;
 }
+#sessions-div {
+    overflow: auto;
+}
 
 .session-selected {
     background-color: lightblue;
@@ -54,11 +57,18 @@ body {
     background: linear-gradient(135deg, lightpink 0%, transparent 100%);
 }
 
-#UsageNote {
+#DefaultUsage {
     margin: 0.0vmin;
 }
-.restore-details {
+#DefaultRestore {
     margin: 0.0vmin;
+}
+#DefaultInfo {
+    margin: 0.0vmin;
+}
+#DefaultTitle {
+    font-size: xx-small;
+    text-align: end;
 }
 
 .chat-message {
@@ -68,10 +78,10 @@ body {
     border: none;
     padding: 0.4vmin;
     padding-left: 0;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
 }
 .chat-message:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
 }
 .chat-message-role {
     border: none;

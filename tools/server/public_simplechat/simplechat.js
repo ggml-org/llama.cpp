@@ -439,8 +439,8 @@ class ChatMessageEx {
  */
 function usage_note(sRecentUserMsgCnt) {
     let sUsageNote = `
-    <details>
-    <summary id="UsageNote" class="role-system">Usage Note</summary>
+    <details id="DefaultUsage">
+    <summary class="role-system">Usage Note</summary>
     <ul class="ul1">
     <li> Clicking chat icon, toggles chat session buttons and system prompt block </li>
     <li> System prompt above, helps control ai response characteristics.</li>
@@ -1394,6 +1394,7 @@ class MultiChatUI {
                 this.elDivChat.innerHTML = usage_note(this.me.get_sRecentUserMsgCnt());
                 this.me.setup_load(this.elDivChat, chat);
                 this.me.show_info(this.elDivChat, bShowInfoAll);
+                this.me.show_title(this.elDivChat);
             }
         }
         return true
@@ -1925,7 +1926,7 @@ export class Me {
     setup_load(div, chat) {
         let tag = `Me:Load:${chat.chatId}`;
         let elRestore = document.createElement("details")
-        elRestore.className = "restore-details"
+        elRestore.id = "DefaultRestore"
         elRestore.hidden = true
         elRestore.open = true
         elRestore.innerHTML += '<summary class="role-system">Restore</summary>\n';
@@ -1962,6 +1963,17 @@ export class Me {
     }
 
     /**
+     * Show the title of this program
+     * @param {HTMLDivElement} elDiv
+     */
+    show_title(elDiv) {
+        let elTitle = document.createElement("div");
+        elTitle.id = "DefaultTitle";
+        elTitle.appendChild(document.createTextNode("SimpleChat"))
+        elDiv.appendChild(elTitle)
+    }
+
+    /**
      * Show the configurable parameters info in the passed Div element.
      * @param {HTMLDivElement} elDiv
      * @param {boolean} bAll
@@ -1971,12 +1983,15 @@ export class Me {
         if (!bAll) {
             props = [ "baseURL", "modelInfo", "tools", "chatProps" ];
         }
+        let elInfo = document.createElement("div")
+        elInfo.id = "DefaultInfo"
+        elDiv.appendChild(elInfo)
         fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
             this.modelInfo = {
                 modelPath: json["model_path"],
                 ctxSize: json["default_generation_settings"]["n_ctx"]
             }
-            ui.ui_show_obj_props_info(elDiv, this, props, "Current Settings/Info (dev console document[gMe])", "", { toplegend: 'role-system' })
+            ui.ui_show_obj_props_info(elInfo, this, props, "Current Settings/Info (dev console document[gMe])", "", { toplegend: 'role-system' })
         }).catch(err=>console.log(`WARN:ShowInfo:${err}`))
     }
 
