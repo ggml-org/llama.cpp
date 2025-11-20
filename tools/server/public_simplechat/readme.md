@@ -834,6 +834,7 @@ Cleanup in general
   * ensure full props hierarchy is accounted for when setting the id of elements.
 * Chat button to toggle sessions buttons and system prompt.
 * Use unix date format markers wrt sys_date_time toolcall, also add w (day of week).
+* Free up the useful vertical space by merging chat sessions buttons/tabs into heading
 
 
 #### ToDo
