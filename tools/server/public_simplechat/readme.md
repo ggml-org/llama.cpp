@@ -835,6 +835,9 @@ Cleanup in general
 * Chat button to toggle sessions buttons and system prompt.
 * Use unix date format markers wrt sys_date_time toolcall, also add w (day of week).
 * Free up the useful vertical space by merging chat sessions buttons/tabs into heading
+* Allow user to load multiple images and submit to ai as part of a single user message.
+* Use popover ui to allow user to view larger versions of loaded images as well as remove before submitting
+  to ai, if and when needed.
 
 
 #### ToDo

@@ -87,6 +87,11 @@ class NSChatMessage {
         this.tool_calls = structuredClone(tool_calls)
         this.tool_call_id = tool_call_id
         this.name = name
+        if (image_urls) {
+            if (image_urls.length <= 0) {
+                image_urls = undefined
+            }
+        }
         this.image_urls = structuredClone(image_urls)
     }
 
@@ -625,7 +630,7 @@ class SimpleChat {
                 }
                 // @ts-ignore
                 tmsg.ns.content = tMixed
-                tmsg.ns_delete("image_url")
+                tmsg.ns_delete("image_urls")
             }
             chat.push(tmsg.ns);
         }
@@ -1085,6 +1090,20 @@ class MultiChatUI {
         this.elPopoverChatMsgDelBtn = /** @type{HTMLElement} */(document.getElementById("popover-chatmsg-del"));
         this.uniqIdChatMsgPO = -1;
 
+        // image popover menu
+        this.elPOImage = /** @type{HTMLElement} */(document.getElementById("popover-image"));
+        this.elPOImageImg = /** @type{HTMLImageElement} */(document.getElementById("poimage-img"));
+        this.elPOImageDel = /** @type{HTMLButtonElement} */(document.getElementById("poimage-del"));
+        this.elPOImageDel.addEventListener('click', (ev)=>{
+            if (this.uniqIdImagePO < 0) {
+                return
+            }
+            this.dataurl_plus_del(this.uniqIdImagePO)
+            this.uniqIdImagePO = -1;
+            this.elPOImage.hidePopover()
+        })
+        this.uniqIdImagePO = -1;
+
         // Save any placeholder set by default like through html, to restore where needed
         this.elInUser.dataset.placeholder = this.elInUser.placeholder
         // Setup Image loading button and flow
@@ -1179,9 +1198,27 @@ class MultiChatUI {
         if (typeof(dataUrl) == 'string') {
             this.me.dataURLs.push(dataUrl)
             let elImg = document.createElement('img')
+            let imgIndex = this.me.dataURLs.length-1
+            elImg.id = `uiimg-${imgIndex}`
             elImg.src = dataUrl
+            elImg.addEventListener('click', (ev)=>{
+                this.uniqIdImagePO = imgIndex;
+                this.elPOImageImg.src = /** @type{string} */(this.me.dataURLs[this.uniqIdImagePO]);
+                this.elPOImage.showPopover()
+            })
             this.elDivUserInImgs.appendChild(elImg)
         }
+    }
+
+    /**
+     * Remove the dataurl, as well as shown image.
+     * @param {number} imgIndex
+     */
+    dataurl_plus_del(imgIndex) {
+        let id = `uiimg-${imgIndex}`
+        this.me.dataURLs[imgIndex] = null
+        let elImg = document.querySelector(`[id="${id}"]`)
+        elImg?.remove()
     }
 
     /**
@@ -1675,9 +1712,14 @@ class MultiChatUI {
                 return;
             }
             try {
-                let images = undefined
+                let images = []
                 if (this.me.dataURLs.length > 0) {
-                    images = /** @type{Array<string>} */(this.me.dataURLs)
+                    for (const img of this.me.dataURLs) {
+                        if (img == null) {
+                            continue
+                        }
+                        images.push(/** @type{string} */(img))
+                    }
                 }
                 this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, images)))
             } catch (err) {

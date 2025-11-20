@@ -189,6 +189,10 @@ body {
     max-width: 12vmin;
     max-height: 12vmin;
 }
+#poimage-img {
+    max-width: 60vmin;
+    max-height: 60vmin;
+}
 #user-in {
     background-color: #ffffff;
     padding: 1.6vmin 2vmin;
