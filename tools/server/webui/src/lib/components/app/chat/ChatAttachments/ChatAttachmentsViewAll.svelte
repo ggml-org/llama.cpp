@@ -1,8 +1,11 @@
 <script lang="ts">
-	import { ChatAttachmentThumbnailImage, ChatAttachmentThumbnailFile } from '$lib/components/app';
+	import {
+		ChatAttachmentThumbnailImage,
+		ChatAttachmentThumbnailFile,
+		DialogChatAttachmentPreview
+	} from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums/files';
 	import { getFileTypeCategory } from '$lib/utils/file-type';
-	import DialogChatAttachmentPreview from '$lib/components/app/dialogs/DialogChatAttachmentPreview.svelte';
 	import type { ChatAttachmentDisplayItem, ChatAttachmentPreviewItem } from '$lib/types/chat';
 
 	interface Props {
