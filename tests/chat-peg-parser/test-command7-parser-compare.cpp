@@ -7,8 +7,8 @@
 #include <string>
 #include <numeric>
 
-static common_chat_peg_arena create_command_r7b_parser() {
-    auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+static common_peg_arena create_command_r7b_parser() {
+    auto parser = build_peg_parser([](common_peg_parser_builder & p) {
         auto thinking = p.rule("thinking",
             "<|START_THINKING|>" << p.rule("reasoning-content", p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
 
@@ -44,8 +44,8 @@ static common_chat_peg_arena create_command_r7b_parser() {
     return parser;
 }
 
-static common_chat_parse_event_handler create_command_r7b_event_handler() {
-    return [](const common_chat_parse_event & ev, common_chat_parse_semantics & semantics) {
+static common_peg_parse_event_handler create_command_r7b_event_handler() {
+    return [](const common_peg_parse_event & ev, common_peg_parse_semantics & semantics) {
         if (ev.rule == "reasoning-content" && ev.ending()) {
             semantics.reasoning_content = ev.text;
         }
@@ -75,12 +75,12 @@ static common_chat_parse_event_handler create_command_r7b_event_handler() {
     };
 }
 
-static void test_command_r7b_parser(const common_chat_peg_arena & p,
+static void test_command_r7b_parser(const common_peg_arena & p,
                            const std::string &  input,
                            bool                 need_more_input,
                            bool                 print_results) {
-    common_chat_parse_semantics semantics;
-    common_chat_parse_context   ctx(input, &semantics, !need_more_input);
+    common_peg_parse_semantics semantics;
+    common_peg_parse_context   ctx(input, &semantics, !need_more_input);
     p.parse(ctx);
 
     if (print_results) {

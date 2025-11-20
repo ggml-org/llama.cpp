@@ -7,7 +7,7 @@
 #include <string>
 
 void test_example_minimax_m2(testing &t) {
-    auto helper_parser = build_peg_parser_helper([](common_chat_peg_parser_builder_helper & p) {
+    auto helper_parser = build_peg_parser_helper([](common_peg_parser_builder_helper & p) {
         auto thinking = p.reasoning();
         auto content = p.content_before_tools("<minimax:tool_call>");
         auto function = p.quasi_xml_attr("generate_joke",
@@ -35,16 +35,16 @@ void test_example_minimax_m2(testing &t) {
         // t.log("Tokens: " + string_join(tokens, ", "));
 
         common_chat_msg prev;
-        common_chat_parse_result last_result;
+        common_peg_parse_result last_result;
         t.test("helper_builder", [&](testing &t) {
             for (auto it = tokens.begin(); it != tokens.end(); it++) {
                 std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
                 // t.log("Current input: " + in);
 
-                common_chat_parse_semantics semantics;
-                common_chat_parse_context   ctx(in, &semantics, it + 1 == tokens.end());
+                common_peg_parse_semantics semantics;
+                common_peg_parse_context   ctx(in, &semantics, it + 1 == tokens.end());
 
-                common_chat_parse_simple_handler handler;
+                common_peg_parse_simple_handler handler;
                 ctx.set_event_handler(handler);
 
                 auto result = helper_parser.parse(ctx);

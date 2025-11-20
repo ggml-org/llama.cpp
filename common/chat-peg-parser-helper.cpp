@@ -2,7 +2,7 @@
 #include "chat-peg-parser.h"
 #include <sstream>
 
-common_chat_peg_parser common_chat_peg_parser_builder_helper::reasoning(const std::string & tag) {
+common_peg_parser common_peg_parser_builder_helper::reasoning(const std::string & tag) {
     std::string open_tag;
     open_tag.append("<").append(tag).append(">");
     std::string close_tag;
@@ -10,16 +10,16 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::reasoning(const st
     return rule("raw-reasoning", literal(open_tag) << rule("reasoning-content", until(close_tag)) << literal(close_tag));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder_helper::content_before_tools(const std::string & tag) {
+common_peg_parser common_peg_parser_builder_helper::content_before_tools(const std::string & tag) {
     return rule("content", until(tag));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_no_attr(
+common_peg_parser common_peg_parser_builder_helper::quasi_xml_no_attr(
     const std::string &              function_name,
     const std::vector<std::string> & parameters,
     const std::string &              function_tag,
     const std::string &              param_tag) {
-    std::vector<common_chat_peg_parser> args;
+    std::vector<common_peg_parser> args;
 
     for (auto it = parameters.begin(); it != parameters.end(); it++) {
         std::string arg_start_name;
@@ -82,13 +82,13 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_no_attr(
     return function;
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_attr(
+common_peg_parser common_peg_parser_builder_helper::quasi_xml_attr(
     const std::string &              function_name,
     const std::vector<std::string> & parameters,
     const std::string &              function_tag,
     const std::string &              param_tag,
     const std::string &              name_attr) {
-    std::vector<common_chat_peg_parser> args;
+    std::vector<common_peg_parser> args;
 
     for (auto it = parameters.begin(); it != parameters.end(); it++) {
         std::string arg_start_name;
@@ -152,12 +152,12 @@ common_chat_peg_parser common_chat_peg_parser_builder_helper::quasi_xml_attr(
     return function;
 }
 
-void common_chat_parse_simple_handler::operator()(const common_chat_parse_event & ev, common_chat_parse_semantics & semantics) const {
+void common_peg_parse_simple_handler::operator()(const common_peg_parse_event & ev, common_peg_parse_semantics & semantics) const {
     if (log) {
         std::stringstream ss;
-        ss << "Event: type=" << (ev.type == COMMON_CHAT_PARSE_EVENT_NODE_START ? "start" : "end  ");
+        ss << "Event: type=" << (ev.type == COMMON_PEG_PARSE_EVENT_NODE_START ? "start" : "end  ");
         ss << " rule=" << ev.rule;
-        ss << " result=" << common_chat_parse_result_type_name(ev.status);
+        ss << " result=" << common_peg_parse_result_type_name(ev.status);
         ss << " text=" << ev.text;
         log(ss.str());
     }

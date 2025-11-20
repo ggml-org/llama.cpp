@@ -15,11 +15,11 @@
 #include <unordered_set>
 #include <map>
 
-const char * common_chat_parse_result_type_name(common_chat_parse_result_type type) {
+const char * common_peg_parse_result_type_name(common_peg_parse_result_type type) {
     switch (type) {
-        case COMMON_CHAT_PARSE_RESULT_FAIL:            return "fail";
-        case COMMON_CHAT_PARSE_RESULT_SUCCESS:         return "success";
-        case COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT: return "need_more_input";
+        case COMMON_PEG_PARSE_RESULT_FAIL:            return "fail";
+        case COMMON_PEG_PARSE_RESULT_SUCCESS:         return "success";
+        case COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT: return "need_more_input";
         default:                                       return "unknown";
     }
 }
@@ -35,7 +35,7 @@ static bool is_hex_digit(const char c) {
 }
 
 // Trie for matching multiple literals.
-// This is used in common_chat_peg_until_parser and to build a GBNF exclusion grammar
+// This is used in common_peg_until_parser and to build a GBNF exclusion grammar
 struct trie {
     struct node {
         size_t depth = 0;
@@ -208,9 +208,9 @@ static std::pair<uint32_t, size_t> parse_char_class_char(const std::string & con
     return {static_cast<uint32_t>(static_cast<unsigned char>(content[pos])), 1};
 }
 
-// Helper to parse common_chat_peg_chars_parser pattern and build ranges
-static std::pair<std::vector<common_chat_peg_chars_parser::char_range>, bool> parse_char_classes(const std::string & classes) {
-    std::vector<common_chat_peg_chars_parser::char_range> ranges;
+// Helper to parse common_peg_chars_parser pattern and build ranges
+static std::pair<std::vector<common_peg_chars_parser::char_range>, bool> parse_char_classes(const std::string & classes) {
+    std::vector<common_peg_chars_parser::char_range> ranges;
     bool negated = false;
 
     std::string content = classes;
@@ -236,10 +236,10 @@ static std::pair<std::vector<common_chat_peg_chars_parser::char_range>, bool> pa
         if (i + 1 < content.length() && content[i] == '-') {
             // Range detected
             auto [end, end_len] = parse_char_class_char(content, i + 1);
-            ranges.push_back(common_chat_peg_chars_parser::char_range{start, end});
+            ranges.push_back(common_peg_chars_parser::char_range{start, end});
             i += 1 + end_len;
         } else {
-            ranges.push_back(common_chat_peg_chars_parser::char_range{start, start});
+            ranges.push_back(common_peg_chars_parser::char_range{start, start});
         }
     }
 
@@ -247,20 +247,20 @@ static std::pair<std::vector<common_chat_peg_chars_parser::char_range>, bool> pa
 }
 
 // Parse cache implementation
-common_chat_parse_result common_chat_parse_cache::set(common_chat_peg_parser_id id, size_t start, common_chat_parse_result result) {
-    results[common_chat_parse_cache_key{id, start}] = result;
+common_peg_parse_result common_peg_parse_cache::set(common_peg_parser_id id, size_t start, common_peg_parse_result result) {
+    results[common_peg_parse_cache_key{id, start}] = result;
     return result;
 }
 
-std::optional<common_chat_parse_result> common_chat_parse_cache::get(common_chat_peg_parser_id id, size_t start) {
-    auto it = results.find(common_chat_parse_cache_key{id, start});
+std::optional<common_peg_parse_result> common_peg_parse_cache::get(common_peg_parser_id id, size_t start) {
+    auto it = results.find(common_peg_parse_cache_key{id, start});
     if (it != results.end()) {
         return it->second;
     }
     return std::nullopt;
 }
 
-void common_chat_parse_cache::clear() {
+void common_peg_parse_cache::clear() {
     results.clear();
 }
 
@@ -268,19 +268,19 @@ void common_chat_parse_cache::clear() {
 struct parser_executor;
 
 // Arena implementation
-common_chat_peg_arena::common_chat_peg_arena() : root_(COMMON_CHAT_PEG_INVALID_PARSER_ID) {}
+common_peg_arena::common_peg_arena() : root_(COMMON_PEG_INVALID_PARSER_ID) {}
 
-common_chat_peg_parser_id common_chat_peg_arena::add_parser(common_chat_peg_parser_variant parser) {
-    common_chat_peg_parser_id id = parsers_.size();
+common_peg_parser_id common_peg_arena::add_parser(common_peg_parser_variant parser) {
+    common_peg_parser_id id = parsers_.size();
     parsers_.push_back(std::move(parser));
     return id;
 }
 
-void common_chat_peg_arena::add_rule(const std::string & name, common_chat_peg_parser_id id) {
+void common_peg_arena::add_rule(const std::string & name, common_peg_parser_id id) {
     rules_[name] = id;
 }
 
-common_chat_peg_parser_id common_chat_peg_arena::get_rule(const std::string & name) const {
+common_peg_parser_id common_peg_arena::get_rule(const std::string & name) const {
     auto it = rules_.find(name);
     if (it == rules_.end()) {
         throw std::runtime_error("Rule not found: " + name);
@@ -290,60 +290,60 @@ common_chat_peg_parser_id common_chat_peg_arena::get_rule(const std::string & na
 
 // Parsing executor - uses std::visit to dispatch to appropriate parser
 struct parser_executor {
-    const common_chat_peg_arena & arena;
-    common_chat_parse_context & ctx;
+    const common_peg_arena & arena;
+    common_peg_parse_context & ctx;
     size_t start_pos;
 
-    parser_executor(const common_chat_peg_arena & arena, common_chat_parse_context & ctx, size_t start)
+    parser_executor(const common_peg_arena & arena, common_peg_parse_context & ctx, size_t start)
         : arena(arena), ctx(ctx), start_pos(start) {}
 
-    common_chat_parse_result operator()(const common_chat_peg_start_parser & /* p */) const {
-        return common_chat_parse_result(
-            start_pos == 0 ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL,
+    common_peg_parse_result operator()(const common_peg_start_parser & /* p */) const {
+        return common_peg_parse_result(
+            start_pos == 0 ? COMMON_PEG_PARSE_RESULT_SUCCESS : COMMON_PEG_PARSE_RESULT_FAIL,
             start_pos
         );
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_end_parser & /* p */) const {
-        return common_chat_parse_result(
-            start_pos >= ctx.input.size() ? COMMON_CHAT_PARSE_RESULT_SUCCESS : COMMON_CHAT_PARSE_RESULT_FAIL,
+    common_peg_parse_result operator()(const common_peg_end_parser & /* p */) const {
+        return common_peg_parse_result(
+            start_pos >= ctx.input.size() ? COMMON_PEG_PARSE_RESULT_SUCCESS : COMMON_PEG_PARSE_RESULT_FAIL,
             start_pos
         );
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_literal_parser & p) {
+    common_peg_parse_result operator()(const common_peg_literal_parser & p) {
         auto pos = start_pos;
         for (auto i = 0u; i < p.literal.size(); ++i) {
             if (pos >= ctx.input.size()) {
                 if (ctx.input_is_complete) {
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
             if (ctx.input[pos] != p.literal[i]) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
             ++pos;
         }
 
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_sequence_parser & p) {
+    common_peg_parse_result operator()(const common_peg_sequence_parser & p) {
         auto pos = start_pos;
         for (const auto & child_id : p.children) {
             auto result = arena.parse(child_id, ctx, pos);
             if (!result.success()) {
-                return common_chat_parse_result(result.type, start_pos, result.end);
+                return common_peg_parse_result(result.type, start_pos, result.end);
             }
 
             pos = result.end;
         }
 
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_choice_parser & p) {
+    common_peg_parse_result operator()(const common_peg_choice_parser & p) {
         auto pos = start_pos;
         for (const auto & child_id : p.children) {
             auto result = arena.parse(child_id, ctx, pos);
@@ -352,10 +352,10 @@ struct parser_executor {
             }
         }
 
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_repetition_parser & p) {
+    common_peg_parse_result operator()(const common_peg_repetition_parser & p) {
         auto pos = start_pos;
         int match_count = 0;
 
@@ -378,7 +378,7 @@ struct parser_executor {
             }
 
             if (result.need_more_input()) {
-                return common_chat_parse_result(result.type, start_pos, result.end);
+                return common_peg_parse_result(result.type, start_pos, result.end);
             }
 
             // Child failed - stop trying
@@ -388,26 +388,26 @@ struct parser_executor {
         // Check if we got enough matches
         if (p.min_count > 0 && match_count < p.min_count) {
             if (pos >= ctx.input.size() && !ctx.input_is_complete) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos, pos);
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
         }
 
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_and_parser & p) {
+    common_peg_parse_result operator()(const common_peg_and_parser & p) {
         auto result = arena.parse(p.child, ctx, start_pos);
         // Pass result but don't consume input
-        return common_chat_parse_result(result.type, start_pos);
+        return common_peg_parse_result(result.type, start_pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_not_parser & p) {
+    common_peg_parse_result operator()(const common_peg_not_parser & p) {
         auto result = arena.parse(p.child, ctx, start_pos);
 
         if (result.success()) {
             // Fail if the underlying parser matches
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
         }
 
         if (result.need_more_input()) {
@@ -416,26 +416,26 @@ struct parser_executor {
         }
 
         // Child failed, so negation succeeds
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_any_parser & /* p */) const {
+    common_peg_parse_result operator()(const common_peg_any_parser & /* p */) const {
         // Parse a single UTF-8 codepoint (not just a single byte)
         auto result = parse_utf8_codepoint(ctx.input, start_pos);
 
         if (result.status == utf8_parse_result::INCOMPLETE) {
             if (ctx.input_is_complete) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
         }
         if (result.status == utf8_parse_result::INVALID) {
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
         }
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, start_pos + result.bytes_consumed);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, start_pos + result.bytes_consumed);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_space_parser & /* p */) {
+    common_peg_parse_result operator()(const common_peg_space_parser & /* p */) {
         auto pos = start_pos;
         while (pos < ctx.input.size()) {
             char c = ctx.input[pos];
@@ -446,10 +446,10 @@ struct parser_executor {
             }
         }
 
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_chars_parser & p) const {
+    common_peg_parse_result operator()(const common_peg_chars_parser & p) const {
         auto pos = start_pos;
         int match_count = 0;
 
@@ -460,23 +460,23 @@ struct parser_executor {
             if (result.status == utf8_parse_result::INCOMPLETE) {
                 if (match_count >= p.min_count) {
                     // We have enough matches, succeed with what we have
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
                 }
                 // Not enough matches yet
                 if (ctx.input_is_complete) {
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
 
             if (result.status == utf8_parse_result::INVALID) {
                 // Malformed UTF-8 in input
                 if (match_count >= p.min_count) {
                     // We have enough matches, succeed up to here
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
                 }
                 // Not enough matches, fail
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
 
             // Check if this codepoint matches our character class
@@ -505,21 +505,21 @@ struct parser_executor {
         // Check if we got enough matches
         if (match_count < p.min_count) {
             if (pos >= ctx.input.size() && !ctx.input_is_complete) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos, pos);
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
         }
 
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
     }
 
-    static common_chat_parse_result handle_escape_sequence(common_chat_parse_context & ctx, size_t start, size_t & pos) {
+    static common_peg_parse_result handle_escape_sequence(common_peg_parse_context & ctx, size_t start, size_t & pos) {
         ++pos; // consume '\'
         if (pos >= ctx.input.size()) {
             if (ctx.input_is_complete) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
             }
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
         }
 
         switch (ctx.input[pos]) {
@@ -532,33 +532,33 @@ struct parser_executor {
             case 'r':
             case 't':
                 ++pos;
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start, pos);
             case 'u':
                 return handle_unicode_escape(ctx, start, pos);
             default:
                 // Invalid escape sequence
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
         }
     }
 
-    static common_chat_parse_result handle_unicode_escape(common_chat_parse_context & ctx, size_t start, size_t & pos) {
+    static common_peg_parse_result handle_unicode_escape(common_peg_parse_context & ctx, size_t start, size_t & pos) {
         ++pos; // consume 'u'
         for (int i = 0; i < 4; ++i) {
             if (pos >= ctx.input.size()) {
                 if (ctx.input_is_complete) {
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
                 }
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
             }
             if (!is_hex_digit(ctx.input[pos])) {
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
             }
             ++pos;
         }
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start, pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start, pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_json_string_parser & /* p */) {
+    common_peg_parse_result operator()(const common_peg_json_string_parser & /* p */) {
         auto pos = start_pos;
 
         // Parse string content (without quotes)
@@ -567,7 +567,7 @@ struct parser_executor {
 
             if (c == '"') {
                 // Found closing quote - success (don't consume it)
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
             if (c == '\\') {
@@ -580,13 +580,13 @@ struct parser_executor {
 
                 if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
                     if (ctx.input_is_complete) {
-                        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                     }
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
                 }
 
                 if (utf8_result.status == utf8_parse_result::INVALID) {
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
 
                 pos += utf8_result.bytes_consumed;
@@ -595,12 +595,12 @@ struct parser_executor {
 
         // Reached end without finding closing quote
         if (ctx.input_is_complete) {
-            return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos, pos);
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
         }
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_until_parser & p) const {
+    common_peg_parse_result operator()(const common_peg_until_parser & p) const {
         trie matcher(p.delimiters);
 
         // Scan input and check for delimiters
@@ -614,15 +614,15 @@ struct parser_executor {
                 // Incomplete UTF-8 sequence
                 if (ctx.input_is_complete) {
                     // Input is complete but UTF-8 is incomplete = malformed
-                    return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
                 // Return what we have so far (before incomplete sequence)
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_NEED_MORE_INPUT, start_pos, last_valid_pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, last_valid_pos);
             }
 
             if (utf8_result.status == utf8_parse_result::INVALID) {
                 // Malformed UTF-8
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_FAIL, start_pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
 
             // Check if a delimiter starts at this position
@@ -630,36 +630,36 @@ struct parser_executor {
 
             if (match == trie::COMPLETE_MATCH) {
                 // Found a complete delimiter, return everything before it
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
             if (match == trie::PARTIAL_MATCH) {
                 // Found a partial match extending to end of input, return everything before it
-                return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, pos);
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
             pos += utf8_result.bytes_consumed;
             last_valid_pos = pos;
         }
 
-        return common_chat_parse_result(COMMON_CHAT_PARSE_RESULT_SUCCESS, start_pos, last_valid_pos);
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, last_valid_pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_schema_parser & p) {
+    common_peg_parse_result operator()(const common_peg_schema_parser & p) {
         return arena.parse(p.child, ctx, start_pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_rule_parser & p) {
+    common_peg_parse_result operator()(const common_peg_rule_parser & p) {
         // Fire NODE_START event
         if (ctx.event_handler && ctx.semantics) {
-            ctx.event_handler(common_chat_parse_event{
-                COMMON_CHAT_PARSE_EVENT_NODE_START,
+            ctx.event_handler(common_peg_parse_event{
+                COMMON_PEG_PARSE_EVENT_NODE_START,
                 p.name,
                 p.annotation,
                 start_pos,
                 start_pos,
                 "",
-                COMMON_CHAT_PARSE_RESULT_FAIL,
+                COMMON_PEG_PARSE_RESULT_FAIL,
                 ctx.current_depth
             }, *ctx.semantics);
             ctx.current_depth++;
@@ -677,8 +677,8 @@ struct parser_executor {
             } else {
                 text = "";
             }
-            ctx.event_handler(common_chat_parse_event{
-                COMMON_CHAT_PARSE_EVENT_NODE_END,
+            ctx.event_handler(common_peg_parse_event{
+                COMMON_PEG_PARSE_EVENT_NODE_END,
                 p.name,
                 p.annotation,
                 result.start,
@@ -692,12 +692,12 @@ struct parser_executor {
         return result;
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_ref_parser & p) {
+    common_peg_parse_result operator()(const common_peg_ref_parser & p) {
         auto rule_id = arena.get_rule(p.name);
         return arena.parse(rule_id, ctx, start_pos);
     }
 
-    common_chat_parse_result operator()(const common_chat_peg_capture_parser & p) {
+    common_peg_parse_result operator()(const common_peg_capture_parser & p) {
         auto result = arena.parse(p.child, ctx, start_pos);
 
         if (!result.fail() && ctx.semantics) {
@@ -711,14 +711,14 @@ struct parser_executor {
     }
 };
 
-common_chat_parse_result common_chat_peg_arena::parse(common_chat_parse_context & ctx, size_t start) const {
-    if (root_ == COMMON_CHAT_PEG_INVALID_PARSER_ID) {
+common_peg_parse_result common_peg_arena::parse(common_peg_parse_context & ctx, size_t start) const {
+    if (root_ == COMMON_PEG_INVALID_PARSER_ID) {
         throw std::runtime_error("No root parser set");
     }
     return parse(root_, ctx, start);
 }
 
-common_chat_parse_result common_chat_peg_arena::parse(common_chat_peg_parser_id id, common_chat_parse_context & ctx, size_t start) const {
+common_peg_parse_result common_peg_arena::parse(common_peg_parser_id id, common_peg_parse_context & ctx, size_t start) const {
     // Check cache
     auto cached = ctx.cache.get(id, start);
     if (cached) {
@@ -735,59 +735,59 @@ common_chat_parse_result common_chat_peg_arena::parse(common_chat_peg_parser_id 
 }
 
 // Dump implementation (for debugging)
-std::string common_chat_peg_arena::dump(common_chat_peg_parser_id id) const {
+std::string common_peg_arena::dump(common_peg_parser_id id) const {
     const auto & parser = parsers_.at(id);
 
     return std::visit([this](const auto & p) -> std::string {
         using T = std::decay_t<decltype(p)>;
 
-        if constexpr (std::is_same_v<T, common_chat_peg_start_parser>) {
+        if constexpr (std::is_same_v<T, common_peg_start_parser>) {
             return "Start";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_end_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_end_parser>) {
             return "End";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_literal_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
             return "Literal(" + p.literal + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_sequence_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
             std::vector<std::string> parts;
             for (const auto & child : p.children) {
                 parts.push_back(dump(child));
             }
             return "Sequence(" + string_join(parts, ", ") + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_choice_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
             std::vector<std::string> parts;
             for (const auto & child : p.children) {
                 parts.push_back(dump(child));
             }
             return "Choice(" + string_join(parts, ", ") + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_repetition_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_repetition_parser>) {
             if (p.max_count == -1) {
                 return "Repetition(" + dump(p.child) + ", " + std::to_string(p.min_count) + ", unbounded)";
             }
             return "Repetition(" + dump(p.child) + ", " + std::to_string(p.min_count) + ", " + std::to_string(p.max_count) + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_and_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_and_parser>) {
             return "And(" + dump(p.child) + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_not_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_not_parser>) {
             return "Not(" + dump(p.child) + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_any_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_any_parser>) {
             return "Any";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_space_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_space_parser>) {
             return "Space";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_chars_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_chars_parser>) {
             if (p.max_count == -1) {
                 return "CharRepeat(" + p.pattern + ", " + std::to_string(p.min_count) + ", unbounded)";
             }
             return "CharRepeat(" + p.pattern + ", " + std::to_string(p.min_count) + ", " + std::to_string(p.max_count) + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_json_string_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_json_string_parser>) {
             return "JsonString()";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_until_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
             return "Until(" + string_join(p.delimiters, " | ") + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_schema_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
             return "Schema(" + dump(p.child) + ", " + (p.schema ? p.schema->dump() : "null") + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
             return "Rule(" + p.name + ", " + dump(p.child) + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
             return "Ref(" + p.name + ")";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_capture_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_capture_parser>) {
             return "Capture(" + p.key + ", " + dump(p.child) + ")";
         } else {
             return "Unknown";
@@ -796,57 +796,57 @@ std::string common_chat_peg_arena::dump(common_chat_peg_parser_id id) const {
 }
 
 // Parser wrapper operator implementations
-common_chat_peg_parser common_chat_peg_parser::operator+(const common_chat_peg_parser & other) const {
+common_peg_parser common_peg_parser::operator+(const common_peg_parser & other) const {
     return builder_->sequence({id_, other.id_});
 }
 
-common_chat_peg_parser common_chat_peg_parser::operator|(const common_chat_peg_parser & other) const {
+common_peg_parser common_peg_parser::operator|(const common_peg_parser & other) const {
     return builder_->choice({id_, other.id_});
 }
 
-common_chat_peg_parser common_chat_peg_parser::operator<<(const common_chat_peg_parser & other) const {
+common_peg_parser common_peg_parser::operator<<(const common_peg_parser & other) const {
     return builder_->sequence({id_, builder_->space(), other.id_});
 }
 
 // String literal overloads
-common_chat_peg_parser common_chat_peg_parser::operator+(const char * str) const {
+common_peg_parser common_peg_parser::operator+(const char * str) const {
     return *this + builder_->literal(str);
 }
 
-common_chat_peg_parser common_chat_peg_parser::operator+(const std::string & str) const {
+common_peg_parser common_peg_parser::operator+(const std::string & str) const {
     return *this + builder_->literal(str);
 }
 
-common_chat_peg_parser common_chat_peg_parser::operator|(const char * str) const {
+common_peg_parser common_peg_parser::operator|(const char * str) const {
     return *this | builder_->literal(str);
 }
 
-common_chat_peg_parser common_chat_peg_parser::operator|(const std::string & str) const {
+common_peg_parser common_peg_parser::operator|(const std::string & str) const {
     return *this | builder_->literal(str);
 }
 
-common_chat_peg_parser common_chat_peg_parser::operator<<(const char * str) const {
+common_peg_parser common_peg_parser::operator<<(const char * str) const {
     return *this << builder_->literal(str);
 }
 
-common_chat_peg_parser common_chat_peg_parser::operator<<(const std::string & str) const {
+common_peg_parser common_peg_parser::operator<<(const std::string & str) const {
     return *this << builder_->literal(str);
 }
 
 // Free function operators for string + parser
-common_chat_peg_parser operator+(const char * str, const common_chat_peg_parser & p) {
+common_peg_parser operator+(const char * str, const common_peg_parser & p) {
     return p.builder()->literal(str) + p;
 }
 
-common_chat_peg_parser operator+(const std::string & str, const common_chat_peg_parser & p) {
+common_peg_parser operator+(const std::string & str, const common_peg_parser & p) {
     return operator+(str.c_str(), p);
 }
 
-common_chat_peg_parser operator<<(const char * str, const common_chat_peg_parser & p) {
+common_peg_parser operator<<(const char * str, const common_peg_parser & p) {
     return p.builder()->literal(str) << p;
 }
 
-common_chat_peg_parser operator<<(const std::string & str, const common_chat_peg_parser & p) {
+common_peg_parser operator<<(const std::string & str, const common_peg_parser & p) {
     return operator<<(str.c_str(), p);
 }
 
@@ -857,36 +857,36 @@ static std::string rule_name(const std::string & name) {
 }
 
 // Builder implementation
-common_chat_peg_parser_builder::common_chat_peg_parser_builder() {}
+common_peg_parser_builder::common_peg_parser_builder() {}
 
-common_chat_peg_parser common_chat_peg_parser_builder::start() {
-    return wrap(arena_.add_parser(common_chat_peg_start_parser{}));
+common_peg_parser common_peg_parser_builder::start() {
+    return wrap(arena_.add_parser(common_peg_start_parser{}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::end() {
-    return wrap(arena_.add_parser(common_chat_peg_end_parser{}));
+common_peg_parser common_peg_parser_builder::end() {
+    return wrap(arena_.add_parser(common_peg_end_parser{}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::literal(const std::string & literal) {
-    return wrap(arena_.add_parser(common_chat_peg_literal_parser{literal}));
+common_peg_parser common_peg_parser_builder::literal(const std::string & literal) {
+    return wrap(arena_.add_parser(common_peg_literal_parser{literal}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::sequence(const std::vector<common_chat_peg_parser_id> & parsers) {
+common_peg_parser common_peg_parser_builder::sequence(const std::vector<common_peg_parser_id> & parsers) {
     // Flatten nested sequences
-    std::vector<common_chat_peg_parser_id> flattened;
+    std::vector<common_peg_parser_id> flattened;
     for (const auto & p : parsers) {
         const auto & parser = arena_.get(p);
-        if (auto seq = std::get_if<common_chat_peg_sequence_parser>(&parser)) {
+        if (auto seq = std::get_if<common_peg_sequence_parser>(&parser)) {
             flattened.insert(flattened.end(), seq->children.begin(), seq->children.end());
         } else {
             flattened.push_back(p);
         }
     }
-    return wrap(arena_.add_parser(common_chat_peg_sequence_parser{flattened}));
+    return wrap(arena_.add_parser(common_peg_sequence_parser{flattened}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::sequence(const std::vector<common_chat_peg_parser> & parsers) {
-    std::vector<common_chat_peg_parser_id> ids;
+common_peg_parser common_peg_parser_builder::sequence(const std::vector<common_peg_parser> & parsers) {
+    std::vector<common_peg_parser_id> ids;
     ids.reserve(parsers.size());
     for (const auto & p : parsers) {
         ids.push_back(p.id());
@@ -894,8 +894,8 @@ common_chat_peg_parser common_chat_peg_parser_builder::sequence(const std::vecto
     return sequence(ids);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::sequence(std::initializer_list<common_chat_peg_parser> parsers) {
-    std::vector<common_chat_peg_parser_id> ids;
+common_peg_parser common_peg_parser_builder::sequence(std::initializer_list<common_peg_parser> parsers) {
+    std::vector<common_peg_parser_id> ids;
     ids.reserve(parsers.size());
     for (const auto & p : parsers) {
         ids.push_back(p.id());
@@ -903,22 +903,22 @@ common_chat_peg_parser common_chat_peg_parser_builder::sequence(std::initializer
     return sequence(ids);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::choice(const std::vector<common_chat_peg_parser_id> & parsers) {
+common_peg_parser common_peg_parser_builder::choice(const std::vector<common_peg_parser_id> & parsers) {
     // Flatten nested choices
-    std::vector<common_chat_peg_parser_id> flattened;
+    std::vector<common_peg_parser_id> flattened;
     for (const auto & p : parsers) {
         const auto & parser = arena_.get(p);
-        if (auto choice = std::get_if<common_chat_peg_choice_parser>(&parser)) {
+        if (auto choice = std::get_if<common_peg_choice_parser>(&parser)) {
             flattened.insert(flattened.end(), choice->children.begin(), choice->children.end());
         } else {
             flattened.push_back(p);
         }
     }
-    return wrap(arena_.add_parser(common_chat_peg_choice_parser{flattened}));
+    return wrap(arena_.add_parser(common_peg_choice_parser{flattened}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::choice(const std::vector<common_chat_peg_parser> & parsers) {
-    std::vector<common_chat_peg_parser_id> ids;
+common_peg_parser common_peg_parser_builder::choice(const std::vector<common_peg_parser> & parsers) {
+    std::vector<common_peg_parser_id> ids;
     ids.reserve(parsers.size());
     for (const auto & p : parsers) {
         ids.push_back(p.id());
@@ -926,8 +926,8 @@ common_chat_peg_parser common_chat_peg_parser_builder::choice(const std::vector<
     return choice(ids);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::choice(std::initializer_list<common_chat_peg_parser> parsers) {
-    std::vector<common_chat_peg_parser_id> ids;
+common_peg_parser common_peg_parser_builder::choice(std::initializer_list<common_peg_parser> parsers) {
+    std::vector<common_peg_parser_id> ids;
     ids.reserve(parsers.size());
     for (const auto & p : parsers) {
         ids.push_back(p.id());
@@ -935,91 +935,91 @@ common_chat_peg_parser common_chat_peg_parser_builder::choice(std::initializer_l
     return choice(ids);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::peek(common_chat_peg_parser p) {
-    return wrap(arena_.add_parser(common_chat_peg_and_parser{p.id()}));
+common_peg_parser common_peg_parser_builder::peek(common_peg_parser p) {
+    return wrap(arena_.add_parser(common_peg_and_parser{p.id()}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::negate(common_chat_peg_parser p) {
-    return wrap(arena_.add_parser(common_chat_peg_not_parser{p.id()}));
+common_peg_parser common_peg_parser_builder::negate(common_peg_parser p) {
+    return wrap(arena_.add_parser(common_peg_not_parser{p.id()}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::any() {
-    return wrap(arena_.add_parser(common_chat_peg_any_parser{}));
+common_peg_parser common_peg_parser_builder::any() {
+    return wrap(arena_.add_parser(common_peg_any_parser{}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::chars(const std::string & classes, int min, int max) {
+common_peg_parser common_peg_parser_builder::chars(const std::string & classes, int min, int max) {
     auto [ranges, negated] = parse_char_classes(classes);
-    return wrap(arena_.add_parser(common_chat_peg_chars_parser{classes, ranges, negated, min, max}));
+    return wrap(arena_.add_parser(common_peg_chars_parser{classes, ranges, negated, min, max}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::one(const std::string & classes) {
+common_peg_parser common_peg_parser_builder::one(const std::string & classes) {
     return chars(classes, 1, 1);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::ref(const std::string & name) {
-    return wrap(arena_.add_parser(common_chat_peg_ref_parser{rule_name(name)}));
+common_peg_parser common_peg_parser_builder::ref(const std::string & name) {
+    return wrap(arena_.add_parser(common_peg_ref_parser{rule_name(name)}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::space() {
-    return wrap(arena_.add_parser(common_chat_peg_space_parser{}));
+common_peg_parser common_peg_parser_builder::space() {
+    return wrap(arena_.add_parser(common_peg_space_parser{}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::until(const std::string & delimiter) {
-    return wrap(arena_.add_parser(common_chat_peg_until_parser{std::vector<std::string>{delimiter}}));
+common_peg_parser common_peg_parser_builder::until(const std::string & delimiter) {
+    return wrap(arena_.add_parser(common_peg_until_parser{std::vector<std::string>{delimiter}}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
-    return wrap(arena_.add_parser(common_chat_peg_until_parser{delimiters}));
+common_peg_parser common_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
+    return wrap(arena_.add_parser(common_peg_until_parser{delimiters}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::repeat(common_chat_peg_parser p, int min, int max) {
-    return wrap(arena_.add_parser(common_chat_peg_repetition_parser{p.id(), min, max}));
+common_peg_parser common_peg_parser_builder::repeat(common_peg_parser p, int min, int max) {
+    return wrap(arena_.add_parser(common_peg_repetition_parser{p.id(), min, max}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::repeat(common_chat_peg_parser p, int n) {
-    return wrap(arena_.add_parser(common_chat_peg_repetition_parser{p.id(), n, n}));
+common_peg_parser common_peg_parser_builder::repeat(common_peg_parser p, int n) {
+    return wrap(arena_.add_parser(common_peg_repetition_parser{p.id(), n, n}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::optional(common_chat_peg_parser p) {
+common_peg_parser common_peg_parser_builder::optional(common_peg_parser p) {
     return repeat(p, 0, 1);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::zero_or_more(common_chat_peg_parser p) {
+common_peg_parser common_peg_parser_builder::zero_or_more(common_peg_parser p) {
     return repeat(p, 0, -1);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::one_or_more(common_chat_peg_parser p) {
+common_peg_parser common_peg_parser_builder::one_or_more(common_peg_parser p) {
     return repeat(p, 1, -1);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::json_string_content() {
-    return wrap(arena_.add_parser(common_chat_peg_json_string_parser{}));
+common_peg_parser common_peg_parser_builder::json_string_content() {
+    return wrap(arena_.add_parser(common_peg_json_string_parser{}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::schema(common_chat_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema) {
-    return wrap(arena_.add_parser(common_chat_peg_schema_parser{p.id(), name, std::make_shared<nlohmann::ordered_json>(schema)}));
+common_peg_parser common_peg_parser_builder::schema(common_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema) {
+    return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::make_shared<nlohmann::ordered_json>(schema)}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::capture(const std::string & key, common_chat_peg_parser p) {
-    return wrap(arena_.add_parser(common_chat_peg_capture_parser{p.id(), key}));
+common_peg_parser common_peg_parser_builder::capture(const std::string & key, common_peg_parser p) {
+    return wrap(arena_.add_parser(common_peg_capture_parser{p.id(), key}));
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, common_chat_peg_parser p, bool trigger) {
+common_peg_parser common_peg_parser_builder::rule(const std::string & name, common_peg_parser p, bool trigger) {
     return rule(name, "", p, trigger);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::string & annotation, common_chat_peg_parser p, bool trigger) {
+common_peg_parser common_peg_parser_builder::rule(const std::string & name, const std::string & annotation, common_peg_parser p, bool trigger) {
     auto clean_name = rule_name(name);
-    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{clean_name, annotation, p.id(), trigger});
+    auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, annotation, p.id(), trigger});
     arena_.add_rule(clean_name, rule_id);
     return ref(clean_name);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::function<common_chat_peg_parser()> & builder_fn, bool trigger) {
+common_peg_parser common_peg_parser_builder::rule(const std::string & name, const std::function<common_peg_parser()> & builder_fn, bool trigger) {
     return rule(name, "", builder_fn, trigger);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & name, const std::string & annotation, const std::function<common_chat_peg_parser()> & builder_fn, bool trigger) {
+common_peg_parser common_peg_parser_builder::rule(const std::string & name, const std::string & annotation, const std::function<common_peg_parser()> & builder_fn, bool trigger) {
     auto clean_name = rule_name(name);
     if (arena_.has_rule(clean_name)) {
         return ref(clean_name);
@@ -1027,30 +1027,30 @@ common_chat_peg_parser common_chat_peg_parser_builder::rule(const std::string & 
 
     // Create placeholder rule to allow recursive references
     auto placeholder = any();  // Temporary placeholder
-    auto placeholder_rule_id = arena_.add_parser(common_chat_peg_rule_parser{clean_name, annotation, placeholder.id(), trigger});
+    auto placeholder_rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, annotation, placeholder.id(), trigger});
     arena_.add_rule(clean_name, placeholder_rule_id);
 
     // Build the actual parser
     auto parser = builder_fn();
 
     // Replace placeholder with actual rule
-    auto rule_id = arena_.add_parser(common_chat_peg_rule_parser{clean_name, annotation, parser.id(), trigger});
+    auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, annotation, parser.id(), trigger});
     arena_.rules_[clean_name] = rule_id;
 
     return ref(clean_name);
 }
 
-void common_chat_peg_parser_builder::set_root(common_chat_peg_parser p) {
+void common_peg_parser_builder::set_root(common_peg_parser p) {
     arena_.set_root(p.id());
 }
 
-common_chat_peg_arena common_chat_peg_parser_builder::build() {
+common_peg_arena common_peg_parser_builder::build() {
     return std::move(arena_);
 }
 
 // JSON parsers
-common_chat_peg_parser common_chat_peg_parser_builder::json_number() {
-    std::function<common_chat_peg_parser()> builder = [this]() {
+common_peg_parser common_peg_parser_builder::json_number() {
+    std::function<common_peg_parser()> builder = [this]() {
         auto digit1_9 = chars("[1-9]", 1, 1);
         auto digits = chars("[0-9]");
         auto int_part = choice({literal("0"), sequence({digit1_9, chars("[0-9]", 0, -1)})});
@@ -1061,29 +1061,29 @@ common_chat_peg_parser common_chat_peg_parser_builder::json_number() {
     return rule("json-number", builder);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::json_string() {
-    std::function<common_chat_peg_parser()> builder = [this]() {
+common_peg_parser common_peg_parser_builder::json_string() {
+    std::function<common_peg_parser()> builder = [this]() {
         return sequence({literal("\""), json_string_content(), literal("\"")});
     };
     return rule("json-string", builder);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::json_bool() {
-    std::function<common_chat_peg_parser()> builder = [this]() {
+common_peg_parser common_peg_parser_builder::json_bool() {
+    std::function<common_peg_parser()> builder = [this]() {
         return choice({literal("true"), literal("false")});
     };
     return rule("json-bool", builder);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::json_null() {
-    std::function<common_chat_peg_parser()> builder = [this]() {
+common_peg_parser common_peg_parser_builder::json_null() {
+    std::function<common_peg_parser()> builder = [this]() {
         return literal("null");
     };
     return rule("json-null", builder);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::json_object() {
-    std::function<common_chat_peg_parser()> builder = [this]() {
+common_peg_parser common_peg_parser_builder::json_object() {
+    std::function<common_peg_parser()> builder = [this]() {
         auto ws = space();
         auto member = sequence({json_string(), ws, literal(":"), ws, json()});
         auto members = sequence({member, zero_or_more(sequence({ws, literal(","), ws, member}))});
@@ -1095,8 +1095,8 @@ common_chat_peg_parser common_chat_peg_parser_builder::json_object() {
     return rule("json-object", builder);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::json_array() {
-    std::function<common_chat_peg_parser()> builder = [this]() {
+common_peg_parser common_peg_parser_builder::json_array() {
+    std::function<common_peg_parser()> builder = [this]() {
         auto ws = space();
         auto elements = sequence({json(), zero_or_more(sequence({ws, literal(","), ws, json()}))});
         return choice({
@@ -1107,8 +1107,8 @@ common_chat_peg_parser common_chat_peg_parser_builder::json_array() {
     return rule("json-array", builder);
 }
 
-common_chat_peg_parser common_chat_peg_parser_builder::json() {
-    std::function<common_chat_peg_parser()> builder = [this]() {
+common_peg_parser common_peg_parser_builder::json() {
+    std::function<common_peg_parser()> builder = [this]() {
         return choice({
             json_object(),
             json_array(),
@@ -1181,39 +1181,39 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
 
 // Collect reachable rules from a given rule
 static std::unordered_set<std::string> collect_reachable_rules(
-    const common_chat_peg_arena & arena,
-    const common_chat_peg_parser_id & rule
+    const common_peg_arena & arena,
+    const common_peg_parser_id & rule
 ) {
     std::unordered_set<std::string> reachable;
     std::unordered_set<std::string> visited;
 
-    std::function<void(common_chat_peg_parser_id)> visit = [&](common_chat_peg_parser_id id) {
+    std::function<void(common_peg_parser_id)> visit = [&](common_peg_parser_id id) {
         const auto & parser = arena.get(id);
 
         std::visit([&](const auto & p) {
             using T = std::decay_t<decltype(p)>;
 
-            if constexpr (std::is_same_v<T, common_chat_peg_sequence_parser>) {
+            if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 for (auto child : p.children) {
                     visit(child);
                 }
-            } else if constexpr (std::is_same_v<T, common_chat_peg_choice_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
                 for (auto child : p.children) {
                     visit(child);
                 }
-            } else if constexpr (std::is_same_v<T, common_chat_peg_repetition_parser> ||
-                                 std::is_same_v<T, common_chat_peg_and_parser> ||
-                                 std::is_same_v<T, common_chat_peg_not_parser> ||
-                                 std::is_same_v<T, common_chat_peg_schema_parser> ||
-                                 std::is_same_v<T, common_chat_peg_capture_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_repetition_parser> ||
+                                 std::is_same_v<T, common_peg_and_parser> ||
+                                 std::is_same_v<T, common_peg_not_parser> ||
+                                 std::is_same_v<T, common_peg_schema_parser> ||
+                                 std::is_same_v<T, common_peg_capture_parser>) {
                 visit(p.child);
-            } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 if (visited.find(p.name) == visited.end()) {
                     visited.insert(p.name);
                     reachable.insert(p.name);
                     visit(p.child);
                 }
-            } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
                 // Traverse rules so we pick up everything
                 auto referenced_rule = arena.get_rule(p.name);
                 visit(referenced_rule);
@@ -1226,19 +1226,19 @@ static std::unordered_set<std::string> collect_reachable_rules(
 }
 
 // GBNF generation implementation
-void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
+void common_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
     // Generate GBNF for a parser
-    std::function<std::string(common_chat_peg_parser_id)> to_gbnf = [&](common_chat_peg_parser_id id) -> std::string {
+    std::function<std::string(common_peg_parser_id)> to_gbnf = [&](common_peg_parser_id id) -> std::string {
         const auto & parser = parsers_.at(id);
 
         return std::visit([&](const auto & p) -> std::string {
             using T = std::decay_t<decltype(p)>;
 
-            if constexpr (std::is_same_v<T, common_chat_peg_start_parser> || std::is_same_v<T, common_chat_peg_end_parser>) {
+            if constexpr (std::is_same_v<T, common_peg_start_parser> || std::is_same_v<T, common_peg_end_parser>) {
                 return "";
-            } else if constexpr (std::is_same_v<T, common_chat_peg_literal_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
                 return gbnf_literal(p.literal);
-            } else if constexpr (std::is_same_v<T, common_chat_peg_sequence_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 std::string s;
                 for (const auto & child : p.children) {
                     if (!s.empty()) {
@@ -1246,15 +1246,15 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
                     }
                     auto child_gbnf = to_gbnf(child);
                     const auto & child_parser = parsers_.at(child);
-                    if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser) ||
-                        std::holds_alternative<common_chat_peg_sequence_parser>(child_parser)) {
+                    if (std::holds_alternative<common_peg_choice_parser>(child_parser) ||
+                        std::holds_alternative<common_peg_sequence_parser>(child_parser)) {
                         s += "(" + child_gbnf + ")";
                     } else {
                         s += child_gbnf;
                     }
                 }
                 return s;
-            } else if constexpr (std::is_same_v<T, common_chat_peg_choice_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
                 std::string s;
                 for (const auto & child : p.children) {
                     if (!s.empty()) {
@@ -1262,18 +1262,18 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
                     }
                     auto child_gbnf = to_gbnf(child);
                     const auto & child_parser = parsers_.at(child);
-                    if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser)) {
+                    if (std::holds_alternative<common_peg_choice_parser>(child_parser)) {
                         s += "(" + child_gbnf + ")";
                     } else {
                         s += child_gbnf;
                     }
                 }
                 return s;
-            } else if constexpr (std::is_same_v<T, common_chat_peg_repetition_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_repetition_parser>) {
                 auto child_gbnf = to_gbnf(p.child);
                 const auto & child_parser = parsers_.at(p.child);
-                if (std::holds_alternative<common_chat_peg_choice_parser>(child_parser) ||
-                    std::holds_alternative<common_chat_peg_sequence_parser>(child_parser)) {
+                if (std::holds_alternative<common_peg_choice_parser>(child_parser) ||
+                    std::holds_alternative<common_peg_sequence_parser>(child_parser)) {
                     child_gbnf = "(" + child_gbnf + ")";
                 }
                 if (p.min_count == 0 && p.max_count == 1) {
@@ -1289,13 +1289,13 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
                     return child_gbnf + "{" + std::to_string(p.min_count) + ",}";
                 }
                 return child_gbnf + "{" + std::to_string(p.min_count) + "," + std::to_string(p.max_count) + "}";
-            } else if constexpr (std::is_same_v<T, common_chat_peg_and_parser> || std::is_same_v<T, common_chat_peg_not_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_and_parser> || std::is_same_v<T, common_peg_not_parser>) {
                 return "";  // Lookahead not supported in GBNF
-            } else if constexpr (std::is_same_v<T, common_chat_peg_any_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_any_parser>) {
                 return ".";
-            } else if constexpr (std::is_same_v<T, common_chat_peg_space_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_space_parser>) {
                 return "space";
-            } else if constexpr (std::is_same_v<T, common_chat_peg_chars_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_chars_parser>) {
                 std::string result = p.pattern;
                 if (p.min_count == 0 && p.max_count == -1) {
                     return result + "*";
@@ -1313,20 +1313,20 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
                     return result + "{" + std::to_string(p.min_count) + "}";
                 }
                 return result + "{" + std::to_string(p.min_count) + "," + std::to_string(p.max_count) + "}";
-            } else if constexpr (std::is_same_v<T, common_chat_peg_json_string_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_json_string_parser>) {
                 return R"(( [^"\\] | "\\" ( ["\\/ bfnrt] | "u" [0-9a-fA-F]{4} ) )*)";
-            } else if constexpr (std::is_same_v<T, common_chat_peg_until_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
                 return gbnf_excluding_pattern(p.delimiters);
-            } else if constexpr (std::is_same_v<T, common_chat_peg_schema_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (p.schema) {
                     return builder.add_schema(p.name, *p.schema);
                 }
                 return to_gbnf(p.child);
-            } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 return to_gbnf(p.child);
-            } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
                 return p.name;
-            } else if constexpr (std::is_same_v<T, common_chat_peg_capture_parser>) {
+            } else if constexpr (std::is_same_v<T, common_peg_capture_parser>) {
                 return to_gbnf(p.child);
             } else {
                 return "";
@@ -1341,7 +1341,7 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
         // Collect rules reachable from trigger rules
         for (const auto & [name, id] : rules_) {
             const auto & parser = parsers_.at(id);
-            if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
+            if (auto rule = std::get_if<common_peg_rule_parser>(&parser)) {
                 if (rule->trigger) {
                     // Mark trigger as reachable and visit it
                     reachable_rules.insert(name);
@@ -1362,7 +1362,7 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
         }
 
         const auto & parser = parsers_.at(rule_id);
-        if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
+        if (auto rule = std::get_if<common_peg_rule_parser>(&parser)) {
             builder.add_rule(rule->name, to_gbnf(rule->child));
         }
     }
@@ -1372,7 +1372,7 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
         std::vector<std::string> trigger_names;
         for (const auto & [name, rule_id] : rules_) {
             const auto & parser = parsers_.at(rule_id);
-            if (auto rule = std::get_if<common_chat_peg_rule_parser>(&parser)) {
+            if (auto rule = std::get_if<common_peg_rule_parser>(&parser)) {
                 if (rule->trigger) {
                     trigger_names.push_back(rule->name);
                 }
@@ -1380,47 +1380,47 @@ void common_chat_peg_arena::build_grammar(const common_grammar_builder & builder
         }
 
         builder.add_rule("root", string_join(trigger_names, " | "));
-    } else if (root_ != COMMON_CHAT_PEG_INVALID_PARSER_ID) {
+    } else if (root_ != COMMON_PEG_INVALID_PARSER_ID) {
         builder.add_rule("root", to_gbnf(root_));
     }
 }
 
 // Serialization helper: convert parser variant to JSON
-static nlohmann::json serialize_parser_variant(const common_chat_peg_parser_variant & variant) {
+static nlohmann::json serialize_parser_variant(const common_peg_parser_variant & variant) {
     return std::visit([](const auto & p) -> nlohmann::json {
         using T = std::decay_t<decltype(p)>;
 
         nlohmann::json j;
 
-        if constexpr (std::is_same_v<T, common_chat_peg_start_parser>) {
+        if constexpr (std::is_same_v<T, common_peg_start_parser>) {
             j["type"] = "start";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_end_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_end_parser>) {
             j["type"] = "end";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_literal_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
             j["type"] = "literal";
             j["literal"] = p.literal;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_sequence_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
             j["type"] = "sequence";
             j["children"] = p.children;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_choice_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
             j["type"] = "choice";
             j["children"] = p.children;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_repetition_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_repetition_parser>) {
             j["type"] = "repetition";
             j["child"] = p.child;
             j["min_count"] = p.min_count;
             j["max_count"] = p.max_count;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_and_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_and_parser>) {
             j["type"] = "and";
             j["child"] = p.child;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_not_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_not_parser>) {
             j["type"] = "not";
             j["child"] = p.child;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_any_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_any_parser>) {
             j["type"] = "any";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_space_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_space_parser>) {
             j["type"] = "space";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_chars_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_chars_parser>) {
             j["type"] = "chars";
             j["pattern"] = p.pattern;
             nlohmann::json ranges = nlohmann::json::array();
@@ -1434,12 +1434,12 @@ static nlohmann::json serialize_parser_variant(const common_chat_peg_parser_vari
             j["negated"] = p.negated;
             j["min_count"] = p.min_count;
             j["max_count"] = p.max_count;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_json_string_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_json_string_parser>) {
             j["type"] = "json_string";
-        } else if constexpr (std::is_same_v<T, common_chat_peg_until_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
             j["type"] = "until";
             j["delimiters"] = p.delimiters;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_schema_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
             j["type"] = "schema";
             j["child"] = p.child;
             j["name"] = p.name;
@@ -1448,16 +1448,16 @@ static nlohmann::json serialize_parser_variant(const common_chat_peg_parser_vari
             } else {
                 j["schema"] = nullptr;
             }
-        } else if constexpr (std::is_same_v<T, common_chat_peg_rule_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
             j["type"] = "rule";
             j["name"] = p.name;
             j["annotation"] = p.annotation;
             j["child"] = p.child;
             j["trigger"] = p.trigger;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_ref_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
             j["type"] = "ref";
             j["name"] = p.name;
-        } else if constexpr (std::is_same_v<T, common_chat_peg_capture_parser>) {
+        } else if constexpr (std::is_same_v<T, common_peg_capture_parser>) {
             j["type"] = "capture";
             j["child"] = p.child;
             j["key"] = p.key;
@@ -1467,7 +1467,7 @@ static nlohmann::json serialize_parser_variant(const common_chat_peg_parser_vari
     }, variant);
 }
 
-nlohmann::json common_chat_peg_arena::to_json() const {
+nlohmann::json common_peg_arena::to_json() const {
     nlohmann::json j;
 
     auto parsers = nlohmann::json::array();
@@ -1482,7 +1482,7 @@ nlohmann::json common_chat_peg_arena::to_json() const {
 }
 
 // Deserialization helper: convert JSON to parser variant
-static common_chat_peg_parser_variant deserialize_parser_variant(const nlohmann::json & j) {
+static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json & j) {
     if (!j.contains("type") || !j["type"].is_string()) {
         throw std::runtime_error("Parser variant JSON missing or invalid 'type' field");
     }
@@ -1490,35 +1490,35 @@ static common_chat_peg_parser_variant deserialize_parser_variant(const nlohmann:
     std::string type = j["type"];
 
     if (type == "start") {
-        return common_chat_peg_start_parser{};
+        return common_peg_start_parser{};
     }
     if (type == "end") {
-        return common_chat_peg_end_parser{};
+        return common_peg_end_parser{};
     }
     if (type == "literal") {
         if (!j.contains("literal") || !j["literal"].is_string()) {
             throw std::runtime_error("literal parser missing or invalid 'literal' field");
         }
-        return common_chat_peg_literal_parser{j["literal"]};
+        return common_peg_literal_parser{j["literal"]};
     }
     if (type == "sequence") {
         if (!j.contains("children") || !j["children"].is_array()) {
             throw std::runtime_error("sequence parser missing or invalid 'children' field");
         }
-        return common_chat_peg_sequence_parser{j["children"].get<std::vector<common_chat_peg_parser_id>>()};
+        return common_peg_sequence_parser{j["children"].get<std::vector<common_peg_parser_id>>()};
     }
     if (type == "choice") {
         if (!j.contains("children") || !j["children"].is_array()) {
             throw std::runtime_error("choice parser missing or invalid 'children' field");
         }
-        return common_chat_peg_choice_parser{j["children"].get<std::vector<common_chat_peg_parser_id>>()};
+        return common_peg_choice_parser{j["children"].get<std::vector<common_peg_parser_id>>()};
     }
     if (type == "repetition") {
         if (!j.contains("child") || !j.contains("min_count") || !j.contains("max_count")) {
             throw std::runtime_error("repetition parser missing required fields");
         }
-        return common_chat_peg_repetition_parser{
-            j["child"].get<common_chat_peg_parser_id>(),
+        return common_peg_repetition_parser{
+            j["child"].get<common_peg_parser_id>(),
             j["min_count"].get<int>(),
             j["max_count"].get<int>()
         };
@@ -1527,26 +1527,26 @@ static common_chat_peg_parser_variant deserialize_parser_variant(const nlohmann:
         if (!j.contains("child")) {
             throw std::runtime_error("and parser missing 'child' field");
         }
-        return common_chat_peg_and_parser{j["child"].get<common_chat_peg_parser_id>()};
+        return common_peg_and_parser{j["child"].get<common_peg_parser_id>()};
     }
     if (type == "not") {
         if (!j.contains("child")) {
             throw std::runtime_error("not parser missing 'child' field");
         }
-        return common_chat_peg_not_parser{j["child"].get<common_chat_peg_parser_id>()};
+        return common_peg_not_parser{j["child"].get<common_peg_parser_id>()};
     }
     if (type == "any") {
-        return common_chat_peg_any_parser{};
+        return common_peg_any_parser{};
     }
     if (type == "space") {
-        return common_chat_peg_space_parser{};
+        return common_peg_space_parser{};
     }
     if (type == "chars") {
         if (!j.contains("pattern") || !j.contains("ranges") || !j.contains("negated") ||
             !j.contains("min_count") || !j.contains("max_count")) {
             throw std::runtime_error("chars parser missing required fields");
         }
-        common_chat_peg_chars_parser parser;
+        common_peg_chars_parser parser;
         parser.pattern = j["pattern"];
         parser.negated = j["negated"];
         parser.min_count = j["min_count"];
@@ -1563,20 +1563,20 @@ static common_chat_peg_parser_variant deserialize_parser_variant(const nlohmann:
         return parser;
     }
     if (type == "json_string") {
-        return common_chat_peg_json_string_parser{};
+        return common_peg_json_string_parser{};
     }
     if (type == "until") {
         if (!j.contains("delimiters") || !j["delimiters"].is_array()) {
             throw std::runtime_error("until parser missing or invalid 'delimiters' field");
         }
-        return common_chat_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
+        return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
     }
     if (type == "schema") {
         if (!j.contains("child") || !j.contains("name") || !j.contains("schema")) {
             throw std::runtime_error("schema parser missing required fields");
         }
-        common_chat_peg_schema_parser parser;
-        parser.child = j["child"].get<common_chat_peg_parser_id>();
+        common_peg_schema_parser parser;
+        parser.child = j["child"].get<common_peg_parser_id>();
         parser.name = j["name"];
         if (!j["schema"].is_null()) {
             parser.schema = std::make_shared<nlohmann::ordered_json>(j["schema"]);
@@ -1587,10 +1587,10 @@ static common_chat_peg_parser_variant deserialize_parser_variant(const nlohmann:
         if (!j.contains("name") || !j.contains("annotation") || !j.contains("child") || !j.contains("trigger")) {
             throw std::runtime_error("rule parser missing required fields");
         }
-        return common_chat_peg_rule_parser{
+        return common_peg_rule_parser{
             j["name"].get<std::string>(),
             j["annotation"].get<std::string>(),
-            j["child"].get<common_chat_peg_parser_id>(),
+            j["child"].get<common_peg_parser_id>(),
             j["trigger"].get<bool>()
         };
     }
@@ -1598,14 +1598,14 @@ static common_chat_peg_parser_variant deserialize_parser_variant(const nlohmann:
         if (!j.contains("name") || !j["name"].is_string()) {
             throw std::runtime_error("ref parser missing or invalid 'name' field");
         }
-        return common_chat_peg_ref_parser{j["name"]};
+        return common_peg_ref_parser{j["name"]};
     }
     if (type == "capture") {
         if (!j.contains("child") || !j.contains("key")) {
             throw std::runtime_error("capture parser missing required fields");
         }
-        return common_chat_peg_capture_parser{
-            j["child"].get<common_chat_peg_parser_id>(),
+        return common_peg_capture_parser{
+            j["child"].get<common_peg_parser_id>(),
             j["key"].get<std::string>()
         };
     }
@@ -1613,7 +1613,7 @@ static common_chat_peg_parser_variant deserialize_parser_variant(const nlohmann:
     throw std::runtime_error("Unknown parser type: " + type);
 }
 
-common_chat_peg_arena common_chat_peg_arena::from_json(const nlohmann::json & j) {
+common_peg_arena common_peg_arena::from_json(const nlohmann::json & j) {
     if (!j.contains("parsers") || !j["parsers"].is_array()) {
         throw std::runtime_error("JSON missing or invalid 'parsers' array");
     }
@@ -1624,7 +1624,7 @@ common_chat_peg_arena common_chat_peg_arena::from_json(const nlohmann::json & j)
         throw std::runtime_error("JSON missing 'root' field");
     }
 
-    common_chat_peg_arena arena;
+    common_peg_arena arena;
 
     const auto & parsers_json = j["parsers"];
     arena.parsers_.reserve(parsers_json.size());
@@ -1632,7 +1632,7 @@ common_chat_peg_arena common_chat_peg_arena::from_json(const nlohmann::json & j)
         arena.parsers_.push_back(deserialize_parser_variant(parser_json));
     }
 
-    arena.rules_ = j["rules"].get<std::unordered_map<std::string, common_chat_peg_parser_id>>();
+    arena.rules_ = j["rules"].get<std::unordered_map<std::string, common_peg_parser_id>>();
 
     for (const auto & [name, id] : arena.rules_) {
         if (id >= arena.parsers_.size()) {
@@ -1640,8 +1640,8 @@ common_chat_peg_arena common_chat_peg_arena::from_json(const nlohmann::json & j)
         }
     }
 
-    arena.root_ = j["root"].get<common_chat_peg_parser_id>();
-    if (arena.root_ != COMMON_CHAT_PEG_INVALID_PARSER_ID && arena.root_ >= arena.parsers_.size()) {
+    arena.root_ = j["root"].get<common_peg_parser_id>();
+    if (arena.root_ != COMMON_PEG_INVALID_PARSER_ID && arena.root_ >= arena.parsers_.size()) {
         throw std::runtime_error("Root references invalid parser ID: " + std::to_string(arena.root_));
     }
 

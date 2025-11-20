@@ -15,7 +15,7 @@ static void assert_gbnf_equal(testing & t, const std::string & expected, const s
 
 void test_gbnf_generation(testing &t) {
     t.test("literal grammar generation", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.literal("hello");
         });
 
@@ -30,7 +30,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("char class grammar", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.one("[a-z]");
         });
 
@@ -45,7 +45,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("sequence grammar", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.literal("hello") + p.literal(" ") + p.literal("world");
         });
 
@@ -60,7 +60,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("choice grammar", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.literal("cat") | p.literal("dog");
         });
 
@@ -75,7 +75,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("one_or_more grammar", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.one_or_more(p.one("[0-9]"));
         });
 
@@ -90,7 +90,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("zero_or_more grammar", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.zero_or_more(p.one("[a-z]"));
         });
 
@@ -105,7 +105,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("optional grammar", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.literal("hello") + p.optional(p.literal(" world"));
         });
 
@@ -120,7 +120,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("until grammar", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p)  {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
             return p.until("</tag>");
         });
 
@@ -135,7 +135,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("complex expressions with parentheses", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.one_or_more(p.literal("a") | p.literal("b"));
         });
 
@@ -150,7 +150,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("rule references", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             auto digit = p.rule("digit", p.one("[0-9]"));
             return p.one_or_more(digit);
         });
@@ -167,7 +167,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("escaping in literals", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.literal("hello\nworld\t!");
         });
 
@@ -182,7 +182,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("operator<< (whitespace insertion)", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             return p.literal("hello") << p.literal("world");
         });
 
@@ -197,7 +197,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("emit only reachable rules", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             p.rule("orphan", p.literal("orphan"));
             return p.literal("hello") + p.rule("child", p.literal(" world"));
         });
@@ -214,7 +214,7 @@ void test_gbnf_generation(testing &t) {
     });
 
     t.test("emit only trigger rules (and references)", [](testing &t) {
-        auto parser = build_peg_parser([](common_chat_peg_parser_builder & p) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
             auto rule1 = p.rule("rule-1", p.literal("a") + p.ref("rule-2"));
             p.rule("rule-2", p.literal("b") + p.ref("rule-3"), true);
             p.rule("rule-3", p.literal("c") + p.ref("rule-4"));
