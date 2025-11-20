@@ -23,7 +23,9 @@ void main() {
     const float k_scale = max(qh / kh, 1.0f);
     const float q_scale = max(kh / qh, 1.0f);
 
-    const int pos = int(float(i12)*q_scale - float(i11)*k_scale + (kh - 1.0f)*k_scale);
+    // Add a small epsilon to avoid floating point precision issues
+    const float epsilon = 0.0001f;
+    const int pos = int(float(i12) * q_scale - float(i11) * k_scale + (kh - 1.0f) * k_scale + epsilon);
 
     const uint src_idx = pos*p.nb01 + i10*p.nb00;
     const uint dst_idx = i13*p.nb13 + i12*p.nb12 + i11*p.nb11 + i10*p.nb10;
