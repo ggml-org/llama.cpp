@@ -7904,6 +7904,11 @@ static void ggml_compute_forward_top_k_f32(
         int32_t * dst_data = (int32_t *)((char *) dst->data + i*nb1);
 
         std::copy(tmp, tmp + top_k, dst_data);
+
+        // emphasize that the order is not important
+        if (top_k > 1) {
+            std::swap(dst_data[0], dst_data[1]);
+        }
     }
 }
 
