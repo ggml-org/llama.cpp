@@ -107,21 +107,6 @@
 </script>
 
 <div class="space-y-4">
-	<div class="mb-4">
-		<h2 class="text-lg font-semibold">
-			Select Conversations to {mode === 'export' ? 'Export' : 'Import'}
-		</h2>
-		<p class="text-sm text-muted-foreground">
-			{#if mode === 'export'}
-				Choose which conversations you want to export. Selected conversations will be downloaded as
-				a JSON file.
-			{:else}
-				Choose which conversations you want to import. Selected conversations will be merged with
-				your existing conversations.
-			{/if}
-		</p>
-	</div>
-
 	<div class="relative">
 		<Search class="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 

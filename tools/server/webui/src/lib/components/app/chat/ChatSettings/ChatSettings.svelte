@@ -392,8 +392,6 @@
 	<!-- Desktop Sidebar -->
 	<div class="hidden w-64 border-r border-border/30 p-6 md:block">
 		<nav class="space-y-1 py-2">
-			<h2 class="mb-6 flex items-center gap-2 text-lg font-semibold">Settings</h2>
-
 			{#each settingSections as section (section.title)}
 				<button
 					class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
@@ -413,8 +411,6 @@
 	<!-- Mobile Header with Horizontal Scrollable Menu -->
 	<div class="flex flex-col md:hidden">
 		<div class="border-b border-border/30 py-4">
-			<h2 class="mb-6 flex items-center gap-2 px-4 text-lg font-semibold">Settings</h2>
-
 			<!-- Horizontal Scrollable Category Menu with Navigation -->
 			<div class="relative flex items-center" style="scroll-padding: 1rem;">
 				<button

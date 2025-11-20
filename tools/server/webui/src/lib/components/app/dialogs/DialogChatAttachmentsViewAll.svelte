@@ -23,6 +23,8 @@
 		imageWidth = 'w-auto',
 		imageClass = ''
 	}: Props = $props();
+
+	let totalCount = $derived(uploadedFiles.length + attachments.length);
 </script>
 
 <Dialog.Root bind:open>
@@ -30,6 +32,11 @@
 		<Dialog.Overlay />
 
 		<Dialog.Content class="flex !max-h-[90vh] !max-w-6xl flex-col">
+			<Dialog.Header>
+				<Dialog.Title>All Attachments ({totalCount})</Dialog.Title>
+				<Dialog.Description>View and manage all attached files</Dialog.Description>
+			</Dialog.Header>
+
 			<ChatAttachmentsViewAll
 				{uploadedFiles}
 				{attachments}

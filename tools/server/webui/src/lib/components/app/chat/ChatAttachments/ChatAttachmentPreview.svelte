@@ -4,7 +4,6 @@
 	import { convertPDFToImage } from '$lib/utils/pdf-processing';
 	import { Button } from '$lib/components/ui/button';
 	import { getFileTypeCategory } from '$lib/utils/file-type';
-	import { formatFileSize } from '$lib/utils/file-preview';
 
 	interface Props {
 		// Either an uploaded file or a stored attachment
@@ -14,11 +13,10 @@
 		preview?: string;
 		name?: string;
 		type?: string;
-		size?: number;
 		textContent?: string;
 	}
 
-	let { uploadedFile, attachment, preview, name, type, size, textContent }: Props = $props();
+	let { uploadedFile, attachment, preview, name, type, textContent }: Props = $props();
 
 	let displayName = $derived(uploadedFile?.name || attachment?.name || name || 'Unknown File');
 
@@ -38,8 +36,6 @@
 							? MimeTypeApplication.PDF
 							: type || 'unknown')
 	);
-
-	let displaySize = $derived(uploadedFile?.size || size);
 
 	let displayTextContent = $derived(
 		uploadedFile?.textContent ||
@@ -138,27 +134,7 @@
 </script>
 
 <div class="space-y-4">
-	<div class="flex items-center justify-between gap-6">
-		<div class="flex items-center gap-3">
-			{#if IconComponent}
-				<IconComponent class="h-5 w-5 text-muted-foreground" />
-			{/if}
-
-			<div>
-				<h2 class="text-left text-lg font-semibold">{displayName}</h2>
-
-				<div class="flex items-center gap-2 text-sm text-muted-foreground">
-					<span>{displayType}</span>
-
-					{#if displaySize}
-						<span>•</span>
-
-						<span>{formatFileSize(displaySize)}</span>
-					{/if}
-				</div>
-			</div>
-		</div>
-
+	<div class="flex items-center justify-end gap-6">
 		{#if isPdf}
 			<div class="flex items-center gap-2">
 				<Button

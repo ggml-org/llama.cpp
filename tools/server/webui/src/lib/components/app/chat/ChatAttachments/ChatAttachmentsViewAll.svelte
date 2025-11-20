@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components/app';
+	import { ChatAttachmentThumbnailImage, ChatAttachmentThumbnailFile } from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums/files';
 	import { getFileTypeCategory } from '$lib/utils/file-type';
 	import DialogChatAttachmentPreview from '$lib/components/app/dialogs/DialogChatAttachmentPreview.svelte';
@@ -125,18 +125,13 @@
 </script>
 
 <div class="space-y-4">
-	<div class="mb-4">
-		<h2 class="text-lg font-semibold">All Attachments ({displayItems.length})</h2>
-		<p class="text-sm text-muted-foreground">View and manage all attached files</p>
-	</div>
-
 	<div class="min-h-0 flex-1 space-y-6 overflow-y-auto px-1">
 		{#if fileItems.length > 0}
 			<div>
 				<h3 class="mb-3 text-sm font-medium text-foreground">Files ({fileItems.length})</h3>
 				<div class="flex flex-wrap items-start gap-3">
 					{#each fileItems as item (item.id)}
-						<ChatAttachmentFilePreview
+						<ChatAttachmentThumbnailFile
 							class="cursor-pointer"
 							id={item.id}
 							name={item.name}
@@ -158,7 +153,7 @@
 				<div class="flex flex-wrap items-start gap-3">
 					{#each imageItems as item (item.id)}
 						{#if item.preview}
-							<ChatAttachmentImagePreview
+							<ChatAttachmentThumbnailImage
 								class="cursor-pointer"
 								id={item.id}
 								name={item.name}

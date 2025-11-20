@@ -1,8 +1,8 @@
 // Chat
 
-export { default as ChatAttachmentFilePreview } from './chat/ChatAttachments/ChatAttachmentFilePreview.svelte';
-export { default as ChatAttachmentImagePreview } from './chat/ChatAttachments/ChatAttachmentImagePreview.svelte';
 export { default as ChatAttachmentPreview } from './chat/ChatAttachments/ChatAttachmentPreview.svelte';
+export { default as ChatAttachmentThumbnailFile } from './chat/ChatAttachments/ChatAttachmentThumbnailFile.svelte';
+export { default as ChatAttachmentThumbnailImage } from './chat/ChatAttachments/ChatAttachmentThumbnailImage.svelte';
 export { default as ChatAttachmentsList } from './chat/ChatAttachments/ChatAttachmentsList.svelte';
 export { default as ChatAttachmentsViewAll } from './chat/ChatAttachments/ChatAttachmentsViewAll.svelte';
 
