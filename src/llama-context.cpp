@@ -60,11 +60,11 @@ llama_context::llama_context(
 
     // backend samplers
     if (params.samplers != nullptr && params.n_samplers > 0) {
-        samplers.reserve(params.n_samplers);
+        sampling.samplers.reserve(params.n_samplers);
 
         for (size_t i = 0; i < params.n_samplers; ++i) {
             const auto & config = params.samplers[i];
-            samplers[config.seq_id] = config.sampler;
+            sampling.samplers[config.seq_id] = config.sampler;
         }
     }
 
@@ -435,9 +435,9 @@ llama_context::llama_context(
     {
         const llama_vocab * vocab = llama_model_get_vocab(&model);
         const int n_vocab = llama_vocab_n_tokens(vocab);
-        sampled_token_ids_full_vocab.resize(n_vocab);
+        sampling.token_ids_full_vocab.resize(n_vocab);
         for (int i = 0; i < n_vocab; ++i) {
-            sampled_token_ids_full_vocab[i] = i;
+            sampling.token_ids_full_vocab[i] = i;
         }
     }
 }
@@ -445,7 +445,7 @@ llama_context::llama_context(
 llama_context::~llama_context() {
     ggml_opt_free(opt_ctx);
     // TODO: perhaps use a smart pointer for samplers
-    for (auto const& [seq_id, sampler] : samplers) {
+    for (auto const& [seq_id, sampler] : sampling.samplers) {
         llama_sampler_free(sampler);
     }
 }
@@ -635,7 +635,7 @@ float * llama_context::get_embeddings() {
 }
 
 llama_token * llama_context::get_backend_sampled_tokens() {
-    return sampled_tokens;
+    return sampling.sampled;
 }
 
 float * llama_context::get_embeddings_ith(int32_t i) {
@@ -691,15 +691,15 @@ llama_token llama_context::get_backend_sampled_token_ith(int32_t idx) {
     // Handle special case where idx == -1 (single sequence exists) which is
     // a valid index when using common_sampler_sample.
     if (idx == -1) {
-        if (sampled_tokens_map.size() == 1) {
-            auto it = sampled_tokens_map.begin();
+        if (sampling.map_sampled.size() == 1) {
+            auto it = sampling.map_sampled.begin();
             return it->second;
         }
         return LLAMA_TOKEN_NULL;
     }
 
-    auto it = sampled_tokens_map.find(idx);
-    if (it == sampled_tokens_map.end()) {
+    auto it = sampling.map_sampled.find(idx);
+    if (it == sampling.map_sampled.end()) {
         return LLAMA_TOKEN_NULL;
     }
 
@@ -708,13 +708,13 @@ llama_token llama_context::get_backend_sampled_token_ith(int32_t idx) {
 
 float * llama_context::get_backend_sampled_probs_ith(int32_t idx) {
     if (idx == -1) {
-        if (sampled_probs_map.size() == 1) {
-            return sampled_probs_map.begin()->second.data();
+        if (sampling.map_probs.size() == 1) {
+            return sampling.map_probs.begin()->second.data();
         }
     }
 
-    auto it = sampled_probs_map.find(idx);
-    if (it == sampled_probs_map.end()) {
+    auto it = sampling.map_probs.find(idx);
+    if (it == sampling.map_probs.end()) {
         return nullptr;
     }
 
@@ -723,12 +723,12 @@ float * llama_context::get_backend_sampled_probs_ith(int32_t idx) {
 
 float * llama_context::get_backend_sampled_logits_ith(int32_t idx) {
     if (idx == -1) {
-        if (sampled_logits_map.size() == 1) {
-            return sampled_logits_map.begin()->second.data();
+        if (sampling.map_logits.size() == 1) {
+            return sampling.map_logits.begin()->second.data();
         }
     }
-    auto it = sampled_logits_map.find(idx);
-    if (it == sampled_logits_map.end()) {
+    auto it = sampling.map_logits.find(idx);
+    if (it == sampling.map_logits.end()) {
         return nullptr;
     }
 
@@ -737,29 +737,29 @@ float * llama_context::get_backend_sampled_logits_ith(int32_t idx) {
 
 const llama_token * llama_context::get_backend_sampled_token_ids_ith(int32_t idx) {
     if (idx == -1) {
-        if (sampled_token_ids_map.size() == 1) {
-            const auto & vec = sampled_token_ids_map.begin()->second;
+        if (sampling.map_cadidates.size() == 1) {
+            const auto & vec = sampling.map_cadidates.begin()->second;
             if (!vec.empty()) {
                 return vec.data();
             }
         }
     }
-    auto it = sampled_token_ids_map.find(idx);
-    if (it != sampled_token_ids_map.end() && !it->second.empty()) {
+    auto it = sampling.map_cadidates.find(idx);
+    if (it != sampling.map_cadidates.end() && !it->second.empty()) {
         return it->second.data();
     }
 
-    return sampled_token_ids_full_vocab.data();
+    return sampling.token_ids_full_vocab.data();
 }
 
 size_t llama_context::get_backend_sampled_logits_count(int32_t idx) const {
     if (idx == -1) {
-        if (sampled_logits_map.size() == 1) {
-            return sampled_logits_map.begin()->second.size();
+        if (sampling.map_logits.size() == 1) {
+            return sampling.map_logits.begin()->second.size();
         }
     }
-    auto it = sampled_logits_map.find(idx);
-    if (it == sampled_logits_map.end()) {
+    auto it = sampling.map_logits.find(idx);
+    if (it == sampling.map_logits.end()) {
         return 0;
     }
 
@@ -768,14 +768,14 @@ size_t llama_context::get_backend_sampled_logits_count(int32_t idx) const {
 
 size_t llama_context::get_backend_sampled_probs_count(int32_t idx) const {
     if (idx == -1) {
-        if (sampled_probs_map.size() == 1) {
-            return sampled_probs_map.begin()->second.size();
+        if (sampling.map_probs.size() == 1) {
+            return sampling.map_probs.begin()->second.size();
         }
         return 0;
     }
 
-    auto it = sampled_probs_map.find(idx);
-    if (it == sampled_probs_map.end()) {
+    auto it = sampling.map_probs.find(idx);
+    if (it == sampling.map_probs.end()) {
         return 0;
     }
 
@@ -841,8 +841,8 @@ void llama_context::set_warmup(bool value) {
 void llama_context::set_backend_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
 
-    auto it = samplers.find(seq_id);
-    if (it != samplers.end()) {
+    auto it = sampling.samplers.find(seq_id);
+    if (it != sampling.samplers.end()) {
         // If the sampler to be set is the same that is already set, do nothing.
         if (it->second == sampler) {
             return;
@@ -853,7 +853,7 @@ void llama_context::set_backend_sampler(llama_seq_id seq_id, llama_sampler * sam
         // If sampler is nullptr, we remove the samppler chain for this seq_id.
         // chain for this seq_id.
         if (sampler == nullptr) {
-            samplers.erase(it);
+            sampling.samplers.erase(it);
             return;
         }
 
@@ -865,7 +865,7 @@ void llama_context::set_backend_sampler(llama_seq_id seq_id, llama_sampler * sam
     // If there is no sampler for this seq_id and the caller provides a non-null
     // sampler, we set it.
     if (sampler != nullptr) {
-        samplers[seq_id] = sampler;
+        sampling.samplers[seq_id] = sampler;
     }
 }
 
@@ -1202,7 +1202,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // when computing embeddings, all tokens are output
     const bool output_all = cparams.embeddings;
-    const bool has_backend_samplers = !samplers.empty();
+    const bool has_backend_samplers = !sampling.samplers.empty();
 
     if (!balloc->init(batch_inp, vocab, memory.get(), n_embd,
                       cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max,
@@ -1235,10 +1235,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
-    sampled_probs_map.clear();
-    sampled_logits_map.clear();
-    sampled_tokens_map.clear();
-    sampled_token_ids_map.clear();
+    sampling.map_probs.clear();
+    sampling.map_logits.clear();
+    sampling.map_sampled.clear();
+    sampling.map_cadidates.clear();
     output_swaps.clear();
 
     bool did_optimize = false;
@@ -1361,27 +1361,27 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
-        backend_has_sampled = !res->t_sampled_tokens.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
+        backend_has_sampled = !res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
 
         if (has_backend_samplers && backend_has_sampled) {
             const auto seq_to_batch_idx = build_seq_to_batch_idx(ubatch);
 
             // If a backend sampler has sampled a token we only want to copy the
             // sampled tokens and avoid copying logits and probabilites.
-            if (!res->t_sampled_tokens.empty()) {
+            if (!res->t_sampled.empty()) {
                 // async copy the sampled tokens from the backend to the host.
-                copy_tensor_async_int(res->t_sampled_tokens, sampled_tokens_map, seq_to_batch_idx, sched.get());
+                copy_tensor_async_int(res->t_sampled, sampling.map_sampled, seq_to_batch_idx, sched.get());
             } else {
                 // async copy the sampled logits/probs from the backend to the host.
-                copy_tensor_async_floats(res->t_sampled_logits, sampled_logits_map, seq_to_batch_idx, sched.get());
-                copy_tensor_async_floats(res->t_sampled_probs,  sampled_probs_map,  seq_to_batch_idx, sched.get());
+                copy_tensor_async_floats(res->t_sampled_logits, sampling.map_logits, seq_to_batch_idx, sched.get());
+                copy_tensor_async_floats(res->t_sampled_probs,  sampling.map_probs,  seq_to_batch_idx, sched.get());
             }
 
-            // async copy the filtered token ids from the backend to the host.
+            // async copy the candidate token ids from the backend to the host.
             // These are needed for:
             // 1) Backend dist sampler to map indices to vocab token ids.
-            // 2) CPU samplers to associate filtered logits with their token ids.
-            copy_tensor_async_token_ids(res->t_sampled_token_ids, sampled_token_ids_map, seq_to_batch_idx, sched.get());
+            // 2) CPU samplers to associate candidate logits with their token ids.
+            copy_tensor_async_token_ids(res->t_candidates, sampling.map_cadidates, seq_to_batch_idx, sched.get());
 
         }
 
@@ -1589,8 +1589,9 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     logits         = has_logits        ? output_base               : nullptr;
     embd           = has_embd          ? output_base + logits_size : nullptr;
-    sampled_tokens = !samplers.empty() ? s_output_base             : nullptr;
-    sampled_probs  = !samplers.empty() ? embd                      : nullptr;
+
+    sampling.sampled = !sampling.samplers.empty() ? s_output_base    : nullptr;
+    sampling.probs   = !sampling.samplers.empty() ? embd             : nullptr;
 
     // set all ids as invalid (negative)
     std::fill(output_ids.begin(), output_ids.end(), -1);
@@ -1700,7 +1701,7 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ &loras,
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
-        /*.samplers    =*/ samplers,
+        /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,

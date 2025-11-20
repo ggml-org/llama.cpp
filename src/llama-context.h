@@ -254,16 +254,21 @@ private:
     size_t  logits_size = 0; // capacity (of floats) for logits
     float * logits      = nullptr;
 
-    std::unordered_map<llama_seq_id, llama_sampler*> samplers;
-    llama_token * sampled_tokens = nullptr;
-    std::unordered_map<int32_t, llama_token> sampled_tokens_map;
+    struct sampling_info {
+        std::unordered_map<llama_seq_id, llama_sampler*> samplers;
 
-    float * sampled_probs = nullptr;
-    std::unordered_map<int32_t, std::vector<float>> sampled_probs_map;
+        llama_token * sampled = nullptr;
+        float       * probs = nullptr;
 
-    std::unordered_map<int32_t, std::vector<float>> sampled_logits_map;
-    std::unordered_map<int32_t, std::vector<llama_token>> sampled_token_ids_map;
-    std::vector<llama_token> sampled_token_ids_full_vocab;
+        std::unordered_map<int32_t, llama_token>              map_sampled;
+        std::unordered_map<int32_t, std::vector<float>>       map_probs;
+        std::unordered_map<int32_t, std::vector<float>>       map_logits;
+        std::unordered_map<int32_t, std::vector<llama_token>> map_cadidates;
+
+        std::vector<llama_token> token_ids_full_vocab;
+    };
+
+    sampling_info sampling;
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE

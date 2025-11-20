@@ -543,8 +543,8 @@ public:
     ggml_tensor * t_embd_pooled = nullptr;
 
     std::unordered_map<llama_seq_id, ggml_tensor*> t_sampled_logits;
-    std::unordered_map<llama_seq_id, ggml_tensor*> t_sampled_token_ids;
-    std::unordered_map<llama_seq_id, ggml_tensor*> t_sampled_tokens;
+    std::unordered_map<llama_seq_id, ggml_tensor*> t_candidates;
+    std::unordered_map<llama_seq_id, ggml_tensor*> t_sampled;
     std::unordered_map<llama_seq_id, ggml_tensor*> t_sampled_probs;
 
     std::vector<llm_graph_input_ptr> inputs;

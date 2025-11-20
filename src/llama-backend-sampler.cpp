@@ -15,7 +15,7 @@ static void llama_sampler_backend_greedy_apply_ggml(
     GGML_UNUSED(smpl);
     struct ggml_tensor * argmax_result = ggml_argmax(ctx, ggml_data->logits);
     ggml_set_name(argmax_result, "argmax_result");
-    ggml_data->sampled_token = argmax_result;
+    ggml_data->sampled = argmax_result;
 }
 
 static const char * llama_sampler_backend_greedy_sampler_name(const struct llama_sampler *) {
@@ -149,7 +149,7 @@ static void llama_sampler_backend_top_k_apply_ggml(
         fprintf(stderr, "CPU backend will be used instead which defeats the purpose of having backend samplers\n");
     }
 
-    ggml_data->filtered_ids = top_k;
+    ggml_data->candidates = top_k;
 
     struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, ggml_data->logits, 1, ggml_data->logits->ne[0]);
     struct ggml_tensor * top_k_rows = ggml_get_rows(ctx, logits_rows, top_k);
@@ -303,19 +303,19 @@ static void llama_sampler_backend_dist_apply_ggml(
     struct ggml_tensor * idx = ggml_cast(ctx, ggml_scale_bias(ctx, idxf, -1.0f, mask->ne[0]), GGML_TYPE_I32);
     ggml_set_name(idx, "dist_index_i32");
 
-    // Map back to original vocab ids if a filtered id tensor is available.
+    // Map back to original vocab ids if a candidates tensor is available.
     struct ggml_tensor * sampled_token = idx;
-    if (ggml_data->filtered_ids != nullptr) {
-        struct ggml_tensor * filtered_ids = ggml_data->filtered_ids;
-        struct ggml_tensor * filtered_ids_reshaped = ggml_view_2d(ctx, filtered_ids, 1, ggml_nelements(filtered_ids),
-                ggml_type_size(filtered_ids->type), 0);
+    if (ggml_data->candidates != nullptr) {
+        struct ggml_tensor * candidates = ggml_data->candidates;
+        struct ggml_tensor * candidates_reshaped = ggml_view_2d(ctx, candidates, 1, ggml_nelements(candidates),
+                ggml_type_size(candidates->type), 0);
 
-        sampled_token = ggml_get_rows(ctx, filtered_ids_reshaped, idx);
+        sampled_token = ggml_get_rows(ctx, candidates_reshaped, idx);
         ggml_set_name(sampled_token, "dist_sampled_token");
     }
 
     ggml_set_output(sampled_token);
-    ggml_data->sampled_token = sampled_token;
+    ggml_data->sampled = sampled_token;
 }
 
 static const char * llama_sampler_backend_dist_name(const struct llama_sampler *) {

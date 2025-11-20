@@ -213,8 +213,8 @@ extern "C" {
     struct llama_sampler_ggml_data {
         struct ggml_tensor * logits;
         struct ggml_tensor * probs;
-        struct ggml_tensor * sampled_token;
-        struct ggml_tensor * filtered_ids;
+        struct ggml_tensor * sampled;
+        struct ggml_tensor * candidates;
     };
 
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
