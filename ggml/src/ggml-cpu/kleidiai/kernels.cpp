@@ -39,7 +39,7 @@
 
 #include "kernels.h"
 
-#define NELEMS(x) sizeof(x) / sizeof(*x)
+#define NELEMS(x) (sizeof(x) / sizeof(*x))
 
 template<size_t(*Fn)(size_t,size_t,size_t)>
 static inline size_t kernel_offs_fn3(size_t a, size_t b, size_t c) {
@@ -635,6 +635,7 @@ static ggml_kleidiai_kernels gemm_gemv_kernels[] = {
     },
 #endif
 #endif
+    { /* Sentinel */ }
 };
 
 static ggml_kleidiai_kernels gemm_gemv_kernels_q8[] = {
@@ -803,6 +804,7 @@ static ggml_kleidiai_kernels gemm_gemv_kernels_q8[] = {
         /* .op_type            = */ GGML_TYPE_F32,
     },
 #endif
+    { /* Sentinel */ }
 };
 
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, const ggml_tensor * tensor) {
@@ -810,7 +812,7 @@ ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, c
 
     if (tensor->op == GGML_OP_MUL_MAT && tensor->src[0] != nullptr && tensor->src[1] != nullptr) {
 #if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_DOTPROD) || defined(__ARM_FEATURE_MATMUL_INT8)
-        for (size_t i = 0; i < NELEMS(gemm_gemv_kernels); ++i) {
+        for (size_t i = 0; i < NELEMS(gemm_gemv_kernels) - 1; ++i) {
             if ((cpu_features & gemm_gemv_kernels[i].required_cpu) == gemm_gemv_kernels[i].required_cpu &&
                 gemm_gemv_kernels[i].lhs_type == tensor->src[1]->type &&
                 gemm_gemv_kernels[i].rhs_type == tensor->src[0]->type &&
@@ -820,7 +822,7 @@ ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, c
             }
         }
         if (!kernel) {
-            for (size_t i = 0; i < NELEMS(gemm_gemv_kernels_q8); ++i) {
+            for (size_t i = 0; i < NELEMS(gemm_gemv_kernels_q8) - 1; ++i) {
                 if ((cpu_features & gemm_gemv_kernels_q8[i].required_cpu) == gemm_gemv_kernels_q8[i].required_cpu &&
                     gemm_gemv_kernels_q8[i].lhs_type == tensor->src[1]->type &&
                     gemm_gemv_kernels_q8[i].rhs_type == tensor->src[0]->type &&
@@ -830,6 +832,10 @@ ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, c
                 }
             }
         }
+#else
+    GGML_UNUSED(gemm_gemv_kernels);
+    GGML_UNUSED(gemm_gemv_kernels_q8);
+    GGML_UNUSED(cpu_features);
 #endif
     }
 
@@ -840,12 +846,14 @@ ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q4_0(cpu_feature features) 
     ggml_kleidiai_kernels * kernels = nullptr;
 
 #if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_DOTPROD) || defined(__ARM_FEATURE_MATMUL_INT8)
-    for (size_t i = 0; i < NELEMS(gemm_gemv_kernels); ++i) {
+    for (size_t i = 0; i < NELEMS(gemm_gemv_kernels) - 1; ++i) {
         if ((features & gemm_gemv_kernels[i].required_cpu) == gemm_gemv_kernels[i].required_cpu) {
             kernels = &gemm_gemv_kernels[i];
             break;
         }
     }
+#else
+    GGML_UNUSED(features);
 #endif
 
     return kernels;
@@ -855,12 +863,14 @@ ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q8_0(cpu_feature features) 
     ggml_kleidiai_kernels * kernels = nullptr;
 
 #if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_DOTPROD) || defined(__ARM_FEATURE_MATMUL_INT8)
-    for (size_t i = 0; i < NELEMS(gemm_gemv_kernels_q8); ++i) {
+    for (size_t i = 0; i < NELEMS(gemm_gemv_kernels_q8) - 1; ++i) {
         if ((features & gemm_gemv_kernels_q8[i].required_cpu) == gemm_gemv_kernels_q8[i].required_cpu) {
             kernels = &gemm_gemv_kernels_q8[i];
             break;
         }
     }
+#else
+    GGML_UNUSED(features);
 #endif
 
     return kernels;
