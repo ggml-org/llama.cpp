@@ -71,7 +71,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
 	    #else
 		    unsetenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS");
 	    #endif
-            print_tensor_address_map(cgraph);
+        print_tensor_address_map(cgraph);
     }
 
     set_llm_params();
