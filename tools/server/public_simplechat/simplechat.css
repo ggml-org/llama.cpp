@@ -122,10 +122,6 @@ body {
     max-width: fit-content;
     max-height: 20vh;
 }
-#user-in-imgs img {
-    max-width: 12vmin;
-    max-height: 12vmin;
-}
 #popover-chatmsg {
     position:fixed;
     position-area: span-top span-left;
@@ -182,6 +178,10 @@ body {
     border-color: black;
     border-style: solid;
 }
+#user-in-imgs img {
+    max-width: 12vmin;
+    max-height: 12vmin;
+}
 #user-in {
     background-color: #ffffff;
     padding: 1.6vmin 2vmin;
@@ -193,10 +193,11 @@ body {
     background-color: lightyellow;
 }
 #user-in-div button {
-    padding-inline: 2vmin;
+    padding-inline: 1vmin;
     border-radius: 2vmin;
-    min-height: 3vmin;
+    min-height: 1vmin;
 }
+
 button {
     padding-inline: 2vmin;
     border-radius: 1vmin;

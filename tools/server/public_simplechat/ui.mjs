@@ -44,6 +44,7 @@ export function el_children_config_class(elBase, idSelected, classSelected, clas
 
 /**
  * Create button and set it up.
+ * If innerHTML specified, it takes priority over any innerText specified.
  * @param {string} id
  * @param {(this: HTMLButtonElement, ev: MouseEvent) => any} callback
  * @param {string | undefined} name
@@ -241,12 +242,13 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * which hides input and shows a button which chains to underlying file type input.
  * @param {string} id
  * @param {string} label
+ * @param {string} labelBtnHtml
  * @param {any} defaultValue
  * @param {string} acceptable
  * @param {(arg0: any) => void} cb
  * @param {string} className
  */
-export function el_creatediv_inputfilebtn(id, label, defaultValue, acceptable, cb, className) {
+export function el_creatediv_inputfilebtn(id, label, labelBtnHtml, defaultValue, acceptable, cb, className) {
     let elX = el_creatediv_input(id, label, "file", defaultValue, cb, className)
     elX.el.hidden = true
     elX.el.accept = acceptable
@@ -254,7 +256,7 @@ export function el_creatediv_inputfilebtn(id, label, defaultValue, acceptable, c
     let elB = el_create_button(idB, (mev) => {
         elX.el.value = ""
         elX.el.click()
-    }, idB, label, `<p>${label}</p>`)
+    }, idB, undefined, labelBtnHtml)
     return { div: elX.div, el: elX.el, elB: elB };
 }
 
@@ -270,7 +272,7 @@ export function el_creatediv_inputfilebtn(id, label, defaultValue, acceptable, c
  * @param {string} className
  */
 export function el_creatediv_inputfileimgbtn(id, label, defaultValue, acceptable, cb, className) {
-    let elX = el_creatediv_inputfilebtn(id, label, defaultValue, acceptable, cb, className);
+    let elX = el_creatediv_inputfilebtn(id, label, `<p>${label}</p>`, defaultValue, acceptable, cb, className);
     let elImg = document.createElement('img')
     elImg.classList.add(`${className}-img`)
     elX.elB.appendChild(elImg)
