@@ -63,10 +63,20 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
     m_is_static(is_static),
     m_cgraph(cgraph),
     m_op_name(m_node ? std::string(m_node->name) : ""),
-    m_model_weights(model_weights) {
+    m_model_weights(model_weights),
+    /*m_is_static(is_static) {
     if (auto * env = getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS"); env && std::string(env) != "0") {
         unsetenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS");
         print_tensor_address_map(cgraph);
+    }*/
+    m_is_static(is_static) {
+    if (auto* env = getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS"); env && std::string(env) != "0") {
+	    #ifdef _WIN32
+		    _putenv_s("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS", "");
+	    #else
+		    unsetenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS");
+	    #endif
+            print_tensor_address_map(cgraph);
     }
 
     set_llm_params();
