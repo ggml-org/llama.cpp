@@ -1634,6 +1634,13 @@ void ggml_vec_dot_ifairy_q16_K(
 
     float sum_real_total = 0.0f;
     float sum_imag_total = 0.0f;
+    float acc_ac_xr      = 0.0f;
+    float acc_bd_xi      = 0.0f;
+    float acc_bc_xr      = 0.0f;
+    float acc_ad_xi      = 0.0f;
+
+    float coeff_w_real = w[0].d_real;
+    float coeff_w_imag = w[0].d_imag;
 
     // ------------ 常量 & LUT，只装载一次 ------------
 
@@ -1785,15 +1792,18 @@ void ggml_vec_dot_ifairy_q16_K(
         const int32_t sum_bc = vaddvq_s32(acc_bc);
         const int32_t sum_bd = vaddvq_s32(acc_bd);
 
-        const float w_real = w[i].d_real;
-        const float w_imag = w[i].d_imag;
         const float x_real = x[i].d_real;
         const float x_imag = x[i].d_imag;
 
         // (w_real + i w_imag) * (x_real + i x_imag) 与 Σ(ac,ad,bc,bd) 组合
-        sum_real_total += w_real * x_real * (float)sum_ac + w_imag * x_imag * (float)sum_bd;
-        sum_imag_total += w_imag * x_real * (float)sum_bc - w_real * x_imag * (float)sum_ad;
+        acc_ac_xr += x_real * (float) sum_ac;
+        acc_bd_xi += x_imag * (float) sum_bd;
+        acc_bc_xr += x_real * (float) sum_bc;
+        acc_ad_xi += x_imag * (float) sum_ad;
     }
+
+    sum_real_total = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
+    sum_imag_total = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
 
     ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
     ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
