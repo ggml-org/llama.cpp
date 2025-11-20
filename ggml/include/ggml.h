@@ -2259,13 +2259,14 @@ extern "C" {
             struct ggml_tensor  * a,
             enum ggml_sort_order  order);
 
-    // same as ggml_top_k but implemented as `argsort` + `view`
+    // similar to ggml_top_k but implemented as `argsort` + `view`
     GGML_API struct ggml_tensor * ggml_argsort_top_k(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   k);
 
     // top k elements per row
+    // note: the resulting top k indices are in no particular order
     GGML_API struct ggml_tensor * ggml_top_k(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
