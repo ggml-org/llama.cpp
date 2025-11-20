@@ -2776,24 +2776,34 @@ struct test_cpy : public test_case {
 struct test_cont : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
+    bool use_view_slice;
 
     std::string vars() override {
-        return VARS_TO_STR2(type, ne);
+        return VARS_TO_STR3(type, ne, use_view_slice);
     }
 
     test_cont(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {10, 10, 10, 1})
-        : type(type), ne(ne) {}
+            std::array<int64_t, 4> ne = {10, 10, 10, 1},
+            bool use_view_slice = false)
+        : type(type), ne(ne), use_view_slice(use_view_slice) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(src);
         ggml_set_name(src, "src");
 
-        src = ggml_transpose(ctx, src);
-        ggml_set_name(src, "src_transposed");
 
-        ggml_tensor * out = ggml_cont(ctx, src);
+        ggml_tensor * dst;
+        if (use_view_slice) {
+            dst = ggml_view_4d(ctx, src, src->ne[0], 1, src->ne[2], src->ne[3],
+                src->nb[1], src->nb[2], src->nb[3], src->nb[0] * (src->ne[1] - 1));
+            ggml_set_name(dst, "src_view_slice");
+        } else {
+            dst = ggml_transpose(ctx, src);
+            ggml_set_name(dst, "src_transposed");
+        }
+
+        ggml_tensor * out = ggml_cont(ctx, dst);
         ggml_set_name(out, "out");
 
         return out;
@@ -5719,101 +5729,6 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
-
-// SPARSEK: KQ mask builder using existing GGML ops
-struct test_sparsek_kq_mask : public test_case {
-    const int64_t n_kv;   // number of KV rows
-    const int64_t cols;   // number of columns (tokens * heads * streams)
-    const int32_t topk;   // how many rows to allow
-
-    std::string vars() override {
-        return VARS_TO_STR3(n_kv, cols, topk);
-    }
-
-    // Default: 8 rows, 4 columns, top-k = n_kv / 2
-    test_sparsek_kq_mask(int64_t n_kv = 8, int64_t cols = 4, int32_t topk = -1)
-        : n_kv(n_kv),
-          cols(cols),
-          topk(topk >= 0 ? topk : (int32_t)(n_kv / 2)) {
-    }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        // neg2d: base is all -INF, size [n_kv, cols]
-        ggml_tensor * neg2d = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_kv, cols);
-        ggml_set_name(neg2d, "neg2d");
-
-        // idx: per-column indices of the rows we want to zero-out (top-k)
-        // shape: [topk, cols] – same convention as real SparseK top-k index tensor
-        ggml_tensor * idx = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, topk, cols);
-        ggml_set_name(idx, "idx");
-
-        // reshape to 3D to work with ggml_get_rows / ggml_set_rows
-        ggml_tensor * rows3d   = ggml_reshape_3d(ctx, neg2d, n_kv, 1, cols);
-        ggml_tensor * picked   = ggml_get_rows(ctx, rows3d, idx);      // [topk, 1, cols]
-
-        // zeros: create zeros without a scalar node – just picked - picked
-        ggml_tensor * zeros    = ggml_sub(ctx, picked, picked);       // [topk, 1, cols]
-
-        // merged3d: place the zero rows back into the selected indices
-        ggml_tensor * merged3d = ggml_set_rows(ctx, rows3d, zeros, idx);
-
-        // reshape back to 2D: [n_kv, cols]
-        ggml_tensor * out = ggml_reshape_2d(ctx, merged3d, n_kv, cols);
-        ggml_set_name(out, "out");
-
-        return out;
-    }
-
-    void initialize_tensors(ggml_context * ctx) override {
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx);
-             t != nullptr;
-             t = ggml_get_next_tensor(ctx, t)) {
-
-            if (strcmp(t->name, "neg2d") == 0) {
-                // Fill neg2d with -INF
-                std::vector<float> buf(ggml_nelements(t), -INFINITY);
-                ggml_backend_tensor_set(
-                    t,
-                    buf.data(),
-                    0,
-                    buf.size() * sizeof(float)
-                );
-
-            } else if (strcmp(t->name, "idx") == 0) {
-                // idx shape: [topk, cols]
-                const int64_t topk  = t->ne[0];
-                const int64_t cols  = t->ne[1];
-
-                std::vector<int32_t> data(topk * cols);
-                for (int64_t c = 0; c < cols; ++c) {
-                    for (int64_t r = 0; r < topk; ++r) {
-                        // row index along dim-0; identical pattern per column
-                        data[c * topk + r] = (int32_t) r;
-                    }
-                }
-
-                ggml_backend_tensor_set(
-                    t,
-                    data.data(),
-                    0,
-                    data.size() * sizeof(int32_t)
-                );
-            }
-        }
-    }
-
-    // No NMSE computation (this test is fully deterministic)
-    double max_nmse_err() override {
-        return 0.0;
-    }
-
-    bool grad_precise() override {
-        // No gradient check for this test
-        return false;
-    }
-};
-
-
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -6674,9 +6589,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-        // === SparseK primitives: basic get_rows/set_rows pipeline ===
-
-
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX }) {
         for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
             test_cases.emplace_back(new test_rope_set_rows(type, GGML_TYPE_I64, { 128, 32, 1, 100 }, mode));
@@ -7043,16 +6955,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_BF16, GGML_TYPE_BF16, {256, 4, 1, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, true));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {256, 1, 4, 1}, {1, 2, 0, 3}, {0, 0, 0, 0}));
 
-    test_cases.emplace_back(new test_cont());
-    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {2, 1, 1 ,1}));
-    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {2, 1, 3 ,5}));
-    test_cases.emplace_back(new test_cont(GGML_TYPE_F32, {2, 3, 5 ,7}));
-    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {2, 1, 1 ,1}));
-    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {2, 1, 3 ,5}));
-    test_cases.emplace_back(new test_cont(GGML_TYPE_F16, {2, 3, 5 ,7}));
-    test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {2, 1, 1 ,1}));
-    test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {2, 1, 3 ,5}));
-    test_cases.emplace_back(new test_cont(GGML_TYPE_BF16, {2, 3, 5 ,7}));
+    for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        for (bool use_view_slice : { true, false }) {
+            for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{ {2, 1, 1, 1}, {2, 1, 3, 5},
+                {2, 3, 5, 7}, {1, 4, 4, 1}, {1, 8, 17, 1}, {10, 10, 10, 1} }) {
+                if (use_view_slice && (type_dst == GGML_TYPE_F16 || type_dst == GGML_TYPE_BF16)) {
+                    continue; // TODO: add after WebGPU is fixed
+                }
+                test_cases.emplace_back(new test_cont(type_dst, ne, use_view_slice));
+            }
+        }
+    }
 
     auto add_test_bin_bcast = [&](ggml_type type, std::array<int64_t, 4> ne, std::array<int, 4> nr) {
         for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div}) {
@@ -7113,6 +7026,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {16, 5, 4, 3}, {1, 1, 1, 1}, 16));
 
     test_cases.emplace_back(new test_add1());
+    test_cases.emplace_back(new test_add1(GGML_TYPE_F32, {1024, 1024, 1, 1}));
     test_cases.emplace_back(new test_scale());
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f));
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f, true)); // inplace test
@@ -7452,9 +7366,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_clamp     (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_leaky_relu(type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_floor     (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_floor     (type, { 1024, 1024, 1, 1 }));
         test_cases.emplace_back(new test_ceil      (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_ceil      (type, { 1024, 1024, 1, 1 }));
         test_cases.emplace_back(new test_round     (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_round     (type, { 1024, 1024, 1, 1 }));
         test_cases.emplace_back(new test_trunc     (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_trunc     (type, { 1024, 1024, 1, 1 }));
     }
 
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 1, 1}, 5));
@@ -7599,13 +7517,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     for (ggml_sort_order order : {GGML_SORT_ORDER_ASC, GGML_SORT_ORDER_DESC}) {
-        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {8, 1, 1, 1}, order));
+        for (uint32_t i = 4; i <= 1024*1024; i *= 2) {
+            test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {i-1, 1, 1, 1}));
+            test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {i, 1, 1, 1}));
+        }
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {16, 10, 10, 10}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {60, 10, 10, 10}, order)); // qwen
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1023, 2, 1, 3}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1024, 2, 1, 3}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1025, 2, 1, 3}, order));
-        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {16384, 1, 1, 1}, order)); // many backends only handle up to 1024
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {2047, 2, 1, 3}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {2048, 2, 1, 3}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {2049, 2, 1, 3}, order));
@@ -7654,15 +7574,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
     test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_arange());
+    test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 0.0f, 1048576.0f, 1.0f));
     test_cases.emplace_back(new test_timestep_embedding());
     test_cases.emplace_back(new test_leaky_relu());
 
-        // SPARSEK: KQ mask builder test
-    test_cases.emplace_back(new test_sparsek_kq_mask(
-        /*n_kv=*/8,
-        /*cols=*/4,
-        /*topk=*/4
-    ));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 10, 5, 4, 3 }));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 127, 5, 4, 3 }));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 128, 5, 4, 3 }));
@@ -7687,6 +7602,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_fill(0.0f));
     test_cases.emplace_back(new test_fill(2.0f, GGML_TYPE_F32, { 303, 207, 11, 3 }));
     test_cases.emplace_back(new test_fill(-152.0f, GGML_TYPE_F32, { 800, 600, 4, 4 }));
+    test_cases.emplace_back(new test_fill(3.5f, GGML_TYPE_F32, { 2048, 512, 2, 2 }));
 
     test_cases.emplace_back(new test_solve_tri());
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 11, 11, 1, 1 }, { 5, 11, 1, 1 }));
