@@ -1085,7 +1085,7 @@ class MultiChatUI {
         // Save any placeholder set by default like through html, to restore where needed
         this.elInUser.dataset.placeholder = this.elInUser.placeholder
         // Setup Image loading button and flow
-        this.elInFileX = ui.el_creatediv_inputfileimgbtn('image', 'image', '', ".jpg, .jpeg, .png", ()=>{
+        this.elInFileX = ui.el_creatediv_inputfilebtn('image', '&#x1F4F7;', '&#x1F4F7;', '', ".jpg, .jpeg, .png", ()=>{
             let f0 = this.elInFileX.el.files?.item(0);
             if (!f0) {
                 return
@@ -1100,6 +1100,7 @@ class MultiChatUI {
             }
             fR.readAsDataURL(f0)
         }, 'user-in')
+        this.elInFileX.elB.title = "Image"
         this.elBtnUser.parentElement?.appendChild(this.elInFileX.elB)
 
         this.validate_element(this.elInSystem, "system-in");
