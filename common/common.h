@@ -2,17 +2,15 @@
 
 #pragma once
 
+#include "ggml-opt.h"
+#include "llama-cpp.h"
+
 #include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <map>
-#include <sstream>
-#include <cmath>
-
-#include "ggml-opt.h"
-#include "llama-cpp.h"
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -29,6 +27,15 @@
 } while(0)
 
 #define DEFAULT_MODEL_PATH "models/7B/ggml-model-f16.gguf"
+
+struct common_time_meas {
+    common_time_meas(int64_t & t_acc, bool disable = false);
+    ~common_time_meas();
+
+    const int64_t t_start_us;
+
+    int64_t & t_acc;
+};
 
 struct common_adapter_lora_info {
     std::string path;
