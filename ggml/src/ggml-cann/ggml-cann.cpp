@@ -1881,6 +1881,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cann_flash_attn_ext(ctx, dst);
             break;
+        case GGML_OP_OUT_PROD:
+            ggml_cann_out_prod(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -2552,6 +2555,18 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_COUNT_EQUAL:
             return true;
+        case GGML_OP_OUT_PROD:
+            {
+                switch (op->type) {
+                    case GGML_TYPE_F16:
+                    case GGML_TYPE_F32:
+                        return true;
+                    case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_Q4_0:
+                    default:
+                        return false;
+                }
+            }
         case GGML_OP_CONV_TRANSPOSE_1D:
             // TODO: ((weightL - 1) * dilationW - padLeft)=1336 should not be larger than 255.
             return (op->src[0]->ne[0] - 1) <= 255;

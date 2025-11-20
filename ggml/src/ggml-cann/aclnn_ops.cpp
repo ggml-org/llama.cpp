@@ -72,6 +72,7 @@
 #include <aclnnop/aclnn_index_select.h>
 #include <aclnnop/aclnn_clamp.h>
 #include <aclnnop/aclnn_threshold.h>
+#include "aclnnop/aclnn_ger.h"
 #include <float.h>
 
 #include <cmath>
@@ -3222,5 +3223,85 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context & ctx, ggml_tensor * dst
 
     } else {
         GGML_ABORT("Function is not implemented.");
+    }
+}
+
+void ggml_cann_out_prod(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];
+    
+    const enum ggml_type type = src0->type;
+
+    switch (type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+            ggml_cann_out_prod_fp(ctx, dst);
+            break;
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
+        default:
+            GGML_ABORT("Unsupported type for out_prod");
+            break;
+    }
+}
+
+void ggml_cann_out_prod_fp(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];  // weight
+    ggml_tensor * src1 = dst->src[1];  // input
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    const int64_t dps2 = ne2 / ne02;
+    const int64_t dps3 = ne3 / ne03;
+    for (int64_t i3 = 0; i3 < ne3; i3++) {
+        for (int64_t i2 = 0; i2 < ne2; i2++) {
+            const int64_t i02 = i2 / dps2;
+            const int64_t i03 = i3 / dps3;
+
+            const int64_t i12 = i2;
+            const int64_t i13 = i3;
+            aclTensor *accumulator = ggml_cann_create_tensor(
+                (char *)dst->data + i2*nb2 + i3*nb3,
+                ggml_cann_type_mapping(dst->type),
+                ggml_type_size(dst->type),
+                dst->ne,
+                dst->nb,
+                2);
+            
+            GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, accumulator);
+
+            for (int64_t i1 = 0; i1 < ne11; i1++) {
+                aclTensor *acl_input = ggml_cann_create_tensor(
+                    (char *)src1->data + i1*nb11 + i12*nb12 + i13*nb13,
+                    ggml_cann_type_mapping(src0->type),
+                    ggml_type_size(src0->type),
+                    src1->ne,
+                    src1->nb,
+                    1);
+                
+                aclTensor *acl_weight = ggml_cann_create_tensor(
+                    (char *)src0->data + i1*nb01 + i02*nb02 + i03*nb03,
+                    ggml_cann_type_mapping(src0->type),
+                    ggml_type_size(src0->type),
+                    src0->ne,
+                    src0->nb,
+                    1);
+                
+                ggml_cann_pool_alloc output_allocator(ctx.pool());
+                void * output_buffer = output_allocator.alloc(ggml_nbytes(dst));
+                aclTensor *acl_out = ggml_cann_create_tensor(
+                    output_buffer,
+                    ggml_cann_type_mapping(dst->type),
+                    ggml_type_size(dst->type),
+                    dst->ne,
+                    dst->nb,
+                    2);
+
+                GGML_CANN_CALL_ACLNN_OP(ctx, Ger, acl_input, acl_weight, acl_out);
+                float alpha_value = 1.0f;
+                aclScalar * alpha = aclCreateScalar(&alpha_value, ACL_FLOAT);
+                GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdd, accumulator, acl_out, alpha);
+                ggml_cann_release_resources(ctx, acl_input, acl_weight, acl_out);
+            }
+            ggml_cann_release_resources(ctx, accumulator);
+        }
     }
 }
