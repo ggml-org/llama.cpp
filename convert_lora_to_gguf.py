@@ -283,7 +283,7 @@ def load_hparams_from_hf(hf_model_id: str) -> tuple[dict[str, Any], Path | None]
     # normally, adapter does not come with base model config, we need to load it from AutoConfig
     config = AutoConfig.from_pretrained(hf_model_id)
     cache_dir = try_to_load_from_cache(hf_model_id, "config.json")
-    cache_dir = Path(cache_dir).parent if cache_dir is not None else None
+    cache_dir = Path(cache_dir).parent if isinstance(cache_dir, str) else None
 
     return config.to_dict(), cache_dir
 
