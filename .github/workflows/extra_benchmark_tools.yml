@@ -146,3 +146,106 @@ jobs:
         with:
           path: llama-bench-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
           name: llama-bench-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
+
+  release:
+    # if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/benchmarks' ) || github.event.inputs.create_release == 'true' }}
+
+    # Fine-grant permission
+    # https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
+    permissions:
+        contents: write # for creating release
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - android-arm64
+      - windows
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag name
+        id: tag
+        run: |
+          # Try to get existing tag
+          if git describe --tags --exact-match 2>/dev/null; then
+            TAG_NAME=$(git describe --tags --exact-match)
+            echo "tag_exists=true" >> $GITHUB_OUTPUT
+          else
+            # Generate tag name based on date and short SHA
+            TAG_NAME="bench-tools-$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
+            echo "tag_exists=false" >> $GITHUB_OUTPUT
+          fi
+          echo "name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "Generated tag name: ${TAG_NAME}"
+
+      - name: Create tag if needed
+        if: steps.tag.outputs.tag_exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.tag.outputs.name }}" -m "Benchmark tools release ${{ steps.tag.outputs.name }}"
+          git push origin "${{ steps.tag.outputs.name }}"
+
+      - name: Download artifacts
+        id: download-artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifact
+          merge-multiple: true
+
+      - name: Move artifacts
+        id: move_artifacts
+        run: |
+          mkdir -p release
+          mv -v artifact/*.zip release/ || true
+
+          # Package Android artifacts
+          if [ -d "artifact/llama-bench-android-arm64-v8a" ]; then
+            cd artifact
+            zip -r ../release/llama-bench-${{ steps.tag.outputs.name }}-android-arm64-v8a.zip llama-bench-android-arm64-v8a/
+            cd ..
+          fi
+
+          # Rename Windows artifacts to include tag
+          cd release
+          for f in llama-bench-win-*.zip; do
+            if [ -f "$f" ]; then
+              newname="llama-bench-${{ steps.tag.outputs.name }}-${f#llama-bench-}"
+              mv "$f" "$newname"
+            fi
+          done
+
+      - name: Create release
+        id: create_release
+        uses: ggml-org/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+
+      - name: Upload release
+        id: upload_release
+        uses: actions/github-script@v3
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const path = require('path');
+            const fs = require('fs');
+            const release_id = '${{ steps.create_release.outputs.id }}';
+            for (let file of await fs.readdirSync('./release')) {
+              if (path.extname(file) === '.zip') {
+                console.log('uploadReleaseAsset', file);
+                await github.repos.uploadReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: release_id,
+                  name: file,
+                  data: await fs.readFileSync(`./release/${file}`)
+                });
+              }
+            }
