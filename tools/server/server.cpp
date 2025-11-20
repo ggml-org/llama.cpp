@@ -2594,14 +2594,16 @@ struct server_context {
         SRV_INF("thinking = %d\n", enable_thinking);
 
         oai_parser_opt = {
-            /* use_jinja             */ params_base.use_jinja,
-            /* prefill_assistant     */ params_base.prefill_assistant,
-            /* reasoning_format      */ params_base.reasoning_format,
-            /* chat_template_kwargs  */ params_base.default_template_kwargs,
-            /* common_chat_templates */ chat_templates.get(),
-            /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
-            /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
-            /* enable_thinking       */ enable_thinking,
+            /* use_jinja                */ params_base.use_jinja,
+            /* prefill_assistant        */ params_base.prefill_assistant,
+            /* reasoning_format         */ params_base.reasoning_format,
+            /* chat_template_kwargs     */ params_base.default_template_kwargs,
+            /* common_chat_templates    */ chat_templates.get(),
+            /* allow_image              */ mctx ? mtmd_support_vision(mctx) : false,
+            /* allow_audio              */ mctx ? mtmd_support_audio (mctx) : false,
+            /* enable_thinking          */ enable_thinking,
+            /* local_media_max_size_mb  */ params_base.local_media_max_size_mb,
+            /* allowed_local_media_path */ params_base.allowed_local_media_path,
         };
 
         // print sample chat example to make it clear which template is used
