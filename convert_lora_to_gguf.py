@@ -277,10 +277,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_hparams_from_hf(hf_model_id: str) -> dict[str, Any]:
+def load_hparams_from_hf(hf_model_id: str) -> tuple[dict[str, Any], Path | None]:
+    from huggingface_hub import try_to_load_from_cache
+
     # normally, adapter does not come with base model config, we need to load it from AutoConfig
     config = AutoConfig.from_pretrained(hf_model_id)
-    return config.to_dict()
+    cache_dir = try_to_load_from_cache(hf_model_id, "config.json")
+    cache_dir = Path(cache_dir).parent if cache_dir is not None else None
+
+    return config.to_dict(), cache_dir
 
 
 if __name__ == '__main__':
@@ -323,18 +328,15 @@ if __name__ == '__main__':
         lparams: dict[str, Any] = json.load(f)
 
     # load base model
-    remote_base_model_id: str | None = None
     if base_model_id is not None:
         logger.info(f"Loading base model from Hugging Face: {base_model_id}")
-        hparams = load_hparams_from_hf(base_model_id)
-        remote_base_model_id = base_model_id
+        hparams, dir_base_model = load_hparams_from_hf(base_model_id)
     elif dir_base_model is None:
         if "base_model_name_or_path" in lparams:
             model_id = lparams["base_model_name_or_path"]
             logger.info(f"Loading base model from Hugging Face: {model_id}")
             try:
-                hparams = load_hparams_from_hf(model_id)
-                remote_base_model_id = model_id
+                hparams, dir_base_model = load_hparams_from_hf(model_id)
             except OSError as e:
                 logger.error(f"Failed to load base model config: {e}")
                 logger.error("Please try downloading the base model and add its path to --base")
@@ -472,12 +474,8 @@ if __name__ == '__main__':
 
         alpha: float = lparams["lora_alpha"]
 
-        # Use local path if --base is provided,
-        # otherwise use dummy path when loading from Hugging Face
-        dir_model = dir_base_model if dir_base_model is not None else Path(".")
-
         model_instance = LoraModel(
-            dir_model,
+            dir_base_model,
             ftype,
             fname_out,
             is_big_endian=args.bigendian,
@@ -487,7 +485,6 @@ if __name__ == '__main__':
             dir_lora_model=dir_lora,
             lora_alpha=alpha,
             hparams=hparams,
-            remote_hf_model_id=remote_base_model_id,
         )
 
         logger.info("Exporting model...")
