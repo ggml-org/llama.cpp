@@ -514,12 +514,6 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
     assert(nr % 4 == 0);
     assert(nc % ncols_interleaved == 0);
 
-    UNUSED(s);
-    UNUSED(bs);
-    UNUSED(vx);
-    UNUSED(vy);
-    UNUSED(nr);
-    UNUSED(nc);
     UNUSED(nb);
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
@@ -2092,12 +2086,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
     assert(nr % 4 == 0);
     assert(nc % ncols_interleaved == 0);
 
-    UNUSED(s);
-    UNUSED(bs);
-    UNUSED(vx);
-    UNUSED(vy);
-    UNUSED(nr);
-    UNUSED(nc);
     UNUSED(nb);
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
