@@ -954,8 +954,6 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     ggml_tensor * rows3d = ggml_reshape_3d(ctx0, neg2d,
                                            n_kv_scores, 1, cols_scores);
 
-    ggml_tensor * picked = ggml_get_rows(ctx0, rows3d, topk_idx); // [topk, 1, cols]
-
     // 4.c) Build true zeros for selected rows (no INF-INF tricks)
     ggml_tensor * zeros = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32,
                                              topk_safe, 1, cols_scores);
