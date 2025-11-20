@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { Trash2 } from '@lucide/svelte';
-	import { ChatSidebarConversationItem, ConfirmationDialog } from '$lib/components/app';
+	import { ChatSidebarConversationItem, DialogConfirmation } from '$lib/components/app';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
@@ -158,7 +158,7 @@
 	<div class="bottom-0 z-10 bg-sidebar bg-sidebar/50 px-4 py-4 backdrop-blur-lg md:sticky"></div>
 </ScrollArea>
 
-<ConfirmationDialog
+<DialogConfirmation
 	bind:open={showDeleteDialog}
 	title="Delete Conversation"
 	description={selectedConversation

@@ -1,11 +1,10 @@
 <script lang="ts">
-	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components/app';
+	import { ChatAttachmentThumbnailImage, ChatAttachmentThumbnailFile } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { FileTypeCategory } from '$lib/enums/files';
 	import { getFileTypeCategory } from '$lib/utils/file-type';
-	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
-	import ChatAttachmentsViewAllDialog from './ChatAttachmentsViewAllDialog.svelte';
+	import { DialogChatAttachmentPreview, DialogChatAttachmentsViewAll } from '$lib/components/app';
 	import type { ChatAttachmentDisplayItem, ChatAttachmentPreviewItem } from '$lib/types/chat';
 
 	interface Props {
@@ -200,7 +199,7 @@
 			>
 				{#each displayItems as item (item.id)}
 					{#if item.isImage && item.preview}
-						<ChatAttachmentImagePreview
+						<ChatAttachmentThumbnailImage
 							class="flex-shrink-0 cursor-pointer {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
 							id={item.id}
 							name={item.name}
@@ -213,7 +212,7 @@
 							onClick={(event) => openPreview(item, event)}
 						/>
 					{:else}
-						<ChatAttachmentFilePreview
+						<ChatAttachmentThumbnailFile
 							class="flex-shrink-0 cursor-pointer {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
 							id={item.id}
 							name={item.name}
@@ -256,7 +255,7 @@
 {/if}
 
 {#if previewItem}
-	<ChatAttachmentPreviewDialog
+	<DialogChatAttachmentPreview
 		bind:open={previewDialogOpen}
 		uploadedFile={previewItem.uploadedFile}
 		attachment={previewItem.attachment}
@@ -268,7 +267,7 @@
 	/>
 {/if}
 
-<ChatAttachmentsViewAllDialog
+<DialogChatAttachmentsViewAll
 	bind:open={viewAllDialogOpen}
 	{uploadedFiles}
 	{attachments}

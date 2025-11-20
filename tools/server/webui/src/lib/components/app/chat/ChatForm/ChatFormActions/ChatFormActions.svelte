@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { Square, ArrowUp } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import ChatFormActionFileAttachments from './ChatFormActionFileAttachments.svelte';
-	import ChatFormActionRecord from './ChatFormActionRecord.svelte';
-	import ChatFormModelSelector from './ChatFormModelSelector.svelte';
+	import {
+		ChatFormActionFileAttachments,
+		ChatFormActionRecord,
+		ChatFormModelSelector
+	} from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 	import type { FileTypeCategory } from '$lib/enums/files';
 
