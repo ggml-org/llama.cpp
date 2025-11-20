@@ -3379,6 +3379,14 @@ struct test_ssm_conv : public test_case {
         ggml_tensor * out = ggml_ssm_conv(ctx, a, b);
         return out;
     }
+
+    // for CANN Ascend310P3:
+    // this card requires setting cubeMathType=1 (ALLOW_FP32_DOWN_PRECISION)
+    // so the inputs are converted from f32
+    // and tests fail with NMSE = 0.000000114 > 0.000000100
+    double max_nmse_err() override {
+        return 1e-6;
+    }
 };
 
 // GGML_OP_SSM_SCAN
