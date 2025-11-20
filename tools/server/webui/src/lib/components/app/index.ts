@@ -2,6 +2,7 @@ export { default as ChatAttachmentsList } from './chat/ChatAttachments/ChatAttac
 export { default as ChatAttachmentFilePreview } from './chat/ChatAttachments/ChatAttachmentFilePreview.svelte';
 export { default as ChatAttachmentImagePreview } from './chat/ChatAttachments/ChatAttachmentImagePreview.svelte';
 export { default as ChatAttachmentPreviewDialog } from './chat/ChatAttachments/ChatAttachmentPreviewDialog.svelte';
+export { default as ChatAttachmentsViewAllDialog } from './chat/ChatAttachments/ChatAttachmentsViewAllDialog.svelte';
 
 export { default as ChatForm } from './chat/ChatForm/ChatForm.svelte';
 export { default as ChatFormTextarea } from './chat/ChatForm/ChatFormTextarea.svelte';
@@ -41,6 +42,8 @@ export { default as ConversationTitleUpdateDialog } from './dialogs/Conversation
 export { default as KeyboardShortcutInfo } from './misc/KeyboardShortcutInfo.svelte';
 
 export { default as MarkdownContent } from './misc/MarkdownContent.svelte';
+
+export { default as RemoveButton } from './misc/RemoveButton.svelte';
 
 export { default as ServerStatus } from './server/ServerStatus.svelte';
 export { default as ServerErrorSplash } from './server/ServerErrorSplash.svelte';

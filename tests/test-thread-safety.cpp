@@ -131,7 +131,14 @@ int main(int argc, char ** argv) {
                     }
 
                     batch = llama_batch_get_one(&token, 1);
-                    if (llama_decode(ctx.get(), batch)) {
+
+                    int ret = llama_decode(ctx.get(), batch);
+                    if (ret == 1 && i > 0) {
+                        LOG_INF("Context full, stopping generation.\n");
+                        break;
+                    }
+
+                    if (ret != 0) {
                         LOG_ERR("Model %d/%d, Context %d/%d: failed to decode\n", m + 1, num_models, c + 1, num_contexts);
                         failed.store(true);
                         return;

@@ -2,17 +2,15 @@
 
 #pragma once
 
+#include "ggml-opt.h"
+#include "llama-cpp.h"
+
 #include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <map>
-#include <sstream>
-#include <cmath>
-
-#include "ggml-opt.h"
-#include "llama-cpp.h"
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -29,6 +27,15 @@
 } while(0)
 
 #define DEFAULT_MODEL_PATH "models/7B/ggml-model-f16.gguf"
+
+struct common_time_meas {
+    common_time_meas(int64_t & t_acc, bool disable = false);
+    ~common_time_meas();
+
+    const int64_t t_start_us;
+
+    int64_t & t_acc;
+};
 
 struct common_adapter_lora_info {
     std::string path;
@@ -406,6 +413,8 @@ struct common_params {
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
+    int image_min_tokens = -1;
+    int image_max_tokens = -1;
 
     // finetune
     struct lr_opt lr;
@@ -458,7 +467,8 @@ struct common_params {
     float slot_prompt_similarity = 0.1f;
 
     // batched-bench params
-    bool is_pp_shared = false;
+    bool is_pp_shared   = false;
+    bool is_tg_separate = false;
 
     std::vector<int32_t> n_pp;
     std::vector<int32_t> n_tg;
@@ -505,6 +515,10 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
+
+    bool has_speculative() const {
+        return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
+    }
 };
 
 // call once at the start of a program if it uses libcommon
@@ -604,6 +618,13 @@ bool fs_create_directory_with_parents(const std::string & path);
 
 std::string fs_get_cache_directory();
 std::string fs_get_cache_file(const std::string & filename);
+
+struct common_file_info {
+    std::string path;
+    std::string name;
+    size_t      size = 0; // in bytes
+};
+std::vector<common_file_info> fs_list_files(const std::string & path);
 
 //
 // Model utils

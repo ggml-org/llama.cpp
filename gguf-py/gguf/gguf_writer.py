@@ -860,6 +860,9 @@ class GGUFWriter:
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
 
+    def add_num_deepstack_layers(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.NUM_DEEPSTACK_LAYERS.format(arch=self.arch), count)
+
     def add_rope_dimension_count(self, count: int) -> None:
         self.add_uint32(Keys.Rope.DIMENSION_COUNT.format(arch=self.arch), count)
 
@@ -1070,6 +1073,9 @@ class GGUFWriter:
 
     def add_vision_n_wa_pattern(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.N_WA_PATTERN, value)
+
+    def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
+        self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
 
     # audio models
 

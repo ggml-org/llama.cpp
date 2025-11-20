@@ -345,10 +345,14 @@ export class SchemaConverter {
 
           const selectors = ref.split('#')[1].split('/').slice(1);
           for (const sel of selectors) {
-            if (!target || !(sel in target)) {
+            const selIndex = parseInt(sel, 10);
+            if (target && sel in target) {
+              target = target[sel];
+            } else if (target && selIndex in target) {
+              target = target[selIndex];
+            } else {
               throw new Error(`Error resolving ref ${ref}: ${sel} not in ${JSON.stringify(target)}`);
             }
-            target = target[sel];
           }
 
           this._refs[ref] = target;
@@ -594,7 +598,8 @@ export class SchemaConverter {
   }
 
   _resolveRef(ref) {
-    let refName = ref.split('/').pop();
+    let refFragment = ref.split('#').pop();
+    let refName = 'ref' + refFragment.replace(/[^a-zA-Z0-9-]+/g, '-');
     if (!(refName in this._rules) && !this._refsBeingResolved.has(ref)) {
       this._refsBeingResolved.add(ref);
       const resolved = this._refs[ref];
