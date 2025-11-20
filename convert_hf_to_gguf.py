@@ -10267,6 +10267,7 @@ def parse_args() -> argparse.Namespace:
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
     return args
+    
 
 def split_str_to_n_bytes(split_str: str) -> int:
     if split_str.endswith("K"):
