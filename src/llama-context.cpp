@@ -299,7 +299,7 @@ llama_context::llama_context(
 
         cross.v_embd.clear();
 
-        const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
+        const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         // avoid reserving graphs with zero outputs - assume one output per sequence
@@ -542,7 +542,7 @@ bool llama_context::memory_update(bool optimize) {
             throw std::runtime_error("failed to initialize memory context");
         }
 
-        const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
+        const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
