@@ -301,7 +301,9 @@ void GgmlOvDecoder::set_llm_params() {
 
             m_n_seq_active = mask->ne[3];
             auto seq_size = cache_k->ne[0] * cache_k->ne[1] * ggml_type_size(cache_k->type);
-            m_seq_active_start = ((size_t *) cache_k_view->op_params)[0] / seq_size;
+            size_t offset;
+            memcpy(&offset, cache_k_view->op_params, sizeof(size_t));
+            m_seq_active_start = offset / seq_size;
             m_token_len_per_seq = node->ne[2];
 
             if (mask_name.find("swa") != std::string::npos) {
@@ -344,6 +346,13 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
             input_shape = ov::PartialShape{1, 1, 1, m_ctx};
         } else {
             input_shape = ov::PartialShape{-1, 1, -1, -1};
+        }
+
+    } else if (name.find("cache_") == 0) {
+        input_shape = ov::PartialShape{get_shape(input)};
+        if (!m_is_static) {
+            // do not fix ctx size to make llama-bench work
+            input_shape[2] = -1;
         }
 
     } else if (op && op->op == GGML_OP_SET_ROWS && op->src[1] == input) {

@@ -52,7 +52,7 @@ OutputVector translate_permute(const NodeContext & context) {
         auto output_shape = context.get_output_shape(0).to_shape();
         int64_t head_size = output_shape[3];
         int64_t n_heads = output_shape[1];
-        int64_t ctx_per_seq = cache_shape[2].get_length();
+        int64_t ctx_per_seq = cache_shape[2].is_static() ? cache_shape[2].get_length() : -1;
         int64_t n_seq = cache_shape[1].get_length();
 
         Output<Node> attention_size;

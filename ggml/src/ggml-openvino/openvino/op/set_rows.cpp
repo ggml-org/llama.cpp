@@ -18,6 +18,7 @@
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/transpose.hpp>
+#include <vector>
 
 namespace ov {
 namespace frontend {
@@ -48,8 +49,13 @@ OutputVector translate_set_rows(const NodeContext & context) {
 
     if (auto dst_reshape = std::dynamic_pointer_cast<ov::op::v1::Reshape>(dst.get_node_shared_ptr())) {
         // Fix the case of multiple sequences, reshape back to original shape [1, n_seq, ctx_per_seq, emb]
-        res = std::make_shared<ov::op::v1::Reshape>(
-            res, ov::op::v0::Constant::create(ov::element::i64, {4}, dst_reshape->get_input_shape(0)), false);
+        // ctx_per_seq is not fixed due to llama-bench compatibility
+        auto dst_shape_partial = dst_reshape->get_input_partial_shape(0);
+        std::vector<int64_t> dst_shape = {dst_shape_partial[0].get_length(), dst_shape_partial[1].get_length(),
+                                          dst_shape_partial[2].is_static() ? dst_shape_partial[2].get_length() : -1,
+                                          dst_shape_partial[3].get_length()};
+        res = std::make_shared<ov::op::v1::Reshape>(res, ov::op::v0::Constant::create(ov::element::i64, {4}, dst_shape),
+                                                    false);
     }
     return rename_outputs_with_suffix({res}, context.get_name());
 }

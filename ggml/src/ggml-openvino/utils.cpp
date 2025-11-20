@@ -129,26 +129,27 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
             ov_input_names_cache[cgraph] = ov_input_names;
             ov_output_names_cache[cgraph] = ov_output_names;
 
-            // Set output tensors (for NPU) and kvcache i/o tensors once and for all
-            for (size_t i = 0; i < ov_output_names.size(); i++) {
-                auto output_name = ov_output_names[i];
-                if (is_static || output_name.find("cache") == 0) {
-                    auto output_tensor = get_ov_output_tensor(ggml_decoder, ov_output_names[i]);
-                    infer_request->set_output_tensor(i, output_tensor);
-                }
-            }
-            for (size_t i = 0; i < ov_input_names.size(); i++) {
-                auto param_name = ov_input_names[i];
-                if (param_name.find("cache") == 0) {
-                    ov::Tensor input_tensor;
-                    if (is_static) {
-                        input_tensor = get_ov_input_tensor_static(ggml_decoder, param_name, 0, 0);
-                    } else {
-                        input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
-                    }
-                    infer_request->set_input_tensor(i, input_tensor);
-                }
-            }
+            // // Set output tensors (for NPU) and kvcache i/o tensors once and for all
+            // // Note: does not seem to improve perf on CPU/GPU, but it breaks llama-bench, so disabled it
+            // for (size_t i = 0; i < ov_output_names.size(); i++) {
+            //     auto output_name = ov_output_names[i];
+            //     if (is_static || output_name.find("cache") == 0) {
+            //         auto output_tensor = get_ov_output_tensor(ggml_decoder, ov_output_names[i]);
+            //         infer_request->set_output_tensor(i, output_tensor);
+            //     }
+            // }
+            // for (size_t i = 0; i < ov_input_names.size(); i++) {
+            //     auto param_name = ov_input_names[i];
+            //     if (param_name.find("cache") == 0) {
+            //         ov::Tensor input_tensor;
+            //         if (is_static) {
+            //             input_tensor = get_ov_input_tensor_static(ggml_decoder, param_name, 0, 0);
+            //         } else {
+            //             input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
+            //         }
+            //         infer_request->set_input_tensor(i, input_tensor);
+            //     }
+            // }
         }
     }
 
@@ -158,9 +159,6 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
     if (!is_static) {
         for (size_t i = 0; i < ov_input_names.size(); i++) {
             auto param_name = ov_input_names[i];
-            if (param_name.find("cache") == 0) {
-                continue;
-            }
             auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
             infer_request->set_input_tensor(i, input_tensor);
 
@@ -188,9 +186,6 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
         for (int j = 0; j < input_len; j++) {
             for (size_t i = 0; i < ov_input_names.size(); i++) {
                 auto param_name = ov_input_names[i];
-                if (param_name.find("cache") == 0) {
-                    continue;
-                }
                 auto input_tensor = get_ov_input_tensor_static(ggml_decoder, param_name, j, input_len);
                 infer_request->set_input_tensor(i, input_tensor);
 
