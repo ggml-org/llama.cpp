@@ -930,32 +930,36 @@ ggml_tensor * llm_graph_context::build_sparsek_mask(
     ggml_tensor * topk_idx = ggml_top_k(ctx0, scores2d, topk_safe); // [topk, cols_scores]
     cb(topk_idx, "sparsek_topk_idx", il);
 
-       // ---------------------------------------------------------------------
+        // ---------------------------------------------------------------------
     // 4) Build SparseK mask:
     //    Start from all large negative [n_kv_scores, cols_scores] then set
     //    selected rows to 0.
     // ---------------------------------------------------------------------
-    // Use a large finite negative instead of -INF to avoid NaNs in
-    // expressions like (x - x).
     const float sparsek_neg = -1e9f;
 
-    // zeros2d = 0
-    ggml_tensor * zeros2d = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32,
-                                               n_kv_scores, cols_scores);
-    zeros2d = ggml_set_zero(zeros2d);
+    // 4.a) Create 1D row filled with sparsek_neg
+    ggml_tensor * neg_row = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_kv_scores);
+    {
+        // We are in real compute context (no_alloc == false), so data is valid
+        float * data = (float *) neg_row->data;
+        GGML_ASSERT(data != nullptr);
+        for (int64_t i = 0; i < n_kv_scores; ++i) {
+            data[i] = sparsek_neg;
+        }
+    }
 
-    // neg2d = sparsek_neg + zeros2d  → constant matrix with sparsek_neg
-    ggml_tensor * neg2d = ggml_add(ctx0,
-                                   ggml_new_f32(ctx0, sparsek_neg),
-                                   zeros2d);
+    // 4.b) Broadcast to full [n_kv_scores, cols_scores]
+    ggml_tensor * neg2d = ggml_repeat(ctx0, neg_row, scores2d); // [n_kv_scores, cols_scores]
 
     ggml_tensor * rows3d = ggml_reshape_3d(ctx0, neg2d,
                                            n_kv_scores, 1, cols_scores);
 
     ggml_tensor * picked = ggml_get_rows(ctx0, rows3d, topk_idx); // [topk, 1, cols]
 
-    // Create true zeros: (sparsek_neg - sparsek_neg) = 0
-    ggml_tensor * zeros = ggml_sub(ctx0, picked, picked);
+    // 4.c) Build true zeros for selected rows (no INF-INF tricks)
+    ggml_tensor * zeros = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32,
+                                             topk_safe, 1, cols_scores);
+    ggml_set_zero(zeros);
 
     ggml_tensor * merged3d = ggml_set_rows(ctx0, rows3d, zeros, topk_idx);
 
