@@ -11,7 +11,7 @@ OutputVector translate_view(const NodeContext & context) {
 
     if (context.get_op_case() == 2) {
         auto dst_shape = context.get_output_shape(0).to_shape();
-        return rename_outputs_with_suffix({process_view_input(context, 0, dst_shape[1] * dst_shape[2])},
+        return rename_outputs_with_suffix({process_view_input(context, 0, dst_shape[2] * dst_shape[3])},
                                           context.get_name());
     }
     return {context.get_input(0)};

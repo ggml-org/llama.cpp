@@ -52,10 +52,10 @@ OutputVector translate_rope(const NodeContext & context) {
 
     if (op_case == 2) {
         // The input comes from a VIEW
-        int slice_len = output_shape[1] * output_shape[2];
+        int slice_len = output_shape[2] * output_shape[3];
         data_node = process_view_input(context, 0, slice_len).get_node_shared_ptr();
         auto data_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {3}, std::vector<int64_t>{-1, (int64_t) output_shape[1], (int64_t) output_shape[2]});
+            ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
         data_node = std::make_shared<ov::op::v1::Reshape>(data_node, data_shape, false);
     }
 
@@ -67,9 +67,10 @@ OutputVector translate_rope(const NodeContext & context) {
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
         auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-        auto end = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[2]});
-        auto even_slice = std::make_shared<ov::op::v8::Slice>(data_node, zero, end, two, two);
-        auto odd_slice = std::make_shared<ov::op::v8::Slice>(data_node, one, end, two, two);
+        auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
+        auto end = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[3]});
+        auto even_slice = std::make_shared<ov::op::v8::Slice>(data_node, zero, end, two, three);
+        auto odd_slice = std::make_shared<ov::op::v8::Slice>(data_node, one, end, two, three);
 
         Output<Node> first_half =
             std::make_shared<ov::op::v1::Subtract>(std::make_shared<ov::op::v1::Multiply>(even_slice, cos_theta_node),
@@ -79,14 +80,17 @@ OutputVector translate_rope(const NodeContext & context) {
                                               std::make_shared<ov::op::v1::Multiply>(odd_slice, cos_theta_node));
 
         first_half = std::make_shared<ov::op::v0::Unsqueeze>(first_half,
-                                                             ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
+                                                             ov::op::v0::Constant::create(ov::element::i64, {1}, {4}));
         second_half = std::make_shared<ov::op::v0::Unsqueeze>(second_half,
-                                                              ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
-        auto stack = std::make_shared<ov::op::v0::Concat>(OutputVector{first_half, second_half}, 3);
-        res = std::make_shared<ov::op::v1::Reshape>(stack, std::make_shared<ov::op::v0::ShapeOf>(data_node), false);
+                                                              ov::op::v0::Constant::create(ov::element::i64, {1}, {4}));
+        auto stack = std::make_shared<ov::op::v0::Concat>(OutputVector{first_half, second_half}, 4);
+
+        auto data_shape = ov::op::v0::Constant::create(
+            ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+        res = std::make_shared<ov::op::v1::Reshape>(stack, data_shape, false);
     } else if (mode == ROPE_TYPE_NEOX) {
         auto data_split = std::make_shared<ov::op::v1::Split>(
-            data_node, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {2}), 2);
+            data_node, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {3}), 2);
         Output<Node> slice_data_node_0 = data_split->outputs()[0];
         Output<Node> slice_data_node_1 = data_split->outputs()[1];
 
@@ -98,7 +102,7 @@ OutputVector translate_rope(const NodeContext & context) {
             std::make_shared<ov::op::v1::Multiply>(slice_data_node_0, sin_theta_node),
             std::make_shared<ov::op::v1::Multiply>(slice_data_node_1, cos_theta_node));
 
-        res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{first_half_node, second_half_node}, 2);
+        res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{first_half_node, second_half_node}, 3);
     }
 
     return rename_outputs_with_suffix({res}, context.get_name());

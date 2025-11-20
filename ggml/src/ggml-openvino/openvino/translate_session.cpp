@@ -72,15 +72,8 @@ ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
     return pairs;
 }
 
-void add_token_len(TensorMap & tensor_map) {
-    auto inp_tokens = tensor_map.at("inp_tokens").get_node_shared_ptr();
-    auto token_len = get_dimensions(inp_tokens, {2});
-    token_len->set_friendly_name("token_len");
-    tensor_map.insert({"token_len", token_len->output(0)});
-}
-
 void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
-    auto token_len = tensor_map.at("token_len").get_node_shared_ptr();
+    auto token_len_per_seq = tensor_map.at("token_len_per_seq").get_node_shared_ptr();
 
     auto create_sliced_mask = [&](const std::string & mask_name, const std::string & sliced_name, bool is_static) {
         if (tensor_map.find(mask_name) != tensor_map.end()) {
@@ -89,28 +82,10 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
             if (is_static) {
                 mask_sliced = mask;
             } else {
-                auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 0});
-                auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 1});
-                auto one_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-                auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-                auto two_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-                auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 2});
-
-                std::shared_ptr<ov::Node> kv_len;
-                {
-                    auto start = ov::op::v0::Constant::create(element::i64, Shape{3}, {0, 0, -1});
-                    auto stride = ov::op::v0::Constant::create(element::i64, Shape{3}, {1, 1, 1});
-                    auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
-                    kv_len = std::make_shared<ov::op::v1::StridedSlice>(
-                        inp_pos, start, start, stride, std::vector<int64_t>{0, 0, 0}, std::vector<int64_t>{1, 1, 1});
-                }
-                kv_len = std::make_shared<ov::op::v0::Squeeze>(
-                    kv_len, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
-                kv_len = std::make_shared<ov::op::v0::Convert>(kv_len, ov::element::i64);
-                kv_len = std::make_shared<ov::op::v1::Add>(kv_len, one_1d);
-                auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len, kv_len}, 0);
-
-                mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
+                auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+                auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+                auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+                mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, token_len_per_seq, one, two);
                 mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
                 mask_sliced->set_friendly_name(sliced_name);
             }
@@ -119,8 +94,7 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
     };
 
     create_sliced_mask("KQ_mask", "KQ_mask_sliced", ggml_model_decoder.is_static());
-    // swa is not working for the `kv_len` is not correct
-    // create_sliced_mask("KQ_mask_swa", "KQ_mask_swa_sliced", ggml_model_decoder.is_static());
+    create_sliced_mask("KQ_mask_swa", "KQ_mask_swa_sliced", ggml_model_decoder.is_static());
 }
 
 void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
@@ -143,7 +117,6 @@ void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) 
 
 // Create common patterns
 void preprocess(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
-    add_token_len(tensor_map);
     add_sliced_mask(tensor_map, ggml_model_decoder);
     add_rope_sin_cos(tensor_map, ggml_model_decoder);
 }

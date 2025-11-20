@@ -42,17 +42,11 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     if (context.has_input(mask_name)) {
         mask_sliced = context.get_input(mask_name);
     } else {
+        auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+        auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+        auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
         auto token_len = get_dimensions(q, {2});
-        auto kv_len = get_dimensions(k.get_node_shared_ptr(), {2});
-
-        auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 0});
-        auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 1});
-        auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-        auto two_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-        auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 2});
-
-        auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len, kv_len}, 0);
-        mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
+        mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, token_len, one, two);
     }
 
     if (mask_sliced.get_element_type() != ov::element::f16) {
@@ -63,27 +57,29 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         int64_t factor = num_heads / num_heads_kv;
         if (factor > 1) {
             ov::Output<ov::Node> kv_broadcast_shape, kv_unsqueezed, new_kv_shape;
-            auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {1});
+            auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {2});
             kv_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(kv, unsqueeze_axes);
 
-            kv_broadcast_shape =
-                ov::op::v0::Constant::create(ov::element::i64, {4}, {num_heads_kv, factor, (int64_t) 1, head_size});
-            new_kv_shape = ov::op::v0::Constant::create(ov::element::i64, {3}, {num_heads, (int64_t) -1, head_size});
+            kv_broadcast_shape = ov::op::v0::Constant::create(
+                ov::element::i64, {5}, {(int64_t) 1, num_heads_kv, factor, (int64_t) 1, head_size});
+            new_kv_shape =
+                ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 0, num_heads, (int64_t) -1, head_size});
 
             kv = std::make_shared<ov::op::v3::Broadcast>(kv_unsqueezed, kv_broadcast_shape,
                                                          ov::op::BroadcastType::BIDIRECTIONAL);
-            kv = std::make_shared<ov::op::v1::Reshape>(kv, new_kv_shape, false);
+            kv = std::make_shared<ov::op::v1::Reshape>(kv, new_kv_shape, true);
         }
         return kv;
     };
 
     auto q_shape = context.get_input_shape(0).to_shape();
     auto k_shape = context.get_input_shape(1).to_shape();
-    k = tile_kv(q_shape[0], k_shape[0], q_shape[2], k);
-    v = tile_kv(q_shape[0], k_shape[0], q_shape[2], v);
+    k = tile_kv(q_shape[1], k_shape[1], q_shape[3], k);
+    v = tile_kv(q_shape[1], k_shape[1], q_shape[3], v);
 
     auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(q, k, v, mask_sliced, scale_node, false);
-    res = std::make_shared<ov::op::v1::Transpose>(sdpa, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
+    res = std::make_shared<ov::op::v1::Transpose>(sdpa,
+                                                  ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
     res = std::make_shared<ov::op::v0::Convert>(res, ov::element::f32);
     return rename_outputs_with_suffix({res}, context.get_name());
 }

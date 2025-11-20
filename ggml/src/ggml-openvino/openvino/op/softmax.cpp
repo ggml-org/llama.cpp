@@ -23,6 +23,7 @@ namespace ggml {
 namespace op {
 
 OutputVector translate_soft_max(const NodeContext & context) {
+    // TODO code is outdated
     num_inputs_check(context, 1, 2);
 
     auto input_node = context.get_input(0).get_node_shared_ptr();

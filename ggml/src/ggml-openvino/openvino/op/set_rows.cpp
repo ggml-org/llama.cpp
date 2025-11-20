@@ -28,33 +28,28 @@ OutputVector translate_set_rows(const NodeContext & context) {
     num_inputs_check(context, 3, 3);
 
     auto data = context.get_input(0);
+    auto indices = context.get_input(1);
+    auto dst = context.get_input(2);
+
     data = std::make_shared<ov::op::v0::Convert>(data, context.get_output_type(0));
 
     auto dst_shape = context.get_output_shape(0).to_shape();
-    FRONT_END_OP_CONVERSION_CHECK(dst_shape[0] == 1, "Unsupported shape in SET_ROWS");
 
-    auto indices = context.get_input(1);
-    auto dst = context.get_input(context.get_output_name());
+    auto ind_squeezed =
+        std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {3}, {0, 1, 2}));
+    auto data_reshaped = std::make_shared<ov::op::v1::Reshape>(
+        data,
+        ov::op::v0::Constant::create(ov::element::i64, {4},
+                                     {(int64_t) 1, (int64_t) 1, (int64_t) -1, (int64_t) dst_shape[3]}),
+        false);
+    auto axes = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {2});
 
-    auto zero = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {0});
-    Output<Node> res;
-    if (context.is_static()) {
-        auto dst_reshaped = std::make_shared<ov::op::v1::Reshape>(
-            dst, ov::op::v0::Constant::create(ov::element::i64, {2}, {(int64_t) dst_shape[1], (int64_t) dst_shape[2]}),
-            false);
-        auto indices_reshaped =
-            std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
-        auto data_reshaped = std::make_shared<ov::op::v1::Reshape>(
-            data, ov::op::v0::Constant::create(ov::element::i64, {2}, {(int64_t) -1, (int64_t) dst_shape[2]}), false);
+    Output<Node> res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_reshaped, axes);
 
-        auto updated = std::make_shared<ov::op::v3::ScatterUpdate>(dst_reshaped, indices_reshaped, data_reshaped, zero);
-        res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(dst), false);
-    } else {
-        int64_t dim1 = dst.get_partial_shape()[1].get_length();
-        int64_t dim2 = dst.get_partial_shape()[2].get_length();
-        data = std::make_shared<ov::op::v1::Reshape>(
-            data, ov::op::v0::Constant::create(ov::element::i64, {3}, {(int64_t) -1, dim1, dim2}), false);
-        res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, 0);
+    if (auto dst_reshape = std::dynamic_pointer_cast<ov::op::v1::Reshape>(dst.get_node_shared_ptr())) {
+        // Fix the case of multiple sequences, reshape back to original shape [1, n_seq, ctx_per_seq, emb]
+        res = std::make_shared<ov::op::v1::Reshape>(
+            res, ov::op::v0::Constant::create(ov::element::i64, {4}, dst_reshape->get_input_shape(0)), false);
     }
     return rename_outputs_with_suffix({res}, context.get_name());
 }

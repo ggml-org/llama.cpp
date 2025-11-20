@@ -27,6 +27,7 @@ OutputVector translate_cont(const NodeContext & context) {
 
     if (op_case == 1) {
         // The input comes from a PERMUTE
+        throw std::runtime_error("Code of this case might be outdated");
         dst_shape[1] = -1;
         res = std::make_shared<ov::op::v1::Reshape>(
             context.get_input(0), ov::op::v0::Constant::create(ov::element::i64, {dst_shape.size()}, dst_shape), false);

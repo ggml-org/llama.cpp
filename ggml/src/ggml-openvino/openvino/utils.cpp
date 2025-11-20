@@ -77,12 +77,12 @@ ov::Output<ov::Node> rope_yarn_ramp_mix(int n_dims, const float corr_dims[2], fl
     int half_n_dims = n_dims / 2;
     std::vector<float> dim_ids_vec(half_n_dims);
     std::iota(dim_ids_vec.begin(), dim_ids_vec.end(), 0);
-    auto dim_ids = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, (size_t) half_n_dims}, dim_ids_vec);
-    auto corr_low = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1}, {corr_dims[0]});
-    auto corr_high = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1}, {corr_dims[1]});
-    auto denom =
-        std::make_shared<ov::op::v1::Maximum>(std::make_shared<ov::op::v1::Subtract>(corr_high, corr_low),
-                                              ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1}, {0.001f}));
+    auto dim_ids = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, (size_t) half_n_dims}, dim_ids_vec);
+    auto corr_low = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {corr_dims[0]});
+    auto corr_high = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {corr_dims[1]});
+    auto denom = std::make_shared<ov::op::v1::Maximum>(
+        std::make_shared<ov::op::v1::Subtract>(corr_high, corr_low),
+        ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {0.001f}));
     auto ramp_y =
         std::make_shared<ov::op::v1::Divide>(std::make_shared<ov::op::v1::Subtract>(dim_ids, corr_low), denom);
     auto ramp_clamped = std::make_shared<ov::op::v0::Clamp>(ramp_y, 0.0f, 1.0f);
@@ -116,7 +116,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
                                                            std::shared_ptr<ov::Node> rope_freqs_weight) {
     inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
     auto pos_perm =
-        std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{3}, std::vector<int64_t>{2, 1, 0});
+        std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{4}, std::vector<int64_t>{0, 3, 1, 2});
     inp_pos = std::make_shared<ov::op::v1::Transpose>(inp_pos, pos_perm);
 
     float freq_base;
@@ -146,7 +146,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
     }
 
     Output<Node> freq_factors =
-        std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, factor.size()}, factor);
+        std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, 1, factor.size()}, factor);
     if (rope_freqs_weight) {
         freq_factors = std::make_shared<ov::op::v1::Divide>(freq_factors, rope_freqs_weight);
     }
@@ -161,7 +161,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
         theta = theta_interp;
     } else {
         auto ramp_mix = rope_yarn_ramp_mix(n_dims, corr_dims, ext_factor);
-        auto one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1}, {1.0f});
+        auto one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {1.0f});
         auto one_minus_ramp = std::make_shared<ov::op::v1::Subtract>(one, ramp_mix);
 
         theta = std::make_shared<ov::op::v1::Add>(std::make_shared<ov::op::v1::Multiply>(theta_interp, one_minus_ramp),
@@ -183,19 +183,19 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
     // Only works for VIEW operations that slice at the lowest dimension
     // If the VIEW also reshape the result, `slice_len` should be provided
     auto input = context.get_input(input_index);
-    int32_t * op_params = context.get_input_op_params(input_index);
+    auto * op_params = (size_t *) context.get_input_op_params(input_index);
     auto src1_stride = context.get_input_stride(input_index);
 
-    int64_t split_addr = op_params[0] / src1_stride[2];
+    int64_t split_addr = op_params[0] / src1_stride[3];
     if (slice_len == 0) {
-        slice_len = context.get_input_shape(input_index)[2].get_length();
+        slice_len = context.get_input_shape(input_index)[3].get_length();
     }
     int64_t slice_end = split_addr + slice_len;
 
     auto begin = ov::op::v0::Constant::create(ov::element::i64, {1}, {split_addr});
     auto end = ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_end});
     auto stride = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-    auto axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+    auto axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
     auto sliced = std::make_shared<ov::op::v8::Slice>(input, begin, end, stride, axes);
     return sliced;
 }

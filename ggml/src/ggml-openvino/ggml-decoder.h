@@ -103,19 +103,19 @@ public:
 
     virtual const std::vector<std::string> & get_model_output_names() const override { return m_model_output_names; }
 
-    virtual int get_context_size() const override { return m_context_size; }
+    virtual int get_ctx_size() const { return m_ctx; }
 
-    virtual int get_context_size_swa() const override { return m_context_size_swa; }
+    virtual int get_ctx_swa_size() const { return m_ctx_swa; }
+
+    virtual int get_ctx_per_seq() const { return m_ctx_per_seq; }
+
+    virtual int get_ctx_per_seq_swa() const { return m_ctx_per_seq_swa; }
+
+    virtual int get_n_seq() const { return m_n_seq; }
 
     virtual int is_swa_layer(int layer) const override {
         return std::find(m_swa_layers.begin(), m_swa_layers.end(), layer) != m_swa_layers.end();
     }
-
-    virtual int get_num_heads() const override { return m_num_heads; }
-
-    virtual int get_num_heads_kv() const override { return m_num_heads_kv; }
-
-    virtual int get_head_size() const override { return m_head_size; }
 
     int get_past_kv_len() const { return m_past_kv_len; }
 
@@ -127,7 +127,7 @@ public:
 
     virtual bool is_static() const override { return m_is_static; }
 
-    ov::PartialShape get_graph_input_shape(const ggml_tensor * src) const;
+    ov::PartialShape get_graph_input_shape(const ggml_tensor * op, const ggml_tensor * input) const;
 
     static void dump_cgraph(const ggml_cgraph * cgraph, std::string & filename);
 
@@ -151,9 +151,10 @@ private:
     static std::vector<size_t> get_stride(const ggml_tensor * tensor);
     static ov::element::Type get_ov_type(const ggml_tensor * tensor);
 
-    // set context_size, num_heads, etc
     void set_llm_params();
     void validate_cgraph() const;
+
+    bool m_is_static = false;
 
     ggml_cgraph * m_cgraph = nullptr;
     ggml_tensor * m_node = nullptr;
@@ -171,17 +172,28 @@ private:
     std::map<std::string, std::shared_ptr<ov::Tensor>> m_model_extra_input_values;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::vector<std::string> m_model_output_names;
-    int m_context_size;
-    int m_context_size_swa;
+
+    // Fixed for a model
+    int m_ctx = -1;
+    int m_ctx_swa = -1;
+    int m_ctx_per_seq = -1;
+    int m_ctx_per_seq_swa = -1;
+    int m_n_seq = -1;
+    int m_n_heads = -1;
+    int m_n_heads_kv = -1;
+    int m_head_size = -1;
     std::vector<int> m_swa_layers;
-    int m_num_heads;
-    int m_num_heads_kv;
-    int m_head_size;
-    int m_past_kv_len;
-    int m_input_len;
-    int32_t * m_rope_params;
     std::vector<std::string> m_kv_names;
-    bool m_is_static = false;
+
+    // Changed per inference
+    int m_n_seq_active = -1;
+    int m_seq_active_start = -1;
+    int m_attention_size = -1;
+    int m_attention_size_swa = -1;
+    int m_input_len = -1;
+    int m_token_len_per_seq = -1;
+    int m_past_kv_len = -1;
+    int32_t * m_rope_params = nullptr;
 };
 
 void print_tensor_address_map(const ggml_cgraph * cgraph);

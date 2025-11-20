@@ -58,15 +58,11 @@ public:
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_weights() const = 0;
     virtual const std::vector<std::string>& get_model_output_names() const = 0;
 
-    virtual int get_num_heads() const = 0;
-    virtual int get_num_heads_kv() const = 0;
-    virtual int get_head_size() const = 0;
     virtual int32_t* get_rope_params() const = 0;
     virtual std::map<std::string, std::string> get_kv_param_res_names() const = 0;
 
     virtual bool is_static() const = 0;
-    virtual int get_context_size() const = 0;
-    virtual int get_context_size_swa() const = 0;
+
     virtual int is_swa_layer(int layer) const = 0;
 };
 

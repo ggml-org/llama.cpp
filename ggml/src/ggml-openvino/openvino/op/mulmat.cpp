@@ -53,6 +53,7 @@ OutputVector translate_mulmat(const NodeContext & context) {
     Output<Node> Z = A_batch_larger ? B : A;
     int64_t factor = A_batch_larger ? A_batch / B_batch : B_batch / A_batch;
     if (factor > 1) {
+        // TODO code is outdated
         auto A_batch_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{A_batch});
         auto B_batch_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{B_batch});
         auto factor_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{factor});

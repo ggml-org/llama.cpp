@@ -8,6 +8,7 @@
 #include <openvino/op/convert.hpp>
 #include <openvino/op/gather.hpp>
 #include <openvino/op/squeeze.hpp>
+#include <openvino/op/unsqueeze.hpp>
 
 namespace ov {
 namespace frontend {
@@ -28,11 +29,13 @@ OutputVector translate_get_rows(const NodeContext & context) {
         indices = process_view_input(context, 1);
     }
 
-    // data[b,x,y] ind[1,b,x'] test-backend-ops case
-    // data[x,y]   ind[1,1,x'] normal case
-    indices = std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
-    if (data.get_partial_shape().rank() == 3) {
+    // data[1,b,x,y] ind[1,1,b,x'] test-backend-ops case
+    // data[x,y] ind[1,1,1,x'] normal case
+    indices =
+        std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
+    if (data.get_partial_shape().rank() == 4) {
         auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
+        data = std::make_shared<ov::op::v0::Squeeze>(data, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
         res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 1);
     } else {
         auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
@@ -42,6 +45,7 @@ OutputVector translate_get_rows(const NodeContext & context) {
     if (res.get_element_type() != context.get_output_type(0)) {
         res = std::make_shared<ov::op::v0::Convert>(res, context.get_output_type(0));
     }
+    res = std::make_shared<ov::op::v0::Unsqueeze>(res, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

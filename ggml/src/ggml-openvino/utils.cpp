@@ -129,18 +129,24 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
             ov_input_names_cache[cgraph] = ov_input_names;
             ov_output_names_cache[cgraph] = ov_output_names;
 
-            // Set output tensors and kvcache address for NPU once and for all since the graph is static
-            if (is_static) {
-                for (size_t i = 0; i < ov_output_names.size(); i++) {
+            // Set output tensors (for NPU) and kvcache i/o tensors once and for all
+            for (size_t i = 0; i < ov_output_names.size(); i++) {
+                auto output_name = ov_output_names[i];
+                if (is_static || output_name.find("cache") == 0) {
                     auto output_tensor = get_ov_output_tensor(ggml_decoder, ov_output_names[i]);
                     infer_request->set_output_tensor(i, output_tensor);
                 }
-                for (size_t i = 0; i < ov_input_names.size(); i++) {
-                    auto param_name = ov_input_names[i];
-                    if (param_name.find("cache_k") == 0 || param_name.find("cache_v") == 0) {
-                        auto input_tensor = get_ov_input_tensor_static(ggml_decoder, param_name, 0, 0);
-                        infer_request->set_input_tensor(i, input_tensor);
+            }
+            for (size_t i = 0; i < ov_input_names.size(); i++) {
+                auto param_name = ov_input_names[i];
+                if (param_name.find("cache") == 0) {
+                    ov::Tensor input_tensor;
+                    if (is_static) {
+                        input_tensor = get_ov_input_tensor_static(ggml_decoder, param_name, 0, 0);
+                    } else {
+                        input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
                     }
+                    infer_request->set_input_tensor(i, input_tensor);
                 }
             }
         }
@@ -152,6 +158,9 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
     if (!is_static) {
         for (size_t i = 0; i < ov_input_names.size(); i++) {
             auto param_name = ov_input_names[i];
+            if (param_name.find("cache") == 0) {
+                continue;
+            }
             auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
             infer_request->set_input_tensor(i, input_tensor);
 
@@ -179,7 +188,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
         for (int j = 0; j < input_len; j++) {
             for (size_t i = 0; i < ov_input_names.size(); i++) {
                 auto param_name = ov_input_names[i];
-                if (param_name.find("cache_k") == 0 || param_name.find("cache_v") == 0) {
+                if (param_name.find("cache") == 0) {
                     continue;
                 }
                 auto input_tensor = get_ov_input_tensor_static(ggml_decoder, param_name, j, input_len);
@@ -306,7 +315,7 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
     ov::Shape input_shape;
     if (ggml_tensor->op == GGML_OP_VIEW) {
         // This case is added to make test-backend-ops work
-        input_shape = ggml_decoder->get_graph_input_shape(ggml_tensor->view_src).to_shape();
+        input_shape = ggml_decoder->get_graph_input_shape(ggml_tensor, ggml_tensor->view_src).to_shape();
     } else {
         input_shape = ggml_decoder->get_input_shape(name).to_shape();
     }
@@ -319,13 +328,6 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
     ov::Tensor input_tensor;
     if (ggml_decoder->get_model_extra_inputs().find(param_name) != ggml_decoder->get_model_extra_inputs().end()) {
         input_tensor = *ggml_decoder->get_model_extra_input_values().at(param_name);
-
-    } else if (param_name.find("cache_k") == 0 || param_name.find("cache_v") == 0) {
-        void * input_data = ggml_decoder->get_input_ggml_tensor(param_name)->data;
-        ov::Shape input_shape = {(size_t) ggml_decoder->get_past_kv_len(), (size_t) ggml_decoder->get_num_heads_kv(),
-                                 (size_t) ggml_decoder->get_head_size()};
-        input_tensor = ov::Tensor(ggml_decoder->get_input_type(param_name), input_shape, input_data);
-
     } else {
         input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
     }
@@ -339,15 +341,8 @@ ov::Tensor get_ov_input_tensor_static(std::shared_ptr<GgmlOvDecoder> ggml_decode
     const auto * ggml_tensor = ggml_decoder->get_input_ggml_tensor(param_name);
     const auto * op = ggml_decoder->get_tensor_used_op(ggml_tensor);
 
-    if (param_name.find("cache_k") == 0 || param_name.find("cache_v") == 0) {
-        void * input_data = ggml_decoder->get_input_ggml_tensor(param_name)->data;
-        ov::Shape input_shape = {(size_t) ggml_decoder->get_context_size(), (size_t) ggml_decoder->get_num_heads_kv(),
-                                 (size_t) ggml_decoder->get_head_size()};
-        return ov::Tensor(ggml_decoder->get_input_type(param_name), input_shape, input_data);
-    }
-
     if (param_name == "inp_pos" || param_name == "inp_tokens" || op->op == GGML_OP_SET_ROWS) {
-        ov::Shape input_shape = {1, 1, 1};
+        ov::Shape input_shape = {1, 1, 1, 1};
         ov::Tensor input_tensor(ggml_decoder->get_input_type(param_name), input_shape);
         // copy the j-th value from ggml_tensor
         size_t element_size = ggml_type_size(ggml_tensor->type);
@@ -357,7 +352,7 @@ ov::Tensor get_ov_input_tensor_static(std::shared_ptr<GgmlOvDecoder> ggml_decode
     }
 
     if (param_name == "inp_out_ids") {
-        ov::Shape input_shape = {1, 1, 1};
+        ov::Shape input_shape = {1, 1, 1, 1};
         ov::Tensor input_tensor(ggml_decoder->get_input_type(param_name), input_shape);
         if (ggml_tensor->ne[0] == 0) {
             *input_tensor.data<int32_t>() = 0;
@@ -374,10 +369,10 @@ ov::Tensor get_ov_input_tensor_static(std::shared_ptr<GgmlOvDecoder> ggml_decode
     }
 
     if (param_name.find("KQ_mask") == 0) {
-        size_t context_size = ggml_decoder->get_context_size();
+        size_t context_size = ggml_decoder->get_ctx_size();
         const auto * input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
         std::vector<float> padded_data = pad_input<float>(input_tensor_ggml, input_len, context_size, -INFINITY);
-        ov::Tensor input_tensor(ov::element::f32, ov::Shape{1, 1, context_size});
+        ov::Tensor input_tensor(ov::element::f32, ov::Shape{1, 1, 1, context_size});
         // copy the j-th row of padded_data
         auto * data_ptr = input_tensor.data<float>();
         std::copy(padded_data.begin() + j * context_size, padded_data.begin() + (j + 1) * context_size, data_ptr);
@@ -391,20 +386,12 @@ ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, con
     auto * ggml_tensor = ggml_decoder->get_output_ggml_tensor(result_name);
     auto output_type = ggml_decoder->get_output_type(result_name);
     ov::Shape output_shape;
-    if (result_name.find("cache") == std::string::npos) {
-        output_shape = ggml_decoder->get_output_shape(result_name).to_shape();
-        if (ggml_decoder->is_static() && result_name == "result_output") {
-            output_shape[1] = 1;
-        }
-    } else {
-        size_t total_token_len = ggml_decoder->get_past_kv_len() + ggml_decoder->get_input_len();
-        size_t num_heads_kv = ggml_decoder->get_num_heads_kv();
-        size_t head_size = ggml_decoder->get_head_size();
-        if (ggml_decoder->is_static()) {
-            total_token_len = ggml_decoder->get_context_size();
-        }
-        output_shape = ov::Shape{total_token_len, num_heads_kv, head_size};
+    output_shape = ggml_decoder->get_output_shape(result_name).to_shape();
+
+    if (ggml_decoder->is_static() && result_name == "result_output") {
+        output_shape[1] = 1;
     }
+
     ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
     return output_tensor;
 }
