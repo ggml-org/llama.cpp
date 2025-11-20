@@ -47,7 +47,6 @@ static inline void decode_q4_Kx8_scales_mins(const uint8_t * scales_in,
     memcpy(out_scales, scales_u32, 8);
 }
 
-
 void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
@@ -659,7 +658,6 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
 #endif  // #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
     ggml_gemv_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
-
 
 void ggml_gemm_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
@@ -2077,7 +2075,6 @@ void ggml_gemm_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
     ggml_gemm_iq4_nl_4x4_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
 
-
 void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                              float * GGML_RESTRICT      s,
                              size_t                     bs,
@@ -2293,4 +2290,3 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
 #endif
     ggml_gemm_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
-
