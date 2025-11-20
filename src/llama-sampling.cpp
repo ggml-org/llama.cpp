@@ -472,9 +472,6 @@ static void llama_sampler_chain_reset(struct llama_sampler * smpl) {
     for (auto * smpl : chain->samplers) {
         llama_sampler_reset(smpl);
     }
-
-    chain->t_sample_us = 0;
-    chain->n_sample    = 0;
 }
 
 static struct llama_sampler * llama_sampler_chain_clone(const struct llama_sampler * smpl) {
@@ -2680,5 +2677,6 @@ void llama_perf_sampler_reset(struct llama_sampler * chain) {
 
     auto * ctx = (struct llama_sampler_chain *) chain->ctx;
 
-    ctx->t_sample_us = ctx->n_sample = 0;
+    ctx->t_sample_us = 0;
+    ctx->n_sample    = 0;
 }

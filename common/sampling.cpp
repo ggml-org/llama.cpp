@@ -114,8 +114,6 @@ struct common_sampler {
     llama_token_data_array cur_p;
 
     void reset() {
-        t_total_us = 0;
-
         prev.clear();
 
         llama_sampler_reset(grmr);
@@ -378,7 +376,7 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
         LOG_INF("%s:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
                 __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
         LOG_INF("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
-        LOG_INF("%s: unaccounted time = %10.2f ms / %5.1f %%      (total - sampling - peval - eval) / (total)\n", __func__, t_unacc_ms, t_unacc_pc);
+        LOG_INF("%s: unaccounted time = %10.2f ms / %5.1f %%      (total - sampling - prompt eval - eval) / (total)\n", __func__, t_unacc_ms, t_unacc_pc);
         LOG_INF("%s:    graphs reused = %10d\n", __func__, data.n_reused);
 
         llama_memory_breakdown_print(ctx);
