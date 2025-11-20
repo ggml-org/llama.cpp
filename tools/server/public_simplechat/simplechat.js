@@ -78,16 +78,16 @@ class NSChatMessage {
      * @param {Array<NSToolCall>|undefined} tool_calls
      * @param {string|undefined} tool_call_id - toolcall response - the tool / function call id
      * @param {string|undefined} name - toolcall response - the tool / function call name
-     * @param {string|undefined} image_url - a image url for vision models
+     * @param {Array<string>|undefined} image_urls - a image url for vision models
      */
-    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined, tool_call_id=undefined, name=undefined, image_url=undefined) {
+    constructor(role = "", content=undefined, reasoning_content=undefined, tool_calls=undefined, tool_call_id=undefined, name=undefined, image_urls=undefined) {
         this.role = role;
         this.content = content;
         this.reasoning_content = reasoning_content
         this.tool_calls = structuredClone(tool_calls)
         this.tool_call_id = tool_call_id
         this.name = name
-        this.image_url = image_url
+        this.image_urls = structuredClone(image_urls)
     }
 
     /**
@@ -287,7 +287,7 @@ class ChatMessageEx {
      * @param {ChatMessageEx} old
      */
     static newFrom(old) {
-        return new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.ns.tool_call_id, old.ns.name, old.ns.image_url), old.trimmedContent)
+        return new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.ns.tool_call_id, old.ns.name, old.ns.image_urls), old.trimmedContent)
     }
 
     clear() {
@@ -533,7 +533,7 @@ class SimpleChat {
                 this.iLastSys = ods.iLastSys;
                 this.xchat = [];
                 for (const cur of ods.xchat) {
-                    this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.ns.tool_call_id, cur.ns.name, cur.ns.image_url), cur.trimmedContent))
+                    this.xchat.push(new ChatMessageEx(new NSChatMessage(cur.ns.role, cur.ns.content, cur.ns.reasoning_content, cur.ns.tool_calls, cur.ns.tool_call_id, cur.ns.name, cur.ns.image_urls), cur.trimmedContent))
                 }
                 cb(true, status, related)
             } else {
@@ -610,7 +610,7 @@ class SimpleChat {
             if (tmsg.ns.getReasoningContent() === "") {
                 tmsg.ns_delete("reasoning_content")
             }
-            if (tmsg.ns.image_url) {
+            if (tmsg.ns.image_urls) {
                 // Has I need to know if really there or if undefined, so direct access and not through getContent helper.
                 let tContent = tmsg.ns.content
                 /** @type{NSMixedContent} */
@@ -618,8 +618,10 @@ class SimpleChat {
                 if (tContent) {
                     tMixed.push({"type": "text", "text": tContent})
                 }
-                tMixed.push({"type": "image_url", "image_url": {"url": tmsg.ns.image_url}})
-                //tMixed.push({"type": "image", "image": tmsg.ns.image_url})
+                for (const imgUrl of tmsg.ns.image_urls) {
+                    tMixed.push({"type": "image_url", "image_url": {"url": imgUrl}})
+                    //tMixed.push({"type": "image", "image": imgUrl})
+                }
                 // @ts-ignore
                 tmsg.ns.content = tMixed
                 tmsg.ns_delete("image_url")
@@ -1175,7 +1177,6 @@ class MultiChatUI {
     dataurl_plus_add(dataUrl) {
         if (typeof(dataUrl) == 'string') {
             this.me.dataURLs.push(dataUrl)
-            this.me.dataURLs[0] = dataUrl
             let elImg = document.createElement('img')
             elImg.src = dataUrl
             this.elDivUserInImgs.appendChild(elImg)
@@ -1324,11 +1325,13 @@ class MultiChatUI {
             }
         }
         // Handle Image
-        if (msg.ns.image_url) {
-            let img = document.createElement('img')
-            img.classList.add('chat-message-img')
-            img.src = msg.ns.image_url
-            secContents?.append(img)
+        if (msg.ns.image_urls) {
+            for (const imgUrl of msg.ns.image_urls) {
+                let img = document.createElement('img')
+                img.classList.add('chat-message-img')
+                img.src = imgUrl
+                secContents?.append(img)
+            }
         }
         // Handle tool call edit/trigger ui, if reqd
         let bTC = false
@@ -1671,11 +1674,11 @@ class MultiChatUI {
                 return;
             }
             try {
-                let image = undefined
+                let images = undefined
                 if (this.me.dataURLs.length > 0) {
-                    image = this.dataurl_get(0)
+                    images = /** @type{Array<string>} */(this.me.dataURLs)
                 }
-                this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, image)))
+                this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(new NSChatMessage(Roles.User, content, undefined, undefined, undefined, undefined, images)))
             } catch (err) {
                 throw new Error("HandleUserSubmit:ChatAddShow failure", {cause: err})
             } finally {
