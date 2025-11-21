@@ -475,6 +475,8 @@ function usage_note(sRecentUserMsgCnt) {
 }
 
 
+/** @typedef {{ chatPropsStream: boolean, toolsEnabled: boolean}} SCHandshakeProps*/
+
 /** @typedef {ChatMessageEx[]} ChatMessages */
 
 /** @typedef {{iLastSys: number, xchat: ChatMessages}} SimpleChatODS */
@@ -495,6 +497,11 @@ class SimpleChat {
         this.iLastSys = -1;
         this.latestResponse = new ChatMessageEx();
         this.me = me;
+        /** @type {SCHandshakeProps} */
+        this.handshakeProps = {
+            chatPropsStream: false,
+            toolsEnabled: true,
+        }
     }
 
     clear() {
@@ -775,10 +782,10 @@ class SimpleChat {
         for(let k in this.me.apiRequestOptions) {
             obj[k] = this.me.apiRequestOptions[k];
         }
-        if (this.me.chatProps.stream) {
+        if (this.handshakeProps.chatPropsStream) {
             obj["stream"] = true;
         }
-        if (this.me.tools.enabled) {
+        if (this.handshakeProps.toolsEnabled) {
             obj["tools"] = this.me.toolsMgr.meta();
         }
         return JSON.stringify(obj);
@@ -935,8 +942,6 @@ class SimpleChat {
     /**
      * Handle the response from the server be it in oneshot or multipart/stream mode.
      * Also take care of the optional garbage trimming.
-     * TODO: Need to handle tool calling and related flow, including how to show
-     * the assistant's request for tool calling and the response from tool.
      * @param {Response} resp
      * @param {string} apiEP
      * @param {HTMLDivElement} elDiv
@@ -944,7 +949,7 @@ class SimpleChat {
     async handle_response(resp, apiEP, elDiv) {
         let theResp = null;
         try {
-            if (this.me.chatProps.stream) {
+            if (this.handshakeProps.chatPropsStream) {
                 theResp = await this.handle_response_multipart(resp, apiEP, elDiv);
                 this.latestResponse.clear();
             } else {
@@ -973,9 +978,10 @@ class SimpleChat {
      * Handle the chat handshake with the ai server
      * @param {string} baseURL
      * @param {string} apiEP
+     * @param {SCHandshakeProps} hsProps
      * @param {HTMLDivElement} elDivChat - used to show chat response as it is being generated/recieved in streaming mode
      */
-    async handle_chat_hs(baseURL, apiEP, elDivChat) {
+    async handle_chat_hs(baseURL, apiEP, hsProps, elDivChat) {
         class ChatHSError extends Error {
             constructor(/** @type {string} */message) {
                 super(message);
@@ -983,6 +989,8 @@ class SimpleChat {
             }
         }
 
+        this.handshakeProps.chatPropsStream = hsProps.chatPropsStream
+        this.handshakeProps.toolsEnabled = hsProps.toolsEnabled
         let theUrl = ApiEP.Url(baseURL, apiEP);
         let theBody = this.request_jsonstr(apiEP);
         console.debug(`DBUG:SimpleChat:${this.chatId}:HandleChatHS:${theUrl}:ReqBody:${theBody}`);
@@ -1742,7 +1750,7 @@ class MultiChatUI {
         this.elInUser.disabled = true;
 
         try {
-            let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, this.elDivChat)
+            let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, { chatPropsStream: this.me.chatProps.stream, toolsEnabled: this.me.tools.enabled }, this.elDivChat)
             if (chatId == this.curChatId) {
                 this.chat_uirefresh(chatId);
                 if ((theResp.trimmedContent) && (theResp.trimmedContent.length > 0)) {
@@ -1910,7 +1918,7 @@ export class Me {
              * Control how many milliseconds to wait for tool call to respond, before generating a timed out
              * error response and giving control back to end user.
              */
-            toolCallResponseTimeoutMS: 20000,
+            toolCallResponseTimeoutMS: 200*1000,
             /**
              * Control how many seconds to wait before auto triggering tool call or its response submission.
              * A value of 0 is treated as auto triggering disable.
