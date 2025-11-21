@@ -149,10 +149,6 @@ struct llm_build_dream : public llm_graph_context {
     llm_build_dream(const llama_model & model, const llm_graph_params & params);
 };
 
-struct llm_build_rnd1 : public llm_graph_context {
-    llm_build_rnd1(const llama_model & model, const llm_graph_params & params);
-};
-
 struct llm_build_ernie4_5 : public llm_graph_context {
     llm_build_ernie4_5(const llama_model & model, const llm_graph_params & params);
 };
@@ -433,6 +429,10 @@ struct llm_build_qwen : public llm_graph_context {
 
 struct llm_build_refact : public llm_graph_context {
     llm_build_refact(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_rnd1 : public llm_graph_context {
+    llm_build_rnd1(const llama_model & model, const llm_graph_params & params);
 };
 
 struct llm_build_rwkv6 : public llm_build_rwkv6_base {
