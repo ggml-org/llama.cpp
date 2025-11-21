@@ -4182,6 +4182,7 @@ class Qwen3MoeModel(Qwen2MoeModel):
 
         super().set_vocab()
 
+
 @ModelBase.register("RND1")
 class RND1Model(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.RND1
@@ -4195,6 +4196,7 @@ class RND1Model(Qwen2MoeModel):
 
         if (mask_token_id := self.hparams.get("mask_token_id")) is not None:
             self.gguf_writer.add_mask_token_id(mask_token_id)
+
 
 @ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration")
 class Qwen3VLVisionModel(MmprojModel):
