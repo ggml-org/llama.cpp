@@ -77,6 +77,7 @@ enum oaicompat_type {
     OAICOMPAT_TYPE_CHAT,
     OAICOMPAT_TYPE_COMPLETION,
     OAICOMPAT_TYPE_EMBEDDING,
+    OAICOMPAT_TYPE_ANTHROPIC,
 };
 
 // https://community.openai.com/t/openai-chat-list-of-error-codes-and-types/357791/11
@@ -823,6 +824,8 @@ struct server_task_result_cmpl_final : server_task_result {
                 return to_json_oaicompat();
             case OAICOMPAT_TYPE_CHAT:
                 return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat();
+            case OAICOMPAT_TYPE_ANTHROPIC:
+                return stream ? to_json_anthropic_stream() : to_json_anthropic();
             default:
                 GGML_ASSERT(false && "Invalid oaicompat_type");
         }
@@ -1018,6 +1021,159 @@ struct server_task_result_cmpl_final : server_task_result {
 
         return deltas;
     }
+
+    json to_json_anthropic() {
+        std::string stop_reason = "max_tokens";
+        if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+            stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+        }
+
+        json content_blocks = json::array();
+
+        common_chat_msg msg;
+        if (!oaicompat_msg.empty()) {
+            msg = oaicompat_msg;
+        } else {
+            msg.role = "assistant";
+            msg.content = content;
+        }
+
+        if (!msg.content.empty()) {
+            content_blocks.push_back({
+                {"type", "text"},
+                {"text", msg.content}
+            });
+        }
+
+        for (const auto & tool_call : msg.tool_calls) {
+            json tool_use_block = {
+                {"type", "tool_use"},
+                {"id", tool_call.id},
+                {"name", tool_call.name}
+            };
+
+            try {
+                tool_use_block["input"] = json::parse(tool_call.arguments);
+            } catch (const std::exception &) {
+                tool_use_block["input"] = json::object();
+            }
+
+            content_blocks.push_back(tool_use_block);
+        }
+
+        json res = {
+            {"id", oaicompat_cmpl_id},
+            {"type", "message"},
+            {"role", "assistant"},
+            {"content", content_blocks},
+            {"model", oaicompat_model},
+            {"stop_reason", stop_reason},
+            {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
+            {"usage", {
+                {"input_tokens", n_prompt_tokens},
+                {"output_tokens", n_decoded}
+            }}
+        };
+
+        return res;
+    }
+
+    json to_json_anthropic_stream() {
+        json events = json::array();
+
+        std::string stop_reason = "max_tokens";
+        if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+            stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+        }
+
+        bool has_text = !oaicompat_msg.content.empty();
+        size_t num_tool_calls = oaicompat_msg.tool_calls.size();
+
+        for (const auto & diff : oaicompat_msg_diffs) {
+            if (!diff.content_delta.empty()) {
+                json delta_event = json::object();
+                delta_event["event"] = "content_block_delta";
+                delta_event["data"] = json::object();
+                delta_event["data"]["type"] = "content_block_delta";
+                delta_event["data"]["index"] = 0;
+                delta_event["data"]["delta"] = json::object();
+                delta_event["data"]["delta"]["type"] = "text_delta";
+                delta_event["data"]["delta"]["text"] = diff.content_delta;
+                events.push_back(delta_event);
+            }
+
+            if (diff.tool_call_index != std::string::npos && !diff.tool_call_delta.name.empty()) {
+                // tool calls come after text content
+                size_t content_block_index = (has_text ? 1 : 0) + diff.tool_call_index;
+
+                json tool_input = json::object();
+                try {
+                    tool_input = json::parse(diff.tool_call_delta.arguments);
+                } catch (const std::exception &) {
+                    tool_input = json::object();
+                }
+
+                json tool_delta_event = json::object();
+                tool_delta_event["event"] = "content_block_delta";
+                tool_delta_event["data"] = json::object();
+                tool_delta_event["data"]["type"] = "content_block_delta";
+                tool_delta_event["data"]["index"] = content_block_index;
+                tool_delta_event["data"]["delta"] = json::object();
+                tool_delta_event["data"]["delta"]["type"] = "tool_use";
+                tool_delta_event["data"]["delta"]["id"] = diff.tool_call_delta.id;
+                tool_delta_event["data"]["delta"]["name"] = diff.tool_call_delta.name;
+                tool_delta_event["data"]["delta"]["input"] = tool_input;
+                events.push_back(tool_delta_event);
+            }
+        }
+
+        if (has_text) {
+            json text_stop_event = json::object();
+            text_stop_event["event"] = "content_block_stop";
+            text_stop_event["data"] = json::object();
+            text_stop_event["data"]["type"] = "content_block_stop";
+            text_stop_event["data"]["index"] = 0;
+            events.push_back(text_stop_event);
+        }
+
+        for (size_t i = 0; i < num_tool_calls; i++) {
+            size_t content_block_index = (has_text ? 1 : 0) + i;
+            json tool_stop_event = json::object();
+            tool_stop_event["event"] = "content_block_stop";
+            tool_stop_event["data"] = json::object();
+            tool_stop_event["data"]["type"] = "content_block_stop";
+            tool_stop_event["data"]["index"] = content_block_index;
+            events.push_back(tool_stop_event);
+        }
+
+        json message_delta_event = json::object();
+        message_delta_event["event"] = "message_delta";
+        message_delta_event["data"] = json::object();
+        message_delta_event["data"]["type"] = "message_delta";
+        message_delta_event["data"]["delta"] = json::object();
+        message_delta_event["data"]["delta"]["stop_reason"] = stop_reason;
+        message_delta_event["data"]["delta"]["stop_sequence"] = stopping_word.empty() ? nullptr : json(stopping_word);
+        message_delta_event["data"]["usage"] = json::object();
+        message_delta_event["data"]["usage"]["output_tokens"] = n_decoded;
+        events.push_back(message_delta_event);
+
+        json message_stop_event = json::object();
+        message_stop_event["event"] = "message_stop";
+        message_stop_event["data"] = json::object();
+        message_stop_event["data"]["type"] = "message_stop";
+        events.push_back(message_stop_event);
+
+        // extra fields for debugging purposes
+        if (verbose && !events.empty()) {
+            events.front()["data"]["__verbose"] = to_json_non_oaicompat();
+        }
+        // Don't add timings for Anthropic API (breaks spec compliance)
+        if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && timings.prompt_n >= 0 && !events.empty()) {
+            events.back()["data"]["timings"] = timings.to_json();
+        }
+
+        return events;
+    }
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
@@ -1058,6 +1214,8 @@ struct server_task_result_cmpl_partial : server_task_result {
                 return to_json_oaicompat();
             case OAICOMPAT_TYPE_CHAT:
                 return to_json_oaicompat_chat();
+            case OAICOMPAT_TYPE_ANTHROPIC:
+                return to_json_anthropic();
             default:
                 GGML_ASSERT(false && "Invalid oaicompat_type");
         }
@@ -1178,6 +1336,107 @@ struct server_task_result_cmpl_partial : server_task_result {
         }
 
         return deltas;
+    }
+
+    json to_json_anthropic() {
+        json events = json::array();
+        bool first = n_decoded == 1;
+        static bool text_block_started = false;
+
+        if (first) {
+            text_block_started = false;
+
+            json message_start_event = json::object();
+            message_start_event["event"] = "message_start";
+            message_start_event["data"] = json::object();
+            message_start_event["data"]["type"] = "message_start";
+            message_start_event["data"]["message"] = json::object();
+            message_start_event["data"]["message"]["id"] = oaicompat_cmpl_id;
+            message_start_event["data"]["message"]["type"] = "message";
+            message_start_event["data"]["message"]["role"] = "assistant";
+            message_start_event["data"]["message"]["content"] = json::array();
+            message_start_event["data"]["message"]["model"] = oaicompat_model;
+            message_start_event["data"]["message"]["stop_reason"] = nullptr;
+            message_start_event["data"]["message"]["stop_sequence"] = nullptr;
+            message_start_event["data"]["message"]["usage"] = json::object();
+            message_start_event["data"]["message"]["usage"]["input_tokens"] = n_prompt_tokens;
+            message_start_event["data"]["message"]["usage"]["output_tokens"] = 0;
+            events.push_back(message_start_event);
+        }
+
+        for (const auto & diff : oaicompat_msg_diffs) {
+            if (!diff.content_delta.empty()) {
+                if (!text_block_started) {
+                    json block_start_event = json::object();
+                    block_start_event["event"] = "content_block_start";
+                    block_start_event["data"] = json::object();
+                    block_start_event["data"]["type"] = "content_block_start";
+                    block_start_event["data"]["index"] = 0;
+                    block_start_event["data"]["content_block"] = json::object();
+                    block_start_event["data"]["content_block"]["type"] = "text";
+                    block_start_event["data"]["content_block"]["text"] = "";
+                    events.push_back(block_start_event);
+                    text_block_started = true;
+                }
+
+                json delta_event = json::object();
+                delta_event["event"] = "content_block_delta";
+                delta_event["data"] = json::object();
+                delta_event["data"]["type"] = "content_block_delta";
+                delta_event["data"]["index"] = 0;
+                delta_event["data"]["delta"] = json::object();
+                delta_event["data"]["delta"]["type"] = "text_delta";
+                delta_event["data"]["delta"]["text"] = diff.content_delta;
+                events.push_back(delta_event);
+            }
+
+            if (diff.tool_call_index != std::string::npos && !diff.tool_call_delta.name.empty()) {
+                // tool calls come after text content
+                size_t content_block_index = (text_block_started ? 1 : 0) + diff.tool_call_index;
+
+                json tool_start_event = json::object();
+                tool_start_event["event"] = "content_block_start";
+                tool_start_event["data"] = json::object();
+                tool_start_event["data"]["type"] = "content_block_start";
+                tool_start_event["data"]["index"] = content_block_index;
+                tool_start_event["data"]["content_block"] = json::object();
+                tool_start_event["data"]["content_block"]["type"] = "tool_use";
+                tool_start_event["data"]["content_block"]["id"] = diff.tool_call_delta.id;
+                tool_start_event["data"]["content_block"]["name"] = diff.tool_call_delta.name;
+                events.push_back(tool_start_event);
+
+                json tool_delta_event = json::object();
+                tool_delta_event["event"] = "content_block_delta";
+                tool_delta_event["data"] = json::object();
+                tool_delta_event["data"]["type"] = "content_block_delta";
+                tool_delta_event["data"]["index"] = content_block_index;
+                tool_delta_event["data"]["delta"] = json::object();
+                tool_delta_event["data"]["delta"]["type"] = "input_json_delta";
+                tool_delta_event["data"]["delta"]["partial_json"] = diff.tool_call_delta.arguments;
+                events.push_back(tool_delta_event);
+
+                json tool_stop_event = json::object();
+                tool_stop_event["event"] = "content_block_stop";
+                tool_stop_event["data"] = json::object();
+                tool_stop_event["data"]["type"] = "content_block_stop";
+                tool_stop_event["data"]["index"] = content_block_index;
+                events.push_back(tool_stop_event);
+            }
+        }
+
+        if (verbose && !events.empty() && first) {
+            events.front()["data"]["__verbose"] = to_json_non_oaicompat();
+        }
+
+        if (timings.prompt_n >= 0 && !events.empty()) {
+            events.back()["data"]["timings"] = timings.to_json();
+        }
+
+        if (is_progress && !events.empty()) {
+            events.back()["data"]["prompt_progress"] = progress.to_json();
+        }
+
+        return events;
     }
 };
 
@@ -4842,6 +5101,39 @@ public:
             OAICOMPAT_TYPE_CHAT);
     };
 
+    server_http_context::handler_t post_anthropic_messages = [this](const server_http_req & req) {
+        std::vector<raw_buffer> files;
+        json body = json::parse(req.body);
+        json body_parsed = anthropic_messages_params_parse(
+            body,
+            ctx_server.oai_parser_opt,
+            files);
+        return handle_completions_impl(
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            req.should_stop,
+            OAICOMPAT_TYPE_ANTHROPIC);
+    };
+
+    server_http_context::handler_t post_anthropic_count_tokens = [this](const server_http_req & req) {
+        auto res = std::make_unique<server_res_generator>(ctx_server);
+        std::vector<raw_buffer> files;
+        json body = json::parse(req.body);
+
+        // Parse the Anthropic request (max_tokens is not required for count_tokens)
+        json body_parsed = anthropic_messages_params_parse(
+            body,
+            ctx_server.oai_parser_opt,
+            files);
+
+        json prompt = body_parsed.at("prompt");
+        llama_tokens tokens = tokenize_mixed(ctx_server.vocab, prompt, true, true);
+
+        res->ok({{"input_tokens", static_cast<int>(tokens.size())}});
+        return res;
+    };
+
     // same with handle_chat_completions, but without inference part
     server_http_context::handler_t post_apply_template = [this](const server_http_req & req) {
         auto res = std::make_unique<server_res_generator>(ctx_server);
@@ -5205,7 +5497,11 @@ private:
             }
 
             // next responses are streamed
-            res->data = format_sse(first_result->to_json()); // to be sent immediately
+            if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                res->data = format_anthropic_sse(first_result->to_json());
+            } else {
+                res->data = format_sse(first_result->to_json());
+            }
             res->status = 200;
             res->content_type = "text/event-stream";
             res->next = [res_this = res.get(), oaicompat, &should_stop](std::string & output) -> bool {
@@ -5225,7 +5521,10 @@ private:
 
                 // check if there is more data
                 if (!rd.has_next()) {
-                    if (oaicompat != OAICOMPAT_TYPE_NONE) {
+                    if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                        // Anthropic doesn't send [DONE], message_stop was already sent
+                        output = "";
+                    } else if (oaicompat != OAICOMPAT_TYPE_NONE) {
                         output = "data: [DONE]\n\n";
                     } else {
                         output = "";
@@ -5244,7 +5543,16 @@ private:
                 // send the results
                 json res_json = result->to_json();
                 if (result->is_error()) {
-                    output = format_sse(json {{ "error", res_json }});
+                    if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                        json error_event = json::object();
+                        error_event["event"] = "error";
+                        error_event["data"] = res_json;
+                        json error_array = json::array();
+                        error_array.push_back(error_event);
+                        output = format_anthropic_sse(error_array);
+                    } else {
+                        output = format_sse(json {{ "error", res_json }});
+                    }
                     SRV_DBG("%s", "error received during streaming, terminating stream\n");
                     return false; // terminate on error
                 } else {
@@ -5252,7 +5560,11 @@ private:
                         dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr
                         || dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr
                     );
-                    output = format_sse(res_json);
+                    if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                        output = format_anthropic_sse(res_json);
+                    } else {
+                        output = format_sse(res_json);
+                    }
                 }
 
                 // has next data, continue
@@ -5565,6 +5877,8 @@ int main(int argc, char ** argv) {
     ctx_http.post("/chat/completions",    ex_wrapper(routes.post_chat_completions));
     ctx_http.post("/v1/chat/completions", ex_wrapper(routes.post_chat_completions));
     ctx_http.post("/api/chat",            ex_wrapper(routes.post_chat_completions)); // ollama specific endpoint
+    ctx_http.post("/v1/messages",         ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
+    ctx_http.post("/v1/messages/count_tokens", ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
     ctx_http.post("/infill",              ex_wrapper(routes.post_infill));
     ctx_http.post("/embedding",           ex_wrapper(routes.post_embeddings)); // legacy
     ctx_http.post("/embeddings",          ex_wrapper(routes.post_embeddings));
