@@ -1509,7 +1509,13 @@ class MultiChatUI {
                 this.show_message(this.elDivChat, msg, (i-1), nextMsg)
             }
         }
-        this.elDivChat.appendChild(this.elDivChat.removeChild(this.elDivStreams[chatId]))
+        try {
+            this.elDivChat.removeChild(this.elDivStreams[chatId])
+        } catch {
+            console.log(`DBUG:SimpleChat:MCUI:UiRefresh:Removing ${chatId} DivStream ${this.elDivStreams[chatId].id} failed...`)
+        } finally {
+            this.elDivChat.appendChild(this.elDivStreams[chatId])
+        }
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         }
@@ -1652,12 +1658,12 @@ class MultiChatUI {
         // ChatMessage edit popover menu
 
         this.elPopoverChatMsgDelBtn.addEventListener('click', (ev) => {
-            console.log(`DBUG:MCUI:ChatMsgPO:Del:${this.curChatId}:${this.uniqIdChatMsgPO}`)
+            console.log(`DBUG:SimpleChat:MCUI:ChatMsgPO:Del:${this.curChatId}:${this.uniqIdChatMsgPO}`)
             this.chatmsg_del_uiupdate(this.curChatId, this.uniqIdChatMsgPO)
         })
 
         this.elPopoverChatMsgCopyBtn.addEventListener('click', (ev) => {
-            console.log(`DBUG:MCUI:ChatMsgPO:Copy:${this.curChatId}:${this.uniqIdChatMsgPO}`)
+            console.log(`DBUG:SimpleChat:MCUI:ChatMsgPO:Copy:${this.curChatId}:${this.uniqIdChatMsgPO}`)
             let chatSession = this.simpleChats[this.curChatId]
             let index = chatSession.get_chatmessage_index(this.uniqIdChatMsgPO)
             let chat = chatSession.xchat[index]
@@ -1678,6 +1684,7 @@ class MultiChatUI {
     new_chat_session(chatId, bSwitchSession=false) {
         this.simpleChats[chatId] = new SimpleChat(chatId, this.me);
         this.elDivStreams[chatId] = document.createElement('div')
+        this.elDivStreams[chatId].id = `DivStream-${chatId}`
         this.elDivStreams[chatId].classList.add("chat-message-content-live")
         if (bSwitchSession) {
             this.handle_session_switch(chatId);
@@ -2009,7 +2016,7 @@ export class Me {
             }
             elRestore.innerHTML += `<p>Load previously saved chat session, if available</p>`;
             let btn = ui.el_create_button(chat.ods_key(), (ev)=>{
-                console.log(`DBUG:${tag}`, chat);
+                console.debug(`DBUG:${tag}`, chat);
                 this.multiChat.elInUser.value = `Loading ${chat.ods_key()}...`
                 chat.load((loadStatus, dbStatus, related)=>{
                     if (!loadStatus || !dbStatus) {
