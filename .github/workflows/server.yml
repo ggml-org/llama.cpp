@@ -351,16 +351,10 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-
       - name: Build
         id: cmake_build
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          cmake -B build -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
+          cmake -B build -DLLAMA_CURL=OFF -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
 
       - name: Python setup
@@ -373,13 +367,6 @@ jobs:
         id: test_dependencies
         run: |
           pip install -r tools/server/tests/requirements.txt
-
-      - name: Copy Libcurl
-        id: prepare_libcurl
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
-        run: |
-          cp $env:CURL_PATH/bin/libcurl-x64.dll ./build/bin/Release/libcurl-x64.dll
 
       - name: Tests
         id: server_integration_tests
