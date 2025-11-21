@@ -943,14 +943,26 @@ std::vector<common_file_info> fs_list_files(const std::string & path) {
 // Model utils
 //
 
-struct common_init_result common_init_from_params(common_params & params) {
-    common_init_result iparams;
+llama_model * common_load_model_from_params(common_params & params) {
     auto mparams = common_model_params_to_llama(params);
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
         LOG_ERR("%s: failed to load model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
             __func__, params.model.path.c_str());
+        return nullptr;
+    }
+
+    return model;
+}
+
+struct common_init_result common_init_context_from_model(
+    llama_model * model,
+    common_params & params) {
+    common_init_result iparams;
+
+    if (model == NULL) {
+        LOG_ERR("%s: model is NULL\n", __func__);
         return iparams;
     }
 
@@ -1123,6 +1135,14 @@ struct common_init_result common_init_from_params(common_params & params) {
     iparams.context.reset(lctx);
 
     return iparams;
+}
+
+struct common_init_result common_init_from_params(common_params & params) {
+    llama_model * model = common_load_model_from_params(params);
+    if (model == NULL) {
+        return common_init_result();
+    }
+    return common_init_context_from_model(model, params);
 }
 
 std::string get_model_endpoint() {

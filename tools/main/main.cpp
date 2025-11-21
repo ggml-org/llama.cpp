@@ -137,18 +137,29 @@ int main(int argc, char ** argv) {
 
     // load the model and apply lora adapter, if any
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
-    common_init_result llama_init = common_init_from_params(params);
 
-    model = llama_init.model.get();
-    ctx = llama_init.context.get();
-
+    model = common_load_model_from_params(params);
     if (model == NULL) {
         LOG_ERR("%s: error: unable to load model\n", __func__);
         return 1;
     }
 
-    // Configure backend sampler chain
-    llama_set_backend_sampler(ctx, 0, common_sampler_backend_init(model, sparams));
+    // Configure backend sampler if configured
+    llama_sampler * backend_sampler = common_sampler_backend_init(model, sparams);
+    if (backend_sampler) {
+        llama_sampler_seq_config sampler_config = { 0, backend_sampler };
+        params.backend_samplers = &sampler_config;
+        params.n_backend_samplers = 1;
+    }
+
+    common_init_result llama_init = common_init_context_from_model(model, params);
+    ctx = llama_init.context.get();
+    model = llama_init.model.get(); // Update pointer (now managed by llama_init)
+
+    if (ctx == NULL) {
+        LOG_ERR("%s: error: unable to create context\n", __func__);
+        return 1;
+    }
 
     auto * mem = llama_get_memory(ctx);
 

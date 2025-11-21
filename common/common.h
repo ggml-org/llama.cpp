@@ -640,6 +640,14 @@ struct common_init_result {
 
 struct common_init_result     common_init_from_params(common_params & params);
 
+// Load model only (allows creating backend samplers before context initialization)
+llama_model * common_load_model_from_params(common_params & params);
+
+// Initialize context from an already-loaded model (allows pre-configuring backend samplers)
+struct common_init_result common_init_context_from_model(
+    llama_model * model,
+    common_params & params);
+
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);
 struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_params & params);
