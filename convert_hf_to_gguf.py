@@ -4197,7 +4197,7 @@ class RND1Model(Qwen3MoeModel):
         # RND1 specific parameters
         # RND1 uses bidirectional attention
         self.gguf_writer.add_causal_attention(False)
-        
+
         mask_token_id = self.hparams.get("mask_token_id")
         if mask_token_id is not None:
             self.gguf_writer.add_mask_token_id(mask_token_id)
