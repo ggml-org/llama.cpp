@@ -4442,10 +4442,6 @@ struct server_res_generator : server_http_res {
         status = 200;
         data = safe_json_to_str(response_data);
     }
-    void ok(const std::string & response_data) {
-        status = 200;
-        data = response_data;
-    }
     void error(const json & error_data) {
         status = json_value(error_data, "code", 500);
         data = safe_json_to_str({{ "error", error_data }});
@@ -4568,7 +4564,8 @@ public:
 
         res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->t_start);
         res->content_type = "text/plain; version=0.0.4";
-        res->ok(prometheus.str());
+        res->status = 200;
+        res->data = prometheus.str();
         return res;
     };
 
