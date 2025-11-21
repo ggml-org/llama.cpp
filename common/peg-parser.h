@@ -6,7 +6,6 @@
 
 #include <memory>
 #include <unordered_map>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <functional>
@@ -18,6 +17,9 @@ struct common_grammar_builder;
 // Forward declarations
 using common_peg_parser_id = size_t;
 constexpr common_peg_parser_id COMMON_PEG_INVALID_PARSER_ID = static_cast<common_peg_parser_id>(-1);
+
+using common_peg_ast_id = size_t;
+constexpr common_peg_ast_id COMMON_PEG_INVALID_AST_ID = static_cast<common_peg_ast_id>(-1);
 
 // Forward declare builder for parser wrapper
 class common_peg_parser_builder;
@@ -61,22 +63,6 @@ common_peg_parser operator+(const std::string & str, const common_peg_parser & p
 common_peg_parser operator<<(const char * str, const common_peg_parser & p);
 common_peg_parser operator<<(const std::string & str, const common_peg_parser & p);
 
-struct common_peg_parse_semantics {
-    std::string content;
-    std::string reasoning_content;
-    std::vector<common_chat_tool_call> tool_calls;
-
-    std::unordered_map<std::string, std::string> captures;
-
-    common_chat_msg to_msg() const {
-        common_chat_msg msg;
-        msg.content = content;
-        msg.reasoning_content = reasoning_content;
-        msg.tool_calls = tool_calls;
-        return msg;
-    }
-};
-
 enum common_peg_parse_result_type {
     COMMON_PEG_PARSE_RESULT_FAIL            = 0,
     COMMON_PEG_PARSE_RESULT_SUCCESS         = 1,
@@ -84,6 +70,49 @@ enum common_peg_parse_result_type {
 };
 
 const char * common_peg_parse_result_type_name(common_peg_parse_result_type type);
+
+struct common_peg_ast_node {
+    common_peg_ast_id id;
+    std::string rule_name;
+    std::string tag;
+    size_t start;
+    size_t end;
+    std::string_view text;
+    std::vector<common_peg_ast_id> children;
+
+    bool is_partial = false;
+};
+
+struct common_peg_parse_result;
+
+using common_peg_ast_visitor = std::function<void(const common_peg_ast_node & node)>;
+
+class common_peg_ast_arena {
+    std::vector<common_peg_ast_node> nodes_;
+  public:
+    common_peg_ast_id add_node(
+        const std::string & rule_name,
+        const std::string & tag,
+        size_t start,
+        size_t end,
+        std::string_view text,
+        std::vector<common_peg_ast_id> children,
+        bool is_partial = false
+    ) {
+        common_peg_ast_id id = nodes_.size();
+        nodes_.push_back({id, rule_name, tag, start, end, text, std::move(children), is_partial});
+        return id;
+    }
+
+    const common_peg_ast_node & get(common_peg_ast_id id) const { return nodes_.at(id); }
+
+    size_t size() const { return nodes_.size(); }
+
+    void clear() { nodes_.clear(); }
+
+    void visit(common_peg_ast_id id, common_peg_ast_visitor visitor);
+    void visit(const common_peg_parse_result & result, common_peg_ast_visitor visitor);
+};
 
 struct common_peg_parse_cache_key {
     common_peg_parser_id id;
@@ -106,6 +135,8 @@ struct common_peg_parse_result {
     size_t start = 0;
     size_t end = 0;
 
+    std::vector<common_peg_ast_id> nodes;
+
     common_peg_parse_result() : type(COMMON_PEG_PARSE_RESULT_FAIL) {}
 
     common_peg_parse_result(common_peg_parse_result_type type, size_t start)
@@ -114,42 +145,20 @@ struct common_peg_parse_result {
     common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end)
         : type(type), start(start), end(end) {}
 
+    common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end, std::vector<common_peg_ast_id> nodes)
+        : type(type), start(start), end(end), nodes(std::move(nodes)) {}
+
     bool fail() const { return type == COMMON_PEG_PARSE_RESULT_FAIL; }
     bool need_more_input() const { return type == COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT; }
     bool success() const { return type == COMMON_PEG_PARSE_RESULT_SUCCESS; }
 };
 
-enum common_peg_parse_event_type {
-    COMMON_PEG_PARSE_EVENT_NODE_START,
-    COMMON_PEG_PARSE_EVENT_NODE_END,
-};
-
-struct common_peg_parse_event {
-    common_peg_parse_event_type type;
-    std::string rule;
-    std::string annotation;
-    size_t start;
-    size_t end;
-    std::string_view text;
-    common_peg_parse_result_type status;
-    int depth;
-
-    bool starting() const { return type == COMMON_PEG_PARSE_EVENT_NODE_START; }
-    bool ending() const { return type == COMMON_PEG_PARSE_EVENT_NODE_END; }
-
-    bool success() const { return status == COMMON_PEG_PARSE_RESULT_SUCCESS; }
-    bool need_more_input() const { return status == COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT; }
-    bool fail() const { return status == COMMON_PEG_PARSE_RESULT_FAIL; }
-};
-
-using common_peg_parse_event_handler = std::function<void(const common_peg_parse_event &, common_peg_parse_semantics &)>;
-
 class common_peg_parse_cache {
     std::unordered_map<common_peg_parse_cache_key, common_peg_parse_result> results;
 
   public:
-    common_peg_parse_result set(common_peg_parser_id id, size_t start, common_peg_parse_result result);
-    std::optional<common_peg_parse_result> get(common_peg_parser_id id, size_t start);
+    const common_peg_parse_result & set(common_peg_parser_id id, size_t start, common_peg_parse_result result);
+    common_peg_parse_result * get(common_peg_parser_id id, size_t start);
     void clear();
 };
 
@@ -157,36 +166,18 @@ struct common_peg_parse_context {
     std::string input;
     bool input_is_complete;
     common_peg_parse_cache cache;
-    common_peg_parse_semantics * semantics;
-    common_peg_parse_event_handler event_handler;
+    common_peg_ast_arena ast_arena;
 
-    int current_depth;
     int parse_depth;
 
     common_peg_parse_context()
-        : input_is_complete(true), cache(), semantics(nullptr), event_handler(nullptr), current_depth(0), parse_depth(0) {}
+        : input_is_complete(true), cache(), parse_depth(0) {}
 
     common_peg_parse_context(const std::string & input)
-        : input(input), input_is_complete(true), cache(), semantics(nullptr), event_handler(nullptr), current_depth(0), parse_depth(0) {}
+        : input(input), input_is_complete(true), cache(), parse_depth(0) {}
 
     common_peg_parse_context(const std::string & input, bool complete)
-        : input(input), input_is_complete(complete), cache(), semantics(nullptr), event_handler(nullptr), current_depth(0), parse_depth(0) {}
-
-    common_peg_parse_context(const std::string & input, common_peg_parse_semantics * semantics)
-        : input(input), input_is_complete(true), cache(), semantics(semantics), event_handler(nullptr), current_depth(0), parse_depth(0) {}
-
-    common_peg_parse_context(const std::string & input, common_peg_parse_semantics * semantics, bool complete)
-        : input(input), input_is_complete(complete), cache(), semantics(semantics), event_handler(nullptr), current_depth(0), parse_depth(0) {}
-
-    common_peg_parse_context(const std::string & input, common_peg_parse_semantics * semantics, common_peg_parse_event_handler handler, bool complete = true)
-        : input(input), input_is_complete(complete), cache(), semantics(semantics), event_handler(std::move(handler)), current_depth(0), parse_depth(0) {}
-
-    template <typename T>
-    void set_event_handler(const T & handler) {
-        event_handler = [&](const common_peg_parse_event & ev, common_peg_parse_semantics & semantics) {
-            handler(ev, semantics);
-        };
-    }
+        : input(input), input_is_complete(complete), cache(), parse_depth(0) {}
 };
 
 // Forward declaration
@@ -255,7 +246,6 @@ struct common_peg_schema_parser {
 
 struct common_peg_rule_parser {
     std::string name;
-    std::string annotation;
     common_peg_parser_id child;
     bool trigger;
 };
@@ -267,6 +257,15 @@ struct common_peg_ref_parser {
 struct common_peg_capture_parser {
     common_peg_parser_id child;
     std::string key;
+};
+
+struct common_peg_atomic_parser {
+    common_peg_parser_id child;
+};
+
+struct common_peg_tag_parser {
+    common_peg_parser_id child;
+    std::string tag;
 };
 
 // Variant holding all parser types
@@ -287,7 +286,9 @@ using common_peg_parser_variant = std::variant<
     common_peg_schema_parser,
     common_peg_rule_parser,
     common_peg_ref_parser,
-    common_peg_capture_parser
+    common_peg_capture_parser,
+    common_peg_atomic_parser,
+    common_peg_tag_parser
 >;
 
 // Arena owns all parsers
@@ -452,7 +453,6 @@ class common_peg_parser_builder {
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
     //   auto json = p.rule("json", json_obj | json_arr | ...)
     common_peg_parser rule(const std::string & name, common_peg_parser p, bool trigger = false);
-    common_peg_parser rule(const std::string & name, const std::string & annotation, common_peg_parser p, bool trigger = false);
 
     // Creates a named rule using a builder function. This handles recursive grammars by
     // inserting a placeholder rule before invoking the builder, allowing the
@@ -461,7 +461,15 @@ class common_peg_parser_builder {
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
     //   auto json = p.rule("json", [&]() { return json_object() | json_array() | ... })
     common_peg_parser rule(const std::string & name, const std::function<common_peg_parser()> & builder, bool trigger = false);
-    common_peg_parser rule(const std::string & name, const std::string & annotation, const std::function<common_peg_parser()> & builder, bool trigger = false);
+
+    // Creates an atomic parser. Atomic parsers do not create an AST node if
+    // the child results in a partial parse, i.e. NEEDS_MORE_INPUT. This is
+    // intended for situations where partial output is undesirable.
+    common_peg_parser atomic(common_peg_parser p);
+
+    // Tags create nodes in the generated AST for semantic purposes.
+    // Unlike rules, you can tag multiple nodes with the same tag.
+    common_peg_parser tag(const std::string & tag, common_peg_parser p);
 
     void set_root(common_peg_parser p);
 
@@ -472,7 +480,6 @@ class common_peg_parser_builder {
 template<typename F>
 common_peg_arena build_peg_parser(F && fn) {
     common_peg_parser_builder builder;
-    auto root = fn(builder);
-    builder.set_root(root);
+    builder.set_root(fn(builder));
     return builder.build();
 }

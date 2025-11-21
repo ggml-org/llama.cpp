@@ -2,6 +2,7 @@
 #include "peg-parser.h"
 #include <sstream>
 
+/*
 common_peg_parser common_chat_peg_parser_builder::reasoning(const std::string & tag) {
     std::string open_tag;
     open_tag.append("<").append(tag).append(">");
@@ -151,70 +152,75 @@ common_peg_parser common_chat_peg_parser_builder::quasi_xml_attr(
 
     return function;
 }
+*/
 
-void common_chat_peg_simple_handler::operator()(const common_peg_parse_event & ev, common_peg_parse_semantics & semantics) const {
-    if (log) {
-        std::stringstream ss;
-        ss << "Event: type=" << (ev.type == COMMON_PEG_PARSE_EVENT_NODE_START ? "start" : "end  ");
-        ss << " rule=" << ev.rule;
-        ss << " result=" << common_peg_parse_result_type_name(ev.status);
-        ss << " text=" << ev.text;
-        log(ss.str());
+common_peg_ast_visitor common_chat_peg_constructed_builder::extractor::visitor() {
+    return [this](const common_peg_ast_node & node) {
+        extract(node);
+    };
+}
+
+void common_chat_peg_constructed_builder::extractor::extract(const common_peg_ast_node & node) {
+    bool is_reasoning_block = node.tag == REASONING_BLOCK;
+    bool is_reasoning = node.tag == REASONING;
+    bool is_content = node.tag == CONTENT;
+    bool is_tool_name = node.tag == TOOL_NAME;
+    bool is_tool_close = node.tag == TOOL_CLOSE;
+    bool is_arg_open = node.tag == TOOL_ARG_OPEN;
+    bool is_arg_close = node.tag == TOOL_ARG_CLOSE;
+    bool is_arg_name = node.tag == TOOL_ARG_NAME;
+    bool is_arg_string = node.tag == TOOL_ARG_STRING_VALUE;
+    bool is_arg_json = node.tag == TOOL_ARG_JSON_VALUE;
+
+    if (is_reasoning_block) {
+        result.reasoning_content = std::string(node.text);
     }
 
-    if (ev.rule == "reasoning-content" && ev.ending()) {
-        semantics.reasoning_content = ev.text;
-        if (log) {
-            log("  reasoning_content=" + semantics.reasoning_content);
+    if (is_reasoning) {
+        result.reasoning_content = std::string(node.text);
+    }
+
+    if (is_content) {
+        result.content = std::string(node.text);
+    }
+
+    if (is_tool_name) {
+        result.tool_calls.emplace_back();
+        current_tool = &result.tool_calls.back();
+        arg_count = 0;
+
+        current_tool->name = std::string(node.text);
+        current_tool->arguments = "{";
+    }
+
+    if (is_arg_open) {
+        needs_closing_quote = false;
+    }
+
+    if (is_arg_name) {
+        if (arg_count > 0) {
+            current_tool->arguments += ",";
+        }
+        current_tool->arguments += "\"" + std::string(node.text) + "\":";
+        ++arg_count;
+    }
+
+    if (is_arg_string) {
+        current_tool->arguments += "\"" + std::string(node.text);
+        needs_closing_quote = true;
+    }
+
+    if (is_arg_close) {
+        if (needs_closing_quote) {
+            current_tool->arguments += "\"";
         }
     }
 
-    if (ev.rule == "content" && ev.ending()) {
-        semantics.content = ev.text;
-        if (log) {
-            log("  content=" + semantics.content);
-        }
+    if (is_arg_json) {
+        current_tool->arguments += std::string(node.text);
     }
 
-    if (ev.rule.find("function-start") != std::string::npos && ev.ending() && ev.success()) {
-        semantics.tool_calls.emplace_back();
-        auto & tc = semantics.tool_calls.back();
-        tc.name = semantics.captures["tool-name"];
-        if (log) {
-            log("  tool call added");
-            log("    name=" + tc.name);
-        }
-    }
-
-    if (ev.rule.find("arg-start") != std::string::npos && ev.ending() && ev.success()) {
-        auto & tc = semantics.tool_calls.back();
-        auto name = semantics.captures["arg-name"];
-        if (tc.arguments.empty()) {
-            tc.arguments += "{";
-        } else {
-            tc.arguments += ", ";
-        }
-        tc.arguments += "\"" + name + "\": ";
-    }
-
-    if (ev.rule == "arg-string-content" && ev.ending() && ev.success()) {
-        auto & tc = semantics.tool_calls.back();
-        tc.arguments += "\"" + std::string(ev.text);
-    }
-
-    if (ev.annotation == "arg-string" && ev.ending() && ev.success()) {
-        auto & tc = semantics.tool_calls.back();
-        tc.arguments += "\"";
-        if (log) {
-            log("    args=" + tc.arguments);
-        }
-    }
-
-    if (ev.rule == "arg-json-content" && ev.ending() && (ev.success() || ev.need_more_input())) {
-        auto & tc = semantics.tool_calls.back();
-        tc.arguments += std::string(ev.text);
-        if (log) {
-            log("    args=" + tc.arguments);
-        }
+    if (is_tool_close) {
+        current_tool->arguments += "}";
     }
 }

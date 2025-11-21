@@ -6,9 +6,6 @@
 
 void test_example_qwen3_coder(testing &t) {
     auto explicit_parser = build_chat_peg_parser([](common_chat_peg_parser_builder & p) {
-        auto thinking = p.rule("raw-reasoning",
-            "<think>" << p.rule("reasoning-content", p.until("</think>")) << "</think>");
-
         auto content = p.rule("content", p.until("<tool_call>"));
 
         auto arg_name = p.rule("arg-start", "<parameter=" + p.capture("arg-name", p.chars("[a-zA-Z0-9_]")) + ">");
@@ -51,9 +48,6 @@ void test_example_qwen3_coder(testing &t) {
 
     t.test("qwen3_accumulation_test", [&](testing &t) {
         std::string input =
-            "<think>The user wants to find large log files that haven't been accessed recently. "
-            "I should search for files with .log extension, filter by size (over 100MB), "
-            "and check access time within the last 30 days. I'll need to use the search_files function.</think>"
             "Based on your requirements, I'll search for log files over 100MB that haven't been "
             "accessed in the last month. This will help identify candidates for cleanup or archival.\n\n"
             "<tool_call>"

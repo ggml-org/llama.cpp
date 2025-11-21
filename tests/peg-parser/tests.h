@@ -1,15 +1,14 @@
 #pragma once
 
 // Common includes for all test files
-#include "test_harness.h"
 #include <nlohmann/json.hpp>
+#include <string>
+#include <vector>
+
+#include "test_harness.h"
 #include "peg-parser.h"
 #include "chat-peg-parser.h"
-#include <memory>
-#include <vector>
-#include <string>
-
-std::vector<std::string> simple_tokenize(const std::string &);
+#include "simple_tokenizer.h"
 
 struct bench_tool_call {
     std::string            id;

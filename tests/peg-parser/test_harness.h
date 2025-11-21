@@ -1,14 +1,19 @@
 #pragma once
 
+#include "common.h"
+
 #include <chrono>
 #include <exception>
 #include <iostream>
 #include <string>
+#include <regex>
 #include <vector>
 
 struct testing {
     std::ostream &out;
     std::vector<std::string> stack;
+    std::regex filter;
+    bool filter_tests = false;
     bool throw_exception = false;
     int tests = 0;
     int assertions = 0;
@@ -27,8 +32,26 @@ struct testing {
         return std::string((stack.size() - 1) * 2, ' ');
     }
 
+    std::string full_name() const {
+        return string_join(stack, ".");
+    }
+
     void log(const std::string & msg) {
         out << indent() << "  " << msg << "\n";
+    }
+
+    void set_filter(const std::string & re) {
+        filter = std::regex(re);
+        filter_tests = true;
+    }
+
+    bool should_run() const {
+        if (filter_tests) {
+            if (!std::regex_match(full_name(), filter)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     template <typename F>
@@ -88,9 +111,13 @@ struct testing {
 
     template <typename F>
     void test(const std::string &name, F f) {
-        ++tests;
         stack.push_back(name);
+        if (!should_run()) {
+            stack.pop_back();
+            return;
+        }
 
+        ++tests;
         out << indent() << name << "\n";
 
         int before_failures   = failures;
@@ -113,9 +140,13 @@ struct testing {
 
     template <typename F>
     void bench(const std::string &name, F f, int iterations = 100) {
-        ++tests;
         stack.push_back(name);
+        if (!should_run()) {
+            stack.pop_back();
+            return;
+        }
 
+        ++tests;
         out << indent() << "[bench] " << name << "\n";
 
         int before_failures   = failures;
