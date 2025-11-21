@@ -1486,6 +1486,10 @@ class ChatStore {
 					timestamp: Date.now()
 				});
 
+				// Ensure currNode points to the edited message to maintain correct path
+				await DatabaseStore.updateCurrentNode(this.activeConversation.id, messageToEdit.id);
+				this.activeConversation.currNode = messageToEdit.id;
+
 				this.updateMessageAtIndex(messageIndex, {
 					content: newContent,
 					timestamp: Date.now()
@@ -1496,6 +1500,69 @@ class ChatStore {
 			await this.refreshActiveMessages();
 		} catch (error) {
 			console.error('Failed to edit assistant message:', error);
+		}
+	}
+
+	/**
+	 * Edits a user message and preserves all responses below
+	 * Updates the message content in-place without deleting or regenerating responses
+	 *
+	 * **Use Case**: When you want to fix a typo or rephrase a question without losing the assistant's response
+	 *
+	 * **Important Behavior:**
+	 * - Does NOT create a branch (unlike editMessageWithBranching)
+	 * - Does NOT regenerate assistant responses
+	 * - Only updates the user message content in the database
+	 * - Preserves the entire conversation tree below the edited message
+	 * - Updates conversation title if this is the first user message
+	 *
+	 * @param messageId - The ID of the user message to edit
+	 * @param newContent - The new content for the message
+	 */
+	async editUserMessagePreserveResponses(messageId: string, newContent: string): Promise<void> {
+		if (!this.activeConversation) return;
+
+		try {
+			const messageIndex = this.findMessageIndex(messageId);
+			if (messageIndex === -1) {
+				console.error('Message not found for editing');
+				return;
+			}
+
+			const messageToEdit = this.activeMessages[messageIndex];
+			if (messageToEdit.role !== 'user') {
+				console.error('Only user messages can be edited with this method');
+				return;
+			}
+
+			// Simply update the message content in-place
+			await DatabaseStore.updateMessage(messageId, {
+				content: newContent,
+				timestamp: Date.now()
+			});
+
+			this.updateMessageAtIndex(messageIndex, {
+				content: newContent,
+				timestamp: Date.now()
+			});
+
+			// Check if first user message for title update
+			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+			const isFirstUserMessage =
+				rootMessage && messageToEdit.parent === rootMessage.id && messageToEdit.role === 'user';
+
+			if (isFirstUserMessage && newContent.trim()) {
+				await this.updateConversationTitleWithConfirmation(
+					this.activeConversation.id,
+					newContent.trim(),
+					this.titleUpdateConfirmationCallback
+				);
+			}
+
+			this.updateConversationTimestamp();
+		} catch (error) {
+			console.error('Failed to edit user message:', error);
 		}
 	}
 
@@ -1697,6 +1764,200 @@ class ChatStore {
 	}
 
 	/**
+	 * Continues generation for an existing assistant message
+	 * @param messageId - The ID of the assistant message to continue
+	 */
+	async continueAssistantMessage(messageId: string): Promise<void> {
+		if (!this.activeConversation || this.isLoading) return;
+
+		try {
+			const messageIndex = this.findMessageIndex(messageId);
+			if (messageIndex === -1) {
+				console.error('Message not found for continuation');
+				return;
+			}
+
+			const messageToContinue = this.activeMessages[messageIndex];
+			if (messageToContinue.role !== 'assistant') {
+				console.error('Only assistant messages can be continued');
+				return;
+			}
+
+			// Race condition protection: Check if this specific conversation is already loading
+			// This prevents multiple rapid clicks on "Continue" from creating concurrent operations
+			if (this.isConversationLoading(this.activeConversation.id)) {
+				console.warn('Continuation already in progress for this conversation');
+				return;
+			}
+
+			this.errorDialogState = null;
+			this.setConversationLoading(this.activeConversation.id, true);
+			this.clearConversationStreaming(this.activeConversation.id);
+
+			// IMPORTANT: Fetch the latest content from the database to ensure we have
+			// the most up-to-date content, especially after a stopped generation
+			// This prevents issues where the in-memory state might be stale
+			const allMessages = await DatabaseStore.getConversationMessages(this.activeConversation.id);
+			const dbMessage = allMessages.find((m) => m.id === messageId);
+
+			if (!dbMessage) {
+				console.error('Message not found in database for continuation');
+				this.setConversationLoading(this.activeConversation.id, false);
+
+				return;
+			}
+
+			// Use content from database as the source of truth
+			const originalContent = dbMessage.content;
+			const originalThinking = dbMessage.thinking || '';
+
+			// Get conversation context up to (but not including) the message to continue
+			const conversationContext = this.activeMessages.slice(0, messageIndex);
+
+			const contextWithContinue = [
+				...conversationContext.map((msg) => {
+					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
+						return msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
+					}
+					return msg as ApiChatMessageData;
+				}),
+				{
+					role: 'assistant' as const,
+					content: originalContent
+				}
+			];
+
+			let appendedContent = '';
+			let appendedThinking = '';
+			let hasReceivedContent = false;
+
+			await chatService.sendMessage(
+				contextWithContinue,
+				{
+					...this.getApiOptions(),
+
+					onChunk: (chunk: string) => {
+						hasReceivedContent = true;
+						appendedContent += chunk;
+						// Preserve originalContent exactly as-is, including any trailing whitespace
+						// The concatenation naturally preserves any whitespace at the end of originalContent
+						const fullContent = originalContent + appendedContent;
+
+						this.setConversationStreaming(
+							messageToContinue.convId,
+							fullContent,
+							messageToContinue.id
+						);
+
+						this.updateMessageAtIndex(messageIndex, {
+							content: fullContent
+						});
+					},
+
+					onReasoningChunk: (reasoningChunk: string) => {
+						hasReceivedContent = true;
+						appendedThinking += reasoningChunk;
+
+						const fullThinking = originalThinking + appendedThinking;
+
+						this.updateMessageAtIndex(messageIndex, {
+							thinking: fullThinking
+						});
+					},
+
+					onComplete: async (
+						finalContent?: string,
+						reasoningContent?: string,
+						timings?: ChatMessageTimings
+					) => {
+						const fullContent = originalContent + (finalContent || appendedContent);
+						const fullThinking = originalThinking + (reasoningContent || appendedThinking);
+
+						const updateData: {
+							content: string;
+							thinking: string;
+							timestamp: number;
+							timings?: ChatMessageTimings;
+						} = {
+							content: fullContent,
+							thinking: fullThinking,
+							timestamp: Date.now(),
+							timings: timings
+						};
+
+						await DatabaseStore.updateMessage(messageToContinue.id, updateData);
+
+						this.updateMessageAtIndex(messageIndex, updateData);
+
+						this.updateConversationTimestamp();
+
+						this.setConversationLoading(messageToContinue.convId, false);
+						this.clearConversationStreaming(messageToContinue.convId);
+						slotsService.clearConversationState(messageToContinue.convId);
+					},
+
+					onError: async (error: Error) => {
+						if (this.isAbortError(error)) {
+							// User cancelled - save partial continuation if any content was received
+							if (hasReceivedContent && appendedContent) {
+								const partialContent = originalContent + appendedContent;
+								const partialThinking = originalThinking + appendedThinking;
+
+								await DatabaseStore.updateMessage(messageToContinue.id, {
+									content: partialContent,
+									thinking: partialThinking,
+									timestamp: Date.now()
+								});
+
+								this.updateMessageAtIndex(messageIndex, {
+									content: partialContent,
+									thinking: partialThinking,
+									timestamp: Date.now()
+								});
+							}
+
+							this.setConversationLoading(messageToContinue.convId, false);
+							this.clearConversationStreaming(messageToContinue.convId);
+							slotsService.clearConversationState(messageToContinue.convId);
+
+							return;
+						}
+
+						// Non-abort error - rollback to original content
+						console.error('Continue generation error:', error);
+
+						// Rollback: Restore original content in UI
+						this.updateMessageAtIndex(messageIndex, {
+							content: originalContent,
+							thinking: originalThinking
+						});
+
+						// Ensure database has original content (in case of partial writes)
+						await DatabaseStore.updateMessage(messageToContinue.id, {
+							content: originalContent,
+							thinking: originalThinking
+						});
+
+						this.setConversationLoading(messageToContinue.convId, false);
+						this.clearConversationStreaming(messageToContinue.convId);
+						slotsService.clearConversationState(messageToContinue.convId);
+
+						const dialogType = error.name === 'TimeoutError' ? 'timeout' : 'server';
+						this.showErrorDialog(dialogType, error.message);
+					}
+				},
+				messageToContinue.convId
+			);
+		} catch (error) {
+			if (this.isAbortError(error)) return;
+			console.error('Failed to continue message:', error);
+			if (this.activeConversation) {
+				this.setConversationLoading(this.activeConversation.id, false);
+			}
+		}
+	}
+
+	/**
 	 * Public methods for accessing per-conversation states
 	 */
 	public isConversationLoadingPublic(convId: string): boolean {
@@ -1743,8 +2004,11 @@ export const refreshActiveMessages = chatStore.refreshActiveMessages.bind(chatSt
 export const navigateToSibling = chatStore.navigateToSibling.bind(chatStore);
 export const editAssistantMessage = chatStore.editAssistantMessage.bind(chatStore);
 export const editMessageWithBranching = chatStore.editMessageWithBranching.bind(chatStore);
+export const editUserMessagePreserveResponses =
+	chatStore.editUserMessagePreserveResponses.bind(chatStore);
 export const regenerateMessageWithBranching =
 	chatStore.regenerateMessageWithBranching.bind(chatStore);
+export const continueAssistantMessage = chatStore.continueAssistantMessage.bind(chatStore);
 export const deleteMessage = chatStore.deleteMessage.bind(chatStore);
 export const getDeletionInfo = chatStore.getDeletionInfo.bind(chatStore);
 export const updateConversationName = chatStore.updateConversationName.bind(chatStore);

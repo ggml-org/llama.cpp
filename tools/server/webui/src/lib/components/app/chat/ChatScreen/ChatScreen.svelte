@@ -5,13 +5,13 @@
 		ChatScreenHeader,
 		ChatScreenWarning,
 		ChatMessages,
-		ChatProcessingInfo,
-		EmptyFileAlertDialog,
-		ChatErrorDialog,
+		ChatScreenProcessingInfo,
+		DialogEmptyFileAlert,
+		DialogChatError,
 		ServerErrorSplash,
 		ServerInfo,
 		ServerLoadingSplash,
-		ConfirmationDialog
+		DialogConfirmation
 	} from '$lib/components/app';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import {
@@ -299,7 +299,7 @@
 			class="pointer-events-none sticky right-0 bottom-0 left-0 mt-auto"
 			in:slide={{ duration: 150, axis: 'y' }}
 		>
-			<ChatProcessingInfo />
+			<ChatScreenProcessingInfo />
 
 			{#if serverWarning()}
 				<ChatScreenWarning class="pointer-events-auto mx-auto max-w-[48rem] px-4" />
@@ -432,7 +432,7 @@
 	</AlertDialog.Portal>
 </AlertDialog.Root>
 
-<ConfirmationDialog
+<DialogConfirmation
 	bind:open={showDeleteDialog}
 	title="Delete Conversation"
 	description="Are you sure you want to delete this conversation? This action cannot be undone and will permanently remove all messages in this conversation."
@@ -444,7 +444,7 @@
 	onCancel={() => (showDeleteDialog = false)}
 />
 
-<EmptyFileAlertDialog
+<DialogEmptyFileAlert
 	bind:open={showEmptyFileDialog}
 	emptyFiles={emptyFileNames}
 	onOpenChange={(open) => {
@@ -454,7 +454,7 @@
 	}}
 />
 
-<ChatErrorDialog
+<DialogChatError
 	message={activeErrorDialog?.message ?? ''}
 	onOpenChange={handleErrorDialogOpenChange}
 	open={Boolean(activeErrorDialog)}
