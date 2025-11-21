@@ -2019,7 +2019,8 @@ export class Me {
     show_title(elDiv) {
         let elTitle = document.createElement("div");
         elTitle.id = "DefaultTitle";
-        elTitle.appendChild(document.createTextNode("SimpleChat"))
+        //SimpleChatTCRV-अन्वेषिका-सल्लाप
+        elTitle.appendChild(document.createTextNode("AnveshikaSallap"))
         elDiv.appendChild(elTitle)
     }
 
