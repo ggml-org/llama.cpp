@@ -10,6 +10,8 @@ Pull the repo and build.zip, then unpack build.zip
 
 ```bash
 cd llama.cpp
+cd build/bin
+wget https://www.modelscope.cn/models/unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/resolve/master/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf && mv DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf ds1.5b.gguf
 chmod +x ds.sh && ./ds.sh
 ```
 
