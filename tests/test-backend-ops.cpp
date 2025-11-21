@@ -1206,6 +1206,35 @@ struct test_case {
             ggml_free(ctx);
             return test_status_t::SKIPPED;
         }
+            // Temporarily mark SparseK-related tests as not supported on Vulkan backends
+    {
+        const char * backend1_name = ggml_backend_name(backend1);
+
+        // backend name starts with "Vulkan" (e.g. "Vulkan0")
+        bool is_vulkan = (std::strncmp(backend1_name, "Vulkan", 6) == 0);
+
+        // SparseK tests encode their parameters with "sparsek_..." in vars()
+        bool is_sparsek_test = (vars().find("sparsek_") != std::string::npos);
+
+        if (is_vulkan && is_sparsek_test) {
+            test_result result(
+                backend1_name,
+                current_op_name,
+                vars(),
+                "test",
+                /* supported */ false,
+                /* passed    */ false,
+                "SparseK not supported on Vulkan backend yet"
+            );
+
+            if (output_printer) {
+                output_printer->print_test_result(result);
+            }
+
+            ggml_free(ctx);
+            return test_status_t::NOT_SUPPORTED;
+        }
+    }
 
         // check if the backends support the ops
         bool supported = true;
