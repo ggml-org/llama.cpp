@@ -2246,8 +2246,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
                                             bool &                      use_cann_graph,
                                             bool &                      cann_graph_update_required) {
 #ifdef USE_ACL_GRAPH
-    ggml_cann_graph * matched_graph = cann_ctx->graph_lru_cache.cache_list.front();
-    if (use_cann_graph && cann_graph_update_required) {
+    if (use_cann_graph && cann_graph_update_required) {  // Begin CANN graph capture
         ACL_CHECK(aclmdlRICaptureBegin(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
     }
 #endif  // USE_ACL_GRAPH
@@ -2271,12 +2270,14 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
     }
 
 #ifdef USE_ACL_GRAPH
-    if (use_cann_graph && cann_graph_update_required) {  // End CANN graph capture
-        ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &matched_graph->graph));
-    }
-
     if (use_cann_graph) {
-        // Execute graph
+        ggml_cann_graph * matched_graph = cann_ctx->graph_lru_cache.cache_list.front();
+
+        if (cann_graph_update_required) {  // End CANN graph capture
+            ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &matched_graph->graph));
+        }
+
+        // Execute CANN graph
         ACL_CHECK(aclmdlRIExecuteAsync(matched_graph->graph, cann_ctx->stream()));
     }
 #endif  // USE_ACL_GRAPH
