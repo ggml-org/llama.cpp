@@ -67,7 +67,7 @@ jobs:
         run: |
           cp LICENSE ./build/bin/
           zip -y -r llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz -C ./build/bin .
+          tar -cvf llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar -C ./build/bin .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -122,7 +122,7 @@ jobs:
         run: |
           cp LICENSE ./build/bin/
           zip -y -r llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip ./build/bin/*
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz -C ./build/bin .
+          tar -cvf llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar -C ./build/bin .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -185,7 +185,7 @@ jobs:
         run: |
           cp LICENSE ./build/bin/
           zip -y -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz -C ./build/bin .
+          tar -cvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar -C ./build/bin .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -239,7 +239,7 @@ jobs:
         run: |
           cp LICENSE ./build/bin/
           zip -y -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./build/bin/*
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz -C ./build/bin .
+          tar -cvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar -C ./build/bin .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -690,7 +690,7 @@ jobs:
         id: pack_artifacts
         run: |
           zip -y -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
-          tar -czvf llama-${{ steps.tag.outputs.name }}-xcframework.tar.gz -C build-apple llama.xcframework
+          tar -cvf llama-${{ steps.tag.outputs.name }}-xcframework.tar -C build-apple llama.xcframework
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
