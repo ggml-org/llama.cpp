@@ -2292,48 +2292,20 @@ static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t) {
     h->nb[3] = t->nb[3];
 }
 
-template <size_t _Cnt>
-static size_t dspqueue_buffers_init(dspqueue_buffer (&bufs)[_Cnt],
-                                    const bool                                 is_src0_static,
-                                    const ggml_tensor *                        dst,
-                                    std::initializer_list<const ggml_tensor *> srcs) {
-    GGML_ASSERT(_Cnt == srcs.size() + 1);
-    GGML_ASSERT(srcs.size() > 0);
-
-    constexpr const auto buffer_init = [](dspqueue_buffer * buffer, const ggml_tensor * t, uint32_t flags) {
-        auto tensor_buf = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
-        buffer->fd      = tensor_buf->fd;
-        buffer->ptr     = t->data;
-        buffer->offset  = (uint8_t *) t->data - tensor_buf->base;
-        buffer->size    = ggml_nbytes(t);
-        buffer->flags   = flags;
-    };
-
-    memset(bufs, 0, sizeof(bufs));
-
-    const uint32_t src0_flags = is_src0_static ? 0 :
-                                                 (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                                                  DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
-    buffer_init(&bufs[0], srcs.begin()[0], src0_flags);
-
-    size_t n_bufs = 1;
-    for (size_t i = 1; i < srcs.size(); i++) {
-        auto * src = srcs.begin()[i];
-        if (!src) {
-            continue;
-        }
-
-        buffer_init(&bufs[n_bufs], srcs.begin()[i],
-                    DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |
-                        DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Flush CPU and Invalidate DSP
-        n_bufs++;
+static size_t dspqueue_buffers_init(dspqueue_buffer * buf, const ggml_tensor * t, bool flush_host, bool flush_htp) {
+    if (!t) {
+        return 0;
     }
 
-    buffer_init(&bufs[n_bufs], dst,
-                DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);  // Output buffer: flush CPU caches
-    n_bufs++;
-
-    return n_bufs;
+    memset(buf, 0, sizeof(*buf));
+    auto tensor_buf = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
+    buf->fd      = tensor_buf->fd;
+    buf->ptr     = t->data;
+    buf->offset  = (uint8_t *) t->data - tensor_buf->base;
+    buf->size    = ggml_nbytes(t);
+    buf->flags   = (flush_host ? DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER : 0);        // Flush CPU
+    buf->flags |= (flush_htp ? DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT : 0);  // Invalidate DSP
+    return 1;
 }
 
 static ggml_hexagon_session * get_session_from_tensor(const ggml_tensor * t) {
@@ -2374,20 +2346,23 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
         req.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
     }
 
+    dspqueue_buffer bufs[3];
+
     // First buffer Weights.
     // The content is static, there is no need to do any cache management
-    //
+    dspqueue_buffers_init(bufs, src0, false, false);
+
     // Second buffer Input Activations. This is a buffer that the CPU
     // writes and the DSP reads, so we'll need to flush CPU caches and
     // invalidate DSP ones. On platforms with I/O coherency support the
     // framework will automatically skip cache operations where possible.
-    //
+    dspqueue_buffers_init(&bufs[1], src1, true, true);
+
     // Third buffer Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    dspqueue_buffer bufs[3];
-    dspqueue_buffers_init(bufs, true, dst, { src0, src1 });
+    dspqueue_buffers_init(&bufs[2], dst, true, false);
 
     auto * sess = get_session_from_tensor(src0);
 
@@ -2443,25 +2418,28 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
         req.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
     }
 
+    dspqueue_buffer bufs[4];
     // First buffer Weights.
     // The content is static, there is no need to do any cache management
-    //
+    dspqueue_buffers_init(bufs, src0, false, false);
+
     // Second buffer Input Activations. This is a buffer that the CPU
     // writes and the DSP reads, so we'll need to flush CPU caches and
     // invalidate DSP ones. On platforms with I/O coherency support the
     // framework will automatically skip cache operations where possible.
-    //
+    dspqueue_buffers_init(&bufs[1], src1, true, true);
+
     // Third buffer expert IDs. This is a buffer that the CPU
     // writes and the DSP reads, so we'll need to flush CPU caches and
     // invalidate DSP ones. On platforms with I/O coherency support the
     // framework will automatically skip cache operations where possible.
-    //
+    dspqueue_buffers_init(&bufs[2], src2, true, true);
+
     // Forth buffer Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    dspqueue_buffer bufs[4];
-    dspqueue_buffers_init(bufs, true, dst, { src0, src1, src2 });
+    dspqueue_buffers_init(&bufs[3], dst, true, false);
 
     auto * sess = get_session_from_tensor(src0);
 
@@ -2533,24 +2511,26 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     init_htp_tensor(&req.src1, src1);
     init_htp_tensor(&req.dst, dst);
 
+    dspqueue_buffer bufs[3];
     // First buffer = First Operand of Binary op
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    //
+    dspqueue_buffers_init(bufs, src0, true, true);
+
     // Second buffer = Second Operand of Binary op
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    //
+    dspqueue_buffers_init(&bufs[1], src1, true, true);
+
     // Third buffer = Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    dspqueue_buffer bufs[3];
-    dspqueue_buffers_init(bufs, false, dst, { src0, src1 });
+    dspqueue_buffers_init(&bufs[2], dst, true, false);
 
     auto * sess = get_session_from_tensor(src0);
 
@@ -2616,12 +2596,15 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     init_htp_tensor(&req.src2, src2);
     init_htp_tensor(&req.dst, dst);
 
-    // First buffer = input activations
-    // Second buffer = experts bias
-    // Third buffer = activated experts
-    // Forth buffer = output activations
     dspqueue_buffer bufs[4];
-    dspqueue_buffers_init(bufs, false, dst, { src0, src1, src2 });
+    // First buffer = input activations
+    dspqueue_buffers_init(bufs, src0, true, true);
+    // Second buffer = experts bias
+    dspqueue_buffers_init(&bufs[1], src1, true, true);
+    // Third buffer = activated experts
+    dspqueue_buffers_init(&bufs[2], src2, true, true);
+    // Forth buffer = output activations
+    dspqueue_buffers_init(&bufs[3], dst, true, true);
 
     auto * sess = get_session_from_tensor(src0);
 
@@ -2719,25 +2702,28 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
         req.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
     }
 
+    dspqueue_buffer bufs[3];
+
     // First buffer = Only Operand of Unary op
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    //
+    size_t n_bufs = dspqueue_buffers_init(bufs, src0, true, true);
+
     // Second buffer(nullable) = Second Operand of Binary op
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    //
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src1, true, true);
+
     // Second or third buffer = Output Activations. We'll handle DSP
     // Second buffer = Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    dspqueue_buffer bufs[3];
-    size_t          n_bufs = dspqueue_buffers_init(bufs, false, dst, { src0, src1 });
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], dst, true, false);
 
     // Primary DSP session from the src0 tensor
     auto * sess = get_session_from_tensor(src0);
@@ -2815,31 +2801,35 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
         req.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
     }
 
+    dspqueue_buffer bufs[4];
+
     // First buffer
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    //
+    size_t n_bufs = dspqueue_buffers_init(bufs, src0, true, true);
+
     // Second buffer
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    //
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src1, true, true);
+
     // Third buffer(nullable)
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    //
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src2, true, true);
+
     // Final buffer = Output Activations. We'll handle DSP
     // Second buffer = Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    dspqueue_buffer bufs[4];
-    size_t          n_bufs = dspqueue_buffers_init(bufs, false, dst, { src0, src1, src2 });
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], dst, true, false);
 
     // Primary DSP session from the src0 tensor
     auto * sess = get_session_from_tensor(src0);
