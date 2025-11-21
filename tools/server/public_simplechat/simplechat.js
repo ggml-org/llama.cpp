@@ -9,12 +9,16 @@ import * as mTools from "./tools.mjs"
 import * as mIdb from "./idb.mjs"
 
 
+const TEMP_MARKER = "-TEMP"
+
 const DB_NAME = "SimpleChatTCRV"
 const DB_STORE = "Sessions"
 
-const ROLES_TEMP_ENDSWITH = "-TEMP"
+export const AI_TC_SESSIONNAME = `ExternalAI${TEMP_MARKER}`
 
-class Roles {
+const ROLES_TEMP_ENDSWITH = TEMP_MARKER
+
+export class Roles {
     static System = "system";
     static User = "user";
     static Assistant = "assistant";
@@ -33,7 +37,7 @@ class Roles {
 }
 
 
-class ApiEP {
+export class ApiEP {
     static Type = {
         Chat: "chat",
         Completion: "completion",
@@ -69,7 +73,7 @@ class ApiEP {
  * @typedef {{id: string, type: string, function: {name: string, arguments: string}}} NSToolCall
  */
 
-class NSChatMessage {
+export class NSChatMessage {
     /**
      * Represents a Message as seen in the http server Chat handshake
      * @param {string} role
@@ -260,7 +264,7 @@ class NSChatMessage {
 }
 
 
-class ChatMessageEx {
+export class ChatMessageEx {
 
     static uniqCounter = 0
 
@@ -1888,7 +1892,7 @@ export class Me {
 
     constructor() {
         this.baseURL = "http://127.0.0.1:8080";
-        this.defaultChatIds = [ "Default", "Other" ];
+        this.defaultChatIds = [ "Default", "Other", AI_TC_SESSIONNAME ];
         this.multiChat = new MultiChatUI(this);
         this.tools = {
             enabled: true,
