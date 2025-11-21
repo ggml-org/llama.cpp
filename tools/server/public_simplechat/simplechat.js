@@ -874,14 +874,13 @@ class SimpleChat {
      * Handle the multipart response from server/ai-model
      * @param {Response} resp
      * @param {string} apiEP
-     * @param {HTMLDivElement} elDivStream
+     * @param {Object<string, HTMLDivElement>} elDivStreams
      */
-    async handle_response_multipart(resp, apiEP, elDivStream) {
+    async handle_response_multipart(resp, apiEP, elDivStreams) {
         if (!resp.body) {
             throw Error("ERRR:SimpleChat:SC:HandleResponseMultiPart:No body...");
         }
-        let elP = ui.el_create_append_p("", elDivStream);
-        elP.classList.add("chat-message-content-live")
+        let elP = elDivStreams[this.chatId];
         try {
             let tdUtf8 = new TextDecoder("utf-8");
             let rr = resp.body.getReader();
@@ -944,15 +943,15 @@ class SimpleChat {
      * Also take care of the optional garbage trimming.
      * @param {Response} resp
      * @param {string} apiEP
-     * @param {HTMLDivElement} elDivStream - place the ai server response as its being generated.
+     * @param {Object<string, HTMLDivElement>} elDivStreams - used to place ai server chat response as it is being generated/recieved in streaming mode
      */
-    async handle_response(resp, apiEP, elDivStream) {
+    async handle_response(resp, apiEP, elDivStreams) {
         let theResp = null;
         try {
             if (this.handshakeProps.chatPropsStream) {
-                theResp = await this.handle_response_multipart(resp, apiEP, elDivStream);
+                theResp = await this.handle_response_multipart(resp, apiEP, elDivStreams);
                 this.latestResponse.clear();
-                elDivStream.replaceChildren()
+                elDivStreams[this.chatId].replaceChildren()
             } else {
                 theResp = await this.handle_response_oneshot(resp, apiEP);
             }
@@ -961,7 +960,7 @@ class SimpleChat {
             theResp.ns.role = Roles.Assistant;
             this.add(theResp);
             this.latestResponse.clear();
-            elDivStream.replaceChildren()
+            elDivStreams[this.chatId].replaceChildren()
             throw error;
         }
         if (this.me.chatProps.bTrimGarbage) {
@@ -981,9 +980,9 @@ class SimpleChat {
      * @param {string} baseURL
      * @param {string} apiEP
      * @param {SCHandshakeProps} hsProps
-     * @param {HTMLDivElement} elDivStream - used to show chat response as it is being generated/recieved in streaming mode
+     * @param {Object<string, HTMLDivElement>} elDivStreams - used to show chat response as it is being generated/recieved in streaming mode
      */
-    async handle_chat_hs(baseURL, apiEP, hsProps, elDivStream) {
+    async handle_chat_hs(baseURL, apiEP, hsProps, elDivStreams) {
         class ChatHSError extends Error {
             constructor(/** @type {string} */message) {
                 super(message);
@@ -1009,7 +1008,7 @@ class SimpleChat {
             throw new ChatHSError(`HandleChatHS:GotResponse:NotOk:${resp.status}:${resp.statusText}:${respBody}`);
         }
 
-        return this.handle_response(resp, apiEP, elDivStream);
+        return this.handle_response(resp, apiEP, elDivStreams);
     }
 
     /**
@@ -1140,8 +1139,8 @@ class MultiChatUI {
         this.elBtnUser.parentElement?.appendChild(this.elInFileX.elB)
 
         // other ui elements
-        this.elDivStream = document.createElement("div")
-        this.elDivStream.id = "DivStream"
+        /** @type {Object<string, HTMLDivElement>} */
+        this.elDivStreams = {}
 
         this.validate_element(this.elInSystem, "system-in");
         this.validate_element(this.elDivChat, "chat-div");
@@ -1438,7 +1437,7 @@ class MultiChatUI {
         if (bClear) {
             this.elDivChat.replaceChildren();
             this.ui_userinput_reset()
-            this.elDivStream.replaceChildren()
+            this.elDivStreams[chatId]?.replaceChildren()
         }
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
@@ -1451,7 +1450,7 @@ class MultiChatUI {
             }
             this.show_message(this.elDivChat, x, iFromLast, nextMsg)
         }
-        this.elDivChat.appendChild(this.elDivStream)
+        this.elDivChat.appendChild(this.elDivStreams[chatId])
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         } else {
@@ -1470,13 +1469,7 @@ class MultiChatUI {
      * @param {number} uniqIdChatMsg
      */
     chatmsg_ui_remove(uniqIdChatMsg) {
-        while (true) {
-            let el = document.querySelector (`[CMUniqId="${uniqIdChatMsg}"]`)
-            if (!el) {
-                return
-            }
-            el?.remove()
-        }
+        ui.remove_els(`[CMUniqId="${uniqIdChatMsg}"]`)
     }
 
     /**
@@ -1516,6 +1509,7 @@ class MultiChatUI {
                 this.show_message(this.elDivChat, msg, (i-1), nextMsg)
             }
         }
+        this.elDivChat.appendChild(this.elDivChat.removeChild(this.elDivStreams[chatId]))
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         }
@@ -1683,6 +1677,8 @@ class MultiChatUI {
      */
     new_chat_session(chatId, bSwitchSession=false) {
         this.simpleChats[chatId] = new SimpleChat(chatId, this.me);
+        this.elDivStreams[chatId] = document.createElement('div')
+        this.elDivStreams[chatId].classList.add("chat-message-content-live")
         if (bSwitchSession) {
             this.handle_session_switch(chatId);
         }
@@ -1758,7 +1754,7 @@ class MultiChatUI {
         this.elInUser.disabled = true;
 
         try {
-            let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, { chatPropsStream: this.me.chatProps.stream, toolsEnabled: this.me.tools.enabled }, this.elDivStream)
+            let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, { chatPropsStream: this.me.chatProps.stream, toolsEnabled: this.me.tools.enabled }, this.elDivStreams)
             if (chatId == this.curChatId) {
                 this.chat_uirefresh(chatId);
                 if ((theResp.trimmedContent) && (theResp.trimmedContent.length > 0)) {
