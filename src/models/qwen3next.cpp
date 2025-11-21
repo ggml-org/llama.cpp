@@ -338,6 +338,9 @@ ggml_tensor * llm_build_qwen3next::delta_net_unified(ggml_context * ctx,
     ggml_build_forward_expand(gf, core_attn_out);
     ggml_build_forward_expand(gf, new_state);
 
+    ggml_set_input(core_attn_out);
+    ggml_set_input(new_state);
+
     int64_t num_chunks = n_tokens % CHUNK_SIZE == 0 ? (n_tokens / CHUNK_SIZE - 1) : n_tokens / CHUNK_SIZE;
     
     for (int64_t chunk = 0; chunk < num_chunks; chunk++) {
