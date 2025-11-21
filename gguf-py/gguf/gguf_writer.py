@@ -373,7 +373,8 @@ class GGUFWriter:
         raw_dtype: GGMLQuantizationType | None = None,
     ) -> None:
         if self.endianess == GGUFEndian.BIG:
-            tensor.byteswap(inplace=True)
+            # Don't byteswap inplace since lazy copies cannot handle it
+            tensor = tensor.byteswap(inplace=False)
         if self.use_temp_file and self.temp_file is None:
             fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024)
             fp.seek(0)
@@ -400,7 +401,8 @@ class GGUFWriter:
         assert self.fout is not None
 
         if self.endianess == GGUFEndian.BIG:
-            tensor.byteswap(inplace=True)
+            # Don't byteswap inplace since lazy copies cannot handle it
+            tensor = tensor.byteswap(inplace=False)
 
         file_id = -1
         for i, tensors in enumerate(self.tensors):
