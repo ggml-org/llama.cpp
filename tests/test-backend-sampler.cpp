@@ -325,6 +325,13 @@ static void test_backend_top_k_sampling(const char * model_path) {
         printf("top_k logit[%zu] = %.6f\n", i, logits[i]);
     }
 
+    llama_token * candidates = llama_get_backend_sampled_candidates_ith(test_ctx.ctx, batch_idx);
+    uint32_t n_candidates = llama_get_backend_sampled_candidates_count_ith(test_ctx.ctx, batch_idx);
+    for (size_t i = 0; i < n_candidates; ++i) {
+        printf("top_k candidate[%zu] = %d : %s\n", i, candidates[i],
+               test_ctx.token_to_piece(candidates[i], false).c_str());
+    }
+
     // Sample using CPU sampler for verification that it is possible to do hybrid
     // sampling, first top_k on the backend and then dist on the CPU.
     struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
@@ -369,6 +376,9 @@ static void test_backend_temp_sampling(const char * model_path) {
 
     int32_t batch_idx_0 = test_ctx.idx_for_seq(0);
     int32_t batch_idx_1 = test_ctx.idx_for_seq(1);
+
+    int n_logits = llama_get_backend_sampled_logits_count_ith(test_ctx.ctx, batch_idx_0);
+    GGML_ASSERT(n_logits == test_ctx.n_vocab);
 
     // Sample from sequence 0 using CPU sampler
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();

@@ -70,11 +70,13 @@ struct llama_context {
     llama_token         get_backend_sampled_token_ith(int32_t idx);
 
     float             * get_backend_sampled_logits_ith(int32_t idx);
-    const llama_token * get_backend_sampled_token_ids_ith(int32_t idx);
-    size_t              get_backend_sampled_logits_count(int32_t idx) const;
+    size_t              get_backend_sampled_logits_count(int32_t idx);
 
     float             * get_backend_sampled_probs_ith(int32_t idx);
-    size_t              get_backend_sampled_probs_count(int32_t idx) const;
+    size_t              get_backend_sampled_probs_count(int32_t idx);
+
+    const llama_token * get_backend_sampled_candidates_ith(int32_t idx);
+    size_t              get_backend_sampled_candidates_count(int32_t idx);
 
     void attach_threadpool(
             ggml_threadpool_t threadpool,
@@ -201,6 +203,7 @@ private:
     uint32_t output_reserve(int32_t n_outputs);
 
     void output_reorder();
+    int64_t resolve_output_row(int32_t i) const;
 
     //
     // graph
@@ -257,13 +260,22 @@ private:
     struct sampling_info {
         std::unordered_map<llama_seq_id, llama_sampler*> samplers;
 
-        llama_token * sampled = nullptr;
-        float       * probs = nullptr;
+        float       * logits      = nullptr;
+        size_t        logits_size = 0;
 
-        std::unordered_map<int32_t, llama_token>              map_sampled;
-        std::unordered_map<int32_t, std::vector<float>>       map_probs;
-        std::unordered_map<int32_t, std::vector<float>>       map_logits;
-        std::unordered_map<int32_t, std::vector<llama_token>> map_cadidates;
+        llama_token * sampled      = nullptr;
+        size_t        sampled_size = 0;
+
+        float       * probs        = nullptr;
+        size_t        probs_size   = 0;
+
+        llama_token * candidates   = nullptr;
+        size_t        candidates_size = 0;
+
+        size_t outputs_capacity = 0;
+        std::vector<uint32_t> logits_count;
+        std::vector<uint32_t> probs_count;
+        std::vector<uint32_t> candidates_count;
 
         std::vector<llama_token> token_ids_full_vocab;
     };

@@ -974,20 +974,23 @@ extern "C" {
     // The index matches llama_get_backend_sampled_token_ith().
     // Returns NULL if no probabilites were generated.
     LLAMA_API float * llama_get_backend_sampled_probs_ith(struct llama_context * ctx, int32_t i);
+    //
+    // Get the number of backend sampled probabilites for the ith token.
+    LLAMA_API uint32_t llama_get_backend_sampled_probs_count_ith(struct llama_context * ctx, int32_t i);
 
     // Get the backend sampled logits for the ith token
     // Returns NULL if no logits were sampled.
     LLAMA_API float * llama_get_backend_sampled_logits_ith(struct llama_context * ctx, int32_t i);
-
-    // Get the backend sampled token ids associated with the sampled logits for the ith token
-    // Returns NULL if no logits were sampled.
-    LLAMA_API llama_token * llama_get_backend_sampled_token_ids_ith(struct llama_context * ctx, int32_t i);
-
+    //
     // Get the number of backend sampled logits for the ith token.
     LLAMA_API uint32_t llama_get_backend_sampled_logits_count_ith(struct llama_context * ctx, int32_t i);
 
-    // Get the number of backend sampled probabilites for the ith token.
-    LLAMA_API uint32_t llama_get_backend_sampled_probs_count_ith(struct llama_context * ctx, int32_t i);
+    // Get the backend sampled candidates (token ids) for the ith token
+    // Returns NULL if no candidates were sampled.
+    LLAMA_API llama_token * llama_get_backend_sampled_candidates_ith(struct llama_context * ctx, int32_t i);
+    //
+    // Get the number of backend sampled candidates for the ith token.
+    LLAMA_API uint32_t llama_get_backend_sampled_candidates_count_ith(struct llama_context * ctx, int32_t i);
 
     //
     // Vocab

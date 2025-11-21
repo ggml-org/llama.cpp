@@ -113,9 +113,9 @@ struct common_sampler {
     llama_token_data_array cur_p;
 
     void set_logits(struct llama_context * ctx, int idx) {
-        const float *       sampled_probs  = llama_get_backend_sampled_probs_ith    (ctx, idx);
-        const float *       sampled_logits = llama_get_backend_sampled_logits_ith   (ctx, idx);
-        const llama_token * sampled_ids    = llama_get_backend_sampled_token_ids_ith(ctx, idx);
+        const float *       sampled_probs  = llama_get_backend_sampled_probs_ith     (ctx, idx);
+        const float *       sampled_logits = llama_get_backend_sampled_logits_ith    (ctx, idx);
+        const llama_token * sampled_ids    = llama_get_backend_sampled_candidates_ith(ctx, idx);
 
         const llama_model * model = llama_get_model(ctx);
         const llama_vocab * vocab = llama_model_get_vocab(model);
