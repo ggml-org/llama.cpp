@@ -493,15 +493,8 @@ void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs
 
         // Complex multiplication: (a+bi)(c+di) = (ac+bd) + (-ad+bc)i
         sum_real += w_real * x_real * (float)sum_ac + w_imag * x_imag * (float)sum_bd;
-        if(sum_real != sum_real){
-            GGML_ABORT("nan discoverd, w_real is %f, w_imag is %f, x_real is %f, x_imag is %f, sum_ac is %d, sum_bd is %d\n",
-                w_real, w_imag, x_real, x_imag, sum_ac, sum_bd);
-        }
+
         sum_imag += w_imag * x_real * (float)sum_bc - w_real * x_imag * (float)sum_ad;
-        if(sum_imag != sum_imag){
-            GGML_ABORT("nan discoverd, w_real is %f, w_imag is %f, x_real is %f, x_imag is %f, sum_bc is %d, sum_ad is %d\n",
-                w_real, w_imag, x_real, x_imag, sum_bc, sum_ad);
-        }
     }
 
     ((ggml_bf16_t*)s)[0] = GGML_FP32_TO_BF16(sum_real);

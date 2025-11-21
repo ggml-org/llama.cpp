@@ -2698,19 +2698,13 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
 
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);
             float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
-
-            // todo_liweitao 是不是可以删了
-            if(__builtin_expect(!!(x_real!=x_real), 0)){
-                GGML_ABORT("nan discovered, x_com in binary32 format: [%08x] [%04x %04x]", ((const uint32_t*)(x_com))[0], ((const ggml_bf16_t*)(x_com))[0].bits, ((const ggml_bf16_t*)(x_com))[1].bits);
-            }
-
+          
             max_real = MAX(max_real, fabsf(x_real));
             max_imag = MAX(max_imag, fabsf(x_imag));
         }
 
         const float iscale_real = 127.f / max_real;
         const float iscale_imag = 127.f / max_imag;
-        //GGML_LOG("max_real = %f, iscale_real = %f, max_imag = %f, iscale_imag = %f\n", max_real, iscale_real, max_imag, iscale_imag);
         for (int j = 0; j < QK_K; ++j) {
             const float* x_com = x + j;
 

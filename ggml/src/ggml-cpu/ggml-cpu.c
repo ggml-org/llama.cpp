@@ -1210,7 +1210,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
         }
     }
 }
-int n_ti = 0;
+
 void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1403,7 +1403,6 @@ UseGgmlGemm2:;
 
         current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
     }
-    GGML_LOG("mul_mat end, time = %d\n", n_ti++);
 }
 
 // ggml_compute_forward_mul_mat_id
