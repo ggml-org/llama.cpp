@@ -4,6 +4,14 @@ In short, this repository is designed to make llama.cpp easily accessible for An
 
 ![llamacppforaarch64](logo.png)
 
+# Usage
+
+Pull the repo and build.zip, then unpack build.zip
+
+```bash
+cd llama.cpp
+chmod +x ds.sh && ./ds.sh
+
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
 [![Server](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml/badge.svg)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
