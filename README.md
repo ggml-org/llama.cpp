@@ -2,7 +2,7 @@
 
 In short, this repository is designed to make llama.cpp easily accessible for Android users, particularly those on Termux. It provides pre-compiled binaries, Deepseek-R1 1.5b Model, along with the source code and build files, saving you the hassle of navigating complex dependency hell and the expense of your valuable time.
 
-![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
+![llamacppforaarch64](logo.png)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
