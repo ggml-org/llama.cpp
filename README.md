@@ -11,6 +11,7 @@ Pull the repo and build.zip, then unpack build.zip
 ```bash
 cd llama.cpp
 chmod +x ds.sh && ./ds.sh
+```
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
