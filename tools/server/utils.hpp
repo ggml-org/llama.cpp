@@ -9,16 +9,6 @@
 #include "mtmd-helper.h"
 #include "chat.h"
 
-// increase max payload length to allow use of larger context size
-#define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
-// increase backlog size to avoid connection resets for >> 1 slots
-#define CPPHTTPLIB_LISTEN_BACKLOG 512
-// increase max URI length to handle longer prompts in query string
-#define CPPHTTPLIB_REQUEST_URI_MAX_LENGTH 32768
-// disable Nagle's algorithm
-#define CPPHTTPLIB_TCP_NODELAY true
-#include <cpp-httplib/httplib.h>
-
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
@@ -434,6 +424,10 @@ static std::string gen_tool_call_id() {
 // other common utils
 //
 
+static std::string safe_json_to_str(const json & data) {
+    return data.dump(-1, ' ', false, json::error_handler_t::replace);
+}
+
 // TODO: reuse llama_detokenize
 template <class Iter>
 static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
@@ -461,15 +455,25 @@ static std::string tokens_to_output_formatted_string(const llama_context * ctx, 
     return out;
 }
 
-static bool server_sent_event(httplib::DataSink & sink, const json & data) {
-    const std::string str =
-        "data: " +
-        data.dump(-1, ' ', false, json::error_handler_t::replace) +
-        "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
+// format server-sent event (SSE), return the formatted string to send
+// note: if data is a json array, it will be sent as multiple events, one per item
+static std::string format_sse(const json & data) {
+    std::ostringstream ss;
+    auto send_single = [&ss](const json & data) {
+        ss << "data: " <<
+            safe_json_to_str(data) <<
+            "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
+    };
 
-    LOG_DBG("data stream, to_send: %s", str.c_str());
+    if (data.is_array()) {
+        for (const auto & item : data) {
+            send_single(item);
+        }
+    } else {
+        send_single(data);
+    }
 
-    return sink.write(str.c_str(), str.size());
+    return ss.str();
 }
 
 //
@@ -946,10 +950,6 @@ static json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) 
         });
     }
     return data;
-}
-
-static std::string safe_json_to_str(const json & data) {
-    return data.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
 static std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx) {
