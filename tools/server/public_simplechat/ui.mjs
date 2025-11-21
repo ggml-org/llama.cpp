@@ -415,3 +415,18 @@ export function ui_show_obj_props_info(elParent, oObj, lProps, sLegend, sOffset=
         }
     }
 }
+
+
+/**
+ * Remove elements which match specified selectors template
+ * @param {string} sSelectorsTemplate
+ */
+export function remove_els(sSelectorsTemplate) {
+    while (true) {
+        let el = document.querySelector (sSelectorsTemplate)
+        if (!el) {
+            return
+        }
+        el?.remove()
+    }
+}
