@@ -223,17 +223,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             endforeach()
 
             include(CheckCXXSourceCompiles)
-            
-            # specify Android cross compile target
-            if("${GGML_CPU_NAME}" MATCHES ".*android.*")
-              set(ANDROID_TARGET_FLAG "--target=aarch64-linux-android${ANDROID_API_LEVEL}")
-            else()
-              set(ANDROID_TARGET_FLAG "")
-            endif()
-
             set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
-            set(CMAKE_REQUIRED_FLAGS "${ARCH_FLAGS}" "{ANDROID_TARGET_FLAG}")
-
+            set(CMAKE_REQUIRED_FLAGS "${ARCH_FLAGS}")
             foreach(feature DOTPROD SVE MATMUL_INT8 FMA FP16_VECTOR_ARITHMETIC SME)
                 set(ARM_FEATURE "HAVE_${feature}")
                 check_cxx_source_compiles(
