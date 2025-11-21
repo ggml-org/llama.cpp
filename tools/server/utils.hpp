@@ -1043,7 +1043,14 @@ static json anthropic_messages_params_parse(
         body["messages"] = new_messages;
     }
 
-    json parsed = oaicompat_chat_params_parse(body, opt, out_files);
+    oaicompat_parser_options anthropic_opt = opt;
+    if (opt.enable_thinking && opt.prefill_assistant) {
+        if (!body["messages"].empty() && body["messages"].back()["role"] == "assistant") {
+            anthropic_opt.enable_thinking = false;
+        }
+    }
+
+    json parsed = oaicompat_chat_params_parse(body, anthropic_opt, out_files);
 
     for (const auto & item : llama_params.items()) {
         parsed[item.key()] = item.value();
