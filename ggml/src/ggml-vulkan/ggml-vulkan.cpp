@@ -513,6 +513,7 @@ struct vk_device_struct {
     vk_queue compute_queue;
     vk_queue transfer_queue;
     bool single_queue;
+    bool support_async;
     uint32_t subgroup_size;
     uint32_t shader_core_count;
     bool uma;
@@ -4272,6 +4273,16 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->properties = props2.properties;
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
+
+        // Implementing the async backend interfaces seems broken on older Intel HW,
+        // see https://github.com/ggml-org/llama.cpp/issues/17302.
+        device->support_async = (device->vendor_id != VK_VENDOR_ID_INTEL ||
+                                 std::string(device->properties.deviceName.data()).find("(DG1)") == std::string::npos) &&
+                                getenv("GGML_VK_DISABLE_ASYNC") == nullptr;
+
+        if (!device->support_async) {
+            GGML_LOG_DEBUG("ggml_vulkan: WARNING: Async execution disabled on certain Intel devices.\n");
+        }
 
         const char* GGML_VK_FORCE_MAX_ALLOCATION_SIZE = getenv("GGML_VK_FORCE_MAX_ALLOCATION_SIZE");
 
@@ -13187,6 +13198,10 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->device->perf_logger->print_timings();
     }
 
+    if (!ctx->device->support_async) {
+        ggml_vk_synchronize(ctx);
+    }
+
     return GGML_STATUS_SUCCESS;
 
     UNUSED(backend);
@@ -13479,6 +13494,10 @@ ggml_backend_t ggml_backend_vk_init(size_t dev_num) {
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), dev_num),
         /* .context = */ ctx,
     };
+
+    if (!ctx->device->support_async) {
+        vk_backend->iface.get_tensor_async = nullptr;
+    }
 
     return vk_backend;
 }
