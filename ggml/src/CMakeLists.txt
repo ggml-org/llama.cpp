@@ -221,6 +221,10 @@ if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
 
+if (GGML_SCHED_NO_REALLOC)
+    target_compile_definitions(ggml-base PUBLIC GGML_SCHED_NO_REALLOC)
+endif()
+
 add_library(ggml
             ggml-backend-reg.cpp)
 add_library(ggml::ggml ALIAS ggml)
