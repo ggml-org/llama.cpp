@@ -9,7 +9,7 @@
 	import { supportsVision } from '$lib/stores/server.svelte';
 	import { getParameterInfo, resetParameterToServerDefault } from '$lib/stores/settings.svelte';
 	import { ParameterSyncService } from '$lib/services/parameter-sync';
-	import ParameterSourceIndicator from './ParameterSourceIndicator.svelte';
+	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -63,7 +63,7 @@
 					{/if}
 				</Label>
 				{#if isCustomRealTime}
-					<ParameterSourceIndicator />
+					<ChatSettingsParameterSourceIndicator />
 				{/if}
 			</div>
 
@@ -145,7 +145,7 @@
 					{/if}
 				</Label>
 				{#if isCustomRealTime}
-					<ParameterSourceIndicator />
+					<ChatSettingsParameterSourceIndicator />
 				{/if}
 			</div>
 
