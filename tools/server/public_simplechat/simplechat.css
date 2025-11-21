@@ -6,6 +6,11 @@
 :root {
     --background-color: #f4f4f9;
     --background-color-contrast-vlight: #e8e8e8;
+    --system-color: lightblue;
+    --user-color: #D0F0FF;
+    --assistant-color: #F7FAFC;
+    --tool-call-color: antiquewhite;
+    --tool-resp-color: #B0F0E0;
 }
 
 body {
@@ -17,7 +22,7 @@ body {
 }
 
 #heading {
-    background: linear-gradient(135deg, var(--background-color) 0%, lightblue 100%);
+    background: linear-gradient(135deg, var(--background-color) 0%, var(--system-color) 100%);
     margin: 0;
 }
 #sessions-div {
@@ -32,7 +37,7 @@ body {
 }
 
 .session-selected {
-    background-color: lightblue;
+    background-color: var(--system-color);
 }
 
 #sessionsprompts-div .role-system {
@@ -44,21 +49,21 @@ body {
 }
 
 .role-system {
-    background: linear-gradient(135deg, lightblue 0%, var(--background-color) 100%);
+    background: linear-gradient(135deg, var(--system-color) 0%, var(--background-color) 100%);
     border-radius: 0.1vmin;
 }
 .role-user {
-    background: linear-gradient(135deg, #D0F0FF 0%, var(--background-color) 100%);
+    background: linear-gradient(135deg, var(--user-color) 0%, var(--background-color) 100%);
 }
 .role-assistant {
     text-align: initial;
-    background: linear-gradient(135deg, #F7FAFC 0%, var(--background-color) 100%)
+    background: linear-gradient(135deg, var(--assistant-color) 0%, var(--background-color) 100%)
 }
 .role-tool {
-    background: linear-gradient(135deg, var(--background-color) 0%, lightyellow 100%);
+    background: linear-gradient(135deg, var(--background-color) 0%, var(--tool-resp-color) 100%);
 }
 .role-TOOL-TEMP {
-    background: linear-gradient(135deg, var(--background-color) 0%, lightyellow 100%);
+    background: linear-gradient(135deg, var(--background-color) 0%, var(--tool-resp-color) 100%);
 }
 .role-trim {
     background: linear-gradient(135deg, lightpink 0%, transparent 100%);
@@ -178,7 +183,7 @@ body {
     border-width: thin;
     border-color: yellow;
     border-style: ridge;
-    background-color: antiquewhite;
+    background-color: var(--tool-call-color);
 }
 #user-in-div {
     border-width: thin;
@@ -201,7 +206,7 @@ body {
     max-height: 16vh;
 }
 #user-in[data-role="TOOL-TEMP"] {
-    background-color: lightyellow;
+    background: linear-gradient(135deg, var(--background-color) 0%, var(--tool-resp-color) 100%);
 }
 #user-in-div button {
     padding-inline: 1vmin;
