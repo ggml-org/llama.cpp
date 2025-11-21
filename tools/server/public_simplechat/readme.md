@@ -461,10 +461,25 @@ The following tools/functions are currently provided by default
 
 * data_store_get/set/delete/list - allows for a basic data store to be used.
 
-All of the above are run from inside web worker contexts. Currently the ai generated code / expression
-is run through a simple minded eval inside a web worker mechanism. Use of WebWorker helps avoid exposing
-browser global scope to the generated code directly. However any shared web worker scope isnt isolated.
-Either way always remember to cross check the tool requests and generated responses when using tool calling.
+* external_ai - allows ai to use an independent session of itself/ai, with a custom system prompt
+  of ai's choosing and similarly user message of ai's choosing, in order to get any job it deems
+  necessary to be done in a uncluttered indepedent session.
+  * helps ai to process stuff that it needs, without having to worry about any previous chat history
+    etal messing with the current data's processing.
+  * helps ai to process stuff with targeted system prompts of its choosing, for the job at hand.
+  * Could be used by ai for example to
+    * summarise a large text content, where it could use the context of the text to generate a
+      suitable system prompt for summarising things suitably
+    * create a structured data from a raw textual data
+    * act as a literary critic or any domain expert as the case may be
+    * or so and so and so ...
+
+Most of the above (except for external ai call) are run from inside web worker contexts. Currently the
+ai generated code / expression is run through a simple minded eval inside a web worker mechanism. Use
+of WebWorker helps avoid exposing browser global scope to the generated code directly. However any
+shared web worker scope isnt isolated.
+
+Either way always remember to cross check tool requests and generated responses when using tool calling.
 
 ##### using bundled simpleproxy.py (helps bypass browser cors restriction, ...)
 
@@ -475,7 +490,7 @@ Either way always remember to cross check the tool requests and generated respon
   nav, ... blocks.
 
 * search_web_text - search for the specified words using the configured search engine and return the
-plain textual content from the search result page.
+  plain textual content from the search result page.
 
 * fetch_pdf_as_text - fetch/read specified pdf file and extract its textual content
   * this depends on the pypdf python based open source library
@@ -838,6 +853,7 @@ Cleanup in general
 * Allow user to load multiple images and submit to ai as part of a single user message.
 * Use popover ui to allow user to view larger versions of loaded images as well as remove before submitting
   to ai, if and when needed.
+* add external_ai toolcall
 
 
 #### ToDo
@@ -866,9 +882,6 @@ potentially.
 MAYBE add a special ClientSideOnly role for use wrt Chat history to maintain things to be shown in a chat
 session to the end user, but inturn not to be sent to the ai server. Ex current settings or so ...
 
-Update UIRefresh helper to optionally remove messages no longer in the sliding window, so user only sees
-what is sent to the ai server in the chat session messages ui.
-
 Updating system prompt, will reset user input area fully now, which seems a good enough behaviour, while
 keeping the code flow also simple and straight, do I need to change it, I dont think so as of now.
 
@@ -877,13 +890,8 @@ or show all the messages (ie even beyond the sliding window)?
 * rather previously with chat_show only whats in current sliding window was being shown, but now with
   the uirefresh based logic, all messages from last chat_show will be shown irrespective of whether still
   in ai server handshake related sliding window or not.
-
-Add support for submitting multiple images in a single user query/response.
-
-Allow ai to use a independent session of itself/ai as a tool call, with a custom system prompt it generates,
-in order to get any job it deems necessary to be done in a uncluttered independent session. Could be used by
-ai to summarise a large text content, where it could using the context of the text to generate a suitable
-system prompt for summarising things suitably or so and so and so ...
+* Update UIRefresh helper to optionally remove messages no longer in the sliding window, so user only sees
+  what is sent to the ai server in the chat session messages ui.
 
 For now amn't bringing in mozilla/github/standard-entities pdf, md, mathslatex etal javascript libraries for
 their respective functionalities.

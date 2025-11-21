@@ -23,11 +23,11 @@ let externalai_meta = {
                     "type": "string",
                     "description": "The system prompt to define the role and expected behavior of the external AI.",
                     "required": true,
-                    "example": "You are a professional summarizer. Summarize the following text in 100 words:"
+                    "example": "You are a professional summarizer. Summarize the following text with up to around 500 words, or as the case may be based on the context:"
                 },
                 "user_message": {
                     "type": "string",
-                    "description": "The message to be processed by the external AI.",
+                    "description": "The detailed message with all the needed context to be processed by the external AI.",
                     "required": true,
                     "example": "This is a long document about climate change. It discusses rising temperatures, policy responses, and future projections. The remaining part of the document is captured here..."
                 },
@@ -94,7 +94,7 @@ function externalai_run(chatid, toolcallid, toolname, obj) {
 
     sc.add_system_anytime(obj['system_prompt'], 'TC:ExternalAI')
     sc.add(new mChatMagic.ChatMessageEx(new mChatMagic.NSChatMessage(mChatMagic.Roles.User, obj['user_message'])))
-    sc.handle_chat_hs(gMe.baseURL, mChatMagic.ApiEP.Type.Chat, gMe.multiChat.elDivChat).then((resp)=>{
+    sc.handle_chat_hs(gMe.baseURL, mChatMagic.ApiEP.Type.Chat, { chatPropsStream: gMe.chatProps.stream, toolsEnabled: false }, gMe.multiChat.elDivChat).then((resp)=>{
         gMe.toolsMgr.workers_postmessage_for_main(gMe.toolsMgr.workers.js, chatid, toolcallid, toolname, resp.content_equiv());
     }).catch((err)=>{
         gMe.toolsMgr.workers_postmessage_for_main(gMe.toolsMgr.workers.js, chatid, toolcallid, toolname, `Error:TC:ExternalAI:${err}`);
