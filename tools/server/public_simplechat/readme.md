@@ -467,6 +467,10 @@ The following tools/functions are currently provided by default
   * helps ai to process stuff that it needs, without having to worry about any previous chat history
     etal messing with the current data's processing.
   * helps ai to process stuff with targeted system prompts of its choosing, for the job at hand.
+  * tool calling is disabled wrt the external_ai's independent session, for now.
+    * it was noticed that else even the external_ai may call into more external_ai calls trying to
+      find answer to the same question. maybe one can enable tool calling, while explicitly disabling
+      external_ai tool call from within external_ai tool call or so ...
   * Could be used by ai for example to
     * summarise a large text content, where it could use the context of the text to generate a
       suitable system prompt for summarising things suitably
@@ -854,6 +858,11 @@ Cleanup in general
 * Use popover ui to allow user to view larger versions of loaded images as well as remove before submitting
   to ai, if and when needed.
 * add external_ai toolcall
+* maintain chat session specific DivStream elements, so that in future, if the logic is updated to allow
+  switching in the middle of a pending tool call or pending ai server response, things dont mess up wrt
+  ui, as they will be updating their respective DivStream and switching sessions will also take care of
+  making the right DivStream the currently active one, so that end user can see the streamed response
+  as it is occuring.
 
 
 #### ToDo

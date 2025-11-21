@@ -919,7 +919,7 @@ class SimpleChat {
                 }
             }
         } finally {
-            elP.remove()
+            elP.replaceChildren()
         }
         console.debug("DBUG:SC:PART:Full:", this.latestResponse.content_equiv());
         return ChatMessageEx.newFrom(this.latestResponse);
@@ -1509,13 +1509,10 @@ class MultiChatUI {
                 this.show_message(this.elDivChat, msg, (i-1), nextMsg)
             }
         }
-        try {
-            this.elDivChat.removeChild(this.elDivStreams[chatId])
-        } catch {
-            console.log(`DBUG:SimpleChat:MCUI:UiRefresh:Removing ${chatId} DivStream ${this.elDivStreams[chatId].id} failed...`)
-        } finally {
-            this.elDivChat.appendChild(this.elDivStreams[chatId])
+        if (!this.elDivChat.contains(this.elDivStreams[chatId])) {
+            console.log(`DBUG:SimpleChat:MCUI:UiRefresh:${chatId}: DivStream ${this.elDivStreams[chatId].id} missing...`)
         }
+        this.elDivChat.appendChild(this.elDivStreams[chatId])
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         }
