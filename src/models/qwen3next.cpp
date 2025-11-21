@@ -281,7 +281,7 @@ ggml_tensor * llm_build_qwen3next::delta_net_chunking(ggml_context * ctx,
         attn = ggml_mul(ctx, attn, decay_mask_chunk);
         attn = ggml_mul(ctx, attn, ggml_add(ctx, chunked_identity, chunked_mask));
 
-        ggml_tensor * state_t = ggml_cont(ctx, ggml_permute(ctx, new_state, 1, 0, 3, 2));
+        ggml_tensor * state_t = ggml_cont_4d(ctx, ggml_permute(ctx, new_state, 1, 0, 2, 3), S_v, S_v, 1, H_v * n_seqs);
 
         // v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
         ggml_tensor * v_prime = ggml_mul_mat(ctx, state_t, k_cumdecay_chunk);
@@ -332,6 +332,8 @@ ggml_tensor * llm_build_qwen3next::delta_net_chunking(ggml_context * ctx,
 
         new_state = ggml_add(ctx, ggml_mul(ctx, new_state, ggml_permute(ctx, gexp_last, 0, 1, 3, 2)), ggml_permute(ctx, kgdmulvnew, 0, 1, 3, 2));
     }
+
+    core_attn_out = ggml_cont_4d(ctx, core_attn_out, S_v, chunk_size * n_chunks, H_v, n_seqs);
 
     ggml_tensor * output_tokens = ggml_view_4d(ctx, core_attn_out, S_v, n_tokens, H_v, n_seqs, core_attn_out->nb[1], core_attn_out->nb[2], core_attn_out->nb[3], 0);
     cb(output_tokens, "output_tokens", il);
