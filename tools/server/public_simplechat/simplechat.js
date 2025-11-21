@@ -874,13 +874,13 @@ class SimpleChat {
      * Handle the multipart response from server/ai-model
      * @param {Response} resp
      * @param {string} apiEP
-     * @param {HTMLDivElement} elDiv
+     * @param {HTMLDivElement} elDivStream
      */
-    async handle_response_multipart(resp, apiEP, elDiv) {
+    async handle_response_multipart(resp, apiEP, elDivStream) {
         if (!resp.body) {
             throw Error("ERRR:SimpleChat:SC:HandleResponseMultiPart:No body...");
         }
-        let elP = ui.el_create_append_p("", elDiv);
+        let elP = ui.el_create_append_p("", elDivStream);
         elP.classList.add("chat-message-content-live")
         try {
             let tdUtf8 = new TextDecoder("utf-8");
@@ -944,14 +944,15 @@ class SimpleChat {
      * Also take care of the optional garbage trimming.
      * @param {Response} resp
      * @param {string} apiEP
-     * @param {HTMLDivElement} elDiv
+     * @param {HTMLDivElement} elDivStream - place the ai server response as its being generated.
      */
-    async handle_response(resp, apiEP, elDiv) {
+    async handle_response(resp, apiEP, elDivStream) {
         let theResp = null;
         try {
             if (this.handshakeProps.chatPropsStream) {
-                theResp = await this.handle_response_multipart(resp, apiEP, elDiv);
+                theResp = await this.handle_response_multipart(resp, apiEP, elDivStream);
                 this.latestResponse.clear();
+                elDivStream.replaceChildren()
             } else {
                 theResp = await this.handle_response_oneshot(resp, apiEP);
             }
@@ -960,6 +961,7 @@ class SimpleChat {
             theResp.ns.role = Roles.Assistant;
             this.add(theResp);
             this.latestResponse.clear();
+            elDivStream.replaceChildren()
             throw error;
         }
         if (this.me.chatProps.bTrimGarbage) {
@@ -979,9 +981,9 @@ class SimpleChat {
      * @param {string} baseURL
      * @param {string} apiEP
      * @param {SCHandshakeProps} hsProps
-     * @param {HTMLDivElement} elDivChat - used to show chat response as it is being generated/recieved in streaming mode
+     * @param {HTMLDivElement} elDivStream - used to show chat response as it is being generated/recieved in streaming mode
      */
-    async handle_chat_hs(baseURL, apiEP, hsProps, elDivChat) {
+    async handle_chat_hs(baseURL, apiEP, hsProps, elDivStream) {
         class ChatHSError extends Error {
             constructor(/** @type {string} */message) {
                 super(message);
@@ -1007,7 +1009,7 @@ class SimpleChat {
             throw new ChatHSError(`HandleChatHS:GotResponse:NotOk:${resp.status}:${resp.statusText}:${respBody}`);
         }
 
-        return this.handle_response(resp, apiEP, elDivChat);
+        return this.handle_response(resp, apiEP, elDivStream);
     }
 
     /**
@@ -1136,6 +1138,10 @@ class MultiChatUI {
         }, 'user-in')
         this.elInFileX.elB.title = "Image"
         this.elBtnUser.parentElement?.appendChild(this.elInFileX.elB)
+
+        // other ui elements
+        this.elDivStream = document.createElement("div")
+        this.elDivStream.id = "DivStream"
 
         this.validate_element(this.elInSystem, "system-in");
         this.validate_element(this.elDivChat, "chat-div");
@@ -1432,6 +1438,7 @@ class MultiChatUI {
         if (bClear) {
             this.elDivChat.replaceChildren();
             this.ui_userinput_reset()
+            this.elDivStream.replaceChildren()
         }
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
@@ -1444,6 +1451,7 @@ class MultiChatUI {
             }
             this.show_message(this.elDivChat, x, iFromLast, nextMsg)
         }
+        this.elDivChat.appendChild(this.elDivStream)
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         } else {
@@ -1750,7 +1758,7 @@ class MultiChatUI {
         this.elInUser.disabled = true;
 
         try {
-            let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, { chatPropsStream: this.me.chatProps.stream, toolsEnabled: this.me.tools.enabled }, this.elDivChat)
+            let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, { chatPropsStream: this.me.chatProps.stream, toolsEnabled: this.me.tools.enabled }, this.elDivStream)
             if (chatId == this.curChatId) {
                 this.chat_uirefresh(chatId);
                 if ((theResp.trimmedContent) && (theResp.trimmedContent.length > 0)) {
