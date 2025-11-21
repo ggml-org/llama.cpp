@@ -330,7 +330,9 @@ ggml_tensor * llm_build_qwen3next::delta_net_chunking(ggml_context * ctx,
 
         ggml_tensor * kgdmulvnew = ggml_mul_mat(ctx, v_new_t, ggml_cont(ctx, ggml_transpose(ctx, key_gdiff)));
 
-        new_state = ggml_add(ctx, ggml_mul(ctx, new_state, ggml_permute(ctx, gexp_last, 0, 1, 3, 2)), ggml_permute(ctx, kgdmulvnew, 0, 1, 3, 2));
+        new_state = ggml_add(ctx,
+            ggml_mul(ctx, new_state, ggml_reshape_4d(ctx, gexp_last, gexp_last->ne[0], gexp_last->ne[1], H_v, n_seqs)),
+            ggml_reshape_4d(ctx, kgdmulvnew, kgdmulvnew->ne[0], kgdmulvnew->ne[1], H_v, n_seqs));
     }
 
     core_attn_out = ggml_cont_4d(ctx, core_attn_out, S_v, chunk_size * n_chunks, H_v, n_seqs);
