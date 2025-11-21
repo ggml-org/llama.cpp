@@ -443,7 +443,20 @@ private:
                 ggml_tensor * cur,
           const llama_model & model,
                         int   il);
-    ggml_tensor * delta_net_unified(
+    ggml_tensor * delta_net_recurrent(
+               ggml_context * ctx,
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                ggml_tensor * causal_mask,
+                ggml_tensor * identity,
+                      bool    use_qk_l2norm,
+                     float    eps_norm,
+                       int    il);
+    ggml_tensor * delta_net_chunking(
                ggml_context * ctx,
                 ggml_tensor * q,
                 ggml_tensor * k,
