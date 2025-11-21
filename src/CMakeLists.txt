@@ -35,6 +35,7 @@ add_library(llama
             unicode-data.cpp
             unicode.cpp
             unicode.h
+            models/afmoe.cpp
             models/apertus.cpp
             models/arcee.cpp
             models/arctic.cpp
@@ -131,6 +132,11 @@ add_library(llama
             models/xverse.cpp
             models/graph-context-mamba.cpp
             )
+
+set_target_properties(llama PROPERTIES
+    VERSION ${LLAMA_INSTALL_VERSION}
+    SOVERSION 0
+)
 
 target_include_directories(llama PRIVATE .)
 target_include_directories(llama PUBLIC ../include)

@@ -12,6 +12,15 @@
 #define VLEN_FP32   (VLEN / SIZEOF_FP32)
 #define VLEN_FP16   (VLEN / SIZEOF_FP16)
 
+typedef union {
+    HVX_Vector v;
+    uint8_t    b[VLEN];
+    uint16_t   h[VLEN_FP16];
+    uint32_t   w[VLEN_FP32];
+    __fp16     fp16[VLEN_FP16];
+    float      fp32[VLEN_FP32];
+} __attribute__((aligned(VLEN), packed)) HVX_VectorAlias;
+
 static inline HVX_Vector hvx_vec_splat_fp32(float i) {
     union {
         float   f;
@@ -243,19 +252,16 @@ static __attribute__((always_inline)) int32_t is_in_one_chunk(void * addr, uint3
 }
 
 static void hvx_vec_dump_fp16_n(char * pref, HVX_Vector v, uint32_t n) {
-    union {
-        HVX_Vector v;
-        __fp16 d[64];
-    } u = { .v = v };
+    HVX_VectorAlias u = { .v = v };
 
     const uint32_t n0 = n / 16;
     const uint32_t n1 = n % 16;
     int            i  = 0;
     for (; i < n0; i++) {
-        htp_dump_fp16_line(pref, u.d + (16 * i), 16);
+        htp_dump_fp16_line(pref, u.fp16 + (16 * i), 16);
     }
     if (n1) {
-        htp_dump_fp16_line(pref, u.d + (16 * i), n1);
+        htp_dump_fp16_line(pref, u.fp16 + (16 * i), n1);
     }
 }
 
@@ -411,8 +417,8 @@ static inline HVX_Vector hvx_vec_fp32_reduce_sum_n(HVX_Vector in, unsigned int n
 
     HVX_Vector sum = in, sum_t;
     while (width < total) {
-        sum_t = Q6_V_vror_VR(sum, width);       // rotate right
-        sum   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(sum, sum_t)); // elementwise sum
+        sum_t = Q6_V_vror_VR(sum, width);                               // rotate right
+        sum   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(sum, sum_t));  // elementwise sum
         width = width << 1;
     }
     return sum;
@@ -491,7 +497,7 @@ static inline HVX_Vector hvx_vec_abs_fp16(HVX_Vector v) {
 static inline HVX_Vector hvx_vec_neg_fp16(HVX_Vector v) {
     // neg by setting the fp16 sign bit
     HVX_Vector mask = Q6_Vh_vsplat_R(0x8000);
-    return Q6_V_vor_VV(v, mask);
+    return Q6_V_vxor_VV(v, mask);
 }
 
 static inline HVX_Vector hvx_vec_abs_fp32(HVX_Vector v) {
@@ -506,7 +512,7 @@ static inline HVX_Vector hvx_vec_neg_fp32(HVX_Vector v) {
 #else
     // neg by setting the fp32 sign bit
     HVX_Vector mask = Q6_V_vsplat_R(0x80000000);
-    return Q6_V_vor_VV(v, mask);
+    return Q6_V_vxor_VV(v, mask);
 #endif  // __HTP_ARCH__ > 75
 }
 
@@ -718,6 +724,24 @@ static inline HVX_Vector hvx_vec_inverse_fp32(HVX_Vector v_sf) {
         r_qf, Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v_sf))));
 
     return Q6_Vsf_equals_Vqf32(r_qf);
+}
+
+static inline HVX_Vector hvx_vec_inverse_fp32_guard(HVX_Vector v_sf) {
+    static const float    kInf     = INFINITY;
+    static const uint32_t kNanMask = 0x7fffffff;
+    static const uint32_t kNanMin  = 0x7f800000;
+
+    const HVX_Vector     inf      = hvx_vec_splat_fp32(kInf);
+    const HVX_VectorPred pred_inf = Q6_Q_vcmp_gt_VsfVsf(inf, v_sf);
+
+    HVX_Vector out = hvx_vec_inverse_fp32(v_sf);
+
+    const HVX_Vector     nan_mask   = Q6_V_vsplat_R(kNanMask);
+    const HVX_Vector     nan_min    = Q6_V_vsplat_R(kNanMin);
+    HVX_Vector           masked_out = Q6_V_vand_VV(out, nan_mask);
+    const HVX_VectorPred pred       = Q6_Q_vcmp_gtand_QVuwVuw(pred_inf, nan_min, masked_out);
+
+    return Q6_V_vmux_QVV(pred, out, Q6_V_vzero());
 }
 
 #define FAST_SIGMOID_LOG2F (0x3fb8aa3b)  // 1.442695022
@@ -934,6 +958,16 @@ static inline HVX_Vector hvx_vec_rsqrt_fp32(HVX_Vector in_vec) {
     return Q6_Vsf_equals_Vqf32(temp);
 }
 
+static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard(HVX_Vector v) {
+    static const float kMaxExp = -88.02f;  // log(INF)
+
+    const HVX_Vector     max_exp  = Q6_V_vsplat_R(*((uint32_t *) &kMaxExp));
+    const HVX_VectorPred pred_inf = Q6_Q_vcmp_gt_VsfVsf(v, max_exp);
+
+    HVX_Vector out = hvx_vec_fast_sigmoid_fp32(v);
+    return Q6_V_vmux_QVV(pred_inf, out, Q6_V_vzero());
+}
+
 static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems) {
     int step_of_1 = num_elems >> 5;
     int remaining = num_elems - step_of_1 * VLEN_FP32;
@@ -945,7 +979,7 @@ static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * 
 
     #pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {
-        v_dst[i] = hvx_vec_fast_sigmoid_fp32(v_src[i]);
+        v_dst[i] = hvx_vec_fast_sigmoid_fp32_guard(v_src[i]);
     }
 }
 

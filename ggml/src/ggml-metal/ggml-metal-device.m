@@ -564,8 +564,10 @@ ggml_metal_device_t ggml_metal_device_init(void) {
             // TODO: try to update the tensor API kernels to at least match the simdgroup performance
             if (getenv("GGML_METAL_TENSOR_ENABLE") == NULL &&
                 ![[dev->mtl_device name] containsString:@"M5"] &&
-                ![[dev->mtl_device name] containsString:@"M6"]) {
-                GGML_LOG_WARN("%s: tensor API disabled for pre-M5 device\n", __func__);
+                ![[dev->mtl_device name] containsString:@"M6"] &&
+                ![[dev->mtl_device name] containsString:@"A19"] &&
+                ![[dev->mtl_device name] containsString:@"A20"]) {
+                GGML_LOG_WARN("%s: tensor API disabled for pre-M5 and pre-A19 devices\n", __func__);
                 dev->props.has_tensor = false;
             }
 
@@ -868,6 +870,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SUM:
             return has_simdgroup_reduction && ggml_is_contiguous(op->src[0]);
         case GGML_OP_SUM_ROWS:
+        case GGML_OP_CUMSUM:
         case GGML_OP_MEAN:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_GROUP_NORM:
@@ -883,6 +886,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return true;
         case GGML_OP_IM2COL:
             return ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
+        case GGML_OP_CONV_2D:
+            return ggml_is_contiguous(op->src[0]) &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   op->type == GGML_TYPE_F32 &&
+                   (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32);
         case GGML_OP_POOL_1D:
             return false;
         case GGML_OP_UPSCALE:
@@ -897,8 +905,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_LEAKY_RELU:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_ARGSORT:
-            // TODO: Support arbitrary column width
-            return op->src[0]->ne[0] <= 1024;
         case GGML_OP_ARANGE:
             return true;
         case GGML_OP_FLASH_ATTN_EXT:
@@ -983,7 +989,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                                 return false;
                         }
                     case GGML_TYPE_I32:
-                        return op->type == GGML_TYPE_F32;
+                        return op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32;
                     default:
                         return false;
                 };

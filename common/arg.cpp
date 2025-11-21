@@ -741,6 +741,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"-cl", "--cache-list"},
+        "show list of models in cache",
+        [](common_params &) {
+            printf("model cache directory: %s\n", fs_get_cache_directory().c_str());
+            auto models = common_list_cached_models();
+            printf("number of models in cache: %zu\n", models.size());
+            for (size_t i = 0; i < models.size(); i++) {
+                auto & model = models[i];
+                printf("%4d. %s\n", (int) i + 1, model.to_string().c_str());
+            }
+            exit(0);
+        }
+    ));
+    add_opt(common_arg(
         {"--completion-bash"},
         "print source-able bash completion script for llama.cpp",
         [](common_params & params) {
@@ -2237,6 +2251,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("is the prompt shared across parallel sequences (default: %s)", params.is_pp_shared ? "true" : "false"),
         [](common_params & params) {
             params.is_pp_shared = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
+    add_opt(common_arg(
+        {"-tgs"},
+        string_format("is the text generation separated across the different sequences (default: %s)", params.is_tg_separate ? "true" : "false"),
+        [](common_params & params) {
+            params.is_tg_separate = true;
         }
     ).set_examples({LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(

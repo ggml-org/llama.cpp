@@ -11,29 +11,7 @@
 #define EXPERT_COUNT 8
 #endif
 
-#include "types.glsl"
-
-#ifndef MMQ
-layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
-#else
-layout (binding = 0) readonly buffer A {A_TYPE_PACKED16 data_a[];};
-#endif
-
-layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
-#ifdef B_TYPE_VEC2
-layout (binding = 1) readonly buffer BV2 {B_TYPE_VEC2 data_b_v2[];};
-#endif
-#ifdef B_TYPE_VEC4
-layout (binding = 1) readonly buffer BV4 {B_TYPE_VEC4 data_b_v4[];};
-#endif
-
-layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
-
-layout (binding = 3) readonly buffer Bias {D_TYPE data_bias[];};
-
-#ifdef MUL_MAT_ID
-layout (binding = 4) readonly buffer IDS {int data_ids[];};
-#endif
+#include "mul_mat_vec_iface.glsl"
 
 #include "dequant_funcs.glsl"
 
@@ -48,7 +26,7 @@ layout (push_constant) uniform parameter
     uint batch_stride_b;
     uint batch_stride_d;
 
-    uint enable_bias;
+    uint fusion_flags;
 
 #ifdef MUL_MAT_ID
     uint nei0;
@@ -122,13 +100,26 @@ void reduce_result(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t 
     if (tid == 0) {
         [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
             [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-                if (p.enable_bias != 0) {
 #ifdef MUL_MAT_ID
-                    temp[j][n] += FLOAT_TYPE(data_bias[expert_id*p.stride_d + first_row + n]);
-#else
-                    temp[j][n] += FLOAT_TYPE(data_bias[j*p.batch_stride_d + d_offset + first_row + n]);
-#endif
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
+                    temp[j][n] += FLOAT_TYPE(data_fuse0[expert_id*p.stride_d + first_row + n]);
                 }
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SCALE0) != 0) {
+                    const uint expert_idx = gl_GlobalInvocationID.y;
+                    temp[j][n] *= FLOAT_TYPE(data_fuse0[expert_idx]);
+                }
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SCALE1) != 0) {
+                    const uint expert_idx = gl_GlobalInvocationID.y;
+                    temp[j][n] *= FLOAT_TYPE(data_fuse1[expert_idx]);
+                }
+#else
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
+                    temp[j][n] += FLOAT_TYPE(data_fuse0[j*p.batch_stride_d + d_offset + first_row + n]);
+                }
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS1) != 0) {
+                    temp[j][n] += FLOAT_TYPE(data_fuse1[j*p.batch_stride_d + d_offset + first_row + n]);
+                }
+#endif
                 data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(temp[j][n]);
             }
         }
@@ -164,13 +155,26 @@ void reduce_result(FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offs
                 [[unroll]] for (uint s = 0; s < gl_NumSubgroups; ++s) {
                     temp[j][n] += tmpsh[j][n][s];
                 }
-                if (p.enable_bias != 0) {
 #ifdef MUL_MAT_ID
-                    temp[j][n] += FLOAT_TYPE(data_bias[expert_id*p.stride_d + first_row + n]);
-#else
-                    temp[j][n] += FLOAT_TYPE(data_bias[j*p.batch_stride_d + d_offset + first_row + n]);
-#endif
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
+                    temp[j][n] += FLOAT_TYPE(data_fuse0[expert_id*p.stride_d + first_row + n]);
                 }
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SCALE0) != 0) {
+                    const uint expert_idx = gl_GlobalInvocationID.y;
+                    temp[j][n] *= FLOAT_TYPE(data_fuse0[expert_idx]);
+                }
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SCALE1) != 0) {
+                    const uint expert_idx = gl_GlobalInvocationID.y;
+                    temp[j][n] *= FLOAT_TYPE(data_fuse1[expert_idx]);
+                }
+#else
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
+                    temp[j][n] += FLOAT_TYPE(data_fuse0[j*p.batch_stride_d + d_offset + first_row + n]);
+                }
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS1) != 0) {
+                    temp[j][n] += FLOAT_TYPE(data_fuse1[j*p.batch_stride_d + d_offset + first_row + n]);
+                }
+#endif
                 data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(temp[j][n]);
             }
         }
@@ -196,13 +200,26 @@ void reduce_result(FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offs
     if (tid == 0) {
         [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
             [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-                if (p.enable_bias != 0) {
 #ifdef MUL_MAT_ID
-                    tmpsh[j][n][0] += FLOAT_TYPE(data_bias[expert_id*p.stride_d + first_row + n]);
-#else
-                    tmpsh[j][n][0] += FLOAT_TYPE(data_bias[j*p.batch_stride_d + d_offset + first_row + n]);
-#endif
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
+                    tmpsh[j][n][0] += FLOAT_TYPE(data_fuse0[expert_id*p.stride_d + first_row + n]);
                 }
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SCALE0) != 0) {
+                    const uint expert_idx = gl_GlobalInvocationID.y;
+                    tmpsh[j][n][0] *= FLOAT_TYPE(data_fuse0[expert_idx]);
+                }
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_SCALE1) != 0) {
+                    const uint expert_idx = gl_GlobalInvocationID.y;
+                    tmpsh[j][n][0] *= FLOAT_TYPE(data_fuse1[expert_idx]);
+                }
+#else
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
+                    tmpsh[j][n][0] += FLOAT_TYPE(data_fuse0[j*p.batch_stride_d + d_offset + first_row + n]);
+                }
+                if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS1) != 0) {
+                    tmpsh[j][n][0] += FLOAT_TYPE(data_fuse1[j*p.batch_stride_d + d_offset + first_row + n]);
+                }
+#endif
                 data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(tmpsh[j][n][0]);
             }
         }

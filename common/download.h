@@ -8,15 +8,22 @@ struct common_params_model;
 // download functionalities
 //
 
+struct common_cached_model_info {
+    std::string manifest_path;
+    std::string user;
+    std::string model;
+    std::string tag;
+    size_t      size = 0; // GGUF size in bytes
+    std::string to_string() const {
+        return user + "/" + model + ":" + tag;
+    }
+};
+
 struct common_hf_file_res {
     std::string repo; // repo name with ":tag" removed
     std::string ggufFile;
     std::string mmprojFile;
 };
-
-// resolve and download model from Docker registry
-// return local path to downloaded model file
-std::string common_docker_resolve_model(const std::string & docker);
 
 /**
  * Allow getting the HF file from the HF repo with tag (like ollama), for example:
@@ -39,3 +46,10 @@ bool common_download_model(
     const common_params_model & model,
     const std::string & bearer_token,
     bool offline);
+
+// returns list of cached models
+std::vector<common_cached_model_info> common_list_cached_models();
+
+// resolve and download model from Docker registry
+// return local path to downloaded model file
+std::string common_docker_resolve_model(const std::string & docker);
