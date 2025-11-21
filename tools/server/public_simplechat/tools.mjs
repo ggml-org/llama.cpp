@@ -8,6 +8,7 @@
 import * as tjs from './tooljs.mjs'
 import * as tweb from './toolweb.mjs'
 import * as tdb from './tooldb.mjs'
+import * as tai from './toolai.mjs'
 import * as mChatMagic from './simplechat.js'
 
 
@@ -59,6 +60,12 @@ export class ToolsManager {
         await tdb.init(me).then(()=>{
             for (const key in tdb.tc_switch) {
                 this.tc_switch[key] = tdb.tc_switch[key]
+                me.tools.toolNames.push(key)
+            }
+        })
+        await tai.init(me).then(()=>{
+            for (const key in tai.tc_switch) {
+                this.tc_switch[key] = tai.tc_switch[key]
                 me.tools.toolNames.push(key)
             }
         })
