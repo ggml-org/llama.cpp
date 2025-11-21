@@ -258,15 +258,16 @@ static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 
 
 // ifairy_model
 // 每个块处理 QK_K (256) 个 2-bit 值
-// 由于是复数，每个复数用一个 2-bit 值表示（离散化到 4 个复数值）
+// 每个复数用一个 2-bit 值表示（离散化到 4 个复数值）
+// 2.25 bpw
 typedef struct {
     uint8_t qs[QK_K/4]; // 2 bits per element
     float d_real, d_imag;
 } block_ifairy;
 static_assert(sizeof(block_ifairy) == sizeof(float) * 2 + QK_K / 4, "wrong ifairy block size/padding");
-// 总大小: 64 + 2 + 2 = 68 字节
+// 总大小: 64 + 4 + 4 = 72 字节
 // 存储 256 个复数 = 512 个 fp32 值 (2048 字节)
-// 压缩率: 2048/68 = 30.1x
+// 压缩率: 2048/72 = 28.1x
 
 
 typedef struct {

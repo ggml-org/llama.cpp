@@ -4048,7 +4048,7 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(
         float                 attn_factor,
         float                 beta_fast,
         float                 beta_slow,
-        bool                  inplace) {
+        bool                  inplace) { // todo_liweitao 可以删了？
     GGML_ASSERT((mode & 1) == 0 && "mode & 1 == 1 is no longer supported");
 
     GGML_ASSERT(ggml_is_vector(b));
@@ -7356,7 +7356,6 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ1_M:   result = quantize_iq1_m  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_NL:  result = quantize_iq4_nl (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_XS:  result = quantize_iq4_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        // todo_liweitao fix
         case GGML_TYPE_IFAIRY:  result = quantize_ifairy (src + start, src + start ,(char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:
             {

@@ -107,7 +107,6 @@ enum llm_arch {
 };
 
 enum llm_kv {
-    // todo_liweitao check!
     LLM_KV_GENERAL_TYPE,
     LLM_KV_GENERAL_ARCHITECTURE,
     LLM_KV_GENERAL_QUANTIZATION_VERSION,

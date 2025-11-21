@@ -59,7 +59,6 @@ def quantize_ifairy_ref(w_real: np.ndarray, w_imag: np.ndarray):
     qw_imag[imag_neg] = -1.0
 
     # 应用缩放因子
-    # todo_liweitao  ???
     qw_real = qw_real / real_scale
     qw_imag = qw_imag / imag_scale
 

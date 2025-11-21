@@ -113,10 +113,10 @@ void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
     float * x_imag = (float *)malloc(k * sizeof(float));
 
     for (int64_t i = 0; i < k; ++i) {
-        float* x_com = x + i;
+        const float* x_com = x + i;
 
-        ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
-        ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
+        ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t*)(x_com))[0];
+        ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t*)(x_com))[1];
 
         x_real[i] = GGML_BF16_TO_FP32(x_real_bf16);
         x_imag[i] = GGML_BF16_TO_FP32(x_imag_bf16);
@@ -443,7 +443,7 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 // Complex 2-bit quantization dot product for Fairy±i model
 // Computes: result = sum((real_w + i*imag_w) * (real_act + i*imag_act)) (要对激活取共轭)
 // We use q8_K for both real and imaginary activation parts stored sequentially
-void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -472,10 +472,10 @@ void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
                 for (size_t l = 0; l < 4; ++l) {
                     // a: real_w, b: imag_w, c: real_x, d: imag_x
                     int8_t w_val = (weight >> (l*2)) & 3;
-                    // todo_tbr: q8k 激活量化方式
                     int8_t c = x[i].x_real[(j + k) * 4 + l];
                     int8_t d = x[i].x_imag[(j + k) * 4 + l];
-
+                    
+                    // 0 represent -1 , 1 represent 1 , 2 represent -i , 3 represent i
                     if      (w_val == 1) sum_ac += c, sum_ad += d;
                     else if (w_val == 0) sum_ac -= c, sum_ad -= d;
                     else if (w_val == 3) sum_bc += c, sum_bd += d;
@@ -491,7 +491,7 @@ void ggml_vec_dot_ifairy_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
         const float x_imag = x[i].d_imag;
         //GGML_LOG("w_real: %f, w_imag: %f, x_real: %f, x_imag: %f\n", w_real, w_imag, x_real, x_imag);
 
-        // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+        // Complex multiplication: (a+bi)(c+di) = (ac+bd) + (-ad+bc)i
         sum_real += w_real * x_real * (float)sum_ac + w_imag * x_imag * (float)sum_bd;
 
         sum_imag += w_imag * x_real * (float)sum_bc - w_real * x_imag * (float)sum_ad;

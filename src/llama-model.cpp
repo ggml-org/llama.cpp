@@ -227,6 +227,7 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 );
 
             } break;
+            // todo_liweitao 删除？
             /*
         case GGML_OP_IFAIRY_SPLIT:
             {
@@ -1616,9 +1617,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_rms_eps);
 
                 switch (hparams.n_layer) {
-                    case 24: type = LLM_TYPE_1_3B; break;
-                    default: type  = LLM_TYPE_700M;
-                    //default: type = LLM_TYPE_UNKNOWN;
+                    case 24: type = LLM_TYPE_700M; break;
+                    default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
         case LLM_ARCH_T5:
@@ -13740,7 +13740,7 @@ struct llm_build_ifairy : public llm_graph_context {
         auto * inp_attn = build_attn_inp_kv();
 
         const float kq_scale = hparams.f_attention_scale == 0.0f
-                ? 1.0f/sqrtf(float(n_embd_head/2))
+                ? 1.0f/sqrtf(float(n_embd_head)/2)
                 : hparams.f_attention_scale;
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
@@ -13765,6 +13765,7 @@ struct llm_build_ifairy : public llm_graph_context {
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head/2, n_head,    n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head/2, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head/2, n_head_kv, n_tokens);
+            // todo_liweitao 是不是可以删了
 /*
             Qcur->type = GGML_TYPE_BF16;
             Qcur->ne[0] *= 2;
@@ -19677,6 +19678,7 @@ int32_t llama_n_head(const llama_model * model) {
     return llama_model_n_head(model);
 }
 
+// todo_liweitao 要改吧？
 llama_rope_type llama_model_rope_type(const llama_model * model) {
     switch (model->arch) {
         // these models do not use RoPE

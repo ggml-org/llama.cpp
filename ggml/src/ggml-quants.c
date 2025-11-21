@@ -2684,17 +2684,21 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
 
     for (int i = 0; i < nb; i++) {
 
-        float max_real = 1e-5, max_imag = 1e-5;
+        float max_real = 1e-5;
+        float max_imag = 1e-5;
 
         for (int j = 0; j < QK_K; ++j) {
-            float* x_com = x + j;
+            const float* x_com = x + j;
 
-            ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
-            ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
+            ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t*)(x_com))[0];
+            //GGML_ASSERT(sizeof(ggml_bf16_t) == 2);
+            //GGML_ASSERT((void*)((const ggml_bf16_t*)(x_com)) == (void*)x_com);
+            //GGML_ASSERT((void*)((const ggml_bf16_t*)(x_com) + 1) == (void*)((const char*)x_com + 2));
+            ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t*)(x_com))[1];
 
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);
             float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
-
+          
             max_real = MAX(max_real, fabsf(x_real));
             max_imag = MAX(max_imag, fabsf(x_imag));
         }
@@ -2702,14 +2706,15 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
         const float iscale_real = 127.f / max_real;
         const float iscale_imag = 127.f / max_imag;
         for (int j = 0; j < QK_K; ++j) {
-            float* x_com = x + j;
+            const float* x_com = x + j;
 
-            ggml_bf16_t x_imag_bf16 = ((ggml_bf16_t*)(x_com))[1];
-            ggml_bf16_t x_real_bf16 = ((ggml_bf16_t*)(x_com))[0];
+            ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t*)(x_com))[1];
+            ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t*)(x_com))[0];
 
             float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);
 
+            // todo_liweitao 是否需要分开？
             int v = nearest_int(iscale_real * x_real);
             y[i].x_real[j] = MIN(127, v);
             v = nearest_int(iscale_imag * x_imag);
