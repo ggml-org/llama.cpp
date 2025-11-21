@@ -615,12 +615,6 @@ class ModelBase:
                 # reverse shape to make it similar to the internal ggml dimension order
                 shape_str = f"{{{', '.join(str(n) for n in reversed(shape))}}}"
 
-                if sys.byteorder == 'big':
-                    # Switch data back to little-endian.
-                    # gguf_writer.add_tensor later switches it back to big endian if needed.
-                    # Don't byteswap inplace since it cannot handle lazy copies
-                    data = data.byteswap(inplace=False)
-
                 # n_dims is implicit in the shape
                 logger.info(f"{f'%-{max_name_len}s' % f'{new_name},'} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
 
