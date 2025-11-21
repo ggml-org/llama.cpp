@@ -1593,6 +1593,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_DEEPSEEK2:
             {
+                // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
                 bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
@@ -4581,6 +4582,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_DEEPSEEK2:
                 {
+                    // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
                     const bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
 
                     const bool is_mla = (hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0);
