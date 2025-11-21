@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import pytest
-import json
 import base64
 import requests
 import os
