@@ -227,28 +227,6 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 );
 
             } break;
-            // todo_liweitao 删除？
-            /*
-        case GGML_OP_IFAIRY_SPLIT:
-            {
-                op_tensor = ggml_ifairy_split(ctx, w, hparams.n_embd_head_v);
-
-            } break;
-        
-        case GGML_OP_IFAIRY_ROPE:
-            {
-                int n_embd_head = hparams.n_embd_head_v;
-                int n_head = hparams.n_head();
-                ggml_tensor * a = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_head, n_head, 512);
-                ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 512);
-                op_tensor = ggml_ifairy_rope(
-                    ctx, a, b, w,
-                    0, 0, 0, 0, 0,
-                    0, 0, 0, 0
-                );
-
-            } break;
-        */
         case GGML_OP_SSM_CONV:
             {
                 const int64_t n_seq_tokens = 512;
@@ -13765,32 +13743,7 @@ struct llm_build_ifairy : public llm_graph_context {
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head/2, n_head,    n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head/2, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head/2, n_head_kv, n_tokens);
-            // todo_liweitao 是不是可以删了
-/*
-            Qcur->type = GGML_TYPE_BF16;
-            Qcur->ne[0] *= 2;
-            Qcur->nb[0] /= 2;
-            Kcur->type = GGML_TYPE_BF16;
-            Kcur->ne[0] *= 2;
-            Kcur->nb[0] /= 2;
-            //Vcur->type = GGML_TYPE_BF16;
-            //Vcur->ne[0] *= 2;
-            //Vcur->nb[0] /= 2;
-            Qcur = ggml_cast(ctx0, Qcur, GGML_TYPE_F32);
-            Kcur = ggml_cast(ctx0, Kcur, GGML_TYPE_F32);
-            //Vcur = ggml_cast(ctx0, Vcur, GGML_TYPE_F32);
-
-            Qcur = ggml_rope(
-                        ctx0, Qcur, inp_pos, n_rot,0
-                        );
-            Kcur = ggml_rope(
-                        ctx0, Kcur, inp_pos, n_rot, 0
-                        );
-*/
-            GGML_ASSERT(Qcur -> ne[0] == Kcur -> ne[0]);
-            GGML_ASSERT(Qcur -> ne[1] == Kcur -> ne[1]);
-            GGML_ASSERT(Qcur -> ne[2] == Kcur -> ne[2]);
-            GGML_ASSERT(Qcur -> ne[3] == Kcur -> ne[3]);
+            
             Qcur = ggml_ifairy_rope(ctx0, Qcur, inp_pos, n_rot, 0);
             cb(Qcur, "Qcur_rope", il);
 
@@ -19678,7 +19631,6 @@ int32_t llama_n_head(const llama_model * model) {
     return llama_model_n_head(model);
 }
 
-// todo_liweitao 要改吧？
 llama_rope_type llama_model_rope_type(const llama_model * model) {
     switch (model->arch) {
         // these models do not use RoPE

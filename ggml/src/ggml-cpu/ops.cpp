@@ -5957,8 +5957,7 @@ static void ggml_compute_forward_rope_f16(
         }
     }
 }
-// todo_liweitao 看一下是不是要删除
-static void rope_yarn_ifairy(
+inline static void rope_yarn_ifairy(
     float theta_extrap, float freq_scale, float corr_dims[2], int64_t i0, float ext_factor, float mscale,
     float * cos_theta, float * sin_theta) {
     // Standard RoPE: theta = inv_freq * position_id

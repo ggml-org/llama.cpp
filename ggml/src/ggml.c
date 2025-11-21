@@ -4047,8 +4047,7 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(
         float                 ext_factor,
         float                 attn_factor,
         float                 beta_fast,
-        float                 beta_slow,
-        bool                  inplace) { // todo_liweitao 可以删了？
+        float                 beta_slow) {
     GGML_ASSERT((mode & 1) == 0 && "mode & 1 == 1 is no longer supported");
 
     GGML_ASSERT(ggml_is_vector(b));
@@ -4087,9 +4086,7 @@ struct ggml_tensor * ggml_ifairy_rope(
         struct ggml_tensor  * b,
         int                   n_dims,
         int                   mode) {
-    return ggml_ifairy_rope_impl(
-        ctx, a, b, n_dims, NULL, mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, false
-    );
+    return ggml_ifairy_rope_impl(ctx, a, b, n_dims, NULL, mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 }
 
 struct ggml_tensor * ggml_ifairy_add(
