@@ -81,7 +81,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built binaries from builder
-COPY --from=builder /app/full /app
+COPY --from=builder /app/lib /app
 
 # Full
 FROM base AS full
