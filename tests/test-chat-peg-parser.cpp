@@ -267,7 +267,7 @@ static void test_example_qwen3_coder(testing & t) {
 
             common_chat_msg msg;
             auto mapper = common_chat_peg_constructed_mapper(msg);
-            mapper.from_ast(ctx.ast_arena, result);
+            mapper.from_ast(ctx.ast, result);
 
             //t.log("Input: " + input);
             t.log("===========================================");
@@ -325,7 +325,7 @@ void test_command7_parser_compare(testing & t) {
 
         common_chat_msg msg;
         auto mapper = common_chat_peg_native_mapper(msg);
-        mapper.from_ast(ctx.ast_arena, result);
+        mapper.from_ast(ctx.ast, result);
 
         if (print_results) {
             std::cout << "== Parsed (new) ==\n";

@@ -680,7 +680,7 @@ struct parser_executor {
                 text = std::string_view(ctx.input).substr(result.start, result.end - result.start);
             }
 
-            auto node_id = ctx.ast_arena.add_node(
+            auto node_id = ctx.ast.add_node(
                 p.name,
                 "",
                 result.start,
@@ -706,7 +706,7 @@ struct parser_executor {
                 text = std::string_view(ctx.input).substr(result.start, result.end - result.start);
             }
 
-            auto node_id = ctx.ast_arena.add_node(
+            auto node_id = ctx.ast.add_node(
                 "",
                 p.tag,
                 result.start,

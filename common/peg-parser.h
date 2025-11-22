@@ -140,7 +140,7 @@ struct common_peg_parse_result {
 struct common_peg_parse_context {
     std::string input;
     bool input_is_complete;
-    common_peg_ast_arena ast_arena;
+    common_peg_ast_arena ast;
 
     int parse_depth;
 
