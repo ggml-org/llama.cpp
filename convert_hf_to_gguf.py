@@ -4183,6 +4183,21 @@ class Qwen3MoeModel(Qwen2MoeModel):
         super().set_vocab()
 
 
+@ModelBase.register("RND1")
+class RND1Model(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.RND1
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # RND1 specific parameters
+        # RND1 uses bidirectional attention
+        self.gguf_writer.add_causal_attention(False)
+
+        if (mask_token_id := self.hparams.get("mask_token_id")) is not None:
+            self.gguf_writer.add_mask_token_id(mask_token_id)
+
+
 @ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration")
 class Qwen3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
