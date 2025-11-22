@@ -114,6 +114,7 @@ add_library(llama
             models/qwen3vl.cpp
             models/qwen3vl-moe.cpp
             models/qwen3moe.cpp
+            models/qwen3next.cpp
             models/refact.cpp
             models/rwkv6-base.cpp
             models/rwkv6.cpp
