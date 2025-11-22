@@ -839,6 +839,9 @@ class GGUFWriter:
     def add_value_residual_mix_lora_rank(self, length: int) -> None:
         self.add_uint32(Keys.Attention.VALUE_RESIDUAL_MIX_LORA_RANK.format(arch=self.arch), length)
 
+    def add_rope_freq_base_swa(self, value: float) -> None:
+        self.add_float32(Keys.Rope.FREQ_BASE_SWA.format(arch=self.arch), value)
+
     def add_gate_lora_rank(self, length: int) -> None:
         self.add_uint32(Keys.Attention.GATE_LORA_RANK.format(arch=self.arch), length)
 
@@ -847,6 +850,9 @@ class GGUFWriter:
 
     def add_sliding_window(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
+    
+    def add_dense_every_n_layers(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.DENSE_EVERY_N_LAYERS.format(arch=self.arch), value)
 
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
