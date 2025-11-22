@@ -1,0 +1,53 @@
+[versions]
+
+# Plugins
+agp = "8.13.0"
+kotlin = "2.2.20"
+
+# AndroidX
+activity = "1.11.0"
+appcompat = "1.7.1"
+core-ktx = "1.17.0"
+constraint-layout = "2.2.1"
+datastore-preferences = "1.1.7"
+
+# Material
+material = "1.13.0"
+
+# Testing
+espresso-core = "3.7.0"
+androidx-junit = "1.3.0"
+junit = "4.13.2"
+
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+jetbrains-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+
+
+[libraries]
+
+# AndroidX
+androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraint-layout" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore-preferences" }
+
+#Material
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+
+# Testing
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso-core" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidx-junit" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+
+[bundles]
+androidx = [
+    "androidx-activity",
+    "androidx-appcompat",
+    "androidx-constraintlayout",
+    "androidx-core-ktx",
+    "androidx-datastore-preferences",
+]
