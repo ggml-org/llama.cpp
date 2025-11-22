@@ -20,14 +20,14 @@ inline common_peg_arena build_chat_peg_parser(const std::function<common_peg_par
     return builder.build();
 }
 
-class common_chat_peg_extractor {
+class common_chat_peg_mapper {
   public:
     common_chat_msg & result;
 
-    common_chat_peg_extractor(common_chat_msg & msg) : result(msg) {}
+    common_chat_peg_mapper(common_chat_msg & msg) : result(msg) {}
 
-    virtual void extract(const common_peg_ast_node & node);
-    common_peg_ast_visitor visitor();
+    virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
+    virtual void map(const common_peg_ast_node & node);
 };
 
 class common_chat_peg_native_builder : public common_chat_peg_builder {
@@ -47,13 +47,13 @@ class common_chat_peg_native_builder : public common_chat_peg_builder {
     common_peg_parser tool_args(const common_peg_parser & p) { return tag(TOOL_ARGS, p); }
 };
 
-class common_chat_peg_native_extractor : public common_chat_peg_extractor {
+class common_chat_peg_native_mapper : public common_chat_peg_mapper {
     common_chat_tool_call * current_tool;
 
   public:
-    common_chat_peg_native_extractor(common_chat_msg & msg) : common_chat_peg_extractor(msg) {}
+    common_chat_peg_native_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
 
-    void extract(const common_peg_ast_node & node) override;
+    void map(const common_peg_ast_node & node) override;
 };
 
 inline common_peg_arena build_chat_peg_native_parser(const std::function<common_peg_parser(common_chat_peg_native_builder & builder)> & fn) {
@@ -87,15 +87,15 @@ class common_chat_peg_constructed_builder : public common_chat_peg_builder {
     common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_JSON_VALUE, p); }
 };
 
-class common_chat_peg_constructed_extractor : public common_chat_peg_extractor {
+class common_chat_peg_constructed_mapper : public common_chat_peg_mapper {
     common_chat_tool_call * current_tool;
     int arg_count = 0;
     bool needs_closing_quote = false;
 
   public:
-    common_chat_peg_constructed_extractor(common_chat_msg & msg) : common_chat_peg_extractor(msg) {}
+    common_chat_peg_constructed_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
 
-    void extract(const common_peg_ast_node & node) override;
+    void map(const common_peg_ast_node & node) override;
 };
 
 inline common_peg_arena build_chat_peg_constructed_parser(const std::function<common_peg_parser(common_chat_peg_constructed_builder & builder)> & fn) {

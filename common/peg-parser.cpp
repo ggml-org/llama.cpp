@@ -248,7 +248,7 @@ static std::pair<std::vector<common_peg_chars_parser::char_range>, bool> parse_c
     return {ranges, negated};
 }
 
-void common_peg_ast_arena::visit(common_peg_ast_id id, std::function<void(const common_peg_ast_node & node)> visitor) {
+void common_peg_ast_arena::visit(common_peg_ast_id id, const common_peg_ast_visitor & visitor) const {
     if (id == COMMON_PEG_INVALID_AST_ID) {
         return;
     }
@@ -259,7 +259,7 @@ void common_peg_ast_arena::visit(common_peg_ast_id id, std::function<void(const 
     }
 }
 
-void common_peg_ast_arena::visit(const common_peg_parse_result & result, std::function<void(const common_peg_ast_node & node)> visitor) {
+void common_peg_ast_arena::visit(const common_peg_parse_result & result, const common_peg_ast_visitor & visitor) const {
     for (const auto & node : result.nodes) {
         visit(node, visitor);
     }

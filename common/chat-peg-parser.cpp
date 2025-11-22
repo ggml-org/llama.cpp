@@ -1,12 +1,12 @@
 #include "chat-peg-parser.h"
 
-common_peg_ast_visitor common_chat_peg_extractor::visitor() {
-    return [this](const common_peg_ast_node & node) {
-        extract(node);
-    };
+void common_chat_peg_mapper::from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) {
+    arena.visit(result, [this](const common_peg_ast_node & node) {
+        map(node);
+    });
 }
 
-void common_chat_peg_extractor::extract(const common_peg_ast_node & node) {
+void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     bool is_reasoning_block = node.tag == common_chat_peg_builder::REASONING_BLOCK;
     bool is_reasoning = node.tag == common_chat_peg_builder::REASONING;
     bool is_content = node.tag == common_chat_peg_builder::CONTENT;
@@ -24,8 +24,8 @@ void common_chat_peg_extractor::extract(const common_peg_ast_node & node) {
     }
 }
 
-void common_chat_peg_native_extractor::extract(const common_peg_ast_node & node) {
-    common_chat_peg_extractor::extract(node);
+void common_chat_peg_native_mapper::map(const common_peg_ast_node & node) {
+    common_chat_peg_mapper::map(node);
 
     bool is_tool_open = node.tag == common_chat_peg_native_builder::TOOL_OPEN;
     bool is_tool_name = node.tag == common_chat_peg_native_builder::TOOL_NAME;
@@ -50,8 +50,8 @@ void common_chat_peg_native_extractor::extract(const common_peg_ast_node & node)
     }
 }
 
-void common_chat_peg_constructed_extractor::extract(const common_peg_ast_node & node) {
-    common_chat_peg_extractor::extract(node);
+void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
+    common_chat_peg_mapper::map(node);
 
     bool is_tool_name = node.tag == common_chat_peg_constructed_builder::TOOL_NAME;
     bool is_tool_close = node.tag == common_chat_peg_constructed_builder::TOOL_CLOSE;
