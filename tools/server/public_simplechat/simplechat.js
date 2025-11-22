@@ -475,7 +475,17 @@ function usage_note(sRecentUserMsgCnt) {
 }
 
 
-/** @typedef {{ chatPropsStream: boolean, toolsEnabled: boolean}} SCHandshakeProps*/
+/**
+ * @typedef {HTMLDivElement & {
+ *      divStreamRole: HTMLDivElement,
+ *      divStreamData: HTMLDivElement,
+ *      divstream_clear: () => void,
+ * }} ELDivStream
+ */
+
+/** @typedef {Object<string, ELDivStream>} ELDivStreams */
+
+/** @typedef {{ chatPropsStream: boolean, toolsEnabled: boolean}} SCHandshakeProps */
 
 /** @typedef {ChatMessageEx[]} ChatMessages */
 
@@ -874,13 +884,14 @@ class SimpleChat {
      * Handle the multipart response from server/ai-model
      * @param {Response} resp
      * @param {string} apiEP
-     * @param {Object<string, HTMLDivElement>} elDivStreams
+     * @param {ELDivStreams} elDivStreams
      */
     async handle_response_multipart(resp, apiEP, elDivStreams) {
         if (!resp.body) {
             throw Error("ERRR:SimpleChat:SC:HandleResponseMultiPart:No body...");
         }
-        let elP = elDivStreams[this.chatId];
+        let elDiv = elDivStreams[this.chatId];
+        elDiv.divStreamRole.innerText = `Ai:${this.chatId.slice(0,6)}`
         try {
             let tdUtf8 = new TextDecoder("utf-8");
             let rr = resp.body.getReader();
@@ -912,14 +923,14 @@ class SimpleChat {
                     console.debug("DBUG:SC:PART:Json:", curJson);
                     this.latestResponse.update_stream(curJson, apiEP);
                 }
-                elP.innerText = this.latestResponse.content_equiv()
-                elP.scrollIntoView(false);
+                elDiv.divStreamData.innerText = this.latestResponse.content_equiv()
+                elDiv.scrollIntoView(false);
                 if (done) {
                     break;
                 }
             }
         } finally {
-            elP.replaceChildren()
+            elDiv.divstream_clear()
         }
         console.debug("DBUG:SC:PART:Full:", this.latestResponse.content_equiv());
         return ChatMessageEx.newFrom(this.latestResponse);
@@ -943,7 +954,7 @@ class SimpleChat {
      * Also take care of the optional garbage trimming.
      * @param {Response} resp
      * @param {string} apiEP
-     * @param {Object<string, HTMLDivElement>} elDivStreams - used to place ai server chat response as it is being generated/recieved in streaming mode
+     * @param {ELDivStreams} elDivStreams - used to place ai server chat response as it is being generated/recieved in streaming mode
      */
     async handle_response(resp, apiEP, elDivStreams) {
         let theResp = null;
@@ -951,7 +962,7 @@ class SimpleChat {
             if (this.handshakeProps.chatPropsStream) {
                 theResp = await this.handle_response_multipart(resp, apiEP, elDivStreams);
                 this.latestResponse.clear();
-                elDivStreams[this.chatId].replaceChildren()
+                elDivStreams[this.chatId].divstream_clear();
             } else {
                 theResp = await this.handle_response_oneshot(resp, apiEP);
             }
@@ -960,7 +971,7 @@ class SimpleChat {
             theResp.ns.role = Roles.Assistant;
             this.add(theResp);
             this.latestResponse.clear();
-            elDivStreams[this.chatId].replaceChildren()
+            elDivStreams[this.chatId].divstream_clear()
             throw error;
         }
         if (this.me.chatProps.bTrimGarbage) {
@@ -980,7 +991,7 @@ class SimpleChat {
      * @param {string} baseURL
      * @param {string} apiEP
      * @param {SCHandshakeProps} hsProps
-     * @param {Object<string, HTMLDivElement>} elDivStreams - used to show chat response as it is being generated/recieved in streaming mode
+     * @param {ELDivStreams} elDivStreams - used to show chat response as it is being generated/recieved in streaming mode
      */
     async handle_chat_hs(baseURL, apiEP, hsProps, elDivStreams) {
         class ChatHSError extends Error {
@@ -1139,7 +1150,7 @@ class MultiChatUI {
         this.elBtnUser.parentElement?.appendChild(this.elInFileX.elB)
 
         // other ui elements
-        /** @type {Object<string, HTMLDivElement>} */
+        /** @type {ELDivStreams} */
         this.elDivStreams = {}
 
         this.validate_element(this.elInSystem, "system-in");
@@ -1437,7 +1448,7 @@ class MultiChatUI {
         if (bClear) {
             this.elDivChat.replaceChildren();
             this.ui_userinput_reset()
-            this.elDivStreams[chatId]?.replaceChildren()
+            this.elDivStreams[chatId]?.divstream_clear()
         }
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
@@ -1680,9 +1691,29 @@ class MultiChatUI {
      */
     new_chat_session(chatId, bSwitchSession=false) {
         this.simpleChats[chatId] = new SimpleChat(chatId, this.me);
-        this.elDivStreams[chatId] = document.createElement('div')
-        this.elDivStreams[chatId].id = `DivStream-${chatId}`
-        this.elDivStreams[chatId].classList.add("chat-message-content-live")
+        /** @type {ELDivStream} */
+        // @ts-ignore
+        let elDiv = Object.assign(document.createElement('div'), {
+            id: `DivStream-${chatId}`,
+            className: 'chat-message',
+        });
+        let elDivRole = Object.assign(document.createElement('div'), {
+            id: 'divStreamRole',
+            className: 'chat-message-role',
+        });
+        elDiv.appendChild(elDivRole)
+        elDiv.divStreamRole = elDivRole
+        let elDivData = Object.assign(document.createElement('div'), {
+            id: 'divStreamData',
+            className: 'chat-message-content-live',
+        });
+        elDiv.appendChild(elDivData)
+        elDiv.divStreamData = elDivData
+        elDiv.divstream_clear = function() {
+            this.divStreamRole.replaceChildren()
+            this.divStreamData.replaceChildren()
+        }
+        this.elDivStreams[chatId] = elDiv;
         if (bSwitchSession) {
             this.handle_session_switch(chatId);
         }
