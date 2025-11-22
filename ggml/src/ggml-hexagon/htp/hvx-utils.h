@@ -727,21 +727,15 @@ static inline HVX_Vector hvx_vec_inverse_fp32(HVX_Vector v_sf) {
 }
 
 static inline HVX_Vector hvx_vec_inverse_fp32_guard(HVX_Vector v_sf) {
-    static const float    kInf     = INFINITY;
-    static const uint32_t kNanMask = 0x7fffffff;
-    static const uint32_t kNanMin  = 0x7f800000;
-
-    const HVX_Vector     inf      = hvx_vec_splat_fp32(kInf);
-    const HVX_VectorPred pred_inf = Q6_Q_vcmp_gt_VsfVsf(inf, v_sf);
+    static const uint32_t kNanInfMask = 0x7f800000;
 
     HVX_Vector out = hvx_vec_inverse_fp32(v_sf);
 
-    const HVX_Vector     nan_mask   = Q6_V_vsplat_R(kNanMask);
-    const HVX_Vector     nan_min    = Q6_V_vsplat_R(kNanMin);
-    HVX_Vector           masked_out = Q6_V_vand_VV(out, nan_mask);
-    const HVX_VectorPred pred       = Q6_Q_vcmp_gtand_QVuwVuw(pred_inf, nan_min, masked_out);
+    const HVX_Vector     nan_inf_mask = Q6_V_vsplat_R(kNanInfMask);
+    HVX_Vector           masked_out   = Q6_V_vand_VV(out, nan_inf_mask);
+    const HVX_VectorPred pred         = Q6_Q_vcmp_eq_VwVw(nan_inf_mask, masked_out);
 
-    return Q6_V_vmux_QVV(pred, out, Q6_V_vzero());
+    return Q6_V_vmux_QVV(pred, Q6_V_vzero(), out);
 }
 
 #define FAST_SIGMOID_LOG2F (0x3fb8aa3b)  // 1.442695022
@@ -962,15 +956,15 @@ static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard(HVX_Vector v) {
     static const float kMinExp = -88.02f;  // 0
     static const float kMaxExp = 88.02f;   // 1
 
-    const HVX_Vector     one      = hvx_vec_splat_fp32(1.f);
-    const HVX_Vector     max_exp  = hvx_vec_splat_fp32(kMaxExp);
-    const HVX_Vector     min_exp  = hvx_vec_splat_fp32(kMinExp);
+    const HVX_Vector one     = hvx_vec_splat_fp32(1.f);
+    const HVX_Vector max_exp = hvx_vec_splat_fp32(kMaxExp);
+    const HVX_Vector min_exp = hvx_vec_splat_fp32(kMinExp);
 
     const HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
     const HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(v, min_exp);
 
     HVX_Vector out = hvx_vec_fast_sigmoid_fp32(v);
-    out = Q6_V_vmux_QVV(pred_max, out, one);
+    out            = Q6_V_vmux_QVV(pred_max, out, one);
     return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
 }
 
