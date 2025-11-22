@@ -126,6 +126,30 @@ export function useProcessingState(): UseProcessingStateReturn {
 			);
 		}
 
+		// Show input parsing progress when preparing
+		if (
+			stateToUse.status === 'preparing' &&
+			stateToUse.inputTokensProcessed !== undefined &&
+			stateToUse.inputTokensTotal !== undefined &&
+			stateToUse.inputTokensTotal > 0
+		) {
+			const inputPercent = Math.round(
+				(stateToUse.inputTokensProcessed / stateToUse.inputTokensTotal) * 100
+			);
+			details.push(
+				`Input: ${stateToUse.inputTokensProcessed}/${stateToUse.inputTokensTotal} (${inputPercent}%)`
+			);
+
+			// Show parsing tokens per second if available
+			if (
+				currentConfig.showTokensPerSecond &&
+				stateToUse.parsingTokensPerSecond !== undefined &&
+				stateToUse.parsingTokensPerSecond > 0
+			) {
+				details.push(`${stateToUse.parsingTokensPerSecond.toFixed(1)} t/s`);
+			}
+		}
+
 		if (stateToUse.outputTokensUsed > 0) {
 			// Handle infinite max_tokens (-1) case
 			if (stateToUse.outputTokensMax <= 0) {
@@ -144,7 +168,8 @@ export function useProcessingState(): UseProcessingStateReturn {
 		if (
 			currentConfig.showTokensPerSecond &&
 			stateToUse.tokensPerSecond &&
-			stateToUse.tokensPerSecond > 0
+			stateToUse.tokensPerSecond > 0 &&
+			stateToUse.status !== 'preparing' // Don't show generation t/s when parsing
 		) {
 			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} tokens/sec`);
 		}
