@@ -25,6 +25,7 @@
 #include <cfloat>
 #include <cstdio>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #if defined(GGML_USE_HIP)
@@ -972,6 +973,61 @@ struct ggml_cuda_graph {
 #endif
 };
 
+struct ggml_cuda_concurrent_event {
+    std::vector<cudaEvent_t> join_events;
+    cudaEvent_t              fork_event = nullptr;
+
+    int                                          n_streams = 0;
+    std::unordered_map<const ggml_tensor *, int> stream_mapping;
+
+    const ggml_tensor * join_node;
+
+    ggml_cuda_concurrent_event() = default;
+
+    ggml_cuda_concurrent_event(const ggml_cuda_concurrent_event &) = delete;
+    ggml_cuda_concurrent_event & operator=(const ggml_cuda_concurrent_event &) = delete;
+
+    explicit ggml_cuda_concurrent_event(int n_streams) : n_streams(n_streams) {
+        join_events.resize(n_streams);
+
+        for (size_t i = 0; i < join_events.size(); ++i) {
+            CUDA_CHECK(cudaEventCreateWithFlags(&join_events[i], cudaEventDisableTiming));
+        }
+
+        CUDA_CHECK(cudaEventCreateWithFlags(&fork_event, cudaEventDisableTiming));
+    }
+
+    ggml_cuda_concurrent_event(ggml_cuda_concurrent_event && other) noexcept
+    : join_events(std::move(other.join_events))
+    , fork_event(other.fork_event)
+    , n_streams(other.n_streams)
+    , stream_mapping(std::move(other.stream_mapping))
+    , join_node(other.join_node) {
+        other.fork_event = nullptr;
+    }
+
+    ~ggml_cuda_concurrent_event() {
+        if (fork_event != nullptr) {
+            CUDA_CHECK(cudaEventDestroy(fork_event));
+        }
+        for (cudaEvent_t e : join_events) {
+            if (e != nullptr) {
+                CUDA_CHECK(cudaEventDestroy(e));
+            }
+        }
+    }
+};
+
+struct ggml_cuda_stream_context {
+    std::vector<const ggml_tensor *>                                    original_nodes;
+    std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> concurrent_events;
+
+    void reset() {
+        original_nodes.clear();
+        concurrent_events.clear();
+    }
+};
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -982,10 +1038,14 @@ struct ggml_backend_cuda_context {
 
     std::unique_ptr<ggml_cuda_graph> cuda_graph;
 
+    int curr_stream_no = 0;
+
     explicit ggml_backend_cuda_context(int device) :
         device(device),
         name(GGML_CUDA_NAME + std::to_string(device)) {
     }
+
+    ggml_cuda_stream_context concurrent_stream_context;
 
     ~ggml_backend_cuda_context();
 
@@ -997,9 +1057,9 @@ struct ggml_backend_cuda_context {
         return streams[device][stream];
     }
 
-    cudaStream_t stream() {
-        return stream(device, 0);
-    }
+    cudaStream_t stream() { return stream(device, curr_stream_no); }
+
+    ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
 
     cublasHandle_t cublas_handle(int device) {
         if (cublas_handles[device] == nullptr) {
@@ -1015,15 +1075,15 @@ struct ggml_backend_cuda_context {
     }
 
     // pool
-    std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES];
+    std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS];
 
-    static std::unique_ptr<ggml_cuda_pool> new_pool_for_device(int device);
+    static std::unique_ptr<ggml_cuda_pool> new_pool_for_device(int device, int stream_no);
 
     ggml_cuda_pool & pool(int device) {
-        if (pools[device] == nullptr) {
-            pools[device] = new_pool_for_device(device);
+        if (pools[device][curr_stream_no] == nullptr) {
+            pools[device][curr_stream_no] = new_pool_for_device(device, curr_stream_no);
         }
-        return *pools[device];
+        return *pools[device][curr_stream_no];
     }
 
     ggml_cuda_pool & pool() {
