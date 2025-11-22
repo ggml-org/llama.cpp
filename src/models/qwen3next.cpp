@@ -254,12 +254,12 @@ ggml_tensor * llm_build_qwen3next::delta_net_chunking(ggml_context * ctx,
     cb(new_state, "new_state", il);
 
     for (int64_t chunk = 0; chunk < n_chunks; chunk++) {
-        auto chunkify = [ctx, chunk](ggml_tensor * t) {
+        auto chunkify = [ctx, chunk, chunk_size](ggml_tensor * t) {
             return ggml_cont(ctx, ggml_view_4d(ctx, t, t->ne[0], chunk_size, 1, t->ne[3],
                 t->nb[1], t->nb[2], t->nb[3], t->nb[2] * chunk));
         };
 
-        auto chunkify_g = [ctx, chunk](ggml_tensor * t) {
+        auto chunkify_g = [ctx, chunk, chunk_size](ggml_tensor * t) {
             return ggml_cont(ctx, ggml_view_4d(ctx, t, chunk_size, t->ne[1], 1, t->ne[3],
                 t->nb[1], t->nb[2], t->nb[3], t->nb[2] * chunk));
         };
