@@ -6,7 +6,7 @@ In short, this repository is designed to make llama.cpp easily accessible for An
 
 # Usage
 
-Unpack llama.cpp.zip
+Prepare adb shell or Termux,then unpack llama.cpp.zip
 
 ```bash
 cd llama.cpp
