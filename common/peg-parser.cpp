@@ -15,6 +15,10 @@
 #include <unordered_set>
 #include <map>
 
+// Trick to catch missing branches
+template <typename T>
+inline constexpr bool is_always_false_v = false;
+
 const char * common_peg_parse_result_type_name(common_peg_parse_result_type type) {
     switch (type) {
         case COMMON_PEG_PARSE_RESULT_FAIL:            return "fail";
@@ -1242,7 +1246,17 @@ static std::unordered_set<std::string> collect_reachable_rules(
         std::visit([&](const auto & p) {
             using T = std::decay_t<decltype(p)>;
 
-            if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
+            if constexpr (std::is_same_v<T, common_peg_start_parser> ||
+                          std::is_same_v<T, common_peg_end_parser> ||
+                          std::is_same_v<T, common_peg_until_parser> ||
+                          std::is_same_v<T, common_peg_literal_parser> ||
+                          std::is_same_v<T, common_peg_chars_parser> ||
+                          std::is_same_v<T, common_peg_space_parser> ||
+                          std::is_same_v<T, common_peg_any_parser> ||
+                          std::is_same_v<T, common_peg_json_string_parser> ||
+                          std::is_same_v<T, common_peg_schema_parser>) {
+                // These parsers do not have any children
+            } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 for (auto child : p.children) {
                     visit(child);
                 }
@@ -1267,9 +1281,8 @@ static std::unordered_set<std::string> collect_reachable_rules(
                 // Traverse rules so we pick up everything
                 auto referenced_rule = arena.get_rule(p.name);
                 visit(referenced_rule);
-            } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
-                // Schemas should not traverse children so we can prune their
-                // rules from the generated GBNF grammar.
+            } else {
+                static_assert(is_always_false_v<T>);
             }
         }, parser);
     };
@@ -1386,7 +1399,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             } else if constexpr (std::is_same_v<T, common_peg_atomic_parser>) {
                 return to_gbnf(p.child);
             } else {
-                return "";
+                static_assert(is_always_false_v<T>);
             }
         }, parser);
     };
