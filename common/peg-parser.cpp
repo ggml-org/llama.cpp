@@ -1129,21 +1129,6 @@ common_peg_parser common_peg_parser_builder::json() {
 
 
 // GBNF generation helper functions
-static std::string gbnf_literal(const std::string & s) {
-    std::string escaped;
-    for (char c : s) {
-        switch (c) {
-            case '\n': escaped += "\\n"; break;
-            case '\t': escaped += "\\t"; break;
-            case '\r': escaped += "\\r"; break;
-            case '\\': escaped += "\\\\"; break;
-            case '"':  escaped += "\\\""; break;
-            default:   escaped += c; break;
-        }
-    }
-    return "\"" + escaped + "\"";
-}
-
 static std::string gbnf_escape_char_class(char c) {
     switch (c) {
         case '\n': return "\\n";
@@ -1176,7 +1161,7 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
         }
 
         if (!pre.empty()) {
-            pattern += gbnf_literal(pre) + " [^" + cls + "]";
+            pattern += gbnf_format_literal(pre) + " [^" + cls + "]";
         } else {
             pattern += "[^" + cls + "]";
         }
@@ -1256,7 +1241,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             if constexpr (std::is_same_v<T, common_peg_start_parser> || std::is_same_v<T, common_peg_end_parser>) {
                 return "";
             } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
-                return gbnf_literal(p.literal);
+                return gbnf_format_literal(p.literal);
             } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 std::string s;
                 for (const auto & child : p.children) {

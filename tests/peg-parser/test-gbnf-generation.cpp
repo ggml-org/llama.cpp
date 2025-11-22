@@ -168,7 +168,7 @@ void test_gbnf_generation(testing &t) {
 
     t.test("escaping in literals", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
-            return p.literal("hello\nworld\t!");
+            return p.literal("hello\nworld\n!");
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -176,7 +176,7 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            root ::= "hello\nworld\t!"
+            root ::= "hello\nworld\n!"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
