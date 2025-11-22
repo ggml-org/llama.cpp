@@ -128,9 +128,10 @@ struct tool_argument {
 struct tool_definition {
     std::string name;
     std::vector<tool_argument> arguments;
+    json schema;
 };
 
-void foreach_tool(const json & json_tools, const std::function<void(const tool_definition &)> & fn) {
+void foreach_tool(const json & json_tools, const std::function<void(tool_definition &)> & fn) {
     if (!json_tools.is_array()) {
         return;
     }
@@ -144,6 +145,7 @@ void foreach_tool(const json & json_tools, const std::function<void(const tool_d
 
         tool_definition tool;
         tool.name = func_node.value("name", "unknown_tool");
+        tool.schema = func_node;
 
         if (func_node.contains("parameters") && func_node["parameters"].is_object()) {
             const auto& params_node = func_node["parameters"];
@@ -186,9 +188,7 @@ static void test_example_qwen3_coder(testing & t) {
             for (const auto & arg_def : def.arguments) {
                 auto arg = p.tool_arg(
                     p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(arg_def.name)) + ">") +
-                    (arg_def.type == "string" ?
-                        p.tool_arg_string_value(p.until_one_of({"</parameter><parameter=", "</parameter></function>"})) :
-                        p.tool_arg_json_value(p.schema(p.json(), "tool-" + def.name + "-arg-" + def.name + "-schema", arg_def.schema))) +
+                    p.tool_arg_json_value(p.schema(p.json(), "tool-" + def.name + "-arg-" + def.name + "-schema", arg_def.schema)) +
                     p.tool_arg_close("</parameter>" + p.peek(p.literal("<parameter=") | p.literal("</function>")))
                 );
 
@@ -204,11 +204,14 @@ static void test_example_qwen3_coder(testing & t) {
             ));
         });
 
-        auto tool_call = p.rule("tool-call", "<tool_call>" + p.choice(tool_parsers) + "</tool_call>", true);
+        auto tool_call = p.trigger_rule("tool-call", "<tool_call>" + p.choice(tool_parsers) + "</tool_call>");
         return content + p.zero_or_more(p.space() + tool_call) + p.end();
     });
 
     auto grammar = build_grammar([&](const common_grammar_builder & builder) {
+        foreach_tool(tools, [&](tool_definition & def) {
+            builder.resolve_refs(def.schema);
+        });
         parser.build_grammar(builder);
     });
 
@@ -219,8 +222,8 @@ static void test_example_qwen3_coder(testing & t) {
             "Let me search the knowledge base for cat pictures."
             "<tool_call>"
             "<function=search_knowledge_base>"
-            "<parameter=query>cat pictures</parameter>"
-            "<parameter=category>general</parameter>"
+            "<parameter=query>\"cat pictures\"</parameter>"
+            "<parameter=category>\"general\"</parameter>"
             "</function>"
             "</tool_call>";
 

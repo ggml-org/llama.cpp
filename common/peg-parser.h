@@ -462,6 +462,11 @@ class common_peg_parser_builder {
     //   auto json = p.rule("json", [&]() { return json_object() | json_array() | ... })
     common_peg_parser rule(const std::string & name, const std::function<common_peg_parser()> & builder, bool trigger = false);
 
+    // Creates a trigger rule. When generating a lazy grammar from the parser,
+    // only trigger rules and descendents are emitted.
+    common_peg_parser trigger_rule(const std::string & name, common_peg_parser p) { return rule(name, p, true); }
+    common_peg_parser trigger_rule(const std::string & name, const std::function<common_peg_parser()> & builder) { return rule(name, builder, true); }
+
     // Creates an atomic parser. Atomic parsers do not create an AST node if
     // the child results in a partial parse, i.e. NEEDS_MORE_INPUT. This is
     // intended for situations where partial output is undesirable.
