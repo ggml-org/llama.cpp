@@ -1,8 +1,6 @@
-ARG UBUNTU_VERSION=25.10
+ARG UBUNTU_VERSION=26.04
 
 FROM ubuntu:$UBUNTU_VERSION AS build
-
-# Ref: https://vulkan.lunarg.com/doc/sdk/latest/linux/getting_started.html
 
 # Install build tools
 RUN apt update && apt install -y git build-essential cmake wget xz-utils
