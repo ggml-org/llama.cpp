@@ -9,6 +9,7 @@
 #include <chrono>
 #include <mutex>
 #include <string>
+#include <stdexcept>
 
 #ifdef _WIN32
 #    include <sal.h>
