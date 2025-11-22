@@ -2,7 +2,7 @@
 # multiplie collaborators per item can be specified
 
 /.devops/*.Dockerfile                   @ngxson
-/.github/actions/                       @slaren
+/.github/actions/                       @slaren @CISC
 /.github/workflows/                     @CISC
 /.github/workflows/release.yml          @slaren
 /.github/workflows/winget.yml           @slaren
@@ -14,6 +14,7 @@
 /common/build-info.*                    @ggerganov
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
+/common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
 /common/sampling.*                      @ggerganov
@@ -54,18 +55,23 @@
 /ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
 /ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
-/ggml/src/ggml-cuda/mmf.*               @JohannesGaessler
+/ggml/src/ggml-cuda/mmf.*               @JohannesGaessler @am17an
 /ggml/src/ggml-cuda/mmq.*               @JohannesGaessler
 /ggml/src/ggml-cuda/mmvf.*              @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.*              @JohannesGaessler
+/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
+/ggml/src/ggml-hip/                     @IMbackK
+/ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
 /ggml/src/ggml-impl.h                   @ggerganov @slaren
 /ggml/src/ggml-metal/                   @ggerganov
 /ggml/src/ggml-opencl/                  @lhez @max-krasnyansky
+/ggml/src/ggml-hexagon/                 @max-krasnyansky @lhez
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
 /ggml/src/ggml-rpc/                     @rgerganov
 /ggml/src/ggml-threading.*              @ggerganov @slaren
 /ggml/src/ggml-vulkan/                  @0cc4m
+/ggml/src/ggml-webgpu/                  @reeselevine
 /ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
 /ggml/src/ggml.c                        @ggerganov @slaren
 /ggml/src/ggml.cpp                      @ggerganov @slaren
@@ -83,6 +89,7 @@
 /src/llama-model-loader.*               @slaren
 /src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
+/src/models/                            @CISC
 /tests/                                 @ggerganov
 /tests/test-backend-ops.cpp             @slaren
 /tests/test-thread-safety.cpp           @slaren

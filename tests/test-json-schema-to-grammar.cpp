@@ -1124,9 +1124,9 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            foo ::= "{" space foo-a-kv "}" space
-            foo-a-kv ::= "\"a\"" space ":" space string
-            root ::= foo
+            ref-definitions-foo ::= "{" space ref-definitions-foo-a-kv "}" space
+            ref-definitions-foo-a-kv ::= "\"a\"" space ":" space string
+            root ::= ref-definitions-foo
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
             string ::= "\"" char* "\"" space
         )"""
@@ -1151,17 +1151,55 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "type": "object"
         })""",
         R"""(
-            alternative-0 ::= foo
-            alternative-1 ::= bar
-            bar ::= "{" space  (bar-b-kv )? "}" space
-            bar-b-kv ::= "\"b\"" space ":" space number
+            alternative-0 ::= ref-definitions-foo
+            alternative-1 ::= ref-definitions-bar
             decimal-part ::= [0-9]{1,16}
-            foo ::= "{" space  (foo-a-kv )? "}" space
-            foo-a-kv ::= "\"a\"" space ":" space number
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            ref-definitions-bar ::= "{" space  (ref-definitions-bar-b-kv )? "}" space
+            ref-definitions-bar-b-kv ::= "\"b\"" space ":" space number
+            ref-definitions-foo ::= "{" space  (ref-definitions-foo-a-kv )? "}" space
+            ref-definitions-foo-a-kv ::= "\"a\"" space ":" space number
             root ::= alternative-0 | alternative-1
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "anyOf $ref",
+        R"""({
+            "properties": {
+                "a": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "number"}
+                    ]
+                },
+                "b": {
+                    "anyOf": [
+                        {"$ref": "#/properties/a/anyOf/0"},
+                        {"type": "boolean"}
+                    ]
+                }
+            },
+            "type": "object"
+        })""",
+        R"""(
+            a ::= string | number
+            a-kv ::= "\"a\"" space ":" space a
+            a-rest ::= ( "," space b-kv )?
+            b ::= b-0 | boolean
+            b-0 ::= string
+            b-kv ::= "\"b\"" space ":" space b
+            boolean ::= ("true" | "false") space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            root ::= "{" space  (a-kv a-rest | b-kv )? "}" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\"" space
         )"""
     });
 

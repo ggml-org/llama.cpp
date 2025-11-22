@@ -42,7 +42,7 @@ struct llama_hparams {
     uint32_t n_embd;
     uint32_t n_embd_features = 0;
     uint32_t n_layer;
-     int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
+    int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
     uint32_t n_rot;
     uint32_t n_embd_head_k; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
     uint32_t n_embd_head_v; // dimension of values (d_v) aka n_embd_head
@@ -72,6 +72,8 @@ struct llama_hparams {
     uint32_t n_ff_chexp         = 0;
     uint32_t n_expert_shared    = 0;
     uint32_t n_norm_groups      = 0;
+    uint32_t n_expert_groups    = 0;
+    uint32_t n_group_used       = 0;
     uint32_t n_group_experts    = 0;
 
     float    expert_group_scale   = 0.05f;
@@ -169,6 +171,21 @@ struct llama_hparams {
     uint32_t laurel_rank  = 64;
     uint32_t n_embd_altup = 256;
 
+    // needed for sentence-transformers dense layers
+    uint32_t dense_2_feat_in  = 0;  // in_features of the 2_Dense
+    uint32_t dense_2_feat_out = 0;  // out_features of the 2_Dense
+    uint32_t dense_3_feat_in  = 0;  // in_features of the 3_Dense
+    uint32_t dense_3_feat_out = 0;  // out_features of the 3_Dense
+
+    // xIELU
+    std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_n;
+    std::array<float, LLAMA_MAX_LAYERS> xielu_alpha_p;
+    std::array<float, LLAMA_MAX_LAYERS> xielu_beta;
+    std::array<float, LLAMA_MAX_LAYERS> xielu_eps;
+
+    // qwen3vl deepstack
+    uint32_t n_deepstack_layers = 0;
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;
@@ -209,6 +226,9 @@ struct llama_hparams {
     uint32_t n_ff(uint32_t il = 0) const;
 
     uint32_t n_gqa(uint32_t il = 0) const;
+
+    // dimension of main + auxiliary input embeddings
+    uint32_t n_embd_inp() const;
 
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;

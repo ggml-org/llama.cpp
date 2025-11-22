@@ -71,28 +71,53 @@ var<storage, read_write> src: array<f32>;
 DECLS
 
 override wg_size: u32;
+var<workgroup> scratch: array<f32, wg_size>;
+
 @compute @workgroup_size(wg_size)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.ne1 * params.ne2 * params.ne3) {
-        return;
-    }
+fn main(@builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(local_invocation_id) lid: vec3<u32>) {
 
     // one thread per row
-    var i = gid.x;
+    var i = wid.x;
     let i3 = i / (params.ne2 * params.ne1);
     i = i % (params.ne2 * params.ne1);
     let i2 = i / params.ne1;
     let i1 = i % params.ne1;
     let i_src_row = params.offset_src + i3 * params.stride_src3 + i2 * params.stride_src2 + i1 * params.stride_src1;
-    let i_dst_row = params.offset_src + i3 * params.stride_dst3 + i2 * params.stride_dst2 + i1 * params.stride_dst1;
+    let i_dst_row = params.offset_dst + i3 * params.stride_dst3 + i2 * params.stride_dst2 + i1 * params.stride_dst1;
+
+    let elems = (params.ne0 + wg_size - 1) / wg_size;
 
     var sum = 0.0f;
-    for (var j: u32 = 0; j < params.ne0; j++) {
-        sum += src[i_src_row + j] * src[i_src_row + j];
+    var col = lid.x;
+    for (var j: u32 = 0; j < elems; j++) {
+        if (col >= params.ne0) {
+            break;
+        }
+        sum += pow(src[i_src_row + col], 2.0);
+        col += wg_size;
     }
+
+    scratch[lid.x] = sum;
+    workgroupBarrier();
+    var offset = wg_size / 2;
+    while (offset > 0) {
+        if (lid.x < offset) {
+            scratch[lid.x] += scratch[lid.x + offset];
+        }
+        offset = offset / 2;
+        workgroupBarrier();
+    }
+    sum = scratch[0];
+
     let scale = 1.0/sqrt(sum/f32(params.ne0) + params.eps);
-    for (var j: u32 = 0; j < params.ne0; j++) {
-        update(i_src_row + j, i_dst_row + j, scale);
+    col = lid.x;
+    for (var j: u32 = 0; j < elems; j++) {
+        if (col >= params.ne0) {
+            break;
+        }
+        update(i_src_row + col, i_dst_row + col, scale);
+        col += wg_size;
     }
 }
 #end(SHADER)

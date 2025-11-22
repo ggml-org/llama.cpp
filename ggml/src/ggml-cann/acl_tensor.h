@@ -23,11 +23,12 @@
 #ifndef CANN_ACL_TENSOR_H
 #define CANN_ACL_TENSOR_H
 
-#include <algorithm>
-#include <cstring>
+#include "common.h"
 
 #include <aclnn/aclnn_base.h>
-#include "common.h"
+
+#include <algorithm>
+#include <cstring>
 
 /**
  * @brief	Maps a ggml_type to its corresponding aclDataType.
@@ -42,6 +43,20 @@
  *			ACL_DT_UNDEFINED is returned.
  */
 aclDataType ggml_cann_type_mapping(ggml_type type);
+
+// Deleter for acl objects.
+template <typename T, aclError (*DestroyFunc)(const T *)> struct acl_deleter {
+    void operator()(T * ptr) const noexcept {
+        if (ptr) {
+            ACL_CHECK(DestroyFunc(ptr));
+        }
+    }
+};
+
+using acl_tensor_ptr      = std::unique_ptr<aclTensor, acl_deleter<aclTensor, aclDestroyTensor>>;
+using acl_int_array_ptr   = std::unique_ptr<aclIntArray, acl_deleter<aclIntArray, aclDestroyIntArray>>;
+using acl_scalar_ptr      = std::unique_ptr<aclScalar, acl_deleter<aclScalar, aclDestroyScalar>>;
+using acl_tensor_list_ptr = std::unique_ptr<aclTensorList, acl_deleter<aclTensorList, aclDestroyTensorList>>;
 
 /**
  * @brief   Creates an ACL tensor from a ggml_tensor with optional shape.
@@ -62,10 +77,12 @@ aclDataType ggml_cann_type_mapping(ggml_type type);
  * @param   offset      Offset in bytes for the ACL tensor data. Defaults to 0.
  * @return  Pointer to the created ACL tensor.
  */
-aclTensor* ggml_cann_create_tensor(const ggml_tensor* tensor, int64_t* ne = nullptr,
-                             size_t* nb = nullptr, int64_t dims = 0,
-                             aclFormat format = ACL_FORMAT_ND,
-                             size_t offset = 0);
+acl_tensor_ptr ggml_cann_create_tensor(const ggml_tensor * tensor,
+                                       int64_t *           ne     = nullptr,
+                                       size_t *            nb     = nullptr,
+                                       int64_t             dims   = 0,
+                                       aclFormat           format = ACL_FORMAT_ND,
+                                       size_t              offset = 0);
 
 /**
  * @brief   Template for creating an ACL tensor from provided parameters. typename TYPE
@@ -87,12 +104,15 @@ aclTensor* ggml_cann_create_tensor(const ggml_tensor* tensor, int64_t* ne = null
  * @param   offset      Offset in bytes for the ACL tensor data. Defaults to 0.
  * @return  Pointer to the created ACL tensor.
  */
-template<typename TYPE>
-aclTensor* ggml_cann_create_tensor(void* data_ptr, aclDataType dtype,
-                                   TYPE type_size, int64_t* ne, TYPE* nb,
-                                   int64_t dims,
-                                   aclFormat format = ACL_FORMAT_ND,
-                                   size_t offset = 0) {
+template <typename TYPE>
+acl_tensor_ptr ggml_cann_create_tensor(void *      data_ptr,
+                                       aclDataType dtype,
+                                       TYPE        type_size,
+                                       int64_t *   ne,
+                                       TYPE *      nb,
+                                       int64_t     dims,
+                                       aclFormat   format = ACL_FORMAT_ND,
+                                       size_t      offset = 0) {
     int64_t tmp_ne[GGML_MAX_DIMS * 2];
     int64_t tmp_stride[GGML_MAX_DIMS * 2];
 
@@ -109,11 +129,75 @@ aclTensor* ggml_cann_create_tensor(void* data_ptr, aclDataType dtype,
     std::reverse(tmp_ne, tmp_ne + dims);
     std::reverse(tmp_stride, tmp_stride + dims);
 
-    aclTensor* acl_tensor =
-        aclCreateTensor(tmp_ne, dims, dtype, tmp_stride, offset / type_size,
-                        format, &acl_storage_len, 1, data_ptr);
+    aclTensor * raw =
+        aclCreateTensor(tmp_ne, dims, dtype, tmp_stride, offset / type_size, format, &acl_storage_len, 1, data_ptr);
 
-    return acl_tensor;
+    return acl_tensor_ptr(raw);
+}
+
+/**
+ * @brief Create an ACL int array resource wrapped in a smart pointer.
+ *
+ * This function constructs an aclIntArray from the provided int64_t values
+ * and returns it as an acl_int_array_ptr (a std::unique_ptr with a custom
+ * deleter). The returned pointer owns the ACL resource and will automatically
+ * destroy it via aclDestroyIntArray().
+ *
+ * @param value  Pointer to the int64_t elements.
+ * @param size   Number of elements in value.
+ *
+ * @return A smart pointer managing the created ACL int array.
+ */
+acl_int_array_ptr ggml_cann_create_int_array(const int64_t * value, uint64_t size);
+
+/**
+ * @brief Create an ACL scalar resource wrapped in a smart pointer.
+ *
+ * This function constructs an aclScalar from the raw value pointer and ACL
+ * data type, then returns it as an acl_scalar_ptr (a std::unique_ptr with
+ * a custom deleter). The returned pointer owns the ACL scalar and will
+ * automatically destroy it via aclDestroyScalar().
+ *
+ * @param value     Pointer to the raw scalar memory.
+ * @param dataType  ACL data type of the scalar.
+ *
+ * @return A smart pointer managing the created ACL scalar.
+ */
+acl_scalar_ptr ggml_cann_create_scalar(void * value, aclDataType dataType);
+
+/**
+ * @brief Create an ACL tensor list from multiple tensor smart pointers.
+ *
+ * This function accepts a variadic list of acl_tensor_ptr (a unique_ptr with
+ * custom deleter) and produces an aclTensorList using aclCreateTensorList().
+ *
+ * The lifecycle management of the tensor objects changes as follows:
+ *  - aclCreateTensorList() takes ownership of the tensors
+ *  - Each input smart pointer releases ownership using release()
+ *  - As a result, the tensors will NOT be destroyed by unique_ptr
+ *  - Instead, they will be destroyed when aclDestroyTensorList() is called
+ *
+ * This ensures correct ownership transfer and prevents double-free situations.
+ *
+ * @param acl_tensor_ptr  Variadic template parameter; each argument must be
+ *                         a unique_ptr-like type supporting get() and release().
+ *
+ * @param tensors  Variadic list of acl_tensor_ptr objects. Ownership of
+ *                         each tensor is transferred away from these smart pointers.
+ *
+ * @return A smart pointer (acl_tensor_list_ptr) owning the created ACL tensor list.
+ *
+ * @note This implementation is C++11 compatible. The ownership-release process is
+ *       executed using a pack expansion inside an initializer list.
+ */
+template <typename... acl_tensor_ptr> acl_tensor_list_ptr ggml_cann_create_tensor_list(acl_tensor_ptr &&... tensors) {
+    aclTensor *     raw_tensors[] = { tensors.get()... };
+    aclTensorList * raw           = aclCreateTensorList(raw_tensors, sizeof...(tensors));
+    // aclTensor will release by aclTensorList, so release ownership without
+    // destroying the tensor
+    int             dummy[]       = { (tensors.release(), 0)... };
+    GGML_UNUSED(dummy);
+    return acl_tensor_list_ptr(raw);
 }
 
 /**
@@ -132,7 +216,7 @@ aclTensor* ggml_cann_create_tensor(void* data_ptr, aclDataType dtype,
  *          to 1. If such a dimension is found, broadcasting is required to align t1
  *          with t0 for element-wise operations.
  */
-bool ggml_cann_need_bcast(const ggml_tensor* t0, const ggml_tensor* t1);
+bool ggml_cann_need_bcast(const ggml_tensor * t0, const ggml_tensor * t1);
 
 /**
  * @brief   Computes broadcast shapes and strides for two ggml_tensors.
@@ -187,19 +271,21 @@ bool ggml_cann_need_bcast(const ggml_tensor* t0, const ggml_tensor* t1);
  *  dim1 in a inserted dim, should add nb for dim1,
  *  and all other nb moves to next in order.
  */
-int64_t ggml_cann_get_bcast_shape(const ggml_tensor* src0, const ggml_tensor* src1,
-                        int64_t* bcast_ne_src0, int64_t* bcast_ne_src1,
-                        size_t* bcast_nb_src0, size_t* bcast_nb_src1);
+int64_t ggml_cann_get_bcast_shape(const ggml_tensor * src0,
+                                  const ggml_tensor * src1,
+                                  int64_t *           bcast_ne_src0,
+                                  int64_t *           bcast_ne_src1,
+                                  size_t *            bcast_nb_src0,
+                                  size_t *            bcast_nb_src1);
 
 // Bcast macro to avoid duplicate code.
-#define BCAST_SHAPE(src0, src1)                                              \
-    int64_t bcast_##src0##_ne[GGML_MAX_DIMS * 2];                            \
-    int64_t bcast_##src1##_ne[GGML_MAX_DIMS * 2];                            \
-    size_t bcast_##src0##_nb[GGML_MAX_DIMS * 2];                             \
-    size_t bcast_##src1##_nb[GGML_MAX_DIMS * 2];                             \
-    int64_t bcast_dims = ggml_cann_get_bcast_shape(                          \
-        src0, src1, bcast_##src0##_ne, bcast_##src1##_ne, bcast_##src0##_nb, \
-        bcast_##src1##_nb);
+#define BCAST_SHAPE(src0, src1)                                                                      \
+    int64_t bcast_##src0##_ne[GGML_MAX_DIMS * 2];                                                    \
+    int64_t bcast_##src1##_ne[GGML_MAX_DIMS * 2];                                                    \
+    size_t  bcast_##src0##_nb[GGML_MAX_DIMS * 2];                                                    \
+    size_t  bcast_##src1##_nb[GGML_MAX_DIMS * 2];                                                    \
+    int64_t bcast_dims = ggml_cann_get_bcast_shape(src0, src1, bcast_##src0##_ne, bcast_##src1##_ne, \
+                                                   bcast_##src0##_nb, bcast_##src1##_nb);
 
 #define BCAST_PARAM(tensor) bcast_##tensor##_ne, bcast_##tensor##_nb, bcast_dims
 
@@ -233,26 +319,31 @@ int64_t ggml_cann_get_bcast_shape(const ggml_tensor* src0, const ggml_tensor* sr
  *       before cast dim.
  * @sa ggml_cann_get_bcast_shape
  */
-int64_t ggml_cann_get_mulmat_bcast_shape(
-    const int64_t* input_ne, const int64_t* weight_ne, const int64_t* dst_ne,
-    const size_t* input_nb, const size_t* weight_nb, const size_t* dst_nb,
-    int64_t* bcast_input_ne, int64_t* bcast_weight_ne, int64_t* bcast_dst_ne,
-    size_t* bcast_input_nb, size_t* bcast_weight_nb, size_t* bcast_dst_nb);
+int64_t ggml_cann_get_mulmat_bcast_shape(const int64_t * input_ne,
+                                         const int64_t * weight_ne,
+                                         const int64_t * dst_ne,
+                                         const size_t *  input_nb,
+                                         const size_t *  weight_nb,
+                                         const size_t *  dst_nb,
+                                         int64_t *       bcast_input_ne,
+                                         int64_t *       bcast_weight_ne,
+                                         int64_t *       bcast_dst_ne,
+                                         size_t *        bcast_input_nb,
+                                         size_t *        bcast_weight_nb,
+                                         size_t *        bcast_dst_nb);
 
 // Bcast macro to avoid duplicate code.
-#define BCAST_MUL_MAT_SHAPE(input, weight, dst)                         \
-    int64_t bcast_##input##_ne[GGML_MAX_DIMS * 2];                      \
-    int64_t bcast_##weight##_ne[GGML_MAX_DIMS * 2];                     \
-    int64_t bcast_##dst##_ne[GGML_MAX_DIMS * 2];                        \
-    size_t bcast_##input##_nb[GGML_MAX_DIMS * 2];                       \
-    size_t bcast_##weight##_nb[GGML_MAX_DIMS * 2];                      \
-    size_t bcast_##dst##_nb[GGML_MAX_DIMS * 2];                         \
-    int64_t bcast_dims = ggml_cann_get_mulmat_bcast_shape(              \
-        input->ne, weight->ne, dst->ne, input->nb, weight->nb, dst->nb, \
-        bcast_##input##_ne, bcast_##weight##_ne, bcast_##dst##_ne,      \
-        bcast_##input##_nb, bcast_##weight##_nb, bcast_##dst##_nb);
+#define BCAST_MUL_MAT_SHAPE(input, weight, dst)                                                                  \
+    int64_t bcast_##input##_ne[GGML_MAX_DIMS * 2];                                                               \
+    int64_t bcast_##weight##_ne[GGML_MAX_DIMS * 2];                                                              \
+    int64_t bcast_##dst##_ne[GGML_MAX_DIMS * 2];                                                                 \
+    size_t  bcast_##input##_nb[GGML_MAX_DIMS * 2];                                                               \
+    size_t  bcast_##weight##_nb[GGML_MAX_DIMS * 2];                                                              \
+    size_t  bcast_##dst##_nb[GGML_MAX_DIMS * 2];                                                                 \
+    int64_t bcast_dims = ggml_cann_get_mulmat_bcast_shape(                                                       \
+        input->ne, weight->ne, dst->ne, input->nb, weight->nb, dst->nb, bcast_##input##_ne, bcast_##weight##_ne, \
+        bcast_##dst##_ne, bcast_##input##_nb, bcast_##weight##_nb, bcast_##dst##_nb);
 
-#define BCAST_MUL_MAT_PARAM(tensor) \
-    bcast_##tensor##_ne, bcast_##tensor##_nb, bcast_dims
+#define BCAST_MUL_MAT_PARAM(tensor) bcast_##tensor##_ne, bcast_##tensor##_nb, bcast_dims
 
 #endif  // CANN_ACL_TENSOR_H

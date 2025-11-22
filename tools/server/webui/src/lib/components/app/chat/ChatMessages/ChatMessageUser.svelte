@@ -1,9 +1,11 @@
 <script lang="ts">
-	import { Check, X } from '@lucide/svelte';
+	import { Check, X, Send } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { ChatAttachmentsList } from '$lib/components/app';
+	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
+	import { config } from '$lib/stores/settings.svelte';
+	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 
 	interface Props {
@@ -21,6 +23,7 @@
 		} | null;
 		onCancelEdit: () => void;
 		onSaveEdit: () => void;
+		onSaveEditOnly?: () => void;
 		onEditKeydown: (event: KeyboardEvent) => void;
 		onEditedContentChange: (content: string) => void;
 		onCopy: () => void;
@@ -42,6 +45,7 @@
 		deletionInfo,
 		onCancelEdit,
 		onSaveEdit,
+		onSaveEditOnly,
 		onEditKeydown,
 		onEditedContentChange,
 		onCopy,
@@ -55,6 +59,13 @@
 
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
+	const currentConfig = config();
+
+	$effect(() => {
+		if (isEditing && textareaElement) {
+			autoResizeTextarea(textareaElement);
+		}
+	});
 
 	$effect(() => {
 		if (!messageElement || !message.content.trim()) return;
@@ -93,20 +104,34 @@
 				bind:value={editedContent}
 				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
 				onkeydown={onEditKeydown}
-				oninput={(e) => onEditedContentChange(e.currentTarget.value)}
+				oninput={(e) => {
+					autoResizeTextarea(e.currentTarget);
+					onEditedContentChange(e.currentTarget.value);
+				}}
 				placeholder="Edit your message..."
 			></textarea>
 
 			<div class="mt-2 flex justify-end gap-2">
-				<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="outline">
+				<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="ghost">
 					<X class="mr-1 h-3 w-3" />
-
 					Cancel
 				</Button>
 
-				<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent.trim()} size="sm">
-					<Check class="mr-1 h-3 w-3" />
+				{#if onSaveEditOnly}
+					<Button
+						class="h-8 px-3"
+						onclick={onSaveEditOnly}
+						disabled={!editedContent.trim()}
+						size="sm"
+						variant="outline"
+					>
+						<Check class="mr-1 h-3 w-3" />
+						Save
+					</Button>
+				{/if}
 
+				<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent.trim()} size="sm">
+					<Send class="mr-1 h-3 w-3" />
 					Send
 				</Button>
 			</div>
@@ -123,9 +148,18 @@
 				class="max-w-[80%] rounded-[1.125rem] bg-primary px-3.75 py-1.5 text-primary-foreground data-[multiline]:py-2.5"
 				data-multiline={isMultiline ? '' : undefined}
 			>
-				<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
-					{message.content}
-				</span>
+				{#if currentConfig.renderUserContentAsMarkdown}
+					<div bind:this={messageElement} class="text-md">
+						<MarkdownContent
+							class="markdown-user-content text-primary-foreground"
+							content={message.content}
+						/>
+					</div>
+				{:else}
+					<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
+						{message.content}
+					</span>
+				{/if}
 			</Card>
 		{/if}
 
