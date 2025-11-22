@@ -9,11 +9,8 @@ int main(int argc, char *argv[]) {
         t.set_filter(argv[1]);
     }
 
-    t.test("partial", test_partial_parsing);
-    t.test("one", test_one);
-    t.test("optional", test_optional);
+    t.test("basic", test_basic);
     t.test("unicode", test_unicode);
-    t.test("recursive", test_recursive_references);
     t.test("json", test_json_parser);
     t.test("gbnf", test_gbnf_generation);
     t.test("serialization", test_json_serialization);
