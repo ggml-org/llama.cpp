@@ -195,6 +195,10 @@ struct common_params_sampling {
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
 
+    // Backend sampling flags
+    bool backend_sampling = false; // enable backend sampling
+    bool backend_dist     = false; // backend performs final sampling (dist)
+
     // print the parameters into a string
     std::string print() const;
 };
@@ -519,6 +523,9 @@ struct common_params {
     bool has_speculative() const {
         return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
     }
+
+    llama_sampler_seq_config * backend_samplers   = NULL;
+    size_t                     n_backend_samplers = 0;
 };
 
 // call once at the start of a program if it uses libcommon
@@ -639,6 +646,14 @@ struct common_init_result {
 };
 
 struct common_init_result     common_init_from_params(common_params & params);
+
+// Load model only (allows creating backend samplers before context initialization)
+llama_model * common_load_model_from_params(common_params & params);
+
+// Initialize context from an already-loaded model (allows pre-configuring backend samplers)
+struct common_init_result common_init_context_from_model(
+    llama_model * model,
+    common_params & params);
 
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);
