@@ -114,22 +114,6 @@ class common_peg_ast_arena {
     void visit(const common_peg_parse_result & result, common_peg_ast_visitor visitor);
 };
 
-struct common_peg_parse_cache_key {
-    common_peg_parser_id id;
-    size_t start;
-
-    bool operator==(const common_peg_parse_cache_key & other) const {
-        return id == other.id && start == other.start;
-    }
-};
-
-template <>
-struct std::hash<common_peg_parse_cache_key> {
-    std::size_t operator()(const common_peg_parse_cache_key & k) const {
-        return std::hash<size_t>{}((k.id << 32) | k.start);
-    }
-};
-
 struct common_peg_parse_result {
     common_peg_parse_result_type type = COMMON_PEG_PARSE_RESULT_FAIL;
     size_t start = 0;
@@ -153,31 +137,21 @@ struct common_peg_parse_result {
     bool success() const { return type == COMMON_PEG_PARSE_RESULT_SUCCESS; }
 };
 
-class common_peg_parse_cache {
-    std::unordered_map<common_peg_parse_cache_key, common_peg_parse_result> results;
-
-  public:
-    const common_peg_parse_result & set(common_peg_parser_id id, size_t start, common_peg_parse_result result);
-    common_peg_parse_result * get(common_peg_parser_id id, size_t start);
-    void clear();
-};
-
 struct common_peg_parse_context {
     std::string input;
     bool input_is_complete;
-    common_peg_parse_cache cache;
     common_peg_ast_arena ast_arena;
 
     int parse_depth;
 
     common_peg_parse_context()
-        : input_is_complete(true), cache(), parse_depth(0) {}
+        : input_is_complete(true), parse_depth(0) {}
 
     common_peg_parse_context(const std::string & input)
-        : input(input), input_is_complete(true), cache(), parse_depth(0) {}
+        : input(input), input_is_complete(true), parse_depth(0) {}
 
     common_peg_parse_context(const std::string & input, bool complete)
-        : input(input), input_is_complete(complete), cache(), parse_depth(0) {}
+        : input(input), input_is_complete(complete), parse_depth(0) {}
 };
 
 // Forward declaration

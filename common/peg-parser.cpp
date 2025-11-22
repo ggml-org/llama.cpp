@@ -6,10 +6,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include <deque>
 #include <initializer_list>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <regex>
 #include <unordered_set>
@@ -249,26 +247,6 @@ static std::pair<std::vector<common_peg_chars_parser::char_range>, bool> parse_c
 
     return {ranges, negated};
 }
-
-// Parse cache implementation
-const common_peg_parse_result & common_peg_parse_cache::set(common_peg_parser_id id, size_t start, common_peg_parse_result result) {
-    auto & stored = results[common_peg_parse_cache_key{id, start}];
-    stored = std::move(result);
-    return stored;
-}
-
-common_peg_parse_result * common_peg_parse_cache::get(common_peg_parser_id id, size_t start) {
-    auto it = results.find(common_peg_parse_cache_key{id, start});
-    if (it != results.end()) {
-        return &it->second;
-    }
-    return nullptr;
-}
-
-void common_peg_parse_cache::clear() {
-    results.clear();
-}
-
 
 void common_peg_ast_arena::visit(common_peg_ast_id id, std::function<void(const common_peg_ast_node & node)> visitor) {
     if (id == COMMON_PEG_INVALID_AST_ID) {
@@ -772,19 +750,10 @@ common_peg_parse_result common_peg_arena::parse(common_peg_parse_context & ctx, 
 }
 
 common_peg_parse_result common_peg_arena::parse(common_peg_parser_id id, common_peg_parse_context & ctx, size_t start) const {
-    // Check cache
-    common_peg_parse_result * cached = ctx.cache.get(id, start);
-    if (cached) {
-        return *cached;
-    }
-
     // Execute parser
     const auto & parser = parsers_.at(id);
     parser_executor exec(*this, ctx, start);
-    auto result = std::visit(exec, parser);
-
-    // Cache result
-    return ctx.cache.set(id, start, std::move(result));
+    return std::visit(exec, parser);
 }
 
 common_peg_parser_id common_peg_arena::resolve_ref(common_peg_parser_id id) {
