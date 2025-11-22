@@ -5429,21 +5429,24 @@ struct test_pad : public test_case {
     const std::array<int64_t, 4> ne_a;
     const int pad_0;
     const int pad_1;
+    const bool circular;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne_a, pad_0, pad_1);
+        return VARS_TO_STR5(type, ne_a, pad_0, pad_1, circular);
     }
 
     test_pad(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {512, 512, 1, 1},
-            int pad_0 = 1, int pad_1 = 1)
-        : type(type), ne_a(ne_a), pad_0(pad_0), pad_1(pad_1)  {}
+            int pad_0 = 1, int pad_1 = 1, bool circular = false)
+        : type(type), ne_a(ne_a), pad_0(pad_0), pad_1(pad_1), circular(circular) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
         ggml_set_name(a, "a");
 
-        ggml_tensor * out = ggml_pad(ctx, a, pad_0, pad_1, 0, 0);
+        ggml_tensor * out = circular
+            ? ggml_pad_circular(ctx, a, pad_0, pad_1, 0, 0)
+            : ggml_pad(ctx, a, pad_0, pad_1, 0, 0);
         ggml_set_name(out, "out");
 
         return out;
@@ -5463,17 +5466,19 @@ struct test_pad_ext : public test_case {
     const int lp3;
     const int rp3;
     const bool v;
+    const bool circular;
 
     std::string vars() override {
-        return VARS_TO_STR11(type, ne_a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, v);
+        return VARS_TO_STR12(type, ne_a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, v, circular);
     }
 
     test_pad_ext(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {512, 512, 3, 1},
             int lp0 = 1, int rp0 = 1, int lp1 = 1, int rp1 = 1,
             int lp2 = 1, int rp2 = 1, int lp3 = 1, int rp3 = 1,
-            bool v = false)
-        : type(type), ne_a(ne_a), lp0(lp0), rp0(rp0), lp1(lp1), rp1(rp1), lp2(lp2), rp2(rp2), lp3(lp3), rp3(rp3), v(v) {}
+            bool v = false, bool circular = false)
+        : type(type), ne_a(ne_a), lp0(lp0), rp0(rp0), lp1(lp1), rp1(rp1), lp2(lp2), rp2(rp2), lp3(lp3), rp3(rp3),
+          v(v), circular(circular) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
@@ -5484,12 +5489,102 @@ struct test_pad_ext : public test_case {
             ggml_set_name(a, "view of a");
         }
 
-        ggml_tensor * out = ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+        ggml_tensor * out = circular
+            ? ggml_pad_ext_circular(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3)
+            : ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
         ggml_set_name(out, "out");
 
         return out;
     }
 };
+
+static inline int64_t wrap_coord_circular(int64_t coord, int64_t size) {
+    GGML_ASSERT(size > 0);
+    const int64_t mod = coord % size;
+    return mod < 0 ? mod + size : mod;
+}
+
+static inline int64_t offset4d(const int64_t ne[4], int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+    return ((i3 * ne[2] + i2) * ne[1] + i1) * ne[0] + i0;
+}
+
+// GGML_OP_PAD (with extension and circular)
+struct test_pad_ext_circular : public test_case {
+    const std::array<int64_t, 4> ne_src{4, 3, 1, 1};
+    const std::array<int64_t, 4> pads_l{1, 2, 0, 0};
+    const std::array<int64_t, 4> pads_r{2, 1, 0, 0};
+
+    ggml_tensor * input     = nullptr;
+    ggml_tensor * expected  = nullptr;
+
+    std::string vars() override {
+        return "manual_pad_ext_circular";
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_src.data());
+        ggml_set_name(input, "input");
+
+        ggml_tensor * actual = ggml_pad_ext_circular(ctx, input,
+                pads_l[0], pads_r[0], pads_l[1], pads_r[1], pads_l[2], pads_r[2], pads_l[3], pads_r[3]);
+        ggml_set_name(actual, "actual");
+
+        int64_t ne_dst[4] = {
+            ne_src[0] + pads_l[0] + pads_r[0],
+            ne_src[1] + pads_l[1] + pads_r[1],
+            ne_src[2] + pads_l[2] + pads_r[2],
+            ne_src[3] + pads_l[3] + pads_r[3],
+        };
+
+        expected = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_dst);
+        ggml_set_name(expected, "expected");
+
+        ggml_tensor * diff = ggml_sub(ctx, actual, expected);
+        ggml_tensor * sq   = ggml_sqr(ctx, diff);
+        ggml_tensor * loss = ggml_sum(ctx, sq);
+        ggml_set_name(loss, "loss");
+        return loss;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+
+        std::vector<float> src_data(ggml_nelements(input));
+        for (size_t i = 0; i < src_data.size(); ++i) {
+            src_data[i] = static_cast<float>(i + 1);
+        }
+        ggml_backend_tensor_set(input, src_data.data(), 0, src_data.size() * sizeof(float));
+
+        int64_t ne_dst[4] = {
+            ne_src[0] + pads_l[0] + pads_r[0],
+            ne_src[1] + pads_l[1] + pads_r[1],
+            ne_src[2] + pads_l[2] + pads_r[2],
+            ne_src[3] + pads_l[3] + pads_r[3],
+        };
+
+        std::vector<float> exp_data(ggml_nelements(expected));
+        for (int64_t i3 = 0; i3 < ne_dst[3]; ++i3) {
+            for (int64_t i2 = 0; i2 < ne_dst[2]; ++i2) {
+                for (int64_t i1 = 0; i1 < ne_dst[1]; ++i1) {
+                    for (int64_t i0 = 0; i0 < ne_dst[0]; ++i0) {
+                        const int64_t src_i0 = wrap_coord_circular(i0 - pads_l[0], ne_src[0]);
+                        const int64_t src_i1 = wrap_coord_circular(i1 - pads_l[1], ne_src[1]);
+                        const int64_t src_i2 = wrap_coord_circular(i2 - pads_l[2], ne_src[2]);
+                        const int64_t src_i3 = wrap_coord_circular(i3 - pads_l[3], ne_src[3]);
+                        exp_data[offset4d(ne_dst, i0, i1, i2, i3)] =
+                            src_data[offset4d(ne_src.data(), src_i0, src_i1, src_i2, src_i3)];
+                    }
+                }
+            }
+        }
+        ggml_backend_tensor_set(expected, exp_data.data(), 0, exp_data.size() * sizeof(float));
+    }
+
+    double max_nmse_err() override {
+        return 1e-8;
+    }
+};
+
 
 // GGML_OP_PAD_REFLECT_1D
 struct test_pad_reflect_1d : public test_case {
@@ -7569,7 +7664,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_acc());
     test_cases.emplace_back(new test_pad());
+    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true)); // circular
     test_cases.emplace_back(new test_pad_ext());
+    test_cases.emplace_back(new test_pad_ext_circular());
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
     test_cases.emplace_back(new test_roll());
