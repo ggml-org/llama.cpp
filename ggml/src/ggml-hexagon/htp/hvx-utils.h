@@ -773,7 +773,7 @@ static inline HVX_Vector hvx_vec_fast_sigmoid_fp32(HVX_Vector v) {
     HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
     HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
 
-    HVX_Vector res = hvx_vec_inverse_fp32(v5);
+    HVX_Vector res = hvx_vec_inverse_fp32_guard(v5);
     res            = Q6_Vqf32_vmpy_VsfVsf(v3, res);
 
     return Q6_Vsf_equals_Vqf32(res);
@@ -959,13 +959,19 @@ static inline HVX_Vector hvx_vec_rsqrt_fp32(HVX_Vector in_vec) {
 }
 
 static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard(HVX_Vector v) {
-    static const float kMaxExp = -88.02f;  // log(INF)
+    static const float kMinExp = -88.02f;  // 0
+    static const float kMaxExp = 88.02f;   // 1
 
-    const HVX_Vector     max_exp  = Q6_V_vsplat_R(*((uint32_t *) &kMaxExp));
-    const HVX_VectorPred pred_inf = Q6_Q_vcmp_gt_VsfVsf(v, max_exp);
+    const HVX_Vector     one      = hvx_vec_splat_fp32(1.f);
+    const HVX_Vector     max_exp  = hvx_vec_splat_fp32(kMaxExp);
+    const HVX_Vector     min_exp  = hvx_vec_splat_fp32(kMinExp);
+
+    const HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
+    const HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(v, min_exp);
 
     HVX_Vector out = hvx_vec_fast_sigmoid_fp32(v);
-    return Q6_V_vmux_QVV(pred_inf, out, Q6_V_vzero());
+    out = Q6_V_vmux_QVV(pred_max, out, one);
+    return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
 }
 
 static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems) {
