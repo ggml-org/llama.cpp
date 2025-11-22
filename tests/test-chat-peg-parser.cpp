@@ -184,21 +184,33 @@ static void test_example_qwen3_coder(testing & t) {
             std::vector<common_peg_parser> arg_parsers;
             for (const auto & arg_def : def.arguments) {
                 auto type = arg_def.schema.value("type", "object");
-                auto arg = p.tool_arg(
-                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(arg_def.name)) + ">") +
+
+                auto arg = p.tool_arg(p.sequence({
+                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(arg_def.name)) + ">"),
                     (type == "string" ?
-                        p.tool_arg_string_value(p.schema(
-                                p.until_one_of({"</parameter>\n<parameter=", "</parameter>\n</function>"}),
+                        p.tool_arg_string_value(
+                            p.schema(
+                                p.until_one_of({
+                                    "</parameter>\n<parameter=",
+                                    "</parameter>\n</function>"
+                                }),
                                 "tool-" + def.name + "-arg-" + arg_def.name + "-schema",
                                 arg_def.schema,
-                                true)) :
-                        p.tool_arg_json_value(p.schema(
-                            p.json(),
-                            "tool-" + def.name + "-arg-" + arg_def.name + "-schema",
-                            arg_def.schema))
-                    ) +
-                    p.tool_arg_close(p.literal("</parameter>\n") + p.peek(p.literal("<parameter=") | p.literal("</function>")))
-                );
+                                true
+                            )
+                        ) : p.tool_arg_json_value(
+                            p.schema(
+                                p.json(),
+                                "tool-" + def.name + "-arg-" + arg_def.name + "-schema",
+                                arg_def.schema
+                            )
+                        )
+                    ),
+                    p.tool_arg_close(
+                        "</parameter>\n" +
+                        p.peek(p.literal("<parameter=") | p.literal("</function>"))
+                    )
+                }));
 
                 arg_parsers.push_back(arg_def.is_required ?
                     p.rule("tool-" + def.name + "-arg-" + arg_def.name, arg) :
@@ -206,13 +218,18 @@ static void test_example_qwen3_coder(testing & t) {
             }
 
             tool_parsers.push_back(p.rule("tool-" + def.name,
-                p.tool_open("<function=" + p.tool_name(p.literal(def.name)) + ">") <<
-                p.sequence(arg_parsers) <<
-                p.tool_close(p.literal("</function>"))
+                p.tool_open("<function=" + p.tool_name(p.literal(def.name)) + ">")
+                << p.sequence(arg_parsers)
+                << p.tool_close(p.literal("</function>"))
             ));
         });
 
-        auto tool_call = p.trigger_rule("tool-call", "<tool_call>"  << p.choice(tool_parsers) << "</tool_call>");
+        auto tool_call = p.trigger_rule("tool-call",
+            "<tool_call>"
+            << p.choice(tool_parsers)
+            << "</tool_call>"
+        );
+
         return content + p.zero_or_more(p.space() + tool_call) + p.end();
     });
 
