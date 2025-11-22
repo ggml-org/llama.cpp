@@ -15,7 +15,7 @@ chmod +x ds.sh && ./ds.sh
 
 # Example
 
-SoC : Dimensity 1000+
+SoC : Dimensity 1000+</br>
 platform : CPU
 
 ![example](example.jpg)
