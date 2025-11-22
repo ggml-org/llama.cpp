@@ -181,8 +181,6 @@ static void test_example_qwen3_coder(testing & t) {
 
         std::vector<common_peg_parser> tool_parsers;
         foreach_tool(tools, [&](const tool_definition & def) {
-            t.log(def.name);
-
             std::vector<common_peg_parser> arg_parsers;
             for (const auto & arg_def : def.arguments) {
                 auto type = arg_def.schema.value("type", "object");
@@ -190,7 +188,7 @@ static void test_example_qwen3_coder(testing & t) {
                     p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(arg_def.name)) + ">") +
                     (type == "string" ?
                         p.tool_arg_string_value(p.schema(
-                                p.until_one_of({"</parameter><parameter=", "</parameter></function>"}),
+                                p.until_one_of({"</parameter>\n<parameter=", "</parameter>\n</function>"}),
                                 "tool-" + def.name + "-arg-" + arg_def.name + "-schema",
                                 arg_def.schema,
                                 true)) :
@@ -199,7 +197,7 @@ static void test_example_qwen3_coder(testing & t) {
                             "tool-" + def.name + "-arg-" + arg_def.name + "-schema",
                             arg_def.schema))
                     ) +
-                    p.tool_arg_close(p.literal("</parameter>") + p.peek(p.literal("<parameter=") | p.literal("</function>")))
+                    p.tool_arg_close(p.literal("</parameter>\n") + p.peek(p.literal("<parameter=") | p.literal("</function>")))
                 );
 
                 arg_parsers.push_back(arg_def.is_required ?
@@ -208,13 +206,13 @@ static void test_example_qwen3_coder(testing & t) {
             }
 
             tool_parsers.push_back(p.rule("tool-" + def.name,
-                p.tool_open("<function=" + p.tool_name(p.literal(def.name)) + ">") +
-                p.sequence(arg_parsers) +
+                p.tool_open("<function=" + p.tool_name(p.literal(def.name)) + ">") <<
+                p.sequence(arg_parsers) <<
                 p.tool_close(p.literal("</function>"))
             ));
         });
 
-        auto tool_call = p.trigger_rule("tool-call", "<tool_call>" + p.choice(tool_parsers) + "</tool_call>");
+        auto tool_call = p.trigger_rule("tool-call", "<tool_call>"  << p.choice(tool_parsers) << "</tool_call>");
         return content + p.zero_or_more(p.space() + tool_call) + p.end();
     });
 
@@ -230,11 +228,11 @@ static void test_example_qwen3_coder(testing & t) {
     t.test("incremental parsing", [&](testing &t) {
         std::string input =
             "Let me search the knowledge base for cat pictures."
-            "<tool_call>"
-            "<function=search_knowledge_base>"
-            "<parameter=query>cat pictures</parameter>"
-            "<parameter=category>general</parameter>"
-            "</function>"
+            "<tool_call>\n"
+            "<function=search_knowledge_base>\n"
+            "<parameter=query>cat pictures</parameter>\n"
+            "<parameter=category>general</parameter>\n"
+            "</function>\n"
             "</tool_call>";
 
         std::vector<std::string> tokens = simple_tokenize(input);
