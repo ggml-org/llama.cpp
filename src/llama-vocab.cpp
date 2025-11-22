@@ -2090,7 +2090,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         } else if (type == LLAMA_VOCAB_TYPE_SPIE) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             add_bos = false;
-            add_eos = true;
+            add_eos = false;
         }
         else if (type == LLAMA_VOCAB_TYPE_RWKV) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;

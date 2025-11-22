@@ -100,6 +100,8 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> tokens = common_tokenize(ctx, str, false, true);
 
+    std::vector<llama_token> tokensbos = common_tokenize(ctx, str,true, true);
+
     {
    std::vector<llama_chat_message> conversation {
      {"user", "Hello, how are you?"},
