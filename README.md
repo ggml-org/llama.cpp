@@ -11,6 +11,7 @@ Unpack llama.cpp.zip
 ```bash
 cd llama.cpp
 chmod +x ds.sh && ./ds.sh
+# -t Performance Cores
 ```
 
 # Example
