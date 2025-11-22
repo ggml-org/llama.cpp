@@ -975,7 +975,7 @@ struct ggml_cuda_graph {
 
 struct ggml_cuda_concurrent_event {
     std::vector<cudaEvent_t> join_events;
-    cudaEvent_t              fork_event;
+    cudaEvent_t              fork_event = nullptr;
 
     int                                          n_streams = 0;
     std::unordered_map<const ggml_tensor *, int> stream_mapping;
@@ -983,6 +983,9 @@ struct ggml_cuda_concurrent_event {
     const ggml_tensor * join_node;
 
     ggml_cuda_concurrent_event() = default;
+
+    ggml_cuda_concurrent_event(const ggml_cuda_concurrent_event &) = delete;
+    ggml_cuda_concurrent_event & operator=(const ggml_cuda_concurrent_event &) = delete;
 
     explicit ggml_cuda_concurrent_event(int n_streams) : n_streams(n_streams) {
         join_events.resize(n_streams);
@@ -993,14 +996,34 @@ struct ggml_cuda_concurrent_event {
 
         CUDA_CHECK(cudaEventCreateWithFlags(&fork_event, cudaEventDisableTiming));
     }
+
+    ggml_cuda_concurrent_event(ggml_cuda_concurrent_event && other) noexcept
+    : join_events(std::move(other.join_events))
+    , fork_event(other.fork_event)
+    , n_streams(other.n_streams)
+    , stream_mapping(std::move(other.stream_mapping))
+    , join_node(other.join_node) {
+        other.fork_event = nullptr;
+    }
+
+    ~ggml_cuda_concurrent_event() {
+        if (fork_event != nullptr) {
+            CUDA_CHECK(cudaEventDestroy(fork_event));
+        }
+        for (cudaEvent_t e : join_events) {
+            if (e != nullptr) {
+                CUDA_CHECK(cudaEventDestroy(e));
+            }
+        }
+    }
 };
 
 struct ggml_cuda_stream_context {
-    std::vector<const ggml_tensor *> original_graph;
+    std::vector<const ggml_tensor *>                                    original_nodes;
     std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> concurrent_events;
 
     void reset() {
-        original_graph.clear();
+        original_nodes.clear();
         concurrent_events.clear();
     }
 };
