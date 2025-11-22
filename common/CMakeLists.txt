@@ -54,6 +54,8 @@ add_library(${TARGET} STATIC
     chat-parser-xml-toolcall.cpp
     chat.cpp
     chat.h
+    chat-templates.cpp
+    chat-templates.h
     common.cpp
     common.h
     console.cpp
