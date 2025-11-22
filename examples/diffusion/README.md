@@ -12,11 +12,12 @@ The diffusion CLI supports various parameters to control the generation process:
 ### Core Diffusion Parameters
 - `--diffusion-steps`: Number of diffusion steps (default: 256)
 - `--diffusion-algorithm`: Algorithm for token selection
-  - `0`: ORIGIN - Original algorithm
-  - `1`: ENTROPY_BASED - Entropy-based selection (recommended)
+  - `0`: ORIGIN - Token will be generated in a purely random order from https://arxiv.org/abs/2107.03006.
+  - `1`: ENTROPY_BASED - Entropy-based selection
   - `2`: MARGIN_BASED - Margin-based selection
   - `3`: RANDOM - Random selection
-  - `4`: CONFIDENCE_BASED - Confidence-based selection
+  - `4`: CONFIDENCE_BASED - Confidence-based selection (default)
+  - More documentation here https://github.com/DreamLM/Dream
 - `--diffusion-visual`: Enable live visualization during generation
 
 ### Scheduling Parameters

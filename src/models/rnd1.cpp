@@ -1,5 +1,6 @@
 #include "models.h"
 
+// RND1 is a Qwen3Moe AR model converted to diffusion model.
 llm_build_rnd1::llm_build_rnd1(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
