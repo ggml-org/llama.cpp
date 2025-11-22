@@ -767,7 +767,7 @@ static inline HVX_Vector hvx_vec_fast_sigmoid_fp32(HVX_Vector v) {
     HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
     HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
 
-    HVX_Vector res = hvx_vec_inverse_fp32_guard(v5);
+    HVX_Vector res = hvx_vec_inverse_fp32(v5);
     res            = Q6_Vqf32_vmpy_VsfVsf(v3, res);
 
     return Q6_Vsf_equals_Vqf32(res);
@@ -953,8 +953,8 @@ static inline HVX_Vector hvx_vec_rsqrt_fp32(HVX_Vector in_vec) {
 }
 
 static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard(HVX_Vector v) {
-    static const float kMinExp = -88.02f;  // 0
-    static const float kMaxExp = 88.02f;   // 1
+    static const float kMinExp = -87.f;  // 0
+    static const float kMaxExp = 87.f;   // 1
 
     const HVX_Vector one     = hvx_vec_splat_fp32(1.f);
     const HVX_Vector max_exp = hvx_vec_splat_fp32(kMaxExp);
