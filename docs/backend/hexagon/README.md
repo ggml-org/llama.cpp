@@ -88,6 +88,7 @@ At this point, you should also install some models:
 ...
 2025-10-11 12:04:52 (10.7 MB/s) - ‘Llama-3.2-1B-Instruct-Q4_0.gguf’ saved [773025920/773025920]
 
+~/src/llama.cpp$ adb shell mkdir -p /data/local/tmp/gguf
 ~/src/llama.cpp$ adb push Llama-3.2-1B-Instruct-Q4_0.gguf /data/local/tmp/gguf
 Llama-3.2-1B-Instruct-Q4_0.gguf: 1 file pushed, 0 skipped. 38.3 MB/s (773025920 bytes in 19.250s)
 ```
@@ -106,7 +107,7 @@ Here are some examples of running various llama.cpp tools via ADB.
 Simple question for Llama-3.2-1B
 
 ```
-~/src/llama.cpp$ M=Llama-3.2-1B-Instruct-Q4_0.gguf D=HTP0 ./scripts/snapdragon/adb/run-cli.sh -no-cnv -p "what is the most popular cookie in the world?"
+~/src/llama.cpp$ M=Llama-3.2-1B-Instruct-Q4_0.gguf D=HTP0 ./scripts/snapdragon/adb/run-cli.sh -no-cnv -p \"what is the most popular cookie in the world?\"
 ...
 ggml-hex: Hexagon backend (experimental) : allocating new registry : ndev 1
 ggml-hex: Hexagon Arch version v79

@@ -1,0 +1,16 @@
+{
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/build-snapdragon",
+        "--pch-storage=memory",
+        "--background-index",
+        "-j=32",
+        "--enable-config",
+        "--pretty",
+        // "--resource-dir=/home/docker/proj/p-sbs/prebuilts/clang/host/linux-x86/clang-r547379/lib/clang/20",
+        // "--log=error",
+        // "--background-index=FALSE",
+        // "--query-driver=/usr/bin/g++",
+        // "--log=verbose"
+        // "--index-file=/dev/null",
+    ],
+}
