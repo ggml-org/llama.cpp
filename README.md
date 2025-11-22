@@ -16,7 +16,7 @@ chmod +x ds.sh && ./ds.sh
 
 # Performance
 
-SoC : Dimensity 1000+</br>
+SoC : Dimensity 1000+(8c@2.6Ghz)</br>
 platform : CPU</br>
 On average, it is 4 tokens/s(≈2 Chinese character/s) faster than the official Termux build.
 
