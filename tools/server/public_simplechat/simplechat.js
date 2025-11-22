@@ -14,7 +14,7 @@ const TEMP_MARKER = "-TEMP"
 const DB_NAME = "SimpleChatTCRV"
 const DB_STORE = "Sessions"
 
-export const AI_TC_SESSIONNAME = `ExternalAI${TEMP_MARKER}`
+export const AI_TC_SESSIONNAME = `TCExternalAI`
 
 const ROLES_TEMP_ENDSWITH = TEMP_MARKER
 
@@ -924,7 +924,7 @@ class SimpleChat {
             throw Error("ERRR:SimpleChat:SC:HandleResponseMultiPart:No body...");
         }
         let elDivStream = elDivStreams[this.chatId];
-        elDivStream.divRole.innerText = `Ai:${this.chatId.slice(0,6)}`
+        elDivStream.divRole.innerText = `Ai:${this.chatId.slice(0,8)}`
         elDivStream.show()
         try {
             let tdUtf8 = new TextDecoder("utf-8");
@@ -1496,6 +1496,7 @@ class MultiChatUI {
             this.show_message(this.elDivChat, x, iFromLast, nextMsg)
         }
         this.elDivChat.appendChild(this.elDivStreams[chatId].div)
+        this.elDivChat.appendChild(this.elDivStreams[AI_TC_SESSIONNAME].div)
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         } else {
@@ -1558,6 +1559,7 @@ class MultiChatUI {
             console.log(`DBUG:SimpleChat:MCUI:UiRefresh:${chatId}: DivStream ${this.elDivStreams[chatId].div.id} missing...`)
         }
         this.elDivChat.appendChild(this.elDivStreams[chatId].div)
+        this.elDivChat.appendChild(this.elDivStreams[AI_TC_SESSIONNAME].div)
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         }
@@ -1726,6 +1728,7 @@ class MultiChatUI {
     new_chat_session(chatId, bSwitchSession=false) {
         this.simpleChats[chatId] = new SimpleChat(chatId, this.me);
         this.elDivStreams[chatId] = new ELDivStream(chatId);
+        this.elDivStreams[chatId].clear()
         if (bSwitchSession) {
             this.handle_session_switch(chatId);
         }
