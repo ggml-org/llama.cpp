@@ -236,7 +236,7 @@ set   (GGML_METAL_MACOSX_VERSION_MIN "" CACHE STRING
                                             "ggml: metal minimum macOS version")
 set   (GGML_METAL_STD "" CACHE STRING       "ggml: metal standard version (-std flag)")
 option(GGML_OPENMP                          "ggml: use OpenMP"                                ON)
-option(GGML_RPC                             "ggml: use RPC"                                   OFF)
+option(GGML_RPC                             "ggml: use RPC"                                   ON)
 option(GGML_SYCL                            "ggml: use SYCL"                                  OFF)
 option(GGML_SYCL_F16                        "ggml: use 16 bit floats for sycl calculations"   OFF)
 option(GGML_SYCL_GRAPH                      "ggml: enable graphs in the SYCL backend"         ON)
@@ -273,6 +273,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
+
+set(Protobuf_PROTOC_EXECUTABLE "/data/data/com.termux/files/usr/bin/protoc")
+set(Protobuf_INCLUDE_DIR     "/data/data/com.termux/files/usr/include")
+set(Protobuf_LIBRARY         "/data/data/com.termux/files/usr/lib/libprotobuf.so")
 
 find_package(Threads REQUIRED)
 
