@@ -781,6 +781,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.name }}
+          body: |
+            > [!WARNING]
+            > DEPRECATION NOTICE: Linux releases will soon use .tar archives instead of .zip. Please make the necessary changes to your deployment scripts.
+
+            ${{ github.event.head_commit.message }}
 
       - name: Upload release
         id: upload_release
