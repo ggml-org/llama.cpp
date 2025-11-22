@@ -17,7 +17,7 @@ let sysdatetime_meta = {
         "type": "function",
         "function": {
             "name": "sys_date_time",
-            "description": "Returns the current system date and time. One can optionally pass template to control what and all parts of date and time are returned",
+            "description": "Returns the current system date and time. The template argument helps control which parts of date and time are returned",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -27,10 +27,10 @@ let sysdatetime_meta = {
                             It can be any combination of Y,m,d,H,M,S,w. Here
                             Y - FullYear 4 digits, m - Month 2 digits, d - Day 2 digits,
                             H - hour 2 digits 24 hours format, M - minutes 2 digits, S - seconds 2 digits,
-                            w - day of week (0(sunday)..6(saturday))
-                            any other char will be returned as is.
+                            w - day of week (0(sunday)..6(saturday)).
+                            Any other char will be returned as is.
 
-                            If no template is given, it defaults to YmdTHMS.
+                            YmdTHMS is a useful date time template, which includes all the key parts.
                             Remember that the template characters are case sensitive.
                             `
                     }
