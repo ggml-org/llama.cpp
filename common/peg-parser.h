@@ -318,6 +318,9 @@ class common_peg_arena {
     common_peg_parse_result parse(common_peg_parse_context & ctx, size_t start = 0) const;
     common_peg_parse_result parse(common_peg_parser_id id, common_peg_parse_context & ctx, size_t start) const;
 
+    // Resolve all ref parsers to point directly to their corresponding rule parsers
+    void resolve_refs();
+
     // Grammar generation
     void build_grammar(const common_grammar_builder & builder, bool lazy = false) const;
 
@@ -334,6 +337,8 @@ class common_peg_arena {
   private:
     common_peg_parser_id add_parser(common_peg_parser_variant parser);
     void add_rule(const std::string & name, common_peg_parser_id id);
+
+    common_peg_parser_id resolve_ref(common_peg_parser_id id);
 };
 
 // Builder for constructing parsers

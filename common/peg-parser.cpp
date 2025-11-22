@@ -787,6 +787,61 @@ common_peg_parse_result common_peg_arena::parse(common_peg_parser_id id, common_
     return ctx.cache.set(id, start, std::move(result));
 }
 
+common_peg_parser_id common_peg_arena::resolve_ref(common_peg_parser_id id) {
+    const auto & parser = parsers_.at(id);
+    if (auto ref = std::get_if<common_peg_ref_parser>(&parser)) {
+        return get_rule(ref->name);
+    }
+    return id;
+}
+
+void common_peg_arena::resolve_refs() {
+    // Walk through all parsers and replace refs with their corresponding rule IDs
+    for (auto & parser : parsers_) {
+        std::visit([this](auto & p) {
+            using T = std::decay_t<decltype(p)>;
+
+            if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
+                for (auto & child : p.children) {
+                    child = resolve_ref(child);
+                }
+            } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
+                for (auto & child : p.children) {
+                    child = resolve_ref(child);
+                }
+            } else if constexpr (std::is_same_v<T, common_peg_repetition_parser> ||
+                                 std::is_same_v<T, common_peg_and_parser> ||
+                                 std::is_same_v<T, common_peg_not_parser> ||
+                                 std::is_same_v<T, common_peg_capture_parser> ||
+                                 std::is_same_v<T, common_peg_tag_parser> ||
+                                 std::is_same_v<T, common_peg_atomic_parser>) {
+                p.child = resolve_ref(p.child);
+            } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
+                p.child = resolve_ref(p.child);
+            } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
+                p.child = resolve_ref(p.child);
+            } else if constexpr (std::is_same_v<T, common_peg_start_parser> ||
+                                 std::is_same_v<T, common_peg_end_parser> ||
+                                 std::is_same_v<T, common_peg_ref_parser> ||
+                                 std::is_same_v<T, common_peg_until_parser> ||
+                                 std::is_same_v<T, common_peg_literal_parser> ||
+                                 std::is_same_v<T, common_peg_json_string_parser> ||
+                                 std::is_same_v<T, common_peg_chars_parser> ||
+                                 std::is_same_v<T, common_peg_any_parser> ||
+                                 std::is_same_v<T, common_peg_space_parser>) {
+                // These rules do not have children
+            } else {
+                static_assert(is_always_false_v<T>);
+            }
+        }, parser);
+    }
+
+    // Also flatten root if it's a ref
+    if (root_ != COMMON_PEG_INVALID_PARSER_ID) {
+        root_ = resolve_ref(root_);
+    }
+}
+
 // Dump implementation (for debugging)
 std::string common_peg_arena::dump(common_peg_parser_id id) const {
     const auto & parser = parsers_.at(id);
@@ -1026,6 +1081,7 @@ void common_peg_parser_builder::set_root(common_peg_parser p) {
 }
 
 common_peg_arena common_peg_parser_builder::build() {
+    arena_.resolve_refs();
     return std::move(arena_);
 }
 
@@ -1317,8 +1373,9 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 }
                 return to_gbnf(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
-                return to_gbnf(p.child);
+                return p.name;
             } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
+                // Refs should not exist after flattening, but kept just in case
                 return p.name;
             } else if constexpr (std::is_same_v<T, common_peg_capture_parser>) {
                 return to_gbnf(p.child);
