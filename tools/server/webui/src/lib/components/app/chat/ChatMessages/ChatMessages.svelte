@@ -3,10 +3,12 @@
 	import { DatabaseStore } from '$lib/stores/database';
 	import {
 		activeConversation,
+		continueAssistantMessage,
 		deleteMessage,
-		navigateToSibling,
-		editMessageWithBranching,
 		editAssistantMessage,
+		editMessageWithBranching,
+		editUserMessagePreserveResponses,
+		navigateToSibling,
 		regenerateMessageWithBranching
 	} from '$lib/stores/chat.svelte';
 	import { getMessageSiblings } from '$lib/utils/branching';
@@ -93,6 +95,26 @@
 
 		refreshAllMessages();
 	}
+
+	async function handleContinueAssistantMessage(message: DatabaseMessage) {
+		onUserAction?.();
+
+		await continueAssistantMessage(message.id);
+
+		refreshAllMessages();
+	}
+
+	async function handleEditUserMessagePreserveResponses(
+		message: DatabaseMessage,
+		newContent: string
+	) {
+		onUserAction?.();
+
+		await editUserMessagePreserveResponses(message.id, newContent);
+
+		refreshAllMessages();
+	}
+
 	async function handleDeleteMessage(message: DatabaseMessage) {
 		await deleteMessage(message.id);
 
@@ -110,7 +132,9 @@
 			onNavigateToSibling={handleNavigateToSibling}
 			onEditWithBranching={handleEditWithBranching}
 			onEditWithReplacement={handleEditWithReplacement}
+			onEditUserMessagePreserveResponses={handleEditUserMessagePreserveResponses}
 			onRegenerateWithBranching={handleRegenerateWithBranching}
+			onContinueAssistantMessage={handleContinueAssistantMessage}
 		/>
 	{/each}
 </div>
