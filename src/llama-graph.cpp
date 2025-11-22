@@ -487,17 +487,20 @@ void llm_graph_result::reset() {
 
     inputs.clear();
 
-    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+    buf_compute_meta.resize(
+        ggml_tensor_overhead() * max_nodes +
+        ggml_graph_overhead_custom(max_nodes, /*grad*/ false)
+    );
 
     ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
         /*.mem_buffer =*/ buf_compute_meta.data(),
-        /*.no_alloc   =*/ true,
+        /*.no_alloc   =*/ true, // real compute context, not meta-only
     };
 
     ctx_compute.reset(ggml_init(params));
 
-    gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
+    gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, /*grad*/ false);
 }
 
 void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
@@ -592,7 +595,19 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
+      // === SparseK: load from model metadata (no env vars) =========================
+        this->sparsek_enable    = hparams.sparsek_enable;
+        this->sparsek_topk      = hparams.sparsek_topk;
+        this->sparsek_win_local = hparams.sparsek_window;
+        this->sparsek_stride    = hparams.sparsek_stride;
+
+        // Default gating (until model metadata defines its own)
+        this->sparsek_en_local  = true;
+        this->sparsek_en_stride = true;
+        // ============================================================================
+
     }
+
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {
@@ -840,6 +855,161 @@ ggml_tensor * llm_graph_context::build_ffn(
     }
 
     return cur;
+}
+// SparseK mask builder
+ggml_tensor * llm_graph_context::build_sparsek_mask(
+        ggml_tensor * q,
+        ggml_tensor * k,
+        ggml_tensor * base_mask,
+        int          il) const {
+
+    // If features are disabled, return base mask as-is.
+    if (!sparsek_enable ||
+        (sparsek_topk <= 0 && !sparsek_en_local && !sparsek_en_stride)) {
+        cb(base_mask, "sparsek_passthrough_base", il);
+        return base_mask;
+    }
+
+    // If this is a no-alloc meta context, avoid value-writing ops.
+    // In this pass we only need shapes, so we just keep the base mask.
+    if (ggml_get_no_alloc(ctx0)) {
+        cb(base_mask, "sparsek_skip_on_meta_no_alloc", il);
+        return base_mask;
+    }
+    // ---------------------------------------------------------------------
+    // 1) Compute content-based scores ~ K * Q on current 4D layout.
+    // ---------------------------------------------------------------------
+    ggml_tensor * scores4 = ggml_mul_mat(ctx0, k, q);
+    cb(scores4, "sparsek_scores4_raw", il);
+
+    if (!ggml_is_contiguous(scores4)) {
+        scores4 = ggml_cont(ctx0, scores4);
+    }
+
+    // Derive layout from scores4 (safe for reshape)
+    const int64_t n_kv_scores = scores4->ne[0];
+    const int64_t cols_scores =
+        scores4->ne[1] *
+        std::max<int64_t>(1, scores4->ne[2]) *
+        std::max<int64_t>(1, scores4->ne[3]);
+
+    ggml_tensor * scores2d = ggml_reshape_2d(ctx0, scores4, n_kv_scores, cols_scores);
+    cb(scores2d, "sparsek_scores2d", il);
+
+    // ---------------------------------------------------------------------
+    // 2) Derive base layout and verify compatibility.
+    //    base_mask is assumed to be [n_kv_base, n_rows, n_head, n_stream].
+    // ---------------------------------------------------------------------
+    const int64_t n_kv_base = base_mask->ne[0];
+    const int64_t n_rows    = base_mask->ne[1];
+    const int64_t n_head    = std::max<int64_t>(1, base_mask->ne[2]);
+    const int64_t n_stream  = std::max<int64_t>(1, base_mask->ne[3]);
+    const int64_t hs        = n_head * n_stream;
+
+    if (n_rows <= 0 || hs <= 0) {
+        cb(base_mask, "sparsek_invalid_base_layout_passthrough", il);
+        return base_mask;
+    }
+
+    // Make sure scores layout and base layout really agree.
+    if (n_kv_base != n_kv_scores || n_rows * hs != cols_scores) {
+        cb(base_mask, "sparsek_layout_mismatch_passthrough", il);
+        return base_mask;
+    }
+
+    // ---------------------------------------------------------------------
+    // 3) Top-K indices along dim-0 (per column).
+    // ---------------------------------------------------------------------
+    const int32_t topk_safe =
+        std::max<int32_t>(0, std::min<int32_t>(sparsek_topk, (int32_t) n_kv_scores));
+    if (topk_safe == 0) {
+        cb(base_mask, "sparsek_topk_zero_passthrough", il);
+        return base_mask;
+    }
+
+    ggml_tensor * topk_idx = ggml_top_k(ctx0, scores2d, topk_safe); // [topk, cols_scores]
+    cb(topk_idx, "sparsek_topk_idx", il);
+
+        // ---------------------------------------------------------------------
+    // 4) Build SparseK mask:
+    //    Start from all large negative [n_kv_scores, cols_scores] then set
+    //    selected rows to 0.
+    // ---------------------------------------------------------------------
+    const float sparsek_neg = -1e9f;
+
+    // 4.a) Create 1D row filled with sparsek_neg
+    ggml_tensor * neg_row = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_kv_scores);
+    {
+        // We are in real compute context (no_alloc == false), so data is valid
+        float * data = (float *) neg_row->data;
+        GGML_ASSERT(data != nullptr);
+        for (int64_t i = 0; i < n_kv_scores; ++i) {
+            data[i] = sparsek_neg;
+        }
+    }
+
+    // 4.b) Broadcast to full [n_kv_scores, cols_scores]
+    ggml_tensor * neg2d = ggml_repeat(ctx0, neg_row, scores2d); // [n_kv_scores, cols_scores]
+
+    ggml_tensor * rows3d = ggml_reshape_3d(ctx0, neg2d,
+                                           n_kv_scores, 1, cols_scores);
+
+    // 4.c) Build true zeros for selected rows (no INF-INF tricks)
+    ggml_tensor * zeros = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32,
+                                             topk_safe, 1, cols_scores);
+    ggml_set_zero(zeros);
+
+    ggml_tensor * merged3d = ggml_set_rows(ctx0, rows3d, zeros, topk_idx);
+
+    // ---------------------------------------------------------------------
+    // 5) Broadcast into [n_kv, n_rows, hs] and combine with base_mask.
+    // ---------------------------------------------------------------------
+    ggml_tensor * mask3 = ggml_reshape_3d(ctx0, merged3d,
+                                          n_kv_scores, n_rows, hs);
+    cb(mask3, "sparsek_allow_topk_only", il);
+
+    const int64_t base_elems = ggml_nelements(base_mask);
+    if (base_elems != n_kv_base * n_rows * hs) {
+        cb(base_mask, "sparsek_base_layout_mismatch_passthrough", il);
+        return base_mask;
+    }
+
+    ggml_tensor * base3 = ggml_reshape_3d(ctx0, base_mask,
+                                          n_kv_base, n_rows, hs);
+    cb(base3, "sparsek_base3_broadcast", il);
+
+    ggml_tensor * final3 = ggml_add(ctx0, mask3, base3); // [n_kv, n_rows, hs]
+
+    // ---------------------------------------------------------------------
+    // 6) Reshape back to original 4D layout.
+    // ---------------------------------------------------------------------
+    ggml_tensor * final_mask = ggml_reshape_4d(
+        ctx0,
+        final3,
+        base_mask->ne[0],
+        base_mask->ne[1],
+        base_mask->ne[2],
+        base_mask->ne[3]);
+
+    cb(final_mask, "sparsek_final_mask_4d", il);
+    return final_mask;
+}
+
+ggml_tensor * llm_graph_context::maybe_apply_sparsek_mask(
+        ggml_tensor * base_mask,
+        ggml_tensor * q,
+        ggml_tensor * k,
+        int64_t      n_kv,
+        int64_t      n_rows,
+        int64_t      n_stream,
+        int          il) const {
+    GGML_UNUSED(n_kv);
+    GGML_UNUSED(n_rows);
+    GGML_UNUSED(n_stream);
+
+    // Delegate all gating (enable/topk/etc.) to build_sparsek_mask.
+    // If SparseK is disabled or misconfigured, it will simply return base_mask.
+    return build_sparsek_mask(q, k, base_mask, il);
 }
 
 ggml_tensor * llm_graph_context::build_moe_ffn(
@@ -1374,8 +1544,25 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
-        cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
-                                  hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        // SPARSEK: build final KQ mask once (union with base 0/-INF)
+        ggml_tensor * kq_mask_final = maybe_apply_sparsek_mask(
+            /*base_mask=*/kq_mask,
+            /*q=*/q,
+            /*k=*/k,
+            /*n_kv=*/kq_mask->ne[0],
+            /*n_rows=*/kq_mask->ne[1],
+            /*n_stream=*/kq_mask->ne[3],
+            /*il=*/il);
+
+        // Single flash-attn call using the final mask
+        cur = ggml_flash_attn_ext(
+            ctx0, q, k, v,
+            /*kq_mask=*/kq_mask_final,
+            kq_scale,
+            hparams.f_max_alibi_bias,
+            hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f
+        );
+
         cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
@@ -1960,7 +2147,7 @@ void llm_graph_context::build_pooling(
 
     GGML_ASSERT(inp != nullptr && "missing result_norm/result_embd tensor");
 
-    ggml_tensor * cur;
+   ggml_tensor * cur = nullptr; // ensure initialized
 
     switch (pooling_type) {
         case LLAMA_POOLING_TYPE_NONE:

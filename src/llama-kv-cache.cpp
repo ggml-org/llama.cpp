@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -1300,6 +1301,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
 
                     data[idst + j] = hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f;
                 }
+
             }
         }
     }

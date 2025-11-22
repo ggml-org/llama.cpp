@@ -549,6 +549,23 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     std::fill(hparams.xielu_eps.begin(), hparams.xielu_eps.end(), 0.0f);
 
     ml.get_key_or_arr(LLM_KV_FEED_FORWARD_LENGTH,  hparams.n_ff_arr,   hparams.n_layer, false);
+    // === SparseK metadata (optional) ===
+    hparams.sparsek_enable  = false;
+    hparams.sparsek_topk    = 0;
+    hparams.sparsek_window  = 0;
+    hparams.sparsek_stride  = 0;
+
+    ml.get_key("llama.sparsek.enable", hparams.sparsek_enable, false);
+    ml.get_key("llama.sparsek.top_k",  hparams.sparsek_topk,   false);
+    ml.get_key("llama.sparsek.window", hparams.sparsek_window, false);
+    ml.get_key("llama.sparsek.stride", hparams.sparsek_stride, false);
+
+    LLAMA_LOG_INFO("SparseK hparams: enable=%d top_k=%d win=%d stride=%d",
+                hparams.sparsek_enable ? 1 : 0,
+                hparams.sparsek_topk,
+                hparams.sparsek_window,
+                hparams.sparsek_stride);
+
     ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT, hparams.n_head_arr, hparams.n_layer, false);
 
     // n_head_kv is optional, default to n_head
