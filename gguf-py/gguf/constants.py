@@ -25,6 +25,20 @@ class Keys:
         ALIGNMENT                  = "general.alignment"
         FILE_TYPE                  = "general.file_type"
 
+        # Recommended Sampler Parameters
+        SAMPLING_SEQUENCE           = "general.sampling.sequence"
+        SAMPLING_TOP_K              = "general.sampling.top_k"
+        SAMPLING_TOP_P              = "general.sampling.top_p"
+        SAMPLING_MIN_P              = "general.sampling.min_p"
+        SAMPLING_XTC_PROBABILITY    = "general.sampling.xtc_probability"
+        SAMPLING_XTC_THRESHOLD      = "general.sampling.xtc_threshold"
+        SAMPLING_TEMP               = "general.sampling.temp"
+        SAMPLING_PENALTY_LAST_N     = "general.sampling.penalty_last_n"
+        SAMPLING_PENALTY_REPEAT     = "general.sampling.penalty_repeat"
+        SAMPLING_MIROSTAT           = "general.sampling.mirostat"
+        SAMPLING_MIROSTAT_TAU       = "general.sampling.mirostat_tau"
+        SAMPLING_MIROSTAT_ETA       = "general.sampling.mirostat_eta"
+
         # Authorship Metadata
         NAME                       = "general.name"
         AUTHOR                     = "general.author"
