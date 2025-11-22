@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import struct
+import sys
 import tempfile
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -372,8 +373,10 @@ class GGUFWriter:
         self, name: str, tensor: np.ndarray[Any, Any], raw_shape: Sequence[int] | None = None,
         raw_dtype: GGMLQuantizationType | None = None,
     ) -> None:
-        if self.endianess == GGUFEndian.BIG:
-            tensor.byteswap(inplace=True)
+        if (self.endianess == GGUFEndian.BIG and sys.byteorder != 'big') or \
+                (self.endianess == GGUFEndian.LITTLE and sys.byteorder != 'little'):
+            # Don't byteswap inplace since lazy copies cannot handle it
+            tensor = tensor.byteswap(inplace=False)
         if self.use_temp_file and self.temp_file is None:
             fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024)
             fp.seek(0)
@@ -399,8 +402,10 @@ class GGUFWriter:
             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
         assert self.fout is not None
 
-        if self.endianess == GGUFEndian.BIG:
-            tensor.byteswap(inplace=True)
+        if (self.endianess == GGUFEndian.BIG and sys.byteorder != 'big') or \
+                (self.endianess == GGUFEndian.LITTLE and sys.byteorder != 'little'):
+            # Don't byteswap inplace since lazy copies cannot handle it
+            tensor = tensor.byteswap(inplace=False)
 
         file_id = -1
         for i, tensors in enumerate(self.tensors):
