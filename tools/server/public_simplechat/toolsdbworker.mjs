@@ -30,7 +30,7 @@ self.onmessage = async function (ev) {
                         cid: ev.data.cid,
                         tcid: ev.data.tcid,
                         name: ev.data.name,
-                        data: { 'status': 'ok', 'data': reqList.result, 'msg': `DataStoreList:Ok:${reqList.result}`}
+                        data: { 'status': 'ok', 'data': reqList.result, 'msg': `DataStoreList:Ok:NumOfKeys:${reqList.result.length}`}
                     });
                 }
                 reqList.onerror = (evList) => {
@@ -52,7 +52,7 @@ self.onmessage = async function (ev) {
                         cid: ev.data.cid,
                         tcid: ev.data.tcid,
                         name: ev.data.name,
-                        data: { 'status': 'ok', 'data': reqGet.result, 'msg': `DataStoreGet:Ok:${args['key']}:${reqGet.result}`}
+                        data: { 'status': 'ok', 'data': reqGet.result, 'msg': `DataStoreGet:Ok:Key:${args['key']}:DataLen:${reqGet.result.length}`}
                     });
                 }
                 reqGet.onerror = (evGet) => {
@@ -61,7 +61,7 @@ self.onmessage = async function (ev) {
                         cid: ev.data.cid,
                         tcid: ev.data.tcid,
                         name: ev.data.name,
-                        data: { 'status': 'error', 'msg': `DataStoreGet:Err:${args['key']}:${reqGet.error}`}
+                        data: { 'status': 'error', 'msg': `DataStoreGet:Err:Key:${args['key']}:${reqGet.error}`}
                     });
                 }
                 break;
@@ -74,7 +74,7 @@ self.onmessage = async function (ev) {
                         cid: ev.data.cid,
                         tcid: ev.data.tcid,
                         name: ev.data.name,
-                        data: { 'status': 'error', 'msg': `DataStoreSet:Err:${args['key']}:${reqSet.error}`}
+                        data: { 'status': 'error', 'msg': `DataStoreSet:Err:Key:${args['key']}:${reqSet.error}`}
                     });
                 }
                 reqSet.onsuccess = (evSet) => {
@@ -83,7 +83,7 @@ self.onmessage = async function (ev) {
                         cid: ev.data.cid,
                         tcid: ev.data.tcid,
                         name: ev.data.name,
-                        data: { 'status': 'ok', 'msg': `DataStoreSet:Ok:${args['key']}:${reqSet.result}`}
+                        data: { 'status': 'ok', 'msg': `DataStoreSet:Ok:Key:${args['key']}:SetKey:${reqSet.result}`}
                     });
                 }
                 break;
@@ -96,7 +96,7 @@ self.onmessage = async function (ev) {
                         cid: ev.data.cid,
                         tcid: ev.data.tcid,
                         name: ev.data.name,
-                        data: { 'status': 'ok', 'msg': `DataStoreDelete:Ok:${args['key']}:${reqDel.result}`}
+                        data: { 'status': 'ok', 'msg': `DataStoreDelete:Ok:Key:${args['key']}:${reqDel.result}`}
                     });
                 }
                 reqDel.onerror = (evDel) => {
@@ -105,7 +105,7 @@ self.onmessage = async function (ev) {
                         cid: ev.data.cid,
                         tcid: ev.data.tcid,
                         name: ev.data.name,
-                        data: { 'status': 'error', 'msg': `DataStoreDelete:Err:${args['key']}:${reqDel.error}`}
+                        data: { 'status': 'error', 'msg': `DataStoreDelete:Err:Key:${args['key']}:${reqDel.error}`}
                     });
                 }
                 break;

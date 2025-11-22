@@ -15,7 +15,7 @@ let externalai_meta = {
     "type": "function",
     "function": {
         "name": "external_ai",
-        "description": "Delegates a task to another AI instance using a custom system prompt and user message, that you as the caller define. Useful for tasks like summarization, structured data generation, or any custom AI workflow.",
+        "description": "Delegates a task to another AI instance using a custom system prompt and user message, that you as the caller define. Useful for tasks like summarization, structured data generation, or any custom AI workflow. This external ai doesnt have access to internet or tool calls",
         "parameters": {
             "type": "object",
             "properties": {
