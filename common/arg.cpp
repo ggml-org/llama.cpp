@@ -30,6 +30,7 @@
 #include <thread> // for hardware_concurrency
 #include <vector>
 
+#ifndef __EMSCRIPTEN__
 #ifdef __linux__
 #include <linux/limits.h>
 #elif defined(_WIN32)
@@ -41,6 +42,8 @@
 #else
 #include <sys/syslimits.h>
 #endif
+#endif
+
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
 using json = nlohmann::ordered_json;
