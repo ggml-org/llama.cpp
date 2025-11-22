@@ -1038,6 +1038,7 @@ struct server_task_result_cmpl_final : server_task_result {
             msg.content = content;
         }
 
+
         if (!msg.content.empty()) {
             content_blocks.push_back({
                 {"type", "text"},
@@ -1089,8 +1090,25 @@ struct server_task_result_cmpl_final : server_task_result {
         bool has_text = !oaicompat_msg.content.empty();
         size_t num_tool_calls = oaicompat_msg.tool_calls.size();
 
+        bool text_block_started = false;
+        std::set<size_t> tool_calls_started;
+
         for (const auto & diff : oaicompat_msg_diffs) {
+
             if (!diff.content_delta.empty()) {
+                if (!text_block_started) {
+                    json text_start_event = json::object();
+                    text_start_event["event"] = "content_block_start";
+                    text_start_event["data"] = json::object();
+                    text_start_event["data"]["type"] = "content_block_start";
+                    text_start_event["data"]["index"] = 0;
+                    text_start_event["data"]["content_block"] = json::object();
+                    text_start_event["data"]["content_block"]["type"] = "text";
+                    text_start_event["data"]["content_block"]["text"] = "";
+                    events.push_back(text_start_event);
+                    text_block_started = true;
+                }
+
                 json delta_event = json::object();
                 delta_event["event"] = "content_block_delta";
                 delta_event["data"] = json::object();
@@ -1102,28 +1120,36 @@ struct server_task_result_cmpl_final : server_task_result {
                 events.push_back(delta_event);
             }
 
-            if (diff.tool_call_index != std::string::npos && !diff.tool_call_delta.name.empty()) {
-                // tool calls come after text content
+            if (diff.tool_call_index != std::string::npos) {
                 size_t content_block_index = (has_text ? 1 : 0) + diff.tool_call_index;
 
-                json tool_input = json::object();
-                try {
-                    tool_input = json::parse(diff.tool_call_delta.arguments);
-                } catch (const std::exception &) {
-                    tool_input = json::object();
+                if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
+                    const auto & full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
+
+                    json tool_start_event = json::object();
+                    tool_start_event["event"] = "content_block_start";
+                    tool_start_event["data"] = json::object();
+                    tool_start_event["data"]["type"] = "content_block_start";
+                    tool_start_event["data"]["index"] = content_block_index;
+                    tool_start_event["data"]["content_block"] = json::object();
+                    tool_start_event["data"]["content_block"]["type"] = "tool_use";
+                    tool_start_event["data"]["content_block"]["id"] = full_tool_call.id;
+                    tool_start_event["data"]["content_block"]["name"] = full_tool_call.name;
+                    events.push_back(tool_start_event);
+                    tool_calls_started.insert(diff.tool_call_index);
                 }
 
-                json tool_delta_event = json::object();
-                tool_delta_event["event"] = "content_block_delta";
-                tool_delta_event["data"] = json::object();
-                tool_delta_event["data"]["type"] = "content_block_delta";
-                tool_delta_event["data"]["index"] = content_block_index;
-                tool_delta_event["data"]["delta"] = json::object();
-                tool_delta_event["data"]["delta"]["type"] = "tool_use";
-                tool_delta_event["data"]["delta"]["id"] = diff.tool_call_delta.id;
-                tool_delta_event["data"]["delta"]["name"] = diff.tool_call_delta.name;
-                tool_delta_event["data"]["delta"]["input"] = tool_input;
-                events.push_back(tool_delta_event);
+                if (!diff.tool_call_delta.arguments.empty()) {
+                    json tool_delta_event = json::object();
+                    tool_delta_event["event"] = "content_block_delta";
+                    tool_delta_event["data"] = json::object();
+                    tool_delta_event["data"]["type"] = "content_block_delta";
+                    tool_delta_event["data"]["index"] = content_block_index;
+                    tool_delta_event["data"]["delta"] = json::object();
+                    tool_delta_event["data"]["delta"]["type"] = "input_json_delta";
+                    tool_delta_event["data"]["delta"]["partial_json"] = diff.tool_call_delta.arguments;
+                    events.push_back(tool_delta_event);
+                }
             }
         }
 
@@ -1390,37 +1416,33 @@ struct server_task_result_cmpl_partial : server_task_result {
                 events.push_back(delta_event);
             }
 
-            if (diff.tool_call_index != std::string::npos && !diff.tool_call_delta.name.empty()) {
-                // tool calls come after text content
+            if (diff.tool_call_index != std::string::npos) {
                 size_t content_block_index = (text_block_started ? 1 : 0) + diff.tool_call_index;
 
-                json tool_start_event = json::object();
-                tool_start_event["event"] = "content_block_start";
-                tool_start_event["data"] = json::object();
-                tool_start_event["data"]["type"] = "content_block_start";
-                tool_start_event["data"]["index"] = content_block_index;
-                tool_start_event["data"]["content_block"] = json::object();
-                tool_start_event["data"]["content_block"]["type"] = "tool_use";
-                tool_start_event["data"]["content_block"]["id"] = diff.tool_call_delta.id;
-                tool_start_event["data"]["content_block"]["name"] = diff.tool_call_delta.name;
-                events.push_back(tool_start_event);
+                if (!diff.tool_call_delta.name.empty()) {
+                    json tool_start_event = json::object();
+                    tool_start_event["event"] = "content_block_start";
+                    tool_start_event["data"] = json::object();
+                    tool_start_event["data"]["type"] = "content_block_start";
+                    tool_start_event["data"]["index"] = content_block_index;
+                    tool_start_event["data"]["content_block"] = json::object();
+                    tool_start_event["data"]["content_block"]["type"] = "tool_use";
+                    tool_start_event["data"]["content_block"]["id"] = diff.tool_call_delta.id;
+                    tool_start_event["data"]["content_block"]["name"] = diff.tool_call_delta.name;
+                    events.push_back(tool_start_event);
+                }
 
-                json tool_delta_event = json::object();
-                tool_delta_event["event"] = "content_block_delta";
-                tool_delta_event["data"] = json::object();
-                tool_delta_event["data"]["type"] = "content_block_delta";
-                tool_delta_event["data"]["index"] = content_block_index;
-                tool_delta_event["data"]["delta"] = json::object();
-                tool_delta_event["data"]["delta"]["type"] = "input_json_delta";
-                tool_delta_event["data"]["delta"]["partial_json"] = diff.tool_call_delta.arguments;
-                events.push_back(tool_delta_event);
-
-                json tool_stop_event = json::object();
-                tool_stop_event["event"] = "content_block_stop";
-                tool_stop_event["data"] = json::object();
-                tool_stop_event["data"]["type"] = "content_block_stop";
-                tool_stop_event["data"]["index"] = content_block_index;
-                events.push_back(tool_stop_event);
+                if (!diff.tool_call_delta.arguments.empty()) {
+                    json tool_delta_event = json::object();
+                    tool_delta_event["event"] = "content_block_delta";
+                    tool_delta_event["data"] = json::object();
+                    tool_delta_event["data"]["type"] = "content_block_delta";
+                    tool_delta_event["data"]["index"] = content_block_index;
+                    tool_delta_event["data"]["delta"] = json::object();
+                    tool_delta_event["data"]["delta"]["type"] = "input_json_delta";
+                    tool_delta_event["data"]["delta"]["partial_json"] = diff.tool_call_delta.arguments;
+                    events.push_back(tool_delta_event);
+                }
             }
         }
 
@@ -2120,10 +2142,13 @@ struct server_slot {
         GGML_ASSERT(task);
 
         auto previous_msg = chat_msg;
+
+        bool is_partial = stop != STOP_TYPE_EOS;
+
         SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
         auto new_msg = common_chat_parse(
             generated_text,
-            /* is_partial= */ stop != STOP_TYPE_EOS,
+            is_partial,
             task->params.oaicompat_chat_syntax);
         if (!new_msg.empty()) {
             new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
