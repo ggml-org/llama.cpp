@@ -446,7 +446,10 @@ struct server_task {
             }
             common_reasoning_format reasoning_format = params_base.reasoning_format;
             if (data.contains("reasoning_format")) {
-                reasoning_format = common_reasoning_format_from_name(data.at("reasoning_format").get<std::string>());
+                const auto requested = common_reasoning_format_from_name(data.at("reasoning_format").get<std::string>());
+                if (requested != COMMON_REASONING_FORMAT_AUTO) {
+                    reasoning_format = requested;
+                }
             }
             params.oaicompat_chat_syntax.reasoning_format = reasoning_format;
             params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
@@ -1663,6 +1666,7 @@ struct server_slot {
     bool has_next_token = true;
     bool has_new_line   = false;
     bool truncated      = false;
+    common_chat_stream_state reasoning_stream_state;
 
     stop_type stop;
 
@@ -1735,6 +1739,7 @@ struct server_slot {
         generated_text = "";
         has_new_line   = false;
         truncated      = false;
+        reasoning_stream_state = {};
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
@@ -1861,10 +1866,12 @@ struct server_slot {
         GGML_ASSERT(task);
 
         auto previous_msg = chat_msg;
-        SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
-        auto new_msg = common_chat_parse(
+        const auto text_to_parse = reasoning_stream_state.apply_reasoning_prefix(generated_text);
+        SRV_DBG("Parsing chat message: %s\n", text_to_parse.c_str());
+        auto new_msg = common_chat_parse_stream(
             generated_text,
             /* is_partial= */ stop != STOP_TYPE_EOS,
+            reasoning_stream_state,
             task->params.oaicompat_chat_syntax);
         if (!new_msg.empty()) {
             new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
@@ -2862,6 +2869,8 @@ struct server_context {
 
         slot.state = SLOT_STATE_STARTED;
 
+        slot.reasoning_stream_state.init(slot.task->params.oaicompat_chat_syntax);
+
         SLT_INF(slot, "%s", "processing task\n");
 
         return true;
@@ -2909,8 +2918,20 @@ struct server_context {
                 result.text_to_send = "";
             }
 
+            std::string delta_to_send = result.text_to_send;
+            result.text_to_send = token_str;
             slot.add_token(result);
-            if (slot.task->params.stream) {
+            result.text_to_send = std::move(delta_to_send);
+
+            if (send_text && slot.task->params.stream) {
+                if (auto prefix = slot.reasoning_stream_state.consume_reasoning_prefix()) {
+                    completion_token_output prefix_chunk{};
+                    prefix_chunk.tok          = LLAMA_TOKEN_NULL;
+                    prefix_chunk.prob         = 0.0f;
+                    prefix_chunk.text_to_send = *prefix;
+                    send_partial_response(slot, prefix_chunk, false);
+                }
+
                 send_partial_response(slot, result, false);
             }
         }
@@ -3096,7 +3117,9 @@ struct server_context {
             res->progress.time_ms   = (ggml_time_us() - slot.t_start_process_prompt) / 1000;
         } else {
             res->content = tkn.text_to_send;
-            res->tokens  = { tkn.tok };
+            if (tkn.tok != LLAMA_TOKEN_NULL) {
+                res->tokens = { tkn.tok };
+            }
 
             slot.update_chat_msg(res->oaicompat_msg_diffs);
         }
@@ -3111,7 +3134,7 @@ struct server_context {
         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
 
         // populate res.probs_output
-        if (slot.task->params.sampling.n_probs > 0) {
+        if (slot.task->params.sampling.n_probs > 0 && tkn.tok != LLAMA_TOKEN_NULL) {
             res->prob_output = tkn; // copy the token probs
         }
 
@@ -3130,7 +3153,7 @@ struct server_context {
         res->id_slot = slot.id;
 
         res->index           = slot.task->index;
-        res->content         = slot.generated_text;
+        res->content         = slot.reasoning_stream_state.apply_reasoning_prefix(slot.generated_text);
         res->tokens          = std::move(slot.generated_tokens);
         res->timings         = slot.get_timings();
         res->prompt          = slot.task->tokens.detokenize(ctx, true);

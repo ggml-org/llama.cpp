@@ -660,6 +660,7 @@ const char * common_reasoning_format_name(common_reasoning_format format) {
         case COMMON_REASONING_FORMAT_AUTO:     return "auto";
         case COMMON_REASONING_FORMAT_DEEPSEEK: return "deepseek";
         case COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY: return "deepseek-legacy";
+        case COMMON_REASONING_FORMAT_MINIMAX_M2: return "minimax-m2";
         default:
             throw std::runtime_error("Unknown reasoning format");
     }
@@ -674,8 +675,39 @@ common_reasoning_format common_reasoning_format_from_name(const std::string & fo
         return COMMON_REASONING_FORMAT_DEEPSEEK;
     } else if (format == "deepseek-legacy") {
         return COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY;
+    } else if (format == "minimax-m2") {
+        return COMMON_REASONING_FORMAT_MINIMAX_M2;
     }
     throw std::runtime_error("Unknown reasoning format: " + format);
+}
+
+void common_chat_stream_state::init(const common_chat_syntax & syntax) {
+    reasoning_prefix_streamed_ = false;
+
+    if (syntax.reasoning_format == COMMON_REASONING_FORMAT_MINIMAX_M2) {
+        reasoning_prefix_ = "<think>\n";
+    } else {
+        reasoning_prefix_.clear();
+    }
+}
+
+std::string common_chat_stream_state::apply_reasoning_prefix(const std::string & text) const {
+    if (reasoning_prefix_.empty()) {
+        return text;
+    }
+
+    std::string result(reasoning_prefix_);
+    result += text;
+    return result;
+}
+
+std::optional<std::string> common_chat_stream_state::consume_reasoning_prefix() {
+    if (!reasoning_prefix_pending()) {
+        return std::nullopt;
+    }
+
+    reasoning_prefix_streamed_ = true;
+    return reasoning_prefix_;
 }
 
 static std::string wrap_code_as_arguments(common_chat_msg_parser & builder, const std::string & code) {
@@ -1795,7 +1827,8 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
         // </think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME\n```json\nJSON\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>
         common_chat_parse_deepseek_v3_1_content(builder);
     } else {
-        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE ||
+            builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_MINIMAX_M2) {
           LOG_DBG("%s: reasoning_format none, adding content\n", __func__);
           common_chat_parse_deepseek_v3_1_content(builder);
           return;
@@ -2294,7 +2327,9 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 
         if (regex_match(analysis_regex, header)) {
             builder.move_to(header_start_pos);
-            if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
+            if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE ||
+                builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_MINIMAX_M2 ||
+                builder.syntax().reasoning_in_content) {
                 builder.add_content(consume_end(true));
             } else {
                 builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|end|>");
@@ -3536,4 +3571,13 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
         LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
     }
     return msg;
+}
+
+common_chat_msg common_chat_parse_stream(
+    const std::string & input,
+    bool is_partial,
+    common_chat_stream_state & stream_state,
+    const common_chat_syntax & syntax) {
+    const auto text_to_parse = stream_state.apply_reasoning_prefix(input);
+    return common_chat_parse(text_to_parse, is_partial, syntax);
 }

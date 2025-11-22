@@ -171,7 +171,8 @@ void common_chat_msg_parser::consume_literal(const std::string & literal) {
 bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think, const std::string & end_think) {
     std::string pending_reasoning_prefix;
 
-    if (syntax_.reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+    if (syntax_.reasoning_format == COMMON_REASONING_FORMAT_NONE ||
+        syntax_.reasoning_format == COMMON_REASONING_FORMAT_MINIMAX_M2) {
         return false;
     }
 
