@@ -1009,8 +1009,8 @@ common_peg_parser common_peg_parser_builder::json_string_content() {
     return wrap(arena_.add_parser(common_peg_json_string_parser{}));
 }
 
-common_peg_parser common_peg_parser_builder::schema(common_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema) {
-    return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::make_shared<nlohmann::ordered_json>(schema)}));
+common_peg_parser common_peg_parser_builder::schema(common_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema, bool raw) {
+    return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::make_shared<nlohmann::ordered_json>(schema), raw}));
 }
 
 common_peg_parser common_peg_parser_builder::capture(const std::string & key, common_peg_parser p) {
@@ -1338,6 +1338,19 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return gbnf_excluding_pattern(p.delimiters);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (p.schema) {
+                    auto type = p.schema->value("type","object");
+                    if (p.raw && type == "string") {
+                        if (p.schema->contains("pattern")) {
+                            // heuristic:
+                            // if .* is in the user's provided pattern, use the child's GBNF grammar.
+                            // This is because .* will greedily match everything, past any delimiters.
+                            auto pattern = p.schema->value("pattern", "^.*$");
+                            if (pattern.find(".*") != std::string::npos) {
+                                return to_gbnf(p.child);
+                            }
+                        }
+                        return builder.add_string_schema(p.name, *p.schema);
+                    }
                     return builder.add_schema(p.name, *p.schema);
                 }
                 return to_gbnf(p.child);

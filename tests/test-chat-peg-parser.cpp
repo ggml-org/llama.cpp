@@ -185,10 +185,21 @@ static void test_example_qwen3_coder(testing & t) {
 
             std::vector<common_peg_parser> arg_parsers;
             for (const auto & arg_def : def.arguments) {
+                auto type = arg_def.schema.value("type", "object");
                 auto arg = p.tool_arg(
                     p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(arg_def.name)) + ">") +
-                    p.tool_arg_json_value(p.schema(p.json(), "tool-" + def.name + "-arg-" + def.name + "-schema", arg_def.schema)) +
-                    p.tool_arg_close(p.literal("</parameter>"))
+                    (type == "string" ?
+                        p.tool_arg_string_value(p.schema(
+                                p.until_one_of({"</parameter><parameter=", "</parameter></function>"}),
+                                "tool-" + def.name + "-arg-" + arg_def.name + "-schema",
+                                arg_def.schema,
+                                true)) :
+                        p.tool_arg_json_value(p.schema(
+                            p.json(),
+                            "tool-" + def.name + "-arg-" + arg_def.name + "-schema",
+                            arg_def.schema))
+                    ) +
+                    p.tool_arg_close(p.literal("</parameter>") + p.peek(p.literal("<parameter=") | p.literal("</function>")))
                 );
 
                 arg_parsers.push_back(arg_def.is_required ?
@@ -221,8 +232,8 @@ static void test_example_qwen3_coder(testing & t) {
             "Let me search the knowledge base for cat pictures."
             "<tool_call>"
             "<function=search_knowledge_base>"
-            "<parameter=query>\"cat pictures\"</parameter>"
-            "<parameter=category>\"general\"</parameter>"
+            "<parameter=query>cat pictures</parameter>"
+            "<parameter=category>general</parameter>"
             "</function>"
             "</tool_call>";
 
