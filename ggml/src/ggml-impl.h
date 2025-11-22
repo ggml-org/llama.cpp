@@ -488,8 +488,30 @@ static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
     return result;
 }
 
+// Equal to ggml_e8m0_to_fp32/(2^e)
+// Useful with MXFP6 quantization since KValues are stored in different scale
+static inline float ggml_e8m0_to_fp32_any(uint8_t x, const uint8_t e) {
+    uint32_t bits;
+    const int cutoff = e + 1;
+    if (x < cutoff) {
+        // x=0: 0x00040000 = 2^(-131)
+        // x=1: 0x00080000 = 2^(-130)
+        // ...
+        bits = (uint32_t)1 << (x - e + 22);
+    }
+    else {
+        // E = x - e
+        bits = (uint32_t)(x - e) << 23;
+    }
+
+    float result;
+    memcpy(&result, &bits, sizeof(float));
+    return result;
+}
+
 #define GGML_E8M0_TO_FP32(x) ggml_e8m0_to_fp32(x)
 #define GGML_E8M0_TO_FP32_HALF(x) ggml_e8m0_to_fp32_half(x)
+#define GGML_E8M0_TO_FP32_ANY(x,e) ggml_e8m0_to_fp32_any(x,e)
 
 /**
  * Converts brain16 to float32.
