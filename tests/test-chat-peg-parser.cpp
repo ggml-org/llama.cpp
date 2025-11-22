@@ -440,10 +440,23 @@ void test_command7_parser_compare(testing & t) {
 
     // Run benchmarks
     t.bench("legacy_parse_benchmark", [&]() {
-        test_legacy(input, false, false);
-    }, 100);
+        std::string in;
+        for (auto i = 0u; i < tokens.size(); i++) {
+            in += tokens[i];
+
+            try {
+                test_legacy(in, i + 1 < tokens.size(), false);
+            } catch (common_chat_msg_partial_exception & e) {
+                // Do nothing, this is expected
+            }
+        }
+    }, 20);
 
     t.bench("current_parse_benchmark", [&]() {
-        test_current(parser, input, false, false);
-    }, 100);
+        std::string in;
+        for (auto i = 0u; i < tokens.size(); i++) {
+            in += tokens[i];
+            test_current(parser, input, i + 1 < tokens.size(), false);
+        }
+    }, 20);
 }
