@@ -7,6 +7,7 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
  * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions and embeddings routes
+ * [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) compatible endpoint with full streaming support
  * Reranking endpoint (https://github.com/ggml-org/llama.cpp/pull/9510)
  * Parallel decoding with multi-user support
  * Continuous batching
@@ -1342,6 +1343,252 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
           "encoding_format": "float"
   }'
   ```
+
+### POST `/v1/messages`: Anthropic Messages API
+
+Compatible with Anthropic's Messages API format. Supports the same models and features as the OpenAI endpoints, but with Anthropic's request/response format.
+
+*Features:*
+
+- Full streaming support with Anthropic's event-based SSE format
+- Tool calling/function use (requires `--jinja` flag)
+- Vision/multimodal support (images and audio)
+- System prompts (as separate parameter, not in messages array)
+- `top_k` parameter support
+- Permissive validation (provides defaults for missing parameters)
+
+*Key differences from OpenAI format:*
+
+- System prompt is a separate `system` parameter (string or array of content blocks)
+- Messages only contain `user` and `assistant` roles (no `system` role)
+- Content is always an array of content blocks
+- Response uses `type: "message"` instead of `object: "chat.completion"`
+- `stop_reason` instead of `finish_reason`
+- `input_tokens`/`output_tokens` instead of `prompt_tokens`/`completion_tokens`
+- Streaming uses typed events (`message_start`, `content_block_delta`, etc.)
+
+*Options:*
+
+See [Anthropic Messages API documentation](https://docs.anthropic.com/en/api/messages).
+
+Common parameters:
+- `model`: Model identifier (required)
+- `messages`: Array of message objects with `role` and `content` (required)
+- `max_tokens`: Maximum tokens to generate (required in strict Anthropic API, optional here with default: 4096)
+- `system`: System prompt as string or array of content blocks (optional)
+- `temperature`: Sampling temperature 0-1 (optional, default: 1.0)
+- `top_p`: Nucleus sampling (optional, default: 1.0)
+- `top_k`: Top-k sampling (optional, llama.cpp specific)
+- `stop_sequences`: Array of stop sequences (optional)
+- `stream`: Enable streaming (optional, default: false)
+- `tools`: Array of tool definitions (optional, requires `--jinja`)
+- `tool_choice`: Tool selection mode (optional: `{"type": "auto"}`, `{"type": "any"}`, or `{"type": "tool", "name": "..."}`)
+
+*Examples:*
+
+Basic chat completion:
+
+```shell
+curl http://localhost:8080/v1/messages \
+-H "Content-Type: application/json" \
+-H "x-api-key: your-api-key" \
+-d '{
+  "model": "claude-3-sonnet",
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello, Claude!"
+    }
+  ]
+}'
+```
+
+With system prompt:
+
+```shell
+curl http://localhost:8080/v1/messages \
+-H "Content-Type: application/json" \
+-H "x-api-key: your-api-key" \
+-d '{
+  "model": "claude-3-sonnet",
+  "max_tokens": 1024,
+  "system": "You are a helpful AI assistant.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the capital of France?"
+    }
+  ]
+}'
+```
+
+Streaming example:
+
+```shell
+curl http://localhost:8080/v1/messages \
+-H "Content-Type: application/json" \
+-H "x-api-key: your-api-key" \
+-d '{
+  "model": "claude-3-sonnet",
+  "max_tokens": 1024,
+  "stream": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Write a haiku about coding"
+    }
+  ]
+}'
+```
+
+With vision (multimodal):
+
+```shell
+curl http://localhost:8080/v1/messages \
+-H "Content-Type: application/json" \
+-H "x-api-key: your-api-key" \
+-d '{
+  "model": "claude-3-sonnet",
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image",
+          "source": {
+            "type": "url",
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANS..."
+          }
+        },
+        {
+          "type": "text",
+          "text": "What is in this image?"
+        }
+      ]
+    }
+  ]
+}'
+```
+
+With tool use (requires `--jinja` flag):
+
+```shell
+curl http://localhost:8080/v1/messages \
+-H "Content-Type: application/json" \
+-H "x-api-key: your-api-key" \
+-d '{
+  "model": "claude-3-sonnet",
+  "max_tokens": 1024,
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get the weather for a location",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "City name"
+          }
+        },
+        "required": ["location"]
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather in Paris?"
+    }
+  ]
+}'
+```
+
+*Response format:*
+
+```json
+{
+  "id": "msg_01XYZ...",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "Hello! How can I help you today?"
+    }
+  ],
+  "model": "claude-3-sonnet",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 20
+  }
+}
+```
+
+*Streaming response format:*
+
+Anthropic streaming uses Server-Sent Events (SSE) with typed events:
+
+```
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_...","type":"message","role":"assistant",...}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"!"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}
+
+event: message_stop
+data: {"type":"message_stop"}
+```
+
+### POST `/v1/messages/count_tokens`: Token Counting
+
+Count the number of tokens in a request without generating a response. Useful for estimating costs and ensuring requests fit within model limits.
+
+Accepts the same parameters as `/v1/messages` except:
+- `max_tokens` is not required
+- `stream` is not supported
+
+*Example:*
+
+```shell
+curl http://localhost:8080/v1/messages/count_tokens \
+-H "Content-Type: application/json" \
+-H "x-api-key: your-api-key" \
+-d '{
+  "model": "claude-3-sonnet",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello, Claude!"
+    }
+  ],
+  "system": "You are a helpful assistant."
+}'
+```
+
+*Response format:*
+
+```json
+{
+  "input_tokens": 30
+}
+```
 
 ## More examples
 
