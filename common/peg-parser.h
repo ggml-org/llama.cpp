@@ -340,23 +340,23 @@ class common_peg_arena {
 class common_peg_parser_builder {
     common_peg_arena arena_;
 
-    // Helper to wrap common_peg_parser_id with this builder
     common_peg_parser wrap(common_peg_parser_id id) { return common_peg_parser(id, this); }
+    common_peg_parser add(const common_peg_parser_variant & p) { return wrap(arena_.add_parser(p)); }
 
   public:
     common_peg_parser_builder();
 
     // Matches the start of the input.
     //   S -> ^
-    common_peg_parser start();
+    common_peg_parser start() { return add(common_peg_start_parser{}); }
 
     // Matches the end of the input.
     //   S -> $
-    common_peg_parser end();
+    common_peg_parser end() { return add(common_peg_end_parser{}); }
 
     // Matches an exact literal string.
     //   S -> "hello"
-    common_peg_parser literal(const std::string & literal);
+    common_peg_parser literal(const std::string & literal) { return add(common_peg_literal_parser{literal}); }
 
     // Matches a sequence of parsers in order, all must succeed.
     //   S -> A B C
@@ -372,27 +372,27 @@ class common_peg_parser_builder {
 
     // Matches one or more repetitions of a parser.
     //   S -> A+
-    common_peg_parser one_or_more(common_peg_parser p);
+    common_peg_parser one_or_more(common_peg_parser p) { return repeat(p, 1, -1); }
 
     // Matches zero or more repetitions of a parser, always succeeds.
     //   S -> A*
-    common_peg_parser zero_or_more(common_peg_parser p);
+    common_peg_parser zero_or_more(common_peg_parser p) { return repeat(p, 0, -1); }
 
     // Matches zero or one occurrence of a parser, always succeeds.
     //   S -> A?
-    common_peg_parser optional(common_peg_parser p);
+    common_peg_parser optional(common_peg_parser p) { return repeat(p, 0, 1); }
 
     // Positive lookahead: succeeds if child parser succeeds, consumes no input.
     //   S -> &A
-    common_peg_parser peek(common_peg_parser p);
+    common_peg_parser peek(common_peg_parser p) { return add(common_peg_and_parser{p}); }
 
     // Negative lookahead: succeeds if child parser fails, consumes no input.
     //   S -> !A
-    common_peg_parser negate(common_peg_parser p);
+    common_peg_parser negate(common_peg_parser p) { return add(common_peg_not_parser{p}); }
 
     // Matches any single character.
     //   S -> .
-    common_peg_parser any();
+    common_peg_parser any() { return add(common_peg_any_parser{}); }
 
     // Matches between min and max repetitions of characters from a character class.
     //   S -> [a-z]{m,n}
@@ -404,30 +404,30 @@ class common_peg_parser_builder {
     //   S -> [a-z] or S -> [^0-9]
     //
     // Equivalent to chars(classes, 1, 1)
-    common_peg_parser one(const std::string & classes);
+    common_peg_parser one(const std::string & classes) { return chars(classes, 1, 1); }
 
     // Creates a lightweight reference to a named rule (resolved during build()).
     // Use this for forward references in recursive grammars.
     //   expr_ref -> expr
-    common_peg_parser ref(const std::string & name);
+    common_peg_parser ref(const std::string & name) { return add(common_peg_ref_parser{name}); }
 
     // Matches zero or more whitespace characters (space, tab, newline).
     //   S -> [ \t\n]*
-    common_peg_parser space();
+    common_peg_parser space() { return add(common_peg_space_parser{}); }
 
     // Matches all characters until a delimiter is found (delimiter not consumed).
     //   S -> (!delim .)*
-    common_peg_parser until(const std::string & delimiter);
-    common_peg_parser until_one_of(const std::vector<std::string> & delimiters);
+    common_peg_parser until(const std::string & delimiter) { return add(common_peg_until_parser{{delimiter}}); }
+    common_peg_parser until_one_of(const std::vector<std::string> & delimiters) { return add(common_peg_until_parser{delimiters}); }
 
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}
     // Use -1 for max to represent unbounded repetition (equivalent to {m,})
-    common_peg_parser repeat(common_peg_parser p, int min, int max);
+    common_peg_parser repeat(common_peg_parser p, int min, int max) { return add(common_peg_repetition_parser{p, min,max}); }
 
     // Matches exactly n repetitions of a parser.
     //   S -> A{n}
-    common_peg_parser repeat(common_peg_parser p, int n);
+    common_peg_parser repeat(common_peg_parser p, int n) { return repeat(p, n, n); }
 
     // Creates a complete JSON parser supporting objects, arrays, strings, numbers, booleans, and null.
     //   value -> object | array | string | number | true | false | null
@@ -465,11 +465,11 @@ class common_peg_parser_builder {
     // Creates an atomic parser. Atomic parsers do not create an AST node if
     // the child results in a partial parse, i.e. NEEDS_MORE_INPUT. This is
     // intended for situations where partial output is undesirable.
-    common_peg_parser atomic(common_peg_parser p);
+    common_peg_parser atomic(common_peg_parser p) { return add(common_peg_atomic_parser{p}); }
 
     // Tags create nodes in the generated AST for semantic purposes.
     // Unlike rules, you can tag multiple nodes with the same tag.
-    common_peg_parser tag(const std::string & tag, common_peg_parser p);
+    common_peg_parser tag(const std::string & tag, common_peg_parser p) { return add(common_peg_tag_parser{p.id(), tag}); }
 
     void set_root(common_peg_parser p);
 

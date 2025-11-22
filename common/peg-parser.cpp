@@ -912,18 +912,6 @@ static std::string rule_name(const std::string & name) {
 // Builder implementation
 common_peg_parser_builder::common_peg_parser_builder() {}
 
-common_peg_parser common_peg_parser_builder::start() {
-    return wrap(arena_.add_parser(common_peg_start_parser{}));
-}
-
-common_peg_parser common_peg_parser_builder::end() {
-    return wrap(arena_.add_parser(common_peg_end_parser{}));
-}
-
-common_peg_parser common_peg_parser_builder::literal(const std::string & literal) {
-    return wrap(arena_.add_parser(common_peg_literal_parser{literal}));
-}
-
 common_peg_parser common_peg_parser_builder::sequence(const std::vector<common_peg_parser_id> & parsers) {
     // Flatten nested sequences
     std::vector<common_peg_parser_id> flattened;
@@ -988,61 +976,9 @@ common_peg_parser common_peg_parser_builder::choice(std::initializer_list<common
     return choice(ids);
 }
 
-common_peg_parser common_peg_parser_builder::peek(common_peg_parser p) {
-    return wrap(arena_.add_parser(common_peg_and_parser{p.id()}));
-}
-
-common_peg_parser common_peg_parser_builder::negate(common_peg_parser p) {
-    return wrap(arena_.add_parser(common_peg_not_parser{p.id()}));
-}
-
-common_peg_parser common_peg_parser_builder::any() {
-    return wrap(arena_.add_parser(common_peg_any_parser{}));
-}
-
 common_peg_parser common_peg_parser_builder::chars(const std::string & classes, int min, int max) {
     auto [ranges, negated] = parse_char_classes(classes);
     return wrap(arena_.add_parser(common_peg_chars_parser{classes, ranges, negated, min, max}));
-}
-
-common_peg_parser common_peg_parser_builder::one(const std::string & classes) {
-    return chars(classes, 1, 1);
-}
-
-common_peg_parser common_peg_parser_builder::ref(const std::string & name) {
-    return wrap(arena_.add_parser(common_peg_ref_parser{rule_name(name)}));
-}
-
-common_peg_parser common_peg_parser_builder::space() {
-    return wrap(arena_.add_parser(common_peg_space_parser{}));
-}
-
-common_peg_parser common_peg_parser_builder::until(const std::string & delimiter) {
-    return wrap(arena_.add_parser(common_peg_until_parser{std::vector<std::string>{delimiter}}));
-}
-
-common_peg_parser common_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
-    return wrap(arena_.add_parser(common_peg_until_parser{delimiters}));
-}
-
-common_peg_parser common_peg_parser_builder::repeat(common_peg_parser p, int min, int max) {
-    return wrap(arena_.add_parser(common_peg_repetition_parser{p.id(), min, max}));
-}
-
-common_peg_parser common_peg_parser_builder::repeat(common_peg_parser p, int n) {
-    return wrap(arena_.add_parser(common_peg_repetition_parser{p.id(), n, n}));
-}
-
-common_peg_parser common_peg_parser_builder::optional(common_peg_parser p) {
-    return repeat(p, 0, 1);
-}
-
-common_peg_parser common_peg_parser_builder::zero_or_more(common_peg_parser p) {
-    return repeat(p, 0, -1);
-}
-
-common_peg_parser common_peg_parser_builder::one_or_more(common_peg_parser p) {
-    return repeat(p, 1, -1);
 }
 
 common_peg_parser common_peg_parser_builder::json_string_content() {
@@ -1055,10 +991,6 @@ common_peg_parser common_peg_parser_builder::schema(common_peg_parser p, const s
 
 common_peg_parser common_peg_parser_builder::capture(const std::string & key, common_peg_parser p) {
     return wrap(arena_.add_parser(common_peg_capture_parser{p.id(), key}));
-}
-
-common_peg_parser common_peg_parser_builder::atomic(common_peg_parser p) {
-    return wrap(arena_.add_parser(common_peg_atomic_parser{p.id()}));
 }
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, common_peg_parser p, bool trigger) {
@@ -1087,10 +1019,6 @@ common_peg_parser common_peg_parser_builder::rule(const std::string & name, cons
     arena_.rules_[clean_name] = rule_id;
 
     return ref(clean_name);
-}
-
-common_peg_parser common_peg_parser_builder::tag(const std::string & tag, common_peg_parser p) {
-    return wrap(arena_.add_parser(common_peg_tag_parser{p.id(), tag}));
 }
 
 void common_peg_parser_builder::set_root(common_peg_parser p) {
