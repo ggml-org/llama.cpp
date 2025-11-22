@@ -14,7 +14,7 @@ chmod +x ds.sh && ./ds.sh
 # -t Performance Cores
 ```
 
-# Example
+# Performance
 
 SoC : Dimensity 1000+</br>
 platform : CPU
