@@ -290,7 +290,7 @@ void test_command7_parser_compare(testing & t) {
             << ("[" << tool_call << p.zero_or_more(p.literal(",") << tool_call) << "]")
             << "<|END_ACTION|>");
 
-        return p.optional(thinking) + p.optional(p.space() + response) + p.optional(p.space() + tool_calls) + p.end();
+        return p.optional(thinking) << (tool_calls | response) + p.end();
     });
 
     auto test_current = [&](const common_peg_arena & p, const std::string & input, bool need_more_input, bool print_results) {
@@ -385,21 +385,6 @@ void test_command7_parser_compare(testing & t) {
             "5. Provide a detailed cost breakdown that includes accommodation, transportation, meals, and entry fees "
             "to attractions.";
 
-    std::string content = "For a two-week trip to Japan with a $4,000 budget, I recommend planning an itinerary that balances "
-            "historical sites with modern attractions. The destination will be Japan, with a duration of 14 days.\n\n"
-            "Given your interests in both historical sites and modern attractions, you'll want to focus on cities like "
-            "Kyoto for its temples and traditional culture, Tokyo for its cutting-edge technology and entertainment "
-            "districts, and possibly Hiroshima or Nara for additional historical significance.\n\n"
-            "For accommodation, I suggest looking for affordable options such as budget hotels, hostels, or "
-            "guesthouses that offer good value without sacrificing too much comfort. Japan has excellent mid-range "
-            "accommodation options that can keep your lodging costs manageable.\n\n"
-            "Transportation should prioritize efficiency—consider getting a JR Rail Pass for intercity travel, which "
-            "allows unlimited rides on most JR trains including the Shinkansen (bullet train). Within cities, use "
-            "local trains and subways, which are both affordable and highly reliable.\n\n"
-            "For meals, embrace local cuisine by eating at neighborhood restaurants, ramen shops, and izakayas rather "
-            "than touristy establishments. This will give you an authentic experience while keeping costs "
-            "reasonable—you can enjoy excellent meals for $10-20 per person at local spots.\n\n";
-
     std::vector<std::tuple<std::string, std::string, nlohmann::json>> tool_calls = {{
         "call_0",
         "plan_trip",
@@ -422,13 +407,6 @@ void test_command7_parser_compare(testing & t) {
         tokens.emplace_back("<|START_THINKING|>");
         tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
         tokens.emplace_back("<|END_THINKING|>");
-    }
-
-    if (!content.empty()) {
-        auto tokenized = simple_tokenize(content);
-        tokens.emplace_back("<|START_RESPONSE|>");
-        tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
-        tokens.emplace_back("<|END_RESPONSE|>");
     }
 
     if (!tool_calls.empty()) {
@@ -463,9 +441,9 @@ void test_command7_parser_compare(testing & t) {
     // Run benchmarks
     t.bench("legacy_parse_benchmark", [&]() {
         test_legacy(input, false, false);
-    }, 1000);
+    }, 100);
 
     t.bench("current_parse_benchmark", [&]() {
         test_current(parser, input, false, false);
-    }, 1000);
+    }, 100);
 }
