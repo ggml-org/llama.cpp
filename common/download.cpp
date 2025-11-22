@@ -303,7 +303,8 @@ static bool common_download_head(CURL *              curl,
 // download one single file from remote URL to local path
 static bool common_download_file_single_online(const std::string & url,
                                                const std::string & path,
-                                               const std::string & bearer_token) {
+                                               const std::string & bearer_token,
+                                               const std::vector<std::pair<std::string, std::string>> & headers) {
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
     for (int i = 0; i < max_attempts; ++i) {
@@ -322,10 +323,14 @@ static bool common_download_file_single_online(const std::string & url,
 
         // Initialize libcurl
         curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
-        common_load_model_from_url_headers headers;
-        curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &headers);
+        common_load_model_from_url_headers response_headers;
+        curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &response_headers);
         curl_slist_ptr http_headers;
-        const bool     was_perform_successful = common_download_head(curl.get(), http_headers, url, bearer_token);
+        for (const auto & h : headers) {
+            auto header_str = h.first + ": " + h.second;
+            http_headers.ptr = curl_slist_append(http_headers.ptr, header_str.c_str());
+        }
+        const bool was_perform_successful = common_download_head(curl.get(), http_headers, url, bearer_token);
         if (!was_perform_successful) {
             head_request_ok = false;
         }
@@ -345,15 +350,15 @@ static bool common_download_file_single_online(const std::string & url,
         if (head_request_ok) {
             // check if ETag or Last-Modified headers are different
             // if it is, we need to download the file again
-            if (!etag.empty() && etag != headers.etag) {
+            if (!etag.empty() && etag != response_headers.etag) {
                 LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__, etag.c_str(),
-                        headers.etag.c_str());
+                        response_headers.etag.c_str());
                 should_download              = true;
                 should_download_from_scratch = true;
             }
         }
 
-        const bool accept_ranges_supported = !headers.accept_ranges.empty() && headers.accept_ranges != "none";
+        const bool accept_ranges_supported = !response_headers.accept_ranges.empty() && response_headers.accept_ranges != "none";
         if (should_download) {
             if (file_exists &&
                 !accept_ranges_supported) {  // Resumable downloads not supported, delete and start again.
@@ -381,13 +386,13 @@ static bool common_download_file_single_online(const std::string & url,
                 }
             }
             if (head_request_ok) {
-                write_etag(path, headers.etag);
+                write_etag(path, response_headers.etag);
             }
 
             // start the download
             LOG_INF("%s: trying to download model from %s to %s (server_etag:%s, server_last_modified:%s)...\n",
                     __func__, llama_download_hide_password_in_url(url).c_str(), path_temporary.c_str(),
-                    headers.etag.c_str(), headers.last_modified.c_str());
+                    response_headers.etag.c_str(), response_headers.last_modified.c_str());
             const bool was_pull_successful = common_pull_file(curl.get(), path_temporary);
             if (!was_pull_successful) {
                 if (i + 1 < max_attempts) {
@@ -433,7 +438,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
     curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 1L);
     typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
     auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
-        auto data_vec = static_cast<std::vector<char> *>(data);
+        auto *data_vec = static_cast<std::vector<char> *>(data);
         data_vec->insert(data_vec->end(), (char *)ptr, (char *)ptr + size * nmemb);
         return size * nmemb;
     };
@@ -565,7 +570,8 @@ static bool common_pull_file(httplib::Client & cli,
 // download one single file from remote URL to local path
 static bool common_download_file_single_online(const std::string & url,
                                                const std::string & path,
-                                               const std::string & bearer_token) {
+                                               const std::string & bearer_token,
+                                               const std::vector<std::pair<std::string, std::string>> & headers) {
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
@@ -574,6 +580,9 @@ static bool common_download_file_single_online(const std::string & url,
     httplib::Headers default_headers = {{"User-Agent", "llama-cpp"}};
     if (!bearer_token.empty()) {
         default_headers.insert({"Authorization", "Bearer " + bearer_token});
+    }
+    for (const auto & h : headers) {
+        default_headers.insert({h.first, h.second});
     }
     cli.set_default_headers(default_headers);
 
@@ -718,9 +727,10 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
 static bool common_download_file_single(const std::string & url,
                                         const std::string & path,
                                         const std::string & bearer_token,
-                                        bool                offline) {
+                                        bool                offline,
+                                        const std::vector<std::pair<std::string, std::string>> & headers) {
     if (!offline) {
-        return common_download_file_single_online(url, path, bearer_token);
+        return common_download_file_single_online(url, path, bearer_token, headers);
     }
 
     if (!std::filesystem::exists(path)) {
@@ -734,13 +744,24 @@ static bool common_download_file_single(const std::string & url,
 
 // download multiple files from remote URLs to local paths
 // the input is a vector of pairs <url, path>
-static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls, const std::string & bearer_token, bool offline) {
+static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls,
+                                          const std::string & bearer_token,
+                                          bool offline,
+                                          const std::vector<std::pair<std::string, std::string>> & headers) {
     // Prepare download in parallel
     std::vector<std::future<bool>> futures_download;
+    futures_download.reserve(urls.size());
+
     for (auto const & item : urls) {
-        futures_download.push_back(std::async(std::launch::async, [bearer_token, offline](const std::pair<std::string, std::string> & it) -> bool {
-            return common_download_file_single(it.first, it.second, bearer_token, offline);
-        }, item));
+        futures_download.push_back(
+            std::async(
+                std::launch::async,
+                [&bearer_token, offline, &headers](const std::pair<std::string, std::string> & it) -> bool {
+                    return common_download_file_single(it.first, it.second, bearer_token, offline, headers);
+                },
+                item
+            )
+        );
     }
 
     // Wait for all downloads to complete
@@ -753,17 +774,17 @@ static bool common_download_file_multiple(const std::vector<std::pair<std::strin
     return true;
 }
 
-bool common_download_model(
-        const common_params_model & model,
-        const std::string & bearer_token,
-        bool offline) {
+bool common_download_model(const common_params_model & model,
+                           const std::string & bearer_token,
+                           bool offline,
+                           const std::vector<std::pair<std::string, std::string>> & headers) {
     // Basic validation of the model.url
     if (model.url.empty()) {
         LOG_ERR("%s: invalid model url\n", __func__);
         return false;
     }
 
-    if (!common_download_file_single(model.url, model.path, bearer_token, offline)) {
+    if (!common_download_file_single(model.url, model.path, bearer_token, offline, headers)) {
         return false;
     }
 
@@ -822,7 +843,7 @@ bool common_download_model(
         }
 
         // Download in parallel
-        common_download_file_multiple(urls, bearer_token, offline);
+        common_download_file_multiple(urls, bearer_token, offline, headers);
     }
 
     return true;
@@ -1016,7 +1037,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string local_path = fs_get_cache_file(model_filename);
 
         const std::string blob_url = url_prefix + "/blobs/" + gguf_digest;
-        if (!common_download_file_single(blob_url, local_path, token, false)) {
+        if (!common_download_file_single(blob_url, local_path, token, false, {})) {
             throw std::runtime_error("Failed to download Docker Model");
         }
 
@@ -1034,7 +1055,10 @@ common_hf_file_res common_get_hf_file(const std::string &, const std::string &, 
     throw std::runtime_error("download functionality is not enabled in this build");
 }
 
-bool common_download_model(const common_params_model &, const std::string &, bool) {
+bool common_download_model(const common_params_model &,
+                           const std::string &,
+                           bool,
+                           const std::vector<std::pair<std::string, std::string>> &) {
     throw std::runtime_error("download functionality is not enabled in this build");
 }
 

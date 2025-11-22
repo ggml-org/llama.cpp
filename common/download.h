@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 struct common_params_model;
 
@@ -45,7 +46,8 @@ common_hf_file_res common_get_hf_file(
 bool common_download_model(
     const common_params_model & model,
     const std::string & bearer_token,
-    bool offline);
+    bool offline,
+    const std::vector<std::pair<std::string, std::string>> & headers = {});
 
 // returns list of cached models
 std::vector<common_cached_model_info> common_list_cached_models();
