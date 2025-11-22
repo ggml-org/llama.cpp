@@ -161,6 +161,7 @@ class Keys:
         VALUE_LENGTH_MLA             = "{arch}.attention.value_length_mla"
         SHARED_KV_LAYERS             = "{arch}.attention.shared_kv_layers"
         SLIDING_WINDOW_PATTERN       = "{arch}.attention.sliding_window_pattern"
+        TEMPERATURE_SCALE            = "{arch}.attention.temperature_scale"
 
     class Rope:
         DIMENSION_COUNT          = "{arch}.rope.dimension_count"

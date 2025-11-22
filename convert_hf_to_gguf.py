@@ -1581,9 +1581,26 @@ class MmprojModel(ModelBase):
 
         # load preprocessor config
         self.preprocessor_config = {}
-        if not self.is_mistral_format:
-            with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
+
+        # prefer preprocessor_config.json if possible
+        preprocessor_config_path = self.dir_model / "preprocessor_config.json"
+        if preprocessor_config_path.is_file():
+            with open(preprocessor_config_path, "r", encoding="utf-8") as f:
                 self.preprocessor_config = json.load(f)
+
+        # prefer processor_config.json if possible
+        processor_config_path = self.dir_model / "processor_config.json"
+        if processor_config_path.is_file():
+            with open(processor_config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                # move image_processor to root level for compat
+                if "image_processor" in cfg:
+                    cfg = {
+                        **cfg,
+                        **cfg["image_processor"],
+                    }
+                # merge configs
+                self.preprocessor_config = {**self.preprocessor_config, **cfg}
 
     def get_vision_config(self) -> dict[str, Any] | None:
         config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
@@ -2798,6 +2815,19 @@ class Llama4VisionModel(MmprojModel):
 @ModelBase.register("Mistral3ForConditionalGeneration")
 class Mistral3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        rope_params = self.hparams.get("rope_parameters")
+        if rope_params is not None and rope_params.get("rope_type") == "yarn":
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_params["factor"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_fast(rope_params["beta_fast"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_slow(rope_params["beta_slow"])
+            self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1 * rope_params["mscale_all_dim"]) # copied from deepseekv2
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_params["original_max_position_embeddings"])
+            if "llama_4_scaling_beta" in rope_params:
+                self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         name = name.replace("language_model.", "")
