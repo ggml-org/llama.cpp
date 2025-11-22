@@ -475,13 +475,46 @@ function usage_note(sRecentUserMsgCnt) {
 }
 
 
-/**
- * @typedef {HTMLDivElement & {
- *      divStreamRole: HTMLDivElement,
- *      divStreamData: HTMLDivElement,
- *      divstream_clear: () => void,
- * }} ELDivStream
- */
+class ELDivStream {
+
+    /**
+     * @param {string} chatId
+     */
+    constructor(chatId) {
+        let elDiv = Object.assign(document.createElement('div'), {
+            id: `DivStream-${chatId}`,
+            className: 'chat-message',
+        });
+        this.div = elDiv
+
+        let elDivRole = Object.assign(document.createElement('div'), {
+            id: 'divStreamRole',
+            className: 'chat-message-role',
+        });
+        elDiv.appendChild(elDivRole)
+        this.divRole = elDivRole
+
+        let elDivData = Object.assign(document.createElement('div'), {
+            id: 'divStreamData',
+            className: 'chat-message-content-live',
+        });
+        elDiv.appendChild(elDivData)
+        this.divData = elDivData
+    }
+
+    show() {
+        this.div.hidden = false
+        this.div.style.visibility = "visible"
+    }
+
+    clear() {
+        this.divRole.replaceChildren()
+        this.divData.replaceChildren()
+        this.div.hidden = true
+        this.div.style.visibility = "collapse"
+    }
+
+}
 
 /** @typedef {Object<string, ELDivStream>} ELDivStreams */
 
@@ -890,8 +923,9 @@ class SimpleChat {
         if (!resp.body) {
             throw Error("ERRR:SimpleChat:SC:HandleResponseMultiPart:No body...");
         }
-        let elDiv = elDivStreams[this.chatId];
-        elDiv.divStreamRole.innerText = `Ai:${this.chatId.slice(0,6)}`
+        let elDivStream = elDivStreams[this.chatId];
+        elDivStream.divRole.innerText = `Ai:${this.chatId.slice(0,6)}`
+        elDivStream.show()
         try {
             let tdUtf8 = new TextDecoder("utf-8");
             let rr = resp.body.getReader();
@@ -923,14 +957,14 @@ class SimpleChat {
                     console.debug("DBUG:SC:PART:Json:", curJson);
                     this.latestResponse.update_stream(curJson, apiEP);
                 }
-                elDiv.divStreamData.innerText = this.latestResponse.content_equiv()
-                elDiv.scrollIntoView(false);
+                elDivStream.divData.innerText = this.latestResponse.content_equiv()
+                elDivStream.div.scrollIntoView(false);
                 if (done) {
                     break;
                 }
             }
         } finally {
-            elDiv.divstream_clear()
+            elDivStream.clear()
         }
         console.debug("DBUG:SC:PART:Full:", this.latestResponse.content_equiv());
         return ChatMessageEx.newFrom(this.latestResponse);
@@ -962,7 +996,7 @@ class SimpleChat {
             if (this.handshakeProps.chatPropsStream) {
                 theResp = await this.handle_response_multipart(resp, apiEP, elDivStreams);
                 this.latestResponse.clear();
-                elDivStreams[this.chatId].divstream_clear();
+                elDivStreams[this.chatId].clear();
             } else {
                 theResp = await this.handle_response_oneshot(resp, apiEP);
             }
@@ -971,7 +1005,7 @@ class SimpleChat {
             theResp.ns.role = Roles.Assistant;
             this.add(theResp);
             this.latestResponse.clear();
-            elDivStreams[this.chatId].divstream_clear()
+            elDivStreams[this.chatId].clear()
             throw error;
         }
         if (this.me.chatProps.bTrimGarbage) {
@@ -1448,7 +1482,7 @@ class MultiChatUI {
         if (bClear) {
             this.elDivChat.replaceChildren();
             this.ui_userinput_reset()
-            this.elDivStreams[chatId]?.divstream_clear()
+            this.elDivStreams[chatId]?.clear()
         }
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
@@ -1461,7 +1495,7 @@ class MultiChatUI {
             }
             this.show_message(this.elDivChat, x, iFromLast, nextMsg)
         }
-        this.elDivChat.appendChild(this.elDivStreams[chatId])
+        this.elDivChat.appendChild(this.elDivStreams[chatId].div)
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         } else {
@@ -1520,10 +1554,10 @@ class MultiChatUI {
                 this.show_message(this.elDivChat, msg, (i-1), nextMsg)
             }
         }
-        if (!this.elDivChat.contains(this.elDivStreams[chatId])) {
-            console.log(`DBUG:SimpleChat:MCUI:UiRefresh:${chatId}: DivStream ${this.elDivStreams[chatId].id} missing...`)
+        if (!this.elDivChat.contains(this.elDivStreams[chatId].div)) {
+            console.log(`DBUG:SimpleChat:MCUI:UiRefresh:${chatId}: DivStream ${this.elDivStreams[chatId].div.id} missing...`)
         }
-        this.elDivChat.appendChild(this.elDivStreams[chatId])
+        this.elDivChat.appendChild(this.elDivStreams[chatId].div)
         if (this.elLastChatMessage != null) {
             this.scroll_el_into_view(this.elLastChatMessage)
         }
@@ -1691,29 +1725,7 @@ class MultiChatUI {
      */
     new_chat_session(chatId, bSwitchSession=false) {
         this.simpleChats[chatId] = new SimpleChat(chatId, this.me);
-        /** @type {ELDivStream} */
-        // @ts-ignore
-        let elDiv = Object.assign(document.createElement('div'), {
-            id: `DivStream-${chatId}`,
-            className: 'chat-message',
-        });
-        let elDivRole = Object.assign(document.createElement('div'), {
-            id: 'divStreamRole',
-            className: 'chat-message-role',
-        });
-        elDiv.appendChild(elDivRole)
-        elDiv.divStreamRole = elDivRole
-        let elDivData = Object.assign(document.createElement('div'), {
-            id: 'divStreamData',
-            className: 'chat-message-content-live',
-        });
-        elDiv.appendChild(elDivData)
-        elDiv.divStreamData = elDivData
-        elDiv.divstream_clear = function() {
-            this.divStreamRole.replaceChildren()
-            this.divStreamData.replaceChildren()
-        }
-        this.elDivStreams[chatId] = elDiv;
+        this.elDivStreams[chatId] = new ELDivStream(chatId);
         if (bSwitchSession) {
             this.handle_session_switch(chatId);
         }
