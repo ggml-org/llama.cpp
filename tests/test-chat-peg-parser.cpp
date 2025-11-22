@@ -439,7 +439,11 @@ void test_command7_parser_compare(testing & t) {
     });
 
     // Run benchmarks
-    t.bench("legacy_parse_benchmark", [&]() {
+    t.bench("legacy_parse_benchmark complete", [&]() {
+        test_legacy(input, false, false);
+    });
+
+    t.bench("legacy_parse_benchmark incremental", [&]() {
         std::string in;
         for (auto i = 0u; i < tokens.size(); i++) {
             in += tokens[i];
@@ -452,11 +456,15 @@ void test_command7_parser_compare(testing & t) {
         }
     }, 20);
 
-    t.bench("current_parse_benchmark", [&]() {
+    t.bench("current_parse_benchmark complete", [&]() {
+        test_current(parser, input, false, false);
+    }, 100);
+
+    t.bench("current_parse_benchmark incremental", [&]() {
         std::string in;
         for (auto i = 0u; i < tokens.size(); i++) {
             in += tokens[i];
-            test_current(parser, input, i + 1 < tokens.size(), false);
+            test_current(parser, in, i + 1 < tokens.size(), false);
         }
     }, 20);
 }
