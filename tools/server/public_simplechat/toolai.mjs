@@ -91,7 +91,7 @@ let externalai_meta = {
  */
 function externalai_run(chatid, toolcallid, toolname, obj) {
     let sc = gMe.multiChat.simpleChats[mChatMagic.AI_TC_SESSIONNAME];
-
+    sc.clear()
     sc.add_system_anytime(obj['system_prompt'], 'TC:ExternalAI')
     sc.add(new mChatMagic.ChatMessageEx(new mChatMagic.NSChatMessage(mChatMagic.Roles.User, obj['user_message'])))
     sc.handle_chat_hs(gMe.baseURL, mChatMagic.ApiEP.Type.Chat, { chatPropsStream: gMe.chatProps.stream, toolsEnabled: false }, gMe.multiChat.elDivStreams).then((resp)=>{
