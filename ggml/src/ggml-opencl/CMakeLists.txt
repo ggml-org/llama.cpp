@@ -109,6 +109,7 @@ set(GGML_OPENCL_KERNELS
     softmax_4_f16
     softmax_f32
     softmax_f16
+    sqr
     sub
     sum_rows
     transpose
