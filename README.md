@@ -1,6 +1,6 @@
 # llama.cpp for aarch64
 
-In short, this repository is designed to make llama.cpp easily accessible for Android users, particularly those on Termux. It provides pre-compiled binaries, Deepseek-R1 1.5b Model, along with the source code and build files, saving you the hassle of navigating complex dependency hell and the expense of your valuable time.
+In short, this repository is designed to make llama.cpp easily accessible for Android users, particularly those on Termux. It provides pre-compiled binaries, Deepseek-R1 1.5b Model, along with the source code and build files, saving you the hassle of navigating complex dependency hell and the expense of your valuable time.Due to dependency hell, this repository does not support GPU or NPU acceleration yet.
 
 ![llamacppforaarch64](logo.png)
 
