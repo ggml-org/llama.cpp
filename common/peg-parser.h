@@ -31,6 +31,8 @@ class common_peg_parser {
     common_peg_parser(common_peg_parser_id id, common_peg_parser_builder & builder) : id_(id), builder_(builder) {}
 
     common_peg_parser & operator=(common_peg_parser const & other);
+    common_peg_parser & operator+=(common_peg_parser const & other);
+    common_peg_parser & operator|=(common_peg_parser const & other);
 
     operator common_peg_parser_id() const { return id_; }
     common_peg_parser_id id() const { return id_; }
@@ -333,12 +335,14 @@ class common_peg_parser_builder {
 
     // Matches a sequence of parsers in order, all must succeed.
     //   S -> A B C
+    common_peg_parser sequence() { return add(common_peg_sequence_parser{}); }
     common_peg_parser sequence(const std::vector<common_peg_parser_id> & parsers);
     common_peg_parser sequence(const std::vector<common_peg_parser> & parsers);
     common_peg_parser sequence(std::initializer_list<common_peg_parser> parsers);
 
     // Matches the first parser that succeeds from a list of alternatives.
     //   S -> A | B | C
+    common_peg_parser choice() { return add(common_peg_choice_parser{}); }
     common_peg_parser choice(const std::vector<common_peg_parser_id> & parsers);
     common_peg_parser choice(const std::vector<common_peg_parser> & parsers);
     common_peg_parser choice(std::initializer_list<common_peg_parser> parsers);

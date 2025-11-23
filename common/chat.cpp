@@ -1917,12 +1917,12 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
             "\n</parameter>\n</function>"
         }));
 
-        std::vector<common_peg_parser> tool_parsers;
+        auto tools = p.choice();
         foreach_function(params.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
             std::string fn_name = function.at("name");
 
-            std::vector<common_peg_parser> argument_parsers;
+            auto args = p.sequence();
             foreach_parameter(function, [&](const std::string & name, const json & schema, bool is_required) {
                 auto arg_value = p.eps();
                 if (schema.contains("type") && schema.at("type") == "string") {
@@ -1950,24 +1950,23 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
                 );
 
                 auto arg_rule = p.rule("tool-" + fn_name + "-arg-" + name, arg);
-                argument_parsers.push_back(p.repeat(arg_rule, (is_required ? 1 : 0), 1));
+                args += p.repeat(arg_rule, (is_required ? 1 : 0), 1);
             });
 
-            tool_parsers.push_back(p.rule("tool-" + fn_name,
+            tools |= p.rule("tool-" + fn_name,
                 p.tool_open("<function=" + p.tool_name(p.literal(fn_name)) + ">")
-                << p.sequence(argument_parsers)
-                << p.tool_close(p.literal("</function>"))
-            ));
+                << args
+                << p.tool_close(p.literal("</function>")));
         });
 
         auto tool_call = p.trigger_rule("tool-call",
             p.optional("<tool_call>" + p.space())
-            + p.choice(tool_parsers)
+            + tools
             + p.space()
             + "</tool_call>"
             // We have to handle parallel tool calls here because it is a trigger rule
             + (params.parallel_tool_calls ?
-                p.repeat(p.space() + "<tool_call>" << p.choice(tool_parsers) << "</tool_call>", 0, -1) :
+                p.repeat(p.space() + "<tool_call>" << tools << "</tool_call>", 0, -1) :
                 p.eps())
         );
 
