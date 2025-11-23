@@ -147,10 +147,14 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    auto * mem = llama_get_memory(ctx);
-
+    llama_memory_t mem = llama_get_memory(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    // note: the time for chat template initialization is not negligible:
     auto chat_templates = common_chat_templates_init(model, params.chat_template);
+
+    // start measuring performance timings from here
+    llama_perf_context_reset(ctx);
 
     LOG_INF("%s: llama threadpool init, n_threads = %d\n", __func__, (int) params.cpuparams.n_threads);
 

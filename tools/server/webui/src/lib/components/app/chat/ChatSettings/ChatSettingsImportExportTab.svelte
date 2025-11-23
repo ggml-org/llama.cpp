@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Download, Upload } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import ConversationSelectionDialog from './ConversationSelectionDialog.svelte';
+	import { DialogConversationSelection } from '$lib/components/app';
 	import { DatabaseStore } from '$lib/stores/database';
 	import type { ExportedConversations } from '$lib/types/database';
 	import { createMessageCountMap } from '$lib/utils/conversation-utils';
@@ -236,7 +236,7 @@
 	</div>
 </div>
 
-<ConversationSelectionDialog
+<DialogConversationSelection
 	conversations={availableConversations}
 	{messageCountMap}
 	mode="export"
@@ -245,7 +245,7 @@
 	onConfirm={handleExportConfirm}
 />
 
-<ConversationSelectionDialog
+<DialogConversationSelection
 	conversations={availableConversations}
 	{messageCountMap}
 	mode="import"
