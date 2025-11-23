@@ -476,11 +476,21 @@ inline static void ggml_vec_mad_f16(const int n, ggml_fp16_t * GGML_RESTRICT y, 
         }
 
     #elif defined(__riscv_v_intrinsic)
-        // todo: RVV impl
+    #if defined(__riscv_zvfh)
+        _Float16 hv = (_Float16)v;
+        for (int i = 0, avl; i < n; i += avl) {
+            avl = __riscv_vsetvl_e16m8(n - i);
+            vfloat16m8_t ax = __riscv_vle16_v_f16m8((const _Float16 *)&x[i], avl);
+            vfloat16m8_t ay = __riscv_vle16_v_f16m8((_Float16 *)&y[i], avl);
+            vfloat16m8_t ny = __riscv_vfmadd_vf_f16m8(ax, hv, ay, avl);
+            __riscv_vse16_v_f16m8((_Float16 *)&y[i], ny, avl);
+        }
+    #else
         // scalar
         for (int i = 0; i < n; ++i) {
             y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(y[i]) + GGML_CPU_FP16_TO_FP32(x[i])*v);
         }
+    #endif
     #else
         const int np = (n & ~(GGML_F16_STEP - 1));
 
