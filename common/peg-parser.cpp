@@ -1342,22 +1342,22 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return gbnf_excluding_pattern(p.delimiters);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (p.schema) {
-                    auto type = p.schema->value("type","object");
-                    if (p.raw && type == "string") {
-                        if (p.schema->contains("pattern")) {
+                    // TODO: Handle anyOf that could contain raw strings and JSON. For now we only
+                    // handle raw strings to cover most cases and require JSON for the more
+                    // sophisticated schemas.
+                    if (p.raw && p.schema->contains("type") && p.schema->at("type").is_string() && p.schema->at("type") == "string") {
+                        if (p.schema->contains("pattern") && p.schema->at("pattern").is_string()) {
                             // heuristic:
                             // if .* is in the user's provided pattern, use the child's GBNF grammar.
                             // This is because .* will greedily match everything, past any delimiters.
-                            auto pattern = p.schema->value("pattern", "^.*$");
+                            std::string pattern = p.schema->at("pattern");
                             if (pattern.find(".*") != std::string::npos) {
                                 return to_gbnf(p.child);
                             }
                         } else if (p.schema->contains("enum") ||
                                    p.schema->contains("const") ||
                                    p.schema->contains("minLength") ||
-                                   p.schema->contains("maxLength") ||
-                                   p.schema->contains("allOf") ||
-                                   p.schema->contains("anyOf")) {
+                                   p.schema->contains("maxLength")) {
                             return builder.add_string_schema(p.name, *p.schema);
                         }
                         return to_gbnf(p.child);

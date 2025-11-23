@@ -1925,7 +1925,7 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
             auto args = p.sequence();
             foreach_parameter(function, [&](const std::string & name, const json & schema, bool is_required) {
                 auto arg_value = p.eps();
-                if (schema.contains("type") && schema.at("type") == "string") {
+                if (schema.contains("type") && schema.at("type").is_string() && schema.at("type") == "string") {
                     arg_value = p.tool_arg_string_value(p.schema(
                         until_end_of_param,
                         /* name   = */ "tool-" + fn_name + "-arg-" + name + "-schema",
@@ -3624,6 +3624,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std
     }
 
     common_chat_msg msg;
+    msg.role = "assistant";
+
     if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
         auto mapper = common_chat_peg_native_mapper(msg);
         mapper.from_ast(ctx.ast, result);
