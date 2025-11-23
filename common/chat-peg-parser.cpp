@@ -18,11 +18,8 @@ void common_chat_peg_mapper::from_ast(const common_peg_ast_arena & arena, const 
 }
 
 void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
-    bool is_reasoning_block = node.tag == common_chat_peg_builder::REASONING_BLOCK;
     bool is_reasoning = node.tag == common_chat_peg_builder::REASONING;
     bool is_content = node.tag == common_chat_peg_builder::CONTENT;
-
-    // TODO: Handle reasoning_format
 
     if (is_reasoning) {
         result.reasoning_content = std::string(trim_trailing_space(node.text));
