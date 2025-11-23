@@ -885,10 +885,13 @@ Cleanup in general
       * ensures that the available list of tool calls match the config of the chat session involved.
         Needed as user could change tools related proxy server url.
     * next setup the main ui as needed.
+  * Hide user-input area and tool call validate/trigger area when switching into settings and ensure they
+    get unhidden when returning back, as needed.
+  * Save and restore ChatSession config entries, as needed, in localStorage.
+    * load previously saved config if any, when creating ChatSession
+    * when ever switching, including into a, ChatSession, Configs of all chat sessions are saved.
   * TODO
-    * Need to save and restore ChatSession config entries.
     * Need to allow any changes to proxyUrl to trigger a new tool manager setup wrt that chat session.
-    * Need to hide user-input area and tool call validate/trigger area when switching into settings
 
 
 #### ToDo
