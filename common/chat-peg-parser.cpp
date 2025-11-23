@@ -4,6 +4,13 @@
 
 using json = nlohmann::json;
 
+static std::string_view trim_trailing_space(std::string_view sv) {
+    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back()))) {
+        sv.remove_suffix(1);
+    }
+    return sv;
+}
+
 void common_chat_peg_mapper::from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) {
     arena.visit(result, [this](const common_peg_ast_node & node) {
         map(node);
@@ -15,16 +22,14 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     bool is_reasoning = node.tag == common_chat_peg_builder::REASONING;
     bool is_content = node.tag == common_chat_peg_builder::CONTENT;
 
-    if (is_reasoning_block) {
-        result.reasoning_content = std::string(node.text);
-    }
+    // TODO: Handle reasoning_format
 
     if (is_reasoning) {
-        result.reasoning_content = std::string(node.text);
+        result.reasoning_content = std::string(trim_trailing_space(node.text));
     }
 
     if (is_content) {
-        result.content = std::string(node.text);
+        result.content = std::string(trim_trailing_space(node.text));
     }
 }
 

@@ -26,12 +26,6 @@ const char * common_peg_parse_result_type_name(common_peg_parse_result_type type
     }
 }
 
-// We define our own space function because MSVC's std::isspace()
-// crashes for non-printable characters in Debug builds.
-static bool is_space(const char c) {
-    return (c == ' ' || c == '\t' || c == '\n');
-}
-
 static bool is_hex_digit(const char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
@@ -463,8 +457,8 @@ struct parser_executor {
     common_peg_parse_result operator()(const common_peg_space_parser & /* p */) {
         auto pos = start_pos;
         while (pos < ctx.input.size()) {
-            char c = ctx.input[pos];
-            if (is_space(c)) {
+            auto c = static_cast<unsigned char>(ctx.input[pos]);
+            if (std::isspace(c)) {
                 ++pos;
             } else {
                 break;
