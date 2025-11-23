@@ -1058,40 +1058,36 @@ common_peg_arena common_peg_parser_builder::build() {
 
 // JSON parsers
 common_peg_parser common_peg_parser_builder::json_number() {
-    std::function<common_peg_parser()> builder = [this]() {
+   return rule("json-number", [this]() {
         auto digit1_9 = chars("[1-9]", 1, 1);
         auto digits = chars("[0-9]");
         auto int_part = choice({literal("0"), sequence({digit1_9, chars("[0-9]", 0, -1)})});
         auto frac = sequence({literal("."), digits});
         auto exp = sequence({choice({literal("e"), literal("E")}), optional(chars("[+-]", 1, 1)), digits});
         return sequence({optional(literal("-")), int_part, optional(frac), optional(exp)});
-    };
-    return rule("json-number", builder);
+    });
 }
 
 common_peg_parser common_peg_parser_builder::json_string() {
-    std::function<common_peg_parser()> builder = [this]() {
+    return rule("json-string", [this]() {
         return sequence({literal("\""), json_string_content(), literal("\"")});
-    };
-    return rule("json-string", builder);
+    });
 }
 
 common_peg_parser common_peg_parser_builder::json_bool() {
-    std::function<common_peg_parser()> builder = [this]() {
+    return rule("json-bool", [this]() {
         return choice({literal("true"), literal("false")});
-    };
-    return rule("json-bool", builder);
+    });
 }
 
 common_peg_parser common_peg_parser_builder::json_null() {
-    std::function<common_peg_parser()> builder = [this]() {
+    return rule("json-null", [this]() {
         return literal("null");
-    };
-    return rule("json-null", builder);
+    });
 }
 
 common_peg_parser common_peg_parser_builder::json_object() {
-    std::function<common_peg_parser()> builder = [this]() {
+    return rule("json-object", [this]() {
         auto ws = space();
         auto member = sequence({json_string(), ws, literal(":"), ws, json()});
         auto members = sequence({member, zero_or_more(sequence({ws, literal(","), ws, member}))});
@@ -1099,24 +1095,22 @@ common_peg_parser common_peg_parser_builder::json_object() {
             sequence({literal("{"), ws, literal("}")}),
             sequence({literal("{"), ws, members, ws, literal("}")})
         });
-    };
-    return rule("json-object", builder);
+    });
 }
 
 common_peg_parser common_peg_parser_builder::json_array() {
-    std::function<common_peg_parser()> builder = [this]() {
+    return rule("json-array", [this]() {
         auto ws = space();
         auto elements = sequence({json(), zero_or_more(sequence({ws, literal(","), ws, json()}))});
         return choice({
             sequence({literal("["), ws, literal("]")}),
             sequence({literal("["), ws, elements, ws, literal("]")})
         });
-    };
-    return rule("json-array", builder);
+    });
 }
 
 common_peg_parser common_peg_parser_builder::json() {
-    std::function<common_peg_parser()> builder = [this]() {
+    return rule("json-value", [this]() {
         return choice({
             json_object(),
             json_array(),
@@ -1125,8 +1119,7 @@ common_peg_parser common_peg_parser_builder::json() {
             json_bool(),
             json_null()
         });
-    };
-    return rule("json-value", builder);
+    });
 }
 
 
