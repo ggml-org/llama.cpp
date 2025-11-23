@@ -31,7 +31,7 @@ void test_gbnf_generation(testing &t) {
 
     t.test("char class grammar", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
-            return p.one("[a-z]");
+            return p.chars("[a-z]", 1, 1);
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -76,7 +76,7 @@ void test_gbnf_generation(testing &t) {
 
     t.test("one_or_more grammar", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
-            return p.one_or_more(p.one("[0-9]"));
+            return p.one_or_more(p.literal("a"));
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -84,14 +84,14 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            root ::= [0-9]+
+            root ::= "a"+
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
 
     t.test("zero_or_more grammar", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
-            return p.zero_or_more(p.one("[a-z]"));
+            return p.zero_or_more(p.literal("a"));
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -99,7 +99,7 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            root ::= [a-z]*
+            root ::= "a"*
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
     });
@@ -151,7 +151,7 @@ void test_gbnf_generation(testing &t) {
 
     t.test("rule references", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
-            auto digit = p.rule("digit", p.one("[0-9]"));
+            auto digit = p.rule("digit", p.chars("[0-9]", 1, 1));
             return p.one_or_more(digit);
         });
 

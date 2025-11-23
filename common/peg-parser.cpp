@@ -866,46 +866,51 @@ std::string common_peg_arena::dump(common_peg_parser_id id) const {
 }
 
 // Parser wrapper operator implementations
+common_peg_parser & common_peg_parser::operator=(common_peg_parser const & other) {
+    id_ = other.id_;
+    return *this;
+}
+
 common_peg_parser common_peg_parser::operator+(const common_peg_parser & other) const {
-    return builder_->sequence({id_, other.id_});
+    return builder_.sequence({id_, other.id_});
 }
 
 common_peg_parser common_peg_parser::operator|(const common_peg_parser & other) const {
-    return builder_->choice({id_, other.id_});
+    return builder_.choice({id_, other.id_});
 }
 
 common_peg_parser common_peg_parser::operator<<(const common_peg_parser & other) const {
-    return builder_->sequence({id_, builder_->space(), other.id_});
+    return builder_.sequence({id_, builder_.space(), other.id_});
 }
 
 // String literal overloads
 common_peg_parser common_peg_parser::operator+(const char * str) const {
-    return *this + builder_->literal(str);
+    return *this + builder_.literal(str);
 }
 
 common_peg_parser common_peg_parser::operator+(const std::string & str) const {
-    return *this + builder_->literal(str);
-}
-
-common_peg_parser common_peg_parser::operator|(const char * str) const {
-    return *this | builder_->literal(str);
-}
-
-common_peg_parser common_peg_parser::operator|(const std::string & str) const {
-    return *this | builder_->literal(str);
+    return *this + builder_.literal(str);
 }
 
 common_peg_parser common_peg_parser::operator<<(const char * str) const {
-    return *this << builder_->literal(str);
+    return *this << builder_.literal(str);
 }
 
 common_peg_parser common_peg_parser::operator<<(const std::string & str) const {
-    return *this << builder_->literal(str);
+    return *this << builder_.literal(str);
+}
+
+common_peg_parser common_peg_parser::operator|(const char * str) const {
+    return *this | builder_.literal(str);
+}
+
+common_peg_parser common_peg_parser::operator|(const std::string & str) const {
+    return *this | builder_.literal(str);
 }
 
 // Free function operators for string + parser
 common_peg_parser operator+(const char * str, const common_peg_parser & p) {
-    return p.builder()->literal(str) + p;
+    return p.builder().literal(str) + p;
 }
 
 common_peg_parser operator+(const std::string & str, const common_peg_parser & p) {
@@ -913,11 +918,19 @@ common_peg_parser operator+(const std::string & str, const common_peg_parser & p
 }
 
 common_peg_parser operator<<(const char * str, const common_peg_parser & p) {
-    return p.builder()->literal(str) << p;
+    return p.builder().literal(str) << p;
 }
 
 common_peg_parser operator<<(const std::string & str, const common_peg_parser & p) {
     return operator<<(str.c_str(), p);
+}
+
+common_peg_parser operator|(const char * str, const common_peg_parser & p) {
+    return p.builder().literal(str) | p;
+}
+
+common_peg_parser operator|(const std::string & str, const common_peg_parser & p) {
+    return operator|(str.c_str(), p);
 }
 
 // Rule name helper, intended to produce valid GBNF rule names

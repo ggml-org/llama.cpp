@@ -1,10 +1,10 @@
 #include "tests.h"
 
 void test_basic(testing & t) {
-    t.test("one", [](testing & t) {
+    t.test("chars", [](testing & t) {
         // Test common escape sequences - newline
         t.test("escape_sequence_newline", [](testing &t) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("[\\n\\t\\\\]"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -16,7 +16,7 @@ void test_basic(testing & t) {
 
         // Test common escape sequences - tab
         t.test("escape_sequence_tab", [](testing &t) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("[\\n\\t\\\\]"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -28,7 +28,7 @@ void test_basic(testing & t) {
 
         // Test common escape sequences - backslash
         t.test("escape_sequence_backslash", [](testing &t) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("[\\n\\t\\\\]"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -40,7 +40,7 @@ void test_basic(testing & t) {
 
         // Test common escape sequences - space (should ())
         t.test("escape_sequence_space_fail", [](testing &t) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("[\\n\\t\\\\]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("[\\n\\t\\\\]"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -52,7 +52,7 @@ void test_basic(testing & t) {
 
         // Test escaped dash - 'a' should succeed
         t.test("escaped_dash_a", [](testing &t) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("[a\\-z]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("[a\\-z]"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -64,7 +64,7 @@ void test_basic(testing & t) {
 
         // Test escaped dash - '-' should succeed (literal dash)
         t.test("escaped_dash_literal", [](testing &t) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("[a\\-z]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("[a\\-z]"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -76,7 +76,7 @@ void test_basic(testing & t) {
 
         // Test escaped dash - 'z' should succeed
         t.test("escaped_dash_z", [](testing &t) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("[a\\-z]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("[a\\-z]"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -88,7 +88,7 @@ void test_basic(testing & t) {
 
         // Test escaped dash - 'b' should NOT match (since \- is literal dash, not range)
         t.test("escaped_dash_b_fail", [](testing &t) {
-            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("[a\\-z]"); });
+            auto common_chat_combinator_parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("[a\\-z]"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -152,7 +152,7 @@ void test_basic(testing & t) {
 
         // Char Classes - Basic Lowercase Success
         t.test("char_class_lowercase_success", [&](testing & t) {
-            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("a-z"); });
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("a-z"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -164,7 +164,7 @@ void test_basic(testing & t) {
 
         // Char Classes - Uppercase Fail
         t.test("char_class_uppercase_fail", [&](testing & t) {
-            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("a-z"); });
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("a-z"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -176,7 +176,7 @@ void test_basic(testing & t) {
 
         // Char Classes with Dash - Lowercase Success
         t.test("char_class_with_dash_lowercase", [&](testing & t) {
-            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("a-z-"); });
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("a-z-"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -188,7 +188,7 @@ void test_basic(testing & t) {
 
         // Char Classes with Dash - Literal Dash Success
         t.test("char_class_with_dash_literal_dash", [&](testing & t) {
-            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("a-z-"); });
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("a-z-"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -200,7 +200,7 @@ void test_basic(testing & t) {
 
         // Char Classes with Dash - Uppercase Fail
         t.test("char_class_with_dash_uppercase_fail", [&](testing & t) {
-            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.one("a-z-"); });
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) { return p.chars("a-z-"); });
 
             common_peg_parse_context ctx;
             common_peg_parse_result  result;
@@ -370,7 +370,7 @@ void test_basic(testing & t) {
         // Test simple number
         t.test("simple_number", [](testing &t) {
             auto value_parser = build_peg_parser([](common_peg_parser_builder & p) {
-                p.rule("number", p.one_or_more(p.one("0-9")));
+                p.rule("number", p.chars("0-9"));
                 p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
@@ -384,7 +384,7 @@ void test_basic(testing & t) {
         // Test simple list
         t.test("simple_list", [](testing &t) {
             auto value_parser = build_peg_parser([](common_peg_parser_builder & p) {
-                p.rule("number", p.one_or_more(p.one("0-9")));
+                p.rule("number", p.chars("0-9"));
                 p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
@@ -398,7 +398,7 @@ void test_basic(testing & t) {
         // Test nested list
         t.test("nested_list", [](testing &t) {
             auto value_parser = build_peg_parser([](common_peg_parser_builder & p) {
-                p.rule("number", p.one_or_more(p.one("0-9")));
+                p.rule("number", p.chars("0-9"));
                 p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
@@ -412,7 +412,7 @@ void test_basic(testing & t) {
         // Test deeply nested list
         t.test("deeply_nested_list", [](testing &t) {
             auto value_parser = build_peg_parser([](common_peg_parser_builder & p) {
-                p.rule("number", p.one_or_more(p.one("0-9")));
+                p.rule("number", p.chars("0-9"));
                 p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
@@ -426,7 +426,7 @@ void test_basic(testing & t) {
         // Test need_more_input match
         t.test("need_more_input_match", [](testing &t) {
             auto value_parser = build_peg_parser([](common_peg_parser_builder & p) {
-                p.rule("number", p.one_or_more(p.one("0-9")));
+                p.rule("number", p.chars("0-9"));
                 p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });
@@ -440,7 +440,7 @@ void test_basic(testing & t) {
         // Test no match
         t.test("no_match", [](testing &t) {
             auto value_parser = build_peg_parser([](common_peg_parser_builder & p) {
-                p.rule("number", p.one_or_more(p.one("0-9")));
+                p.rule("number", p.chars("0-9"));
                 p.rule("list", p.literal("[") + p.ref("value") + p.literal("]"));
                 return p.rule("value", p.ref("number") | p.ref("list"));
             });

@@ -14,54 +14,52 @@
 
 struct common_grammar_builder;
 
-// Forward declarations
+class common_peg_parser_builder;
+
 using common_peg_parser_id = size_t;
 constexpr common_peg_parser_id COMMON_PEG_INVALID_PARSER_ID = static_cast<common_peg_parser_id>(-1);
 
 using common_peg_ast_id = size_t;
 constexpr common_peg_ast_id COMMON_PEG_INVALID_AST_ID = static_cast<common_peg_ast_id>(-1);
 
-// Forward declare builder for parser wrapper
-class common_peg_parser_builder;
-
-// Lightweight wrapper around common_peg_parser_id that enables operator overloading
-// and implicit conversions from strings/literals
+// Lightweight wrapper around common_peg_parser_id for convenience
 class common_peg_parser {
     common_peg_parser_id id_;
-    common_peg_parser_builder * builder_;
+    common_peg_parser_builder & builder_;
 
   public:
-    // Construct from common_peg_parser_id
-    common_peg_parser(common_peg_parser_id id, common_peg_parser_builder * builder) : id_(id), builder_(builder) {}
+    common_peg_parser(common_peg_parser_id id, common_peg_parser_builder & builder) : id_(id), builder_(builder) {}
 
-    // Implicit conversion to common_peg_parser_id
+    common_peg_parser & operator=(common_peg_parser const & other);
+
     operator common_peg_parser_id() const { return id_; }
-
-    // Get the underlying ID
     common_peg_parser_id id() const { return id_; }
 
-    // Get builder (for free function operators)
-    common_peg_parser_builder * builder() const { return builder_; }
+    common_peg_parser_builder & builder() const { return builder_; }
 
-    // Operator overloads
+    // Creates a sequence
     common_peg_parser operator+(const common_peg_parser & other) const;
-    common_peg_parser operator|(const common_peg_parser & other) const;
-    common_peg_parser operator<<(const common_peg_parser & other) const;  // sequence with space
 
-    // Overloads for string literals
+    // Creates a sequence separated by spaces.
+    common_peg_parser operator<<(const common_peg_parser & other) const;
+
+    // Creates a choice
+    common_peg_parser operator|(const common_peg_parser & other) const;
+
     common_peg_parser operator+(const char * str) const;
     common_peg_parser operator+(const std::string & str) const;
-    common_peg_parser operator|(const char * str) const;
-    common_peg_parser operator|(const std::string & str) const;
     common_peg_parser operator<<(const char * str) const;
     common_peg_parser operator<<(const std::string & str) const;
+    common_peg_parser operator|(const char * str) const;
+    common_peg_parser operator|(const std::string & str) const;
 };
 
-// Free function operators for string + parser
 common_peg_parser operator+(const char * str, const common_peg_parser & p);
 common_peg_parser operator+(const std::string & str, const common_peg_parser & p);
 common_peg_parser operator<<(const char * str, const common_peg_parser & p);
 common_peg_parser operator<<(const std::string & str, const common_peg_parser & p);
+common_peg_parser operator|(const char * str, const common_peg_parser & p);
+common_peg_parser operator|(const std::string & str, const common_peg_parser & p);
 
 enum common_peg_parse_result_type {
     COMMON_PEG_PARSE_RESULT_FAIL            = 0,
@@ -73,7 +71,7 @@ const char * common_peg_parse_result_type_name(common_peg_parse_result_type type
 
 struct common_peg_ast_node {
     common_peg_ast_id id;
-    std::string rule_name;
+    std::string rule;
     std::string tag;
     size_t start;
     size_t end;
@@ -91,7 +89,7 @@ class common_peg_ast_arena {
     std::vector<common_peg_ast_node> nodes_;
   public:
     common_peg_ast_id add_node(
-        const std::string & rule_name,
+        const std::string & rule,
         const std::string & tag,
         size_t start,
         size_t end,
@@ -100,7 +98,7 @@ class common_peg_ast_arena {
         bool is_partial = false
     ) {
         common_peg_ast_id id = nodes_.size();
-        nodes_.push_back({id, rule_name, tag, start, end, text, std::move(children), is_partial});
+        nodes_.push_back({id, rule, tag, start, end, text, std::move(children), is_partial});
         return id;
     }
 
@@ -121,7 +119,7 @@ struct common_peg_parse_result {
 
     std::vector<common_peg_ast_id> nodes;
 
-    common_peg_parse_result() : type(COMMON_PEG_PARSE_RESULT_FAIL) {}
+    common_peg_parse_result() = default;
 
     common_peg_parse_result(common_peg_parse_result_type type, size_t start)
         : type(type), start(start), end(start) {}
@@ -154,10 +152,9 @@ struct common_peg_parse_context {
         : input(input), input_is_complete(complete), parse_depth(0) {}
 };
 
-// Forward declaration
 class common_peg_arena;
 
-// Parser variant structs (value-based, no inheritance)
+// Parser variants
 struct common_peg_epsilon_parser {};
 
 struct common_peg_start_parser {};
@@ -218,6 +215,8 @@ struct common_peg_schema_parser {
     common_peg_parser_id child;
     std::string name;
     std::shared_ptr<nlohmann::ordered_json> schema;
+
+    // Indicates if the GBNF should accept a raw string that matches the schema.
     bool raw;
 };
 
@@ -263,7 +262,6 @@ using common_peg_parser_variant = std::variant<
     common_peg_tag_parser
 >;
 
-// Arena owns all parsers
 class common_peg_arena {
     std::vector<common_peg_parser_variant> parsers_;
     std::unordered_map<std::string, common_peg_parser_id> rules_;
@@ -272,42 +270,33 @@ class common_peg_arena {
   public:
     common_peg_arena();
 
-    // Access
     const common_peg_parser_variant & get(common_peg_parser_id id) const { return parsers_.at(id); }
     common_peg_parser_variant & get(common_peg_parser_id id) { return parsers_.at(id); }
 
     size_t size() const { return parsers_.size(); }
     bool empty() const { return parsers_.empty(); }
 
-    // Rule lookup
     common_peg_parser_id get_rule(const std::string & name) const;
     bool has_rule(const std::string & name) const { return rules_.find(name) != rules_.end(); }
 
-    // Root
     common_peg_parser_id root() const { return root_; }
     void set_root(common_peg_parser_id id) { root_ = id; }
 
-    // Parse
     common_peg_parse_result parse(common_peg_parse_context & ctx, size_t start = 0) const;
     common_peg_parse_result parse(common_peg_parser_id id, common_peg_parse_context & ctx, size_t start) const;
 
-    // Resolve all ref parsers to point directly to their corresponding rule parsers
     void resolve_refs();
 
-    // Grammar generation
     void build_grammar(const common_grammar_builder & builder, bool lazy = false) const;
 
-    // Dump for debugging
     std::string dump(common_peg_parser_id id) const;
 
-    // Serialization
     nlohmann::json to_json() const;
     static common_peg_arena from_json(const nlohmann::json & j);
 
     std::string serialize() const;
     static common_peg_arena deserialize(const std::string & data);
 
-    // Builder access (for adding parsers)
     friend class common_peg_parser_builder;
 
   private:
@@ -317,11 +306,10 @@ class common_peg_arena {
     common_peg_parser_id resolve_ref(common_peg_parser_id id);
 };
 
-// Builder for constructing parsers
 class common_peg_parser_builder {
     common_peg_arena arena_;
 
-    common_peg_parser wrap(common_peg_parser_id id) { return common_peg_parser(id, this); }
+    common_peg_parser wrap(common_peg_parser_id id) { return common_peg_parser(id, *this); }
     common_peg_parser add(const common_peg_parser_variant & p) { return wrap(arena_.add_parser(p)); }
 
   public:
@@ -385,12 +373,6 @@ class common_peg_parser_builder {
     // Use -1 for max to represent unbounded repetition (equivalent to {m,})
     common_peg_parser chars(const std::string & classes, int min = 1, int max = -1);
 
-    // Matches a single character from a character class or range.
-    //   S -> [a-z] or S -> [^0-9]
-    //
-    // Equivalent to chars(classes, 1, 1)
-    common_peg_parser one(const std::string & classes) { return chars(classes, 1, 1); }
-
     // Creates a lightweight reference to a named rule (resolved during build()).
     // Use this for forward references in recursive grammars.
     //   expr_ref -> expr
@@ -403,6 +385,9 @@ class common_peg_parser_builder {
     // Matches all characters until a delimiter is found (delimiter not consumed).
     //   S -> (!delim .)*
     common_peg_parser until(const std::string & delimiter) { return add(common_peg_until_parser{{delimiter}}); }
+
+    // Matches all characters until one of the delimiters in the list is found (delimiter not consumed).
+    //   S -> (!delim .)*
     common_peg_parser until_one_of(const std::vector<std::string> & delimiters) { return add(common_peg_until_parser{delimiters}); }
 
     // Matches everything
@@ -428,22 +413,20 @@ class common_peg_parser_builder {
     common_peg_parser json_bool();
     common_peg_parser json_null();
 
-    // Specialized single-pass JSON string parser with escape sequence handling
+    // Matches JSON string content without the surrounding quotes.
+    // Useful for extracting content within a JSON string.
     common_peg_parser json_string_content();
 
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
     common_peg_parser schema(common_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema, bool raw = false);
 
-    // Creates a named rule, stores it in the grammar, and returns a reference to it.
+    // Creates a named rule, stores it in the grammar, and returns a ref.
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
     //   auto json = p.rule("json", json_obj | json_arr | ...)
     common_peg_parser rule(const std::string & name, common_peg_parser p, bool trigger = false);
 
-    // Creates a named rule using a builder function. This handles recursive grammars by
-    // inserting a placeholder rule before invoking the builder, allowing the
-    // builder to reference the rule being defined via ref(). Use this when the rule
-    // definition needs to call back to itself (directly or indirectly).
+    // Creates a named rule using a builder function, and returns a ref.
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
     //   auto json = p.rule("json", [&]() { return json_object() | json_array() | ... })
     common_peg_parser rule(const std::string & name, const std::function<common_peg_parser()> & builder, bool trigger = false);
