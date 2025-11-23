@@ -129,8 +129,7 @@ let tc_switch = {
 
 
 /**
- * Used to get hold of the web worker to use for running tool/function call related code
- * Also to setup tool calls, which need to cross check things at runtime
+ * Used to get hold of the web worker to use for running tool/function call related code.
  * @param {mChatMagic.Me} me
  */
 export async function init(me) {
@@ -139,6 +138,10 @@ export async function init(me) {
 
 
 /**
+ * Return the tool call switch with supported / enabled / available tool calls
+ * Allows to verify / setup tool calls, which need to cross check things at runtime
+ * before getting allowed, like maybe bcas they depend on a config wrt specified
+ * chat session.
  * @param {string} chatId
  */
 export async function setup(chatId) {

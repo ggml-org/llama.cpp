@@ -44,7 +44,8 @@ export class ToolsManager {
 
     /**
      * Initialise the ToolsManager,
-     * including all the different tools groups.
+     * including all the different tools groups (ie tool call related modules).
+     * NOTE: Look into setup, for things which depend on chat session configs.
      * @param {mChatMagic.Me} me
      */
     async init(me) {
@@ -59,33 +60,42 @@ export class ToolsManager {
     }
 
     /**
+     * Allows tool call related modules to setup/update the tool call switch,
+     * with supported / enabled / available tool calls.
+     * Allows tool call related modules to verify / setup tool calls, which need one to
+     * cross check things at runtime before getting allowed, like maybe bcas they depend
+     * on a config wrt specified chat session.
      * @param {string} chatId
      */
     async setup(chatId) {
         this.tc_switchs[chatId] = {}
         let chat = this.me?.multiChat.simpleChats[chatId]
+        if (!chat) {
+            return
+        }
+        chat.cfg.tools.toolNames.length = 0
         await tjs.setup(chatId).then((tcs)=>{
             for (const key in tcs) {
                 this.tc_switchs[chatId][key] = tcs[key]
-                chat?.cfg.tools.toolNames.push(key)
+                chat.cfg.tools.toolNames.push(key)
             }
         })
         await tdb.setup(chatId).then((tcs)=>{
             for (const key in tcs) {
                 this.tc_switchs[chatId][key] = tcs[key]
-                chat?.cfg.tools.toolNames.push(key)
+                chat.cfg.tools.toolNames.push(key)
             }
         })
         await tai.setup(chatId).then((tcs)=>{
             for (const key in tcs) {
                 this.tc_switchs[chatId][key] = tcs[key]
-                chat?.cfg.tools.toolNames.push(key)
+                chat.cfg.tools.toolNames.push(key)
             }
         })
         await tweb.setup(chatId).then((tcs)=>{
             for (const key in tcs) {
                 this.tc_switchs[chatId][key] = tcs[key]
-                chat?.cfg.tools.toolNames.push(key)
+                chat.cfg.tools.toolNames.push(key)
             }
         })
     }

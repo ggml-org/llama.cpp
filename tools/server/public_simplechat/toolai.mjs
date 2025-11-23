@@ -117,10 +117,9 @@ let tc_switch = {
 
 
 /**
- * Used to get hold of the
+ * Helps to get hold of the below, when needed later
  * * needed Ai SimpleChat instance
  * * the web worker path to use for returning result of tool call
- * Also to setup tool calls, which need to cross check things at runtime
  * @param {mChatMagic.Me} me
  */
 export async function init(me) {
@@ -129,6 +128,10 @@ export async function init(me) {
 
 
 /**
+ * Return the tool call switch with supported / enabled / available tool calls
+ * Allows to verify / setup tool calls, which need to cross check things at runtime
+ * before getting allowed, like maybe bcas they depend on a config wrt specified
+ * chat session.
  * @param {string} chatId
  */
 export async function setup(chatId) {
