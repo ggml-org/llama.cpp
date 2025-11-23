@@ -5618,7 +5618,7 @@ static vk_subbuffer ggml_vk_tensor_subbuffer(
     const ggml_backend_vk_context * ctx, const ggml_tensor * tensor, bool allow_misalign = false) {
 
     vk_buffer buffer = nullptr;
-    size_t offset = 0;
+    uint64_t offset = 0;
     if (ctx->device->uma) {
         ggml_vk_host_get(ctx->device, tensor->data, buffer, offset);
     }
@@ -5629,9 +5629,9 @@ static vk_subbuffer ggml_vk_tensor_subbuffer(
     }
     GGML_ASSERT(buffer != nullptr);
 
-    size_t size = ggml_nbytes(tensor);
+    uint64_t size = ggml_nbytes(tensor);
 
-    size_t misalign_bytes = offset & (ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1);
+    uint64_t misalign_bytes = offset & (ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1);
     // The shader must support misaligned offsets when indexing into the buffer
     GGML_ASSERT(allow_misalign || misalign_bytes == 0);
     offset &= ~misalign_bytes;
@@ -6895,13 +6895,13 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     vk_subbuffer d_X, d_Y;
 
     if (qx_needs_dequant) {
-        d_X = { ctx->prealloc_x, 0, ctx->prealloc_x->size };
+        d_X = { ctx->prealloc_x, 0, x_sz };
     } else {
         d_X = d_Qx;
         GGML_ASSERT(qx_sz == x_sz);
     }
     if (qy_needs_dequant || quantize_y) {
-        d_Y = { ctx->prealloc_y, 0, ctx->prealloc_y->size };
+        d_Y = { ctx->prealloc_y, 0, y_sz };
     } else {
         d_Y = d_Qy;
     }
@@ -7602,12 +7602,12 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     vk_subbuffer d_X, d_Y;
 
     if (qx_needs_dequant) {
-        d_X = { ctx->prealloc_x, 0, ctx->prealloc_x->size };
+        d_X = { ctx->prealloc_x, 0, x_sz };
     } else {
         d_X = d_Qx;
     }
     if (qy_needs_dequant) {
-        d_Y = { ctx->prealloc_y, 0, ctx->prealloc_y->size };
+        d_Y = { ctx->prealloc_y, 0, y_sz };
     } else {
         d_Y = d_Qy;
     }
