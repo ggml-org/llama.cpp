@@ -314,6 +314,7 @@ export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sL
     let elFS = document.createElement("fieldset");
     if (propsTreeRoot == "") {
         elFS.id = `ObjPropsEdit-${sLegend.replaceAll(' ', '')}`
+        elFS.classList.add('ObjPropsEdit')
     }
     let elLegend = document.createElement("legend");
     elLegend.innerText = sLegend;

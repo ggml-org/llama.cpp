@@ -246,11 +246,11 @@ button {
 [class^=SectionObjPropsInfoL] {
     margin-left: 2vmin;
 }
-#ObjPropsEdit-Settings * {
+.ObjPropsEdit * {
     border-radius: 0.2rem;
     padding-inline: 0.5rem;
 }
-#ObjPropsEdit-Settings button, #ObjPropsEdit-Settings select, #ObjPropsEdit-Settings input {
+.ObjPropsEdit button, .ObjPropsEdit select, .ObjPropsEdit input {
     border-radius: 0.2rem;
     padding-inline: 0.5rem;
     min-height: 2vmin;
