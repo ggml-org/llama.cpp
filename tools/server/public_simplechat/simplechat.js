@@ -1238,21 +1238,23 @@ class MultiChatUI {
     }
 
     /**
-     * Reset/Setup Tool Call UI parts as needed
+     * Setup/Reset Validated Tool Call UI parts as needed
      * @param {ChatMessageEx} ar
+     * @param {string} chatId
      * @param {boolean} bAuto - allows caller to explicitly control whether auto triggering should be setup.
      */
-    ui_reset_toolcall_as_needed(ar, bAuto = false) {
+    ui_toolcallvalidated_as_needed(ar, chatId = "", bAuto = false) {
         if (ar.ns.has_toolcalls()) {
             this.elDivTool.hidden = false
             this.elInToolName.value = ar.ns.getFuncName(0)
             this.elInToolName.dataset.tool_call_id = ar.ns.getFunc(0)?.id
             this.elInToolArgs.value = `${ar.ns.getFunc(0)?.function.arguments}`
             this.elBtnTool.disabled = false
-            if ((this.me.tools.autoSecs > 0) && (bAuto)) {
+            let chat = this.simpleChats[chatId]
+            if ((chat) && (chat.cfg.tools.autoSecs > 0) && (bAuto)) {
                 this.timers.toolcallTriggerClick = setTimeout(()=>{
                     this.elBtnTool.click()
-                }, this.me.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
+                }, chat.cfg.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
             }
         } else {
             this.elDivTool.hidden = true
@@ -1363,11 +1365,12 @@ class MultiChatUI {
      *   * if it is the last message OR
      *   * if it is the last but one message and there is a ToolTemp message next
      * @param {HTMLElement | undefined} elParent
+     * @param {string} chatId
      * @param {ChatMessageEx} msg
      * @param {number} iFromLast
      * @param {ChatMessageEx | undefined} nextMsg
      */
-    show_message(elParent, msg, iFromLast, nextMsg) {
+    show_message(elParent, chatId, msg, iFromLast, nextMsg) {
         // Handle ToolTemp
         if (iFromLast == 0) {
             if (msg.ns.role === Roles.ToolTemp) {
@@ -1457,7 +1460,7 @@ class MultiChatUI {
                 }
             }
             if (bTC) {
-                this.ui_reset_toolcall_as_needed(msg, bAuto);
+                this.ui_toolcallvalidated_as_needed(msg, chatId, bAuto);
             }
         }
         // Handle tool call message show
@@ -1495,7 +1498,7 @@ class MultiChatUI {
             this.ui_userinput_reset()
             this.elDivStreams[chatId]?.clear()
         }
-        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
+        this.ui_toolcallvalidated_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
         let chatToShow = chat.recent_chat(chat.cfg.chatProps.iRecentUserMsgCnt);
         for(const [i, x] of chatToShow.entries()) {
@@ -1504,7 +1507,7 @@ class MultiChatUI {
             if (iFromLast == 1) {
                 nextMsg = chatToShow[i+1]
             }
-            this.show_message(this.elDivChat, x, iFromLast, nextMsg)
+            this.show_message(this.elDivChat, chat.chatId, x, iFromLast, nextMsg)
         }
         this.elDivChat.appendChild(this.elDivStreams[chatId].div)
         this.elDivChat.appendChild(this.elDivStreams[AI_TC_SESSIONNAME].div)
@@ -1557,13 +1560,13 @@ class MultiChatUI {
             return this.chat_show(chatId, true, true)
         }
         this.ui_userinput_reset(false)
-        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
+        this.ui_toolcallvalidated_as_needed(new ChatMessageEx());
         for(let i=lastN; i > 0; i-=1) {
             let msg = chat.xchat[chat.xchat.length-i]
             let nextMsg = chat.xchat[chat.xchat.length-(i-1)]
             if (msg) {
                 this.chatmsg_ui_remove(msg.uniqId)
-                this.show_message(this.elDivChat, msg, (i-1), nextMsg)
+                this.show_message(this.elDivChat, chat.chatId, msg, (i-1), nextMsg)
             }
         }
         if (!this.elDivChat.contains(this.elDivStreams[chatId].div)) {
@@ -1625,7 +1628,7 @@ class MultiChatUI {
             this.handle_session_switch(this.curChatId);
         }
 
-        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
+        this.ui_toolcallvalidated_as_needed(new ChatMessageEx());
 
         this.elBtnSettings.addEventListener("click", (ev)=>{
             this.elDivChat.replaceChildren();
@@ -1776,7 +1779,7 @@ class MultiChatUI {
             chat.clear();
         }
 
-        this.ui_reset_toolcall_as_needed(new ChatMessageEx());
+        this.ui_toolcallvalidated_as_needed(new ChatMessageEx());
 
         chat.add_system_anytime(this.elInSystem.value, chatId);
 
