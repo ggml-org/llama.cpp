@@ -3,7 +3,6 @@
 		Settings,
 		Funnel,
 		AlertTriangle,
-		Brain,
 		Code,
 		Monitor,
 		Sun,
@@ -59,6 +58,33 @@
 					type: 'input'
 				},
 				{
+					key: 'enableContinueGeneration',
+					label: 'Enable "Continue" button',
+					type: 'checkbox',
+					isExperimental: true
+				},
+				{
+					key: 'pdfAsImage',
+					label: 'Parse PDF as image',
+					type: 'checkbox'
+				},
+				{
+					key: 'askForTitleConfirmation',
+					label: 'Ask for confirmation before changing conversation title',
+					type: 'checkbox'
+				}
+			]
+		},
+		{
+			title: 'Display',
+			icon: Monitor,
+			fields: [
+				{
+					key: 'showThoughtInProgress',
+					label: 'Show thought in progress',
+					type: 'checkbox'
+				},
+				{
 					key: 'showMessageStats',
 					label: 'Show message generation statistics',
 					type: 'checkbox'
@@ -79,24 +105,13 @@
 					type: 'checkbox'
 				},
 				{
-					key: 'enableContinueGeneration',
-					label: 'Enable "Continue" button',
-					type: 'checkbox',
-					isExperimental: true
-				},
-				{
-					key: 'pdfAsImage',
-					label: 'Parse PDF as image',
+					key: 'disableAutoScroll',
+					label: 'Disable automatic scroll',
 					type: 'checkbox'
 				},
 				{
 					key: 'renderUserContentAsMarkdown',
 					label: 'Render user content as Markdown',
-					type: 'checkbox'
-				},
-				{
-					key: 'askForTitleConfirmation',
-					label: 'Ask for confirmation before changing conversation title',
 					type: 'checkbox'
 				}
 			]
@@ -205,17 +220,6 @@
 					key: 'dry_penalty_last_n',
 					label: 'DRY penalty last N',
 					type: 'input'
-				}
-			]
-		},
-		{
-			title: 'Reasoning',
-			icon: Brain,
-			fields: [
-				{
-					key: 'showThoughtInProgress',
-					label: 'Show thought in progress',
-					type: 'checkbox'
 				}
 			]
 		},
