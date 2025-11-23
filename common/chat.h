@@ -9,6 +9,8 @@
 #include <vector>
 #include <map>
 
+class common_peg_arena;
+
 struct common_chat_templates;
 
 struct common_chat_tool_call {
@@ -120,9 +122,13 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_GLM_4_5,
     COMMON_CHAT_FORMAT_MINIMAX_M2,
     COMMON_CHAT_FORMAT_KIMI_K2,
-    COMMON_CHAT_FORMAT_QWEN3_CODER_XML,
     COMMON_CHAT_FORMAT_APRIEL_1_5,
     COMMON_CHAT_FORMAT_XIAOMI_MIMO,
+
+    // These are intended to be parsed by the PEG parser
+    COMMON_CHAT_FORMAT_PEG_SIMPLE,
+    COMMON_CHAT_FORMAT_PEG_NATIVE,
+    COMMON_CHAT_FORMAT_PEG_CONSTRUCTED,
 
     COMMON_CHAT_FORMAT_COUNT, // Not a format, just the # formats
 };
@@ -154,6 +160,7 @@ struct common_chat_params {
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
+    std::string                         parser;
 };
 
 struct common_chat_syntax {
@@ -206,6 +213,7 @@ const char*               common_chat_format_name(common_chat_format format);
 const char*               common_reasoning_format_name(common_reasoning_format format);
 common_reasoning_format   common_reasoning_format_from_name(const std::string & format);
 common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+common_chat_msg           common_chat_peg_parse(const std::string & input, bool is_partial, const common_peg_arena & parser, const common_chat_syntax & syntax);
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
 

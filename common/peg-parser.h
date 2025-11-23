@@ -158,6 +158,8 @@ struct common_peg_parse_context {
 class common_peg_arena;
 
 // Parser variant structs (value-based, no inheritance)
+struct common_peg_epsilon_parser {};
+
 struct common_peg_start_parser {};
 
 struct common_peg_end_parser {};
@@ -245,6 +247,7 @@ struct common_peg_tag_parser {
 
 // Variant holding all parser types
 using common_peg_parser_variant = std::variant<
+    common_peg_epsilon_parser,
     common_peg_start_parser,
     common_peg_end_parser,
     common_peg_literal_parser,
@@ -280,6 +283,7 @@ class common_peg_arena {
     common_peg_parser_variant & get(common_peg_parser_id id) { return parsers_.at(id); }
 
     size_t size() const { return parsers_.size(); }
+    bool empty() const { return parsers_.empty(); }
 
     // Rule lookup
     common_peg_parser_id get_rule(const std::string & name) const;
@@ -325,6 +329,10 @@ class common_peg_parser_builder {
 
   public:
     common_peg_parser_builder();
+
+    // Match nothing, always succeed.
+    //   S -> ε
+    common_peg_parser eps() { return add(common_peg_epsilon_parser{}); }
 
     // Matches the start of the input.
     //   S -> ^
@@ -399,6 +407,10 @@ class common_peg_parser_builder {
     //   S -> (!delim .)*
     common_peg_parser until(const std::string & delimiter) { return add(common_peg_until_parser{{delimiter}}); }
     common_peg_parser until_one_of(const std::vector<std::string> & delimiters) { return add(common_peg_until_parser{delimiters}); }
+
+    // Matches everything
+    //   S -> .*
+    common_peg_parser rest() { return until_one_of({}); }
 
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}

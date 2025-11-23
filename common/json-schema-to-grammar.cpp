@@ -1012,9 +1012,9 @@ public:
             }
             // TODO: support minimum, maximum, exclusiveMinimum, exclusiveMaximum at least for zero
             if (is_raw) {
-                auto it = PRIMITIVE_RAW_RULES.find(schema_type.get<std::string>());
+                auto it = PRIMITIVE_RAW_RULES.find(schema_type.get<std::string>() + "-raw");
                 if (it != PRIMITIVE_RAW_RULES.end()) {
-                    return _add_primitive(rule_name == "root" ? "root" : schema_type.get<std::string>(), it->second);
+                    return _add_primitive(rule_name == "root" ? "root" : schema_type.get<std::string>() + "-raw", it->second);
                 }
             }
             return _add_primitive(rule_name == "root" ? "root" : schema_type.get<std::string>(), PRIMITIVE_RULES.at(schema_type.get<std::string>()));

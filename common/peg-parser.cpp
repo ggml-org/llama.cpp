@@ -298,6 +298,10 @@ struct parser_executor {
     parser_executor(const common_peg_arena & arena, common_peg_parse_context & ctx, size_t start)
         : arena(arena), ctx(ctx), start_pos(start) {}
 
+    common_peg_parse_result operator()(const common_peg_epsilon_parser & /* p */) const {
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos);
+    }
+
     common_peg_parse_result operator()(const common_peg_start_parser & /* p */) const {
         return common_peg_parse_result(
             start_pos == 0 ? COMMON_PEG_PARSE_RESULT_SUCCESS : COMMON_PEG_PARSE_RESULT_FAIL,
@@ -789,7 +793,8 @@ void common_peg_arena::resolve_refs() {
                 p.child = resolve_ref(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 p.child = resolve_ref(p.child);
-            } else if constexpr (std::is_same_v<T, common_peg_start_parser> ||
+            } else if constexpr (std::is_same_v<T, common_peg_epsilon_parser> ||
+                                 std::is_same_v<T, common_peg_start_parser> ||
                                  std::is_same_v<T, common_peg_end_parser> ||
                                  std::is_same_v<T, common_peg_ref_parser> ||
                                  std::is_same_v<T, common_peg_until_parser> ||
@@ -818,7 +823,9 @@ std::string common_peg_arena::dump(common_peg_parser_id id) const {
     return std::visit([this](const auto & p) -> std::string {
         using T = std::decay_t<decltype(p)>;
 
-        if constexpr (std::is_same_v<T, common_peg_start_parser>) {
+        if constexpr (std::is_same_v<T, common_peg_epsilon_parser>) {
+            return "Epsilon";
+        } else if constexpr (std::is_same_v<T, common_peg_start_parser>) {
             return "Start";
         } else if constexpr (std::is_same_v<T, common_peg_end_parser>) {
             return "End";
@@ -1184,7 +1191,8 @@ static std::unordered_set<std::string> collect_reachable_rules(
         std::visit([&](const auto & p) {
             using T = std::decay_t<decltype(p)>;
 
-            if constexpr (std::is_same_v<T, common_peg_start_parser> ||
+            if constexpr (std::is_same_v<T, common_peg_epsilon_parser> ||
+                          std::is_same_v<T, common_peg_start_parser> ||
                           std::is_same_v<T, common_peg_end_parser> ||
                           std::is_same_v<T, common_peg_until_parser> ||
                           std::is_same_v<T, common_peg_literal_parser> ||
@@ -1238,7 +1246,9 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
         return std::visit([&](const auto & p) -> std::string {
             using T = std::decay_t<decltype(p)>;
 
-            if constexpr (std::is_same_v<T, common_peg_start_parser> || std::is_same_v<T, common_peg_end_parser>) {
+            if constexpr (std::is_same_v<T, common_peg_epsilon_parser> ||
+                          std::is_same_v<T, common_peg_start_parser> ||
+                          std::is_same_v<T, common_peg_end_parser>) {
                 return "";
             } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
                 return gbnf_format_literal(p.literal);
@@ -1320,6 +1330,9 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             } else if constexpr (std::is_same_v<T, common_peg_json_string_parser>) {
                 return R"(( [^"\\] | "\\" ( ["\\/ bfnrt] | "u" [0-9a-fA-F]{4} ) )*)";
             } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
+                if (p.delimiters.empty()) {
+                    return ".*";
+                }
                 return gbnf_excluding_pattern(p.delimiters);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (p.schema) {
@@ -1333,8 +1346,15 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                             if (pattern.find(".*") != std::string::npos) {
                                 return to_gbnf(p.child);
                             }
+                        } else if (p.schema->contains("enum") ||
+                                   p.schema->contains("const") ||
+                                   p.schema->contains("minLength") ||
+                                   p.schema->contains("maxLength") ||
+                                   p.schema->contains("allOf") ||
+                                   p.schema->contains("anyOf")) {
+                            return builder.add_string_schema(p.name, *p.schema);
                         }
-                        return builder.add_string_schema(p.name, *p.schema);
+                        return to_gbnf(p.child);
                     }
                     return builder.add_schema(p.name, *p.schema);
                 }
@@ -1414,7 +1434,9 @@ static nlohmann::json serialize_parser_variant(const common_peg_parser_variant &
 
         nlohmann::json j;
 
-        if constexpr (std::is_same_v<T, common_peg_start_parser>) {
+        if constexpr (std::is_same_v<T, common_peg_epsilon_parser>) {
+            j["type"] = "epsilon";
+        } else if constexpr (std::is_same_v<T, common_peg_start_parser>) {
             j["type"] = "start";
         } else if constexpr (std::is_same_v<T, common_peg_end_parser>) {
             j["type"] = "end";
@@ -1470,6 +1492,7 @@ static nlohmann::json serialize_parser_variant(const common_peg_parser_variant &
             } else {
                 j["schema"] = nullptr;
             }
+            j["raw"] = p.raw;
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
             j["type"] = "rule";
             j["name"] = p.name;
@@ -1517,6 +1540,9 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
 
     std::string type = j["type"];
 
+    if (type == "epsilon") {
+        return common_peg_epsilon_parser{};
+    }
     if (type == "start") {
         return common_peg_start_parser{};
     }
@@ -1600,7 +1626,7 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
         return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
     }
     if (type == "schema") {
-        if (!j.contains("child") || !j.contains("name") || !j.contains("schema")) {
+        if (!j.contains("child") || !j.contains("name") || !j.contains("schema") || !j.contains("raw")) {
             throw std::runtime_error("schema parser missing required fields");
         }
         common_peg_schema_parser parser;
@@ -1609,6 +1635,7 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
         if (!j["schema"].is_null()) {
             parser.schema = std::make_shared<nlohmann::ordered_json>(j["schema"]);
         }
+        parser.raw = j["raw"].get<bool>();
         return parser;
     }
     if (type == "rule") {

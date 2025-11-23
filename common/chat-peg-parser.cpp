@@ -1,5 +1,9 @@
 #include "chat-peg-parser.h"
 
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
+
 void common_chat_peg_mapper::from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) {
     arena.visit(result, [this](const common_peg_ast_node & node) {
         map(node);
@@ -78,12 +82,14 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
         if (arg_count > 0) {
             current_tool->arguments += ",";
         }
-        current_tool->arguments += "\"" + std::string(node.text) + "\":";
+        current_tool->arguments += json(node.text).dump() + ":";
         ++arg_count;
     }
 
     if (is_arg_string && current_tool) {
-        current_tool->arguments += "\"" + std::string(node.text);
+        // Serialize to JSON, but exclude the end quote
+        std::string dumped = json(node.text).dump();
+        current_tool->arguments += dumped.substr(0, dumped.size() - 1);
         needs_closing_quote = true;
     }
 

@@ -1,9 +1,11 @@
 #include "chat.h"
 #include "chat-parser.h"
+#include "chat-peg-parser.h"
 #include "common.h"
 #include "json-partial.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
+#include "peg-parser.h"
 #include "regex-partial.h"
 
 #include <minja/chat-template.hpp>
@@ -646,9 +648,11 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
         case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         case COMMON_CHAT_FORMAT_KIMI_K2: return "Kimi K2";
-        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
+        case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
+        case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
+        case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -793,6 +797,25 @@ static void foreach_function(const json & tools, const std::function<void(const 
             continue;
         }
         fn(tool);
+    }
+}
+
+static void foreach_parameter(const json & function, const std::function<void(const std::string &, const json &, bool)> & fn) {
+    if (!function.contains("parameters") || !function.at("parameters").is_object()) {
+        return;
+    }
+    const auto & params = function.at("parameters");
+    if (!params.contains("properties") || !params.at("properties").is_object()) {
+        return;
+    }
+    const auto & props = params.at("properties");
+    std::set<std::string> required;
+    if (props.contains("required") && props.at("required").is_array()) {
+        props.at("required").get_to(required);
+    }
+    for (const auto & [name, prop] : props.items()) {
+        bool is_required = (required.find(name) != required.end());
+        fn(name, prop, is_required);
     }
 }
 
@@ -1872,51 +1895,108 @@ static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
-    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    bool use_tools = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    bool tool_required = params.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    data.grammar_lazy = use_tools && !tool_required;
 
     data.prompt = apply(tmpl, params);
-    data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
+    data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
 
-    data.preserved_tokens = {
-        "<tool_call>",
-        "</tool_call>",
-        "<function=",
-        "</function>",
-        "<parameter=",
-        "</parameter>",
+    data.preserved_tokens = {"<tool_call>", "</tool_call>"};
+
+    auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
+        if (!use_tools) {
+            return p.rule("content", p.content(p.rest()));
+        }
+
+        auto content = p.rule("content", p.content(p.until_one_of({"<tool_call>", "<function="})));
+
+        std::vector<common_peg_parser> tool_parsers;
+        foreach_function(params.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            std::string fn_name = function.at("name");
+
+            std::vector<common_peg_parser> argument_parsers;
+            foreach_parameter(function, [&](const std::string & name, const json & schema, bool is_required) {
+                auto arg_value = p.literal("");
+                if (schema.contains("type") && schema.at("type") == "string") {
+                    arg_value = p.tool_arg_string_value(p.schema(
+                        p.until_one_of({
+                            "\n</parameter>\n<parameter=",
+                            "\n</parameter>\n</function>"
+                        }),
+                        "tool-" + fn_name + "-arg-" + name + "-schema",
+                        schema,
+                        true
+                    ));
+                } else {
+                    arg_value = p.tool_arg_json_value(p.schema(
+                        p.json(),
+                        "tool-" + fn_name + "-arg-" + name + "-schema",
+                        schema
+                    ));
+                }
+
+                auto arg = p.tool_arg(p.sequence({
+                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">"),
+                    p.space(),
+                    arg_value,
+                    p.space(),
+                    p.tool_arg_close(
+                        "</parameter>\n" +
+                        p.peek(p.literal("<parameter=") | p.literal("</function>"))
+                    )
+                }));
+
+                argument_parsers.push_back(is_required ?
+                    p.rule("tool-" + fn_name + "-arg-" + name, arg) :
+                    p.optional(p.rule("tool-" + fn_name + "-arg-" + name, arg)));
+            });
+
+            tool_parsers.push_back(p.rule("tool-" + fn_name,
+                p.tool_open("<function=" + p.tool_name(p.literal(fn_name)) + ">")
+                << p.sequence(argument_parsers)
+                << p.tool_close(p.literal("</function>"))
+            ));
+        });
+
+        auto tool_call = p.trigger_rule("tool-call",
+            p.optional("<tool_call>" + p.space())
+            + p.choice(tool_parsers)
+            + p.space()
+            + "</tool_call>"
+            // We have to handle parallel tool calls here because it is a trigger rule
+            + (params.parallel_tool_calls ?
+                p.repeat(p.space() + "<tool_call>" << p.choice(tool_parsers) << "</tool_call>", 0, -1) :
+                p.eps())
+        );
+
+        return p.sequence({
+            content,
+            p.repeat(p.space() + tool_call, (tool_required ? 1 : 0), 1),
+            p.end()
+        });
+    });
+
+    data.parser = parser.to_json().dump();
+    data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+        foreach_function(params.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            auto parameters = function.at("parameters");
+            builder.resolve_refs(parameters);
+        });
+        parser.build_grammar(builder, data.grammar_lazy);
+    });
+
+    data.grammar_triggers = {
+        {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>"},
+        {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function="}
     };
 
-    // build grammar for tool call
-    static const xml_tool_call_format form {
-        /* form.scope_start = */ "<tool_call>\n",
-        /* form.tool_start  = */ "<function=",
-        /* form.tool_sep    = */ ">\n",
-        /* form.key_start   = */ "<parameter=",
-        /* form.key_val_sep = */ ">\n",
-        /* form.val_end     = */ "\n</parameter>\n",
-        /* form.tool_end    = */ "</function>\n",
-        /* form.scope_end   = */ "</tool_call>",
-    };
-    build_grammar_xml_tool_call(data, params.tools, form);
-
+    LOG_DBG("Grammar:\n%s\n", data.grammar.c_str());
     return data;
-}
-
-static void common_chat_parse_qwen3_coder_xml(common_chat_msg_parser & builder) {
-    static const xml_tool_call_format form = ([]() {
-        xml_tool_call_format form {};
-        form.scope_start = "<tool_call>";
-        form.tool_start  = "<function=";
-        form.tool_sep    = ">";
-        form.key_start   = "<parameter=";
-        form.key_val_sep = ">";
-        form.val_end     = "</parameter>";
-        form.tool_end    = "</function>";
-        form.scope_end   = "</tool_call>";
-        form.trim_raw_argval = true;
-        return form;
-    })();
-    builder.consume_reasoning_with_xml_tool_calls(form);
 }
 
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
@@ -3504,9 +3584,6 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
         case COMMON_CHAT_FORMAT_KIMI_K2:
             common_chat_parse_kimi_k2(builder);
             break;
-        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML:
-            common_chat_parse_qwen3_coder_xml(builder);
-            break;
         case COMMON_CHAT_FORMAT_APRIEL_1_5:
             common_chat_parse_apriel_1_5(builder);
             break;
@@ -3532,6 +3609,34 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
         }
     }
     auto msg = builder.result();
+    if (!is_partial) {
+        LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
+    }
+    return msg;
+}
+
+common_chat_msg common_chat_peg_parse(const std::string & input, bool is_partial, const common_peg_arena & parser, const common_chat_syntax & syntax) {
+    LOG_DBG("Parsing input with format %s: %s\n", common_chat_format_name(syntax.format), input.c_str());
+
+    common_peg_parse_context ctx(input, !is_partial);
+    auto result = parser.parse(ctx);
+    if (result.fail()) {
+        // TODO: Add commit/expect parsers to formulate descriptive errors
+        throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end));
+    }
+
+    common_chat_msg msg;
+    if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
+        auto mapper = common_chat_peg_native_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+    } else if (syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
+        auto mapper = common_chat_peg_constructed_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+    } else {
+        // Generic mapper
+        auto mapper = common_chat_peg_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+    }
     if (!is_partial) {
         LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
     }
