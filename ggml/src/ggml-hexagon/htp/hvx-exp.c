@@ -16,13 +16,8 @@
 #include "hvx-utils.h"
 #include "ops-utils.h"
 
-static inline HVX_Vector hvx_vec_exp_fp32_guard(HVX_Vector in_vec) {
-    static const float kInf    = INFINITY;
-    static const float kMaxExp = 88.02f;  // log(INF)
-
-    const HVX_Vector     max_exp = hvx_vec_splat_fp32(kMaxExp);
-    const HVX_Vector     inf     = hvx_vec_splat_fp32(kInf);
-    const HVX_VectorPred pred0   = Q6_Q_vcmp_gt_VsfVsf(in_vec, max_exp);
+static inline HVX_Vector hvx_vec_exp_fp32_guard(HVX_Vector in_vec, HVX_Vector max_exp, HVX_Vector inf) {
+    const HVX_VectorPred pred0 = Q6_Q_vcmp_gt_VsfVsf(in_vec, max_exp);
 
     HVX_Vector out = hvx_vec_exp_fp32(in_vec);
 
@@ -47,6 +42,12 @@ void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int
 
     HVX_Vector vec_out = Q6_V_vzero();
 
+    static const float kInf    = INFINITY;
+    static const float kMaxExp = 88.02f;  // log(INF)
+
+    const HVX_Vector max_exp = hvx_vec_splat_fp32(kMaxExp);
+    const HVX_Vector inf     = hvx_vec_splat_fp32(kInf);
+
     if (0 == unaligned_loop) {
         HVX_Vector * p_vec_in1 = (HVX_Vector *) src;
         HVX_Vector * p_vec_out = (HVX_Vector *) dst;
@@ -55,9 +56,9 @@ void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             if (true == negate) {
                 HVX_Vector neg_vec_in = hvx_vec_neg_fp32(*p_vec_in1++);
-                *p_vec_out++          = hvx_vec_exp_fp32_guard(neg_vec_in);
+                *p_vec_out++          = hvx_vec_exp_fp32_guard(neg_vec_in, max_exp, inf);
             } else {
-                *p_vec_out++ = hvx_vec_exp_fp32_guard(*p_vec_in1++);
+                *p_vec_out++ = hvx_vec_exp_fp32_guard(*p_vec_in1++, max_exp, inf);
             }
         }
     } else {
@@ -67,9 +68,9 @@ void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int
 
             if (true == negate) {
                 HVX_Vector neg_vec_in                    = hvx_vec_neg_fp32(in);
-                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard(neg_vec_in);
+                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard(neg_vec_in, max_exp, inf);
             } else {
-                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard(in);
+                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard(in, max_exp, inf);
             }
         }
     }
@@ -83,9 +84,9 @@ void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int
         if (true == negate) {
             HVX_Vector neg_vec_in = hvx_vec_neg_fp32(in);
 
-            vec_out = hvx_vec_exp_fp32_guard(neg_vec_in);
+            vec_out = hvx_vec_exp_fp32_guard(neg_vec_in, max_exp, inf);
         } else {
-            vec_out = hvx_vec_exp_fp32_guard(in);
+            vec_out = hvx_vec_exp_fp32_guard(in, max_exp, inf);
         }
 
         hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, vec_out);
