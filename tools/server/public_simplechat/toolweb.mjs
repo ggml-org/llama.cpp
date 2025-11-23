@@ -17,6 +17,7 @@
 
 
 import * as mChatMagic from './simplechat.js'
+import * as mToolsMgr from './tools.mjs'
 
 
 /**
@@ -77,13 +78,15 @@ async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchPa
  * Setup a proxy server dependent tool call
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
  * @param {string} tag
+ * @param {string} chatId
  * @param {string} tcPath
  * @param {string} tcName
  * @param {{ [x: string]: any; }} tcsData
- * @param {Object<string, Object<string, any>>} tcs
+ * @param {mToolsMgr.TCSwitch} tcs
  */
-async function proxyserver_tc_setup(tag, tcPath, tcName, tcsData, tcs) {
-    await fetch(`${gMe.defaultCfg.tools.proxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
+async function proxyserver_tc_setup(tag, chatId, tcPath, tcName, tcsData, tcs) {
+    let chat = gMe.multiChat.simpleChats[chatId]
+    await fetch(`${chat.cfg.tools.proxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
         if (resp.statusText != 'bharatavarshe') {
             console.log(`WARN:ToolWeb:${tag}:Dont forget to run the bundled local.tools/simpleproxy.py to enable me`)
             return
@@ -141,10 +144,11 @@ function fetchweburlraw_run(chatid, toolcallid, toolname, obj) {
 /**
  * Setup fetch_web_url_raw for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
- * @param {Object<string, Object<string, any>>} tcs
+ * @param {mToolsMgr.TCSwitch} tcs
+ * @param {string} chatId
  */
-async function fetchweburlraw_setup(tcs) {
-    return proxyserver_tc_setup('FetchWebUrlRaw', 'urlraw', 'fetch_web_url_raw', {
+async function fetchweburlraw_setup(tcs, chatId) {
+    return proxyserver_tc_setup('FetchWebUrlRaw', chatId, 'urlraw', 'fetch_web_url_raw', {
         "handler": fetchweburlraw_run,
         "meta": fetchweburlraw_meta,
         "result": ""
@@ -195,10 +199,11 @@ function fetchhtmltext_run(chatid, toolcallid, toolname, obj) {
 /**
  * Setup fetch_html_text for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
- * @param {Object<string, Object<string, any>>} tcs
+ * @param {mToolsMgr.TCSwitch} tcs
+ * @param {string} chatId
  */
-async function fetchhtmltext_setup(tcs) {
-    return proxyserver_tc_setup('FetchHtmlText', 'htmltext', 'fetch_html_text', {
+async function fetchhtmltext_setup(tcs, chatId) {
+    return proxyserver_tc_setup('FetchHtmlText', chatId, 'htmltext', 'fetch_html_text', {
         "handler": fetchhtmltext_run,
         "meta": fetchhtmltext_meta,
         "result": ""
@@ -254,10 +259,11 @@ function searchwebtext_run(chatid, toolcallid, toolname, obj) {
 /**
  * Setup search_web_text for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
- * @param {Object<string, Object<string, any>>} tcs
+ * @param {mToolsMgr.TCSwitch} tcs
+ * @param {string} chatId
  */
-async function searchwebtext_setup(tcs) {
-    return proxyserver_tc_setup('SearchWebText', 'htmltext', 'search_web_text', {
+async function searchwebtext_setup(tcs, chatId) {
+    return proxyserver_tc_setup('SearchWebText', chatId, 'htmltext', 'search_web_text', {
         "handler": searchwebtext_run,
         "meta": searchwebtext_meta,
         "result": ""
@@ -319,10 +325,11 @@ function fetchpdftext_run(chatid, toolcallid, toolname, obj) {
 /**
  * Setup fetchpdftext for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
- * @param {Object<string, Object<string, any>>} tcs
+ * @param {mToolsMgr.TCSwitch} tcs
+ * @param {string} chatId
  */
-async function fetchpdftext_setup(tcs) {
-    return proxyserver_tc_setup('FetchPdfAsText', 'pdftext', 'fetch_pdf_as_text', {
+async function fetchpdftext_setup(tcs, chatId) {
+    return proxyserver_tc_setup('FetchPdfAsText', chatId, 'pdftext', 'fetch_pdf_as_text', {
         "handler": fetchpdftext_run,
         "meta": fetchpdftext_meta,
         "result": ""
@@ -391,10 +398,11 @@ function fetchxmlfiltered_run(chatid, toolcallid, toolname, obj) {
 /**
  * Setup fetch_xml_filtered for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
- * @param {Object<string, Object<string, any>>} tcs
+ * @param {mToolsMgr.TCSwitch} tcs
+ * @param {string} chatId
  */
-async function fetchxmlfiltered_setup(tcs) {
-    return proxyserver_tc_setup('FetchXmlFiltered', 'xmlfiltered', 'fetch_xml_filtered', {
+async function fetchxmlfiltered_setup(tcs, chatId) {
+    return proxyserver_tc_setup('FetchXmlFiltered', chatId, 'xmlfiltered', 'fetch_xml_filtered', {
         "handler": fetchxmlfiltered_run,
         "meta": fetchxmlfiltered_meta,
         "result": ""
@@ -413,15 +421,22 @@ async function fetchxmlfiltered_setup(tcs) {
  * @param {mChatMagic.Me} me
  */
 export async function init(me) {
+    gMe = me
+}
+
+
+/**
+ * @param {string} chatId
+ */
+export async function setup(chatId) {
     /**
-     * @type {Object<string, Object<string, any>>} tcs
+     * @type {mToolsMgr.TCSwitch} tcs
      */
     let tc_switch = {}
-    gMe = me
-    await fetchweburlraw_setup(tc_switch)
-    await fetchhtmltext_setup(tc_switch)
-    await searchwebtext_setup(tc_switch)
-    await fetchpdftext_setup(tc_switch)
-    await fetchxmlfiltered_setup(tc_switch)
+    await fetchweburlraw_setup(tc_switch, chatId)
+    await fetchhtmltext_setup(tc_switch, chatId)
+    await searchwebtext_setup(tc_switch, chatId)
+    await fetchpdftext_setup(tc_switch, chatId)
+    await fetchxmlfiltered_setup(tc_switch, chatId)
     return tc_switch
 }

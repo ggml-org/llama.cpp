@@ -12,15 +12,17 @@ import * as tai from './toolai.mjs'
 import * as mChatMagic from './simplechat.js'
 
 
+/** @typedef {Object<string,Object<string,any>>} TCSwitch */
+
 
 export class ToolsManager {
 
     constructor() {
         /**
          * Maintain currently available tool/function calls
-         * @type {Object<string,Object<string,any>>}
+         * @type {Object<string, TCSwitch>}
          */
-        this.tc_switch = {}
+        this.tc_switchs = {}
 
         this.workers = {
             js: /** @type {Worker} */(/** @type {unknown} */(undefined)),
@@ -46,43 +48,56 @@ export class ToolsManager {
      * @param {mChatMagic.Me} me
      */
     async init(me) {
+        this.me = me
         this.setup_workers();
-        /**
-         * @type {string[]}
-         */
-        me.defaultCfg.tools.toolNames = []
-        await tjs.init(me).then(()=>{
-            for (const key in tjs.tc_switch) {
-                this.tc_switch[key] = tjs.tc_switch[key]
-                me.defaultCfg.tools.toolNames.push(key)
+        let tcM = []
+        tcM.push(tjs.init(me))
+        tcM.push(tdb.init(me))
+        tcM.push(tai.init(me))
+        tcM.push(tweb.init(me))
+        return Promise.all(tcM)
+    }
+
+    /**
+     * @param {string} chatId
+     */
+    async setup(chatId) {
+        this.tc_switchs[chatId] = {}
+        let chat = this.me?.multiChat.simpleChats[chatId]
+        await tjs.setup(chatId).then((tcs)=>{
+            for (const key in tcs) {
+                this.tc_switchs[chatId][key] = tcs[key]
+                chat?.cfg.tools.toolNames.push(key)
             }
         })
-        await tdb.init(me).then(()=>{
-            for (const key in tdb.tc_switch) {
-                this.tc_switch[key] = tdb.tc_switch[key]
-                me.defaultCfg.tools.toolNames.push(key)
+        await tdb.setup(chatId).then((tcs)=>{
+            for (const key in tcs) {
+                this.tc_switchs[chatId][key] = tcs[key]
+                chat?.cfg.tools.toolNames.push(key)
             }
         })
-        await tai.init(me).then(()=>{
-            for (const key in tai.tc_switch) {
-                this.tc_switch[key] = tai.tc_switch[key]
-                me.defaultCfg.tools.toolNames.push(key)
+        await tai.setup(chatId).then((tcs)=>{
+            for (const key in tcs) {
+                this.tc_switchs[chatId][key] = tcs[key]
+                chat?.cfg.tools.toolNames.push(key)
             }
         })
-        let tNs = await tweb.init(me)
-        for (const key in tNs) {
-            this.tc_switch[key] = tNs[key]
-            me.defaultCfg.tools.toolNames.push(key)
-        }
+        await tweb.setup(chatId).then((tcs)=>{
+            for (const key in tcs) {
+                this.tc_switchs[chatId][key] = tcs[key]
+                chat?.cfg.tools.toolNames.push(key)
+            }
+        })
     }
 
     /**
      * Prepare the tools meta data that can be passed to the ai server.
+     * @param {string} chatId
      */
-    meta() {
+    meta(chatId) {
         let tools = []
-        for (const key in this.tc_switch) {
-            tools.push(this.tc_switch[key]["meta"])
+        for (const key in this.tc_switchs[chatId]) {
+            tools.push(this.tc_switchs[chatId][key]["meta"])
         }
         return tools
     }
@@ -134,11 +149,11 @@ export class ToolsManager {
      * @param {string} toolargs
      */
     async tool_call(chatid, toolcallid, toolname, toolargs) {
-        for (const fn in this.tc_switch) {
+        for (const fn in this.tc_switchs[chatid]) {
             if (fn == toolname) {
                 try {
                     this.toolcallpending_add(chatid, toolcallid);
-                    this.tc_switch[fn]["handler"](chatid, toolcallid, fn, JSON.parse(toolargs))
+                    this.tc_switchs[chatid][fn]["handler"](chatid, toolcallid, fn, JSON.parse(toolargs))
                     return undefined
                 } catch (/** @type {any} */error) {
                     this.toolcallpending_found_cleared(chatid, toolcallid, 'ToolsManager:ToolCall:Exc')
