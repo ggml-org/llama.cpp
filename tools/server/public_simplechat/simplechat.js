@@ -546,6 +546,19 @@ export class SimpleChat {
         this.latestResponse = new ChatMessageEx();
     }
 
+    /**
+     * Given a string, gives the equivalent simplified string which could be used as chatId.
+     * * Converts the very 1st char into upper case.
+     * * Removes everything other than alphabets and numbers.
+     *   Also converts 1st character following such removed substrings into upper case.
+     * @param {string} chatId
+     */
+    static ChatIdClean(chatId) {
+        let sTempId1 = chatId.trim()
+        let sTempId2 = sTempId1.replace(/[^a-zA-Z0-9]+(.)/g, (m, chr) => chr.toUpperCase());
+        return `${sTempId2[0].toUpperCase()}${sTempId2.slice(1)}`
+    }
+
     ods_key() {
         return `SimpleChat-${this.chatId}`
     }
@@ -1609,7 +1622,7 @@ class MultiChatUI {
         this.elBtnSettings.addEventListener("click", (ev)=>{
             this.elDivChat.replaceChildren();
             let chat = this.simpleChats[this.curChatId]
-            chat.cfg.show_settings(this.elDivChat);
+            chat.cfg.show_settings(this.elDivChat, chat.chatId);
             this.me.houseKeeping.clear = true;
         });
         this.elBtnClearChat.addEventListener("click", (ev)=>{
@@ -1860,6 +1873,7 @@ class MultiChatUI {
                 console.error("ERRR:SimpleChat:MCUI:NewChat:Skipping based on user request...");
                 return;
             }
+            chatIdGot = SimpleChat.ChatIdClean(chatIdGot)
             this.new_chat_session(chatIdGot, true);
             this.create_session_btn(elDiv, chatIdGot);
             ui.el_children_config_class(elDiv, chatIdGot, "session-selected", "");
@@ -2042,9 +2056,10 @@ export class Config {
     /**
      * Show settings ui for configurable parameters, in the passed Div element.
      * @param {HTMLDivElement} elDiv
+     * @param {string} tag
      */
-    show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "chatProps"], "Settings", (prop, elProp)=>{
+    show_settings(elDiv, tag) {
+        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "chatProps"], `Settings-${tag}`, (prop, elProp)=>{
             if (prop == "headers:Authorization") {
                 // @ts-ignore
                 elProp.placeholder = "Bearer OPENAI_API_KEY";
