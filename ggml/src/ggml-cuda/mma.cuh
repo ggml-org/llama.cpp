@@ -913,4 +913,3 @@ static __device__ __forceinline__ void mma(
 #endif
     }
 }
-
