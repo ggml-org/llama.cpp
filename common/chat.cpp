@@ -3613,7 +3613,7 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
     return msg;
 }
 
-common_chat_msg common_chat_peg_parse(const std::string & input, bool is_partial, const common_peg_arena & parser, const common_chat_syntax & syntax) {
+common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
     LOG_DBG("Parsing input with format %s: %s\n", common_chat_format_name(syntax.format), input.c_str());
 
     common_peg_parse_context ctx(input, is_partial);

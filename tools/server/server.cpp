@@ -1869,15 +1869,15 @@ struct server_slot {
 
         auto previous_msg = chat_msg;
         SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
-        auto new_msg = task->params.oaicompat_chat_parser.empty() ?
-            common_chat_parse(
+        auto new_msg = !task->params.oaicompat_chat_parser.empty() ?
+            common_chat_peg_parse(
+                task->params.oaicompat_chat_parser,
                 generated_text,
                 /* is_partial= */ stop != STOP_TYPE_EOS,
                 task->params.oaicompat_chat_syntax) :
-            common_chat_peg_parse(
+            common_chat_parse(
                 generated_text,
                 /* is_partial= */ stop != STOP_TYPE_EOS,
-                task->params.oaicompat_chat_parser,
                 task->params.oaicompat_chat_syntax);
 
         if (!new_msg.empty()) {
