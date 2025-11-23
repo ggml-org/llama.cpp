@@ -1341,6 +1341,157 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
     });
 }
 
+static void test_all_raw(const std::string & lang, std::function<void(const TestCase &)> runner) {
+    fprintf(stderr, "#\n# Testing JSON schema conversion to raw string (%s)\n#\n", lang.c_str());
+    auto test = [&](const TestCase & tc) {
+        fprintf(stderr, "- %s%s\n", tc.name.c_str(), tc.expected_status == FAILURE ? " (failure expected)" : "");
+        runner(tc);
+    };
+
+    test({
+        SUCCESS,
+        "string",
+        R"""({
+            "type": "string"
+        })""",
+        R"""(
+            char-raw ::= [^\x7F\x00-\x1F] | [\x0A\x0D]
+            root ::= char-raw*
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "string w/ min length 1",
+        R"""({
+            "type": "string",
+            "minLength": 1
+        })""",
+        R"""(
+            char-raw ::= [^\x7F\x00-\x1F] | [\x0A\x0D]
+            root ::= char-raw+
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "string w/ min length 3",
+        R"""({
+            "type": "string",
+            "minLength": 3
+        })""",
+        R"""(
+            char-raw ::= [^\x7F\x00-\x1F] | [\x0A\x0D]
+            root ::= char-raw{3,}
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "string w/ max length",
+        R"""({
+            "type": "string",
+            "maxLength": 3
+        })""",
+        R"""(
+            char-raw ::= [^\x7F\x00-\x1F] | [\x0A\x0D]
+            root ::= char-raw{0,3}
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "string w/ min & max length",
+        R"""({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4
+        })""",
+        R"""(
+            char-raw ::= [^\x7F\x00-\x1F] | [\x0A\x0D]
+            root ::= char-raw{1,4}
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "string w/ enum",
+        R"""({
+            "type": "string",
+            "enum": ["a", "b", "c"]
+        })""",
+        R"""(
+            root ::= ("a" | "b" | "c")
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "allOf w/ enum",
+        R"""({
+            "type": "string",
+            "allOf": [
+                {"$ref": "#/definitions/foo"}
+            ],
+            "definitions": {
+                "foo": {
+                    "type": "string",
+                    "enum": ["a", "b", "c"]
+                }
+            }
+        })""",
+        R"""(
+            root ::= ("a" | "b" | "c")
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "allOf w/ multiple enum",
+        R"""({
+            "type": "string",
+            "allOf": [
+                {"$ref": "#/definitions/foo"},
+                {"$ref": "#/definitions/bar"}
+            ],
+            "definitions": {
+                "foo": {
+                    "type": "string",
+                    "enum": ["a", "b", "c"]
+                },
+                "bar": {
+                    "type": "string",
+                    "enum": ["b", "c", "d"]
+                }
+            }
+        })""",
+        R"""(
+            root ::= ("b" | "c")
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "string w/ const",
+        R"""({
+            "type": "string",
+            "const": "abc"
+        })""",
+        R"""(
+            root ::= "abc"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+}
+
 int main() {
     fprintf(stderr, "LLAMA_NODE_AVAILABLE = %s\n", getenv("LLAMA_NODE_AVAILABLE") ? "true" : "false");
     fprintf(stderr, "LLAMA_PYTHON_AVAILABLE = %s\n", getenv("LLAMA_PYTHON_AVAILABLE") ? "true" : "false");
@@ -1348,6 +1499,16 @@ int main() {
     test_all("C++", [](const TestCase & tc) {
         try {
             tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
+            tc.verify_status(SUCCESS);
+        } catch (const std::runtime_error & ex) {
+            fprintf(stderr, "Error: %s\n", ex.what());
+            tc.verify_status(FAILURE);
+        }
+    });
+
+    test_all_raw("C++", [](const TestCase & tc) {
+        try {
+            tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true, true));
             tc.verify_status(SUCCESS);
         } catch (const std::runtime_error & ex) {
             fprintf(stderr, "Error: %s\n", ex.what());

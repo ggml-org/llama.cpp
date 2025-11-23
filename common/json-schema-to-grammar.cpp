@@ -267,6 +267,7 @@ static bool is_reserved_name(const std::string & name) {
         std::unordered_set<std::string> s;
         s.insert("root");
         for (const auto & p : PRIMITIVE_RULES) s.insert(p.first);
+        for (const auto & p : PRIMITIVE_RAW_RULES) s.insert(p.first);
         for (const auto & p : STRING_FORMAT_RULES) s.insert(p.first);
         return s;
     }();
@@ -838,10 +839,7 @@ public:
     std::string visit(const json & schema, const std::string & name, bool is_raw) {
         json schema_type = schema.contains("type") ? schema["type"] : json();
         std::string schema_format = schema.contains("format") ? schema["format"].get<std::string>() : "";
-        std::string rule_name = is_reserved_name(name) ? name + "-" : name.empty() ? "root" : name;
-        if (is_raw) {
-            rule_name += "-raw";
-        }
+        std::string rule_name = is_reserved_name(name) ? name + "-" : name.empty() ? "root" : is_raw ? name + "-raw" : name;
 
         if (schema.contains("$ref")) {
             return _add_rule(rule_name, _resolve_ref(schema["$ref"], is_raw));
@@ -1039,7 +1037,7 @@ public:
     }
 };
 
-std::string json_schema_to_grammar(const json & schema, bool force_gbnf) {
+std::string json_schema_to_grammar(const json & schema, bool force_gbnf, bool raw) {
 #ifdef LLAMA_USE_LLGUIDANCE
     if (!force_gbnf) {
         return "%llguidance {}\nstart: %json " + schema.dump();
@@ -1050,7 +1048,11 @@ std::string json_schema_to_grammar(const json & schema, bool force_gbnf) {
     return build_grammar([&](const common_grammar_builder & callbacks) {
         auto copy = schema;
         callbacks.resolve_refs(copy);
-        callbacks.add_schema("", copy);
+        if (raw) {
+            callbacks.add_string_schema("", copy);
+        } else {
+            callbacks.add_schema("", copy);
+        }
     });
 }
 
