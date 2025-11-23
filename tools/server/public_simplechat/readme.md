@@ -867,15 +867,28 @@ Cleanup in general
   end user can see the streamed response from that chat session as it is occuring.
 * Cleanup the tool call descriptions and verbose messages returned a bit.
 * Move towards Chat Session specific settings
+  * Needed so that one could
+    * setup a different ai model / engine as the external ai backend.
+    * interact with different independent ai models / engines / parallel instances in general
   * Move needed configs from Me into a seperate Config class.
     * also move ShowSettings, ShowInfo etal into Config class
   * SimpleChat maintains an instance of Config class instead of Me.
-  * Update starting flow to create the default set of chat sessions, setup ui etal after toolsMgr init
-    * TODO: Rather temporarily for now, to ensure tools name etal get populated.
-    * TODO: May need to have seperate partial tools manager per chat session, if we allow the proxyUrl
-      to be decided at a per chat session basis.
-    * TODO: Rather current flow expects any changed proxyUrl to reflect what ever was supported by
-      default proxyUrl
+  * ToolsManager and the different tool call modules have been updated to
+    * have seperate init and setup calls.
+      * init is called at the begining
+      * setup will be called when ever a chat session is being created
+        and or in future when ever any config of interest changes.
+    * pick needed config etal from the specified chatId's config and not any global config.
+  * Starting flow updated to chain the different logical blocks of code
+    * first allow tools manager to be initd
+    * next create the needed default set of sessions, while parallely calling tool manager setup as needed.
+      * ensures that the available list of tool calls match the config of the chat session involved.
+        Needed as user could change tools related proxy server url.
+    * next setup the main ui as needed.
+  * TODO
+    * Need to save and restore ChatSession config entries.
+    * Need to allow any changes to proxyUrl to trigger a new tool manager setup wrt that chat session.
+    * Need to hide user-input area and tool call validate/trigger area when switching into settings
 
 
 #### ToDo
@@ -893,9 +906,6 @@ the simpleproxy.py if and where needed.
 
 Save used config entries along with the auto saved chat sessions and inturn give option to reload the
 same when saved chat is loaded.
-
-MAYBE make the settings in general chat session specific, rather than the current global config flow.
-Rather for now having a global settings seems to make more sense, so dont change for now.
 
 Have a seperate helper to show the user input area, based on set state. And have support for multiple images
 if the models support same. It should also take care of some aspects of the tool call response edit / submit,
