@@ -810,8 +810,8 @@ static void foreach_parameter(const json & function, const std::function<void(co
     }
     const auto & props = params.at("properties");
     std::set<std::string> required;
-    if (props.contains("required") && props.at("required").is_array()) {
-        props.at("required").get_to(required);
+    if (params.contains("required") && params.at("required").is_array()) {
+        params.at("required").get_to(required);
     }
     for (const auto & [name, prop] : props.items()) {
         bool is_required = (required.find(name) != required.end());
@@ -1899,11 +1899,10 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
     bool use_tools = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
     bool tool_required = params.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
-    data.grammar_lazy = use_tools && !tool_required;
-
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
 
+    data.grammar_lazy = use_tools && !tool_required;
     data.preserved_tokens = {"<tool_call>", "</tool_call>"};
 
     auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
@@ -1913,6 +1912,11 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
 
         auto content = p.rule("content", p.content(p.until_one_of({"<tool_call>", "<function="})));
 
+        auto until_end_of_param = p.rule("string-arg-value", p.until_one_of({
+            "\n</parameter>\n<parameter=",
+            "\n</parameter>\n</function>"
+        }));
+
         std::vector<common_peg_parser> tool_parsers;
         foreach_function(params.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
@@ -1920,39 +1924,33 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
 
             std::vector<common_peg_parser> argument_parsers;
             foreach_parameter(function, [&](const std::string & name, const json & schema, bool is_required) {
-                auto arg_value = p.literal("");
+                auto arg_value = p.eps();
                 if (schema.contains("type") && schema.at("type") == "string") {
                     arg_value = p.tool_arg_string_value(p.schema(
-                        p.until_one_of({
-                            "\n</parameter>\n<parameter=",
-                            "\n</parameter>\n</function>"
-                        }),
-                        "tool-" + fn_name + "-arg-" + name + "-schema",
-                        schema,
-                        true
+                        until_end_of_param,
+                        /* name   = */ "tool-" + fn_name + "-arg-" + name + "-schema",
+                        /* schema = */ schema,
+                        /* raw    = */ true
                     ));
                 } else {
                     arg_value = p.tool_arg_json_value(p.schema(
                         p.json(),
-                        "tool-" + fn_name + "-arg-" + name + "-schema",
-                        schema
+                        /* name   = */ "tool-" + fn_name + "-arg-" + name + "-schema",
+                        /* schema = */ schema
                     ));
                 }
 
-                auto arg = p.tool_arg(p.sequence({
-                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">"),
-                    p.space(),
-                    arg_value,
-                    p.space(),
-                    p.tool_arg_close(
+                auto arg = p.tool_arg(
+                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">")
+                    << arg_value
+                    << p.tool_arg_close(
                         "</parameter>\n" +
                         p.peek(p.literal("<parameter=") | p.literal("</function>"))
                     )
-                }));
+                );
 
-                argument_parsers.push_back(is_required ?
-                    p.rule("tool-" + fn_name + "-arg-" + name, arg) :
-                    p.optional(p.rule("tool-" + fn_name + "-arg-" + name, arg)));
+                auto arg_rule = p.rule("tool-" + fn_name + "-arg-" + name, arg);
+                argument_parsers.push_back(p.repeat(arg_rule, (is_required ? 1 : 0), 1));
             });
 
             tool_parsers.push_back(p.rule("tool-" + fn_name,
@@ -1973,14 +1971,12 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
                 p.eps())
         );
 
-        return p.sequence({
-            content,
-            p.repeat(p.space() + tool_call, (tool_required ? 1 : 0), 1),
-            p.end()
-        });
+        return content
+            + p.repeat(p.space() + tool_call, (tool_required ? 1 : 0), 1)
+            + p.end();
     });
 
-    data.parser = parser.to_json().dump();
+    data.parser = parser.serialize();
     data.grammar = build_grammar([&](const common_grammar_builder & builder) {
         foreach_function(params.tools, [&](const json & tool) {
             const auto & function = tool.at("function");

@@ -1199,8 +1199,7 @@ static std::unordered_set<std::string> collect_reachable_rules(
                           std::is_same_v<T, common_peg_chars_parser> ||
                           std::is_same_v<T, common_peg_space_parser> ||
                           std::is_same_v<T, common_peg_any_parser> ||
-                          std::is_same_v<T, common_peg_json_string_parser> ||
-                          std::is_same_v<T, common_peg_schema_parser>) {
+                          std::is_same_v<T, common_peg_json_string_parser>) {
                 // These parsers do not have any children
             } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 for (auto child : p.children) {
@@ -1215,7 +1214,8 @@ static std::unordered_set<std::string> collect_reachable_rules(
                                  std::is_same_v<T, common_peg_not_parser> ||
                                  std::is_same_v<T, common_peg_capture_parser> ||
                                  std::is_same_v<T, common_peg_tag_parser> ||
-                                 std::is_same_v<T, common_peg_atomic_parser>) {
+                                 std::is_same_v<T, common_peg_atomic_parser> ||
+                                 std::is_same_v<T, common_peg_schema_parser>) {
                 visit(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 if (visited.find(p.name) == visited.end()) {
@@ -1302,6 +1302,12 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 if (p.max_count == -1) {
                     return child_gbnf + "{" + std::to_string(p.min_count) + ",}";
                 }
+                if (p.min_count == p.max_count) {
+                    if (p.min_count == 1) {
+                        return child_gbnf;
+                    }
+                    return child_gbnf + "{" + std::to_string(p.min_count) + "}";
+                }
                 return child_gbnf + "{" + std::to_string(p.min_count) + "," + std::to_string(p.max_count) + "}";
             } else if constexpr (std::is_same_v<T, common_peg_and_parser> || std::is_same_v<T, common_peg_not_parser>) {
                 return "";  // Lookahead not supported in GBNF
@@ -1311,6 +1317,9 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return "space";
             } else if constexpr (std::is_same_v<T, common_peg_chars_parser>) {
                 std::string result = p.pattern;
+                if (p.min_count == 0 && p.max_count == 1) {
+                    return result + "?";
+                }
                 if (p.min_count == 0 && p.max_count == -1) {
                     return result + "*";
                 }
@@ -1717,4 +1726,12 @@ common_peg_arena common_peg_arena::from_json(const nlohmann::json & j) {
     }
 
     return arena;
+}
+
+std::string common_peg_arena::serialize() const {
+    return to_json().dump();
+}
+
+common_peg_arena common_peg_arena::deserialize(const std::string & data) {
+    return from_json(nlohmann::json::parse(data));
 }

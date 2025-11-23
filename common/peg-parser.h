@@ -310,6 +310,9 @@ class common_peg_arena {
     nlohmann::json to_json() const;
     static common_peg_arena from_json(const nlohmann::json & j);
 
+    std::string serialize() const;
+    static common_peg_arena deserialize(const std::string & data);
+
     // Builder access (for adding parsers)
     friend class common_peg_parser_builder;
 

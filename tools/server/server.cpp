@@ -458,7 +458,7 @@ struct server_task {
 
         if (data.contains("chat_parser")) {
             auto parser = data.at("chat_parser").get<std::string>();
-            params.oaicompat_chat_parser = common_peg_arena::from_json(json::parse(parser));
+            params.oaicompat_chat_parser = common_peg_arena::deserialize(parser);
         }
 
         {
