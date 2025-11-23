@@ -866,17 +866,17 @@ std::string common_peg_arena::dump(common_peg_parser_id id) const {
 }
 
 // Parser wrapper operator implementations
-common_peg_parser & common_peg_parser::operator=(common_peg_parser const & other) {
+common_peg_parser & common_peg_parser::operator=(const common_peg_parser & other) {
     id_ = other.id_;
     return *this;
 }
 
-common_peg_parser & common_peg_parser::operator+=(common_peg_parser const & other) {
+common_peg_parser & common_peg_parser::operator+=(const common_peg_parser & other) {
     id_ = builder_.sequence({id_, other.id_});
     return *this;
 }
 
-common_peg_parser & common_peg_parser::operator|=(common_peg_parser const & other) {
+common_peg_parser & common_peg_parser::operator|=(const common_peg_parser & other) {
     id_ = builder_.choice({id_, other.id_});
     return *this;
 }
