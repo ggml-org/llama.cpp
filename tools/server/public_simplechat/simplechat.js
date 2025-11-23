@@ -518,19 +518,17 @@ class ELDivStream {
 
 /** @typedef {Object<string, ELDivStream>} ELDivStreams */
 
-/** @typedef {{ chatPropsStream: boolean, toolsEnabled: boolean}} SCHandshakeProps */
-
 /** @typedef {ChatMessageEx[]} ChatMessages */
 
 /** @typedef {{iLastSys: number, xchat: ChatMessages}} SimpleChatODS */
 
-class SimpleChat {
+export class SimpleChat {
 
     /**
      * @param {string} chatId
-     * @param {Me} me
+     * @param {Config} cfg
      */
-    constructor(chatId, me) {
+    constructor(chatId, cfg) {
         this.chatId = chatId;
         /**
          * Maintain in a form suitable for common LLM web service chat/completions' messages entry
@@ -539,12 +537,7 @@ class SimpleChat {
         this.xchat = [];
         this.iLastSys = -1;
         this.latestResponse = new ChatMessageEx();
-        this.me = me;
-        /** @type {SCHandshakeProps} */
-        this.handshakeProps = {
-            chatPropsStream: false,
-            toolsEnabled: true,
-        }
+        this.cfg = Config.clone(cfg);
     }
 
     clear() {
@@ -804,8 +797,8 @@ class SimpleChat {
      */
     fetch_headers(apiEP) {
         let headers = new Headers();
-        for(let k in this.me.headers) {
-            let v = this.me.headers[k];
+        for(let k in this.cfg.headers) {
+            let v = this.cfg.headers[k];
             if ((k == "Authorization") && (v.trim() == "")) {
                 continue;
             }
@@ -822,13 +815,13 @@ class SimpleChat {
      * @param {Object<string, any>} obj
      */
     request_jsonstr_extend(obj) {
-        for(let k in this.me.apiRequestOptions) {
-            obj[k] = this.me.apiRequestOptions[k];
+        for(let k in this.cfg.apiRequestOptions) {
+            obj[k] = this.cfg.apiRequestOptions[k];
         }
-        if (this.handshakeProps.chatPropsStream) {
+        if (this.cfg.chatProps.stream) {
             obj["stream"] = true;
         }
-        if (this.handshakeProps.toolsEnabled) {
+        if (this.cfg.tools.enabled) {
             obj["tools"] = this.me.toolsMgr.meta();
         }
         return JSON.stringify(obj);
@@ -839,7 +832,7 @@ class SimpleChat {
      */
     request_messages_jsonstr() {
         let req = {
-            messages: this.recent_chat_ns(this.me.chatProps.iRecentUserMsgCnt),
+            messages: this.recent_chat_ns(this.cfg.chatProps.iRecentUserMsgCnt),
         }
         return this.request_jsonstr_extend(req);
     }
@@ -851,7 +844,7 @@ class SimpleChat {
     request_prompt_jsonstr(bInsertStandardRolePrefix) {
         let prompt = "";
         let iCnt = 0;
-        for(const msg of this.recent_chat(this.me.chatProps.iRecentUserMsgCnt)) {
+        for(const msg of this.recent_chat(this.cfg.chatProps.iRecentUserMsgCnt)) {
             iCnt += 1;
             if (iCnt > 1) {
                 prompt += "\n";
@@ -875,7 +868,7 @@ class SimpleChat {
         if (apiEP == ApiEP.Type.Chat) {
             return this.request_messages_jsonstr();
         } else {
-            return this.request_prompt_jsonstr(this.me.chatProps.bCompletionInsertStandardRolePrefix);
+            return this.request_prompt_jsonstr(this.cfg.chatProps.bCompletionInsertStandardRolePrefix);
         }
     }
 
@@ -993,7 +986,7 @@ class SimpleChat {
     async handle_response(resp, apiEP, elDivStreams) {
         let theResp = null;
         try {
-            if (this.handshakeProps.chatPropsStream) {
+            if (this.cfg.chatProps.stream) {
                 theResp = await this.handle_response_multipart(resp, apiEP, elDivStreams);
                 this.latestResponse.clear();
                 elDivStreams[this.chatId].clear();
@@ -1008,7 +1001,7 @@ class SimpleChat {
             elDivStreams[this.chatId].clear()
             throw error;
         }
-        if (this.me.chatProps.bTrimGarbage) {
+        if (this.cfg.chatProps.bTrimGarbage) {
             let origMsg = theResp.ns.getContent();
             if (origMsg) {
                 theResp.ns.content_adj(du.trim_garbage_at_end(origMsg), true);
@@ -1024,10 +1017,9 @@ class SimpleChat {
      * Handle the chat handshake with the ai server
      * @param {string} baseURL
      * @param {string} apiEP
-     * @param {SCHandshakeProps} hsProps
      * @param {ELDivStreams} elDivStreams - used to show chat response as it is being generated/recieved in streaming mode
      */
-    async handle_chat_hs(baseURL, apiEP, hsProps, elDivStreams) {
+    async handle_chat_hs(baseURL, apiEP, elDivStreams) {
         class ChatHSError extends Error {
             constructor(/** @type {string} */message) {
                 super(message);
@@ -1035,8 +1027,6 @@ class SimpleChat {
             }
         }
 
-        this.handshakeProps.chatPropsStream = hsProps.chatPropsStream
-        this.handshakeProps.toolsEnabled = hsProps.toolsEnabled
         let theUrl = ApiEP.Url(baseURL, apiEP);
         let theBody = this.request_jsonstr(apiEP);
         console.debug(`DBUG:SimpleChat:${this.chatId}:HandleChatHS:${theUrl}:ReqBody:${theBody}`);
@@ -1486,7 +1476,7 @@ class MultiChatUI {
         }
         this.ui_reset_toolcall_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
-        let chatToShow = chat.recent_chat(this.me.chatProps.iRecentUserMsgCnt);
+        let chatToShow = chat.recent_chat(chat.cfg.chatProps.iRecentUserMsgCnt);
         for(const [i, x] of chatToShow.entries()) {
             let iFromLast = (chatToShow.length - 1)-i
             let nextMsg = undefined
@@ -1501,9 +1491,9 @@ class MultiChatUI {
             this.scroll_el_into_view(this.elLastChatMessage)
         } else {
             if (bClear) {
-                this.elDivChat.innerHTML = usage_note(this.me.get_sRecentUserMsgCnt());
+                this.elDivChat.innerHTML = usage_note(chat.cfg.get_sRecentUserMsgCnt());
                 this.me.setup_load(this.elDivChat, chat);
-                this.me.show_info(this.elDivChat, bShowInfoAll);
+                chat.cfg.show_info(this.elDivChat, bShowInfoAll);
                 this.me.show_title(this.elDivChat);
             }
         }
@@ -1618,7 +1608,8 @@ class MultiChatUI {
 
         this.elBtnSettings.addEventListener("click", (ev)=>{
             this.elDivChat.replaceChildren();
-            this.me.show_settings(this.elDivChat);
+            let chat = this.simpleChats[this.curChatId]
+            chat.cfg.show_settings(this.elDivChat);
             this.me.houseKeeping.clear = true;
         });
         this.elBtnClearChat.addEventListener("click", (ev)=>{
@@ -1639,8 +1630,9 @@ class MultiChatUI {
             if (this.elInUser.disabled) {
                 return;
             }
-            this.handle_user_submit(this.curChatId, this.me.chatProps.apiEP).catch((/** @type{Error} */reason)=>{
-                let msg = `ERRR:SimpleChat\nMCUI:HandleUserSubmit:${this.curChatId}\n${reason.name}:${reason.message}\n${reason.cause?reason.cause:""}`;
+            let chat = this.simpleChats[this.curChatId]
+            this.handle_user_submit(chat.chatId, chat.cfg.chatProps.apiEP).catch((/** @type{Error} */reason)=>{
+                let msg = `ERRR:SimpleChat\nMCUI:HandleUserSubmit:${chat.chatId}\n${reason.name}:${reason.message}\n${reason.cause?reason.cause:""}`;
                 console.error(msg.replace("\n", ":"));
                 alert(msg);
             });
@@ -1661,16 +1653,16 @@ class MultiChatUI {
             this.timers.toolcallResponseTimeout = undefined
             let chat = this.simpleChats[cid];
             let limitedData = data
-            if (this.me.tools.iResultMaxDataLength > 0) {
-                if (data.length > this.me.tools.iResultMaxDataLength) {
-                    limitedData = data.slice(0, this.me.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
+            if (chat.cfg.tools.iResultMaxDataLength > 0) {
+                if (data.length > chat.cfg.tools.iResultMaxDataLength) {
+                    limitedData = data.slice(0, chat.cfg.tools.iResultMaxDataLength) + `\n\n\nALERT: Data too long, was chopped ....`
                 }
             }
             if (this.chatmsg_addsmart_uishow(cid, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, tcid, name, limitedData))).shown) {
-                if (this.me.tools.autoSecs > 0) {
+                if (chat.cfg.tools.autoSecs > 0) {
                     this.timers.toolcallResponseSubmitClick = setTimeout(()=>{
                         this.elBtnUser.click()
-                    }, this.me.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
+                    }, chat.cfg.tools.autoSecs*this.TimePeriods.ToolCallAutoSecsTimeUnit)
                 }
             }
         })
@@ -1726,7 +1718,7 @@ class MultiChatUI {
      * @param {boolean} bSwitchSession
      */
     new_chat_session(chatId, bSwitchSession=false) {
-        this.simpleChats[chatId] = new SimpleChat(chatId, this.me);
+        this.simpleChats[chatId] = new SimpleChat(chatId, this.me.defaultCfg);
         this.elDivStreams[chatId] = new ELDivStream(chatId);
         this.elDivStreams[chatId].clear()
         if (bSwitchSession) {
@@ -1759,7 +1751,7 @@ class MultiChatUI {
         // So if user wants to simulate a multi-chat based completion query,
         // they will have to enter the full thing, as a suitable multiline
         // user input/query.
-        if ((apiEP == ApiEP.Type.Completion) && (this.me.chatProps.bCompletionFreshChatAlways)) {
+        if ((apiEP == ApiEP.Type.Completion) && (chat.cfg.chatProps.bCompletionFreshChatAlways)) {
             chat.clear();
         }
 
@@ -1804,7 +1796,7 @@ class MultiChatUI {
         this.elInUser.disabled = true;
 
         try {
-            let theResp = await chat.handle_chat_hs(this.me.baseURL, apiEP, { chatPropsStream: this.me.chatProps.stream, toolsEnabled: this.me.tools.enabled }, this.elDivStreams)
+            let theResp = await chat.handle_chat_hs(chat.cfg.baseURL, apiEP, this.elDivStreams)
             if (chatId == this.curChatId) {
                 this.chat_uirefresh(chatId);
                 if ((theResp.trimmedContent) && (theResp.trimmedContent.length > 0)) {
@@ -1840,7 +1832,7 @@ class MultiChatUI {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
                 this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
                 this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
-            }, this.me.tools.toolCallResponseTimeoutMS)
+            }, chat.cfg.tools.toolCallResponseTimeoutMS)
         }
     }
 
@@ -2025,8 +2017,72 @@ export class Config {
         return Object.assign(newMe, clonedData)
     }
 
-}
+    /**
+     * Show the configurable parameters info in the passed Div element.
+     * @param {HTMLDivElement} elDiv
+     * @param {boolean} bAll
+     */
+    show_info(elDiv, bAll=false) {
+        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "chatProps"];
+        if (!bAll) {
+            props = [ "baseURL", "modelInfo", "tools", "chatProps" ];
+        }
+        let elInfo = document.createElement("div")
+        elInfo.id = "DefaultInfo"
+        elDiv.appendChild(elInfo)
+        fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
+            this.modelInfo = {
+                modelPath: json["model_path"],
+                ctxSize: json["default_generation_settings"]["n_ctx"]
+            }
+            ui.ui_show_obj_props_info(elInfo, this, props, "Current Settings/Info (dev console document[gMe])", "", { toplegend: 'role-system' })
+        }).catch(err=>console.log(`WARN:ShowInfo:${err}`))
+    }
 
+    /**
+     * Show settings ui for configurable parameters, in the passed Div element.
+     * @param {HTMLDivElement} elDiv
+     */
+    show_settings(elDiv) {
+        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "chatProps"], "Settings", (prop, elProp)=>{
+            if (prop == "headers:Authorization") {
+                // @ts-ignore
+                elProp.placeholder = "Bearer OPENAI_API_KEY";
+            }
+            if (prop.startsWith("tools:toolName")) {
+                /** @type {HTMLInputElement} */(elProp).disabled = true
+            }
+        }, [":chatProps:apiEP", ":chatProps:iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
+            if (propWithPath == ":chatProps:apiEP") {
+                let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.chatProps.apiEP, (val)=>{
+                    // @ts-ignore
+                    this.chatProps.apiEP = ApiEP.Type[val];
+                });
+                elParent.appendChild(sel.div);
+            }
+            if (propWithPath == ":chatProps:iRecentUserMsgCnt") {
+                let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCntDict, this.chatProps.iRecentUserMsgCnt, (val)=>{
+                    this.chatProps.iRecentUserMsgCnt = this.sRecentUserMsgCntDict[val];
+                });
+                elParent.appendChild(sel.div);
+            }
+        })
+    }
+
+    get_sRecentUserMsgCnt() {
+        let sRecentUserMsgCnt = Object.keys(this.sRecentUserMsgCntDict).find((key)=>{
+            if (this.sRecentUserMsgCntDict[key] == this.chatProps.iRecentUserMsgCnt) {
+                return true
+            }
+            return false
+        });
+        if (sRecentUserMsgCnt) {
+            return sRecentUserMsgCnt;
+        }
+        return "Unknown";
+    }
+
+}
 
 
 export class Me {
@@ -2111,69 +2167,5 @@ export class Me {
         elDiv.appendChild(elTitle)
     }
 
-    /**
-     * Show the configurable parameters info in the passed Div element.
-     * @param {HTMLDivElement} elDiv
-     * @param {boolean} bAll
-     */
-    show_info(elDiv, bAll=false) {
-        let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "chatProps"];
-        if (!bAll) {
-            props = [ "baseURL", "modelInfo", "tools", "chatProps" ];
-        }
-        let elInfo = document.createElement("div")
-        elInfo.id = "DefaultInfo"
-        elDiv.appendChild(elInfo)
-        fetch(`${this.baseURL}/props`).then(resp=>resp.json()).then(json=>{
-            this.modelInfo = {
-                modelPath: json["model_path"],
-                ctxSize: json["default_generation_settings"]["n_ctx"]
-            }
-            ui.ui_show_obj_props_info(elInfo, this, props, "Current Settings/Info (dev console document[gMe])", "", { toplegend: 'role-system' })
-        }).catch(err=>console.log(`WARN:ShowInfo:${err}`))
-    }
-
-    /**
-     * Show settings ui for configurable parameters, in the passed Div element.
-     * @param {HTMLDivElement} elDiv
-     */
-    show_settings(elDiv) {
-        ui.ui_show_obj_props_edit(elDiv, "", this, ["baseURL", "headers", "tools", "apiRequestOptions", "chatProps"], "Settings", (prop, elProp)=>{
-            if (prop == "headers:Authorization") {
-                // @ts-ignore
-                elProp.placeholder = "Bearer OPENAI_API_KEY";
-            }
-            if (prop.startsWith("tools:toolName")) {
-                /** @type {HTMLInputElement} */(elProp).disabled = true
-            }
-        }, [":chatProps:apiEP", ":chatProps:iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
-            if (propWithPath == ":chatProps:apiEP") {
-                let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.chatProps.apiEP, (val)=>{
-                    // @ts-ignore
-                    this.chatProps.apiEP = ApiEP.Type[val];
-                });
-                elParent.appendChild(sel.div);
-            }
-            if (propWithPath == ":chatProps:iRecentUserMsgCnt") {
-                let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCntDict, this.chatProps.iRecentUserMsgCnt, (val)=>{
-                    this.chatProps.iRecentUserMsgCnt = this.sRecentUserMsgCntDict[val];
-                });
-                elParent.appendChild(sel.div);
-            }
-        })
-    }
-
-    get_sRecentUserMsgCnt() {
-        let sRecentUserMsgCnt = Object.keys(this.sRecentUserMsgCntDict).find((key)=>{
-            if (this.sRecentUserMsgCntDict[key] == this.chatProps.iRecentUserMsgCnt) {
-                return true
-            }
-            return false
-        });
-        if (sRecentUserMsgCnt) {
-            return sRecentUserMsgCnt;
-        }
-        return "Unknown";
-    }
 
 }

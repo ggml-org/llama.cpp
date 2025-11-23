@@ -27,9 +27,10 @@ let gMe = /** @type{mChatMagic.Me} */(/** @type {unknown} */(null));
 
 /**
  * For now hash the shared secret with the year.
+ * @param {mChatMagic.SimpleChat} chat
  */
-async function bearer_transform() {
-    let data = `${new Date().getUTCFullYear()}${gMe.tools.proxyAuthInsecure}`
+async function bearer_transform(chat) {
+    let data = `${new Date().getUTCFullYear()}${chat.cfg.tools.proxyAuthInsecure}`
     const ab = await crypto.subtle.digest('sha-256', new TextEncoder().encode(data));
     return Array.from(new Uint8Array(ab)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
@@ -51,11 +52,12 @@ async function bearer_transform() {
  * @param {any} objHeaders
  */
 async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchParams, path, objHeaders={}) {
+    let chat = gMe.multiChat.simpleChats[chatid]
     if (gMe.toolsMgr.workers.js.onmessage != null) {
         let params = new URLSearchParams(objSearchParams)
-        let newUrl = `${gMe.tools.proxyUrl}/${path}?${params}`
+        let newUrl = `${chat.cfg.tools.proxyUrl}/${path}?${params}`
         let headers = new Headers(objHeaders)
-        let btoken = await bearer_transform()
+        let btoken = await bearer_transform(chat)
         headers.append('Authorization', `Bearer ${btoken}`)
         fetch(newUrl, { headers: headers}).then(resp => {
             if (!resp.ok) {
@@ -81,7 +83,7 @@ async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchPa
  * @param {Object<string, Object<string, any>>} tcs
  */
 async function proxyserver_tc_setup(tag, tcPath, tcName, tcsData, tcs) {
-    await fetch(`${gMe.tools.proxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
+    await fetch(`${gMe.defaultCfg.tools.proxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
         if (resp.statusText != 'bharatavarshe') {
             console.log(`WARN:ToolWeb:${tag}:Dont forget to run the bundled local.tools/simpleproxy.py to enable me`)
             return
@@ -238,12 +240,13 @@ let searchwebtext_meta = {
  * @param {any} obj
  */
 function searchwebtext_run(chatid, toolcallid, toolname, obj) {
+    let chat = gMe.multiChat.simpleChats[chatid]
     /** @type {string} */
-    let searchUrl = gMe.tools.searchUrl;
+    let searchUrl = chat.cfg.tools.searchUrl;
     searchUrl = searchUrl.replace("SEARCHWORDS", encodeURIComponent(obj.words));
     delete(obj.words)
     obj['url'] = searchUrl
-    let headers = { 'htmltext-tag-drops': JSON.stringify(gMe.tools.searchDrops) }
+    let headers = { 'htmltext-tag-drops': JSON.stringify(chat.cfg.tools.searchDrops) }
     return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'htmltext', headers);
 }
 

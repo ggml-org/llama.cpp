@@ -50,29 +50,29 @@ export class ToolsManager {
         /**
          * @type {string[]}
          */
-        me.tools.toolNames = []
+        me.defaultCfg.tools.toolNames = []
         await tjs.init(me).then(()=>{
             for (const key in tjs.tc_switch) {
                 this.tc_switch[key] = tjs.tc_switch[key]
-                me.tools.toolNames.push(key)
+                me.defaultCfg.tools.toolNames.push(key)
             }
         })
         await tdb.init(me).then(()=>{
             for (const key in tdb.tc_switch) {
                 this.tc_switch[key] = tdb.tc_switch[key]
-                me.tools.toolNames.push(key)
+                me.defaultCfg.tools.toolNames.push(key)
             }
         })
         await tai.init(me).then(()=>{
             for (const key in tai.tc_switch) {
                 this.tc_switch[key] = tai.tc_switch[key]
-                me.tools.toolNames.push(key)
+                me.defaultCfg.tools.toolNames.push(key)
             }
         })
         let tNs = await tweb.init(me)
         for (const key in tNs) {
             this.tc_switch[key] = tNs[key]
-            me.tools.toolNames.push(key)
+            me.defaultCfg.tools.toolNames.push(key)
         }
     }
 
