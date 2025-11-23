@@ -32,6 +32,7 @@ function startme() {
             sL.push(gMe.multiChat.new_chat_session(cid));
         }
         await Promise.allSettled(sL)
+        gMe.multiChat.simpleChats[mChatMagic.AI_TC_SESSIONNAME].cfg.tools.enabled = false
         gMe.multiChat.setup_ui(gMe.defaultChatIds[0]);
         gMe.multiChat.show_sessions();
         gMe.multiChat.handle_session_switch(gMe.multiChat.curChatId)

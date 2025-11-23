@@ -34,7 +34,8 @@ enough manner, in general.
 
 Allows developer/end-user to control some of the behaviour by updating gMe members from browser's devel-tool
 console. Parallely some of the directly useful to end-user settings can also be changed using the provided
-settings ui.
+settings ui. Each chat session has its own set of config entries and thus its own setting, this allows one
+to have independent chat sessions with different instances of llama-server and or with different configs.
 
 For GenAi/LLM models supporting tool / function calling, allows one to interact with them and explore use of
 ai driven augmenting of the knowledge used for generating answers as well as for cross checking ai generated
@@ -57,8 +58,8 @@ NOTE: Wrt options sent with the request, it mainly sets temperature, max_tokens 
 as tool_calls mainly for now. However if someone wants they can update the js file or equivalent member in
 gMe as needed.
 
-NOTE: One may be able to use this to chat with openai api web-service /chat/completions endpoint, in a very
-limited / minimal way. One will need to set model, openai url and authorization bearer key in settings ui.
+NOTE: One may be able to use this to chat with openai api web-service /chat/completions endpoint, in a limited
+/ minimal way. One will need to set model, openai url and authorization bearer key in settings ui.
 
 
 ## usage
@@ -69,12 +70,12 @@ http module.
 
 ### running directly using tools/server
 
-./llama-server -m path/model.gguf --path tools/server/public_simplechat [--port PORT]
+./llama-server -m path/model.gguf --path tools/server/public_simplechat [--port PORT --jinja]
 
 ### running using python3's server module
 
 first run tools/server
-* ./llama-server -m path/model.gguf
+* ./llama-server -m path/model.gguf [--port PORT --jinja]
 
 next run this web front end in tools/server/public_simplechat
 * cd ../tools/server/public_simplechat
@@ -84,13 +85,13 @@ next run this web front end in tools/server/public_simplechat
 
 remember to
 
-* pass --jinja to llama-server to enable tool calling support from the server ai engine end.
+* pass --jinja to llama-server to enable tool calling support from the llama server ai engine end.
 
-* set tools.enabled to true in the settings page of the client side gui.
+* tools.enabled needs to be true in the settings page of a chat session, in the client side gui.
 
 * use a GenAi/LLM model which supports tool calling.
 
-* if fetch web page, web search or pdf-to-text tool call is needed remember to run bundled
+* if fetch web page, web search, pdf-to-text, ... tool call is needed remember to run bundled
   local.tools/simpleproxy.py
   helper along with its config file, before using/loading this client ui through a browser
 
@@ -107,16 +108,16 @@ remember to
         and inturn retaining only https based urls or so.
     * the white list of allowed.domains
       * review and update this to match your needs.
-    * the shared bearer token between server and client ui
+    * the shared bearer token between simpleproxy server and client ui
 
-* other builtin tool / function calls like datetime, calculator, javascript runner, DataStore
-  dont require the simpleproxy.py helper.
+* other builtin tool / function calls like datetime, calculator, javascript runner, DataStore,
+  external ai dont require the simpleproxy.py helper.
 
 ### for vision models
 
-* remember to specify the multimodal related gguf file directly using -mmproj or by using -hf to fetch
-  the llm model and its mmproj gguf from huggingface.
-* additionally specify a large enough -batch-size (ex 8k) and -ubatch-size (ex 2k)
+* remember to also specify the multimodal related gguf file directly using -mmproj or by using -hf to
+  fetch the llm model and its mmproj gguf from huggingface.
+* additionally you may need to specify a large enough -batch-size (ex 8k) and -ubatch-size (ex 2k)
 
 
 ### using the front end
@@ -127,13 +128,14 @@ Open this simple web front end from your local browser
 
 Once inside
 
-* If you want to, you can change many of the default global settings
+* If you want to, you can change many of the default chat session settings
   * the base url (ie ip addr / domain name, port)
   * chat (default) vs completion mode
   * try trim garbage in response or not
   * amount of chat history in the context sent to server/ai-model
   * oneshot or streamed mode.
   * use built in tool calling or not and its related params.
+  * ...
 
 * In completion mode >> note: most recent work has been in chat mode <<
   * one normally doesnt use a system prompt in completion mode.
@@ -156,24 +158,21 @@ Once inside
 * If you want to provide a system prompt, then ideally enter it first, before entering any user query.
   Normally Completion mode doesnt need system prompt, while Chat mode can generate better/interesting
   responses with a suitable system prompt.
-  * if chat.add_system_begin is used
-    * you cant change the system prompt, after it is has been submitted once along with user query.
-    * you cant set a system prompt, after you have submitted any user query
-  * if chat.add_system_anytime is used
-    * one can change the system prompt any time during chat, by changing the contents of system prompt.
-    * inturn the updated/changed system prompt will be inserted into the chat session.
-    * this allows for the subsequent user chatting to be driven by the new system prompt set above.
+  * one can change the system prompt any time during chat, by changing the contents of system prompt.
+  * inturn the updated/changed system prompt will be inserted into the chat session.
+  * this allows for the subsequent user chatting to be driven by the new system prompt set above.
+  * devel note: chat.add_system_anytime and related
 
 * Enter your query and either press enter or click on the submit button.
   * If you want to insert enter (\n) as part of your chat/query to ai model, use shift+enter.
   * If the tool response has been placed into user input textarea, its color is changed to help user
     identify the same easily.
-  * allow user to specify a image file, for vision models.
+  * allow user to specify image files, for vision models.
 
 * Wait for the logic to communicate with the server and get the response.
   * the user is not allowed to enter any fresh query during this time.
   * the user input box will be disabled and a working message will be shown in it.
-  * if trim garbage is enabled, the logic will try to trim repeating text kind of garbage to some extent.
+  * if trim garbage is enabled, logic will try to trim repeating text kind of garbage to some extent.
 
 * any reasoning / thinking by the model is shown to the end user, as it is occuring, if the ai model
   shares the same over the http interface.
@@ -199,17 +198,19 @@ Once inside
       ie user - assistant - {tool response} - user - assistant - kind of sequence.
   * copy text content of messages to clipboard.
 
-* ClearChat/Refresh
-  * use the clearchat button to clear the currently active chat session.
+* {spiral}ClearCurrentChat/Refresh
+  * use the clear button to clear the currently active chat session.
   * just refresh the page, to reset wrt the chat history and system prompts across chat sessions
     and start afresh.
     * This also helps if you had forgotten to start the bundled simpleproxy.py server before hand.
       Start the simpleproxy.py server and refresh the client ui page, to get access to web access
       related tool calls.
+      * starting new chat session, after starting simpleproxy, will also give access to tool calls
+        exposed by simpleproxy, in that new chat session.
   * if you refreshed/cleared unknowingly, you can use the Restore feature to try load previous chat
     session and resume that session. This uses a basic local auto save logic that is in there.
 
-* Using NewChat one can start independent chat sessions.
+* Using {+}NewChat one can start independent chat sessions.
   * two independent chat sessions are setup by default.
 
 * When you want to print, switching ChatHistoryInCtxt to Full and clicking on the chat session button of
@@ -228,14 +229,18 @@ And given that the idea is also to help explore/experiment for developers, some 
 to change behaviour easily using the devel-tools/console or provided minimal settings ui (wrt few aspects).
 Skeletal logic has been implemented to explore some of the end points and ideas/implications around them.
 
+Also by avoiding external packages wrt basic functionality, allows one to have complete control without
+having to track external packages in general, while also keeping the size small, especially for embedded
+applications, if needed.
+
 
 ### General
 
-Me/gMe consolidates the settings which control the behaviour into one object.
-One can see the current settings, as well as change/update them using browsers devel-tool/console.
+Me/gMe->multiChat->simpleChat[chatId].cfg consolidates the settings which control the behaviour into one
+object. One can see current settings, as well as change/update them using browsers devel-tool/console.
 It is attached to the document object. Some of these can also be updated using the Settings UI.
 
-  * baseURL - the domain-name/ip-address and inturn the port to send the request.
+  * baseURL - the domain-name/ip-address and inturn the port to handshake with the ai engine server.
 
   * chatProps - maintain a set of properties which manipulate chatting with ai engine
 
@@ -249,7 +254,7 @@ It is attached to the document object. Some of these can also be updated using t
 
       * if a very long text is being generated, which leads to no user interaction for sometime and inturn the machine goes into power saving mode or so, the platform may stop network connection, leading to exception.
 
-    * iRecentUserMsgCnt - a simple minded SlidingWindow to limit context window load at Ai Model end. This is set to 10 by default. So in addition to latest system message, last/latest iRecentUserMsgCnt user messages after the latest system prompt and its responses from the ai model will be sent to the ai-model, when querying for a new response. Note that if enabled, only user messages after the latest system message/prompt will be considered.
+    * iRecentUserMsgCnt - a simple minded SlidingWindow to limit context window load at Ai Model end. This is set to 5 by default. So in addition to latest system message, last/latest iRecentUserMsgCnt user messages after the latest system prompt and its responses from the ai model will be sent to the ai-model, when querying for a new response. Note that if enabled, only user messages after the latest system message/prompt will be considered.
 
       This specified sliding window user message count also includes the latest user query.
 
@@ -305,11 +310,11 @@ It is attached to the document object. Some of these can also be updated using t
 
     inturn if the ai model requests a tool call to be made, the same will be done and the response sent back to the ai model, under user control, by default.
 
-    as tool calling will involve a bit of back and forth between ai assistant and end user, it is recommended to set iRecentUserMsgCnt to 10 or more, so that enough context is retained during chatting with ai models with tool support.
+    as tool calling will involve a bit of back and forth between ai assistant and end user, it is recommended to set iRecentUserMsgCnt to 10 or so, so that enough context is retained during chatting with ai models with tool support. Decide based on your available system and video ram and the type of chat you are having.
 
   * apiRequestOptions - maintains the list of options/fields to send along with api request, irrespective of whether /chat/completions or /completions endpoint.
 
-    If you want to add additional options/fields to send to the server/ai-model, and or modify the existing options value or remove them, for now you can update this global var using browser's development-tools/console.
+    If you want to add additional options/fields to send to the server/ai-model, and or remove them, for now you can do these actions manually using browser's development-tools/console.
 
     For string, numeric, boolean, object fields in apiRequestOptions, including even those added by a user at runtime by directly modifying gMe.apiRequestOptions, setting ui entries will be auto created.
 
@@ -322,8 +327,8 @@ It is attached to the document object. Some of these can also be updated using t
     * Additionally Authorization entry is provided, which can be set if needed using the settings ui.
 
 
-By using gMe's chatProps.iRecentUserMsgCnt and apiRequestOptions.max_tokens/n_predict one can try to
-control the implications of loading of the ai-model's context window by chat history, wrt chat response
+By using gMe-->simpleChats chatProps.iRecentUserMsgCnt and apiRequestOptions.max_tokens/n_predict one can try
+to control the implications of loading of the ai-model's context window by chat history, wrt chat response
 to some extent in a simple crude way. You may also want to control the context size enabled when the
 server loads ai-model, on the server end. One can look at the current context size set on the server
 end by looking at the settings/info block shown when ever one switches-to/is-shown a new session.
@@ -335,13 +340,11 @@ matter clearing site data, dont directly override site caching in all cases. Wor
 have to change port. Or in dev tools of browser, you may be able to disable caching fully.
 
 
-Currently the settings are maintained globally and not as part of a specific chat session, including
-the server to communicate with. So if one changes the server ip/url in setting, then all chat sessions
-will auto switch to this new server, when you try using those sessions.
+The settings are maintained as part of each specific chat session, including the server to communicate with.
+So if one changes the server ip/url in setting, then all subsequent chat wrt that session will auto switch
+to this new server. And based on the client side sliding window size selected, some amount of your past chat
+history from that session will also be sent to this new server.
 
-
-By switching between chat.add_system_begin/anytime, one can control whether one can change
-the system prompt, anytime during the conversation or only at the beginning.
 
 
 ### Default setup
@@ -369,9 +372,9 @@ NOTE: One may want to experiment with frequency/presence penalty fields in apiRe
 wrt the set of fields sent to server along with the user query, to check how the model behaves
 wrt repeatations in general in the generated text response.
 
-A end-user can change these behaviour by editing gMe from browser's devel-tool/console or by
-using the provided settings ui (for settings exposed through the ui). The logic uses a generic
-helper which autocreates property edit ui elements for the specified set of properties. If the
+A end-user can change these behaviour by editing these through gMe from browser's devel-tool/
+console or by using provided settings ui (for settings exposed through ui). The logic uses a
+generic helper which autocreates property edit ui elements for specified set of properties. If
 new property is a number or text or boolean or a object with properties within it, autocreate
 logic will try handle it automatically. A developer can trap this autocreation flow and change
 things if needed.
@@ -385,11 +388,11 @@ for a minimal chatting experimentation by setting the below.
 * the baseUrl in settings ui
   * https://api.openai.com/v1 or similar
 
-* Wrt request body - gMe.apiRequestOptions
+* Wrt request body - gMe-->simpleChats apiRequestOptions
   * model (settings ui)
   * any additional fields if required in future
 
-* Wrt request headers - gMe.headers
+* Wrt request headers - gMe-->simpleChats headers
   * Authorization (available through settings ui)
     * Bearer THE_OPENAI_API_KEY
   * any additional optional header entries like "OpenAI-Organization", "OpenAI-Project" or so
@@ -404,7 +407,7 @@ Given that browsers provide a implicit env for not only showing ui, but also run
 simplechat client ui allows use of tool calling support provided by the newer ai models by
 end users of llama.cpp's server in a simple way without needing to worry about seperate mcp
 host / router, tools etal, for basic useful tools/functions like calculator, code execution
-(javascript in this case), data store.
+(javascript in this case), data store, ai calling ai, ...
 
 Additionally if users want to work with web content or pdf content as part of their ai chat
 session, Few functions related to web access as well as pdf access which work with a included
@@ -427,6 +430,8 @@ responses. This can also be used for
   * searching for specific topics and summarising the search results and or fetching and
   analysing found data to generate summary or to explore / answer queries around that data ...
   * or so
+  * NOTE: rather here unlike a pure RAG based flow, ai itself helps identify what additional
+  data to get and work on and goes about trying to do the same
 
 * save collated data or generated analysis or more to the provided data store and retrieve
 them later to augment the analysis / generation then. Also could be used to summarise chat
@@ -454,29 +459,32 @@ The following tools/functions are currently provided by default
 
 * sys_date_time - provides the current date and time
 
-* simple_calculator - which can solve simple arithmatic expressions
+* simple_calculator - can solve simple arithmatic expressions
 
-* run_javascript_function_code - which can be used to run ai generated or otherwise javascript code
+* run_javascript_function_code - can be used to run ai generated or otherwise javascript code
   using browser's js capabilities.
 
-* data_store_get/set/delete/list - allows for a basic data store to be used.
+* data_store_get/set/delete/list - allows for a basic data store to be used, to maintain data
+  and or context across sessions and so...
 
-* external_ai - allows ai to use an independent session of itself/ai, with a custom system prompt
-  of ai's choosing and similarly user message of ai's choosing, in order to get any job it deems
-  necessary to be done in a uncluttered indepedent session.
+* external_ai - allows ai to use an independent session of itself / different instance of ai,
+  with a custom system prompt of ai's choosing and similarly user message of ai's choosing,
+  in order to get any job it deems necessary to be done in a uncluttered indepedent session.
   * helps ai to process stuff that it needs, without having to worry about any previous chat history
-    etal messing with the current data's processing.
+    etal messing with the current data's context and processing.
   * helps ai to process stuff with targeted system prompts of its choosing, for the job at hand.
   * tool calling is disabled wrt the external_ai's independent session, for now.
     * it was noticed that else even the external_ai may call into more external_ai calls trying to
       find answer to the same question. maybe one can enable tool calling, while explicitly disabling
-      external_ai tool call from within external_ai tool call or so ...
+      external_ai tool call from within external_ai tool call or so later...
   * Could be used by ai for example to
     * summarise a large text content, where it could use the context of the text to generate a
       suitable system prompt for summarising things suitably
     * create a structured data from a raw textual data
     * act as a literary critic or any domain expert as the case may be
     * or so and so and so ...
+    * given the fuzzy nature of the generative ai, sometimes the model may even use this tool call
+      to get answer to questions like what is your name ;>
 
 Most of the above (except for external ai call) are run from inside web worker contexts. Currently the
 ai generated code / expression is run through a simple minded eval inside a web worker mechanism. Use
@@ -521,11 +529,11 @@ in the url, so be careful as to where and under which user id the simple proxy w
 simpleproxy.json config file.
 
 Implementing some of the tool calls through the simpleproxy.py server and not directly in the browser
-js env, allows one to isolate the core of these logic within a discardable VM or so, by running the
-simpleproxy.py in such a vm.
+js env, allows one to isolate the core of these logic within a discardable VM or so and also if required
+in a different region or so, by running the simpleproxy.py in such a vm.
 
 Depending on the path specified wrt the proxy server, it executes the corresponding logic. Like if
-urltext path is used (and not urlraw), the logic in addition to fetching content from given url, it
+htmltext path is used (and not urlraw), the logic in addition to fetching content from given url, it
 tries to convert html content into equivalent plain text content to some extent in a simple minded
 manner by dropping head block as well as all scripts/styles/footers/headers/nav blocks and inturn
 also dropping the html tags. Similarly for pdftext.
@@ -553,7 +561,9 @@ The bundled simple proxy
 In future it can be further extended to help with other relatively simple yet useful tool calls like
 fetch_rss and so.
 
-  * for now fetch_rss can be indirectly achieved using fetch_web_url_raw.
+  * for now fetch_rss can be indirectly achieved using
+    * fetch_web_url_raw or better still
+    * xmlfiltered and its tagDropREs
 
 #### Extending with new tools
 
@@ -577,8 +587,8 @@ Update the tc_switch to include a object entry for the tool, which inturn includ
   It should pass these along to the tools web worker, if used.
 * the result key (was used previously, may use in future, but for now left as is)
 
-Look into tooljs.mjs and tooldb.mjs for javascript and inturn web worker based tool calls and
-toolweb.mjs for the simpleproxy.py based tool calls.
+Look into tooljs.mjs, toolai.mjs and tooldb.mjs for javascript and inturn browser web worker based
+tool calls and toolweb.mjs for the simpleproxy.py based tool calls.
 
 #### OLD: Mapping tool calls and responses to normal assistant - user chat flow
 
@@ -866,32 +876,36 @@ Cleanup in general
   Also switching sessions takes care of showing the right DivStream ie of currently switched to chat, so that
   end user can see the streamed response from that chat session as it is occuring.
 * Cleanup the tool call descriptions and verbose messages returned a bit.
-* Move towards Chat Session specific settings
-  * Needed so that one could
-    * setup a different ai model / engine as the external ai backend.
-    * interact with different independent ai models / engines / parallel instances in general
-  * Move needed configs from Me into a seperate Config class.
-    * also move ShowSettings, ShowInfo etal into Config class
-  * SimpleChat maintains an instance of Config class instead of Me.
-  * ToolsManager and the different tool call modules have been updated to
-    * have seperate init and setup calls.
-      * init is called at the begining
-      * setup will be called when ever a chat session is being created
-        and or in future when ever any config of interest changes.
-    * pick needed config etal from the specified chatId's config and not any global config.
-  * Starting flow updated to chain the different logical blocks of code
-    * first allow tools manager to be initd
-    * next create the needed default set of sessions, while parallely calling tool manager setup as needed.
-      * ensures that the available list of tool calls match the config of the chat session involved.
-        Needed as user could change tools related proxy server url.
-    * next setup the main ui as needed.
-  * Hide user-input area and tool call validate/trigger area when switching into settings and ensure they
-    get unhidden when returning back, as needed.
-  * Save and restore ChatSession config entries, as needed, in localStorage.
-    * load previously saved config if any, when creating ChatSession
-    * when ever switching, including into a, ChatSession, Configs of all chat sessions are saved.
-  * TODO
-    * Need to allow any changes to proxyUrl to trigger a new tool manager setup wrt that chat session.
+
+Chat Session specific settings
+* Needed so that one could
+  * setup a different ai model / engine as the external ai backend.
+  * interact with different independent ai models / engines / parallel instances in general
+* Move needed configs from Me into a seperate Config class.
+  * also move ShowSettings, ShowInfo etal into Config class
+* SimpleChat maintains an instance of Config class instead of Me.
+* ToolsManager and the different tool call modules have been updated to
+  * have seperate init and setup calls.
+    * init is called at the begining
+    * setup will be called when ever a chat session is being created
+      and or in future when ever any config of interest changes.
+  * pick needed config etal from the specified chatId's config and not any global config.
+* Starting flow updated to chain the different logical blocks of code
+  * first allow tools manager to be initd
+  * next create the needed default set of sessions, while parallely calling tool manager setup as needed.
+    * ensures that the available list of tool calls match the config of the chat session involved.
+      Needed as user could change tools related proxy server url.
+  * next setup the main ui as needed.
+* Hide user-input area and tool call validate/trigger area when switching into settings and ensure they
+  get unhidden when returning back, as needed.
+* Save and restore ChatSession config entries, as needed, in localStorage.
+  * load previously saved config if any, when creating ChatSession
+  * when ever switching, including into a, ChatSession, Configs of all chat sessions are saved.
+* ALERT: If a chat session's tools proxyUrl is changed
+  * the same will be picked up immidiately wrt all subsequent tool calls which depend on the
+    tool call proxy server.
+  * however any resultant changes to the available tool calls list wont get reflected,
+    till one reloads the program.
 
 
 #### ToDo
@@ -907,8 +921,7 @@ the simpleproxy.py if and where needed.
     titles along with corresponding links and descriptions
   * rather with some minimal proding and guidance gpt-oss generated this to use xmlfiltered to read rss
 
-Save used config entries along with the auto saved chat sessions and inturn give option to reload the
-same when saved chat is loaded.
+Add a option/button to reset the chat session config, to defaults.
 
 Have a seperate helper to show the user input area, based on set state. And have support for multiple images
 if the models support same. It should also take care of some aspects of the tool call response edit / submit,
@@ -950,9 +963,11 @@ in devel console of the browser
   resubmitting of response fresh, for any reason, follow below steps
   * remove the assistant response from end of chat session, if any, using
     * document['gMe'].multiChat.simpleChats['SessionId'].xchat.pop()
+    * [202511] One can even use the del button in the popover menu wrt each chat message to delete
   * reset role of Tool response chat message to TOOL.TEMP from tool
     * toolMessageIndex = document['gMe'].multiChat.simpleChats['SessionId'].xchat.length - 1
     * document['gMe'].multiChat.simpleChats['SessionId'].xchat[toolMessageIndex].role = "TOOL.TEMP"
+  * if you dont mind running the tool call again, just deleting the tool response message will also do
   * clicking on the SessionId at top in UI, should refresh the chat ui and inturn it should now give
     the option to control that tool call again
   * this can also help in the case where the chat session fails with context window exceeded

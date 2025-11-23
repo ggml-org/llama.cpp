@@ -85,6 +85,7 @@ async function proxyserver_get_anyargs(chatid, toolcallid, toolname, objSearchPa
  * @param {mToolsMgr.TCSwitch} tcs
  */
 async function proxyserver_tc_setup(tag, chatId, tcPath, tcName, tcsData, tcs) {
+    tag = `${tag}:${chatId}`
     let chat = gMe.multiChat.simpleChats[chatId]
     await fetch(`${chat.cfg.tools.proxyUrl}/aum?url=${tcPath}.jambudweepe.akashaganga.multiverse.987654321123456789`).then(resp=>{
         if (resp.statusText != 'bharatavarshe') {
@@ -416,8 +417,7 @@ async function fetchxmlfiltered_setup(tcs, chatId) {
 
 
 /**
- * Used to get hold of the web worker to use for running tool/function call related code
- * Also to setup tool calls, which need to cross check things at runtime
+ * Used to get hold of the web worker to use for running tool/function call related code.
  * @param {mChatMagic.Me} me
  */
 export async function init(me) {
@@ -426,6 +426,10 @@ export async function init(me) {
 
 
 /**
+ * Return the tool call switch with supported / enabled / available tool calls
+ * Allows to verify / setup tool calls, which need to cross check things at runtime
+ * before getting allowed, like maybe bcas they depend on a config wrt specified
+ * chat session.
  * @param {string} chatId
  */
 export async function setup(chatId) {

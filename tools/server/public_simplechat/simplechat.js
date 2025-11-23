@@ -459,16 +459,19 @@ function usage_note(sRecentUserMsgCnt) {
         </ul>
     <li> Use shift+enter for inserting enter/newline.</li>
     <li> Enter your query/response to ai assistant in text area provided below.</li>
+    <li> Use image button for vision models, submitting or switching session clears same </li>
+    <li> Settings button allows current chat session's configuration to be updated.</li>
+    <li> Remember that each chat session has its own setting.</li>
     <li> settings-tools-enabled should be true to enable tool calling.</li>
         <ul class="ul2">
         <li> If ai assistant requests a tool call, verify same before triggering.</li>
         <li> submit tool response placed into user query/response text area</li>
         </ul>
-    <li> Use image button for vision models, submitting or switching session clears same </li>
     <li> ContextWindow = [System, ${sRecentUserMsgCnt} User Query/Resp, Cur Query].</li>
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
         </ul>
+    <li> ${AI_TC_SESSIONNAME} session keeps tool calls disabled, to avoid recursive...</li>
     </ul>
     </details>`;
     return sUsageNote;
