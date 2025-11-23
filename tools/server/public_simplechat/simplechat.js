@@ -525,10 +525,13 @@ class ELDivStream {
 export class SimpleChat {
 
     /**
+     * Create an instance of SimpleChat
+     * * dont forget to call setup
      * @param {string} chatId
      * @param {Config} cfg
+     * @param {mTools.ToolsManager} toolsMgr
      */
-    constructor(chatId, cfg) {
+    constructor(chatId, cfg, toolsMgr) {
         this.chatId = chatId;
         /**
          * Maintain in a form suitable for common LLM web service chat/completions' messages entry
@@ -538,12 +541,17 @@ export class SimpleChat {
         this.iLastSys = -1;
         this.latestResponse = new ChatMessageEx();
         this.cfg = Config.clone(cfg);
+        this.toolsMgr = toolsMgr
     }
 
     clear() {
         this.xchat = [];
         this.iLastSys = -1;
         this.latestResponse = new ChatMessageEx();
+    }
+
+    setup() {
+        return this.toolsMgr.setup(this.chatId)
     }
 
     /**
@@ -835,7 +843,7 @@ export class SimpleChat {
             obj["stream"] = true;
         }
         if (this.cfg.tools.enabled) {
-            obj["tools"] = this.me.toolsMgr.meta();
+            obj["tools"] = this.toolsMgr.meta(this.chatId);
         }
         return JSON.stringify(obj);
     }
@@ -1072,9 +1080,9 @@ export class SimpleChat {
             return "Tool/Function call name not specified"
         }
         try {
-            return await this.me.toolsMgr.tool_call(this.chatId, toolcallid, toolname, toolargs)
+            return await this.toolsMgr.tool_call(this.chatId, toolcallid, toolname, toolargs)
         } catch (/** @type {any} */error) {
-            this.me.toolsMgr.toolcallpending_found_cleared(this.chatId, toolcallid, 'SC:HandleToolCall:Exc')
+            this.toolsMgr.toolcallpending_found_cleared(this.chatId, toolcallid, 'SC:HandleToolCall:Exc')
             return `Tool/Function call raised an exception:${error.name}:${error.message}`
         }
     }
@@ -1730,15 +1738,15 @@ class MultiChatUI {
      * @param {string} chatId
      * @param {boolean} bSwitchSession
      */
-    new_chat_session(chatId, bSwitchSession=false) {
-        this.simpleChats[chatId] = new SimpleChat(chatId, this.me.defaultCfg);
+    async new_chat_session(chatId, bSwitchSession=false) {
+        this.simpleChats[chatId] = new SimpleChat(chatId, this.me.defaultCfg, this.me.toolsMgr);
+        await this.simpleChats[chatId].setup();
         this.elDivStreams[chatId] = new ELDivStream(chatId);
-        this.elDivStreams[chatId].clear()
+        this.elDivStreams[chatId].clear();
         if (bSwitchSession) {
             this.handle_session_switch(chatId);
         }
     }
-
 
     /**
      * Handle user query submit request, wrt specified chat session.
@@ -1874,9 +1882,10 @@ class MultiChatUI {
                 return;
             }
             chatIdGot = SimpleChat.ChatIdClean(chatIdGot)
-            this.new_chat_session(chatIdGot, true);
-            this.create_session_btn(elDiv, chatIdGot);
-            ui.el_children_config_class(elDiv, chatIdGot, "session-selected", "");
+            this.new_chat_session(chatIdGot, true).then(()=>{
+                this.create_session_btn(elDiv, chatIdGot);
+                ui.el_children_config_class(elDiv, chatIdGot, "session-selected", "");
+            })
         },"NewChat", "+ new");
         btnNew.title = "start a new chat session"
         elDiv.appendChild(btnNew);

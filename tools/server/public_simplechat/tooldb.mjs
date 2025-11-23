@@ -6,6 +6,7 @@
 //
 
 import * as mChatMagic from './simplechat.js'
+import * as mToolsMgr from './tools.mjs'
 
 
 let gMe = /** @type{mChatMagic.Me} */(/** @type {unknown} */(null));
@@ -101,9 +102,9 @@ function dsops_run(chatid, toolcallid, toolname, obj) {
 
 
 /**
- * @type {Object<string, Object<string, any>>}
+ * @type {mToolsMgr.TCSwitch}
  */
-export let tc_switch = {
+let tc_switch = {
     "data_store_get": {
         "handler": dsops_run,
         "meta": dsget_meta,
@@ -134,4 +135,12 @@ export let tc_switch = {
  */
 export async function init(me) {
     gMe = me
+}
+
+
+/**
+ * @param {string} chatId
+ */
+export async function setup(chatId) {
+    return tc_switch;
 }

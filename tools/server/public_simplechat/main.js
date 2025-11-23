@@ -26,10 +26,12 @@ function startme() {
     gMe = new mChatMagic.Me();
     gMe.debug_disable();
     devel_expose()
-    gMe.toolsMgr.init(gMe).then(()=>{
+    gMe.toolsMgr.init(gMe).then(async ()=>{
+        let sL = []
         for (let cid of gMe.defaultChatIds) {
-            gMe.multiChat.new_chat_session(cid);
+            sL.push(gMe.multiChat.new_chat_session(cid));
         }
+        await Promise.allSettled(sL)
         gMe.multiChat.setup_ui(gMe.defaultChatIds[0]);
         gMe.multiChat.show_sessions();
         gMe.multiChat.handle_session_switch(gMe.multiChat.curChatId)
