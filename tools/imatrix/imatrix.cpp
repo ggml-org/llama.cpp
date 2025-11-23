@@ -757,27 +757,10 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.activations.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.values.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.counts.size(), GGML_MEM_ALIGN);
-        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * 4, GGML_MEM_ALIGN);
     }
 
     // deterministic tensor name order
     std::sort(to_store.begin(), to_store.end());
-
-    // Compute per-tensor statistics (CosSim, L2 Dist, ECS) to store alongside sums
-    std::vector<tensor_statistics> tstats;
-    tstats.reserve(m_stats.size());
-    bool legacy_tensor = true;
-    for (const auto & kv : m_stats) {
-        if (!compute_vector_statistics(tstats, kv.first, kv.second, legacy_tensor)) {
-            LOG_WRN("%s: tensor %s has no data - skipping\n", __func__, kv.first.c_str());
-        }
-    }
-    if (!tstats.empty()) { compute_tensor_statistics(tstats); }
-
-    // index by tensor name
-    std::unordered_map<std::string, const tensor_statistics *> tstat_index;
-    tstat_index.reserve(tstats.size());
-    for (const auto & ts : tstats) { tstat_index[ts.tensor] = &ts; }
 
     struct ggml_init_params params = {
         /* .mem_size   = */ data_size,
@@ -834,29 +817,6 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
                 }
                 gguf_add_tensor(ctx_gguf, in_sum);
             }
-        }
-
-        // Store per-tensor statistics as a small 1D tensor: [ECS, L2 Dist, CosSim, ZD Score]
-        {
-            float l2 = 0.0f;
-            float cs = 0.0f;
-            float zd = 0.0f;
-            float ecs = 0.0f;
-            auto it_ts = tstat_index.find(name);
-            if (it_ts != tstat_index.end() && it_ts->second != nullptr) {
-                l2 = it_ts->second->l2_dist;
-                cs = it_ts->second->cossim;
-                zd = it_ts->second->zd_score;
-                ecs = 100.0f * (1.0f - std::exp(-0.01f * l2) * std::pow(std::fabs(cs), 10.0f));
-            }
-
-            struct ggml_tensor * stats_t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
-            ggml_format_name(stats_t, "%s.stats", name.c_str());
-            ((float *)stats_t->data)[0] = ecs;
-            ((float *)stats_t->data)[1] = l2;
-            ((float *)stats_t->data)[2] = cs;
-            ((float *)stats_t->data)[3] = zd;
-            gguf_add_tensor(ctx_gguf, stats_t);
         }
     }
 
@@ -1431,10 +1391,16 @@ static bool show_statistics(const common_params & params) {
         "=============================================================================================================="
         "=============================================================\n");
 
+    // Euclidean-Cosine score
+    auto ecs = [](const float l2_dist, const float cossim) {
+        return 100.0f - (100.0f * (1.0f / (1.0f + ((2.0f / 3.0f) * l2_dist * l2_dist))) * ((1 + cossim) * 0.5f));
+    };
+
     for (const auto & tstat : ts) {
         std::string layer;
         std::string name;
         process_tensor_name(tstat.tensor, layer, name);
+        const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2((float) tstat.elements)) : 0.0f;
 
         int blk;
         try {
@@ -1442,9 +1408,6 @@ static bool show_statistics(const common_params & params) {
         } catch (const std::exception &) {
             blk = -1; // not a block layer
         }
-
-        const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2((float) tstat.elements)) : 0.0f;
-        const float ecs = 100.0f * (1.0f - std::exp(-0.01f * tstat.l2_dist) * std::pow(std::fabs(tstat.cossim), 10.0f)); // Euclidean-Cosine score
 
         LOG_INF("%5s\t%-20s\t%11.4f\t%10.4f\t%10.4f\t%8.4f\t%8.4f\t%7d\t%10.2f%%\t%10.4f\t%6.2f%%\t%10.4f\n",
             layer.c_str(),
@@ -1456,7 +1419,7 @@ static bool show_statistics(const common_params & params) {
             tstat.std_deviation,
             tstat.elements,
             h_norm,
-            legacy ? tstat.entropy : ecs,
+            legacy ? tstat.entropy : ecs(tstat.l2_dist, tstat.cossim),
             100.0f * tstat.zd_score,
             tstat.cossim);
 
@@ -1516,13 +1479,12 @@ static bool show_statistics(const common_params & params) {
                 100.0f * stats.layer_zd / stats.n,
                 layer_cs);
         } else {
-            const float layer_ecs = 100.0f * (1.0f - std::exp(-0.01f * layer_l2n) * std::pow(std::fabs(layer_cs), 10.0f));
             LOG_INF("%5d\t%11.4f\t%6.2f%%\t%11.4f\t%8.4f\n",
                 layer,
                 layer_l2n,
                 100.0f * stats.layer_zd / stats.n,
                 layer_cs,
-                layer_ecs);
+                ecs(layer_l2n, layer_cs));
         }
     }
     LOG_INF("\n");
