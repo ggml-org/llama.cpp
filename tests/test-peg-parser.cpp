@@ -14,10 +14,6 @@ int main(int argc, char *argv[]) {
     t.test("json", test_json_parser);
     t.test("gbnf", test_gbnf_generation);
     t.test("serialization", test_json_serialization);
-    //t.test("qwen3_coder", test_example_qwen3_coder);
-    //t.test("seed_oss", test_example_seed_oss);
-    //t.test("minimax_m2", test_example_minimax_m2);
-    //t.test("command7_parser_compare", test_command7_parser_compare);
 
     return t.summary();
 }
