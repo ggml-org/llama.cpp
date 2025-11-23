@@ -94,7 +94,8 @@ function externalai_run(chatid, toolcallid, toolname, obj) {
     sc.clear()
     sc.add_system_anytime(obj['system_prompt'], 'TC:ExternalAI')
     sc.add(new mChatMagic.ChatMessageEx(new mChatMagic.NSChatMessage(mChatMagic.Roles.User, obj['user_message'])))
-    sc.handle_chat_hs(gMe.baseURL, mChatMagic.ApiEP.Type.Chat, { chatPropsStream: gMe.chatProps.stream, toolsEnabled: false }, gMe.multiChat.elDivStreams).then((resp)=>{
+    sc.cfg.tools.enabled = false
+    sc.handle_chat_hs(sc.cfg.baseURL, mChatMagic.ApiEP.Type.Chat, gMe.multiChat.elDivStreams).then((resp)=>{
         gMe.toolsMgr.workers_postmessage_for_main(gMe.toolsMgr.workers.js, chatid, toolcallid, toolname, resp.content_equiv());
     }).catch((err)=>{
         gMe.toolsMgr.workers_postmessage_for_main(gMe.toolsMgr.workers.js, chatid, toolcallid, toolname, `Error:TC:ExternalAI:${err}`);
