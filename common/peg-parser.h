@@ -137,19 +137,19 @@ struct common_peg_parse_result {
 
 struct common_peg_parse_context {
     std::string input;
-    bool input_is_complete;
+    bool is_partial;
     common_peg_ast_arena ast;
 
     int parse_depth;
 
     common_peg_parse_context()
-        : input_is_complete(true), parse_depth(0) {}
+        : is_partial(false), parse_depth(0) {}
 
     common_peg_parse_context(const std::string & input)
-        : input(input), input_is_complete(true), parse_depth(0) {}
+        : input(input), is_partial(false), parse_depth(0) {}
 
-    common_peg_parse_context(const std::string & input, bool complete)
-        : input(input), input_is_complete(complete), parse_depth(0) {}
+    common_peg_parse_context(const std::string & input, bool is_partial)
+        : input(input), is_partial(is_partial), parse_depth(0) {}
 };
 
 class common_peg_arena;

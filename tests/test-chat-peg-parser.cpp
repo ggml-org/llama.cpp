@@ -258,7 +258,7 @@ static void test_example_qwen3_coder(testing & t) {
         for (auto it = tokens.begin(); it != tokens.end(); it++) {
             std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
 
-            common_peg_parse_context ctx(in, it == tokens.end() - 1);
+            common_peg_parse_context ctx(in, it + 1 < tokens.end());
 
             auto result = parser.parse(ctx);
             if (!t.assert_equal("not fail", false, result.fail())) {
@@ -319,8 +319,8 @@ void test_command7_parser_compare(testing & t) {
         return p.optional(thinking) << (tool_calls | response) + p.end();
     });
 
-    auto test_current = [&](const common_peg_arena & p, const std::string & input, bool need_more_input, bool print_results) {
-        common_peg_parse_context ctx(input, !need_more_input);
+    auto test_current = [&](const common_peg_arena & p, const std::string & input, bool is_partial, bool print_results) {
+        common_peg_parse_context ctx(input, is_partial);
         auto result = p.parse(ctx);
 
         common_chat_msg msg;

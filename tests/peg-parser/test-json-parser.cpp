@@ -46,7 +46,7 @@ void test_json_parser(testing &t) {
         auto json = build_peg_parser([](common_peg_parser_builder & p) { return p.json(); });
 
         std::string    input = R"({"name": "test", "value": )";
-        common_peg_parse_context ctx(input, false);
+        common_peg_parse_context ctx(input, true);
 
         auto result = json.parse(ctx);
 
@@ -58,7 +58,7 @@ void test_json_parser(testing &t) {
         auto json = build_peg_parser([](common_peg_parser_builder & p) { return p.json(); });
 
         std::string    input = R"([1, 2, 3, )";
-        common_peg_parse_context ctx(input, false);
+        common_peg_parse_context ctx(input, true);
 
         auto result = json.parse(ctx);
 
@@ -70,7 +70,7 @@ void test_json_parser(testing &t) {
         auto json = build_peg_parser([](common_peg_parser_builder & p) { return p.json(); });
 
         std::string    input = R"({"data": {"nested": )";
-        common_peg_parse_context ctx(input, false);
+        common_peg_parse_context ctx(input, true);
 
         auto result = json.parse(ctx);
 

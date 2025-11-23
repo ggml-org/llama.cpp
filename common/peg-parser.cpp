@@ -314,7 +314,7 @@ struct parser_executor {
         auto pos = start_pos;
         for (auto i = 0u; i < p.literal.size(); ++i) {
             if (pos >= ctx.input.size()) {
-                if (ctx.input_is_complete) {
+                if (!ctx.is_partial) {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
@@ -406,7 +406,7 @@ struct parser_executor {
 
         // Check if we got enough matches
         if (p.min_count > 0 && match_count < p.min_count) {
-            if (pos >= ctx.input.size() && !ctx.input_is_complete) {
+            if (pos >= ctx.input.size() && ctx.is_partial) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos, std::move(nodes));
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
@@ -443,7 +443,7 @@ struct parser_executor {
         auto result = parse_utf8_codepoint(ctx.input, start_pos);
 
         if (result.status == utf8_parse_result::INCOMPLETE) {
-            if (ctx.input_is_complete) {
+            if (!ctx.is_partial) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
@@ -482,7 +482,7 @@ struct parser_executor {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
                 }
                 // Not enough matches yet
-                if (ctx.input_is_complete) {
+                if (!ctx.is_partial) {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
@@ -523,7 +523,7 @@ struct parser_executor {
 
         // Check if we got enough matches
         if (match_count < p.min_count) {
-            if (pos >= ctx.input.size() && !ctx.input_is_complete) {
+            if (pos >= ctx.input.size() && ctx.is_partial) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
@@ -535,7 +535,7 @@ struct parser_executor {
     static common_peg_parse_result handle_escape_sequence(common_peg_parse_context & ctx, size_t start, size_t & pos) {
         ++pos; // consume '\'
         if (pos >= ctx.input.size()) {
-            if (ctx.input_is_complete) {
+            if (!ctx.is_partial) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
@@ -564,7 +564,7 @@ struct parser_executor {
         ++pos; // consume 'u'
         for (int i = 0; i < 4; ++i) {
             if (pos >= ctx.input.size()) {
-                if (ctx.input_is_complete) {
+                if (!ctx.is_partial) {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
@@ -598,7 +598,7 @@ struct parser_executor {
                 auto utf8_result = parse_utf8_codepoint(ctx.input, pos);
 
                 if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
-                    if (ctx.input_is_complete) {
+                    if (!ctx.is_partial) {
                         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                     }
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
@@ -613,7 +613,7 @@ struct parser_executor {
         }
 
         // Reached end without finding closing quote
-        if (ctx.input_is_complete) {
+        if (!ctx.is_partial) {
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
         }
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
@@ -631,7 +631,7 @@ struct parser_executor {
 
             if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
                 // Incomplete UTF-8 sequence
-                if (ctx.input_is_complete) {
+                if (!ctx.is_partial) {
                     // Input is complete but UTF-8 is incomplete = malformed
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }

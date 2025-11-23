@@ -59,7 +59,7 @@ void test_unicode(testing &t) {
             std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
             t.test(test_name, [&](testing &t) {
-                common_peg_parse_context ctx(tc.input, false);
+                common_peg_parse_context ctx(tc.input, true);
                 auto result = parser.parse(ctx);
 
                 // Assert result type matches
@@ -102,7 +102,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, false);
+                    common_peg_parse_context ctx(tc.input, true);
                     auto result = parser.parse(ctx);
 
                     // Assert result type matches
@@ -143,7 +143,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, false);
+                    common_peg_parse_context ctx(tc.input, true);
                     auto result = parser.parse(ctx);
 
                     // Assert result type matches
@@ -188,7 +188,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, false);
+                    common_peg_parse_context ctx(tc.input, true);
                     auto result = parser.parse(ctx);
 
                     // Assert result type matches
@@ -226,7 +226,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, false);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -260,7 +260,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, false);  // input_is_complete = false
+                    common_peg_parse_context ctx(tc.input, true);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -294,7 +294,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, false);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -331,7 +331,7 @@ void test_unicode(testing &t) {
                         return p.sequence({p.json_string_content(), p.literal("\"")});
                     });
 
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, false);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -368,7 +368,7 @@ void test_unicode(testing &t) {
                         return p.json_string_content();
                     });
 
-                    common_peg_parse_context ctx(tc.input, false);  // input_is_complete = false
+                    common_peg_parse_context ctx(tc.input, true);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -405,7 +405,7 @@ void test_unicode(testing &t) {
                         return p.json_string_content();
                     });
 
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, false);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -434,7 +434,7 @@ void test_unicode(testing &t) {
                         return p.sequence({p.json_string_content(), p.literal("\"")});
                     });
 
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, false);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
