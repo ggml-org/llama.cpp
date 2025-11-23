@@ -232,9 +232,6 @@ static const char * cu_get_error_str(CUresult err) {
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
 #define VOLTA_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
-#if defined(GGML_USE_HIP) && defined(RDNA4)
-#define AMD_WMMA_AVAILABLE
-#endif // defined(GGML_USE_HIP) && defined(RDNA4) && !defined(GGML_HIP_NO_MMQ_WMMA)
 
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 #define TURING_MMA_AVAILABLE
@@ -296,10 +293,6 @@ static bool amd_wmma_available(const int cc) {
 
 static bool volta_mma_available(const int cc) {
     return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_VOLTA;
-}
-
-static bool amd_wmma_available(const int cc) {
-    return GGML_CUDA_CC_IS_RDNA4(cc);
 }
 
 static bool turing_mma_available(const int cc) {
