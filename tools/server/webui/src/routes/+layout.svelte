@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
-	import { ChatSidebar, ConversationTitleUpdateDialog } from '$lib/components/app';
+	import { ChatSidebar, DialogConversationTitleUpdate } from '$lib/components/app';
 	import {
 		activeMessages,
 		isLoading,
@@ -150,7 +150,7 @@
 
 <Toaster richColors />
 
-<ConversationTitleUpdateDialog
+<DialogConversationTitleUpdate
 	bind:open={titleUpdateDialogOpen}
 	currentTitle={titleUpdateCurrentTitle}
 	newTitle={titleUpdateNewTitle}
