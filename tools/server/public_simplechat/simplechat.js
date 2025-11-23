@@ -1142,6 +1142,7 @@ class MultiChatUI {
         this.elBtnUser = /** @type{HTMLButtonElement} */(document.getElementById("user-btn"));
         this.elInUser = /** @type{HTMLInputElement} */(document.getElementById("user-in"));
         this.elDivUserInImgs = /** @type{HTMLSelectElement} */(document.getElementById("user-in-imgs"));
+        this.elDivUserIn = /** @type{HTMLSelectElement} */(document.getElementById("user-in-div"));
         this.elDivHeading = /** @type{HTMLSelectElement} */(document.getElementById("heading"));
         this.elDivSessions = /** @type{HTMLDivElement} */(document.getElementById("sessions-div"));
         this.elBtnSettings = /** @type{HTMLButtonElement} */(document.getElementById("settings"));
@@ -1634,6 +1635,8 @@ class MultiChatUI {
             this.elDivChat.replaceChildren();
             let chat = this.simpleChats[this.curChatId]
             chat.cfg.show_settings(this.elDivChat, chat.chatId);
+            this.elDivUserIn.hidden = true
+            this.elDivTool.hidden = true
             this.me.houseKeeping.clear = true;
         });
         this.elBtnClearChat.addEventListener("click", (ev)=>{
@@ -1936,6 +1939,7 @@ class MultiChatUI {
             console.error(`ERRR:SimpleChat:MCUI:HandleSessionSwitch:${chatId} missing...`);
             return;
         }
+        this.elDivUserIn.hidden = false
         this.elInSystem.value = chat.get_system_latest().ns.getContent();
         this.curChatId = chatId;
         this.chat_show(chatId, true, true);
