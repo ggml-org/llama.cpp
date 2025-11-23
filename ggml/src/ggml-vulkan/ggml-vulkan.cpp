@@ -8616,6 +8616,14 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_fill_f32;
         }
         return nullptr;
+    case GGML_OP_GET_REL_POS:
+        if (src0->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_get_rel_pos_f32;
+        }
+        if (src0->type == GGML_TYPE_F16) {
+            return ctx->device->pipeline_get_rel_pos_f16;
+        }
+        return nullptr;
     default:
         return nullptr;
     }
@@ -8925,6 +8933,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_UNARY:
     case GGML_OP_GLU:
     case GGML_OP_CONV_2D_DW:
+    case GGML_OP_GET_REL_POS:
         {
             uint32_t ne = ggml_nelements(dst);
             if (op == GGML_OP_CPY && ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
@@ -10024,29 +10033,8 @@ static void ggml_vk_rope(ggml_backend_vk_context * ctx, vk_context& subctx, cons
 }
 
 static void ggml_vk_get_rel_pos(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
-    vk_pipeline pipeline = nullptr;
-    switch (src0->type) {
-        case GGML_TYPE_F32: pipeline = ctx->device->pipeline_get_rel_pos_f32; break;
-        case GGML_TYPE_F16: pipeline = ctx->device->pipeline_get_rel_pos_f16; break;
-        default: GGML_ABORT("fatal error");
-    }
-    GGML_ASSERT(pipeline != nullptr);
-
     vk_op_unary_push_constants pc = vk_op_unary_push_constants_init(src0, dst, ggml_nelements(dst));
-    init_pushconst_fastdiv(pc);
-
-    std::array<uint32_t, 3> elements;
-    uint32_t ne = ggml_nelements(dst);
-    if (ne > 262144) {
-        elements = { 512, 512, CEIL_DIV(ne, 262144) };
-    } else if (ne > 512) {
-        elements = { 512, CEIL_DIV(ne, 512), 1 };
-    } else {
-        elements = { ne, 1, 1 };
-    }
-
-    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { ggml_vk_tensor_subbuffer(ctx, src0), ggml_vk_tensor_subbuffer(ctx, dst) }, pc, elements);
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_GET_REL_POS, pc);
 }
 
 static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
@@ -14001,7 +13989,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_LOG:
             return op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16;
         case GGML_OP_GET_REL_POS:
-            return ggml_is_contiguous(op->src[0]) &&
+            return ggml_is_contiguous(op->src[0]) && ggml_vk_dim01_contiguous(op->src[0]) &&
                    (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
         case GGML_OP_ARGSORT:
             {
