@@ -542,6 +542,7 @@ export class SimpleChat {
         this.latestResponse = new ChatMessageEx();
         this.cfg = Config.clone(cfg);
         this.toolsMgr = toolsMgr
+        this.load_cfg()
     }
 
     clear() {
@@ -569,6 +570,30 @@ export class SimpleChat {
 
     ods_key() {
         return `SimpleChat-${this.chatId}`
+    }
+
+    /**
+     * Save the config to local storage
+     */
+    save_cfg() {
+        let tag = `SimpleChat:SaveCfg:${this.chatId}`;
+        let ods = JSON.stringify(this.cfg)
+        localStorage.setItem(this.ods_key(), ods)
+        console.log(`DBUG:${tag}:saved`)
+    }
+
+    /**
+     * Load the config from local storage
+     */
+    load_cfg() {
+        let tag = `SimpleChat:LoadCfg:${this.chatId}`;
+        let odsStr = localStorage.getItem(this.ods_key())
+        if (odsStr) {
+            this.cfg = Object.assign(this.cfg, JSON.parse(odsStr))
+            console.log(`DBUG:${tag}:loaded`)
+        } else {
+            console.log(`DBUG:${tag}:nothing to load`)
+        }
     }
 
     /**
@@ -1927,6 +1952,15 @@ class MultiChatUI {
     }
 
     /**
+     * Save configs wrt all the currently loaded sessions
+     */
+    save_sessions_cfgs() {
+        for (const cid of Object.keys(this.simpleChats)) {
+            this.simpleChats[cid].save_cfg()
+        }
+    }
+
+    /**
      * Switch ui to the specified chatId and set curChatId to same.
      * @param {string} chatId
      */
@@ -1939,6 +1973,7 @@ class MultiChatUI {
             console.error(`ERRR:SimpleChat:MCUI:HandleSessionSwitch:${chatId} missing...`);
             return;
         }
+        this.save_sessions_cfgs()
         this.elDivUserIn.hidden = false
         this.elInSystem.value = chat.get_system_latest().ns.getContent();
         this.curChatId = chatId;
