@@ -1960,13 +1960,16 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
         });
 
         auto tool_call = p.trigger_rule("tool-call",
+            // Qwen3-Coder may emit <tool_call> or <function= first, so we make the first
+            // <tool_call> optional but required in parallel calls
             p.optional("<tool_call>" + p.space())
             + tools
             + p.space()
             + "</tool_call>"
-            // We have to handle parallel tool calls here because it is a trigger rule
+            // It seems more intuitive to place parallel calls as a repetition in the root rule, but
+            // it is here because it needs to be wrapped in a trigger rule.
             + (params.parallel_tool_calls ?
-                p.repeat(p.space() + "<tool_call>" << tools << "</tool_call>", 0, -1) :
+                p.zero_or_more(p.space() + "<tool_call>" << tools << "</tool_call>") :
                 p.eps())
         );
 
