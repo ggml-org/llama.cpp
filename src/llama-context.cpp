@@ -1482,9 +1482,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
 
             // async copy the candidate token ids from the backend to the host.
-            // These are needed for:
-            // 1) Backend dist sampler to map indices to vocab token ids.
-            // 2) CPU samplers to associate candidate logits with their token ids.
+            // These are needed by CPU samplers to map probability/logit indices to vocab token ids.
             copy_tensor_async_candidates(res->t_candidates, sampling.candidates, stride, sampling.candidates_count, seq_to_output_row, sched.get());
 
         }
