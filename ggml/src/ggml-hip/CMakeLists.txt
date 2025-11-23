@@ -116,10 +116,6 @@ if (NOT GGML_HIP_MMQ_MFMA)
     add_compile_definitions(GGML_HIP_NO_MMQ_MFMA)
 endif()
 
-if (NOT GGML_HIP_MMQ_WMMA)
-    add_compile_definitions(GGML_HIP_NO_MMQ_WMMA)
-endif()
-
 if (GGML_HIP_EXPORT_METRICS)
     set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -Rpass-analysis=kernel-resource-usage --save-temps")
 endif()
