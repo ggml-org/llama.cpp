@@ -231,11 +231,6 @@ struct common_peg_ref_parser {
     std::string name;
 };
 
-struct common_peg_capture_parser {
-    common_peg_parser_id child;
-    std::string key;
-};
-
 struct common_peg_atomic_parser {
     common_peg_parser_id child;
 };
@@ -264,7 +259,6 @@ using common_peg_parser_variant = std::variant<
     common_peg_schema_parser,
     common_peg_rule_parser,
     common_peg_ref_parser,
-    common_peg_capture_parser,
     common_peg_atomic_parser,
     common_peg_tag_parser
 >;
@@ -440,9 +434,6 @@ class common_peg_parser_builder {
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
     common_peg_parser schema(common_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema, bool raw = false);
-
-    // Captures matched text to semantics.captures[key]
-    common_peg_parser capture(const std::string & key, common_peg_parser p);
 
     // Creates a named rule, stores it in the grammar, and returns a reference to it.
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.

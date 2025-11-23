@@ -731,11 +731,6 @@ struct parser_executor {
         return arena.parse(rule_id, ctx, start_pos);
     }
 
-    common_peg_parse_result operator()(const common_peg_capture_parser & p) {
-        auto result = arena.parse(p.child, ctx, start_pos);
-        return result;
-    }
-
     common_peg_parse_result operator()(const common_peg_atomic_parser & p) {
         auto result = arena.parse(p.child, ctx, start_pos);
         if (result.need_more_input()) {
@@ -785,7 +780,6 @@ void common_peg_arena::resolve_refs() {
             } else if constexpr (std::is_same_v<T, common_peg_repetition_parser> ||
                                  std::is_same_v<T, common_peg_and_parser> ||
                                  std::is_same_v<T, common_peg_not_parser> ||
-                                 std::is_same_v<T, common_peg_capture_parser> ||
                                  std::is_same_v<T, common_peg_tag_parser> ||
                                  std::is_same_v<T, common_peg_atomic_parser>) {
                 p.child = resolve_ref(p.child);
@@ -871,8 +865,6 @@ std::string common_peg_arena::dump(common_peg_parser_id id) const {
             return "Rule(" + p.name + ", " + dump(p.child) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
             return "Ref(" + p.name + ")";
-        } else if constexpr (std::is_same_v<T, common_peg_capture_parser>) {
-            return "Capture(" + p.key + ", " + dump(p.child) + ")";
         } else {
             return "Unknown";
         }
@@ -1018,10 +1010,6 @@ common_peg_parser common_peg_parser_builder::json_string_content() {
 
 common_peg_parser common_peg_parser_builder::schema(common_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema, bool raw) {
     return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::make_shared<nlohmann::ordered_json>(schema), raw}));
-}
-
-common_peg_parser common_peg_parser_builder::capture(const std::string & key, common_peg_parser p) {
-    return wrap(arena_.add_parser(common_peg_capture_parser{p.id(), key}));
 }
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, common_peg_parser p, bool trigger) {
@@ -1212,7 +1200,6 @@ static std::unordered_set<std::string> collect_reachable_rules(
             } else if constexpr (std::is_same_v<T, common_peg_repetition_parser> ||
                                  std::is_same_v<T, common_peg_and_parser> ||
                                  std::is_same_v<T, common_peg_not_parser> ||
-                                 std::is_same_v<T, common_peg_capture_parser> ||
                                  std::is_same_v<T, common_peg_tag_parser> ||
                                  std::is_same_v<T, common_peg_atomic_parser> ||
                                  std::is_same_v<T, common_peg_schema_parser>) {
@@ -1373,8 +1360,6 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
                 // Refs should not exist after flattening, but kept just in case
                 return p.name;
-            } else if constexpr (std::is_same_v<T, common_peg_capture_parser>) {
-                return to_gbnf(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_tag_parser>) {
                 return to_gbnf(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_atomic_parser>) {
@@ -1438,107 +1423,94 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
 
 // Serialization helper: convert parser variant to JSON
 static nlohmann::json serialize_parser_variant(const common_peg_parser_variant & variant) {
-    return std::visit([](const auto & p) -> nlohmann::json {
+    using json = nlohmann::json;
+
+    return std::visit([](const auto & p) -> json {
         using T = std::decay_t<decltype(p)>;
 
-        nlohmann::json j;
-
         if constexpr (std::is_same_v<T, common_peg_epsilon_parser>) {
-            j["type"] = "epsilon";
+            return json{{"type", "epsilon"}};
         } else if constexpr (std::is_same_v<T, common_peg_start_parser>) {
-            j["type"] = "start";
+            return json{{"type", "start"}};
         } else if constexpr (std::is_same_v<T, common_peg_end_parser>) {
-            j["type"] = "end";
+            return json{{"type", "end"}};
         } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
-            j["type"] = "literal";
-            j["literal"] = p.literal;
+            return json{{"type", "literal"}, {"literal", p.literal}};
         } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
-            j["type"] = "sequence";
-            j["children"] = p.children;
+            return json{{"type", "sequence"}, {"children", p.children}};
         } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
-            j["type"] = "choice";
-            j["children"] = p.children;
+            return json{{"type", "choice"}, {"children", p.children}};
         } else if constexpr (std::is_same_v<T, common_peg_repetition_parser>) {
-            j["type"] = "repetition";
-            j["child"] = p.child;
-            j["min_count"] = p.min_count;
-            j["max_count"] = p.max_count;
+            return json{
+                {"type", "repetition"},
+                {"child", p.child},
+                {"min_count", p.min_count},
+                {"max_count", p.max_count}
+            };
         } else if constexpr (std::is_same_v<T, common_peg_and_parser>) {
-            j["type"] = "and";
-            j["child"] = p.child;
+            return json{{"type", "and"}, {"child", p.child}};
         } else if constexpr (std::is_same_v<T, common_peg_not_parser>) {
-            j["type"] = "not";
-            j["child"] = p.child;
+            return json{{"type", "not"}, {"child", p.child}};
         } else if constexpr (std::is_same_v<T, common_peg_any_parser>) {
-            j["type"] = "any";
+            return json{{"type", "any"}};
         } else if constexpr (std::is_same_v<T, common_peg_space_parser>) {
-            j["type"] = "space";
+            return json{{"type", "space"}};
         } else if constexpr (std::is_same_v<T, common_peg_chars_parser>) {
-            j["type"] = "chars";
-            j["pattern"] = p.pattern;
-            nlohmann::json ranges = nlohmann::json::array();
+            json ranges = json::array();
             for (const auto & range : p.ranges) {
-                ranges.push_back({
-                    {"start", range.start},
-                    {"end", range.end}
-                });
+                ranges.push_back({{"start", range.start}, {"end", range.end}});
             }
-            j["ranges"] = ranges;
-            j["negated"] = p.negated;
-            j["min_count"] = p.min_count;
-            j["max_count"] = p.max_count;
+            return json{
+                {"type", "chars"},
+                {"pattern", p.pattern},
+                {"ranges", ranges},
+                {"negated", p.negated},
+                {"min_count", p.min_count},
+                {"max_count", p.max_count}
+            };
         } else if constexpr (std::is_same_v<T, common_peg_json_string_parser>) {
-            j["type"] = "json_string";
+            return json{{"type", "json_string"}};
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
-            j["type"] = "until";
-            j["delimiters"] = p.delimiters;
+            return json{{"type", "until"}, {"delimiters", p.delimiters}};
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
-            j["type"] = "schema";
-            j["child"] = p.child;
-            j["name"] = p.name;
-            if (p.schema) {
-                j["schema"] = *p.schema;
-            } else {
-                j["schema"] = nullptr;
-            }
-            j["raw"] = p.raw;
+            return json{
+                {"type", "schema"},
+                {"child", p.child},
+                {"name", p.name},
+                {"schema", p.schema ? *p.schema : nullptr},
+                {"raw", p.raw}
+            };
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
-            j["type"] = "rule";
-            j["name"] = p.name;
-            j["child"] = p.child;
-            j["trigger"] = p.trigger;
+            return json{
+                {"type", "rule"},
+                {"name", p.name},
+                {"child", p.child},
+                {"trigger", p.trigger}
+            };
         } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
-            j["type"] = "ref";
-            j["name"] = p.name;
-        } else if constexpr (std::is_same_v<T, common_peg_capture_parser>) {
-            j["type"] = "capture";
-            j["child"] = p.child;
-            j["key"] = p.key;
+            return json{{"type", "ref"}, {"name", p.name}};
         } else if constexpr (std::is_same_v<T, common_peg_atomic_parser>) {
-            j["type"] = "atomic";
-            j["child"] = p.child;
+            return json{{"type", "atomic"}, {"child", p.child}};
         } else if constexpr (std::is_same_v<T, common_peg_tag_parser>) {
-            j["type"] = "tag";
-            j["child"] = p.child;
-            j["tag"] = p.tag;
+            return json{
+                {"type", "tag"},
+                {"child", p.child},
+                {"tag", p.tag}
+            };
         }
-
-        return j;
     }, variant);
 }
 
 nlohmann::json common_peg_arena::to_json() const {
-    nlohmann::json j;
-
     auto parsers = nlohmann::json::array();
     for (const auto & parser : parsers_) {
         parsers.push_back(serialize_parser_variant(parser));
     }
-
-    j["parsers"] = parsers;
-    j["rules"] = rules_;
-    j["root"] = root_;
-    return j;
+    return nlohmann::json{
+        {"parsers", parsers},
+        {"rules", rules_},
+        {"root", root_}
+    };
 }
 
 // Deserialization helper: convert JSON to parser variant
@@ -1662,15 +1634,6 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
             throw std::runtime_error("ref parser missing or invalid 'name' field");
         }
         return common_peg_ref_parser{j["name"]};
-    }
-    if (type == "capture") {
-        if (!j.contains("child") || !j.contains("key")) {
-            throw std::runtime_error("capture parser missing required fields");
-        }
-        return common_peg_capture_parser{
-            j["child"].get<common_peg_parser_id>(),
-            j["key"].get<std::string>()
-        };
     }
     if (type == "atomic") {
         if (!j.contains("child")) {
