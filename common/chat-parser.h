@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chat.h"
+#include "chat-parser-xml-toolcall.h"
 #include "json-partial.h"
 #include "regex-partial.h"
 
@@ -118,6 +119,15 @@ class common_chat_msg_parser {
         const std::vector<std::vector<std::string>> & args_paths = {},
         const std::vector<std::vector<std::string>> & content_paths = {}
     );
+
+    /**
+     * Parse XML-Style tool call for given xml_tool_call_format. Return false for invalid syntax and get the position untouched.
+     * form.scope_start, form.tool_sep and form.scope_end can be empty.
+     */
+    bool try_consume_xml_tool_calls(const struct xml_tool_call_format & form);
+
+    // Parse content uses reasoning and XML-Style tool call
+    void consume_reasoning_with_xml_tool_calls(const struct xml_tool_call_format & form, const std::string & start_think = "<think>", const std::string & end_think = "</think>");
 
     void clear_tools();
 };

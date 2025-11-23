@@ -3,7 +3,6 @@
 		Settings,
 		Funnel,
 		AlertTriangle,
-		Brain,
 		Code,
 		Monitor,
 		Sun,
@@ -12,20 +11,21 @@
 		ChevronRight,
 		Database
 	} from '@lucide/svelte';
-	import { ChatSettingsFooter, ChatSettingsFields } from '$lib/components/app';
-	import ImportExportTab from './ImportExportTab.svelte';
-	import * as Dialog from '$lib/components/ui/dialog';
+	import {
+		ChatSettingsFooter,
+		ChatSettingsImportExportTab,
+		ChatSettingsFields
+	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, updateMultipleConfig } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
 
 	interface Props {
-		onOpenChange?: (open: boolean) => void;
-		open?: boolean;
+		onSave?: () => void;
 	}
 
-	let { onOpenChange, open = false }: Props = $props();
+	let { onSave }: Props = $props();
 
 	const settingSections: Array<{
 		fields: SettingsFieldConfig[];
@@ -53,6 +53,38 @@
 					]
 				},
 				{
+					key: 'pasteLongTextToFileLen',
+					label: 'Paste long text to file length',
+					type: 'input'
+				},
+				{
+					key: 'enableContinueGeneration',
+					label: 'Enable "Continue" button',
+					type: 'checkbox',
+					isExperimental: true
+				},
+				{
+					key: 'pdfAsImage',
+					label: 'Parse PDF as image',
+					type: 'checkbox'
+				},
+				{
+					key: 'askForTitleConfirmation',
+					label: 'Ask for confirmation before changing conversation title',
+					type: 'checkbox'
+				}
+			]
+		},
+		{
+			title: 'Display',
+			icon: Monitor,
+			fields: [
+				{
+					key: 'showThoughtInProgress',
+					label: 'Show thought in progress',
+					type: 'checkbox'
+				},
+				{
 					key: 'showMessageStats',
 					label: 'Show message generation statistics',
 					type: 'checkbox'
@@ -68,23 +100,13 @@
 					type: 'checkbox'
 				},
 				{
-					key: 'askForTitleConfirmation',
-					label: 'Ask for confirmation before changing conversation title',
-					type: 'checkbox'
-				},
-				{
-					key: 'pasteLongTextToFileLen',
-					label: 'Paste long text to file length',
-					type: 'input'
-				},
-				{
-					key: 'pdfAsImage',
-					label: 'Parse PDF as image',
-					type: 'checkbox'
-				},
-				{
 					key: 'showModelInfo',
 					label: 'Show model information',
+					type: 'checkbox'
+				},
+				{
+					key: 'disableAutoScroll',
+					label: 'Disable automatic scroll',
 					type: 'checkbox'
 				},
 				{
@@ -202,17 +224,6 @@
 			]
 		},
 		{
-			title: 'Reasoning',
-			icon: Brain,
-			fields: [
-				{
-					key: 'showThoughtInProgress',
-					label: 'Show thought in progress',
-					type: 'checkbox'
-				}
-			]
-		},
-		{
 			title: 'Import/Export',
 			icon: Database,
 			fields: []
@@ -263,7 +274,6 @@
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
 	let localConfig: SettingsConfigType = $state({ ...config() });
-	let originalTheme: string = $state('');
 
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
@@ -279,18 +289,10 @@
 		localConfig[key] = value;
 	}
 
-	function handleClose() {
-		if (localConfig.theme !== originalTheme) {
-			setMode(originalTheme as 'light' | 'dark' | 'system');
-		}
-		onOpenChange?.(false);
-	}
-
 	function handleReset() {
 		localConfig = { ...config() };
 
 		setMode(localConfig.theme as 'light' | 'dark' | 'system');
-		originalTheme = localConfig.theme as string;
 	}
 
 	function handleSave() {
@@ -341,7 +343,7 @@
 		}
 
 		updateMultipleConfig(processedConfig);
-		onOpenChange?.(false);
+		onSave?.();
 	}
 
 	function scrollToCenter(element: HTMLElement) {
@@ -377,14 +379,11 @@
 		canScrollRight = scrollLeft < scrollWidth - clientWidth - 1; // -1 for rounding
 	}
 
-	$effect(() => {
-		if (open) {
-			localConfig = { ...config() };
-			originalTheme = config().theme as string;
+	export function reset() {
+		localConfig = { ...config() };
 
-			setTimeout(updateScrollButtons, 100);
-		}
-	});
+		setTimeout(updateScrollButtons, 100);
+	}
 
 	$effect(() => {
 		if (scrollContainer) {
@@ -393,120 +392,106 @@
 	});
 </script>
 
-<Dialog.Root {open} onOpenChange={handleClose}>
-	<Dialog.Content
-		class="z-999999 flex h-[100dvh] max-h-[100dvh] min-h-[100dvh] flex-col gap-0 rounded-none p-0
-			md:h-[64vh] md:max-h-[64vh] md:min-h-0 md:rounded-lg"
-		style="max-width: 48rem;"
-	>
-		<div class="flex flex-1 flex-col overflow-hidden md:flex-row">
-			<!-- Desktop Sidebar -->
-			<div class="hidden w-64 border-r border-border/30 p-6 md:block">
-				<nav class="space-y-1 py-2">
-					<Dialog.Title class="mb-6 flex items-center gap-2">Settings</Dialog.Title>
+<div class="flex h-full flex-col overflow-hidden md:flex-row">
+	<!-- Desktop Sidebar -->
+	<div class="hidden w-64 border-r border-border/30 p-6 md:block">
+		<nav class="space-y-1 py-2">
+			{#each settingSections as section (section.title)}
+				<button
+					class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
+					section.title
+						? 'bg-accent text-accent-foreground'
+						: 'text-muted-foreground'}"
+					onclick={() => (activeSection = section.title)}
+				>
+					<section.icon class="h-4 w-4" />
 
-					{#each settingSections as section (section.title)}
-						<button
-							class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
-							section.title
-								? 'bg-accent text-accent-foreground'
-								: 'text-muted-foreground'}"
-							onclick={() => (activeSection = section.title)}
-						>
-							<section.icon class="h-4 w-4" />
+					<span class="ml-2">{section.title}</span>
+				</button>
+			{/each}
+		</nav>
+	</div>
 
-							<span class="ml-2">{section.title}</span>
-						</button>
-					{/each}
-				</nav>
-			</div>
+	<!-- Mobile Header with Horizontal Scrollable Menu -->
+	<div class="flex flex-col md:hidden">
+		<div class="border-b border-border/30 py-4">
+			<!-- Horizontal Scrollable Category Menu with Navigation -->
+			<div class="relative flex items-center" style="scroll-padding: 1rem;">
+				<button
+					class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollLeft
+						? 'opacity-100'
+						: 'pointer-events-none opacity-0'}"
+					onclick={scrollLeft}
+					aria-label="Scroll left"
+				>
+					<ChevronLeft class="h-4 w-4" />
+				</button>
 
-			<!-- Mobile Header with Horizontal Scrollable Menu -->
-			<div class="flex flex-col md:hidden">
-				<div class="border-b border-border/30 py-4">
-					<Dialog.Title class="mb-6 flex items-center gap-2 px-4">Settings</Dialog.Title>
-
-					<!-- Horizontal Scrollable Category Menu with Navigation -->
-					<div class="relative flex items-center" style="scroll-padding: 1rem;">
-						<button
-							class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollLeft
-								? 'opacity-100'
-								: 'pointer-events-none opacity-0'}"
-							onclick={scrollLeft}
-							aria-label="Scroll left"
-						>
-							<ChevronLeft class="h-4 w-4" />
-						</button>
-
-						<div
-							class="scrollbar-hide overflow-x-auto py-2"
-							bind:this={scrollContainer}
-							onscroll={updateScrollButtons}
-						>
-							<div class="flex min-w-max gap-2">
-								{#each settingSections as section (section.title)}
-									<button
-										class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors first:ml-4 last:mr-4 hover:bg-accent {activeSection ===
-										section.title
-											? 'bg-accent text-accent-foreground'
-											: 'text-muted-foreground'}"
-										onclick={(e: MouseEvent) => {
-											activeSection = section.title;
-											scrollToCenter(e.currentTarget as HTMLElement);
-										}}
-									>
-										<section.icon class="h-4 w-4 flex-shrink-0" />
-										<span>{section.title}</span>
-									</button>
-								{/each}
-							</div>
-						</div>
-
-						<button
-							class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollRight
-								? 'opacity-100'
-								: 'pointer-events-none opacity-0'}"
-							onclick={scrollRight}
-							aria-label="Scroll right"
-						>
-							<ChevronRight class="h-4 w-4" />
-						</button>
+				<div
+					class="scrollbar-hide overflow-x-auto py-2"
+					bind:this={scrollContainer}
+					onscroll={updateScrollButtons}
+				>
+					<div class="flex min-w-max gap-2">
+						{#each settingSections as section (section.title)}
+							<button
+								class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors first:ml-4 last:mr-4 hover:bg-accent {activeSection ===
+								section.title
+									? 'bg-accent text-accent-foreground'
+									: 'text-muted-foreground'}"
+								onclick={(e: MouseEvent) => {
+									activeSection = section.title;
+									scrollToCenter(e.currentTarget as HTMLElement);
+								}}
+							>
+								<section.icon class="h-4 w-4 flex-shrink-0" />
+								<span>{section.title}</span>
+							</button>
+						{/each}
 					</div>
 				</div>
+
+				<button
+					class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {canScrollRight
+						? 'opacity-100'
+						: 'pointer-events-none opacity-0'}"
+					onclick={scrollRight}
+					aria-label="Scroll right"
+				>
+					<ChevronRight class="h-4 w-4" />
+				</button>
 			</div>
-
-			<ScrollArea class="max-h-[calc(100dvh-13.5rem)] flex-1 md:max-h-[calc(100vh-13.5rem)]">
-				<div class="space-y-6 p-4 md:p-6">
-					<div class="grid">
-						<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
-							<currentSection.icon class="h-5 w-5" />
-
-							<h3 class="text-lg font-semibold">{currentSection.title}</h3>
-						</div>
-
-						{#if currentSection.title === 'Import/Export'}
-							<ImportExportTab />
-						{:else}
-							<div class="space-y-6">
-								<ChatSettingsFields
-									fields={currentSection.fields}
-									{localConfig}
-									onConfigChange={handleConfigChange}
-									onThemeChange={handleThemeChange}
-								/>
-							</div>
-						{/if}
-					</div>
-
-					<div class="mt-8 border-t pt-6">
-						<p class="text-xs text-muted-foreground">
-							Settings are saved in browser's localStorage
-						</p>
-					</div>
-				</div>
-			</ScrollArea>
 		</div>
+	</div>
 
-		<ChatSettingsFooter onReset={handleReset} onSave={handleSave} />
-	</Dialog.Content>
-</Dialog.Root>
+	<ScrollArea class="max-h-[calc(100dvh-13.5rem)] flex-1 md:max-h-[calc(100vh-13.5rem)]">
+		<div class="space-y-6 p-4 md:p-6">
+			<div class="grid">
+				<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
+					<currentSection.icon class="h-5 w-5" />
+
+					<h3 class="text-lg font-semibold">{currentSection.title}</h3>
+				</div>
+
+				{#if currentSection.title === 'Import/Export'}
+					<ChatSettingsImportExportTab />
+				{:else}
+					<div class="space-y-6">
+						<ChatSettingsFields
+							fields={currentSection.fields}
+							{localConfig}
+							onConfigChange={handleConfigChange}
+							onThemeChange={handleThemeChange}
+						/>
+					</div>
+				{/if}
+			</div>
+
+			<div class="mt-8 border-t pt-6">
+				<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
+			</div>
+		</div>
+	</ScrollArea>
+</div>
+
+<ChatSettingsFooter onReset={handleReset} onSave={handleSave} />
