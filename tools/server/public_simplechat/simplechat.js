@@ -1950,12 +1950,10 @@ const SearchURLS = {
 }
 
 
-export class Me {
+export class Config {
 
     constructor() {
         this.baseURL = "http://127.0.0.1:8080";
-        this.defaultChatIds = [ "Default", "Other", AI_TC_SESSIONNAME ];
-        this.multiChat = new MultiChatUI(this);
         this.tools = {
             enabled: true,
             proxyUrl: "http://127.0.0.1:3128",
@@ -2014,6 +2012,29 @@ export class Me {
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
+    }
+
+    /**
+     * Clone a given instance of Config
+     * @param {Config} cloneMePlease
+     */
+    static clone (cloneMePlease) {
+        let clonedData = structuredClone(cloneMePlease)
+        // Object.setPrototypeOf(clonedData, Config.prototype);
+        let newMe = new Config()
+        return Object.assign(newMe, clonedData)
+    }
+
+}
+
+
+
+export class Me {
+
+    constructor() {
+        this.defaultChatIds = [ "Default", "Other", AI_TC_SESSIONNAME ];
+        this.defaultCfg = new Config()
+        this.multiChat = new MultiChatUI(this);
         this.toolsMgr = new mTools.ToolsManager()
         /**
          * @type {(string | ArrayBuffer | null)[]}
