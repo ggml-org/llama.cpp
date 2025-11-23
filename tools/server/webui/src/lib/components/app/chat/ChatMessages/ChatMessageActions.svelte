@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { Edit, Copy, RefreshCw, Trash2, ArrowRight } from '@lucide/svelte';
-	import { ActionButton, ConfirmationDialog } from '$lib/components/app';
-	import ChatMessageBranchingControls from './ChatMessageBranchingControls.svelte';
+	import {
+		ActionButton,
+		ChatMessageBranchingControls,
+		DialogConfirmation
+	} from '$lib/components/app';
 
 	interface Props {
 		role: 'user' | 'assistant';
@@ -80,7 +83,7 @@
 	</div>
 </div>
 
-<ConfirmationDialog
+<DialogConfirmation
 	bind:open={showDeleteDialog}
 	title="Delete Message"
 	description={deletionInfo && deletionInfo.totalCount > 1
