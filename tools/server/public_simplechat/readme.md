@@ -866,6 +866,16 @@ Cleanup in general
   Also switching sessions takes care of showing the right DivStream ie of currently switched to chat, so that
   end user can see the streamed response from that chat session as it is occuring.
 * Cleanup the tool call descriptions and verbose messages returned a bit.
+* Move towards Chat Session specific settings
+  * Move needed configs from Me into a seperate Config class.
+    * also move ShowSettings, ShowInfo etal into Config class
+  * SimpleChat maintains an instance of Config class instead of Me.
+  * Update starting flow to create the default set of chat sessions, setup ui etal after toolsMgr init
+    * TODO: Rather temporarily for now, to ensure tools name etal get populated.
+    * TODO: May need to have seperate partial tools manager per chat session, if we allow the proxyUrl
+      to be decided at a per chat session basis.
+    * TODO: Rather current flow expects any changed proxyUrl to reflect what ever was supported by
+      default proxyUrl
 
 
 #### ToDo

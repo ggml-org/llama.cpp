@@ -27,13 +27,13 @@ function startme() {
     gMe.debug_disable();
     devel_expose()
     gMe.toolsMgr.init(gMe).then(()=>{
+        for (let cid of gMe.defaultChatIds) {
+            gMe.multiChat.new_chat_session(cid);
+        }
+        gMe.multiChat.setup_ui(gMe.defaultChatIds[0]);
+        gMe.multiChat.show_sessions();
         gMe.multiChat.handle_session_switch(gMe.multiChat.curChatId)
     })
-    for (let cid of gMe.defaultChatIds) {
-        gMe.multiChat.new_chat_session(cid);
-    }
-    gMe.multiChat.setup_ui(gMe.defaultChatIds[0]);
-    gMe.multiChat.show_sessions();
 }
 
 document.addEventListener("DOMContentLoaded", startme);
