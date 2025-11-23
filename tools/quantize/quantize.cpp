@@ -134,6 +134,8 @@ static void usage(const char * executable) {
     printf("      Advanced option to remove all tensors from the given layers\n");
     printf("  --target-bpw: target bits per weight (bpw). Must be a positive number between 0.0 and 8.0\n");
     printf("      Advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n");
+    printf("  --disable-tensor-importance: treat all tensors equally during bpw quantization\n");
+    printf("      Advanced option to disable allocating more bpw budget to important tensors. It may increase quality for some models\n");
     printf("  --keep-bpw-state: save the bpw computations to <architecture>-<model hash>.bpw_state\n");
     printf("  --bpw-state: file name to use instead of default\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
@@ -560,6 +562,8 @@ int main(int argc, char ** argv) {
             if (arg_idx == argc-1 || !parse_target_bpw(argv[++arg_idx], target_bpw)) {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--disable-tensor-importance") == 0) {
+            params.disable_tensor_importance = true;
         } else if (strcmp(argv[arg_idx], "--keep-bpw-state") == 0) {
             params.keep_bpw_state = true;
         } else if (strcmp(argv[arg_idx], "--bpw-state") == 0) {

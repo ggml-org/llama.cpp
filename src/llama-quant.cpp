@@ -1570,29 +1570,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
     auto is_important = [&](const std::string & tensor_name) -> bool {
-        bool important = false;
-
-        if (statistics_data) {
-            const std::string key = remap_imatrix(tensor_name, mapped);
-            const auto tstats = statistics_data->find(key);
-            if (tstats != statistics_data->end() && !tstats->second.empty()) {
-                float ecs = 0.0f; // Euclidean-Cosine score
-                float l2 = 0.0f;  // L2 Euclidean Distance
-                float cs = 0.0f;  // Cosine Similarity
-                try {
-                    // ecs = tstats->second.at(0);
-                    l2 = tstats->second.at(1);
-                    cs = tstats->second.at(2);
-                } catch (std::out_of_range &) {
-                    LLAMA_LOG_ERROR("\t%s: insufficient statistics for tensor %s\n", func, tensor_name.c_str());
-                    return false;
-                }
-                ecs = 100.0f - (100.0f / (1.0f + 0.01f * l2 * l2) * std::fabs(cs)); // ecs = 100 - (100 / (1 + (L2 Dist/p)^2) * |Cos Sim|^q)
-                // LLAMA_LOG_INFO("\t%s: tensor %s has ECS score %.4f (L2 Distance %.4f and CosSim %.4f\n", func, tensor_name.c_str(), ecs, l2, cs);
-                important = ecs >= 99.99f; // mark as important if ecs is >= 99.99%
-            }
-        } else {
-            important = tensor_name == "output.weight" ||
+        bool important = tensor_name == "output.weight";
+        if (!important && !params->disable_tensor_importance) {
+            important = tensor_name.find(".attn_v.weight") != std::string::npos ||
+                        tensor_name.find(".time_mix_value.weight") != std::string::npos ||
                         tensor_name.find(".ffn_down.weight") != std::string::npos ||
                         tensor_name.find(".ffn_down_exps.weight") != std::string::npos ||
                         tensor_name.find(".attn_output.weight") != std::string::npos ||
@@ -2023,7 +2004,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::unordered_map<std::string, ggml_type> bpw_overrides = {};
     if (params->target_bpw != -1.0f && !params->only_copy) {
         if (params->imatrix) {
-
+            if (params->activations) {
+                LLAMA_LOG_INFO("%s: imatrix has activations, process will be more accurate\n", __func__);
+            } else {
+                LLAMA_LOG_INFO("%s: imatrix does not have activations, process may be less accurate\n", __func__);
+            }
+            if (params->disable_tensor_importance) {
+                LLAMA_LOG_INFO("%s: allocating bpw budget to tensors equally\n", __func__);
+            } else {
+                LLAMA_LOG_INFO("%s: allocating more bpw budget to important tensors\n", __func__);
+            }
             LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
 
             bpw_overrides = target_bpw_type(ml, model, tensors, mapped, values_data, activations_data, params, nthread);
@@ -2291,6 +2281,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.target_bpw                  =*/ -1.0f,
         /*.keep_bpw_state              =*/ false,
         /*.bpw_state                   =*/ nullptr,
+        /*.disable_tensor_importance   =*/ false
     };
 
     return result;

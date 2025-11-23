@@ -369,6 +369,7 @@ extern "C" {
         float target_bpw;                     // target bits per weight (bpw)
         bool keep_bpw_state;                  // keep bpw state file
         void * bpw_state;                     // pointer to bpw state file
+        bool disable_tensor_importance;       // treat all tensors equally during quantization
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
