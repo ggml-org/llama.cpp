@@ -135,37 +135,48 @@ static void solve_tri_f32_cuda(
     dim3 threads(WARP_SIZE, k);
     dim3 grid(ne02 * ne03);
     if (n == 64) {
-        if (k == 32) {
+        switch (k) {
+            case 32:
             solve_tri_f32_fast<64, 32><<<grid, threads, 0, stream>>>(
                 A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-        } else if (k == 16) {
+            break;
+            case 16:
             solve_tri_f32_fast<64, 16><<<grid, threads, 0, stream>>>(
                 A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-        } else if (k == 14) {
+            break;
+            case 14:
             solve_tri_f32_fast<64, 14><<<grid, threads, 0, stream>>>(
                 A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-        } else if (k == 12) {
+            break;
+            case 12:
             solve_tri_f32_fast<64, 12><<<grid, threads, 0, stream>>>(
                 A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-        } else if (k == 10) {
+            break;
+            case 10:
             solve_tri_f32_fast<64, 10><<<grid, threads, 0, stream>>>(
                 A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-        } else if (k == 8) {
+            break;
+            case 8:
             solve_tri_f32_fast<64, 8><<<grid, threads, 0, stream>>>(
                 A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-        } else if (k == 6) {
+            break;
+            case 6:
             solve_tri_f32_fast<64, 6><<<grid, threads, 0, stream>>>(
                 A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-        } else if (k == 4) {
+            break;
+            case 4:
             solve_tri_f32_fast<64, 4><<<grid, threads, 0, stream>>>(
                 A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-        } else if (k == 2) {
+            break;
+            case 2:
             solve_tri_f32_fast<64, 2><<<grid, threads, 0, stream>>>(
                 A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
-        } else if (k == 1) {
+            break;
+            case 1:
             solve_tri_f32_fast<64, 1><<<grid, threads, 0, stream>>>(
-                A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3,0, 0);
-        } else {
+                A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
+            break;
+            default:
             solve_tri_f32_fast<0, 0><<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, n, k);
         }
     } else { // run general case
