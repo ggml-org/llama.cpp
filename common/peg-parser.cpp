@@ -1,4 +1,3 @@
-#include "log.h"
 #include "common.h"
 #include "peg-parser.h"
 #include "json-schema-to-grammar.h"
@@ -7,11 +6,11 @@
 #include <nlohmann/json.hpp>
 
 #include <initializer_list>
-#include <memory>
-#include <stdexcept>
-#include <regex>
-#include <unordered_set>
 #include <map>
+#include <memory>
+#include <regex>
+#include <set>
+#include <stdexcept>
 
 // Trick to catch missing branches
 template <typename T>
@@ -1186,12 +1185,12 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
 }
 
 // Collect reachable rules from a given rule
-static std::unordered_set<std::string> collect_reachable_rules(
+static std::set<std::string> collect_reachable_rules(
     const common_peg_arena & arena,
     const common_peg_parser_id & rule
 ) {
-    std::unordered_set<std::string> reachable;
-    std::unordered_set<std::string> visited;
+    std::set<std::string> reachable;
+    std::set<std::string> visited;
 
     std::function<void(common_peg_parser_id)> visit = [&](common_peg_parser_id id) {
         const auto & parser = arena.get(id);
@@ -1391,7 +1390,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     };
 
     // Collect reachable rules
-    std::unordered_set<std::string> reachable_rules;
+    std::set<std::string> reachable_rules;
 
     if (lazy) {
         // Collect rules reachable from trigger rules
