@@ -25,5 +25,5 @@ kernel void kernel_sigmoid_f16(
     src0 = (global half*)((global char*)src0 + offset0);
     dst = (global half*)((global char*)dst + offsetd);
 
-    dst[get_global_id(0)] = 1.0f / (1.0f + exp(-src0[get_global_id(0)]));
+    dst[get_global_id(0)] = 1.0f / (1.0f + exp((float)-src0[get_global_id(0)]));
 }

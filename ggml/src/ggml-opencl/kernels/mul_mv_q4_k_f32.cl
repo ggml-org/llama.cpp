@@ -1,3 +1,5 @@
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
 #ifdef cl_intel_required_subgroup_size
 #pragma OPENCL EXTENSION cl_intel_required_subgroup_size : enable
 #define INTEL_GPU 1
@@ -38,6 +40,10 @@ typedef struct {
 #define N_DST 4
 #define N_SIMDGROUP 1
 #define N_SIMDWIDTH 64
+#else
+#define N_DST 4
+#define N_SIMDGROUP 1
+#define N_SIMDWIDTH 32
 #endif
 
 #undef  BLOCK_STRIDE

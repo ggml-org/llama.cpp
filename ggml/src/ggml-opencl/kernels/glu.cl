@@ -196,7 +196,7 @@ kernel void kernel_swiglu_f16(
         const half x0 = src0_row[i0];
         const half x1 = src1_row[i0];
 
-        const half silu = x0 / (1.0f + exp(-x0));
+        const half silu = x0 / (1.0f + exp((float)-x0));
 
         dst_row[i0] = silu*x1;
     }

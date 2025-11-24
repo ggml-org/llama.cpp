@@ -34,6 +34,10 @@ typedef struct {
 #define N_R0_Q8_0 4
 #define N_SG_Q8_0 2
 #define N_SIMDWIDTH 64
+#else
+#define N_R0_Q8_0 8
+#define N_SG_Q8_0 1
+#define N_SIMDWIDTH 32
 #endif
 
 #ifdef INTEL_GPU

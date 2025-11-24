@@ -779,7 +779,8 @@ inline std::string read_file(const std::string &path) {
   return text;
 }
 
-static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts) {
+#define build_program_from_source(ctx, dev, program_buffer, compile_opts) build_program_from_source_impl(__LINE__, ctx, dev, program_buffer, compile_opts)
+static cl_program build_program_from_source_impl(size_t line, cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts) {
     cl_program p;
     char *program_log;
     size_t program_size;
@@ -800,7 +801,7 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
         program_log = (char*) malloc(log_size + 1);
         program_log[log_size] = '\0';
         clGetProgramBuildInfo(p, dev, CL_PROGRAM_BUILD_LOG, log_size + 1, program_log, NULL);
-        GGML_LOG_ERROR("ggml_opencl: kernel compile error:\n\n%s\n", program_log);
+        GGML_LOG_ERROR("ggml_opencl:%lu: kernel compile error:\n\n%s\n", (unsigned long)line, program_log);
         free(program_log);
         exit(1);
     }
@@ -3313,7 +3314,6 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     } else {
         GGML_LOG_ERROR("Unsupported GPU: %s\n", dev_ctx->device_name.c_str());
         backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
-        return nullptr;
     }
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
@@ -8259,7 +8259,7 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
     } else if (backend_ctx->gpu_family == INTEL) {
         sgs = 32;
     } else {
-        GGML_ASSERT(false && "Unsupported GPU");
+        sgs = 32;
     }
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &extra0->data_device));
@@ -8346,7 +8346,7 @@ static void ggml_opencl_op_rms_norm_fused(ggml_backend_t backend, ggml_tensor * 
     } else if (backend_ctx->gpu_family == INTEL) {
         sgs = 32;
     } else {
-        GGML_ASSERT(false && "Unsupported GPU");
+        sgs = 32;
     }
 
     cl_kernel kernel = backend_ctx->kernel_rms_norm_mul;
@@ -8425,7 +8425,7 @@ static void ggml_opencl_op_norm_fused(ggml_backend_t backend, ggml_tensor * norm
     size_t sgs;
     if (backend_ctx->gpu_family == ADRENO) sgs = 64;
     else if (backend_ctx->gpu_family == INTEL) sgs = 32;
-    else GGML_ASSERT(false && "Unsupported GPU");
+    else sgs = 32;
 
     cl_kernel kernel = backend_ctx->kernel_norm_mul_add;
 
@@ -8558,7 +8558,7 @@ static void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0,
     } else if (backend_ctx->gpu_family == INTEL) {
         sgs = 32;
     } else {
-        GGML_ASSERT(false && "Unsupported GPU");
+        sgs = 32;
     }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
@@ -11845,7 +11845,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
                     kernel = backend_ctx->kernel_mul_mat_q4_0_f32_1d_8x_flat;
                 } else {
-                    GGML_ASSERT(false && "TODO: Unknown GPU");
+                    nth0 = 32;
+                    nth1 = 1;
+
+                    kernel = backend_ctx->kernel_mul_mat_q4_0_f32_1d_16x_flat;
                 }
 
                 CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_0->q));
@@ -11903,7 +11906,8 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 1;
             } else {
-                GGML_ASSERT(false && "TODO: Unknown GPU");
+                nth0 = 32;
+                nth1 = 1;
             }
 
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
@@ -11940,7 +11944,8 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 1;
             } else {
-                GGML_ASSERT(false && "TODO: Unknown GPU");
+                nth0 = 32;
+                nth1 = 1;
             }
 
             if (src1t == GGML_TYPE_F32) {
@@ -12002,7 +12007,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 kernel = backend_ctx->kernel_mul_mat_q4_0_f32_8x_flat;
                 ndst =8;
             } else {
-                GGML_ASSERT(false && "TODO: Unknown GPU");
+                nth0 = 32;
+                nth1 = 1;
+                kernel = backend_ctx->kernel_mul_mat_q4_0_f32_8x_flat;
+                ndst = 8;
             }
 
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_0->q));
@@ -12139,7 +12147,9 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth1 = 2;
                 ndst = nth1*4;
             } else {
-                GGML_ASSERT(false && "TODO: Unknown GPU");
+                nth0 = 32;
+                nth1 = 2;
+                ndst = nth1*4;
             }
 
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q8_0->q));
@@ -12461,7 +12471,8 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth1 = 2;
                 ndst = 1;
             } else {
-                GGML_ASSERT(false && "TODO: Unknown GPU");
+                nth0 = 2;
+                nth1 = 32;
             }
 
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
@@ -12499,7 +12510,11 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
                 q = extra0_mxfp4->q_img;
             } else {
-                GGML_ASSERT(false && "TODO: Unknown GPU");
+                nth0 = 32;
+                nth1 = 2;
+                ndst = nth1*2;
+
+                q = extra0_mxfp4->q;
             }
 
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &q));
@@ -12808,7 +12823,9 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 nsg  = 1;
                 ndst = 8;
             } else {
-                GGML_ASSERT(false && "TODO: Unknown GPU");
+                sgs  = 32;
+                nsg  = 1;
+                ndst = 8;
             }
 
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_0->q));
@@ -12852,7 +12869,9 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 nsg  = 2;
                 ndst = 4;
             } else {
-                GGML_ASSERT(false && "TODO: Unknown GPU");
+                sgs  = 32;
+                nsg  = 2;
+                ndst = 4;
             }
 
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q8_0->q));
@@ -13107,7 +13126,11 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                 q = extra0_mxfp4->q_img;
             } else {
-                GGML_ASSERT(false && "TODO: Unknown GPU");
+                sgs  = 32;
+                nsg  = 2;
+                ndst = 2;
+
+                q = extra0_mxfp4->q;
             }
 
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &q));
@@ -13606,7 +13629,7 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     else if (backend_ctx->gpu_family == ADRENO) {
         nth = 64;
     } else {
-        GGML_ASSERT(false && "TODO: Unknown GPU");
+        nth = MIN(32, ne00);
     }
 
     cl_kernel kernel;

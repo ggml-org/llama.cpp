@@ -45,6 +45,10 @@ typedef struct {
 #define N_DST       16
 #define N_SIMDGROUP 2
 #define N_SIMDWIDTH 64
+#else
+#define N_DST       4
+#define N_SIMDGROUP 1
+#define N_SIMDWIDTH 32
 #endif
 
 #undef  BLOCK_STRIDE

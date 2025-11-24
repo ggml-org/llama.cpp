@@ -48,6 +48,10 @@ static inline float e8m0_to_fp32(uchar x) {
 #define N_R0_MXFP4 2
 #define N_SG_MXFP4 2
 #define N_SIMDWIDTH 64
+#else
+#define N_R0_MXFP4 4
+#define N_SG_MXFP4 1
+#define N_SIMDWIDTH 32
 #endif
 
 #ifdef INTEL_GPU

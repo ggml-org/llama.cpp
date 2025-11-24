@@ -69,6 +69,10 @@ inline float block_iq4_nl_dot_y(
 #define N_DST 4
 #define N_SUBGROUP 1
 #define N_SUBGROUP_SIZE 64
+#else
+#define N_DST 4
+#define N_SUBGROUP 1
+#define N_SUBGROUP_SIZE 32
 #endif
 
 inline void mul_vec_q_n_f32(

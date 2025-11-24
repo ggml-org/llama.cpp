@@ -509,7 +509,7 @@ kernel void kernel_rope_multi_f16(
     src0 = (global void*)((global char*)src0 + offset0);
     src1 = (global int*)((global char*)src1 + offset1);
     src2 = (global float*)((global char*)src2 + offset2);
-    dst = (global float*)((global char*)dst + offsetd);
+    dst = (global half*)((global char*)dst + offsetd);
 
     int i3 = get_group_id(2);
     int i2 = get_group_id(1);
@@ -702,7 +702,7 @@ kernel void kernel_rope_vision_f16(
     src0 = (global void*)((global char*)src0 + offset0);
     src1 = (global int*)((global char*)src1 + offset1);
     src2 = (global float*)((global char*)src2 + offset2);
-    dst = (global float*)((global char*)dst + offsetd);
+    dst = (global half*)((global char*)dst + offsetd);
 
     int i3 = get_group_id(2);
     int i2 = get_group_id(1);

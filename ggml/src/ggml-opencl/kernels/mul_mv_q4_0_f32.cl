@@ -80,6 +80,10 @@ inline float block_q_4_0_dot_y(
 #define N_DST 4
 #define N_SIMDGROUP 1
 #define N_SIMDWIDTH 64
+#else
+#define N_DST 4
+#define N_SIMDGROUP 1
+#define N_SIMDWIDTH 32
 #endif
 
 inline void mul_vec_q_n_f32(
