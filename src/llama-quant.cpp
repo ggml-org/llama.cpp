@@ -1571,7 +1571,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
     auto is_important = [&](const std::string & tensor_name) -> bool {
         bool important = tensor_name == "output.weight";
-        if (!important && !params->disable_tensor_importance) {
+        if (!important && !params->no_importance) {
             important = tensor_name.find(".attn_v.weight") != std::string::npos ||
                         tensor_name.find(".time_mix_value.weight") != std::string::npos ||
                         tensor_name.find(".ffn_down.weight") != std::string::npos ||
@@ -2009,10 +2009,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             } else {
                 LLAMA_LOG_INFO("%s: imatrix does not have activations, process may be less accurate\n", __func__);
             }
-            if (params->disable_tensor_importance) {
-                LLAMA_LOG_INFO("%s: allocating bpw budget to tensors equally\n", __func__);
+            if (params->no_importance) {
+                LLAMA_LOG_INFO("%s: distributing bpw budget equitably across all tensors\n", __func__);
             } else {
-                LLAMA_LOG_INFO("%s: allocating more bpw budget to important tensors\n", __func__);
+                LLAMA_LOG_INFO("%s: assigning more bpw budget to important tensors\n", __func__);
             }
             LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
 
@@ -2281,7 +2281,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.target_bpw                  =*/ -1.0f,
         /*.keep_bpw_state              =*/ false,
         /*.bpw_state                   =*/ nullptr,
-        /*.disable_tensor_importance   =*/ false
+        /*.no_importance               =*/ false
     };
 
     return result;

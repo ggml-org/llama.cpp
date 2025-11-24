@@ -117,9 +117,9 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights] [--target-bpw n]\n", executable);
-    printf("       [--keep-bpw-state] [--bpw-state filename] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--prune-layers] [--keep-split] [--override-kv]\n");
-    printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights]\n", executable);
+    printf("        [--target-bpw n] [--no-importance] [--keep-bpw-state] [--bpw-state filename] [--output-tensor-type] [--token-embedding-type] [--tensor-type]\n");
+    printf("        [--prune-layers] [--keep-split] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize: allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -134,8 +134,8 @@ static void usage(const char * executable) {
     printf("      Advanced option to remove all tensors from the given layers\n");
     printf("  --target-bpw: target bits per weight (bpw). Must be a positive number between 0.0 and 8.0\n");
     printf("      Advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n");
-    printf("  --disable-tensor-importance: treat all tensors equally during bpw quantization\n");
-    printf("      Advanced option to disable allocating more bpw budget to important tensors. It may increase quality for some models\n");
+    printf("  --no-importance: distribute bpw budget equitably across all tensors\n");
+    printf("      Advanced option to disable assigning more bpw budget to important tensors. It may increase quality for some models\n");
     printf("  --keep-bpw-state: save the bpw computations to <architecture>-<model hash>.bpw_state\n");
     printf("  --bpw-state: file name to use instead of default\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
@@ -562,8 +562,8 @@ int main(int argc, char ** argv) {
             if (arg_idx == argc-1 || !parse_target_bpw(argv[++arg_idx], target_bpw)) {
                 usage(argv[0]);
             }
-        } else if (strcmp(argv[arg_idx], "--disable-tensor-importance") == 0) {
-            params.disable_tensor_importance = true;
+        } else if (strcmp(argv[arg_idx], "--no-importance") == 0) {
+            params.no_importance = true;
         } else if (strcmp(argv[arg_idx], "--keep-bpw-state") == 0) {
             params.keep_bpw_state = true;
         } else if (strcmp(argv[arg_idx], "--bpw-state") == 0) {
