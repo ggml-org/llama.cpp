@@ -3680,9 +3680,9 @@ int main(int argc, char ** argv) {
         } else
 #endif
         {
-            //test_msg_diffs_compute();
-            //test_msgs_oaicompat_json_conversion();
-            //test_tools_oaicompat_json_conversion();
+            test_msg_diffs_compute();
+            test_msgs_oaicompat_json_conversion();
+            test_tools_oaicompat_json_conversion();
             test_template_output_parsers();
             std::cout << "\n[chat] All tests passed!" << '\n';
         }
