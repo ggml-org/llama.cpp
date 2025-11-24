@@ -171,7 +171,9 @@ struct common_chat_syntax {
     bool                     reasoning_in_content  = false;
     bool                     thinking_forced_open  = false;
     bool                     parse_tool_calls      = true;
-    common_peg_arena         parser                = common_peg_arena(); // NOLINT
+    common_peg_arena         parser;
+
+    common_chat_syntax() = default;
 };
 
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
