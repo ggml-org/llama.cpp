@@ -44,15 +44,15 @@ void common_chat_peg_native_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_tool_id && current_tool) {
-        current_tool->id = std::string(node.text);
+        current_tool->id = std::string(trim_trailing_space(node.text));
     }
 
     if (is_tool_name && current_tool) {
-        current_tool->name = std::string(node.text);
+        current_tool->name = std::string(trim_trailing_space(node.text));
     }
 
     if (is_tool_args && current_tool) {
-        current_tool->arguments = std::string(node.text);
+        current_tool->arguments = std::string(trim_trailing_space(node.text));
     }
 }
 
@@ -84,13 +84,13 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
         if (arg_count > 0) {
             current_tool->arguments += ",";
         }
-        current_tool->arguments += json(node.text).dump() + ":";
+        current_tool->arguments += json(trim_trailing_space(node.text)).dump() + ":";
         ++arg_count;
     }
 
     if (is_arg_string && current_tool) {
         // Serialize to JSON, but exclude the end quote
-        std::string dumped = json(node.text).dump();
+        std::string dumped = json(trim_trailing_space(node.text)).dump();
         current_tool->arguments += dumped.substr(0, dumped.size() - 1);
         needs_closing_quote = true;
     }
@@ -102,7 +102,7 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_arg_json && current_tool) {
-        current_tool->arguments += std::string(node.text);
+        current_tool->arguments += std::string(trim_trailing_space(node.text));
     }
 
     if (is_tool_close && current_tool) {
