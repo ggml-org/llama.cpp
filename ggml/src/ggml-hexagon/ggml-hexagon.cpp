@@ -2322,85 +2322,6 @@ static void hex_dump_dspbuf(const struct ggml_tensor * t, const dspqueue_buffer 
                 (unsigned int) d->size);
 }
 
-static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flags) {
-    const struct ggml_tensor * src0 = op->src[0];
-    const struct ggml_tensor * src1 = op->src[1];
-    const struct ggml_tensor * src2 = op->src[2];
-    const struct ggml_tensor * dst  = op;
-
-    uint64_t t1, t2;
-    t1 = ggml_time_us();
-
-    // Construct HTP message
-    htp_general_req req;
-    req.op    = HTP_OP_MUL_MAT_ID;
-    req.flags = flags;
-
-    init_htp_tensor(&req.src0, src0);
-    init_htp_tensor(&req.src1, src1);
-    init_htp_tensor(&req.src2, src2);
-    init_htp_tensor(&req.dst, dst);
-
-    // Use opmask to override flags
-    if (!(opt_opmask & HTP_OPMASK_QUANTIZE)) {
-        req.flags |= HTP_OPFLAGS_SKIP_QUANTIZE;
-    }
-    if (!(opt_opmask & HTP_OPMASK_COMPUTE)) {
-        req.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
-    }
-
-    dspqueue_buffer bufs[4];
-    // First buffer Weights.
-    // The content is static, there is no need to do any cache management
-    dspqueue_buffers_init(bufs, src0, false, false);
-
-    // Second buffer Input Activations. This is a buffer that the CPU
-    // writes and the DSP reads, so we'll need to flush CPU caches and
-    // invalidate DSP ones. On platforms with I/O coherency support the
-    // framework will automatically skip cache operations where possible.
-    dspqueue_buffers_init(&bufs[1], src1, true, true);
-
-    // Third buffer expert IDs. This is a buffer that the CPU
-    // writes and the DSP reads, so we'll need to flush CPU caches and
-    // invalidate DSP ones. On platforms with I/O coherency support the
-    // framework will automatically skip cache operations where possible.
-    dspqueue_buffers_init(&bufs[2], src2, true, true);
-
-    // Forth buffer Output Activations. We'll handle DSP
-    // cache maintenance in the response message but need to flush
-    // CPU caches to ensure any previously written dirty lines are
-    // written out before writes from the DSP start.
-    dspqueue_buffers_init(&bufs[3], dst, true, false);
-
-    auto * sess = get_session_from_tensor(src0);
-
-    if (opt_verbose) {
-        hex_print_op_info(op, sess, req.flags);
-        if (opt_verbose > 1) {
-            hex_dump_dspbuf(src0, &bufs[0]);
-            hex_dump_dspbuf(src1, &bufs[1]);
-            hex_dump_dspbuf(src2, &bufs[2]);
-            hex_dump_dspbuf(dst, &bufs[3]);
-        }
-    }
-
-    if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        sess->enqueue(req, bufs, 4, opt_opsync);
-    }
-
-    t2 = ggml_time_us();
-
-    HEX_PROFILE(
-        "ggml-hex: %s matmul-id %s %u:%u:%u:%u x %s %u:%u:%u:%u (%s %u:%u:%u:%u) -> %s %u:%u:%u:%u : op-usec %u "
-        "op-cycles %u op-pkts %u (%f) call-usec %llu\n",
-        sess->name.c_str(), src0->name, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1], (uint32_t) src0->ne[2],
-        (uint32_t) src0->ne[3], src1->name, (uint32_t) src1->ne[0], (uint32_t) src1->ne[1], (uint32_t) src1->ne[2],
-        (uint32_t) src1->ne[3], src2->name, (uint32_t) src2->ne[0], (uint32_t) src2->ne[1], (uint32_t) src2->ne[2],
-        (uint32_t) src2->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2],
-        (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
-        (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
-}
-
 template <bool _IsSrc0Constant> static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     const struct ggml_tensor * node = op;
     const struct ggml_tensor * src0 = node->src[0];
@@ -2493,7 +2414,7 @@ template <bool _IsSrc0Constant> static void ggml_hexagon_binary(const struct ggm
         (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
 }
 
-static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
+template <bool _IsSrc0Constant> static void ggml_hexagon_binary_id(const struct ggml_tensor * op, uint32_t flags) {
     const struct ggml_tensor * node = op;
     const struct ggml_tensor * src0 = node->src[0];
     const struct ggml_tensor * src1 = node->src[1];
@@ -2518,6 +2439,9 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     switch (node->op) {
+        case GGML_OP_MUL_MAT_ID:
+            req.op = HTP_OP_MUL_MAT_ID;
+            break;
         case GGML_OP_ADD_ID:
             req.op = HTP_OP_ADD_ID;
             break;
@@ -2532,7 +2456,7 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
 
     dspqueue_buffer bufs[4];
     // First buffer = input activations
-    dspqueue_buffers_init(bufs, src0, true, true);
+    dspqueue_buffers_init(bufs, src0, !_IsSrc0Constant, !_IsSrc0Constant);
     // Second buffer = experts bias
     dspqueue_buffers_init(&bufs[1], src1, true, true);
     // Third buffer = activated experts
@@ -2875,7 +2799,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 prev_quant_op = node;
                 break;
             case GGML_OP_MUL_MAT_ID:
-                ggml_hexagon_mul_mat_id(node, flags);
+                ggml_hexagon_binary_id<true>(node, flags);
                 prev_quant_op = node;
                 break;
             case GGML_OP_MUL:
@@ -2884,7 +2808,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_binary<false>(node, flags);
                 break;
             case GGML_OP_ADD_ID:
-                ggml_hexagon_add_id(node, flags);
+                ggml_hexagon_binary_id<false>(node, flags);
                 break;
             case GGML_OP_RMS_NORM:
                 ggml_hexagon_unary(node, flags);
