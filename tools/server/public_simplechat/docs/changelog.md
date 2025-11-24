@@ -1,5 +1,7 @@
 # Progress
 
+by Humans for All.
+
 Look into source files and git logs for the details, this is a partial changelog of stuff already done
 and some of the things that one may look at in the future.
 
