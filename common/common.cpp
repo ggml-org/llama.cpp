@@ -950,32 +950,30 @@ std::vector<common_file_info> fs_list_files(const std::string & path) {
 // Model utils
 //
 
-llama_model * common_load_model_from_params(common_params & params) {
+struct common_init_result common_init_from_params(common_params & params) {
+    common_init_result iparams;
     auto mparams = common_model_params_to_llama(params);
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
         LOG_ERR("%s: failed to load model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
             __func__, params.model.path.c_str());
-        return nullptr;
-    }
-
-    return model;
-}
-
-struct common_init_result common_init_context_from_model(
-    llama_model * model,
-    common_params & params) {
-    common_init_result iparams;
-
-    if (model == NULL) {
-        LOG_ERR("%s: model is NULL\n", __func__);
         return iparams;
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     auto cparams = common_context_params_to_llama(params);
+
+    // backend sampling initialization
+    if (params.sampling.backend_sampling) {
+        iparams.samplers_seq_config.resize(cparams.n_seq_max);
+        for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
+            iparams.samplers_seq_config[i] = { i, common_sampler_backend_init(model, params.sampling) };
+        }
+        cparams.samplers   = iparams.samplers_seq_config.data();
+        cparams.n_samplers = cparams.n_seq_max;
+    }
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
@@ -1142,14 +1140,6 @@ struct common_init_result common_init_context_from_model(
     return iparams;
 }
 
-struct common_init_result common_init_from_params(common_params & params) {
-    llama_model * model = common_load_model_from_params(params);
-    if (model == NULL) {
-        return common_init_result();
-    }
-    return common_init_context_from_model(model, params);
-}
-
 std::string get_model_endpoint() {
     const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
     // We still respect the use of environment-variable "HF_ENDPOINT" for backward-compatibility.
@@ -1244,9 +1234,6 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
-
-    cparams.samplers   = params.backend_samplers;
-    cparams.n_samplers = params.n_backend_samplers;
 
     return cparams;
 }
