@@ -90,7 +90,7 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
 
     if (is_arg_string && current_tool) {
         // Serialize to JSON, but exclude the end quote
-        std::string dumped = json(trim_trailing_space(node.text)).dump();
+        std::string dumped = json(node.text).dump();
         current_tool->arguments += dumped.substr(0, dumped.size() - 1);
         needs_closing_quote = true;
     }
