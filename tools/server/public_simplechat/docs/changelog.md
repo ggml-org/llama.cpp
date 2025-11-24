@@ -296,6 +296,9 @@ Chat Session specific settings
     chat sliding window size (which takes care of try avoid overloading the ai model context size) selected
     by user already. User can always change the sliding window size to view past messages beyond the currently
     active sliding window size and then switch back again, if they want to.
+* More flexibility to user wrt ExternalAi tool call ie ai calling ai
+  * the user can change the default behaviour of tools being disabled and sliding window of 1
+  * program restart will reset these back to the default
 
 
 ## ToDo

@@ -254,15 +254,17 @@ It is attached to the document object. Some of these can also be updated using t
 
       * if a very long text is being generated, which leads to no user interaction for sometime and inturn the machine goes into power saving mode or so, the platform may stop network connection, leading to exception.
 
-    * iRecentUserMsgCnt - a simple minded SlidingWindow to limit context window load at Ai Model end. This is set to 5 by default. So in addition to latest system message, last/latest iRecentUserMsgCnt user messages after the latest system prompt and its responses from the ai model will be sent to the ai-model, when querying for a new response. Note that if enabled, only user messages after the latest system message/prompt will be considered.
+    * iRecentUserMsgCnt - a simple minded ClientSide SlidingWindow logic to limit context window load at Ai Model end. This is set to 5 by default. So in addition to latest system message, last/latest iRecentUserMsgCnt user messages (after the latest system prompt) and its responses from the ai model along with any associated tool calls will be sent to the ai-model, when querying for a new response. Note that if enabled, only user messages after the latest system message/prompt will be considered.
 
       This specified sliding window user message count also includes the latest user query.
 
       * less than 0 : Send entire chat history to server
 
-      * 0 : Send only the system message if any to the server
+      * 0 : Send only the system message if any to the server. Even the latest user message wont be sent.
 
       * greater than 0 : Send the latest chat history from the latest system prompt, limited to specified cnt.
+
+      * NOTE: the latest user message (query/response/...) for which we need a ai response, will also be counted as belonging to the iRecentUserMsgCnt.
 
     * bCompletionFreshChatAlways - whether Completion mode collates complete/sliding-window history when communicating with the server or only sends the latest user query/message.
 
@@ -467,16 +469,22 @@ The following tools/functions are currently provided by default
 * data_store_get/set/delete/list - allows for a basic data store to be used, to maintain data
   and or context across sessions and so...
 
-* external_ai - allows ai to use an independent session of itself / different instance of ai,
+* external_ai - allows ai to use an independent fresh by default session of itself / different ai,
   with a custom system prompt of ai's choosing and similarly user message of ai's choosing,
   in order to get any job it deems necessary to be done in a uncluttered indepedent session.
-  * helps ai to process stuff that it needs, without having to worry about any previous chat history
-    etal messing with the current data's context and processing.
+  * in its default configuration, helps ai to process stuff that it needs, without having to worry
+    about any previous chat history etal messing with the current data's context and processing.
   * helps ai to process stuff with targeted system prompts of its choosing, for the job at hand.
-  * tool calling is disabled wrt the external_ai's independent session, for now.
-    * it was noticed that else even the external_ai may call into more external_ai calls trying to
-      find answer to the same question. maybe one can enable tool calling, while explicitly disabling
-      external_ai tool call from within external_ai tool call or so later...
+  * by default
+    * tool calling is disabled wrt the external_ai's independent session.
+      * it was noticed that else even external_ai may call into more external_ai calls trying to
+        find answers to the same question/situation.
+      * maybe one can enable tool calling, while explicitly disabling of external_ai tool call
+        from within external_ai tool call related session or so later...
+    * client side sliding window size is set to 1 so that only system prompt and ai set user message
+      gets handshaked with the external_ai instance
+    * End user can change this behaviour by changing the corresponding settings of the TCExternalAi
+      special chat session, which is internally used for this tool call.
   * Could be used by ai for example to
     * summarise a large text content, where it could use the context of the text to generate a
       suitable system prompt for summarising things suitably
@@ -486,7 +494,7 @@ The following tools/functions are currently provided by default
     * given the fuzzy nature of the generative ai, sometimes the model may even use this tool call
       to get answer to questions like what is your name ;>
   * end user can use this mechanism to try and bring in an instance of ai running on a more powerful
-    machine, but then to be used only if needed or so
+    machine with more compute and memory capabiliteis, but then to be used only if needed or so
 
 Most of the above (except for external ai call) are run from inside web worker contexts. Currently the
 ai generated code / expression is run through a simple minded eval inside a web worker mechanism. Use

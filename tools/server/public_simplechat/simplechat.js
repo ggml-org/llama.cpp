@@ -486,9 +486,10 @@ function usage_note(sRecentUserMsgCnt) {
         <ul class="ul2">
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
         </ul>
-    <li> ${AI_TC_SESSIONNAME} session keeps tool calls disabled, to avoid recursive...</li>
+    <li> ${AI_TC_SESSIONNAME} session used for external_ai tool call, ie ai calling ai</li>
         <ul class="ul2">
-        <li> Used by external_ai tool call, which allows ai calling ai, as needed.</li>
+        <li> by default keeps tool calls disabled, client side sliding window of 1</li>
+        <li> if you change for some reason, you may want to change back to these</li>
         </ul>
     </ul>
     </details>`;
@@ -570,6 +571,18 @@ export class SimpleChat {
         this.xchat = [];
         this.iLastSys = -1;
         this.latestResponse = new ChatMessageEx();
+    }
+
+    /**
+     * A relatively isolating default setup
+     * * clear any chat history
+     * * disable tool calls
+     * * set client side sliding window to 1 so that only system prompt is sent along with latest user message
+     */
+    default_isolating() {
+        this.clear()
+        this.cfg.tools.enabled = false
+        this.cfg.chatProps.iRecentUserMsgCnt = 1
     }
 
     setup() {
@@ -669,6 +682,7 @@ export class SimpleChat {
      *
      * Else Return chat messages from latest going back till the last/latest system prompt.
      * While keeping track that the number of user queries/messages doesnt exceed iRecentUserMsgCnt.
+     *
      * @param {number} iRecentUserMsgCnt
      */
     recent_chat(iRecentUserMsgCnt) {
@@ -2074,6 +2088,13 @@ export class Config {
         this.chatProps = {
             apiEP: ApiEP.Type.Chat,
             stream: true,
+            /**
+             * How many recent user msgs to consider and include along with their corresponding
+             * assistant responses and tool calls if any, wrt client side sliding window logic.
+             * * user specified System prompt is outside this count.
+             * * the latest user query/response to send to ai server is part of this.
+             * * only user messages following the latest system prompt is considered.
+             */
             iRecentUserMsgCnt: 5,
             bCompletionFreshChatAlways: true,
             bCompletionInsertStandardRolePrefix: false,
@@ -2201,7 +2222,15 @@ export class Me {
         this.dataURLs = []
         this.houseKeeping = {
             clear: true,
-        }
+        };
+        /**
+         * Control if externalai toolcall related special chat session starts in a forced isolating state
+         * * always external_ai tool call is made
+         * * Or does it start in such a state only at the time of program loading and inturn
+         *   if user has the flexibility to change this characteristic till this program is restarted,
+         *   for what ever reason they may deem fit.
+         */
+        this.tcexternalaiForceIsolatingDefaultsAlways = false;
     }
 
     /**
