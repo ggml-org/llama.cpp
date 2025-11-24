@@ -2722,6 +2722,60 @@ class SmolVLMModel(MmprojModel):
         return [] # skip other tensors
 
 
+@ModelBase.register("KimiLinearForCausalLM")
+class KimiLinearModel(ModelBase):
+    model_arch = gguf.MODEL_ARCH.KIMI
+
+    def set_gguf_parameters(self):
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        self.gguf_writer.add_context_length(self.hparams["max_position_embeddings"])
+        self.gguf_writer.add_block_count(self.hparams["num_hidden_layers"])
+        self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
+        self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
+        self.gguf_writer.add_rope_dimension_count(self.hparams["qk_rope_head_dim"])
+        self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
+        self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
+
+        linear_attn = self.hparams.get("linear_attn_config", {})
+        if linear_attn:
+             self.gguf_writer.add_ssm_conv_kernel(linear_attn.get("short_conv_kernel_size", 4))
+             # Add other Kimi params as generic KV if needed or extend GGUFWriter
+             # For now we rely on conv_kernel being enough for the conv op
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "gate_up_proj" in name:
+            # shape: (2 * intermediate_size, hidden_size)
+            # split along dim 0. Assuming [gate; up]
+            out_dim = data_torch.shape[0]
+            mid = out_dim // 2
+            w1 = data_torch[:mid, :] # gate
+            w3 = data_torch[mid:, :] # up
+
+            # Map directly using the split names which should map to FFN_GATE and FFN_UP
+            # We need to construct the original names that map_tensor_name expects for mapping
+            # Or we can manual map if we know the logic.
+            # But modify_tensors usually returns mapped names.
+            
+            # tensor_mapping.py:
+            # FFN_GATE: "mlp.gate_proj" (standard llama)
+            # FFN_UP: "mlp.up_proj"
+            
+            # name is something like "model.layers.0.mlp.gate_up_proj.weight"
+            name_gate = name.replace("gate_up_proj", "gate_proj")
+            name_up = name.replace("gate_up_proj", "up_proj")
+            
+            return [
+                (self.map_tensor_name(name_gate), w1),
+                (self.map_tensor_name(name_up), w3)
+            ]
+        
+        # Handle 1x1xHx1 tensors like A_log
+        if "A_log" in name:
+            data_torch = data_torch.squeeze()
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+
 @ModelBase.register(
     "Llama4ForConditionalGeneration",
     "Llama4ForCausalLM",
@@ -5110,6 +5164,147 @@ class InternLM2Model(TextModel):
             ]
         else:
             return [(self.map_tensor_name(name), data_torch)]
+
+
+@ModelBase.register("KimiLinearModel", "KimiLinearForCausalLM")
+class KimiLinearModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.KIMI
+    
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def set_gguf_parameters(self):
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        
+        # Use find_hparam for context length
+        n_ctx = self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions"], optional=True)
+        if n_ctx is not None:
+            self.gguf_writer.add_context_length(n_ctx)
+        
+        self.gguf_writer.add_block_count(self.hparams["num_hidden_layers"])
+        self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
+        self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
+        self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
+        self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"])
+        self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
+        self.gguf_writer.add_file_type(self.ftype)
+
+        # KDA & MLA params
+        # Assuming these keys exist in config.json for Kimi models
+        if "ssm_d_conv" in self.hparams:
+             self.gguf_writer.add_uint32(gguf.KEY_SSM_CONV_KERNEL, self.hparams["ssm_d_conv"])
+        
+        # MLA params
+        if "n_lora_q" in self.hparams:
+             self.gguf_writer.add_uint32(gguf.KEY_ATTENTION_Q_LORA_RANK, self.hparams["n_lora_q"])
+        if "n_lora_kv" in self.hparams:
+             self.gguf_writer.add_uint32(gguf.KEY_ATTENTION_KV_LORA_RANK, self.hparams["n_lora_kv"])
+        if "n_embd_head_k_mla" in self.hparams:
+             self.gguf_writer.add_uint32(gguf.KEY_ATTENTION_KEY_LENGTH_MLA, self.hparams["n_embd_head_k_mla"])
+        if "n_embd_head_v_mla" in self.hparams:
+             self.gguf_writer.add_uint32(gguf.KEY_ATTENTION_VALUE_LENGTH_MLA, self.hparams["n_embd_head_v_mla"])
+        
+        # Rotation
+        # Kimi likely uses n_rot
+        if "n_rot" in self.hparams:
+             self.gguf_writer.add_rope_dimension_count(self.hparams["n_rot"])
+        else:
+             # Default to head_dim
+             head_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+             self.gguf_writer.add_rope_dimension_count(head_dim)
+
+        self.gguf_writer.add_rope_freq_base(self.hparams.get("rope_theta", 10000.0))
+
+        # MoE params
+        n_experts = self.hparams.get("num_local_experts", self.hparams.get("num_experts"))
+        if n_experts is not None:
+            self.gguf_writer.add_expert_count(n_experts)
+        if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
+            self.gguf_writer.add_expert_used_count(n_experts_used)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+             experts = [k for d in self._experts for k in d.keys()]
+             if len(experts) > 0:
+                 raise ValueError(f"Unprocessed experts: {experts}")
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Kimi specific bias
+        if name.endswith("block_sparse_moe.gate.e_score_correction_bias"):
+             new_name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_EXP_PROBS_B, bid)
+             return [(new_name, data_torch)]
+
+        # process the experts separately
+        if name.find("block_sparse_moe.experts") != -1:
+            n_experts = self.hparams.get("num_local_experts", self.hparams.get("num_experts"))
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                # merge the experts into a single 3d tensor
+                tensors = []
+                # w1: gate, w2: down, w3: up
+                for wid, tname in [("w1", gguf.MODEL_TENSOR.FFN_GATE_EXP), 
+                                   ("w2", gguf.MODEL_TENSOR.FFN_DOWN_EXP), 
+                                   ("w3", gguf.MODEL_TENSOR.FFN_UP_EXP)]:
+                    datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+                    new_name = self.format_tensor_name(tname, bid)
+                    tensors.append((new_name, data_torch))
+                return tensors
+            return []
+            
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        
+        # Call parent implementation with the loaded tokenizer
+        tokens: list[str] = []
+        toktypes: list[int] = []
+        
+        reverse_vocab: dict[int, str] = {id_: encoded_tok for encoded_tok, id_ in tokenizer.get_vocab().items()}
+        added_vocab = tokenizer.get_added_vocab()
+
+        for i in range(len(tokenizer)):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            elif reverse_vocab[i] in added_vocab:
+                tokens.append(reverse_vocab[i])
+                if tokenizer.added_tokens_decoder[i].special:
+                    toktypes.append(gguf.TokenType.CONTROL)
+                else:
+                    toktypes.append(gguf.TokenType.USER_DEFINED)
+            else:
+                tokens.append(reverse_vocab[i])
+                toktypes.append(gguf.TokenType.NORMAL)
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        return tokens, toktypes, tokpre
+
+    def set_vocab(self):
+        try:
+            self._set_vocab_gpt2()
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer with GPT2 method: {e}")
+            logger.warning("Attempting to use sentencepiece tokenizer")
+            try:
+                self._set_vocab_sentencepiece()
+            except Exception as e2:
+                logger.error(f"Failed to load tokenizer: {e2}")
+                raise
 
 
 @ModelBase.register("InternLM3ForCausalLM")
