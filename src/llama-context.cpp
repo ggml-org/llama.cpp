@@ -1221,7 +1221,7 @@ static void copy_tensor_async_ints(
     size_t sampled_size,
     const std::unordered_map<llama_seq_id, uint32_t> & seq_to_row,
     ggml_backend_sched_t sched) {
-    if (sampled == nullptr || sampled_size == 0) {
+    if (sampled == nullptr) {
         return;
     }
 
@@ -1243,7 +1243,7 @@ static void copy_tensor_async_floats(
     std::vector<uint32_t> & counts,
     const std::unordered_map<llama_seq_id, uint32_t> & seq_to_row,
     ggml_backend_sched_t sched) {
-    if (dst == nullptr || stride == 0) {
+    if (dst == nullptr) {
         return;
     }
 
@@ -1269,7 +1269,7 @@ static void copy_tensor_async_candidates(
     std::vector<uint32_t> & counts,
     const std::unordered_map<llama_seq_id, uint32_t> & seq_to_row,
     ggml_backend_sched_t sched) {
-    if (dst == nullptr || stride == 0) {
+    if (dst == nullptr) {
         return;
     }
 
