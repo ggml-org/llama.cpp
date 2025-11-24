@@ -36,7 +36,7 @@ kernel void kernel_sqrt_cont_f16(
     dst  = (global half*)((global char*)dst + offsetd);
 
     uint gid = get_global_id(0);
-    dst[gid] = sqrt(src0[gid]);
+    dst[gid] = convert_half(sqrt(convert_float(src0[gid])));
 }
 
 kernel void kernel_sqrt_cont_f16_4(
@@ -49,5 +49,5 @@ kernel void kernel_sqrt_cont_f16_4(
     dst  = (global half4*)((global char*)dst + offsetd);
 
     uint gid = get_global_id(0);
-    dst[gid] = sqrt(src0[gid]);
+    dst[gid] = convert_half4(sqrt(convert_float4(src0[gid])));
 }
