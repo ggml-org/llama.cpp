@@ -6,7 +6,7 @@ In short, this repository is designed to make llama.cpp easily accessible for An
 
 # Usage
 
-Prepare adb shell or Termux,then unpack llama.cpp.zip
+Prepare adb shell or Termux,then unpack llama.cpp.tar.gz
 
 ```bash
 cd llama.cpp
@@ -20,7 +20,12 @@ SoC : Dimensity 1000+(8c@2.6Ghz)</br>
 platform : CPU</br>
 On average, it is 4 tokens/s(≈2 Chinese character/s) faster than the official Termux build.
 
-![example](example.jpg)
+![cpu](cpu.jpg)
+
+platform : GPU(OpenCL)</br>
+Tests show the GPU can sustain high generation speeds for extended periods, with minimal impact from throttling.
+
+![gpu_opencl](gpu_opencl.jpg)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
@@ -37,6 +42,7 @@ LLM inference in C/C++
 
 ## Hot topics
 
+- The llama.cpp project for aarch64 has now added GPU support (OpenCL) and enabled it by default
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
 - [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
