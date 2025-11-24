@@ -2179,15 +2179,7 @@ void ggml_gemm_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const 
                     int8x16_t a_1 = vld1q_s8(a_ptr[l].qs + 16 * k + 64);
 
                     uint8x16_t b = vld1q_u8(b_ptr[l].qs + 16 * k);
-                    // k=0 0..3
-                    // k=1 4..7
-                    // k=2 8..11
-                    // k=3 12..15
                     int8x16_t b_hi = vqtbl1q_s8(kvalues, b >> 4);
-                    // k=0 16..19
-                    // k=1 20..23
-                    // k=2 24..27
-                    // k=3 28..31
                     int8x16_t b_lo = vqtbl1q_s8(kvalues, b & 0xF);
 
                     sumi_0 = vdotq_laneq_s32(sumi_0, b_lo, a_0, 0);
