@@ -60,13 +60,17 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 #pragma unroll
         for (int i = 0; i < N * N; i += K * WARP_SIZE) {
             int i0 = i + offset;
-            sA[i0] = A_batch[i0];
+            if (i0 < N * N) {
+                sA[i0] = A_batch[i0];
+            }
         }
 
 #pragma unroll
         for (int i = 0; i < N * K; i += K * WARP_SIZE) {
             int i0 = i + threadIdx.x + threadIdx.y * blockDim.x;
-            sX[i0] = B_batch[i0];
+            if (i0 < N * K) {
+                sX[i0] = B_batch[i0];
+            }
         }
     }
 
@@ -117,7 +121,9 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 #pragma unroll
         for (int i = 0; i < N * K; i += K * WARP_SIZE) {
             const int i0 = i + threadIdx.x + threadIdx.y * blockDim.x;
-            X_batch[i0]  = sX[i0];
+            if (i0 < N * K) {
+                X_batch[i0]  = sX[i0];
+            }
         }
     }
 }
