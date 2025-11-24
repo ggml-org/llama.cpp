@@ -1,3 +1,5 @@
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
 kernel void kernel_sqrt_cont_f32(
     global float * src0,
     ulong          offset0,
