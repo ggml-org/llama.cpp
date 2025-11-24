@@ -501,7 +501,7 @@ inline static void ggml_vec_mad_f16(const int n, ggml_fp16_t * GGML_RESTRICT y, 
             GGML_F16_VEC_STORE(y + i + j*GGML_F16_EPR, ay, j);
         }
     }
-#else 
+#else
     const int np = 0;
 #endif
 
