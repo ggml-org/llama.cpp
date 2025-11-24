@@ -976,8 +976,6 @@ struct common_init_result common_init_context_from_model(
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     auto cparams = common_context_params_to_llama(params);
-    cparams.samplers = params.backend_samplers;
-    cparams.n_samplers = params.n_backend_samplers;
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
@@ -1246,6 +1244,9 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
+
+    cparams.samplers   = params.backend_samplers;
+    cparams.n_samplers = params.n_backend_samplers;
 
     return cparams;
 }

@@ -146,8 +146,9 @@ int main(int argc, char ** argv) {
 
     // Configure backend sampler if configured
     llama_sampler * backend_sampler = common_sampler_backend_init(model, sparams);
+    llama_sampler_seq_config sampler_config = { 0, backend_sampler };
+
     if (backend_sampler) {
-        llama_sampler_seq_config sampler_config = { 0, backend_sampler };
         params.backend_samplers = &sampler_config;
         params.n_backend_samplers = 1;
     }
