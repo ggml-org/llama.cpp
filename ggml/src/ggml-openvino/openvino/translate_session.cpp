@@ -154,7 +154,9 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     }
 
     for (const auto & it : ggml_model_decoder->get_model_extra_inputs()) {
-        params.push_back(std::dynamic_pointer_cast<ov::op::v0::Parameter>(it.second));
+        if (std::dynamic_pointer_cast<ov::op::v0::Parameter>(it.second)) {
+            params.push_back(std::dynamic_pointer_cast<ov::op::v0::Parameter>(it.second));
+        }
         (*tensor_map)[it.first] = it.second;
     }
 

@@ -56,9 +56,7 @@ OutputVector translate_permute(const NodeContext & context) {
         int64_t n_seq = cache_shape[1].get_length();
 
         Output<Node> attention_size;
-        if (context.is_static()) {
-            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {INT_MAX});
-        } else if (op_case == 2) {
+        if (op_case == 2) {
             attention_size = context.get_input("attention_size");
         } else {
             attention_size = context.get_input("attention_size_swa");

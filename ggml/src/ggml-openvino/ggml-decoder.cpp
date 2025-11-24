@@ -311,6 +311,11 @@ void GgmlOvDecoder::set_llm_params() {
             } else {
                 m_attention_size = mask->ne[0];
             }
+            if (m_is_static) {
+                m_attention_size = m_ctx_per_seq;
+                m_attention_size_swa = m_ctx_per_seq_swa;
+                m_token_len_per_seq = 1;
+            }
 
         } else if (node->op == GGML_OP_ROPE) {
             if (name.find("Qcur-0") == 0 || std::string(node->src[0]->name).find("Qcur-0") == 0) {
@@ -330,7 +335,7 @@ void GgmlOvDecoder::set_llm_params() {
 
 void GgmlOvDecoder::validate_cgraph() const {
     if (m_n_seq > 1 && m_is_static == true) {
-        throw std::runtime_error("n_seq > 1 is not supported on NPU");
+        throw std::runtime_error("n_seq > 1 is not supported on NPU. Try setting -np 1.");
     }
 }
 
@@ -371,18 +376,24 @@ void GgmlOvDecoder::add_extra_inputs() {
     // Extra inputs:
     // 1. `attention_size`, used in FLASH_ATTN where the shape of the matmul's are 256 aligned,
     //     see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
-    //     Not used for NPU.
     // 2. `n_seq_active` and `seq_active_start`, used in FLASH_ATTN_EXT to indicate the active sequences in the batch
 
-    auto create_1d_input = [this](const std::string & name, int64_t size) {
-        auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
-        param_node->set_friendly_name(name);
-        param_node->output(0).get_tensor().set_names({name});
-        m_model_extra_inputs[name] = param_node;
+    auto create_1d_input = [this](const std::string & name, int64_t value) {
+        if (m_is_static) {
+            auto constant =
+                std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{1}, std::vector<int64_t>{value});
+            constant->set_friendly_name(name);
+            m_model_extra_inputs[name] = constant;
+        } else {
+            auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
+            param_node->set_friendly_name(name);
+            param_node->output(0).get_tensor().set_names({name});
+            m_model_extra_inputs[name] = param_node;
 
-        auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
-        *tensor->data<int64_t>() = size;
-        m_model_extra_input_values[name] = tensor;
+            auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
+            *tensor->data<int64_t>() = value;
+            m_model_extra_input_values[name] = tensor;
+        }
     };
 
     create_1d_input("attention_size", m_attention_size);
