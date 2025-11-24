@@ -10,6 +10,7 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
 
 #include <atomic>
 #include <cstddef>
@@ -18,6 +19,15 @@
 #include <signal.h>
 #include <thread>
 #include <unordered_set>
+
+// fix problem with std::min and std::max
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using json = nlohmann::ordered_json;
 
@@ -3597,10 +3607,10 @@ private:
     }
 };
 
-std::function<void(int)> shutdown_handler;
-std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
+static std::function<void(int)> shutdown_handler;
+static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
 
-inline void signal_handler(int signal) {
+static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
         // in case it hangs, we can force terminate the server by hitting Ctrl+C twice
         // this is for better developer experience, we can remove when the server is stable enough
@@ -3769,6 +3779,7 @@ int main(int argc, char ** argv) {
         ctx_server.queue_tasks.terminate();
     };
 
+    // TODO: refactor in common/console
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
     struct sigaction sigint_action;
     sigint_action.sa_handler = signal_handler;

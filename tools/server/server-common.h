@@ -5,26 +5,13 @@
 #include "llama.h"
 #include "chat.h"
 #include "mtmd.h"
-#include "mtmd-helper.h"
 
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
-#include <random>
-#include <sstream>
 #include <string>
 #include <vector>
-#include <memory>
 #include <cinttypes>
-
-// fix problem with std::min and std::max
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#ifndef NOMINMAX
-#   define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 #define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo"
 

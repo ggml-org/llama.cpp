@@ -9,6 +9,9 @@
 
 #include "server-common.h"
 
+#include <random>
+#include <sstream>
+
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
     int code = 500;
