@@ -10116,10 +10116,16 @@ class LazyTorchTensor(gguf.LazyBase):
 
     @classmethod
     def from_remote_tensor(cls, remote_tensor: gguf.utility.RemoteTensor):
+        def byteswap_tensor(tensor: np.ndarray, dtype: type) -> np.ndarray:
+            if sys.byteorder == 'big':
+                # switch data back to big endian
+                tensor = tensor.view(dtype).byteswap(inplace=False)
+            return tensor
         dtype = cls._dtype_str_map[remote_tensor.dtype]
+        numpy_dtype = cls._dtype_byteswap_map[dtype]
         shape = remote_tensor.shape
         meta = cls.meta_with_dtype_and_shape(dtype, shape)
-        lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.frombuffer(r.data(), dtype=dtype).reshape(shape))
+        lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.from_numpy(byteswap_tensor(np.frombuffer(r.data(), dtype=numpy_dtype), numpy_dtype)).view(dtype).reshape(shape))
         return cast(torch.Tensor, lazy)
 
     @classmethod
