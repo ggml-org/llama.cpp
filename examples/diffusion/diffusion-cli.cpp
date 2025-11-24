@@ -404,6 +404,7 @@ static void diffusion_generate(llama_context *          ctx,
                         llama_token_data_array cur_p = {
                             candidates.data(),
                             (size_t) n_vocab,
+                            false, // normalized
                             -1,
                             false,
                         };
@@ -429,6 +430,7 @@ static void diffusion_generate(llama_context *          ctx,
                     llama_token_data_array cur_p = {
                         candidates.data(),
                         candidates.size(),
+                        false, // normalized
                         -1,
                         false,
                     };
@@ -472,6 +474,7 @@ static void diffusion_generate(llama_context *          ctx,
                         llama_token_data_array conf_array = {
                             conf_candidates.data(),
                             conf_candidates.size(),
+                            false,
                             -1,
                             false,
                         };

@@ -134,7 +134,7 @@ struct common_sampler {
             cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
         }
 
-        cur_p = { cur.data(), cur.size(), -1, false };
+        cur_p = { cur.data(), cur.size(), false, -1, false };
     }
 
     common_time_meas tm() {
@@ -412,7 +412,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     // check if it the sampled token fits the grammar
     {
         llama_token_data       single_token_data       = { id, 1.0f, 0.0f };
-        llama_token_data_array single_token_data_array = { &single_token_data, 1, -1, false };
+        llama_token_data_array single_token_data_array = { &single_token_data, 1, false, -1, false };
 
         llama_sampler_apply(grmr, &single_token_data_array);
 
