@@ -431,6 +431,10 @@ struct llm_build_refact : public llm_graph_context {
     llm_build_refact(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_rnd1 : public llm_graph_context {
+    llm_build_rnd1(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_rwkv6 : public llm_build_rwkv6_base {
     llm_build_rwkv6(const llama_model & model, const llm_graph_params & params);
 };
