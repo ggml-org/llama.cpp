@@ -2207,8 +2207,8 @@ static void aclnn_index_fill_tensor(ggml_backend_cann_context & ctx,
 
 /**
  * @brief Initializes and caches all intermediate tensors required for RoPE
- *        (Rotary Position Embedding), including support for Yarn、mRoPE、
- *        i-mRoPE、Neox repeat strategy、independent sectors、frequency factors，
+ *        (Rotary Position Embedding), including support for Yarn, mRoPE,
+ *        i-mRoPE, Neox repeat strategy, independent sectors, frequency factors，
  *        and multi-section rotary groups.
  *
  * This function computes and caches the per-dimension θ coefficients used for
@@ -2286,10 +2286,10 @@ static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
     // (1) multiplying by the position,
     // (2) dividing by freq_factors,
     // (3) computing the sine and cosine,
-    // the other parameters used in thecomputation generally do not change in most scenarios.
+    // the other parameters used in the computation generally do not change in most scenarios.
     // Therefore, we can first compute this part of the result and then cache it.
 
-    // Step1.1: prepare theta_scale exponent. if this this exponent updated, should update theta_scale_tensor.
+    // Step1.1: prepare theta_scale exponent. if this exponent updated, should update theta_scale_tensor.
     acl_tensor_ptr acl_theta_scale_tensor;
     bool           theta_scale_updated = false;
     if (ctx.rope_cache.theta_scale_length != theta_scale_length || ctx.rope_cache.theta_scale != theta_scale ||
@@ -2299,7 +2299,7 @@ static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
             free(ctx.rope_cache.theta_scale_exp_host);
         }
         ctx.rope_cache.theta_scale_exp_host = (float *) malloc(theta_scale_length * sizeof(float));
-
+        GGML_ASSERT(ctx.rope_cache.theta_scale_exp_host != nullptr);
         if (!indep_sects) {
             ctx.rope_cache.theta_scale_exp_host[0] = 1;
             for (int i = 1; i < theta_scale_length; i++) {
@@ -2382,7 +2382,7 @@ static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
         GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdds, acl_yarn_ramp_tensor.get(), freq_scale_sc.get(), one.get());
     }
 
-    // Step 1.3: update thea_scale_tensor according to ext_factor or freq_scale.
+    // Step 1.3: update theta_scale_tensor according to ext_factor or freq_scale.
     if (ext_factor != 0) {
         if (theta_scale_updated || yarn_ramp_tensor_updated) {
             theta_scale_updated = true;
@@ -2411,7 +2411,7 @@ static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
                 free(ctx.rope_cache.position_select_index_host);
             }
             ctx.rope_cache.position_select_index_host = (int *) malloc(theta_scale_length * sizeof(int));
-
+            GGML_ASSERT(ctx.rope_cache.position_select_index_host != nullptr);
             int sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
             int sec_w     = sections[1] + sections[0];
             int sec_e     = sections[2] + sec_w;
@@ -2674,6 +2674,14 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE; // qwen3vl apply interleaved mrope
     const bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, note: also true for vision (24 & 8 == true) and for imrope
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+
+    if (mrope_used) {
+        GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
+    }
+
+    if (is_vision) {
+        GGML_ASSERT(n_dims == ne0/2);
+    }
 
     if (is_imrope || mrope_used) {
         is_neox = true;
