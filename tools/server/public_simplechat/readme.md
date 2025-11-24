@@ -2,6 +2,9 @@
 
 by Humans for All.
 
+A lightweight simple minded ai chat client with a web front-end that supports multiple chat sessions, vision, reasoning and tool calling.
+
+
 ## Quickstart
 
 ### Server
@@ -18,6 +21,7 @@ build/bin/llama-server -m <path/to/model.gguf> \
 - `--jinja` enables tool‑calling support
 - `--mmproj <path/to/mmproj.gguf>` enables vision support
 - `--port <port number>` use if a custom port is needed
+  - default is 8080 wrt llama-server
 
 If one needs web related access / tool calls dont forget to run
 
@@ -25,18 +29,20 @@ If one needs web related access / tool calls dont forget to run
 cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config simpleproxy.json
 ```
 
-- `--debug True` enables debug mode which captures internet handshake data.
+- `--debug True` enables debug mode which captures internet handshake data
+- port defaults to 3128, can be changed from simpleproxy.json, if needed
 
 ### Client
 
-1. Open `http://127.0.0.1:PORT/index.html` in a browser
+1. Open `http://127.0.0.1:8080/index.html` in a browser
+   - assuming one is running the llama-server locally with its default port
 
 2. Select / Create a chat session
    - set a suitable system prompt, if needed
    - modify **settings**, if needed
    - **Restore** loads last autosaved session with same name
 
-3. Enter the query, press **Enter**
+3. Enter query/response into user input area at the bottom, press **Enter**
    - use **Shift‑Enter** for newline
    - include images if required (ai vision models)
 
@@ -45,25 +51,26 @@ cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config
 5. If a tool call is requested
    - verify / edit the tool call details before triggering the same
      - one can even ask ai to rethink on the tool call requested,
-       by sending a appropriate user response instead of a tool call response.
-   - tool call is executed using browser's web worker or simpleproxy
-   - tool call response is placed in user input area (with color coding)
+       by sending a appropriate user response instead of a tool call response
+   - tool call is executed using Browser's web worker or included SimpleProxy.py
+   - tool call response is placed in user input area
+     - the user input area is color coded to distinguish between user and tool responses
    - verify / edit the tool call response, before submit same back to ai
      - tool response initially assigned `TOOL-TEMP` role, promoted to `TOOL` upon submit
    - based on got response, if needed one can rerun tool call with modified arguments
-   - *at any time there can be one pending tool call wrt a chat session*
+   - at any time there can be one pending tool call wrt a chat session
 
-6. **Delete / Copy** available via popover menu for each message
+6. **Delete & Copy** available via popover menu for each message
 
-7. **Clear** / **+ New** chat with provided buttons, as needed
+7. **Clear / + New** chat with provided buttons, as needed
 
 
 ## Overview
 
-A lightweight ai chat client with a web front-end that supports multiple chat sessions, vision, reasoning and tool calling.
+A lightweight simple minded ai chat client with a web front-end that supports multiple chat sessions, vision, reasoning and tool calling.
 
 - Supports multiple independent chat sessions with
-  - One‑shot or streamed (default) responses
+  - One‑shot or Streamed (default) responses
   - Custom settings and system prompts per session
   - Automatic local autosave (restorable on next load)
   - can handshake with `/completions` or `/chat/completions` (default) endpoints
@@ -75,29 +82,30 @@ A lightweight ai chat client with a web front-end that supports multiple chat se
 - Supports vision / image / multimodal ai models
   - attach image files as part of user chat messages
     - handshaked as `image_url`s in chat message content array along with text
-    - supports multi-image uploads per message
+    - supports multiple image uploads per message
     - images displayed inline in the chat history
   - specify `mmproj` file via `-mmproj` or using `-hf`
   - specify `-batch-size` and `-ubatch-size` if needed
 
-- Built-in support for GenAI models that expose tool calling
+- Built-in support for GenAI/LLM models that support tool calling
 
   - includes a bunch of useful builtin tool calls, without needing any additional setup
 
-  - direct browser based tool calls include
+  - building on modern browsers' flexibility, following tool calls are directly supported by default
     - `sys_date_time`, `simple_calculator`, `run_javascript_function_code`, `data_store_*`, `external_ai`
     - except for external_ai, these are run from within a web worker context to isolate main context from them
     - data_store brings in browser IndexedDB based persistant key/value storage across sessions
 
-  - along with included python based simpleproxy.py
+  - in collaboration with included python based simpleproxy.py, these additional tool calls are supported
     - `search_web_text`, `fetch_web_url_raw`, `fetch_html_text`, `fetch_pdf_as_text`, `fetch_xml_filtered`
       - these built‑in tool calls (via SimpleProxy) help fetch PDFs, HTML, XML or perform web search
-      - PDF tool also returns an outline with numbering
+      - PDF tool also returns an outline with numbering, if available
       - result is truncated to `iResultMaxDataLength` (default 128 kB)
-    - helps isolate these functionality into a separate vm running locally or otherwise, if needed
+    - helps isolate core of these functionality into a separate vm running locally or otherwise, if needed
     - supports whitelisting of `allowed.schemes` and `allowed.domains` through `simpleproxy.json`
     - supports a bearer token shared between server and client for auth
       - needs https support, for better security wrt this flow, avoided now given mostly local use
+        and need for user to setup corresponding pki key pairs.
 
   - follows a safety first design and lets the user
     - verify and optionally edit the tool call requests, before executing the same
@@ -105,8 +113,8 @@ A lightweight ai chat client with a web front-end that supports multiple chat se
     - user can update the settings for auto executing these actions, if needed
 
   - external_ai allows invoking a separate fresh ai instance
-    - ai could run self modified targeted versions of itself/... with custom system prompts and user messages as needed
-    - user can bring in an ai instance with additional compute access, which should be used only if needed
+    - ai could run self modified targeted versions of itself/... using custom system prompts and user messages as needed
+    - user can setup an ai instance with additional compute access, which should be used only if needed
     - tool calling is currently kept disabled in such a instance
 
 - Client side Sliding window Context control, using `iRecentUserMsgCnt`, helps limit context sent to ai model
@@ -116,8 +124,8 @@ A lightweight ai chat client with a web front-end that supports multiple chat se
 - Follows responsive design to try adapt to any screen size
 
 - built using plain html + css + javascript and python
-  - no additional dependencies that one needs to keep track of
-    - except for pypdf, if pdf support needed. automaticaly drops pdf tool call if pypdf missing
+  - no additional dependencies that one needs to worry about and inturn keep track of
+    - except for pypdf, if pdf support needed. automaticaly drops pdf tool call support, if pypdf missing
   - fits within ~260KB even in uncompressed source form (including simpleproxy.py)
   - easily extend with additional tool calls using either javascript or python, for additional functionality
 
@@ -141,7 +149,10 @@ One can modify the session configuration using Settings UI. All the settings and
 
 - **Ai Server** (`baseURL`)
   - ai server (llama-server) address
-  - default is `http://127.0.0.1:PORT`
+  - default is `http://127.0.0.1:8080`
+- **SimpleProxy Server** (`proxyUrl`)
+  - the simpleproxy.py server address
+  - default is `http://127.0.0.1:3128`
 - **Stream** (`stream`)
   - `true` for live streaming, `false` for oneshot
 - **Client side Sliding Window** (`iRecentUserMsgCnt`)
@@ -149,14 +160,14 @@ One can modify the session configuration using Settings UI. All the settings and
   - `0`  : only system prompt
   - `>0` : last N user messages after the most recent system prompt
 - **Cache Prompt** (`cache_prompt`)
-  - enables server‑side caching of system prompt and history
+  - enables server‑side caching of system prompt and history to an extent
 - **Tool Call Timeout** (`toolCallResponseTimeoutMS`)
   - 200s by default
 - **Tool call Auto** (`autoSecs`)
   - seconds to wait before auto-triggering tool calls and auto-submitting tool responses
   - default is 0 ie manual
 - **Trim Garbage** (`bTrimGarbage`)
-  - Removes repeated trailing text
+  - tries to remove repeating trailing text
 
 
 ## Debugging Tips
