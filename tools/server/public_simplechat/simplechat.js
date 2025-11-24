@@ -33,9 +33,15 @@ export class Roles {
 
     /** Used to identify tool call response, which has not yet been accepted and submitted by users */
     static ToolTemp = `TOOL${ROLES_TEMP_ENDSWITH}`;
+
+    /** Could be used to maintain modified tool calls related info or errors or ... */
+    static ExtraTemp = `EXTRA${ROLES_TEMP_ENDSWITH}`;
+
     /**
-     * Used to maintain errors that wont be normally communicated back to ai server
-     * like error got during handshake with ai server or so.
+     * One could either use ExtraTemp Role to maintain the errors seen or maybe one could
+     * use this to maintain errors that wont be normally communicated back to ai server
+     * like error got during handshake with ai server or so, which in turn the user might
+     * work around by restarting the server with different / updated configuration or ...
      */
     static ErrorTemp = `ERROR${ROLES_TEMP_ENDSWITH}`;
 }

@@ -455,7 +455,7 @@ always run this from a discardable vm, just in case if one wants to be extra cau
 
 The following tools/functions are currently provided by default
 
-##### directly in browser
+##### directly in and using browser capabilities
 
 * sys_date_time - provides the current date and time
 
@@ -485,6 +485,8 @@ The following tools/functions are currently provided by default
     * or so and so and so ...
     * given the fuzzy nature of the generative ai, sometimes the model may even use this tool call
       to get answer to questions like what is your name ;>
+  * end user can use this mechanism to try and bring in an instance of ai running on a more powerful
+    machine, but then to be used only if needed or so
 
 Most of the above (except for external ai call) are run from inside web worker contexts. Currently the
 ai generated code / expression is run through a simple minded eval inside a web worker mechanism. Use
@@ -935,7 +937,9 @@ if the models support same. It should also take care of some aspects of the tool
 potentially.
 
 MAYBE add a special ClientSideOnly role for use wrt Chat history to maintain things to be shown in a chat
-session to the end user, but inturn not to be sent to the ai server. Ex current settings or so ...
+session to the end user, but inturn not to be sent to the ai server. Ex current settings, any edits to toolcall,
+any tool call or server handshake errors seen (which user might have worked around as needed and continued the
+conversation) or so ...
 
 Updating system prompt, will reset user input area fully now, which seems a good enough behaviour, while
 keeping the code flow also simple and straight, do I need to change it, I dont think so as of now.
@@ -963,9 +967,9 @@ in devel console of the browser
   * remove the assistant response from end of chat session, if any, using
     * document['gMe'].multiChat.simpleChats['SessionId'].xchat.pop()
     * [202511] One can even use the del button in the popover menu wrt each chat message to delete
-  * reset role of Tool response chat message to TOOL.TEMP from tool
+  * reset role of Tool response chat message to TOOL-TEMP from tool
     * toolMessageIndex = document['gMe'].multiChat.simpleChats['SessionId'].xchat.length - 1
-    * document['gMe'].multiChat.simpleChats['SessionId'].xchat[toolMessageIndex].role = "TOOL.TEMP"
+    * document['gMe'].multiChat.simpleChats['SessionId'].xchat[toolMessageIndex].role = "TOOL-TEMP"
   * if you dont mind running the tool call again, just deleting the tool response message will also do
   * clicking on the SessionId at top in UI, should refresh the chat ui and inturn it should now give
     the option to control that tool call again
