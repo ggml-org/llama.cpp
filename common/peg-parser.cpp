@@ -1074,25 +1074,25 @@ common_peg_parser common_peg_parser_builder::json_number() {
         auto int_part = choice({literal("0"), sequence({digit1_9, chars("[0-9]", 0, -1)})});
         auto frac = sequence({literal("."), digits});
         auto exp = sequence({choice({literal("e"), literal("E")}), optional(chars("[+-]", 1, 1)), digits});
-        return sequence({optional(literal("-")), int_part, optional(frac), optional(exp)});
+        return sequence({optional(literal("-")), int_part, optional(frac), optional(exp), space()});
     });
 }
 
 common_peg_parser common_peg_parser_builder::json_string() {
     return rule("json-string", [this]() {
-        return sequence({literal("\""), json_string_content(), literal("\"")});
+        return sequence({literal("\""), json_string_content(), literal("\""), space()});
     });
 }
 
 common_peg_parser common_peg_parser_builder::json_bool() {
     return rule("json-bool", [this]() {
-        return choice({literal("true"), literal("false")});
+        return sequence({choice({literal("true"), literal("false")}), space()});
     });
 }
 
 common_peg_parser common_peg_parser_builder::json_null() {
     return rule("json-null", [this]() {
-        return literal("null");
+        return sequence({literal("null"), space()});
     });
 }
 
@@ -1101,9 +1101,14 @@ common_peg_parser common_peg_parser_builder::json_object() {
         auto ws = space();
         auto member = sequence({json_string(), ws, literal(":"), ws, json()});
         auto members = sequence({member, zero_or_more(sequence({ws, literal(","), ws, member}))});
-        return choice({
-            sequence({literal("{"), ws, literal("}")}),
-            sequence({literal("{"), ws, members, ws, literal("}")})
+        return sequence({
+            literal("{"),
+            ws,
+            choice({
+                literal("}"),
+                sequence({members, ws, literal("}")})
+            }),
+            ws
         });
     });
 }
@@ -1111,10 +1116,15 @@ common_peg_parser common_peg_parser_builder::json_object() {
 common_peg_parser common_peg_parser_builder::json_array() {
     return rule("json-array", [this]() {
         auto ws = space();
-        auto elements = sequence({json(), zero_or_more(sequence({ws, literal(","), ws, json()}))});
-        return choice({
-            sequence({literal("["), ws, literal("]")}),
-            sequence({literal("["), ws, elements, ws, literal("]")})
+        auto elements = sequence({json(), zero_or_more(sequence({literal(","), ws, json()}))});
+        return sequence({
+            literal("["),
+            ws,
+            choice({
+                literal("]"),
+                sequence({elements, ws, literal("]")})
+            }),
+            ws
         });
     });
 }
