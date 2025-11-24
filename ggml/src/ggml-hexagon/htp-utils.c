@@ -390,6 +390,12 @@ int get_hex_arch_ver(int domain, int * arch) {
     }
 
     switch (arch_ver.capability & 0xff) {
+        case 0x68:
+            *arch = 68;
+            return 0;
+        case 0x69:
+            *arch = 69;
+            return 0;
         case 0x73:
             *arch = 73;
             return 0;

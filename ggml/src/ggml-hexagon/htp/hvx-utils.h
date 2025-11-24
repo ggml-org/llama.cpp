@@ -21,6 +21,26 @@ typedef union {
     float      fp32[VLEN_FP32];
 } __attribute__((aligned(VLEN), packed)) HVX_VectorAlias;
 
+/* Q6_Vsf_equals_Vw is only available on v73+.*/
+#if __HVX_ARCH__ < 73
+static inline HVX_Vector int32_to_qfloat(HVX_Vector const in)
+{
+    HVX_Vector const vzero = Q6_V_vzero();
+    HVX_VectorPred is_zero = Q6_Q_vcmp_eq_VwVw(in, vzero);
+    HVX_Vector lshift = Q6_Vw_vnormamt_Vw(in);
+    HVX_Vector normalized = Q6_Vw_vasl_VwVw(in, lshift);
+    HVX_Vector vexp = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7f + 30), lshift);
+    HVX_Vector mant = Q6_V_vand_VV(Q6_V_vsplat_R(0xFFFFFF00), normalized);
+    HVX_Vector ret = Q6_V_vmux_QVV(is_zero, vzero, Q6_Vw_vadd_VwVw(mant, vexp));
+    return ret;
+}
+
+static inline HVX_Vector Q6_Vsf_equals_Vw(HVX_Vector const in)
+{
+    return Q6_Vsf_equals_Vqf32(int32_to_qfloat(in));
+}
+#endif
+
 static inline HVX_Vector hvx_vec_splat_fp32(float i) {
     union {
         float   f;
