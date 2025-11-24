@@ -909,6 +909,10 @@ Chat Session specific settings
 * uirefresh helper ensures client side sliding window is always satisfied.
   * now it remove messages no longer in the sliding window, so user only sees what is sent to the ai server,
     in the chat session messages ui.
+  * avoids adding additional control specifically for ui, and instead stick to the ai nw handshake related
+    chat sliding window size (which takes care of try avoid overloading the ai model context size) selected
+    by user already. User can always change the sliding window size to view past messages beyond the currently
+    active sliding window size and then switch back again, if they want to.
 
 
 #### ToDo
