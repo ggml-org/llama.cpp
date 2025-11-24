@@ -1231,6 +1231,8 @@ static void copy_tensor_async_ints(
         const uint32_t row = it->second;
         GGML_ASSERT(row < sampled_size);
 
+        GGML_ASSERT(ggml_is_contiguous(tensor) && "sampled tokens tensor must be contiguous for async copy");
+
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, tensor);
         ggml_backend_tensor_get_async(backend, tensor, sampled + row, 0, sizeof(sampled[row]));
     }
@@ -1252,6 +1254,8 @@ static void copy_tensor_async_floats(
         GGML_ASSERT(it != seq_to_row.end());
         const uint32_t row = it->second;
         GGML_ASSERT(row < counts.size());
+
+        GGML_ASSERT(ggml_is_contiguous(tensor) && "logits/probs tensor must be contiguous for async copy");
 
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, tensor);
         float * row_ptr = dst + (size_t) row * stride;
@@ -1278,6 +1282,8 @@ static void copy_tensor_async_candidates(
         GGML_ASSERT(it != seq_to_row.end());
         const uint32_t row = it->second;
         GGML_ASSERT(row < counts.size());
+
+        GGML_ASSERT(ggml_is_contiguous(tensor) && "candidates tensor must be contiguous for async copy");
 
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, tensor);
         llama_token * row_ptr = dst + (size_t) row * stride;
