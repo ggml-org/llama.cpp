@@ -2303,9 +2303,9 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
     // calculate rope cache for fist layer in current device.
     cann_ctx->rope_cache.cached = false;
 
+    bool cann_graph_update_required = false;
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph             = true;
-    bool cann_graph_update_required = false;
 
     static bool prefill_use_graph = parse_bool(get_env("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
     if (!prefill_use_graph) {
@@ -2336,7 +2336,6 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
     }
 #else
     bool use_cann_graph             = false;
-    bool cann_graph_update_required = false;
 #endif  // USE_ACL_GRAPH
     evaluate_and_capture_cann_graph(cann_ctx, cgraph, use_cann_graph, cann_graph_update_required);
 
