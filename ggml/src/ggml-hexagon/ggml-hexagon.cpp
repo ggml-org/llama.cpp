@@ -2383,24 +2383,21 @@ template <bool _IsSrc0Constant> static void ggml_hexagon_binary(const struct ggm
     init_htp_tensor(&req.dst, dst);
 
     dspqueue_buffer bufs[3];
-    // First buffer = First Operand of Binary op
-    // This is a buffer that the CPU writes and the DSP reads, so we'll
-    // need to flush CPU caches and invalidate DSP ones. On platforms
-    // with I/O coherency support the framework will automatically skip
-    // cache operations where possible.
+
+    // Buffer 0 (src0): Weights (mulmat) or First Operand (binary op).
+    // If constant (e.g. weights), no cache management is needed.
+    // Otherwise (CPU writes, DSP reads), we flush CPU caches and invalidate DSP caches.
+    // Note: On platforms with I/O coherency, the framework skips cache ops automatically.
     dspqueue_buffers_init(bufs, src0, _IsSrc0Constant ? DSP_BUFFER_TYPE_CONSTANT : DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
 
-    // Second buffer = Second Operand of Binary op
-    // This is a buffer that the CPU writes and the DSP reads, so we'll
-    // need to flush CPU caches and invalidate DSP ones. On platforms
-    // with I/O coherency support the framework will automatically skip
-    // cache operations where possible.
+    // Buffer 1 (src1): Input Activations (mulmat) or Second Operand (binary op).
+    // CPU writes, DSP reads: flush CPU caches and invalidate DSP caches.
     dspqueue_buffers_init(&bufs[1], src1, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
 
-    // Third buffer = Output Activations. We'll handle DSP
-    // cache maintenance in the response message but need to flush
-    // CPU caches to ensure any previously written dirty lines are
-    // written out before writes from the DSP start.
+    // Buffer 2 (dst): Output Activations.
+    // DSP writes, CPU reads.
+    // We flush CPU caches to ensure consistency before DSP writes.
+    // DSP cache maintenance is handled in the response message.
     dspqueue_buffers_init(&bufs[2], dst, DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ);
     auto * sess = get_session_from_tensor(src0);
 
@@ -2470,13 +2467,24 @@ template <bool _IsSrc0Constant> static void ggml_hexagon_binary_id(const struct 
     init_htp_tensor(&req.dst, dst);
 
     dspqueue_buffer bufs[4];
-    // First buffer = input activations
+
+    // Buffer 0 (src0): Weights (mulmat) or Input Activations (other op).
+    // If constant, no cache management is needed.
+    // Otherwise (CPU writes, DSP reads), we flush CPU caches and invalidate DSP caches.
     dspqueue_buffers_init(bufs, src0, _IsSrc0Constant ? DSP_BUFFER_TYPE_CONSTANT : DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-    // Second buffer = experts bias
+
+    // Buffer 1 (src1): Input Activations (mulmat) or Experts Bias (other op).
+    // CPU writes, DSP reads: flush CPU caches and invalidate DSP caches.
     dspqueue_buffers_init(&bufs[1], src1, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-    // Third buffer = activated experts
+
+    // Buffer 2 (src2): Expert IDs (mulmat) or Activated Experts (other op).
+    // CPU writes, DSP reads: flush CPU caches and invalidate DSP caches.
     dspqueue_buffers_init(&bufs[2], src2, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-    // Forth buffer = output activations
+
+    // Buffer 3 (dst): Output Activations.
+    // DSP writes, CPU reads.
+    // We flush CPU caches to ensure consistency before DSP writes.
+    // DSP cache maintenance is handled in the response message.
     dspqueue_buffers_init(&bufs[3], dst, DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ);
 
     auto * sess = get_session_from_tensor(src0);
