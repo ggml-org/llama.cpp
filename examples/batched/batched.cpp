@@ -2,6 +2,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include "sampling.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -63,6 +64,18 @@ int main(int argc, char ** argv) {
 
     ctx_params.n_ctx   = n_kv_req;
     ctx_params.n_batch = std::max(n_predict, n_parallel);
+
+    std::vector<llama_sampler_seq_config> sampler_configs(n_parallel);
+    if (params.sampling.backend_sampling) {
+        for (int32_t i = 0; i < n_parallel; ++i) {
+            llama_sampler * backend_sampler = common_sampler_backend_init(model, params.sampling);
+            if (backend_sampler) {
+                sampler_configs[i] = { i, backend_sampler };
+            }
+        }
+        ctx_params.samplers   = sampler_configs.data();
+        ctx_params.n_samplers = n_parallel;
+    }
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 

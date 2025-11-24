@@ -42,3 +42,15 @@ llama_print_timings: prompt eval time =  4089.11 ms /   118 tokens (   34.65 ms 
 llama_print_timings:        eval time =     0.00 ms /     1 runs   (    0.00 ms per token,      inf tokens per second)
 llama_print_timings:       total time =  4156.04 ms
 ```
+
+### Using backend samplers
+It is possible to run this example using backend samplers so that sampling is
+performed on the backend device, like a GPU.
+```bash
+./llama-batched \
+    -m models/Qwen2.5-VL-3B-Instruct-Q8_0.gguf -p "Hello my name is" \
+    -np 4 -kvu \
+    --backend_sampling --top-k 80 --backend_dist
+```
+The `--verbose` flag can be added to see more detailed output and also show
+that the backend samplers are being used.
