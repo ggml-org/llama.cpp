@@ -1248,7 +1248,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         // make the outputs have the same order they had in the user-provided batch
         // note: this is mostly relevant for recurrent models atm
-        if (!sorted_output) {
+        if (!sorted_output && n_outputs > 1) {
             GGML_ASSERT((size_t) n_outputs == out_ids.size());
 
             // TODO: is there something more efficient which also minimizes swaps?
