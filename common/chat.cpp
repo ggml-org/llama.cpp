@@ -1913,8 +1913,8 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
         auto content = p.rule("content", p.content(p.until_one_of({"<tool_call>", "<function="})));
 
         auto until_end_of_param = p.rule("string-arg-value", p.until_one_of({
-            "\n</parameter>\n<parameter=",
-            "\n</parameter>\n</function>"
+            "</parameter>\n<parameter=",
+            "</parameter>\n</function>"
         }));
 
         auto tools = p.choice();
@@ -1941,9 +1941,9 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
                 }
 
                 auto arg = p.tool_arg(
-                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">")
-                    << arg_value
-                    << p.tool_arg_close(
+                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">\n")
+                    + arg_value
+                    + p.tool_arg_close(
                         "</parameter>\n" +
                         p.peek(p.literal("<parameter=") | p.literal("</function>"))
                     )
