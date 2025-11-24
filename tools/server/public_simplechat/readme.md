@@ -112,10 +112,17 @@ A lightweight simple minded ai chat client with a web front-end that supports mu
     - verify and optionally edit the tool call response, before submitting the same
     - user can update the settings for auto executing these actions, if needed
 
-  - external_ai allows invoking a separate fresh ai instance
+  - external_ai allows invoking a separate optionally fresh by default ai instance
     - ai could run self modified targeted versions of itself/... using custom system prompts and user messages as needed
     - user can setup an ai instance with additional compute access, which should be used only if needed
-    - tool calling is currently kept disabled in such a instance
+    - by default in such a instance
+      - tool calling is kept disabled along with
+      - client side sliding window of 1,
+        ie only system prompt and latest user message is sent to ai server.
+    - TCExternalAI is the special chat session used internally for this,
+      and the default behaviour will get impacted if you modify the settings of this special chat session.
+      - Restarting this chat client logic will force reset things to the default behaviour,
+        how ever any other settings wrt TCExternalAi, that where changed, will persist across restarts.
 
 - Client side Sliding window Context control, using `iRecentUserMsgCnt`, helps limit context sent to ai model
 
