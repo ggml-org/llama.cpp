@@ -481,6 +481,9 @@ function usage_note(sRecentUserMsgCnt) {
         <li> ChatHistInCtxt, MaxTokens, ModelCtxt window to expand</li>
         </ul>
     <li> ${AI_TC_SESSIONNAME} session keeps tool calls disabled, to avoid recursive...</li>
+        <ul class="ul2">
+        <li> Used by external_ai tool call, which allows ai calling ai, as needed.</li>
+        </ul>
     </ul>
     </details>`;
     return sUsageNote;
@@ -1421,6 +1424,7 @@ class MultiChatUI {
         // Create main section
         let secMain = document.createElement('section')
         secMain.id = `cmuid${msg.uniqId}`
+        secMain.dataset.cmuid = String(msg.uniqId)
         secMain.classList.add(`role-${msg.ns.role}`)
         secMain.classList.add('chat-message')
         secMain.addEventListener('mouseenter', (ev)=>{
@@ -1510,7 +1514,7 @@ class MultiChatUI {
     }
 
     /**
-     * Refresh UI wrt given chatId, provided it matches the currently selected chatId
+     * Refresh UI (optionally bruteforce) wrt given chatId, provided it matches the currently selected chatId
      *
      * Show the chat contents in elDivChat.
      * Also update
@@ -1521,6 +1525,8 @@ class MultiChatUI {
      * * usage info
      * * option to load prev saved chat if any
      * * as well as settings/info.
+     *
+     * Ensures only messages with in the currently set sliding window are shown
      *
      * @param {string} chatId
      * @param {boolean} bClear
@@ -1585,6 +1591,8 @@ class MultiChatUI {
      * If the houseKeeping.clear flag is set then fallback to
      * the brute force full on chat_show.
      *
+     * Also ensures only messages with in the currently set sliding window are shown
+     *
      * @param {string} chatId
      * @param {number} lastN
      */
@@ -1599,9 +1607,20 @@ class MultiChatUI {
         }
         this.ui_userinput_reset(false)
         this.ui_toolcallvalidated_as_needed(new ChatMessageEx());
+        let chatToShow = chat.recent_chat(chat.cfg.chatProps.iRecentUserMsgCnt);
+        // Remove messages outside sliding window
+        /** @type {NodeListOf<HTMLElement>} */
+        let elList = this.elDivChat.querySelectorAll('[id*="cmuid"]')
+        for (const el of elList) {
+            if (Number(el.dataset.cmuid) >= chatToShow[0].uniqId) {
+                break
+            }
+            el.remove()
+        }
+        // Refresh last few messages in the chat history, as requested by user
         for(let i=lastN; i > 0; i-=1) {
-            let msg = chat.xchat[chat.xchat.length-i]
-            let nextMsg = chat.xchat[chat.xchat.length-(i-1)]
+            let msg = chatToShow[chatToShow.length-i]
+            let nextMsg = chatToShow[chatToShow.length-(i-1)]
             if (msg) {
                 this.chatmsg_ui_remove(msg.uniqId)
                 this.show_message(this.elDivChat, chat.chatId, msg, (i-1), nextMsg)

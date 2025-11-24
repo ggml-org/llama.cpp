@@ -906,6 +906,9 @@ Chat Session specific settings
     tool call proxy server.
   * however any resultant changes to the available tool calls list wont get reflected,
     till one reloads the program.
+* uirefresh helper ensures client side sliding window is always satisfied.
+  * now it remove messages no longer in the sliding window, so user only sees what is sent to the ai server,
+    in the chat session messages ui.
 
 
 #### ToDo
@@ -932,14 +935,6 @@ session to the end user, but inturn not to be sent to the ai server. Ex current 
 
 Updating system prompt, will reset user input area fully now, which seems a good enough behaviour, while
 keeping the code flow also simple and straight, do I need to change it, I dont think so as of now.
-
-Should I have a toggle to control whether show only the messages sent to ai server based on sliding window
-or show all the messages (ie even beyond the sliding window)?
-* rather previously with chat_show only whats in current sliding window was being shown, but now with
-  the uirefresh based logic, all messages from last chat_show will be shown irrespective of whether still
-  in ai server handshake related sliding window or not.
-* Update UIRefresh helper to optionally remove messages no longer in the sliding window, so user only sees
-  what is sent to the ai server in the chat session messages ui.
 
 For now amn't bringing in mozilla/github/standard-entities pdf, md, mathslatex etal javascript libraries for
 their respective functionalities.
