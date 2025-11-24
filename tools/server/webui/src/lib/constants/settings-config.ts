@@ -14,6 +14,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	pasteLongTextToFileLen: 2500,
 	pdfAsImage: false,
 	showModelInfo: false,
+	disableAutoScroll: false,
 	renderUserContentAsMarkdown: false,
 	modelSelectorEnabled: false,
 	// make sure these default values are in sync with `common.h`
@@ -93,6 +94,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
 	pdfAsImage: 'Parse PDF as image instead of text (requires vision-capable model).',
 	showModelInfo: 'Display the model name used to generate each message below the message content.',
+	disableAutoScroll:
+		'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
 	renderUserContentAsMarkdown: 'Render user messages using markdown formatting in the chat.',
 	modelSelectorEnabled:
 		'Enable the model selector in the chat input to choose the inference model. Sends the associated model field in API requests.',
