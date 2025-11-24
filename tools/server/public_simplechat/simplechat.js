@@ -1,6 +1,9 @@
 // @ts-check
-// Core classes which provide a simple implementation of handshake with ai server's completions and chat/completions endpoints
-// as well as related web front end logic for basic usage and testing.
+// Core classes which provide a simple implementation of handshake with ai server's completions and
+// chat/completions endpoints as well as related web front end logic for basic usage and testing.
+// Supports tool calling (including a bunch of builtin ones), reasoning and vision related handshakes,
+// if supported by the ai model, that one is interacting with.
+//
 // by Humans for All
 
 import * as du from "./datautils.mjs";
@@ -17,6 +20,7 @@ const DB_STORE = "Sessions"
 export const AI_TC_SESSIONNAME = `TCExternalAI`
 
 const ROLES_TEMP_ENDSWITH = TEMP_MARKER
+
 
 export class Roles {
     static System = "system";
@@ -451,21 +455,26 @@ function usage_note(sRecentUserMsgCnt) {
     <details id="DefaultUsage">
     <summary class="role-system">Usage Note</summary>
     <ul class="ul1">
-    <li> New button creates new chat session, with its own system prompt.</li>
+    <li> New btn creates new chat session, with its own system prompt & settings.</li>
     <li> Prompt button toggles system prompt entry.</li>
-    <li> System prompt above, helps control ai response characteristics.</li>
         <ul class="ul2">
-        <li> Completion mode - no system prompt normally.</li>
+        <li> System prompt, helps control ai response characteristics.</li>
+        <li> No system prompt normally if using Completion mode</li>
         </ul>
     <li> Use shift+enter for inserting enter/newline.</li>
-    <li> Enter your query/response to ai assistant in text area provided below.</li>
-    <li> Use image button for vision models, submitting or switching session clears same </li>
-    <li> Settings button allows current chat session's configuration to be updated.</li>
-    <li> Remember that each chat session has its own setting.</li>
-    <li> settings-tools-enabled should be true to enable tool calling.</li>
+    <li> Enter your query/response to ai assistant in user input area provided below.</li>
         <ul class="ul2">
-        <li> If ai assistant requests a tool call, verify same before triggering.</li>
+        <li> image btn for vision models, submitting / switching session clears same </li>
+        </ul>
+    <li> Settings button allows current chat session's configuration to be updated.</li>
+        <ul class="ul2">
+        <li> Remember that each chat session has its own setting.</li>
+        </ul>
+    <li> settings-tools-enabled should be true for tool calling.</li>
+        <ul class="ul2">
+        <li> if ai assistant requests a tool call, verify same before triggering.</li>
         <li> submit tool response placed into user query/response text area</li>
+        <li> for web access inc search/pdf tool calls, run included simpleproxy.py</li>
         </ul>
     <li> ContextWindow = [System, ${sRecentUserMsgCnt} User Query/Resp, Cur Query].</li>
         <ul class="ul2">
@@ -2157,7 +2166,7 @@ export class Config {
 export class Me {
 
     constructor() {
-        this.defaultChatIds = [ "Default", "Other", AI_TC_SESSIONNAME ];
+        this.defaultChatIds = [ "Chat1", "Chat2", AI_TC_SESSIONNAME ];
         this.defaultCfg = new Config()
         this.multiChat = new MultiChatUI(this);
         this.toolsMgr = new mTools.ToolsManager()
