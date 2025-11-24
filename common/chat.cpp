@@ -3595,6 +3595,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
 }
 
 common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
+    if (!syntax.parser.empty()) {
+        return common_chat_peg_parse(syntax.parser, input, is_partial, syntax);
+    }
     common_chat_msg_parser builder(input, is_partial, syntax);
     try {
         common_chat_parse(builder);

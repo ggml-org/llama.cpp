@@ -143,7 +143,6 @@ struct slot_params {
     std::string                  oaicompat_model;
     std::string                  oaicompat_cmpl_id;
     common_chat_syntax           oaicompat_chat_syntax;
-    common_peg_arena             oaicompat_chat_parser;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
@@ -454,12 +453,11 @@ struct server_task {
             params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
             params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
             params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
+            if (data.contains("chat_parser")) {
+                params.oaicompat_chat_syntax.parser = common_peg_arena::deserialize(data.at("chat_parser").get<std::string>());
+            }
         }
 
-        if (data.contains("chat_parser")) {
-            auto parser = data.at("chat_parser").get<std::string>();
-            params.oaicompat_chat_parser = common_peg_arena::deserialize(parser);
-        }
 
         {
             const auto preserved_tokens = data.find("preserved_tokens");
@@ -1869,17 +1867,10 @@ struct server_slot {
 
         auto previous_msg = chat_msg;
         SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
-        auto new_msg = !task->params.oaicompat_chat_parser.empty() ?
-            common_chat_peg_parse(
-                task->params.oaicompat_chat_parser,
-                generated_text,
-                /* is_partial= */ stop != STOP_TYPE_EOS,
-                task->params.oaicompat_chat_syntax) :
-            common_chat_parse(
-                generated_text,
-                /* is_partial= */ stop != STOP_TYPE_EOS,
-                task->params.oaicompat_chat_syntax);
-
+        auto new_msg = common_chat_parse(
+            generated_text,
+            /* is_partial= */ stop != STOP_TYPE_EOS,
+            task->params.oaicompat_chat_syntax);
         if (!new_msg.empty()) {
             new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
             chat_msg = new_msg;

@@ -1,7 +1,5 @@
 #pragma once
 
-#include "chat.h"
-
 #include <nlohmann/json_fwd.hpp>
 
 #include <memory>
