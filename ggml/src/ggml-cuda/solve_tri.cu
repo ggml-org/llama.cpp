@@ -40,14 +40,12 @@ static __global__ void solve_tri_f32_fast(
 
     const int offset = threadIdx.x + threadIdx.y * blockDim.x;
     // Load A into shared memory (coalesced)
-#pragma unroll
     for (int i = 0; i < n * n; i += k * WARP_SIZE) {
         int i0 = i + offset;
         sA[i0] = A_batch[i0];
     }
 
     // Load B into shared memory (coalesced)
-#pragma unroll
     for (int i = 0; i < n * k; i += k * WARP_SIZE) {
         int i0 = i + threadIdx.x + threadIdx.y * blockDim.x;
         sX[i0] = B_batch[i0];
