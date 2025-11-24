@@ -149,7 +149,8 @@ static void llama_sampler_backend_top_k_apply_ggml(
         fprintf(stderr, "CPU backend will be used instead which defeats the purpose of having backend samplers\n");
     }
 
-    ggml_data->candidates = top_k;
+    // TODO: temporary cont until https://github.com/ggml-org/llama.cpp/pull/17365 is merged
+    ggml_data->candidates = ggml_cont(ctx, top_k);
 
     struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, ggml_data->logits, 1, ggml_data->logits->ne[0]);
     struct ggml_tensor * top_k_rows = ggml_get_rows(ctx, logits_rows, top_k);
