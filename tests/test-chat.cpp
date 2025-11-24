@@ -2779,6 +2779,7 @@ Hey there!<|im_end|>
 
             make_parser(common_chat_templates * tmpls, bool is_partial, const std::vector<common_chat_tool> & tools) {
                 common_chat_templates_inputs inputs;
+                inputs.messages = { message_user };
                 inputs.tools = tools;
                 params_ = common_chat_templates_apply(tmpls, inputs);
                 assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, params_.format);

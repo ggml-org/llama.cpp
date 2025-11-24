@@ -1914,7 +1914,7 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
 
         auto until_end_of_param = p.rule("string-arg-value", p.until_one_of({
             "</parameter>\n<parameter=", "\n</parameter>\n<parameter=",
-            "</parameter>\n</function>" "\n</parameter>\n</function>"
+            "</parameter>\n</function>", "\n</parameter>\n</function>"
         }));
 
         auto tools = p.choice();
