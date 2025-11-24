@@ -1395,18 +1395,19 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 
     // allocate graph
     if (backend_ids_changed || !ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
-        // the re-allocation may cause the split inputs to be moved to a different address
-        // synchronize without ggml_backend_sched_synchronize to avoid changing cur_copy
-        for (int i = 0; i < sched->n_backends; i++) {
-            ggml_backend_synchronize(sched->backends[i]);
-        }
 #ifdef GGML_SCHED_NO_REALLOC
-        GGML_ABORT("%s: failured to allocate graph, but graph re-allocation is disabled by GGML_SCHED_NO_REALLOC\n", __func__);
+        GGML_ABORT("%s: failed to allocate graph, but graph re-allocation is disabled by GGML_SCHED_NO_REALLOC\n", __func__);
 #endif
 
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: failed to allocate graph, reserving (backend_ids_changed = %d)\n", __func__, backend_ids_changed);
 #endif
+
+        // the re-allocation may cause the split inputs to be moved to a different address
+        // synchronize without ggml_backend_sched_synchronize to avoid changing cur_copy
+        for (int i = 0; i < sched->n_backends; i++) {
+            ggml_backend_synchronize(sched->backends[i]);
+        }
 
         ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids);
         if (!ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
