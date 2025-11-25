@@ -43,7 +43,7 @@ export class MarkDown {
             }
             return
         }
-        if (line == '---') {
+        if (line.match(/^[-]{3,}|[*]{3,}|[_]{3,}\s*$/) != null) {
             this.unwind_list()
             this.html += "<hr>\n"
             return
@@ -61,7 +61,7 @@ export class MarkDown {
             this.html += `<pre class="${matchPre[1]}">\n`
             return
         }
-        let matchUnOrdered = line.match(/^([ ]*)[-*][ ](.*)$/);
+        let matchUnOrdered = line.match(/^([ ]*)[-+*][ ](.*)$/);
         if ( matchUnOrdered != null) {
             let sList = 'none'
             let listLvl = 0
