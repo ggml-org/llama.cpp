@@ -2387,7 +2387,6 @@ void ggml_gemm_q4_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 }
             }  // for b
 
-            // With the previous reorder, the tile is already in the correct memory layout.
             for (int i = 0; i < q8_k_blocklen; i++) {
                 int row = y * q8_k_blocklen + i;
                 for (int j = 0; j < 2; j++) {
