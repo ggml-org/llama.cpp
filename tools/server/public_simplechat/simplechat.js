@@ -2178,16 +2178,16 @@ export class Config {
             }
         }, [":chatProps:apiEP", ":chatProps:iRecentUserMsgCnt"], (propWithPath, prop, elParent)=>{
             if (propWithPath == ":chatProps:apiEP") {
-                let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.chatProps.apiEP, (val)=>{
+                let sel = ui.el_create_divlabelel("ApiEndPoint", ui.el_create_select("SetApiEP", ApiEP.Type, this.chatProps.apiEP, (val)=>{
                     // @ts-ignore
                     this.chatProps.apiEP = ApiEP.Type[val];
-                });
+                }));
                 elParent.appendChild(sel.div);
             }
             if (propWithPath == ":chatProps:iRecentUserMsgCnt") {
-                let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCntDict, this.chatProps.iRecentUserMsgCnt, (val)=>{
+                let sel = ui.el_create_divlabelel("ChatHistoryInCtxt", ui.el_create_select("SetChatHistoryInCtxt", this.sRecentUserMsgCntDict, this.chatProps.iRecentUserMsgCnt, (val)=>{
                     this.chatProps.iRecentUserMsgCnt = this.sRecentUserMsgCntDict[val];
-                });
+                }));
                 elParent.appendChild(sel.div);
             }
         })

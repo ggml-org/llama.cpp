@@ -114,28 +114,6 @@ export function el_create_boolbutton(id, texts, defaultValue, cb) {
 }
 
 /**
- * Create a div wrapped button which represents bool value using specified text wrt true and false.
- * @param {string} id
- * @param {string} label
- * @param {{ true: string; false: string; }} texts
- * @param {boolean} defaultValue
- * @param {(arg0: boolean) => void} cb
- * @param {string} className
- */
-export function el_creatediv_boolbutton(id, label, texts, defaultValue, cb, className="gridx2") {
-    let div = document.createElement("div");
-    div.className = className;
-    let lbl = document.createElement("label");
-    lbl.setAttribute("for", id);
-    lbl.innerText = label;
-    div.appendChild(lbl);
-    let btn = el_create_boolbutton(id, texts, defaultValue, cb);
-    div.appendChild(btn);
-    return { div: div, el: btn };
-}
-
-
-/**
  * Create a select ui element, with a set of options to select from.
  * * options: an object which contains name-value pairs
  * * defaultOption: the value whose name should be choosen, by default.
@@ -172,29 +150,6 @@ export function el_create_select(id, options, defaultOption, cb) {
 }
 
 /**
- * Create a div wrapped select ui element, with a set of options to select from.
- *
- * @param {string} id
- * @param {any} label
- * @param {{ [x: string]: any; }} options
- * @param {any} defaultOption
- * @param {(arg0: string) => void} cb
- * @param {string} className
- */
-export function el_creatediv_select(id, label, options, defaultOption, cb, className="gridx2") {
-    let div = document.createElement("div");
-    div.className = className;
-    let lbl = document.createElement("label");
-    lbl.setAttribute("for", id);
-    lbl.innerText = label;
-    div.appendChild(lbl);
-    let sel = el_create_select(id, options,defaultOption, cb);
-    div.appendChild(sel);
-    return { div: div, el: sel };
-}
-
-
-/**
  * Create a input ui element.
  *
  * @param {string} id
@@ -215,27 +170,26 @@ export function el_create_input(id, type, defaultValue, cb) {
     return el;
 }
 
+
 /**
- * Create a div wrapped input.
+ * Create a div wrapped labeled instance of the passed el.
  *
- * @param {string} id
+ * @template {HTMLElement | HTMLInputElement} T
  * @param {string} label
- * @param {string} type
- * @param {any} defaultValue
- * @param {function(any):void} cb
+ * @param {T} el
  * @param {string} className
  */
-export function el_creatediv_input(id, label, type, defaultValue, cb, className="gridx2") {
+export function el_create_divlabelel(label, el, className="gridx2") {
     let div = document.createElement("div");
     div.className = className;
     let lbl = document.createElement("label");
-    lbl.setAttribute("for", id);
+    lbl.setAttribute("for", el.id);
     lbl.innerText = label;
     div.appendChild(lbl);
-    let el = el_create_input(id, type, defaultValue, cb);
     div.appendChild(el);
     return { div: div, el: el };
 }
+
 
 /**
  * Create a div wrapped input of type file,
@@ -249,8 +203,8 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
  * @param {string} className
  */
 export function el_creatediv_inputfilebtn(id, label, labelBtnHtml, defaultValue, acceptable, cb, className) {
-    let elX = el_creatediv_input(id, label, "file", defaultValue, cb, className)
-    elX.el.hidden = true
+    let elX = el_create_divlabelel(label, el_create_input(id, "file", defaultValue, cb), className)
+    elX.el.hidden = true;
     elX.el.accept = acceptable
     let idB = `${id}-button`
     let elB = el_create_button(idB, (mev) => {
@@ -334,20 +288,20 @@ export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sL
         let type = typeof(val);
         let id = `Set${propsTreeRootNew.replaceAll(':','-')}`
         if (((type == "string") || (type == "number"))) {
-            let inp = el_creatediv_input(`${id}`, k, typeDict[type], oObj[k], (val)=>{
+            let inp = el_create_divlabelel(k, el_create_input(`${id}`, typeDict[type], oObj[k], (val)=>{
                 if (type == "number") {
                     val = Number(val);
                 }
                 oObj[k] = val;
-            });
+            }));
             if (fRefiner) {
                 fRefiner(k, inp.el)
             }
             elFS.appendChild(inp.div);
         } else if (type == "boolean") {
-            let bbtn = el_creatediv_boolbutton(`${id}`, k, {true: "true", false: "false"}, val, (userVal)=>{
+            let bbtn = el_create_divlabelel(k, el_create_boolbutton(`${id}`, {true: "true", false: "false"}, val, (userVal)=>{
                 oObj[k] = userVal;
-            });
+            }));
             if (fRefiner) {
                 fRefiner(k, bbtn.el)
             }
