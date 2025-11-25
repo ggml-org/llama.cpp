@@ -27,18 +27,19 @@ export class MarkDown {
                 this.in.pre = false
                 this.html += "</pre>\n"
             } else {
-                this.html += line
+                this.html += `${line}\n`
             }
             return
         }
         if (line.startsWith ("#")) {
             let hLevel = lineA[0].length
-            this.html += `<h${hLevel}>${lineRStripped}</h${hLevel}>\n`
+            this.html += `<h${hLevel}>${line.slice(hLevel)}</h${hLevel}>\n`
             return
         }
-        if (lineA[0] == '```') {
+        let matchPre = line.match(/^```([a-zA-Z0-9]*)(.*)/);
+        if ( matchPre != null) {
             this.in.pre = true
-            this.html += "<pre>\n"
+            this.html += `<pre class="${matchPre[1]}">\n`
             return
         }
         this.html += `<p>${line}</p>`
