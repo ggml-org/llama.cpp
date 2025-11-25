@@ -1606,7 +1606,7 @@ void ggml_vec_dot_ifairy_q16_K(
     ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
 
 #else
-    ggml_vec_dot_ifairy_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+    ggml_vec_dot_ifairy_q16_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
 

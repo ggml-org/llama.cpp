@@ -450,55 +450,82 @@ void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs
     UNUSED(by);
     UNUSED(bs);
 
-    const block_ifairy * GGML_RESTRICT w = vx;
-    const block_ifairy_q16 * GGML_RESTRICT x = vy;
+    const block_ifairy     * GGML_RESTRICT w = (const block_ifairy *)     vx;
+    const block_ifairy_q16 * GGML_RESTRICT x = (const block_ifairy_q16 *) vy;
 
     const int nb = n / QK_K;
 
-    float sum_real = 0.0f;
-    float sum_imag = 0.0f;
+    const float coeff_w_real = w[0].d_real;
+    const float coeff_w_imag = w[0].d_imag;
+
+    float sum_real_total = 0.0f;
+    float sum_imag_total = 0.0f;
+
+    float acc_ac_xr = 0.0f;
+    float acc_bd_xi = 0.0f;
+    float acc_bc_xr = 0.0f;
+    float acc_ad_xi = 0.0f;
 
     for (int i = 0; i < nb; ++i) {
-        // w: 权重矩阵, x: 激活向量
-        int32_t sum_ac = 0;
-        int32_t sum_bd = 0;
-        int32_t sum_ad = 0;
-        int32_t sum_bc = 0;
-        
-        for (size_t j = 0; j < sizeof(w->qs); j += 32) { // sizeof 512
-            for (size_t k = 0; k < 32; ++k) {
-                // 解包权重
-                uint8_t weight = w[i].qs[j + k];
-                for (size_t l = 0; l < 4; ++l) {
-                    // a: real_w, b: imag_w, c: real_x, d: imag_x
-                    int8_t w_val = (weight >> (l*2)) & 3;
-                    int8_t c = x[i].x_real[(j + k) * 4 + l];
-                    int8_t d = x[i].x_imag[(j + k) * 4 + l];
-                    
-                    // 0 represent -1 , 1 represent 1 , 2 represent -i , 3 represent i
-                    if      (w_val == 1) sum_ac += c, sum_ad += d;
-                    else if (w_val == 0) sum_ac -= c, sum_ad -= d;
-                    else if (w_val == 3) sum_bc += c, sum_bd += d;
-                    else if (w_val == 2) sum_bc -= c, sum_bd -= d;
-                }
+        const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
+        const int8_t  * GGML_RESTRICT x_r_ptr = x[i].x_real;
+        const int8_t  * GGML_RESTRICT x_i_ptr = x[i].x_imag;
+
+        // 这四个是每个 block 内部的 dot 结果（int32 累加）
+        int32_t sum_ac = 0; // Σ xr * wr
+        int32_t sum_ad = 0; // Σ xi * wr
+        int32_t sum_bc = 0; // Σ xr * wi
+        int32_t sum_bd = 0; // Σ xi * wi
+
+        // QK_K 个元素，每 4 个权重 packed 在一个 byte 里
+        for (int j = 0; j < QK_K; ++j) {
+            const int byte_idx = j >> 2;          // j / 4
+            const int bit_off  = (j & 3) * 2;     // (j % 4) * 2
+
+            const uint8_t packed = w_ptr[byte_idx];
+            const uint8_t code   = (packed >> bit_off) & 0x3;
+
+            // 相位编码 -> (wr, wi) ∈ {-1,0,1}
+            int wr = 0;
+            int wi = 0;
+            switch (code) {
+                case 0: // 00 -> -1
+                    wr = -1; wi =  0;
+                    break;
+                case 1: // 01 -> +1
+                    wr =  1; wi =  0;
+                    break;
+                case 2: // 10 -> -i
+                    wr =  0; wi = -1;
+                    break;
+                case 3: // 11 -> +i
+                    wr =  0; wi =  1;
+                    break;
             }
+
+            const int xr = (int) x_r_ptr[j];
+            const int xi = (int) x_i_ptr[j];
+
+            sum_ac += xr * wr;
+            sum_ad += xi * wr;
+            sum_bc += xr * wi;
+            sum_bd += xi * wi;
         }
 
-        // Apply scales
-        const float w_real = w[i].d_real;
-        const float w_imag = w[i].d_imag;
         const float x_real = x[i].d_real;
         const float x_imag = x[i].d_imag;
-        //GGML_LOG("w_real: %f, w_imag: %f, x_real: %f, x_imag: %f\n", w_real, w_imag, x_real, x_imag);
 
-        // Complex multiplication: (a+bi)(c+di) = (ac+bd) + (-ad+bc)i
-        sum_real += w_real * x_real * (float)sum_ac + w_imag * x_imag * (float)sum_bd;
-
-        sum_imag += w_imag * x_real * (float)sum_bc - w_real * x_imag * (float)sum_ad;
+        acc_ac_xr += x_real * (float) sum_ac;
+        acc_bd_xi += x_imag * (float) sum_bd;
+        acc_bc_xr += x_real * (float) sum_bc;
+        acc_ad_xi += x_imag * (float) sum_ad;
     }
 
-    ((ggml_bf16_t*)s)[0] = GGML_FP32_TO_BF16(sum_real);
-    ((ggml_bf16_t*)s)[1] = GGML_FP32_TO_BF16(sum_imag);
+    sum_real_total = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
+    sum_imag_total = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
+
+    ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
+    ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
 }
 
 void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
