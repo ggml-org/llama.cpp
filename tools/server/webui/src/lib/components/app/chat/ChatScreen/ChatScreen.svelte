@@ -29,6 +29,7 @@
 		sendMessage,
 		stopGeneration
 	} from '$lib/stores/chat.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import {
 		supportsVision,
 		supportsAudio,
@@ -47,6 +48,7 @@
 
 	let { showCenteredEmpty = false } = $props();
 
+	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
 	let autoScrollEnabled = $state(true);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);
@@ -149,7 +151,7 @@
 	}
 
 	function handleScroll() {
-		if (!chatScrollContainer) return;
+		if (disableAutoScroll || !chatScrollContainer) return;
 
 		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
 		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
@@ -194,8 +196,10 @@
 		const extras = result?.extras;
 
 		// Enable autoscroll for user-initiated message sending
-		userScrolledUp = false;
-		autoScrollEnabled = true;
+		if (!disableAutoScroll) {
+			userScrolledUp = false;
+			autoScrollEnabled = true;
+		}
 		await sendMessage(message, extras);
 		scrollChatToBottom();
 
@@ -241,6 +245,8 @@
 	}
 
 	function scrollChatToBottom(behavior: ScrollBehavior = 'smooth') {
+		if (disableAutoScroll) return;
+
 		chatScrollContainer?.scrollTo({
 			top: chatScrollContainer?.scrollHeight,
 			behavior
@@ -248,14 +254,27 @@
 	}
 
 	afterNavigate(() => {
-		setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+		if (!disableAutoScroll) {
+			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+		}
 	});
 
 	onMount(() => {
-		setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+		if (!disableAutoScroll) {
+			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+		}
 	});
 
 	$effect(() => {
+		if (disableAutoScroll) {
+			autoScrollEnabled = false;
+			if (scrollInterval) {
+				clearInterval(scrollInterval);
+				scrollInterval = undefined;
+			}
+			return;
+		}
+
 		if (isCurrentConversationLoading && autoScrollEnabled) {
 			scrollInterval = setInterval(scrollChatToBottom, AUTO_SCROLL_INTERVAL);
 		} else if (scrollInterval) {
@@ -289,9 +308,11 @@
 			class="mb-16 md:mb-24"
 			messages={activeMessages()}
 			onUserAction={() => {
-				userScrolledUp = false;
-				autoScrollEnabled = true;
-				scrollChatToBottom();
+				if (!disableAutoScroll) {
+					userScrolledUp = false;
+					autoScrollEnabled = true;
+					scrollChatToBottom();
+				}
 			}}
 		/>
 

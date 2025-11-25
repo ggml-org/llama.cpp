@@ -69,13 +69,6 @@ jobs:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-          brew install curl
-
       - name: Build
         id: cmake_build
         run: |
@@ -83,6 +76,8 @@ jobs:
           cmake -B build \
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=OFF \
             -DGGML_METAL_SHADER_DEBUG=ON \
@@ -110,13 +105,6 @@ jobs:
           key: macOS-latest-cmake-x64
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-          brew install curl
-
       - name: Build
         id: cmake_build
         run: |
@@ -126,6 +114,8 @@ jobs:
           cmake -B build \
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_METAL=OFF \
             -DGGML_RPC=ON \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
@@ -150,13 +140,6 @@ jobs:
         with:
           key: macOS-latest-cmake-arm64-webgpu
           evict-old-files: 1d
-
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-          brew install curl
 
       - name: Dawn Dependency
         id: dawn-depends
@@ -217,7 +200,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             python3 python3-pip python3-dev \
-            libjpeg-dev build-essential libcurl4-openssl-dev \
+            libjpeg-dev build-essential libssl-dev \
             git-lfs
 
       - name: Python Dependencies
@@ -238,6 +221,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(nproc)
@@ -294,13 +279,15 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential libssl-dev
 
       - name: Build
         id: cmake_build
         if: ${{ matrix.sanitizer != 'THREAD' }}
         run: |
           cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
@@ -311,6 +298,8 @@ jobs:
         if: ${{ matrix.sanitizer == 'THREAD' }}
         run: |
           cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
@@ -335,7 +324,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential libssl-dev
 
       - name: Build
         id: cmake_build
@@ -343,6 +332,8 @@ jobs:
           mkdir build
           cd build
           cmake .. \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_LLGUIDANCE=ON
           cmake --build . --config Release -j $(nproc)
@@ -373,12 +364,14 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential libssl-dev
 
       - name: Build
         id: cmake_build
         run: |
           cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -405,12 +398,14 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          sudo apt-get install -y glslc libvulkan-dev libcurl4-openssl-dev
+          sudo apt-get install -y glslc libvulkan-dev libssl-dev
 
       - name: Configure
         id: cmake_configure
         run: |
           cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DGGML_BACKEND_DL=ON \
             -DGGML_CPU_ALL_VARIANTS=ON \
@@ -440,7 +435,7 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:kisak/kisak-mesa
           sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libcurl4-openssl-dev
+          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev
 
       - name: Get latest Vulkan SDK version
         id: vulkan_sdk_version
@@ -466,6 +461,8 @@ jobs:
         run: |
           source ./vulkan_sdk/setup-env.sh
           cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DGGML_VULKAN=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -497,7 +494,7 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:kisak/kisak-mesa
           sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libcurl4-openssl-dev
+          sudo apt-get install -y build-essential mesa-vulkan-drivers libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libssl-dev
 
       - name: Get latest Vulkan SDK version
         id: vulkan_sdk_version
@@ -537,7 +534,10 @@ jobs:
         id: cmake_build
         run: |
           export Dawn_DIR=dawn/lib64/cmake/Dawn
-          cmake -B build -DGGML_WEBGPU=ON
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
+            -DGGML_WEBGPU=ON
           cmake --build build --config Release -j $(nproc)
 
       - name: Test
@@ -560,7 +560,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev rocwmma-dev
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -572,6 +572,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -S . \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DGGML_HIP=ON
@@ -590,7 +592,7 @@ jobs:
         id: depends
         run: |
           apt-get update
-          apt-get install -y build-essential git cmake libcurl4-openssl-dev
+          apt-get install -y build-essential git cmake libssl-dev
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -602,6 +604,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -S . \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DGGML_MUSA=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -626,7 +630,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp libcurl4-openssl-dev
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp libssl-dev
 
       - name: install oneAPI MKL library
         shell: bash
@@ -648,6 +652,8 @@ jobs:
         run: |
           source /opt/intel/oneapi/setvars.sh
           cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx
@@ -674,7 +680,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp libcurl4-openssl-dev
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp libssl-dev
 
       - name: install oneAPI MKL library
         shell: bash
@@ -696,6 +702,8 @@ jobs:
         run: |
           source /opt/intel/oneapi/setvars.sh
           cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx \
@@ -721,12 +729,6 @@ jobs:
         with:
           key: macOS-latest-cmake-ios
           evict-old-files: 1d
-
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
 
       - name: Build
         id: cmake_build
@@ -759,12 +761,6 @@ jobs:
           key: macOS-latest-cmake-tvos
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-
       - name: Build
         id: cmake_build
         run: |
@@ -789,12 +785,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
-
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
 
       - name: Build
         id: cmake_build
@@ -837,12 +827,6 @@ jobs:
         with:
           name: llama-xcframework
           path: build-apple/llama.xcframework/
-
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
 
       - name: Build llama.cpp with CMake
         id: cmake_build
@@ -995,21 +979,12 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
           cmake --build build-arm64-release --target install --config release
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-        with:
-          architecture: ${{ matrix.arch == 'x64' && 'win64' || 'win64a' }}
-
       - name: Build
         id: cmake_build
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           cmake -S . -B build ${{ matrix.defines }} `
-            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
+            -DLLAMA_CURL=OFF -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
-          cp $env:CURL_PATH/bin/libcurl-*.dll build/bin/Release
 
       - name: Add libopenblas.dll
         id: add_libopenblas_dll
@@ -1053,7 +1028,7 @@ jobs:
             DEBIAN_FRONTEND: noninteractive
           run: |
               apt update
-              apt install -y cmake build-essential ninja-build libgomp1 git libcurl4-openssl-dev
+              apt install -y cmake build-essential ninja-build libgomp1 git libssl-dev
 
         - name: ccache
           uses: ggml-org/ccache-action@v1.2.16
@@ -1064,10 +1039,12 @@ jobs:
         - name: Build with CMake
           run: |
             cmake -S . -B build -G Ninja \
+              -DLLAMA_CURL=OFF \
+              -DLLAMA_OPENSSL=ON \
+              -DLLAMA_FATAL_WARNINGS=ON \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_CUDA_ARCHITECTURES=89-real \
               -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
-              -DLLAMA_FATAL_WARNINGS=ON \
               -DGGML_NATIVE=OFF \
               -DGGML_CUDA=ON
             cmake --build build
@@ -1101,25 +1078,20 @@ jobs:
         run: |
           choco install ninja
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-
       - name: Build
         id: cmake_build
         shell: cmd
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DLLAMA_BUILD_SERVER=ON ^
+            -DLLAMA_CURL=OFF ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=ON ^
             -DGGML_CUDA=ON ^
-            -DGGML_RPC=ON ^
-            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include"
+            -DGGML_RPC=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
@@ -1151,7 +1123,7 @@ jobs:
         run:  |
           scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
 
-      # TODO: add libcurl support ; we will also need to modify win-build-sycl.bat to accept user-specified args
+      # TODO: add ssl support ; we will also need to modify win-build-sycl.bat to accept user-specified args
 
       - name: Build
         id: cmake_build
@@ -1208,14 +1180,8 @@ jobs:
           key: ${{ github.job }}
           evict-old-files: 1d
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-
       - name: Build
         id: cmake_build
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
           $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
@@ -1224,11 +1190,12 @@ jobs:
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
             -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-${{ env.ROCM_VERSION }}/include/" `
             -DCMAKE_BUILD_TYPE=Release `
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_BUILD_BORINGSSL=ON `
             -DROCM_DIR="${env:HIP_PATH}" `
             -DGGML_HIP=ON `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
-            -DGGML_RPC=ON `
-            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
+            -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
   ios-xcode-build:
