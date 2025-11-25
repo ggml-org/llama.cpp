@@ -266,11 +266,9 @@ using common_peg_parser_variant = std::variant<
 class common_peg_arena {
     std::vector<common_peg_parser_variant> parsers_;
     std::unordered_map<std::string, common_peg_parser_id> rules_;
-    common_peg_parser_id root_;
+    common_peg_parser_id root_ = COMMON_PEG_INVALID_PARSER_ID;
 
   public:
-    common_peg_arena();
-
     const common_peg_parser_variant & get(common_peg_parser_id id) const { return parsers_.at(id); }
     common_peg_parser_variant & get(common_peg_parser_id id) { return parsers_.at(id); }
 
@@ -295,8 +293,8 @@ class common_peg_arena {
     nlohmann::json to_json() const;
     static common_peg_arena from_json(const nlohmann::json & j);
 
-    std::string serialize() const;
-    static common_peg_arena deserialize(const std::string & data);
+    std::string save() const;
+    void load(const std::string & data);
 
     friend class common_peg_parser_builder;
 

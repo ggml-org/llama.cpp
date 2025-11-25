@@ -259,11 +259,7 @@ void common_peg_ast_arena::visit(const common_peg_parse_result & result, const c
     }
 }
 
-// Forward declaration of parser
 struct parser_executor;
-
-// Arena implementation
-common_peg_arena::common_peg_arena() : root_(COMMON_PEG_INVALID_PARSER_ID) {}
 
 common_peg_parser_id common_peg_arena::add_parser(common_peg_parser_variant parser) {
     common_peg_parser_id id = parsers_.size();
@@ -1713,10 +1709,10 @@ common_peg_arena common_peg_arena::from_json(const nlohmann::json & j) {
     return arena;
 }
 
-std::string common_peg_arena::serialize() const {
+std::string common_peg_arena::save() const {
     return to_json().dump();
 }
 
-common_peg_arena common_peg_arena::deserialize(const std::string & data) {
-    return from_json(nlohmann::json::parse(data));
+void common_peg_arena::load(const std::string & data) {
+    *this = from_json(nlohmann::json::parse(data));
 }

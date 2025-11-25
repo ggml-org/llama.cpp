@@ -1978,7 +1978,7 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
             + p.end();
     });
 
-    data.parser = parser.serialize();
+    data.parser = parser.save();
     data.grammar = build_grammar([&](const common_grammar_builder & builder) {
         foreach_function(params.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
