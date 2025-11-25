@@ -154,8 +154,16 @@ namespace ggml_cuda_mma {
         T x[ne] = {0};
 
         static constexpr __device__ bool supported() {
-            if (I == 16 && J == 16) return true;
-            return false;
+            // Integer WMMA is only supported on RDNA4
+            if constexpr (std::is_same_v<T, int>) {
+#if defined(RDNA4)
+                if (I == 16 && J == 16) return true;
+#endif
+                return false;
+            } else {
+                if (I == 16 && J == 16) return true;
+                return false;
+            }
         }
 
         static __device__ __forceinline__ int get_i(const int l) {
@@ -443,11 +451,14 @@ namespace ggml_cuda_mma {
             xi[0] = xs[0];
         }
 #elif defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA4)
         if constexpr (I == 16 && J == 4) {
             int64_t * xi = (int64_t *) t.x;
             const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
             xi[0] = xs[0];
+#if !defined(RDNA4)
+            // RDNA3 has double the tile size, load 2 more int64_t
+            xi[1] = xs[1];
+#endif
         }else if constexpr (I == 16 && J == 8) {
             int64_t * xi = (int64_t *) t.x;
             const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I));
@@ -455,19 +466,14 @@ namespace ggml_cuda_mma {
 
             const int64_t * xs1 = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I) + 2);
             xi[1] = xs1[0];
+#if !defined(RDNA4)
+            // RDNA3 has double the tile size, load 2 more int64_t
+            xi[2] = xs[1];
+            xi[3] = xs1[1];
+#endif
         }else{
             NO_DEVICE_CODE;
         }
-#else  // RDNA3 - larger tile size for half2/bfloat162, need 2 copies of 16 bytes each
-        if constexpr (sizeof(t.x) == 32) {
-            // RDNA3 half2/bfloat162 tiles
-            ggml_cuda_memcpy_1<16>(t.x, xs0 + t.get_i(0) * stride + t.get_j(0));
-            ggml_cuda_memcpy_1<16>((char*)t.x + 16, xs0 + t.get_i(0) * stride + t.get_j(0) + 4);  // +4 half2 elements
-        } else {
-            // Other tile sizes
-            ggml_cuda_memcpy_1<sizeof(t.x)>(t.x, xs0 + t.get_i(0) * stride + t.get_j(0));
-        }
-#endif
 #else
 #pragma unroll
         for (int l = 0; l < t.ne; ++l) {
