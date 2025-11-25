@@ -53,4 +53,17 @@ performed on the backend device, like a GPU.
     --backend_sampling --top-k 80 --backend_dist
 ```
 The `--verbose` flag can be added to see more detailed output and also show
-that the backend samplers are being used.
+that the backend samplers are being used. The above example will perform distribution
+sampling on the backend device and only transfer the sampled token ids back to the host.
+
+It is also possible to perform partial sampling on the backend, and then allow CPU samplers
+to process those results further. This is sometimes referred to as hybrid sampling.
+For an example of this we can remove `--backend_dist` from the above command:
+```bash
+./llama-batched \
+    -m models/Qwen2.5-VL-3B-Instruct-Q8_0.gguf -p "Hello my name is" \
+    -np 4 -kvu \
+    --backend_sampling --top-k 80 -v
+```
+This will perform the top-k filtering on the backend device, and then transfer the filtered logits
+back to the host for sampling.
