@@ -9,7 +9,10 @@ export class MarkDown {
     constructor() {
         this.in = {
             preFenced: "",
-            table: 0,
+            table: {
+                columns: 0,
+                rawRow: 0,
+            },
             /** @type {Array<number>} */
             listUnordered: []
         }
@@ -32,21 +35,45 @@ export class MarkDown {
      * @param {string} line
      */
     process_table_line(line) {
-        let lineParts = line.match(/^(|.*)*|$/)
+        //let lineParts = line.match(/^([|].*?)+?[|]$/)
+        let lineParts = line.match(/^[|](\s*[^|]*\s*[|])+$/)
         if (lineParts != null) {
-            if (this.in.table == 0) {
+            if (this.in.table.columns == 0) {
                 // table heading
                 this.html += "<table>\n<thead>\n"
                 for(let i=1; i<lineParts.length; i++) {
                     this.html += `<th>${lineParts[i]}</th>\n`
                 }
                 this.html += "</thead>\n"
-                this.in.table = lineParts.length-1;
-                return
+                this.in.table.columns = lineParts.length-1;
+                this.in.table.rawRow = 0
+                return true
             }
-            if (this.in.table > 0) {
-
+            if (this.in.table.columns > 0) {
+                if (this.in.table.columns != lineParts.length-1) {
+                    console.log("DBUG:TypeMD:Table:NonHead columns mismatch")
+                }
+                this.in.table.rawRow += 1
+                if (this.in.table.rawRow == 1) {
+                    // skip the table head vs body seperator
+                    // rather skipping blindly without even checking if seperator or not.
+                    this.html += "<tbody>\n"
+                    return true
+                }
+                this.html += "<tr>\n"
+                for(let i=1; i<lineParts.length; i++) {
+                    this.html += `<td>${lineParts[i]}</td>\n`
+                }
+                this.html += "</tr>\n"
+                return true
             }
+            console.warn("DBUG:TypeMD:Table:Thrisanku???")
+        } else {
+            if (this.in.table.columns > 0) {
+                this.html += "</tbody>\n"
+                this.html += "</table>\n"
+            }
+            return false
         }
     }
 
@@ -63,6 +90,9 @@ export class MarkDown {
             } else {
                 this.html += `${line}\n`
             }
+            return
+        }
+        if (this.process_table_line(line)) {
             return
         }
         // 3 or more of --- or ___ or *** followed by space
