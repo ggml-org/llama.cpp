@@ -66,14 +66,16 @@ export class MarkDown {
             let sList = 'none'
             let listLvl = 0
             if (this.in.listUnordered.length == 0) {
-                sList = 'next'
+                sList = 'same'
                 this.in.listUnordered.push(matchUnOrdered[1].length)
                 listLvl = this.in.listUnordered.length // ie 1
+                this.html += "<ul>\n"
             } else {
                 if (this.in.listUnordered[this.in.listUnordered.length-1] < matchUnOrdered[1].length){
-                    sList = 'next'
+                    sList = 'same'
                     this.in.listUnordered.push(matchUnOrdered[1].length)
                     listLvl = this.in.listUnordered.length
+                    this.html += "<ul>\n"
                 } else if (this.in.listUnordered[this.in.listUnordered.length-1] == matchUnOrdered[1].length){
                     sList = 'same'
                 } else {
@@ -88,9 +90,7 @@ export class MarkDown {
                 }
             }
             if (sList == 'same') {
-                this.html += `<li>${line}</li>\n`
-            } else if (sList == 'next') {
-                this.html += `<ul>\n<li>${line}</li>\n`
+                this.html += `<li>${matchUnOrdered[2]}</li>\n`
             }
             return
         }
