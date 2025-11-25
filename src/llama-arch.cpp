@@ -108,24 +108,37 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_APERTUS,          "apertus"          },
     { LLM_ARCH_MINIMAX_M2,       "minimax-m2"       },
     { LLM_ARCH_COGVLM,           "cogvlm"           },
+    { LLM_ARCH_RND1,             "rnd1"             },
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
 static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
-    { LLM_KV_GENERAL_TYPE,                 "general.type"                          },
-    { LLM_KV_GENERAL_ARCHITECTURE,         "general.architecture"                  },
-    { LLM_KV_GENERAL_QUANTIZATION_VERSION, "general.quantization_version"          },
-    { LLM_KV_GENERAL_ALIGNMENT,            "general.alignment"                     },
-    { LLM_KV_GENERAL_FILE_TYPE,            "general.file_type"                     },
-    { LLM_KV_GENERAL_NAME,                 "general.name"                          },
-    { LLM_KV_GENERAL_AUTHOR,               "general.author"                        },
-    { LLM_KV_GENERAL_VERSION,              "general.version"                       },
-    { LLM_KV_GENERAL_URL,                  "general.url"                           },
-    { LLM_KV_GENERAL_DESCRIPTION,          "general.description"                   },
-    { LLM_KV_GENERAL_LICENSE,              "general.license"                       },
-    { LLM_KV_GENERAL_SOURCE_URL,           "general.source.url"                    },
-    { LLM_KV_GENERAL_SOURCE_HF_REPO,       "general.source.huggingface.repository" },
+    { LLM_KV_GENERAL_TYPE,                     "general.type"                          },
+    { LLM_KV_GENERAL_ARCHITECTURE,             "general.architecture"                  },
+    { LLM_KV_GENERAL_QUANTIZATION_VERSION,     "general.quantization_version"          },
+    { LLM_KV_GENERAL_ALIGNMENT,                "general.alignment"                     },
+    { LLM_KV_GENERAL_FILE_TYPE,                "general.file_type"                     },
+    { LLM_KV_GENERAL_SAMPLING_SEQUENCE,        "general.sampling.sequence"             },
+    { LLM_KV_GENERAL_SAMPLING_TOP_K,           "general.sampling.top_k"                },
+    { LLM_KV_GENERAL_SAMPLING_TOP_P,           "general.sampling.top_p"                },
+    { LLM_KV_GENERAL_SAMPLING_MIN_P,           "general.sampling.min_p"                },
+    { LLM_KV_GENERAL_SAMPLING_XTC_PROBABILITY, "general.sampling.xtc_probability"      },
+    { LLM_KV_GENERAL_SAMPLING_XTC_THRESHOLD,   "general.sampling.xtc_threshold"        },
+    { LLM_KV_GENERAL_SAMPLING_TEMP,            "general.sampling.temp"                 },
+    { LLM_KV_GENERAL_SAMPLING_PENALTY_LAST_N,  "general.sampling.penalty_last_n"       },
+    { LLM_KV_GENERAL_SAMPLING_PENALTY_REPEAT,  "general.sampling.penalty_repeat"       },
+    { LLM_KV_GENERAL_SAMPLING_MIROSTAT,        "general.sampling.mirostat"             },
+    { LLM_KV_GENERAL_SAMPLING_MIROSTAT_TAU,    "general.sampling.mirostat_tau"         },
+    { LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,    "general.sampling.mirostat_eta"         },
+    { LLM_KV_GENERAL_NAME,                     "general.name"                          },
+    { LLM_KV_GENERAL_AUTHOR,                   "general.author"                        },
+    { LLM_KV_GENERAL_VERSION,                  "general.version"                       },
+    { LLM_KV_GENERAL_URL,                      "general.url"                           },
+    { LLM_KV_GENERAL_DESCRIPTION,              "general.description"                   },
+    { LLM_KV_GENERAL_LICENSE,                  "general.license"                       },
+    { LLM_KV_GENERAL_SOURCE_URL,               "general.source.url"                    },
+    { LLM_KV_GENERAL_SOURCE_HF_REPO,           "general.source.huggingface.repository" },
 
     { LLM_KV_VOCAB_SIZE,                        "%s.vocab_size"                        },
     { LLM_KV_CONTEXT_LENGTH,                    "%s.context_length"                    },
@@ -2447,6 +2460,26 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
+        LLM_ARCH_RND1,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,         "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,        "output_norm" },
+            { LLM_TENSOR_OUTPUT,             "output" },
+            { LLM_TENSOR_ATTN_NORM,          "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,             "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_Q_NORM,        "blk.%d.attn_q_norm" },
+            { LLM_TENSOR_ATTN_K,             "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_K_NORM,        "blk.%d.attn_k_norm" },
+            { LLM_TENSOR_ATTN_V,             "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,           "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,           "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE_INP,       "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_EXPS,      "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,      "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,        "blk.%d.ffn_up_exps" },
+        },
+    },
+    {
         LLM_ARCH_UNKNOWN,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -2722,6 +2755,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
+        case LLM_ARCH_RND1:
             return true;
         default:
             return false;

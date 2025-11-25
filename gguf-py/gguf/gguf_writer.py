@@ -496,6 +496,42 @@ class GGUFWriter:
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
 
+    def add_sampling_sequence(self, sequence: str) -> None:
+        self.add_string(Keys.General.SAMPLING_SEQUENCE, sequence)
+
+    def add_sampling_top_k(self, top_k: int) -> None:
+        self.add_int32(Keys.General.SAMPLING_TOP_K, top_k)
+
+    def add_sampling_top_p(self, top_p: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_TOP_P, top_p)
+
+    def add_sampling_min_p(self, min_p: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_MIN_P, min_p)
+
+    def add_sampling_xtc_probability(self, xtc_probability: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_XTC_PROBABILITY, xtc_probability)
+
+    def add_sampling_xtc_threshold(self, xtc_threshold: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_XTC_THRESHOLD, xtc_threshold)
+
+    def add_sampling_temp(self, temp: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_TEMP, temp)
+
+    def add_sampling_penalty_last_n(self, penalty_last_n: int) -> None:
+        self.add_int32(Keys.General.SAMPLING_PENALTY_LAST_N, penalty_last_n)
+
+    def add_sampling_penalty_repeat(self, penalty_repeat: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_PENALTY_REPEAT, penalty_repeat)
+
+    def add_sampling_mirostat(self, mirostat: int) -> None:
+        self.add_int32(Keys.General.SAMPLING_MIROSTAT, mirostat)
+
+    def add_sampling_mirostat_tau(self, mirostat_tau: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_MIROSTAT_TAU, mirostat_tau)
+
+    def add_sampling_mirostat_eta(self, mirostat_eta: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_MIROSTAT_ETA, mirostat_eta)
+
     def add_name(self, name: str) -> None:
         self.add_string(Keys.General.NAME, name)
 
