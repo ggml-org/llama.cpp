@@ -136,7 +136,7 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // Check for API key in the header
+        // Check for API key in the Authorization header
         auto auth_header = req.get_header_value("Authorization");
 
         std::string prefix = "Bearer ";
@@ -145,6 +145,13 @@ bool server_http_context::init(const common_params & params) {
             if (std::find(api_keys.begin(), api_keys.end(), received_api_key) != api_keys.end()) {
                 return true; // API key is valid
             }
+        }
+
+        // Check for API key in the x-api-key header
+        auto x_api_key_header = req.get_header_value("X-Api-Key");
+
+        if (std::find(api_keys.begin(), api_keys.end(), x_api_key_header) != api_keys.end()) {
+                return true; // API key is valid
         }
 
         // API key is invalid or not provided

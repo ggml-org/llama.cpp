@@ -7,6 +7,8 @@
 #include "sampling.h"
 #include "json-schema-to-grammar.h"
 
+#include <set>
+
 using json = nlohmann::ordered_json;
 
 //
@@ -572,6 +574,8 @@ json server_task_result_cmpl_final::to_json() {
             return to_json_oaicompat();
         case OAICOMPAT_TYPE_CHAT:
             return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat();
+        case OAICOMPAT_TYPE_ANTHROPIC:
+            return stream ? to_json_anthropic_stream() : to_json_anthropic();
         default:
             GGML_ASSERT(false && "Invalid oaicompat_type");
     }
@@ -768,6 +772,188 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     return deltas;
 }
 
+json server_task_result_cmpl_final::to_json_anthropic() {
+    std::string stop_reason = "max_tokens";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+    }
+
+    json content_blocks = json::array();
+
+    common_chat_msg msg;
+    if (!oaicompat_msg.empty()) {
+        msg = oaicompat_msg;
+    } else {
+        msg.role = "assistant";
+        msg.content = content;
+    }
+
+    if (!msg.content.empty()) {
+        content_blocks.push_back({
+            {"type", "text"},
+            {"text", msg.content}
+        });
+    }
+
+    for (const auto & tool_call : msg.tool_calls) {
+        json tool_use_block = {
+            {"type", "tool_use"},
+            {"id", tool_call.id},
+            {"name", tool_call.name}
+        };
+
+        try {
+            tool_use_block["input"] = json::parse(tool_call.arguments);
+        } catch (const std::exception &) {
+            tool_use_block["input"] = json::object();
+        }
+
+        content_blocks.push_back(tool_use_block);
+    }
+
+    json res = {
+        {"id", oaicompat_cmpl_id},
+        {"type", "message"},
+        {"role", "assistant"},
+        {"content", content_blocks},
+        {"model", oaicompat_model},
+        {"stop_reason", stop_reason},
+        {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
+        {"usage", {
+            {"input_tokens", n_prompt_tokens},
+            {"output_tokens", n_decoded}
+        }}
+    };
+
+    return res;
+}
+
+json server_task_result_cmpl_final::to_json_anthropic_stream() {
+    json events = json::array();
+
+    std::string stop_reason = "max_tokens";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+    }
+
+    bool has_text = !oaicompat_msg.content.empty();
+    size_t num_tool_calls = oaicompat_msg.tool_calls.size();
+
+    bool text_block_started = false;
+    std::set<size_t> tool_calls_started;
+
+    for (const auto & diff : oaicompat_msg_diffs) {
+        if (!diff.content_delta.empty()) {
+            if (!text_block_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", 0},
+                        {"content_block", {
+                            {"type", "text"},
+                            {"text", ""}
+                        }}
+                    }}
+                });
+                text_block_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", 0},
+                    {"delta", {
+                        {"type", "text_delta"},
+                        {"text", diff.content_delta}
+                    }}
+                }}
+            });
+        }
+
+        if (diff.tool_call_index != std::string::npos) {
+            size_t content_block_index = (has_text ? 1 : 0) + diff.tool_call_index;
+
+            if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
+                const auto & full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
+
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", content_block_index},
+                        {"content_block", {
+                            {"type", "tool_use"},
+                            {"id", full_tool_call.id},
+                            {"name", full_tool_call.name}
+                        }}
+                    }}
+                });
+                tool_calls_started.insert(diff.tool_call_index);
+            }
+
+            if (!diff.tool_call_delta.arguments.empty()) {
+                events.push_back({
+                    {"event", "content_block_delta"},
+                    {"data", {
+                        {"type", "content_block_delta"},
+                        {"index", content_block_index},
+                        {"delta", {
+                            {"type", "input_json_delta"},
+                            {"partial_json", diff.tool_call_delta.arguments}
+                        }}
+                    }}
+                });
+            }
+        }
+    }
+
+    if (has_text) {
+        events.push_back({
+            {"event", "content_block_stop"},
+            {"data", {
+                {"type", "content_block_stop"},
+                {"index", 0}
+            }}
+        });
+    }
+
+    for (size_t i = 0; i < num_tool_calls; i++) {
+        size_t content_block_index = (has_text ? 1 : 0) + i;
+        events.push_back({
+            {"event", "content_block_stop"},
+            {"data", {
+                {"type", "content_block_stop"},
+                {"index", content_block_index}
+            }}
+        });
+    }
+
+    events.push_back({
+        {"event", "message_delta"},
+        {"data", {
+            {"type", "message_delta"},
+            {"delta", {
+                {"stop_reason", stop_reason},
+                {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)}
+            }},
+            {"usage", {
+                {"output_tokens", n_decoded}
+            }}
+        }}
+    });
+
+    events.push_back({
+        {"event", "message_stop"},
+        {"data", {
+            {"type", "message_stop"}
+        }}
+    });
+
+    return events;
+}
+
 //
 // server_task_result_cmpl_partial
 //
@@ -779,6 +965,8 @@ json server_task_result_cmpl_partial::to_json() {
             return to_json_oaicompat();
         case OAICOMPAT_TYPE_CHAT:
             return to_json_oaicompat_chat();
+        case OAICOMPAT_TYPE_ANTHROPIC:
+            return to_json_anthropic();
         default:
             GGML_ASSERT(false && "Invalid oaicompat_type");
     }
@@ -934,6 +1122,102 @@ json server_task_result_rerank::to_json() {
         {"score",            score},
         {"tokens_evaluated", n_tokens},
     };
+}
+
+json server_task_result_cmpl_partial::to_json_anthropic() {
+    json events = json::array();
+    bool first = (n_decoded == 1);
+    static bool text_block_started = false;
+
+    if (first) {
+        text_block_started = false;
+
+        events.push_back({
+            {"event", "message_start"},
+            {"data", {
+                {"type", "message_start"},
+                {"message", {
+                    {"id", oaicompat_cmpl_id},
+                    {"type", "message"},
+                    {"role", "assistant"},
+                    {"content", json::array()},
+                    {"model", oaicompat_model},
+                    {"stop_reason", nullptr},
+                    {"stop_sequence", nullptr},
+                    {"usage", {
+                        {"input_tokens", n_prompt_tokens},
+                        {"output_tokens", 0}
+                    }}
+                }}
+            }}
+        });
+    }
+
+    for (const auto & diff : oaicompat_msg_diffs) {
+        if (!diff.content_delta.empty()) {
+            if (!text_block_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", 0},
+                        {"content_block", {
+                            {"type", "text"},
+                            {"text", ""}
+                        }}
+                    }}
+                });
+                text_block_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", 0},
+                    {"delta", {
+                        {"type", "text_delta"},
+                        {"text", diff.content_delta}
+                    }}
+                }}
+            });
+        }
+
+        if (diff.tool_call_index != std::string::npos) {
+            size_t content_block_index = (text_block_started ? 1 : 0) + diff.tool_call_index;
+
+            if (!diff.tool_call_delta.name.empty()) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", content_block_index},
+                        {"content_block", {
+                            {"type", "tool_use"},
+                            {"id", diff.tool_call_delta.id},
+                            {"name", diff.tool_call_delta.name}
+                        }}
+                    }}
+                });
+            }
+
+            if (!diff.tool_call_delta.arguments.empty()) {
+                events.push_back({
+                    {"event", "content_block_delta"},
+                    {"data", {
+                        {"type", "content_block_delta"},
+                        {"index", content_block_index},
+                        {"delta", {
+                            {"type", "input_json_delta"},
+                            {"partial_json", diff.tool_call_delta.arguments}
+                        }}
+                    }}
+                });
+            }
+        }
+    }
+
+    return events;
 }
 
 //

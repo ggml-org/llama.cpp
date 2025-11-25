@@ -32,6 +32,7 @@ enum oaicompat_type {
     OAICOMPAT_TYPE_CHAT,
     OAICOMPAT_TYPE_COMPLETION,
     OAICOMPAT_TYPE_EMBEDDING,
+    OAICOMPAT_TYPE_ANTHROPIC,
 };
 
 enum stop_type {
@@ -253,6 +254,10 @@ struct server_task_result_cmpl_final : server_task_result {
     json to_json_oaicompat_chat();
 
     json to_json_oaicompat_chat_stream();
+
+    json to_json_anthropic();
+
+    json to_json_anthropic_stream();
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
@@ -292,6 +297,8 @@ struct server_task_result_cmpl_partial : server_task_result {
     json to_json_oaicompat();
 
     json to_json_oaicompat_chat();
+
+    json to_json_anthropic();
 };
 
 struct server_task_result_embd : server_task_result {

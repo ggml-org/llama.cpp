@@ -2991,6 +2991,38 @@ public:
             OAICOMPAT_TYPE_CHAT);
     };
 
+    server_http_context::handler_t post_anthropic_messages = [this](const server_http_req & req) {
+        std::vector<raw_buffer> files;
+        json body = json::parse(req.body);
+        json body_parsed = anthropic_params_from_json(
+            body,
+            ctx_server.oai_parser_opt,
+            files);
+        return handle_completions_impl(
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            req.should_stop,
+            OAICOMPAT_TYPE_ANTHROPIC);
+    };
+
+    server_http_context::handler_t post_anthropic_count_tokens = [this](const server_http_req & req) {
+        auto res = std::make_unique<server_res_generator>(ctx_server);
+        std::vector<raw_buffer> files;
+        json body = json::parse(req.body);
+
+        json body_parsed = anthropic_params_from_json(
+            body,
+            ctx_server.oai_parser_opt,
+            files);
+
+        json prompt = body_parsed.at("prompt");
+        llama_tokens tokens = tokenize_mixed(ctx_server.vocab, prompt, true, true);
+
+        res->ok({{"input_tokens", static_cast<int>(tokens.size())}});
+        return res;
+    };
+
     // same with handle_chat_completions, but without inference part
     server_http_context::handler_t post_apply_template = [this](const server_http_req & req) {
         auto res = std::make_unique<server_res_generator>(ctx_server);
@@ -3352,7 +3384,11 @@ private:
             }
 
             // next responses are streamed
-            res->data = format_sse(first_result->to_json()); // to be sent immediately
+            if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                res->data = format_anthropic_sse(first_result->to_json());
+            } else {
+                res->data = format_sse(first_result->to_json()); // to be sent immediately
+            }
             res->status = 200;
             res->content_type = "text/event-stream";
             res->next = [res_this = res.get(), oaicompat, &should_stop](std::string & output) -> bool {
@@ -3372,7 +3408,10 @@ private:
 
                 // check if there is more data
                 if (!rd.has_next()) {
-                    if (oaicompat != OAICOMPAT_TYPE_NONE) {
+                    if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                        // Anthropic doesn't send [DONE], message_stop was already sent
+                        output = "";
+                    } else if (oaicompat != OAICOMPAT_TYPE_NONE) {
                         output = "data: [DONE]\n\n";
                     } else {
                         output = "";
@@ -3391,7 +3430,16 @@ private:
                 // send the results
                 json res_json = result->to_json();
                 if (result->is_error()) {
-                    output = format_sse(json {{ "error", res_json }});
+                    if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                        json error_event = json::object();
+                        error_event["event"] = "error";
+                        error_event["data"] = res_json;
+                        json error_array = json::array();
+                        error_array.push_back(error_event);
+                        output = format_anthropic_sse(error_array);
+                    } else {
+                        output = format_sse(json {{ "error", res_json }});
+                    }
                     SRV_DBG("%s", "error received during streaming, terminating stream\n");
                     return false; // terminate on error
                 } else {
@@ -3399,7 +3447,11 @@ private:
                         dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr
                         || dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr
                     );
-                    output = format_sse(res_json);
+                    if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                        output = format_anthropic_sse(res_json);
+                    } else {
+                        output = format_sse(res_json);
+                    }
                 }
 
                 // has next data, continue
@@ -3712,6 +3764,8 @@ int main(int argc, char ** argv) {
     ctx_http.post("/chat/completions",    ex_wrapper(routes.post_chat_completions));
     ctx_http.post("/v1/chat/completions", ex_wrapper(routes.post_chat_completions));
     ctx_http.post("/api/chat",            ex_wrapper(routes.post_chat_completions)); // ollama specific endpoint
+    ctx_http.post("/v1/messages",         ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
+    ctx_http.post("/v1/messages/count_tokens", ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
     ctx_http.post("/infill",              ex_wrapper(routes.post_infill));
     ctx_http.post("/embedding",           ex_wrapper(routes.post_embeddings)); // legacy
     ctx_http.post("/embeddings",          ex_wrapper(routes.post_embeddings));
