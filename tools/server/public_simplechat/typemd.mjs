@@ -25,7 +25,11 @@ export class MarkDown {
             /** @type {Array<number>} */
             listUnordered: []
         }
-        this.md = ""
+        /**
+         * @type {Array<*>}
+         */
+        this.errors = []
+        this.raw = ""
         this.html = ""
     }
 
@@ -38,6 +42,48 @@ export class MarkDown {
 
     unwind_list() {
         this.unwind_list_unordered()
+    }
+
+    /**
+     * Process a unordered list one line at a time
+     * @param {string} line
+     */
+    process_list_unordered(line) {
+        // spaces followed by - or + or * followed by a space and actual list item
+        let matchUnOrdered = line.match(/^([ ]*)[-+*][ ](.*)$/);
+        if (matchUnOrdered != null) {
+            let sList = 'none'
+            let listLvl = 0
+            if (this.in.listUnordered.length == 0) {
+                sList = 'same'
+                this.in.listUnordered.push(matchUnOrdered[1].length)
+                listLvl = this.in.listUnordered.length // ie 1
+                this.html += "<ul>\n"
+            } else {
+                if (this.in.listUnordered[this.in.listUnordered.length-1] < matchUnOrdered[1].length){
+                    sList = 'same'
+                    this.in.listUnordered.push(matchUnOrdered[1].length)
+                    listLvl = this.in.listUnordered.length
+                    this.html += "<ul>\n"
+                } else if (this.in.listUnordered[this.in.listUnordered.length-1] == matchUnOrdered[1].length){
+                    sList = 'same'
+                } else {
+                    sList = 'same'
+                    while (this.in.listUnordered[this.in.listUnordered.length-1] > matchUnOrdered[1].length) {
+                        this.in.listUnordered.pop()
+                        this.html += `</ul>\n`
+                        if (this.in.listUnordered.length == 0) {
+                            break
+                        }
+                    }
+                }
+            }
+            if (sList == 'same') {
+                this.html += `<li>${matchUnOrdered[2]}</li>\n`
+            }
+            return true
+        }
+        return false
     }
 
     /**
@@ -102,6 +148,9 @@ export class MarkDown {
      * @param {string} line
      */
     process_line(line) {
+        let elSanitize = document.createElement('div')
+        elSanitize.textContent = line
+        line = elSanitize.innerHTML
         let lineA = line.split(' ')
         if (this.in.preFenced.length > 0) {
             if (line == this.in.preFenced) {
@@ -137,38 +186,7 @@ export class MarkDown {
             this.html += `<pre class="${matchPreFenced[2]}">\n`
             return
         }
-        // spaces followed by - or + or * followed by a space and actual list item
-        let matchUnOrdered = line.match(/^([ ]*)[-+*][ ](.*)$/);
-        if ( matchUnOrdered != null) {
-            let sList = 'none'
-            let listLvl = 0
-            if (this.in.listUnordered.length == 0) {
-                sList = 'same'
-                this.in.listUnordered.push(matchUnOrdered[1].length)
-                listLvl = this.in.listUnordered.length // ie 1
-                this.html += "<ul>\n"
-            } else {
-                if (this.in.listUnordered[this.in.listUnordered.length-1] < matchUnOrdered[1].length){
-                    sList = 'same'
-                    this.in.listUnordered.push(matchUnOrdered[1].length)
-                    listLvl = this.in.listUnordered.length
-                    this.html += "<ul>\n"
-                } else if (this.in.listUnordered[this.in.listUnordered.length-1] == matchUnOrdered[1].length){
-                    sList = 'same'
-                } else {
-                    sList = 'same'
-                    while (this.in.listUnordered[this.in.listUnordered.length-1] > matchUnOrdered[1].length) {
-                        this.in.listUnordered.pop()
-                        this.html += `</ul>\n`
-                        if (this.in.listUnordered.length == 0) {
-                            break
-                        }
-                    }
-                }
-            }
-            if (sList == 'same') {
-                this.html += `<li>${matchUnOrdered[2]}</li>\n`
-            }
+        if (this.process_list_unordered(line)) {
             return
         }
         this.unwind_list()
@@ -180,9 +198,14 @@ export class MarkDown {
      * @param {string} lines
      */
     process(lines) {
+        this.raw = lines
         let linesA = lines.split('\n')
         for(const line of linesA) {
-            this.process_line(line)
+            try {
+                this.process_line(line)
+            } catch (err) {
+                this.errors.push(err)
+            }
         }
     }
 
