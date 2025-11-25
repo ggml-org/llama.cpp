@@ -306,15 +306,11 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         return false;
     }
 
-    if (amd_wmma_available(cc)) {
-        if (GGML_CUDA_CC_IS_RDNA4(cc)) {
-            return true;
-        }
-        // RDNA3 doesn't support integer WMMA operations required for MMQ
-        if (GGML_CUDA_CC_IS_RDNA3(cc)) {
-            return false;
-        }
+    // RDNA4 has integer WMMA support, always use MMQ
+    if (GGML_CUDA_CC_IS_RDNA4(cc)) {
+        return true;
     }
 
+    // RDNA3 uses DP4A path (no integer WMMA), enable for small batches
     return (!GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
 }
