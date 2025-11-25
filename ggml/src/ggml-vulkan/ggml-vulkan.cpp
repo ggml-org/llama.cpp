@@ -13303,6 +13303,59 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     }
 }
 
+ggml_vk_device_info ggml_backend_vk_get_device_info(int device) {
+    GGML_ASSERT(device < (int) vk_instance.device_indices.size());
+    GGML_ASSERT(device < (int) vk_instance.device_supports_membudget.size());
+
+    vk::PhysicalDevice vkdev = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device]];
+    vk::PhysicalDeviceProperties props = vkdev.getProperties();
+
+    ggml_vk_device_info info = {};
+    snprintf(info.device_name, sizeof(info.device_name), "%s", props.deviceName.data());
+    info.vendor_id = props.vendorID;
+    info.device_id = props.deviceID;
+    info.api_version = props.apiVersion;
+
+    // Get memory info
+    size_t free, total;
+    ggml_backend_vk_get_device_memory(device, &free, &total);
+    info.total_device_local_memory = total;
+    info.has_memory_budget_ext = vk_instance.device_supports_membudget[device];
+
+    // Check features
+    VkPhysicalDeviceFeatures2 device_features2;
+    device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    VkPhysicalDeviceVulkan11Features vk11_features;
+    vk11_features.pNext = nullptr;
+    vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    device_features2.pNext = &vk11_features;
+    vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
+
+    info.supports_16bit_storage = vk11_features.storageBuffer16BitAccess;
+    
+    // Check for float16 support (shaderFloat16 or shaderInt8)
+    const std::vector<vk::ExtensionProperties> ext_props = vkdev.enumerateDeviceExtensionProperties();
+    bool fp16_compute = false;
+    for (const auto& properties : ext_props) {
+        if (strcmp("VK_KHR_shader_float16_int8", properties.extensionName) == 0) {
+            fp16_compute = true;
+            break;
+        }
+    }
+    info.supports_float16 = fp16_compute;
+
+    return info;
+}
+
+int ggml_backend_vk_get_default_gpu_layers(int device, int default_layers) {
+    // The dynamic heuristic in common.cpp handles the default case (n_gpu_layers = -1).
+    // This function is kept for API compatibility but currently returns 0 to be safe
+    // if called directly without the heuristic logic.
+    (void)device;
+    (void)default_layers;
+    return 0;
+}
+
 static vk::PhysicalDeviceType ggml_backend_vk_get_device_type(int device_idx) {
     GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
 
