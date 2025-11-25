@@ -2,7 +2,7 @@
 
 #include "ggml-cpu-impl.h"
 
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
 #include <arm_sve.h>
 #endif // __ARM_FEATURE_SVE
 
@@ -149,7 +149,7 @@ inline static float ggml_lookup_fp16_to_fp32(ggml_fp16_t f) {
 //   number of elements to fit in a single register
 //
 
-#if defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_FMA)
+#if defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_FMA) && !defined(__APPLE__)
 
 #define GGML_SIMD
 

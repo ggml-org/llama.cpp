@@ -6835,7 +6835,7 @@ static void ggml_compute_forward_conv_2d_dw_cwhn(
     const int64_t row_end = MIN(row_start + rows_per_thread, rows_total);
 
 #ifdef GGML_SIMD
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
         const int64_t pkg_size = svcntw();
     #else
         const int64_t pkg_size = GGML_F32_EPR;
@@ -8531,7 +8531,8 @@ static void ggml_compute_forward_ssm_scan_f32(
                         const float x_dt = x[ii] * dt_soft_plus;
                         float sumf = 0.0f;
 #if defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
+
                         const int ggml_f32_epr = svcntw();
                         const int ggml_f32_step = 1 * ggml_f32_epr;
 
@@ -8625,7 +8626,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                     for (int i1 = 0; i1 < nr; ++i1) {
                         const int ii = i1 + h*nr;
                         const float x_dt = x[ii] * dt_soft_plus;
-#if defined(__ARM_FEATURE_SVE)
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
                         svfloat32_t vx_dt = GGML_F32_VEC_SET1(x_dt);
                         svfloat32_t vdt_soft_plus = GGML_F32_VEC_SET1(dt_soft_plus);
                         svfloat32_t r1_vector = GGML_F32_VEC_ZERO;
@@ -9135,7 +9136,7 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
         #define GGML_F32X_MUL GGML_F32x16_MUL
         #define GGML_F32X_FMA GGML_F32x16_FMA
         #define WKV_VECTOR_SIZE 16
-    #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__) && !defined(__APPLE__)
         #define GGML_F32X GGML_F32xt
         #define GGML_F32X_SET1 GGML_F32xt_SET1
         #define GGML_F32X_LOAD GGML_F32xt_LOAD
@@ -9155,7 +9156,7 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
 
     #ifdef WKV_VECTOR_SIZE
         int wkv_vector_size;
-        #if defined(__ARM_FEATURE_SVE)
+        #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
             wkv_vector_size = svcntw();
         #else
             wkv_vector_size = WKV_VECTOR_SIZE;
@@ -9351,7 +9352,7 @@ static void ggml_compute_forward_gla_f32(
         #define GGML_F32X_MUL GGML_F32x16_MUL
         #define GGML_F32X_FMA GGML_F32x16_FMA
         #define GLA_VECTOR_SIZE 16
-    #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__) && !defined(__APPLE__)
         #define GGML_F32X GGML_F32xt
         #define GGML_F32X_SET1 GGML_F32xt_SET1
         #define GGML_F32X_LOAD GGML_F32xt_LOAD
@@ -9371,7 +9372,7 @@ static void ggml_compute_forward_gla_f32(
 
     #ifdef GLA_VECTOR_SIZE
         int gla_vector_size;
-        #if defined(__ARM_FEATURE_SVE)
+        #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
             gla_vector_size = svcntw();
         #else
             gla_vector_size = GLA_VECTOR_SIZE;
@@ -9536,7 +9537,7 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
     int64_t h_stride_2d = head_size * head_size;
 
     #if defined(GGML_SIMD)
-        #if defined(__ARM_FEATURE_SVE) || defined(__riscv_v_intrinsic)
+        #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__) || defined(__riscv_v_intrinsic)
             // scalar Route to scalar implementation       //TODO: Write SVE code and RVV code
             for (int64_t t = 0; t < T; t++) {
                 int64_t t_offset = t * t_stride;

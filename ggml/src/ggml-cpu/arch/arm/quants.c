@@ -231,7 +231,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
-#if defined(__ARM_FEATURE_SVE)
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
     svfloat32_t sumv0 = svdup_n_f32(0.0f);
     svfloat32_t sumv1 = svdup_n_f32(0.0f);
 
@@ -962,7 +962,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
-#if defined(__ARM_FEATURE_SVE)
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
     svfloat32_t sumv0 = svdup_n_f32(0.0f);
     svfloat32_t sumv1 = svdup_n_f32(0.0f);
 
@@ -1427,7 +1427,7 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     const int nb = n / QK_K;
 
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
     const int vector_length = svcntb()*8;
     const svuint8_t m3s = svdup_n_u8(0x3);
     const svuint32_t m4s = svdup_n_u32(0xF);
@@ -1764,7 +1764,7 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     const int nb = n / QK_K;
 
-#if defined(__ARM_FEATURE_SVE)
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
 
     uint32_t aux[3];
     uint32_t utmp[4];
@@ -2044,7 +2044,7 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 }
 
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
 static inline svuint32_t ggml_decode_q4scales_and_mins_for_mmla(const uint32_t * vx_scales) {
     const svbool_t pg_all   = svptrue_pat_b32(SV_VL4);
     const svbool_t pg_false = svpfalse_b();            // 0x0000
@@ -2086,11 +2086,11 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     static const uint32_t kmask3 = 0x03030303;
 
     uint32_t utmp[4];
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
     const int vector_length = ggml_cpu_get_sve_cnt()*8;
 #endif
 
-#if defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_MATMUL_INT8)
+#if defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_MATMUL_INT8) && !defined(__APPLE__)
     if (nrc == 2) {
         svbool_t pg32_2 = svptrue_pat_b32(SV_VL2);
 
@@ -2439,7 +2439,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 #endif
 
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
     float sumf = 0;
     for (int i = 0; i < nb; ++i) {
 
@@ -2711,10 +2711,10 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     const int nb = n / QK_K;
 
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
     const int vector_length = ggml_cpu_get_sve_cnt()*8;
 #endif
-#if defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_MATMUL_INT8)
+#if defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_MATMUL_INT8) && !defined(__APPLE__)
     if (nrc == 2) {
         const svbool_t pg32_2 = svptrue_pat_b32(SV_VL2);
 
@@ -3074,7 +3074,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 #endif
 
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
     float sum = 0;
     svuint8_t m4b = svdup_n_u8(0xf);
     svint32_t vzero = svdup_n_s32(0);

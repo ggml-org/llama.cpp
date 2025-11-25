@@ -42,7 +42,7 @@
 #include <omp.h>
 #endif
 
-#if defined(__ARM_FEATURE_SVE) || defined(__ARM_FEATURE_MATMUL_INT8)
+#if (defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)) || defined(__ARM_FEATURE_MATMUL_INT8)
 #undef GGML_USE_LLAMAFILE
 #endif
 
@@ -688,6 +688,7 @@ bool ggml_is_numa(void) {
 #include <sys/auxv.h>
 #endif
 
+#if !defined(__APPLE__)
 static void ggml_init_arm_arch_features(void) {
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
 #if defined(__linux__)
@@ -698,6 +699,7 @@ static void ggml_init_arm_arch_features(void) {
 #endif
 #endif
 }
+#endif
 
 #endif // __ARM_ARCH
 
@@ -3508,7 +3510,7 @@ int ggml_cpu_has_dotprod(void) {
 }
 
 int ggml_cpu_has_sve(void) {
-#if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE)
+#if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
     return 1;
 #else
     return 0;
@@ -3524,7 +3526,7 @@ int ggml_cpu_has_matmul_int8(void) {
 }
 
 int ggml_cpu_get_sve_cnt(void) {
-#if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE)
+#if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
     return ggml_arm_arch_features.sve_cnt;
 #else
     return 0;
@@ -3589,7 +3591,7 @@ void ggml_cpu_init(void) {
 #endif
         }
 
-#if defined(__ARM_ARCH)
+#if defined(__ARM_ARCH) && !defined(__APPLE__)
         ggml_init_arm_arch_features();
 #endif
 

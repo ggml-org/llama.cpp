@@ -120,7 +120,7 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
     }
 
 #if defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
 
         const int sve_register_length = svcntb() * 8;
         const int ggml_f16_epr = sve_register_length / 16; // running when 16
@@ -278,7 +278,7 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
 
 inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const float * GGML_RESTRICT x, const float v) {
 #if defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
 
         const int sve_register_length = ggml_cpu_get_sve_cnt() * 8;
         const int ggml_f32_epr = sve_register_length / 32;//8;//svcntw(); // SVE128:4, SVE256:8, SVE512:16
@@ -398,7 +398,7 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
 
 inline static void ggml_vec_mad_f16(const int n, ggml_fp16_t * GGML_RESTRICT y, const ggml_fp16_t * GGML_RESTRICT x, const float v) {
 #if defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
         const int sve_register_length = svcntb() * 8;
         const int ggml_f16_epr = sve_register_length / 16;
         const int ggml_f16_step = 8 * ggml_f16_epr;
@@ -524,7 +524,7 @@ inline static void ggml_vec_mad_f32_unroll(const int n, const int xs, const int 
     }
 
 #if defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
         // scalar Route to scalar implementation       //TODO: Write SVE code
         for (int k = 0; k < GGML_VEC_MAD_UNROLL; ++k) {
             for (int i = 0; i < n; ++i) {
@@ -587,7 +587,7 @@ inline static void ggml_vec_mad1_f32(const int n, float * y, const float * x, co
 #if defined(GGML_USE_ACCELERATE)
     vDSP_vsmsa(x, 1, &s, &b, y, 1, n);
 #elif defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
         // scalar ; TODO: Write SVE code
         for (int i = 0; i < n; ++i) {
             y[i] = x[i]*s + b;
@@ -635,7 +635,7 @@ inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
 #if defined(GGML_USE_ACCELERATE)
     vDSP_vsmul(y, 1, &v, y, 1, n);
 #elif defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
         const int sve_register_length = ggml_cpu_get_sve_cnt() * 8;
         const int ggml_f32_epr = sve_register_length / 32;//8;//svcntw(); // SVE128:4, SVE256:8, SVE512:16
         const int ggml_f32_step = 2 * ggml_f32_epr;
@@ -699,7 +699,7 @@ inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
 
 inline static void ggml_vec_scale_f16(const int n, ggml_fp16_t * y, const float v) {
 #if defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
         const int sve_register_length = svcntb() * 8;
         const int ggml_f16_epr = sve_register_length / 16;
         const int ggml_f16_step = 2 * ggml_f16_epr;
@@ -970,7 +970,7 @@ inline static ggml_fp16_t ggml_silu_f16(ggml_fp16_t x) {
 
 /* Below function was borrowed from the GitHub repository:
 https://github.com/openvinotoolkit/openvino/blob/master/src/plugins/intel_cpu/src/nodes/kernels/scaled_attn/common.hpp */
-#if defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+#if defined(__ARM_FEATURE_SVE) && defined(__aarch64__) && !defined(__APPLE__)
     inline static svfloat32_t exp_ps_sve(svbool_t pg, svfloat32_t src) {
         // Constants
         const svfloat32_t log2_e = svdup_n_f32(1.4426950409f);
@@ -1004,7 +1004,7 @@ https://github.com/openvinotoolkit/openvino/blob/master/src/plugins/intel_cpu/sr
     }
 #endif
 
-#if defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+#if defined(__ARM_FEATURE_SVE) && defined(__aarch64__) && !defined(__APPLE__)
 
 inline static svfloat32_t ggml_v_expf(svbool_t pg, svfloat32_t x) {
     const svfloat32_t r = svdup_n_f32_x(pg, 0x1.8p23f);

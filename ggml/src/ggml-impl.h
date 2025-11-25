@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#ifdef __ARM_FEATURE_SVE
+#if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
 #include <arm_sve.h>
 #endif // __ARM_FEATURE_SVE
 

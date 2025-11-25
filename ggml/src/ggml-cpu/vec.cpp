@@ -18,7 +18,7 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
 #if defined(GGML_SIMD)
     float sumf = 0.0f;
 
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
         const int sve_register_length = ggml_cpu_get_sve_cnt() * 8;
         const int ggml_f32_epr = sve_register_length / 32;//8;//svcntw(); // SVE128:4, SVE256:8, SVE512:16
         const int ggml_f32_step = 8 * ggml_f32_epr; // choose 8 SVE registers
@@ -215,7 +215,7 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
 
 
 #if defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
+    #if defined(__ARM_FEATURE_SVE) && !defined(__APPLE__)
         const int sve_register_length = svcntb() * 8; //get vector length
         const int ggml_f16_epr = sve_register_length / 16; // running when 16
         const int ggml_f16_step = 8 * ggml_f16_epr; // choose 8 SVE registers
@@ -350,7 +350,7 @@ void ggml_vec_silu_f32(const int n, float * y, const float * x) {
     for (; i + 3 < n; i += 4) {
         _mm_storeu_ps(y + i, ggml_v_silu(_mm_loadu_ps(x + i)));
     }
-#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__) && !defined(__APPLE__)
     const int vlen = svcntw();
     for (; i < n; i += vlen) {
         const svbool_t pg = svwhilelt_b32_s32(i, n);
@@ -380,7 +380,7 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
     for (; i + 3 < n; i += 4) {
         _mm_storeu_ps(y + i, _mm_mul_ps(ggml_v_silu(_mm_loadu_ps(x + i)), _mm_loadu_ps(g + i)));
     }
-#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__) && !defined(__APPLE__)
     const int vlen = svcntw();
     for (; i < n; i += vlen) {
         const svbool_t pg = svwhilelt_b32_s32(i, n);
@@ -507,7 +507,7 @@ ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float 
 #endif
         sum += (ggml_float)_mm_cvtss_f32(val);
     }
-#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__) && !defined(__APPLE__)
     const int vlen = svcntw();
     for (; i < n; i += vlen) {
         const svbool_t pg = svwhilelt_b32_s32(i, n);
