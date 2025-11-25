@@ -43,6 +43,8 @@ export class MarkDown {
             }
             return
         }
+        // 3 or more of --- or ___ or *** followed by space
+        // some online notes seemed to indicate spaces at end, so accepting same
         if (line.match(/^[-]{3,}|[*]{3,}|[_]{3,}\s*$/) != null) {
             this.unwind_list()
             this.html += "<hr>\n"
@@ -54,13 +56,16 @@ export class MarkDown {
             this.html += `<h${hLevel}>${line.slice(hLevel)}</h${hLevel}>\n`
             return
         }
-        let matchPreFenced = line.match(/^(```|~~~)([a-zA-Z0-9]*)(.*)/);
+        // same number of space followed by ``` or ~~~
+        // some samples with spaces at beginning seen, so accepting spaces at begin
+        let matchPreFenced = line.match(/^(\s*```|\s*~~~)([a-zA-Z0-9]*)(.*)/);
         if ( matchPreFenced != null) {
             this.unwind_list()
             this.in.preFenced = matchPreFenced[1]
             this.html += `<pre class="${matchPreFenced[2]}">\n`
             return
         }
+        // spaces followed by - or + or * followed by a space and actual list item
         let matchUnOrdered = line.match(/^([ ]*)[-+*][ ](.*)$/);
         if ( matchUnOrdered != null) {
             let sList = 'none'
