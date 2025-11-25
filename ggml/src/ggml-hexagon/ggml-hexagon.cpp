@@ -8,8 +8,8 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
-#include <string>
 #include <stdexcept>
+#include <string>
 
 #ifdef _WIN32
 #    include <sal.h>
@@ -1982,11 +1982,6 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             return false;
     }
 
-    // src0 & src1 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, src0, src1, dst)) {
-        return false;
-    }
-
     return true;
 }
 
@@ -2029,12 +2024,6 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
         return false;
     }
 
-    // src0 (weights) must be repacked and mapped to the same session
-    // src1 & sr2 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, src0, src1, src2, dst)) {
-        return false;
-    }
-
     return true;
 }
 
@@ -2061,11 +2050,6 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
 
     // TODO: add support for non-contigiuos tensors
     if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
-        return false;
-    }
-
-    // src0, src1 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, src0, src1, dst)) {
         return false;
     }
 
@@ -2096,11 +2080,6 @@ static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * se
         return false;
     }
 
-    // src0, src1 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, src0, src1, src2, dst)) {
-        return false;
-    }
-
     return true;
 }
 
@@ -2120,11 +2099,6 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
 
     // TODO: add support for non-contigiuos tensors
     if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
-        return false;
-    }
-
-    // src0 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, src0, dst)) {
         return false;
     }
 
@@ -2158,11 +2132,6 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
         if (!ggml_is_contiguous(src1)) {
             return false;
         }
-    }
-
-    // src0, src1 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, src0, src1, dst)) {
-        return false;
     }
 
     return true;
@@ -2213,11 +2182,6 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
         }
     }
 
-    // src0, src1 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, src0, src1, dst)) {
-        return false;
-    }
-
     return true;
 }
 
@@ -2266,11 +2230,6 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
         if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
             return false;
         }
-    }
-
-    // src0, src1, src2 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, src0, src1, src2, dst)) {
-        return false;
     }
 
     return true;
@@ -3136,8 +3095,16 @@ static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_repack_buffer_
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
-    bool supp = false;
+    // src0, src1, src2 & dst must be mapped to the same session
+    if (!hex_supported_buffer(sess, op->src[0], op->src[1], op->src[2], op)) {
+        if (opt_verbose) {
+            HEX_VERBOSE("ggml-hex: %s device-unsupports-op %s : unsupported buffer types\n", sess->name.c_str(),
+                        ggml_op_name(op->op));
+        }
+        return false;
+    };
 
+    bool supp = false;
     switch (op->op) {
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
