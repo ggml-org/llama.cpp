@@ -92,7 +92,7 @@ struct tile_x_sizes {
 };
 
 static int get_mmq_x_max_host(const int cc) {
-    return (amd_mfma_available(cc) || turing_mma_available(cc) || amd_wmma_available(cc)) ? 128 :
+    return (amd_mfma_available(cc) || turing_mma_available(cc) || amd_wmma_int_available(cc)) ? 128 :
         GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA ?
 #ifdef GGML_CUDA_FORCE_MMQ
             128                     : 64;
@@ -102,7 +102,7 @@ static int get_mmq_x_max_host(const int cc) {
 }
 
 static constexpr __device__ int get_mmq_x_max_device() {
-#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
     return 128;
 #else // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
 
@@ -231,7 +231,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
 #define MMQ_TILE_Y_K (MMQ_TILE_NE_K + MMQ_TILE_NE_K/QI8_1)
 
 static int mmq_get_granularity_host(const int mmq_x, const int cc) {
-    if (amd_mfma_available(cc) || amd_wmma_available(cc)) {
+    if (amd_mfma_available(cc) || amd_wmma_int_available(cc)) {
         return mmq_x >= 128 ? 32 : 16;
     } else if (turing_mma_available(cc) && mmq_x >= 48) {
         return 16;
@@ -240,7 +240,7 @@ static int mmq_get_granularity_host(const int mmq_x, const int cc) {
     }
 }
 
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
 static constexpr __device__ int mmq_get_granularity_device(const int mmq_x) {
     return mmq_x >= 128 ? 32 : 16;
 }
@@ -256,7 +256,7 @@ static constexpr __device__ int mmq_get_granularity_device(const int /*mmq_x*/) 
 
 #if defined(GGML_USE_HIP)
 static int mmq_get_nwarps_host(const int cc, const int warp_size) {
-    return amd_mfma_available(cc) ? 8 : 256/warp_size;
+    return (amd_mfma_available(cc) || amd_wmma_int_available(cc)) ? 8 : 256/warp_size;
 }
 #else
 static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
@@ -265,7 +265,7 @@ static int mmq_get_nwarps_host(const int /*cc*/, const int warp_size) {
 #endif // (GGML_USE_HIP)
 
 static constexpr __device__ int mmq_get_nwarps_device() {
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
     return 8;
 #else
     return 256/ggml_cuda_get_physical_warp_size();
@@ -796,7 +796,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_dp4a(
 template <int mmq_x, int mmq_y, mmq_q8_1_ds_layout ds_layout>
 static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
     typedef tile<16,  8, int> tile_A;
     typedef tile<16,  8, int> tile_B;
     typedef tile<16, 16, int> tile_C;
@@ -965,7 +965,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_dp4a(
 template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
     typedef tile<16,  8, int> tile_A;
     typedef tile<16,  8, int> tile_B;
     typedef tile<16, 16, int> tile_C;
@@ -1178,7 +1178,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
             }
         }
     }
-#elif defined(AMD_WMMA_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
+#elif defined(AMD_WMMA_INT_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
     typedef tile<16,  4, int> tile_A;
     typedef tile<16,  4, int> tile_B;
     typedef tile<16, 16, int> tile_C;
@@ -1500,7 +1500,7 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
             }
         }
     }
-#elif defined(AMD_WMMA_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
+#elif defined(AMD_WMMA_INT_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
 
     typedef tile<16,  4, int> tile_A;
     typedef tile<16,  4, int> tile_B;
@@ -1879,7 +1879,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     constexpr int rows_per_warp = warp_size / 2;
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps*rows_per_warp) {
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
         // Need if on AMD instead of % because warp_size == 64
         // This causes double work and throughput loss (MI300X)
         // H100 loses about 100 t/s with 'if' condition over '%'
@@ -1888,7 +1888,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #else
         int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/2) % mmq_y;
         {
-#endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
             if (need_check) {
                 i = min(i, i_max);
             }
@@ -2313,7 +2313,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
             }
         }
     }
-#elif defined(AMD_WMMA_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
+#elif defined(AMD_WMMA_INT_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
     typedef tile<16,  4, int> tile_A;
     typedef tile<16,  4, int> tile_B;
     typedef tile<16, 16, int> tile_C;
@@ -3011,14 +3011,14 @@ static __device__ __forceinline__ void mmq_write_back_mma(
     constexpr int granularity = mmq_get_granularity_device(mmq_x);
     constexpr int nwarps = mmq_get_nwarps_device();
 
-#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
     constexpr int tileC_IJ = mmq_get_granularity_device(0);
     typedef tile<tileC_IJ, tileC_IJ, int> tile_C;
     constexpr int rows_per_warp = granularity;
 #else
     typedef tile<16, 8, int> tile_C;
     constexpr int rows_per_warp = 2 * granularity;
-#endif // defined(AMD_MFMA_AVAILABLE)
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
     const int i0 = (threadIdx.y / ntx) * (ntx*tile_C::I);
@@ -3226,13 +3226,13 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     int * tile_y = data_mul_mat_q + mmq_x;
     int * tile_x = tile_y + GGML_PAD(mmq_x*MMQ_TILE_Y_K, nwarps*warp_size);
 
-#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
     constexpr vec_dot_mmq_t    vec_dot    = mmq_type_traits<mmq_x, mmq_y, need_check, type>::vec_dot_mma;
     constexpr mmq_write_back_t write_back = mmq_write_back_mma<type, mmq_x, mmq_y, need_check>;
 #else
     constexpr vec_dot_mmq_t    vec_dot    = mmq_type_traits<mmq_x, mmq_y, need_check, type>::vec_dot_dp4a;
     constexpr mmq_write_back_t write_back = mmq_write_back_dp4a<mmq_x, mmq_y, need_check>;
-#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_INT_AVAILABLE)
 
     constexpr int blocks_per_iter = MMQ_ITER_K / qk;
 
