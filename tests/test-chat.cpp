@@ -2783,7 +2783,7 @@ Hey there!<|im_end|>
                 inputs.tools = tools;
                 params_ = common_chat_templates_apply(tmpls, inputs);
                 assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, params_.format);
-                arena_ = common_peg_arena::deserialize(params_.parser);
+                arena_.load(params_.parser);
                 is_partial_ = is_partial;
             }
 
