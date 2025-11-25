@@ -1036,6 +1036,18 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_RND1:
+            {
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
+
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                switch (hparams.n_layer) {
+                    case 48: type = LLM_TYPE_30B_A3B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+                // Set non-causal attention for diffusion models
+                hparams.causal_attn = false;
+            } break;
         case LLM_ARCH_QWEN2MOE:
             {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
@@ -1593,7 +1605,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_DEEPSEEK2:
             {
-                bool is_lite = (hparams.n_layer == 27);
+                // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
+                bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
                 if (!is_lite) {
@@ -3401,6 +3414,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_QWEN3MOE:
             case LLM_ARCH_QWEN3VLMOE:
+            case LLM_ARCH_RND1:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -4581,7 +4595,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_DEEPSEEK2:
                 {
-                    const bool is_lite = (hparams.n_layer == 27);
+                    // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
+                    const bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
 
                     const bool is_mla = (hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0);
 
@@ -6718,7 +6733,7 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_ff_shexp       = %d\n",     __func__, hparams.n_ff_shexp);
     }
 
-    if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE) {
+    if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1) {
         LLAMA_LOG_INFO("%s: n_ff_exp         = %d\n",     __func__, hparams.n_ff_exp);
     }
 
@@ -6880,6 +6895,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
+        case LLM_ARCH_RND1:
             {
                 res = nullptr;
             } break;
@@ -7071,6 +7087,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_LLADA_MOE:
             {
                 llm = std::make_unique<llm_build_llada_moe>(*this, params);
+            }
+            break;
+        case LLM_ARCH_RND1:
+            {
+                llm = std::make_unique<llm_build_rnd1>(*this, params);
             }
             break;
         case LLM_ARCH_QWEN2VL:
@@ -7593,6 +7614,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
         case LLM_ARCH_LLADA_MOE:
+        case LLM_ARCH_RND1:
         case LLM_ARCH_OLMO2:
         case LLM_ARCH_OLMOE:
         case LLM_ARCH_PHI2:
@@ -7663,6 +7685,24 @@ int32_t llama_model_meta_val_str(const llama_model * model, const char * key, ch
 
 int32_t llama_model_meta_count(const llama_model * model) {
     return (int)model->gguf_kv.size();
+}
+
+const char * llama_model_meta_key_str(llama_model_meta_key key) {
+    switch (key) {
+        case LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE:        return "general.sampling.sequence";
+        case LLAMA_MODEL_META_KEY_SAMPLING_TOP_K:           return "general.sampling.top_k";
+        case LLAMA_MODEL_META_KEY_SAMPLING_TOP_P:           return "general.sampling.top_p";
+        case LLAMA_MODEL_META_KEY_SAMPLING_MIN_P:           return "general.sampling.min_p";
+        case LLAMA_MODEL_META_KEY_SAMPLING_XTC_PROBABILITY: return "general.sampling.xtc_probability";
+        case LLAMA_MODEL_META_KEY_SAMPLING_XTC_THRESHOLD:   return "general.sampling.xtc_threshold";
+        case LLAMA_MODEL_META_KEY_SAMPLING_TEMP:            return "general.sampling.temp";
+        case LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_LAST_N:  return "general.sampling.penalty_last_n";
+        case LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_REPEAT:  return "general.sampling.penalty_repeat";
+        case LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT:        return "general.sampling.mirostat";
+        case LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_TAU:    return "general.sampling.mirostat_tau";
+        case LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA:    return "general.sampling.mirostat_eta";
+        default:                                            return nullptr;
+    }
 }
 
 int32_t llama_model_meta_key_by_index(const llama_model * model, int i, char * buf, size_t buf_size) {
