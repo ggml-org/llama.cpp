@@ -1,5 +1,5 @@
 //@ts-check
-// Helpers to handle markdown content
+// simple minded helpers to handle markdown content
 // by Humans for All
 //
 
@@ -17,13 +17,23 @@ export class MarkDown {
         this.html = ""
     }
 
+    unwind_list_unordered() {
+        for(const i in this.in.listUnordered) {
+            this.html += "</ul>\n"
+        }
+        this.in.listUnordered.length = 0
+    }
+
+    unwind_list() {
+        this.unwind_list_unordered()
+    }
+
     /**
      * Process a line from markdown content
      * @param {string} line
      */
     process_line(line) {
         let lineA = line.split(' ')
-        let lineRStripped = line.trimStart()
         if (this.in.pre) {
             if (lineA[0] == '```') {
                 this.in.pre = false
@@ -33,13 +43,20 @@ export class MarkDown {
             }
             return
         }
+        if (line == '---') {
+            this.unwind_list()
+            this.html += "<hr>\n"
+            return
+        }
         if (line.startsWith ("#")) {
+            this.unwind_list()
             let hLevel = lineA[0].length
             this.html += `<h${hLevel}>${line.slice(hLevel)}</h${hLevel}>\n`
             return
         }
         let matchPre = line.match(/^```([a-zA-Z0-9]*)(.*)/);
         if ( matchPre != null) {
+            this.unwind_list()
             this.in.pre = true
             this.html += `<pre class="${matchPre[1]}">\n`
             return
@@ -77,6 +94,7 @@ export class MarkDown {
             }
             return
         }
+        this.unwind_list()
         this.html += `<p>${line}</p>`
     }
 
