@@ -2059,7 +2059,6 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
 static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
-    const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
 
     if (!hex_supported_src0_type(src0->type)) {
