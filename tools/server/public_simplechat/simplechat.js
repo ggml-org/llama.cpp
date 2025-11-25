@@ -10,6 +10,7 @@ import * as du from "./datautils.mjs";
 import * as ui from "./ui.mjs"
 import * as mTools from "./tools.mjs"
 import * as mIdb from "./idb.mjs"
+import * as mMD from "./typemd.mjs"
 
 
 const TEMP_MARKER = "-TEMP"
@@ -1496,7 +1497,15 @@ class MultiChatUI {
         }
         for (const [name, content] of showList) {
             if (content.length > 0) {
-                entry = ui.el_create_append_p(`${content}`, secContents);
+                if (name == "content") {
+                    entry = document.createElement('div')
+                    let md = new mMD.MarkDown()
+                    md.process(content)
+                    entry.innerHTML = md.html
+                    secContents.appendChild(entry)
+                } else {
+                    entry = ui.el_create_append_p(`${content}`, secContents);
+                }
                 entry.classList.add(`chat-message-${name}`)
             }
         }
