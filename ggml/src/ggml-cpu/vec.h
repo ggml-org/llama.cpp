@@ -238,7 +238,7 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
     for (int i = 0; i < n; i += vl) {
         vl = __riscv_vsetvl_e16m1(n - i);
         ay = __riscv_vle16_v_f16m1_tu(ay, (const _Float16 *)&y[i], vl);
-        
+
         ax      = __riscv_vle16_v_f16m1_tu(ax, (const _Float16 *)&x[0][i], vl);
         vsum0   = __riscv_vfwmacc_vv_f32m2_tu(vsum0, ax, ay, vl);
         ax      = __riscv_vle16_v_f16m1_tu(ax, (const _Float16 *)&x[1][i], vl);
@@ -246,11 +246,11 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
     }
 
     vl = __riscv_vsetvlmax_e32m1();
-    
+
     vfloat32m1_t ac0 = __riscv_vfadd_vv_f32m1(__riscv_vget_v_f32m2_f32m1(vsum0, 0), __riscv_vget_v_f32m2_f32m1(vsum0, 1), vl);
     vs0 = __riscv_vfredusum_vs_f32m1_f32m1(ac0, vs0, vl);
     sumf[0] += (ggml_float)__riscv_vfmv_f_s_f32m1_f32(vs0);
-    
+
     ac0 = __riscv_vfadd_vv_f32m1(__riscv_vget_v_f32m2_f32m1(vsum1, 0), __riscv_vget_v_f32m2_f32m1(vsum1, 1), vl);
     vs1 = __riscv_vfredusum_vs_f32m1_f32m1(ac0, vs1, vl);
     sumf[1] += (ggml_float)__riscv_vfmv_f_s_f32m1_f32(vs1);
