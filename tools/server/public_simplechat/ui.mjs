@@ -5,27 +5,6 @@
 
 
 /**
- * Insert key-value pairs into passed element object.
- * @param {HTMLElement} el
- * @param {string} key
- * @param {any} value
- */
-function el_set(el, key, value) {
-    // @ts-ignore
-    el[key] = value
-}
-
-/**
- * Retrieve the value corresponding to given key from passed element object.
- * @param {HTMLElement} el
- * @param {string} key
- */
-function el_get(el, key) {
-    // @ts-ignore
-    return el[key]
-}
-
-/**
  * Set the class of the children, based on whether it is the idSelected or not.
  * @param {HTMLDivElement} elBase
  * @param {string} idSelected
@@ -88,30 +67,40 @@ export function el_create_append_p(text, elParent=undefined, id=undefined) {
     return para;
 }
 
+
+/** @typedef {{true: string, false: string}} BoolToAnyString */
+
+/** @typedef {HTMLButtonElement & {xbool: boolean, xtexts: BoolToAnyString}} HTMLBoolButtonElement */
+
 /**
  * Create a button which represents bool value using specified text wrt true and false.
  * When ever user clicks the button, it will toggle the value and update the shown text.
  *
  * @param {string} id
- * @param {{true: string, false: string}} texts
+ * @param {BoolToAnyString} texts
  * @param {boolean} defaultValue
  * @param {function(boolean):void} cb
  */
 export function el_create_boolbutton(id, texts, defaultValue, cb) {
-    let el = document.createElement("button");
-    el_set(el, "xbool", defaultValue)
-    el_set(el, "xtexts", structuredClone(texts))
-    el.innerText = el_get(el, "xtexts")[String(defaultValue)];
+    let el = /** @type {HTMLBoolButtonElement} */(document.createElement("button"));
+    el.xbool = defaultValue
+    el.xtexts = structuredClone(texts)
+    el.innerText = el.xtexts[`${defaultValue}`];
     if (id) {
         el.id = id;
     }
     el.addEventListener('click', (ev)=>{
-        el_set(el, "xbool", !el_get(el, "xbool"));
-        el.innerText = el_get(el, "xtexts")[String(el_get(el, "xbool"))];
-        cb(el_get(el, "xbool"));
+        el.xbool = !el.xbool
+        el.innerText = el.xtexts[`${el.xbool}`];
+        cb(el.xbool);
     })
     return el;
 }
+
+
+/** @typedef {Object<string, *>} XSelectOptions */
+
+/** @typedef {HTMLSelectElement & {xselected: *, xoptions: XSelectOptions}} HTMLXSelectElement */
 
 /**
  * Create a select ui element, with a set of options to select from.
@@ -120,14 +109,14 @@ export function el_create_boolbutton(id, texts, defaultValue, cb) {
  * * cb : the call back returns the name string of the option selected.
  *
  * @param {string} id
- * @param {Object<string,*>} options
+ * @param {XSelectOptions} options
  * @param {*} defaultOption
  * @param {function(string):void} cb
  */
 export function el_create_select(id, options, defaultOption, cb) {
-    let el = document.createElement("select");
-    el_set(el, "xselected", defaultOption);
-    el_set(el, "xoptions", structuredClone(options));
+    let el = /** @type{HTMLXSelectElement} */(document.createElement("select"));
+    el.xselected = defaultOption
+    el.xoptions = structuredClone(options)
     for(let cur of Object.keys(options)) {
         let op = document.createElement("option");
         op.value = cur;
