@@ -518,7 +518,7 @@ void ggml_gemv_q4_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if !((defined(_MSC_VER)) && !defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
+#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     constexpr int    col_groups = ncols_interleaved / 4; // 0123 and 4567
     const uint8x16_t m4b        = vdupq_n_u8(0x0f);
 
@@ -633,7 +633,7 @@ void ggml_gemv_q4_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
         vst1q_f32(s + base + 4, acc_f32[1]);
     }  // for x
     return;
-#endif  // #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
+#endif  // #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     ggml_gemv_q4_K_8x4_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
@@ -658,7 +658,7 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if defined(__aarch64__) && defined(__ARM_NEON)
+#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     constexpr int    col_pairs = ncols_interleaved / 2;
     const uint8x16_t m4b       = vdupq_n_u8(0x0f);
 
@@ -788,7 +788,7 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
         vst1q_f32(s + base + 4, acc_f32[1]);
     }  // for x
     return;
-#endif  // defined(__aarch64__) && defined(__ARM_NEON)
+#endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     ggml_gemv_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
