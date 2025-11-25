@@ -8,7 +8,7 @@ export class MarkDown {
 
     constructor() {
         this.in = {
-            pre: false,
+            preFenced: "",
             table: false,
             /** @type {Array<number>} */
             listUnordered: []
@@ -34,9 +34,9 @@ export class MarkDown {
      */
     process_line(line) {
         let lineA = line.split(' ')
-        if (this.in.pre) {
-            if (lineA[0] == '```') {
-                this.in.pre = false
+        if (this.in.preFenced.length > 0) {
+            if (line == this.in.preFenced) {
+                this.in.preFenced = ""
                 this.html += "</pre>\n"
             } else {
                 this.html += `${line}\n`
@@ -54,11 +54,11 @@ export class MarkDown {
             this.html += `<h${hLevel}>${line.slice(hLevel)}</h${hLevel}>\n`
             return
         }
-        let matchPre = line.match(/^```([a-zA-Z0-9]*)(.*)/);
-        if ( matchPre != null) {
+        let matchPreFenced = line.match(/^(```|~~~)([a-zA-Z0-9]*)(.*)/);
+        if ( matchPreFenced != null) {
             this.unwind_list()
-            this.in.pre = true
-            this.html += `<pre class="${matchPre[1]}">\n`
+            this.in.preFenced = matchPreFenced[1]
+            this.html += `<pre class="${matchPreFenced[2]}">\n`
             return
         }
         let matchUnOrdered = line.match(/^([ ]*)[-+*][ ](.*)$/);
