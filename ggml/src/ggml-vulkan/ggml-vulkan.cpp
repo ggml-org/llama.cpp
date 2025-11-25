@@ -1629,6 +1629,22 @@ class vk_perf_logger {
             timings[name].push_back(time);
             return;
         }
+        if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+            const ggml_tensor * dst = node;
+            const ggml_tensor * q = node->src[0];
+            const ggml_tensor * k = node->src[1];
+            const ggml_tensor * v = node->src[2];
+            const ggml_tensor * m = node->src[3];
+            std::stringstream name;
+            name << ggml_op_name(node->op) <<
+                " dst(" << dst->ne[0] << "," << dst->ne[1] << "," << dst->ne[2] << "," << dst->ne[3] << "), " <<
+                " q(" << q->ne[0] << "," << q->ne[1] << "," << q->ne[2] << "," << q->ne[3] << "), " <<
+                " k(" << k->ne[0] << "," << k->ne[1] << "," << k->ne[2] << "," << k->ne[3] << "), " <<
+                " v(" << v->ne[0] << "," << v->ne[1] << "," << v->ne[2] << "," << v->ne[3] << "), " <<
+                " m(" << (m?m->ne[0]:0) << "," << (m?m->ne[1]:0) << "," << (m?m->ne[2]:0) << "," << (m?m->ne[3]:0) << ")";
+            timings[name.str()].push_back(time);
+            return;
+        }
         timings[ggml_op_name(node->op)].push_back(time);
     }
   private:
