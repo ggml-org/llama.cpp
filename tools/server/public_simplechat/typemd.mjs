@@ -9,7 +9,7 @@ export class MarkDown {
     constructor() {
         this.in = {
             preFenced: "",
-            table: false,
+            table: 0,
             /** @type {Array<number>} */
             listUnordered: []
         }
@@ -26,6 +26,28 @@ export class MarkDown {
 
     unwind_list() {
         this.unwind_list_unordered()
+    }
+
+    /**
+     * @param {string} line
+     */
+    process_table_line(line) {
+        let lineParts = line.match(/^(|.*)*|$/)
+        if (lineParts != null) {
+            if (this.in.table == 0) {
+                // table heading
+                this.html += "<table>\n<thead>\n"
+                for(let i=1; i<lineParts.length; i++) {
+                    this.html += `<th>${lineParts[i]}</th>\n`
+                }
+                this.html += "</thead>\n"
+                this.in.table = lineParts.length-1;
+                return
+            }
+            if (this.in.table > 0) {
+
+            }
+        }
     }
 
     /**
