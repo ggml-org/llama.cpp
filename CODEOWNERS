@@ -2,10 +2,8 @@
 # multiplie collaborators per item can be specified
 
 /.devops/*.Dockerfile                   @ngxson
-/.github/actions/                       @slaren @CISC
+/.github/actions/                       @CISC
 /.github/workflows/                     @CISC
-/.github/workflows/release.yml          @slaren
-/.github/workflows/winget.yml           @slaren
 /ci/                                    @ggerganov
 /cmake/                                 @ggerganov
 /common/CMakeLists.txt                  @ggerganov
@@ -40,21 +38,14 @@
 /examples/passkey/                      @ggerganov
 /examples/retrieval/                    @ggerganov
 /examples/save-load-state/              @ggerganov
-/examples/simple-chat/                  @slaren
-/examples/simple/                       @slaren
 /examples/speculative-simple/           @ggerganov
 /examples/speculative/                  @ggerganov
 /ggml/cmake/                            @ggerganov
-/ggml/include/                          @ggerganov @slaren
-/ggml/src/ggml-alloc.c                  @slaren
-/ggml/src/ggml-backend*                 @slaren
-/ggml/src/ggml-blas/                    @slaren
-/ggml/src/ggml-common.h                 @ggerganov @slaren
-/ggml/src/ggml-cpu/                     @ggerganov @slaren
+/ggml/include/                          @ggerganov
+/ggml/src/ggml-common.h                 @ggerganov
+/ggml/src/ggml-cpu/                     @ggerganov
 /ggml/src/ggml-cpu/spacemit/            @alex-spacemit
-/ggml/src/ggml-cuda/common.cuh          @slaren
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
-/ggml/src/ggml-cuda/ggml-cuda.cu        @slaren
 /ggml/src/ggml-cuda/mmf.*               @JohannesGaessler @am17an
 /ggml/src/ggml-cuda/mmq.*               @JohannesGaessler
 /ggml/src/ggml-cuda/mmvf.*              @JohannesGaessler
@@ -62,19 +53,19 @@
 /ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
 /ggml/src/ggml-hip/                     @IMbackK
 /ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
-/ggml/src/ggml-impl.h                   @ggerganov @slaren
+/ggml/src/ggml-impl.h                   @ggerganov
 /ggml/src/ggml-metal/                   @ggerganov
 /ggml/src/ggml-opencl/                  @lhez @max-krasnyansky
 /ggml/src/ggml-hexagon/                 @max-krasnyansky @lhez
 /ggml/src/ggml-opt.cpp                  @JohannesGaessler
 /ggml/src/ggml-quants.*                 @ggerganov
 /ggml/src/ggml-rpc/                     @rgerganov
-/ggml/src/ggml-threading.*              @ggerganov @slaren
+/ggml/src/ggml-threading.*              @ggerganov
 /ggml/src/ggml-vulkan/                  @0cc4m
 /ggml/src/ggml-webgpu/                  @reeselevine
 /ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
-/ggml/src/ggml.c                        @ggerganov @slaren
-/ggml/src/ggml.cpp                      @ggerganov @slaren
+/ggml/src/ggml.c                        @ggerganov
+/ggml/src/ggml.cpp                      @ggerganov
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky
 /gguf-py/                               @CISC
 /media/                                 @ggerganov
@@ -86,15 +77,11 @@
 /src/llama-arch.*                       @CISC
 /src/llama-chat.*                       @ngxson
 /src/llama-graph.*                      @CISC
-/src/llama-model-loader.*               @slaren
 /src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
 /src/models/                            @CISC
 /tests/                                 @ggerganov
-/tests/test-backend-ops.cpp             @slaren
-/tests/test-thread-safety.cpp           @slaren
 /tools/batched-bench/                   @ggerganov
-/tools/llama-bench/                     @slaren
 /tools/main/                            @ggerganov
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
@@ -106,8 +93,6 @@
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov
-/.clang-format                          @slaren
-/.clang-tidy                            @slaren
 /AUTHORS                                @ggerganov
 /CMakeLists.txt                         @ggerganov
 /CONTRIBUTING.md                        @ggerganov
