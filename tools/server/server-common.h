@@ -286,6 +286,8 @@ struct oaicompat_parser_options {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    size_t local_media_max_size_mb;
+    std::filesystem::path allowed_local_media_path;
 };
 
 // used by /chat/completions endpoint

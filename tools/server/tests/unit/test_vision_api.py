@@ -2,12 +2,14 @@ import pytest
 from utils import *
 import base64
 import requests
+from pathlib import Path
 
 server: ServerProcess
 
-def get_img_url(id: str) -> str:
+def get_img_url(id: str, tmp_path: str | None = None) -> str:
     IMG_URL_0 = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
     IMG_URL_1 = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/91_cat.png"
+    IMG_FILE_2 = "https://picsum.photos/id/237/5000"
     if id == "IMG_URL_0":
         return IMG_URL_0
     elif id == "IMG_URL_1":
@@ -28,6 +30,45 @@ def get_img_url(id: str) -> str:
         response = requests.get(IMG_URL_1)
         response.raise_for_status() # Raise an exception for bad status codes
         return base64.b64encode(response.content).decode("utf-8")
+    elif id == "IMG_FILE_0":
+        if tmp_path is None:
+            raise RuntimeError("get_img_url must be called with a tmp_path if using local files")
+        image_name = IMG_URL_0.split('/')[-1]
+        file_name: Path = Path(tmp_path) / image_name
+        if file_name.exists():
+            return f"file://{file_name}"
+        else:
+            response = requests.get(IMG_URL_0)
+            response.raise_for_status() # Raise an exception for bad status codes
+            with open(file_name, 'wb') as f:
+                f.write(response.content)
+            return f"file://{file_name}"
+    elif id == "IMG_FILE_1":
+        if tmp_path is None:
+            raise RuntimeError("get_img_url must be called with a tmp_path if using local files")
+        image_name = IMG_URL_1.split('/')[-1]
+        file_name: Path = Path(tmp_path) / image_name
+        if file_name.exists():
+            return f"file://{file_name}"
+        else:
+            response = requests.get(IMG_URL_1)
+            response.raise_for_status() # Raise an exception for bad status codes
+            with open(file_name, 'wb') as f:
+                f.write(response.content)
+            return f"file://{file_name}"
+    elif id == "IMG_FILE_2":
+        if tmp_path is None:
+            raise RuntimeError("get_img_url must be called with a tmp_path if using local files")
+        image_name = "dog.jpg"
+        file_name: Path = Path(tmp_path) / image_name
+        if file_name.exists():
+            return f"file://{file_name}"
+        else:
+            response = requests.get(IMG_FILE_2)
+            response.raise_for_status() # Raise an exception for bad status codes
+            with open(file_name, 'wb') as f:
+                f.write(response.content)
+            return f"file://{file_name}"
     else:
         return id
 
@@ -70,6 +111,9 @@ def test_v1_models_supports_multimodal_capability():
         ("What is this:\n", "malformed",              False, None),
         ("What is this:\n", "https://google.com/404", False, None), # non-existent image
         ("What is this:\n", "https://ggml.ai",        False, None), # non-image data
+        ("What is this:\n", "IMG_FILE_0",             False, None),
+        ("What is this:\n", "IMG_FILE_1",             False, None),
+        ("What is this:\n", "IMG_FILE_2",             False, None),
         # TODO @ngxson : test with multiple images, no images and with audio
     ]
 )
@@ -83,7 +127,46 @@ def test_vision_chat_completion(prompt, image_url, success, re_content):
             {"role": "user", "content": [
                 {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {
-                    "url": get_img_url(image_url),
+                    "url": get_img_url(image_url, "./tmp"),
+                }},
+            ]},
+        ],
+    })
+    if success:
+        assert res.status_code == 200
+        choice = res.body["choices"][0]
+        assert "assistant" == choice["message"]["role"]
+        assert match_regex(re_content, choice["message"]["content"])
+    else:
+        assert res.status_code != 200
+
+@pytest.mark.parametrize(
+    "allowed_mb_size, allowed_path, img_dir_path, prompt, image_url, success, re_content",
+    [
+        # test model is trained on CIFAR-10, but it's quite dumb due to small size
+        (0, "./tmp", "./tmp", "What is this:\n", "IMG_FILE_0",                          True, "(cat)+"),
+        (0, "./tmp", "./tmp", "What is this:\n", "IMG_FILE_1",                          True, "(frog)+"),
+        (1, "./tmp", "./tmp", "What is this:\n", "IMG_FILE_2",                          False, None),
+        (0, "./tmp/allowed", "./tmp", "What is this:\n", "IMG_FILE_0",                  False, None),
+        (0, "./tm", "./tmp", "What is this:\n", "IMG_FILE_0",                           False, None),
+        (0, "./tmp/allowed", "./tmp/allowed/..", "What is this:\n", "IMG_FILE_0",       False, None),
+        (0, "./tmp/allowed", "./tmp/allowed/../.", "What is this:\n", "IMG_FILE_0",     False, None),
+    ]
+)
+def test_vision_chat_completion_local_files(allowed_mb_size, allowed_path, img_dir_path, prompt, image_url, success, re_content):
+    global server
+    server.local_media_max_size_mb = allowed_mb_size
+    server.allowed_local_media_path = allowed_path
+    Path(allowed_path).mkdir(exist_ok=True)
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {
+                    "url": get_img_url(image_url, img_dir_path),
                 }},
             ]},
         ],

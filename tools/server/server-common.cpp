@@ -11,6 +11,7 @@
 
 #include <random>
 #include <sstream>
+#include <fstream>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -880,6 +881,37 @@ json oaicompat_chat_params_parse(
                     } else {
                         throw std::runtime_error("Failed to download image");
                     }
+
+                } else if (string_starts_with(url, "file://")) {
+                    if (opt.allowed_local_media_path.empty()) {
+                        throw std::runtime_error("Local media paths are not enabled");
+                    }
+                    // Strip off the leading "file://"
+                    const std::string fname = url.substr(7);
+                    const std::filesystem::path input_path = std::filesystem::canonical(std::filesystem::path(fname));
+                    auto [allowed_end, nothing] = std::mismatch(opt.allowed_local_media_path.begin(), opt.allowed_local_media_path.end(), input_path.begin());
+                    if (allowed_end != opt.allowed_local_media_path.end()) {
+                        throw std::runtime_error("Local media file path not allowed: " + fname);
+                    }
+                    if (!std::filesystem::is_regular_file(input_path)) {
+                        throw std::runtime_error("Local media file does not exist: " + fname);
+                    }
+                    const auto file_size = std::filesystem::file_size(input_path);
+                    if (file_size > opt.local_media_max_size_mb * 1024 * 1024) {
+                        throw std::runtime_error("Local media file exceeds maximum allowed size");
+                    }
+                    // load local file path
+                    std::ifstream f(input_path, std::ios::binary);
+                    if (!f) {
+                        SRV_ERR("Unable to open file %s: %s\n", fname.c_str(), strerror(errno));
+                        throw std::runtime_error("Unable to open local media file: " + fname);
+                    }
+                    raw_buffer buf((std::istreambuf_iterator(f)), std::istreambuf_iterator<char>());
+                    if (buf.size() != file_size) {
+                        SRV_ERR("Failed to read entire file %s", fname.c_str());
+                        throw std::runtime_error("Failed to read entire image file");
+                    }
+                    out_files.push_back(buf);
 
                 } else {
                     // try to decode base64 image

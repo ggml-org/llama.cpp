@@ -171,6 +171,8 @@ The project is under active development, and we are [looking for feedback and co
 | `-a, --alias STRING` | set alias for model name (to be used by REST API)<br/>(env: LLAMA_ARG_ALIAS) |
 | `--host HOST` | ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST) |
 | `--port PORT` | port to listen (default: 8080)<br/>(env: LLAMA_ARG_PORT) |
+| `--allowed-local-media-path PATH` | path from which local media files are allowed to be read from (default: none)<br/>(env: LLAMA_ARG_ALLOWED_LOCAL_MEDIA_PATH) |
+| `--local-media-max-size-mb N` | max size in mb for local media files (default: 15)<br/>(env: LLAMA_ARG_LOCAL_MEDIA_MAX_SIZE_MB) |
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
 | `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
 | `--no-webui` | Disable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_NO_WEBUI) |
@@ -1212,6 +1214,8 @@ print(completion.choices[0].text)
 Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
 
 If model supports multimodal, you can input the media file via `image_url` content part. We support both base64 and remote URL as input. See OAI documentation for more.
+
+We also support local files as input (e.g. `file://`) if enabled (see `--allowed-local-media-path` and `--local-media-max-size-mb` for details).
 
 *Options:*
 

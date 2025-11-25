@@ -5,6 +5,7 @@
 #include "ggml-opt.h"
 #include "llama-cpp.h"
 
+#include <filesystem>
 #include <set>
 #include <sstream>
 #include <string>
@@ -454,9 +455,11 @@ struct common_params {
     int32_t n_cache_reuse     = 0;            // min chunk size to reuse from the cache via KV shifting
     int32_t n_ctx_checkpoints = 8;            // max number of context checkpoints per slot
     int32_t cache_ram_mib     = 8192;         // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
+    size_t local_media_max_size_mb = 15;      // 0 = no limit, 15 = 1 MiB. Max size of loaded local media files
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";                                                                         // NOLINT
+    std::filesystem::path allowed_local_media_path;                                                         // NOLINT
     std::string api_prefix    = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = false;                                                                                 // NOLINT
