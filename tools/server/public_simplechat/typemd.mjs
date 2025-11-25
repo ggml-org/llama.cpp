@@ -10,6 +10,8 @@ export class MarkDown {
         this.in = {
             pre: false,
             table: false,
+            /** @type {Array<number>} */
+            listUnordered: []
         }
         this.md = ""
         this.html = ""
@@ -40,6 +42,39 @@ export class MarkDown {
         if ( matchPre != null) {
             this.in.pre = true
             this.html += `<pre class="${matchPre[1]}">\n`
+            return
+        }
+        let matchUnOrdered = line.match(/^([ ]*)[-*][ ](.*)$/);
+        if ( matchUnOrdered != null) {
+            let sList = 'none'
+            let listLvl = 0
+            if (this.in.listUnordered.length == 0) {
+                sList = 'next'
+                this.in.listUnordered.push(matchUnOrdered[1].length)
+                listLvl = this.in.listUnordered.length // ie 1
+            } else {
+                if (this.in.listUnordered[this.in.listUnordered.length-1] < matchUnOrdered[1].length){
+                    sList = 'next'
+                    this.in.listUnordered.push(matchUnOrdered[1].length)
+                    listLvl = this.in.listUnordered.length
+                } else if (this.in.listUnordered[this.in.listUnordered.length-1] == matchUnOrdered[1].length){
+                    sList = 'same'
+                } else {
+                    sList = 'same'
+                    while (this.in.listUnordered[this.in.listUnordered.length-1] > matchUnOrdered[1].length) {
+                        this.in.listUnordered.pop()
+                        this.html += `</ul>\n`
+                        if (this.in.listUnordered.length == 0) {
+                            break
+                        }
+                    }
+                }
+            }
+            if (sList == 'same') {
+                this.html += `<li>${line}</li>\n`
+            } else if (sList == 'next') {
+                this.html += `<ul>\n<li>${line}</li>\n`
+            }
             return
         }
         this.html += `<p>${line}</p>`
