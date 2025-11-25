@@ -1007,8 +1007,8 @@ struct ggml_cuda_concurrent_event {
         other.fork_event = nullptr;
     }
 
-    // check if all branches don't read to the overlapping buffers
-    // check all read_srcs are either within the branch or are at or before the node
+    // 1. check if all branches don't write to the overlapping memory ranges (except the join node)
+    // 2. check all srcs are either within the branch or outside the event
     // we assume all nodes have the same buffer
     bool is_valid() const {
         std::vector<std::vector<std::pair<int64_t, int64_t>>> write_ranges;
