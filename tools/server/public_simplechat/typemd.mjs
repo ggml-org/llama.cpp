@@ -32,25 +32,35 @@ export class MarkDown {
     }
 
     /**
+     * Try extract a table from markdown content,
+     * one line at a time.
+     * This is a imperfect logic, but should give a rough semblance of a table many a times.
      * @param {string} line
      */
     process_table_line(line) {
-        //let lineParts = line.match(/^([|].*?)+?[|]$/)
-        let lineParts = line.match(/^[|](\s*[^|]*\s*[|])+$/)
-        if (lineParts != null) {
+        if (!line.startsWith("|")) {
+            if (this.in.table.columns > 0) {
+                this.html += "</tbody>\n"
+                this.html += "</table>\n"
+                this.in.table.columns = 0
+            }
+            return false
+        }
+        let lineA = line.split('|')
+        if (lineA.length > 2) {
             if (this.in.table.columns == 0) {
                 // table heading
-                this.html += "<table>\n<thead>\n"
-                for(let i=1; i<lineParts.length; i++) {
-                    this.html += `<th>${lineParts[i]}</th>\n`
+                this.html += "<table>\n<thead>\n<tr>\n"
+                for(let i=1; i<lineA.length; i++) {
+                    this.html += `<th>${lineA[i]}</th>\n`
                 }
-                this.html += "</thead>\n"
-                this.in.table.columns = lineParts.length-1;
+                this.html += "</tr>\n</thead>\n"
+                this.in.table.columns = lineA.length-2;
                 this.in.table.rawRow = 0
                 return true
             }
             if (this.in.table.columns > 0) {
-                if (this.in.table.columns != lineParts.length-1) {
+                if (this.in.table.columns != lineA.length-2) {
                     console.log("DBUG:TypeMD:Table:NonHead columns mismatch")
                 }
                 this.in.table.rawRow += 1
@@ -61,8 +71,8 @@ export class MarkDown {
                     return true
                 }
                 this.html += "<tr>\n"
-                for(let i=1; i<lineParts.length; i++) {
-                    this.html += `<td>${lineParts[i]}</td>\n`
+                for(let i=1; i<lineA.length; i++) {
+                    this.html += `<td>${lineA[i]}</td>\n`
                 }
                 this.html += "</tr>\n"
                 return true
@@ -72,6 +82,7 @@ export class MarkDown {
             if (this.in.table.columns > 0) {
                 this.html += "</tbody>\n"
                 this.html += "</table>\n"
+                this.in.table.columns = 0
             }
             return false
         }
