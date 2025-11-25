@@ -126,7 +126,9 @@ A lightweight simple minded ai chat client with a web front-end that supports mu
 
 - Client side Sliding window Context control, using `iRecentUserMsgCnt`, helps limit context sent to ai model
 
-- Optional auto trimming of trailing garbage from model outputs
+- Optional
+  - simple minded markdown parsing of chat message text contents (default)
+  - auto trimming of trailing garbage from model outputs
 
 - Follows responsive design to try adapt to any screen size
 

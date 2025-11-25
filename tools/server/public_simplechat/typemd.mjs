@@ -4,6 +4,15 @@
 //
 
 
+/**
+ * A simple minded Markdown to Html convertor, which tries to support
+ * basic forms of the below in a simple, stupid and some cases in a semi rigid way.
+ * * headings
+ * * fenced code blocks / pres
+ * * unordered list
+ * * tables
+ * * horizontal line
+ */
 export class MarkDown {
 
     constructor() {
@@ -32,9 +41,9 @@ export class MarkDown {
     }
 
     /**
-     * Try extract a table from markdown content,
-     * one line at a time.
+     * Try extract a table from markdown content, one line at a time.
      * This is a imperfect logic, but should give a rough semblance of a table many a times.
+     * Purposefully allows for any text beyond table row end | marker to be shown.
      * @param {string} line
      */
     process_table_line(line) {
