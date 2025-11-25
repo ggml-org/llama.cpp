@@ -441,6 +441,7 @@ namespace ggml_cuda_mma {
             int64_t * xi = (int64_t *) t.x;
             const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
             xi[0] = xs[0];
+            
         }else if constexpr (I == 16 && J == 8) {
             int64_t * xi = (int64_t *) t.x;
             const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I));
@@ -448,6 +449,7 @@ namespace ggml_cuda_mma {
 
             const int64_t * xs1 = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I) + 2);
             xi[1] = xs1[0];
+
         }else{
             NO_DEVICE_CODE;
         }
