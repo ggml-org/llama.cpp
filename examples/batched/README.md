@@ -45,25 +45,38 @@ llama_print_timings:       total time =  4156.04 ms
 
 ### Using backend samplers
 It is possible to run this example using backend samplers so that sampling is
-performed on the backend device, like a GPU.
+performed on a backend device, like a GPU.
 ```bash
 ./llama-batched \
     -m models/Qwen2.5-VL-3B-Instruct-Q8_0.gguf -p "Hello my name is" \
-    -np 4 -kvu \
-    --backend_sampling --top-k 80 --backend_dist
+    -np 4 \
+    -kvu \
+    --backend_sampling \
+    --samplers 'top_k;temperature' \
+    --top-k 80
 ```
-The `--verbose` flag can be added to see more detailed output and also show
-that the backend samplers are being used. The above example will perform distribution
-sampling on the backend device and only transfer the sampled token ids back to the host.
+The samplers specified with `--samplers` must be supported by the backend and
+this is why we are explicitly specifying only `top_k` and `temperature` here as
+at the time of writing these are supported.
 
-It is also possible to perform partial sampling on the backend, and then allow CPU samplers
-to process those results further. This is sometimes referred to as hybrid sampling.
-For an example of this we can remove `--backend_dist` from the above command:
-```bash
-./llama-batched \
-    -m models/Qwen2.5-VL-3B-Instruct-Q8_0.gguf -p "Hello my name is" \
-    -np 4 -kvu \
-    --backend_sampling --top-k 80 -v
-```
-This will perform the top-k filtering on the backend device, and then transfer the filtered logits
-back to the host for sampling.
+The `--verbose` flag can be added to see more detailed output and also show
+that the backend samplers are being used.
+
+With `--backend_sampling` enabled, the sampler chain is automatically analyzed
+to determine which samplers can run on the backend. The system finds the longest
+contiguous chain of backend-supported samplers from the start of the sampler
+sequence. For example:
+* If the chain is `top-k -> temperature -> top-p`, and both `top-k` and
+  `temperature` are backend-supported but `top-p` is not, then `top-k` and
+  `temperature` will run on the backend, while `top-p` and subsequent samplers
+  run on the CPU.
+* If all configured samplers are supported, the final distribution sampling will
+  also happen on the backend, transferring only the sampled token IDs back to the
+  host.
+* If the sampler chain starts with an unsupported sampler (e.g., `penalties`),
+  all sampling runs on the CPU.
+
+**Note:** The default sampler chain includes `penalties` as the first sampler,
+which is not backend-supported yet. To use backend sampling, you must explicitly
+configure a sampler chain that starts with backend-supported samplers using
+`--samplers` like shown above.

@@ -1047,9 +1047,16 @@ struct server_context {
         }
 
         llama_sampler * backend_chain = common_sampler_backend_init(model, sampling);
+        // The sampler types configured with --samplers might not be supported
+        // by backend samplers in which case we disable backend sampling and
+        // fallback to CPU only sampling.
         if (backend_chain == nullptr) {
-            SLT_ERR(slot, "%s", "failed to initialize backend sampler\n");
-            return false;
+            if (slot.backend_sampler != nullptr) {
+                llama_set_backend_sampler(ctx, slot.id, nullptr);
+                slot.backend_sampler = nullptr;
+            }
+            SLT_INF(slot, "%s", "no backend samplers configured (sampler chain doesn't start with backend-supported samplers)\n");
+            return true;
         }
 
         if (slot.backend_sampler != nullptr) {
@@ -1059,6 +1066,7 @@ struct server_context {
 
         slot.backend_sampler = backend_chain;
         llama_set_backend_sampler(ctx, slot.id, backend_chain);
+        SLT_INF(slot, "%s", "configured backend samplers\n");
         return true;
     }
 

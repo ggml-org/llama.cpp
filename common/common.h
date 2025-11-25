@@ -213,9 +213,7 @@ struct common_params_sampling {
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
 
-    // Backend sampling flags
     bool backend_sampling = false; // enable backend sampling
-    bool backend_dist     = false; // backend performs final sampling (dist)
 
     // print the parameters into a string
     std::string print() const;

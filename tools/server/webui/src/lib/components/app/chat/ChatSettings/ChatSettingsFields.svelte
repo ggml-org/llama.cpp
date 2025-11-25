@@ -211,8 +211,7 @@
 			{/if}
 		{:else if field.type === 'checkbox'}
 			{@const pdfDisabled = field.key === 'pdfAsImage' && !supportsVision()}
-			{@const backendDistDisabled = field.key === 'backend_dist' && !localConfig.backend_sampling}
-			{@const isDisabled = pdfDisabled || backendDistDisabled}
+			{@const isDisabled = pdfDisabled}
 
 			<div class="flex items-start space-x-3">
 				<Checkbox
@@ -245,10 +244,6 @@
 						<p class="text-xs text-muted-foreground">
 							PDF-to-image processing requires a vision-capable model. PDFs will be processed as
 							text.
-						</p>
-					{:else if backendDistDisabled}
-						<p class="text-xs text-muted-foreground">
-							Enable GPU sampling to allow GPU dist sampling.
 						</p>
 					{/if}
 				</div>

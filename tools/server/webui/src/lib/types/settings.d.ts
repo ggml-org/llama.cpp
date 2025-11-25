@@ -38,7 +38,6 @@ export interface SettingsChatServiceOptions {
 	// Sampler configuration
 	samplers?: string | string[];
 	backend_sampling?: boolean;
-	backend_dist?: boolean;
 	// Custom parameters
 	custom?: string;
 	timings_per_token?: boolean;

@@ -1521,14 +1521,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--backend-dist"},
-        "perform final (distribution) sampling on backend (default: disabled)",
-        [](common_params & params) {
-            params.sampling.backend_dist = true;
-            params.sampling.backend_sampling = true;
-        }
-    ).set_sparam());
-    add_opt(common_arg(
         {"--pooling"}, "{none,mean,cls,last,rank}",
         "pooling type for embeddings, use model default if unspecified",
         [](common_params & params, const std::string & value) {

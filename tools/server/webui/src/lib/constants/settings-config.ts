@@ -20,7 +20,6 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
 	backend_sampling: false,
-	backend_dist: false,
 	temperature: 0.8,
 	dynatemp_range: 0.0,
 	dynatemp_exponent: 1.0,
@@ -56,8 +55,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'The order at which samplers are applied, in simplified way. Default is "top_k;typ_p;top_p;min_p;temperature": top_k->typ_p->top_p->min_p->temperature',
 	backend_sampling:
 		'Enable backend-based samplers. When enabled, supported samplers run on the accelerator backend for faster sampling.',
-	backend_dist:
-		'Perform the final distribution sampling step on the backend. Requires backend sampling to be enabled.',
 	temperature:
 		'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
 	dynatemp_range:

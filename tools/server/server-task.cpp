@@ -79,7 +79,6 @@ json task_params::to_json(bool only_metrics) const {
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
             {"backend_sampling",          sampling.backend_sampling},
-            {"backend_dist",              sampling.backend_dist},
             {"lora",                      lora},
         };
     }
@@ -139,7 +138,6 @@ json task_params::to_json(bool only_metrics) const {
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
         {"backend_sampling",          sampling.backend_sampling},
-        {"backend_dist",              sampling.backend_dist},
         {"lora",                      lora},
     };
 }
@@ -210,9 +208,7 @@ task_params server_task::params_from_json_cmpl(
     params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
 
     const bool request_backend_sampling    = json_value(data, "backend_sampling",        defaults.sampling.backend_sampling);
-    const bool request_backend_dist        = json_value(data, "backend_dist",            defaults.sampling.backend_dist);
     params.sampling.backend_sampling       = defaults.sampling.backend_sampling && request_backend_sampling;
-    params.sampling.backend_dist           = params.sampling.backend_sampling && request_backend_dist;
 
     params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
     params.speculative.n_max = json_value(data, "speculative.n_max", defaults.speculative.n_max);

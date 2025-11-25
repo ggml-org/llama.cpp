@@ -1021,12 +1021,17 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     // backend sampling initialization
     if (params.sampling.backend_sampling) {
-        iparams.samplers_seq_config.resize(cparams.n_seq_max);
-        for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
-            iparams.samplers_seq_config[i] = { i, common_sampler_backend_init(model, params.sampling) };
+        llama_sampler * backend_chain = common_sampler_backend_init(model, params.sampling);
+        if (backend_chain != nullptr) {
+            iparams.samplers_seq_config.resize(cparams.n_seq_max);
+            for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
+                iparams.samplers_seq_config[i] = { i, llama_sampler_clone(backend_chain) };
+            }
+            cparams.samplers   = iparams.samplers_seq_config.data();
+            cparams.n_samplers = cparams.n_seq_max;
+
+            llama_sampler_free(backend_chain);
         }
-        cparams.samplers   = iparams.samplers_seq_config.data();
-        cparams.n_samplers = cparams.n_seq_max;
     }
 
     llama_context * lctx = llama_init_from_model(model, cparams);
