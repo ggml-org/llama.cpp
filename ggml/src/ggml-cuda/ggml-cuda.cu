@@ -3196,10 +3196,12 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
     ggml_cuda_stream_context & stream_ctx = cuda_ctx->stream_context();
     bool                         is_concurrent_event_active = false;
     ggml_cuda_concurrent_event * concurrent_event           = nullptr;
+    bool                         should_launch_concurrent_events = false;
 
     const auto try_launch_concurrent_event = [&](const ggml_tensor * node) {
         if (stream_ctx.concurrent_events.find(node) != stream_ctx.concurrent_events.end()) {
             concurrent_event = &stream_ctx.concurrent_events[node];
+
             is_concurrent_event_active = true;
 
             GGML_LOG_DEBUG("Launching %d streams at %s\n", concurrent_event->n_streams, node->name);
@@ -3222,6 +3224,12 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
             [[maybe_unused]] int prev_i = 0;
 
             if (stream_ctx.concurrent_events.size() > 0) {
+                bool should_launch_concurrent_events = true;
+                for (const auto & [tensor, event] : stream_ctx.concurrent_events) {
+                    should_launch_concurrent_events &= event.is_valid();
+                }
+            }
+            if (should_launch_concurrent_events) {
                 //Restore the original graph to enable fusion within the streams
                 cgraph->nodes   = const_cast<ggml_tensor **>(stream_ctx.original_nodes.data());
                 cgraph->n_nodes = (int) stream_ctx.original_nodes.size();
@@ -3852,11 +3860,11 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
 
                 bool found_branch = false;
                 for (size_t branch_idx = 0; branch_idx < nodes_per_branch.size(); branch_idx++) {
-                    if (belongs_to_branch(curr_node, nodes_per_branch[branch_idx])) {
+                    std::vector<const ggml_tensor *> & branch_vec = nodes_per_branch[branch_idx];
+                    if (belongs_to_branch(curr_node, branch_vec)) {
                         //continue accumulating
-                        if (std::find(nodes_per_branch[branch_idx].begin(), nodes_per_branch[branch_idx].end(),
-                                      curr_node) == nodes_per_branch[branch_idx].end()) {
-                            nodes_per_branch[branch_idx].push_back(curr_node);
+                        if (std::find(branch_vec.begin(), branch_vec.end(), curr_node) == branch_vec.end()) {
+                            branch_vec.push_back(curr_node);
                         }
                         found_branch = true;
                     }

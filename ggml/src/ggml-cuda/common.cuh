@@ -21,6 +21,7 @@
 #include "ggml-common.h"
 
 #include <array>
+#include <algorithm>
 #include <cassert>
 #include <cfloat>
 #include <cstdio>
@@ -1004,6 +1005,78 @@ struct ggml_cuda_concurrent_event {
     , stream_mapping(std::move(other.stream_mapping))
     , join_node(other.join_node) {
         other.fork_event = nullptr;
+    }
+
+    // check if all branches don't read to the overlapping buffers
+    // check all read_srcs are either within the branch or are at or before the node
+    // we assume all nodes have the same buffer
+    bool is_valid() const {
+        std::vector<std::vector<std::pair<int64_t, int64_t>>> write_ranges;
+        write_ranges.resize(n_streams);
+
+        for (const auto & [tensor, stream] : stream_mapping) {
+            const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
+            //concurrent streams begin from 1
+            write_ranges[stream - 1].emplace_back((int64_t) t->data, (int64_t) t->data + ggml_nbytes(t));
+        }
+
+        for (int i = 0; i < n_streams; ++i) {
+            std::sort(write_ranges[i].begin(), write_ranges[i].end());
+        }
+
+        bool writes_overlap = false;
+        bool dependent_srcs = false;
+        for (const auto & [tensor, stream] : stream_mapping) {
+            const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
+
+            // multiple nodes can use join_node's buffer. That is fine because we synchronize on the join node.
+            if (t->data == join_node->data) {
+                continue;
+            }
+            // check if this buffer's write data overlaps with another stream's
+            std::pair<int64_t, int64_t> data_range =
+                std::make_pair((int64_t) t->data, (int64_t) t->data + ggml_nbytes(t));
+            for (int i = 0; i < n_streams; ++i) {
+                if (i == stream - 1) {
+                    continue;
+                }
+                auto it = std::lower_bound(write_ranges[i].begin(), write_ranges[i].end(), data_range);
+
+                if (it != write_ranges[i].end()) {
+                    const std::pair<int64_t, int64_t> & other = *it;
+                    if ((other.first >= data_range.first && other.second <= data_range.second) ||
+                        (other.first <= data_range.first && other.second >= data_range.second)) {
+                        GGML_LOG_DEBUG("Writes overlap for %s", tensor->name);
+                        writes_overlap = true;
+                        break;
+                    }
+                }
+            }
+
+            //check if all srcs are either in branch or don't have a branch
+            for (int i = 0; i < GGML_MAX_SRC; ++i) {
+                if (!tensor->src[i]) {
+                    continue;
+                }
+
+                auto it = stream_mapping.find(tensor->src[i]);
+
+                if (it == stream_mapping.end()) {
+                    continue;
+                }
+
+                if (it->second != stream) {
+                    dependent_srcs = true;
+                    break;
+                }
+            }
+
+            if (dependent_srcs || writes_overlap) {
+                break;
+            }
+        }
+
+        return !writes_overlap && !dependent_srcs;
     }
 
     ~ggml_cuda_concurrent_event() {
