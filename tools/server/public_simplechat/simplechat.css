@@ -125,6 +125,9 @@ body {
     word-break: break-word;
     hyphens: auto;
 }
+.chat-message-content thead {
+    text-align: left;
+}
 .chat-message-content-live {
     overflow-wrap: break-word;
     word-break: break-word;
