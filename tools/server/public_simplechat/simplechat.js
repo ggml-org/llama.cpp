@@ -1497,7 +1497,7 @@ class MultiChatUI {
         }
         for (const [name, content] of showList) {
             if (content.length > 0) {
-                if (name == "content") {
+                if ((name == "content") && (this.simpleChats[chatId].cfg.chatProps.bMarkdown)) {
                     entry = document.createElement('div')
                     let md = new mMD.MarkDown()
                     md.process(content)
@@ -2105,6 +2105,7 @@ export class Config {
              * * only user messages following the latest system prompt is considered.
              */
             iRecentUserMsgCnt: 5,
+            bMarkdown: true,
             bCompletionFreshChatAlways: true,
             bCompletionInsertStandardRolePrefix: false,
             bTrimGarbage: true,

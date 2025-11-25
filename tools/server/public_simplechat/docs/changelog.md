@@ -299,6 +299,7 @@ Chat Session specific settings
 * More flexibility to user wrt ExternalAi tool call ie ai calling ai
   * the user can change the default behaviour of tools being disabled and sliding window of 1
   * program restart will reset these back to the default
+* Ui module cleanup to avoid duplicated/unneeded boiler plates, including using updated jsdoc annotations
 * A simple minded basic Markdown to Html logic
 
 

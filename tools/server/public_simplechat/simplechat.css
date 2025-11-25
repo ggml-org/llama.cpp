@@ -125,8 +125,11 @@ body {
     word-break: break-word;
     hyphens: auto;
 }
-.chat-message-content thead {
+.chat-message-content thead th {
     text-align: left;
+    background-color: lightgray;
+    /* padding-inline: 1vmin; */
+    border-radius: 0.4vmin;
 }
 .chat-message-content-live {
     overflow-wrap: break-word;
