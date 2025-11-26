@@ -113,8 +113,6 @@ A lightweight simple minded ai chat client with a web front-end that supports mu
     - user can update the settings for auto executing these actions, if needed
 
   - external_ai allows invoking a separate optionally fresh by default ai instance
-    - ai could run self modified targeted versions of itself/... using custom system prompts and user messages as needed
-    - user can setup an ai instance with additional compute access, which should be used only if needed
     - by default in such a instance
       - tool calling is kept disabled along with
       - client side sliding window of 1,
@@ -123,6 +121,14 @@ A lightweight simple minded ai chat client with a web front-end that supports mu
       and the default behaviour will get impacted if you modify the settings of this special chat session.
       - Restarting this chat client logic will force reset things to the default behaviour,
         how ever any other settings wrt TCExternalAi, that where changed, will persist across restarts.
+      - this instance maps to the current ai server itself by default, but can be changed by user if needed.
+    - could help with handling specific tasks using targetted personas or models
+      - ai could run self modified targeted versions of itself/... using custom system prompts and user messages as needed
+      - user can setup ai instance with additional compute, which should be used only if needed, to keep costs in control
+      - can enable a modular pipeline with task type and or job instance specific decoupling, if needed
+    - tasks offloaded could include
+      - summarising, data extraction, formatted output, translation, ...
+      - creative writing, task breakdown, ...
 
 - Client side Sliding window Context control, using `iRecentUserMsgCnt`, helps limit context sent to ai model
 
@@ -135,8 +141,9 @@ A lightweight simple minded ai chat client with a web front-end that supports mu
 - built using plain html + css + javascript and python
   - no additional dependencies that one needs to worry about and inturn keep track of
     - except for pypdf, if pdf support needed. automaticaly drops pdf tool call support, if pypdf missing
-  - fits within ~260KB even in uncompressed source form (including simpleproxy.py)
+  - fits within ~50KB compressed source or ~284KB in uncompressed source form (both including simpleproxy.py)
   - easily extend with additional tool calls using either javascript or python, for additional functionality
+    as you see fit
 
 Start exploring / experimenting with your favorite ai models and thier capabilities.
 
@@ -149,7 +156,7 @@ One can modify the session configuration using Settings UI. All the settings and
 
 | Group | Purpose |
 |---------|---------|
-| `chatProps` | ApiEndpoint, streaming, sliding window, ... |
+| `chatProps` | ApiEndpoint, streaming, sliding window, markdown, ... |
 | `tools` | `enabled`, `proxyUrl`, `proxyAuthInsecure`, search URL/template & drop rules, max data length, timeouts |
 | `apiRequestOptions` | `temperature`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `cache_prompt`, ... |
 | `headers` | `Content-Type`, `Authorization`, ... |
@@ -190,7 +197,7 @@ One can modify the session configuration using Settings UI. All the settings and
   - next wrt the last tool message
     - set role back to `TOOL-TEMP`
       - edit the response as needed
-    - delete the same
+    - or delete the same
       - user will be given option to edit and retrigger the tool call
     - submit the new response
 
