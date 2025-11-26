@@ -69,6 +69,48 @@ cmake --build build --config Release
   - **Debian / Ubuntu:** `sudo apt-get install libcurl4-openssl-dev`  # (or `libcurl4-gnutls-dev` if you prefer GnuTLS)
   - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install libcurl-devel`
   - **Arch / Manjaro:** `sudo pacman -S curl`  # includes libcurl headers
+- Build llama.cpp using MSVC _19.44.35219.0_ - Visual Studio 17 2022:
+  - Install development instance of _libcurl_.
+    ```bat
+    git clone https://github.com/microsoft/vcpkg.git
+    cd vcpkg
+    bootstrap-vcpkg.bat
+    vcpkg.exe install curl:x64-windows --vcpkg-root %cd% --disable-metrics
+    cd ..
+    ```
+  - Build _ccache_ executable - optional.
+    ```bat
+    git clone https://github.com/ccache/ccache.git
+    cd ccache
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --config Release -j 4
+    cd ..
+    ```
+  - To suppress warnings, add the following to `if (MSVC)...` in the top-level _CMakeLists.txt_.
+    ```cmake
+    add_compile_options(
+        /wd4101  # unreferenced local variable
+        /wd4244  # conversion from 'type1' to 'type2', possible loss of data
+        /wd4267  # conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4305  # truncation from 'type1' to 'type2'
+        /wd4319  # zero extending 'uint32_t' to 'size_t' of greater size
+        /wd4804  # unsafe use of type 'bool'
+        /wd4996  # the POSIX name for this item is deprecated
+    )
+    ```
+  - Build configuration - release build with build shared libs disabled.
+    ```bat
+    :: Use full file paths for libcurl and ccache. Replace <user> with valid user ID if applicable.
+    cmake -B build -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release ^
+    -DCURL_LIBRARY=C:\Users\<user>\Projects\llama.cpp\vcpkg\packages\curl_x64-windows\lib\libcurl.lib ^
+    -DCURL_INCLUDE_DIR=C:\Users\<user>\Projects\llama.cpp\vcpkg\packages\curl_x64-windows\include ^
+    -DCMAKE_C_COMPILER_LAUNCHER=C:\Users\<user>\Projects\llama.cpp\ccache\build\Release\ccache.exe ^
+    -DCMAKE_CXX_COMPILER_LAUNCHER=C:\Users\<user>\Projects\llama.cpp\ccache\build\Release\ccache.exe
+    ```
+  - Build
+    ```bat
+    cmake --build build --config Release -j 8
+    ```
 
 ## BLAS Build
 
