@@ -56,22 +56,24 @@ export class MarkDown {
         if (matchUnOrdered != null) {
             let sList = 'none'
             let listLvl = 0
+            let curOffset = matchUnOrdered[1].length
             if (this.in.list.offsets.length == 0) {
                 sList = 'same'
-                this.in.list.offsets.push(matchUnOrdered[1].length)
+                this.in.list.offsets.push(curOffset)
                 listLvl = this.in.list.offsets.length // ie 1
                 this.html += "<ul>\n"
             } else {
-                if (this.in.list.offsets[this.in.list.offsets.length-1] < matchUnOrdered[1].length){
+                let lastOffset = this.in.list.offsets[this.in.list.offsets.length-1];
+                if (lastOffset < curOffset){
                     sList = 'same'
-                    this.in.list.offsets.push(matchUnOrdered[1].length)
+                    this.in.list.offsets.push(curOffset)
                     listLvl = this.in.list.offsets.length
                     this.html += "<ul>\n"
-                } else if (this.in.list.offsets[this.in.list.offsets.length-1] == matchUnOrdered[1].length){
+                } else if (lastOffset == curOffset){
                     sList = 'same'
                 } else {
                     sList = 'same'
-                    while (this.in.list.offsets[this.in.list.offsets.length-1] > matchUnOrdered[1].length) {
+                    while (lastOffset > curOffset) {
                         this.in.list.offsets.pop()
                         this.html += `</ul>\n`
                         if (this.in.list.offsets.length == 0) {
