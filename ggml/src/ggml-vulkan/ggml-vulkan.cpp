@@ -13747,13 +13747,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_I32
                 && ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_I32;
         case GGML_OP_IM2COL:
-            return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1])
-                && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16)
+            return ggml_is_contiguous(op->src[1])
                 && op->src[1]->type == GGML_TYPE_F32
                 && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
         case GGML_OP_IM2COL_3D:
-            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16)
-                && op->src[1]->type == GGML_TYPE_F32
+            return op->src[1]->type == GGML_TYPE_F32
                 && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
         case GGML_OP_TIMESTEP_EMBEDDING:
             return op->src[0]->type == GGML_TYPE_F32;
