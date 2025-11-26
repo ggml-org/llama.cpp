@@ -404,6 +404,22 @@ struct llama_layer {
     struct ggml_tensor * ffn_act_beta    = nullptr;
     struct ggml_tensor * ffn_act_eps     = nullptr;
 
+    // Kimi Linear
+    struct ggml_tensor * kda_q_conv = nullptr;
+    struct ggml_tensor * kda_q_conv_b = nullptr;
+    struct ggml_tensor * kda_k_conv = nullptr;
+    struct ggml_tensor * kda_k_conv_b = nullptr;
+    struct ggml_tensor * kda_v_conv = nullptr;
+    struct ggml_tensor * kda_v_conv_b = nullptr;
+    struct ggml_tensor * kda_f_a    = nullptr;
+    struct ggml_tensor * kda_f_b    = nullptr;
+    struct ggml_tensor * kda_b      = nullptr;
+    struct ggml_tensor * kda_a_log  = nullptr;
+    struct ggml_tensor * kda_g_a    = nullptr;
+    struct ggml_tensor * kda_g_b    = nullptr;
+    struct ggml_tensor * kda_o_norm = nullptr;
+    struct ggml_tensor * kda_o_norm_b = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;

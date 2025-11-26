@@ -445,7 +445,7 @@ class MODEL_ARCH(IntEnum):
     MINIMAXM2        = auto()
     RND1             = auto()
     PANGU_EMBED      = auto()
-    KIMI             = auto()
+    KIMI             = auto()  # Kimi-Linear (hybrid MLA+KDA)
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -3440,6 +3440,10 @@ KEY_ATTENTION_MAX_ALIBI_BIAS    = Keys.Attention.MAX_ALIBI_BIAS
 KEY_ATTENTION_CLAMP_KQV         = Keys.Attention.CLAMP_KQV
 KEY_ATTENTION_LAYERNORM_EPS     = Keys.Attention.LAYERNORM_EPS
 KEY_ATTENTION_LAYERNORM_RMS_EPS = Keys.Attention.LAYERNORM_RMS_EPS
+KEY_ATTENTION_Q_LORA_RANK       = Keys.Attention.Q_LORA_RANK
+KEY_ATTENTION_KV_LORA_RANK      = Keys.Attention.KV_LORA_RANK
+KEY_ATTENTION_KEY_LENGTH_MLA    = Keys.Attention.KEY_LENGTH_MLA
+KEY_ATTENTION_VALUE_LENGTH_MLA  = Keys.Attention.VALUE_LENGTH_MLA
 
 # RoPE
 KEY_ROPE_DIMENSION_COUNT      = Keys.Rope.DIMENSION_COUNT

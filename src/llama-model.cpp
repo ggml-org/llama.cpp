@@ -6358,6 +6358,103 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
                     }
                 } break;
+            case LLM_ARCH_KIMI:
+                {
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        // Check for KDA specific tensors to determine layer type or if it's a mixed model
+                        // Assuming KDA layer if KDA tensors are present
+                        
+                        // Try loading KDA specific tensors
+                        layer.kda_q_conv = create_tensor(tn(LLM_TENSOR_KDA_Q_CONV, "weight", i), {hparams.ssm_d_conv, n_embd_head_k * n_head}, TENSOR_NOT_REQUIRED);
+                        
+                        if (layer.kda_q_conv) {
+                             // KDA Layer
+                             layer.kda_k_conv = create_tensor(tn(LLM_TENSOR_KDA_K_CONV, "weight", i), {hparams.ssm_d_conv, n_embd_head_k * n_head}, 0);
+                             layer.kda_v_conv = create_tensor(tn(LLM_TENSOR_KDA_V_CONV, "weight", i), {hparams.ssm_d_conv, n_embd_head_v * n_head}, 0);
+                             
+                             layer.kda_q_conv_b = create_tensor(tn(LLM_TENSOR_KDA_Q_CONV, "bias", i), {n_embd_head_k * n_head}, 0);
+                             layer.kda_k_conv_b = create_tensor(tn(LLM_TENSOR_KDA_K_CONV, "bias", i), {n_embd_head_k * n_head}, 0);
+                             layer.kda_v_conv_b = create_tensor(tn(LLM_TENSOR_KDA_V_CONV, "bias", i), {n_embd_head_v * n_head}, 0);
+
+                             // q, k, v projections
+                             // Python: q_proj, k_proj, v_proj
+                             layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                             layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                             layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", i), {n_embd, n_embd_head_v * n_head}, 0);
+                             
+                             // KDA specific projections
+                             // f_a_proj, f_b_proj
+                             layer.kda_f_a = create_tensor(tn(LLM_TENSOR_KDA_F_A, "weight", i), {n_embd, n_embd_head_k}, 0); // head_dim
+                             layer.kda_f_b = create_tensor(tn(LLM_TENSOR_KDA_F_B, "weight", i), {n_embd_head_k, n_embd_head_k * n_head}, 0); // projection_size
+                             
+                             // dt_bias (parameter)
+                             // b_proj (beta)
+                             layer.kda_b = create_tensor(tn(LLM_TENSOR_KDA_B, "weight", i), {n_embd, n_head}, 0);
+                             
+                             // A_log
+                             layer.kda_a_log = create_tensor(tn(LLM_TENSOR_KDA_A_LOG, "weight", i), {n_head}, 0); // 1x1xHx1, squeezed to H? 
+                             
+                             // g_a_proj, g_b_proj
+                             layer.kda_g_a = create_tensor(tn(LLM_TENSOR_KDA_G_A, "weight", i), {n_embd, n_embd_head_k}, 0);
+                             layer.kda_g_b = create_tensor(tn(LLM_TENSOR_KDA_G_B, "weight", i), {n_embd_head_k, n_embd_head_k * n_head}, 0);
+                             
+                             // o_norm
+                             layer.kda_o_norm = create_tensor(tn(LLM_TENSOR_KDA_O_NORM, "weight", i), {n_embd_head_k}, 0); // FusedRMSNormGated
+                             layer.kda_o_norm_b = create_tensor(tn(LLM_TENSOR_KDA_O_NORM, "bias", i), {n_embd_head_k}, 0);
+                             
+                             // o_proj
+                             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v * n_head, n_embd}, 0);
+
+                        } else {
+                             // MLA Layer
+                             const int64_t q_lora_rank  = hparams.n_lora_q;
+                             const int64_t kv_lora_rank = hparams.n_lora_kv;
+                             
+                             layer.attn_q_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", i), {q_lora_rank}, TENSOR_NOT_REQUIRED);
+                             layer.attn_kv_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", i), {kv_lora_rank}, 0);
+                             
+                             if (layer.attn_q_a_norm) {
+                                 layer.wq_a = create_tensor(tn(LLM_TENSOR_ATTN_Q_A, "weight", i), {n_embd, q_lora_rank}, 0);
+                                 layer.wq_b = create_tensor(tn(LLM_TENSOR_ATTN_Q_B, "weight", i), {q_lora_rank, n_head * hparams.n_embd_head_k}, 0);
+                             } else {
+                                 layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_head * hparams.n_embd_head_k}, 0);
+                             }
+                             
+                             layer.wkv_a_mqa = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + hparams.n_rot}, 0);
+                             layer.wkv_b = create_tensor(tn(LLM_TENSOR_ATTN_KV_B, "weight", i), {kv_lora_rank, n_head * (hparams.n_embd_head_k - hparams.n_rot + hparams.n_embd_head_v)}, 0);
+                             
+                             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * hparams.n_embd_head_v, n_embd}, 0);
+                        }
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED);
+                        
+                        if (layer.ffn_gate_inp) {
+                            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff, n_expert}, 0);
+                            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff, n_embd, n_expert}, 0);
+                            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff, n_expert}, 0);
+                            
+                            layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, TENSOR_NOT_REQUIRED);
+                            layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, TENSOR_NOT_REQUIRED);
+                            layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, TENSOR_NOT_REQUIRED);
+                        } else {
+                            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
+                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
+                        }
+                    }
+                } break;
             case LLM_ARCH_COGVLM:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -7521,6 +7618,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_QWEN3NEXT:
             {
                 llm = std::make_unique<llm_build_qwen3next>(*this, params);
+            } break;
+        case LLM_ARCH_KIMI:
+            {
+                llm = std::make_unique<llm_build_kimi>(*this, params);
             } break;
         default:
             GGML_ABORT("fatal error");
