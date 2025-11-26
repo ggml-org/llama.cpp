@@ -1,8 +1,19 @@
 # llama.cpp for aarch64
 
-In short, this repository is designed to make llama.cpp easily accessible for Android users, particularly those on Termux. It provides pre-compiled binaries, Deepseek-R1 1.5b Model, along with the source code and build files, saving you the hassle of navigating complex dependency hell and the expense of your valuable time.Due to dependency hell, this repository does not support GPU or NPU acceleration yet.
+In short, this repository is designed to make llama.cpp easily accessible for Android users, particularly those on Termux. It provides pre-compiled binaries, Deepseek-R1 1.5b Model, along with the source code and build files, saving you the hassle of navigating complex dependency hell and the expense of your valuable time.Due to dependency hell, this repository does not support Vulkan acceleration yet, but we have OpenCL.
 
 ![llamacppforaarch64](logo.png)
+
+# Build on arm64
+Navigate to the soc directory and find the script for your device’s SoC. Then, execute the corresponding script.
+
+For example, if your SoC is a Dimensity 1000+, you should run soc/Dimensity1000.sh. (Note: Scripts are typically named after the standard version of the SoC, omitting special edition suffixes like “+” or “Pro”.)
+
+Currently Supported SoCs
+
+| SoC | CPU Optimization | GPU Optimization |
+| ---- | ---- | ---- |
+| Dimensity1000(+) | √ | × |
 
 # Usage
 
