@@ -242,6 +242,32 @@ export class MarkDown {
         }
     }
 
+    /**
+     * Process Pre Fenced block one line at a time.
+     * @param {string} line
+     */
+    process_pre_fenced(line) {
+        if (this.in.preFenced.length > 0) {
+            if (line == this.in.preFenced) {
+                this.in.preFenced = ""
+                this.html += "</pre>\n"
+            } else {
+                this.html += `${line}\n`
+            }
+            return true
+        }
+        // same number of space followed by ``` or ~~~
+        // some samples with spaces at beginning seen, so accepting spaces at begin
+        let matchPreFenced = line.match(/^(\s*```|\s*~~~)([a-zA-Z0-9]*)(.*)/);
+        if ( matchPreFenced != null) {
+            this.unwind_list()
+            this.in.preFenced = matchPreFenced[1]
+            this.html += `<pre class="${matchPreFenced[2]}">\n`
+            return true
+        }
+        return false
+    }
+
     unwind_blockquote() {
         for(let i=0; i<this.in.blockQuote.length; i++) {
             this.html += `</blockquote>\n`
@@ -287,13 +313,7 @@ export class MarkDown {
             line = elSanitize.innerHTML
         }
         let lineA = line.split(' ')
-        if (this.in.preFenced.length > 0) {
-            if (line == this.in.preFenced) {
-                this.in.preFenced = ""
-                this.html += "</pre>\n"
-            } else {
-                this.html += `${line}\n`
-            }
+        if (this.process_pre_fenced(line)) {
             return
         }
         if (this.process_table_line(line)) {
@@ -310,15 +330,6 @@ export class MarkDown {
             this.unwind_list()
             let hLevel = lineA[0].length
             this.html += `<h${hLevel}>${line.slice(hLevel)}</h${hLevel}>\n`
-            return
-        }
-        // same number of space followed by ``` or ~~~
-        // some samples with spaces at beginning seen, so accepting spaces at begin
-        let matchPreFenced = line.match(/^(\s*```|\s*~~~)([a-zA-Z0-9]*)(.*)/);
-        if ( matchPreFenced != null) {
-            this.unwind_list()
-            this.in.preFenced = matchPreFenced[1]
-            this.html += `<pre class="${matchPreFenced[2]}">\n`
             return
         }
         if (this.process_blockquote(line, lineA[0])) {
