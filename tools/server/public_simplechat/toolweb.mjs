@@ -1,6 +1,6 @@
 //@ts-check
 // ALERT - Simple Stupid flow - Using from a discardable VM is better
-// Helpers to handle tools/functions calling related to web access, pdf, etal
+// Helpers to handle tools/functions calling related to local/web access, pdf, etal
 // which work in sync with the bundled simpleproxy.py server logic.
 // Uses the js specific web worker path.
 // by Humans for All
@@ -100,21 +100,21 @@ async function proxyserver_tc_setup(tag, chatId, tcPath, tcName, tcsData, tcs) {
 
 
 //
-// Fetch Web Url Raw
+// Fetch Url Raw
 //
 
 
-let fetchweburlraw_meta = {
+let fetchurlraw_meta = {
         "type": "function",
         "function": {
-            "name": "fetch_web_url_raw",
-            "description": "Fetch the requested web url through a proxy server and return the got content as is, in few seconds",
+            "name": "fetch_url_raw",
+            "description": "Fetch contents of the requested url (local file path / web based) through a proxy server and return the got content as is, in few seconds. Mainly useful for getting textual non binary contents",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "url":{
                         "type":"string",
-                        "description":"url of the web page to fetch from the internet"
+                        "description":"url of the local file / web content to fetch"
                     }
                 },
                 "required": ["url"]
@@ -124,7 +124,7 @@ let fetchweburlraw_meta = {
 
 
 /**
- * Implementation of the fetch web url raw logic.
+ * Implementation of the fetch url raw logic.
  * Expects a simple minded proxy server to be running locally
  * * listening on a configured port
  * * expecting http requests
@@ -136,22 +136,22 @@ let fetchweburlraw_meta = {
  * @param {string} toolname
  * @param {any} obj
  */
-function fetchweburlraw_run(chatid, toolcallid, toolname, obj) {
+function fetchurlraw_run(chatid, toolcallid, toolname, obj) {
     // maybe filter out any key other than 'url' in obj
     return proxyserver_get_anyargs(chatid, toolcallid, toolname, obj, 'urlraw');
 }
 
 
 /**
- * Setup fetch_web_url_raw for tool calling
+ * Setup fetch_url_raw for tool calling
  * NOTE: Currently the logic is setup for the bundled simpleproxy.py
  * @param {mToolsMgr.TCSwitch} tcs
  * @param {string} chatId
  */
-async function fetchweburlraw_setup(tcs, chatId) {
-    return proxyserver_tc_setup('FetchWebUrlRaw', chatId, 'urlraw', 'fetch_web_url_raw', {
-        "handler": fetchweburlraw_run,
-        "meta": fetchweburlraw_meta,
+async function fetchurlraw_setup(tcs, chatId) {
+    return proxyserver_tc_setup('FetchUrlRaw', chatId, 'urlraw', 'fetch_url_raw', {
+        "handler": fetchurlraw_run,
+        "meta": fetchurlraw_meta,
         "result": ""
     }, tcs);
 }
@@ -437,7 +437,7 @@ export async function setup(chatId) {
      * @type {mToolsMgr.TCSwitch} tcs
      */
     let tc_switch = {}
-    await fetchweburlraw_setup(tc_switch, chatId)
+    await fetchurlraw_setup(tc_switch, chatId)
     await fetchhtmltext_setup(tc_switch, chatId)
     await searchwebtext_setup(tc_switch, chatId)
     await fetchpdftext_setup(tc_switch, chatId)

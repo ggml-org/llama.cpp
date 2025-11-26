@@ -97,7 +97,7 @@ A lightweight simple minded ai chat client with a web front-end that supports mu
     - data_store brings in browser IndexedDB based persistant key/value storage across sessions
 
   - in collaboration with included python based simpleproxy.py, these additional tool calls are supported
-    - `search_web_text`, `fetch_web_url_raw`, `fetch_html_text`, `fetch_pdf_as_text`, `fetch_xml_filtered`
+    - `search_web_text`, `fetch_url_raw`, `fetch_html_text`, `fetch_pdf_as_text`, `fetch_xml_filtered`
       - these built‑in tool calls (via SimpleProxy) help fetch PDFs, HTML, XML or perform web search
       - PDF tool also returns an outline with numbering, if available
       - result is truncated to `iResultMaxDataLength` (default 128 kB)

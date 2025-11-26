@@ -510,7 +510,7 @@ Either way always remember to cross check tool requests and generated responses 
 
 ##### using bundled simpleproxy.py (helps bypass browser cors restriction, ...)
 
-* fetch_web_url_raw - fetch contents of the requested url through a proxy server
+* fetch_url_raw - fetch contents of the requested url through a proxy server
 
 * fetch_html_text - fetch text parts of the html content from the requested url through a proxy server.
   Related logic tries to strip html response of html tags and also head, script, style, header,footer,
@@ -577,7 +577,7 @@ In future it can be further extended to help with other relatively simple yet us
 fetch_rss and so.
 
   * for now fetch_rss can be indirectly achieved using
-    * fetch_web_url_raw or better still
+    * fetch_url_raw or better still
     * xmlfiltered and its tagDropREs
 
 #### Extending with new tools

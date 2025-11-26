@@ -300,11 +300,11 @@ Chat Session specific settings
   * the user can change the default behaviour of tools being disabled and sliding window of 1
   * program restart will reset these back to the default
 * Ui module cleanup to avoid duplicated/unneeded boiler plates, including using updated jsdoc annotations
-* A simple minded basic Markdown to Html logic with support for
-  * headings
+* A simple minded basic Markdown to Html logic with support for below to some extent
+  * headings, horiz line,
   * lists (ordered, unordered, intermixed at diff leves)
-  * tables
-  * fenced code blocks
+  * tables, fenced code blocks, blockquotes
+* Rename fetch_web_url_raw to fetch_url_raw, avoids confusion and matchs semantic of access to local and web.
 
 
 ## ToDo
