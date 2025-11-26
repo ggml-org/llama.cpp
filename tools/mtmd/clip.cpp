@@ -1176,7 +1176,6 @@ struct clip_graph {
             cb(V, "resampler_V", -1);
 
             float resampler_kq_scale = 1.0f/ sqrtf(float(d_head));
-            
             embeddings = build_attn(
                 model.mm_model_attn_o_w,
                 model.mm_model_attn_o_b,
