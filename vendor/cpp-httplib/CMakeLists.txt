@@ -31,13 +31,16 @@ if (LLAMA_BUILD_BORINGSSL)
 
     message(STATUS "Fetching BoringSSL version ${BORINGSSL_VERSION}")
 
-    include(FetchContent)
-    FetchContent_Declare(
-        boringssl
+    set(BORINGSSL_ARGS
         GIT_REPOSITORY ${BORINGSSL_GIT}
         GIT_TAG        ${BORINGSSL_VERSION}
-        PATCH_COMMAND  ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/patch-boringssl.cmake"
     )
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+        list(APPEND BORINGSSL_ARGS EXCLUDE_FROM_ALL)
+    endif()
+
+    include(FetchContent)
+    FetchContent_Declare(boringssl ${BORINGSSL_ARGS})
 
     set(SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
     set(SAVED_BUILD_TESTING ${BUILD_TESTING})
@@ -45,7 +48,15 @@ if (LLAMA_BUILD_BORINGSSL)
     set(BUILD_SHARED_LIBS OFF)
     set(BUILD_TESTING OFF)
 
-    FetchContent_MakeAvailable(boringssl)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+        FetchContent_MakeAvailable(boringssl)
+    else()
+        FetchContent_GetProperties(boringssl)
+        if(NOT boringssl_POPULATED)
+            FetchContent_Populate(boringssl)
+            add_subdirectory(${boringssl_SOURCE_DIR} ${boringssl_BINARY_DIR} EXCLUDE_FROM_ALL)
+        endif()
+    endif()
 
     set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
     set(BUILD_TESTING ${SAVED_BUILD_TESTING})
