@@ -2009,8 +2009,6 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
             {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>"},
             {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function="}
         };
-
-        LOG_DBG("Grammar:\n%s\n", data.grammar.c_str());
     }
 
     return data;
