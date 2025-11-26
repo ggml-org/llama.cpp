@@ -323,6 +323,7 @@ static void test_example_native(testing & t) {
             /* .expect_tool_calls =    */ {{
                 /* .name =      */ "get_current_weather",
                 /* .arguments = */ R"({"location": "New York City, NY", "unit": "fahrenheit"})",
+                /* .id =        */ "",
             }},
         },
         {
@@ -350,15 +351,19 @@ static void test_example_native(testing & t) {
             /* .expect_tool_calls =    */ {{
                 /* .name =      */ "get_current_weather",
                 /* .arguments = */ R"({"location": "New York City, NY", "unit": "fahrenheit"})",
+                /* .id =        */ "",
             }, {
                 /* .name =      */ "get_current_weather",
                 /* .arguments = */ R"({"location": "San Francisco, CA", "unit": "fahrenheit"})",
+                /* .id =        */ "",
             }, {
                 /* .name =      */ "get_forecast",
                 /* .arguments = */ R"({"location": "New York City, NY", "unit": "fahrenheit", "days": 3})",
+                /* .id =        */ "",
             }, {
                 /* .name =      */ "get_forecast",
                 /* .arguments = */ R"({"location": "San Francisco, CA", "unit": "fahrenheit", "days": 3})",
+                /* .id =        */ "",
             }},
         },
         {
