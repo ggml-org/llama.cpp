@@ -61,7 +61,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 
 #pragma unroll
     for (int i = 0; i < n * (k + 1); i += k * WARP_SIZE) {
-        int i0 = i + threadIdx.x + threadIdx.y * blockDim.x;
+        int i0 = i + batch_idx + lane * col_idx;
         if (i0 < n * k) {
             sX[i0] = B_batch[i0];
         }
@@ -83,11 +83,8 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
         if (lane == 0) {
             const float b_val  = sX[row * k + col_idx];  // Value from B
             const float a_diag = sA[row * n + row];
-            if (a_diag != 0.0f) {
-                sX[row * k + col_idx] = (b_val - sum) / a_diag;
-            } else {
-                sX[row * k + col_idx] = 0.0f;  // Avoid division by zero
-            }
+            // no safeguards for division by zero because that indicates corrupt data anyway
+            sX[row * k + col_idx] = (b_val - sum) / a_diag;
         }
         __syncthreads();
     }
