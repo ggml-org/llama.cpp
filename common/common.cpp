@@ -1019,7 +1019,6 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     auto cparams = common_context_params_to_llama(params);
 
-    // backend sampling initialization
     if (params.sampling.backend_sampling) {
         llama_sampler * backend_chain = common_sampler_backend_init(model, params.sampling);
         if (backend_chain != nullptr) {
