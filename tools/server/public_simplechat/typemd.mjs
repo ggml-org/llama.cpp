@@ -40,9 +40,14 @@ export class MarkDown {
         this.html = ""
     }
 
+    /** @typedef {{prev: number, cur: number}} EmptyTrackerResult */
+
     /**
+     * Track how many adjacent empty lines have been seen till now, in the immidate past.
+     * as well as whether the current line is empty or otherwise.
      * @param {string} key
      * @param {string} line
+     * @returns {EmptyTrackerResult}
      */
     empty_tracker(key, line) {
         if (this.in.empty[key] == undefined) {
@@ -55,6 +60,46 @@ export class MarkDown {
             this.in.empty[key] = 0
         }
         return {prev: prev, cur: this.in.empty[key]}
+    }
+
+    /**
+     * Append a new block to the end of html.
+     * @param {string} line
+     * @param {string} startMarker
+     * @param {string} endMarker
+     */
+    appendnew(line, startMarker, endMarker) {
+        this.html += `${startMarker}${line}${endMarker}`
+    }
+
+    /**
+     * Extend to the existing last block
+     * @param {string} line
+     * @param {string} endMarker
+     */
+    extend(line, endMarker) {
+        let html = this.html
+        this.html = `${html.slice(0,html.length-endMarker.length)} ${line}${endMarker}`
+    }
+
+    /**
+     * Extend the existing block, if
+     * * there was no immidiate empty lines AND
+     * * the existing block corresponds to what is specified.
+     * Else
+     * * append a new block
+     *
+     * @param {string} line
+     * @param {string} endMarker
+     * @param {string} startMarker
+     * @param {EmptyTrackerResult} emptyTracker
+     */
+    extend_else_appendnew(line, endMarker, startMarker, emptyTracker) {
+        if ((emptyTracker.prev != 0) || (!this.html.endsWith(endMarker))) {
+            this.appendnew(line, startMarker, endMarker)
+        } else {
+            this.extend(line, endMarker)
+        }
     }
 
     unwind_list() {
@@ -126,12 +171,7 @@ export class MarkDown {
                 if (matchOffset[1].length < lastOffset) {
                     return false
                 }
-                if ((emptyTracker.prev != 0) || (!this.html.endsWith("</li>\n"))) {
-                    this.html += `<li>${matchOffset[2]}</li>\n`
-                } else {
-                    let html = this.html
-                    this.html = `${html.slice(0,html.length-"</li>\n".length)} ${matchOffset[2]}</li>\n`
-                }
+                this.extend_else_appendnew(matchOffset[2], "</li>\n", '<li>', emptyTracker)
                 return true
             }
         }
@@ -242,7 +282,8 @@ export class MarkDown {
             return
         }
         this.unwind_list()
-        this.html += `<p>${line}</p>`
+        let emptyTrackerPara = this.empty_tracker("para", line)
+        this.extend_else_appendnew(line, "</p>\n", "<p>", emptyTrackerPara)
     }
 
     /**
