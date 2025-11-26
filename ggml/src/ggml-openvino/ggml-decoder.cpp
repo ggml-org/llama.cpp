@@ -78,6 +78,10 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
         m_nodes.push_back(cur_node);
         set_input_output(cur_node, true);
     }
+    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
+        m_node_info_list[node_n].node_op_case = compute_op_case(m_node_info_list[node_n].node);
+        m_node_info_list[node_n].node_op_type = compute_op_type(m_node_info_list[node_n].node);
+    }
 }
 
 // Called in GgmlOvDecoder constructor. Two cases: 1. constructing a decoder for the whole graph;
