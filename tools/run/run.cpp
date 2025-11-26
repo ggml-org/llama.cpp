@@ -2,6 +2,7 @@
 #include "common.h"
 #include "llama-cpp.h"
 #include "log.h"
+#include "download.h"
 
 #include "linenoise.cpp/linenoise.h"
 
@@ -19,12 +20,6 @@
 #    include <sys/file.h>
 #    include <sys/ioctl.h>
 #    include <unistd.h>
-#endif
-
-#if defined(LLAMA_USE_CURL)
-#    include <curl/curl.h>
-#else
-#    include "http.h"
 #endif
 
 #include <signal.h>
@@ -303,24 +298,6 @@ class Opt {
     }
 };
 
-struct progress_data {
-    size_t                                file_size  = 0;
-    std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
-    bool                                  printed    = false;
-};
-
-static int get_terminal_width() {
-#if defined(_WIN32)
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
-    return csbi.srWindow.Right - csbi.srWindow.Left + 1;
-#else
-    struct winsize w;
-    ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
-    return w.ws_col;
-#endif
-}
-
 class File {
   public:
     FILE * file = nullptr;
@@ -400,368 +377,6 @@ class File {
 #    endif
 };
 
-class HttpClient {
-  public:
-    int init(const std::string & url, const std::vector<std::string> & headers, const std::string & output_file,
-             const bool progress, std::string * response_str = nullptr) {
-        if (std::filesystem::exists(output_file)) {
-            return 0;
-        }
-
-        std::string output_file_partial;
-
-        if (!output_file.empty()) {
-            output_file_partial = output_file + ".partial";
-        }
-
-        if (download(url, headers, output_file_partial, progress, response_str)) {
-            return 1;
-        }
-
-        if (!output_file.empty()) {
-            try {
-                std::filesystem::rename(output_file_partial, output_file);
-            } catch (const std::filesystem::filesystem_error & e) {
-                printe("Failed to rename '%s' to '%s': %s\n", output_file_partial.c_str(), output_file.c_str(), e.what());
-                return 1;
-            }
-        }
-
-        return 0;
-    }
-
-#ifdef LLAMA_USE_CURL
-
-    ~HttpClient() {
-        if (chunk) {
-            curl_slist_free_all(chunk);
-        }
-
-        if (curl) {
-            curl_easy_cleanup(curl);
-        }
-    }
-
-  private:
-    CURL *              curl  = nullptr;
-    struct curl_slist * chunk = nullptr;
-
-    int download(const std::string & url, const std::vector<std::string> & headers, const std::string & output_file,
-             const bool progress, std::string * response_str = nullptr) {
-        curl = curl_easy_init();
-        if (!curl) {
-            return 1;
-        }
-
-        progress_data data;
-        File          out;
-        if (!output_file.empty()) {
-            if (!out.open(output_file, "ab")) {
-                printe("Failed to open file for writing\n");
-
-                return 1;
-            }
-
-            if (out.lock()) {
-                printe("Failed to exclusively lock file\n");
-
-                return 1;
-            }
-        }
-
-        set_write_options(response_str, out);
-        data.file_size = set_resume_point(output_file);
-        set_progress_options(progress, data);
-        set_headers(headers);
-        CURLcode res = perform(url);
-        if (res != CURLE_OK){
-            printe("Fetching resource '%s' failed: %s\n", url.c_str(), curl_easy_strerror(res));
-            return 1;
-        }
-
-        return 0;
-    }
-
-    void set_write_options(std::string * response_str, const File & out) {
-        if (response_str) {
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, capture_data);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, response_str);
-        } else {
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, out.file);
-        }
-    }
-
-    size_t set_resume_point(const std::string & output_file) {
-        size_t file_size = 0;
-        if (std::filesystem::exists(output_file)) {
-            file_size = std::filesystem::file_size(output_file);
-            curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, static_cast<curl_off_t>(file_size));
-        }
-
-        return file_size;
-    }
-
-    void set_progress_options(bool progress, progress_data & data) {
-        if (progress) {
-            curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-            curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &data);
-            curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, update_progress);
-        }
-    }
-
-    void set_headers(const std::vector<std::string> & headers) {
-        if (!headers.empty()) {
-            if (chunk) {
-                curl_slist_free_all(chunk);
-                chunk = 0;
-            }
-
-            for (const auto & header : headers) {
-                chunk = curl_slist_append(chunk, header.c_str());
-            }
-
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
-        }
-    }
-
-    CURLcode perform(const std::string & url) {
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_DEFAULT_PROTOCOL, "https");
-        curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
-#ifdef _WIN32
-        curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
-#endif
-        return curl_easy_perform(curl);
-    }
-
-#else // LLAMA_USE_CURL is not defined
-
-#define curl_off_t long long  // temporary hack
-
-  private:
-    // this is a direct translation of the cURL download() above
-    int download(const std::string & url, const std::vector<std::string> & headers_vec, const std::string & output_file,
-                 const bool progress, std::string * response_str = nullptr) {
-        try {
-            auto [cli, url_parts] = common_http_client(url);
-
-            httplib::Headers headers;
-            for (const auto & h : headers_vec) {
-                size_t pos = h.find(':');
-                if (pos != std::string::npos) {
-                    headers.emplace(h.substr(0, pos), h.substr(pos + 2));
-                }
-            }
-
-            File out;
-            if (!output_file.empty()) {
-                if (!out.open(output_file, "ab")) {
-                    printe("Failed to open file for writing\n");
-                    return 1;
-                }
-                if (out.lock()) {
-                    printe("Failed to exclusively lock file\n");
-                    return 1;
-                }
-            }
-
-            size_t resume_offset = 0;
-            if (!output_file.empty() && std::filesystem::exists(output_file)) {
-                resume_offset = std::filesystem::file_size(output_file);
-                if (resume_offset > 0) {
-                    headers.emplace("Range", "bytes=" + std::to_string(resume_offset) + "-");
-                }
-            }
-
-            progress_data data;
-            data.file_size = resume_offset;
-
-            long long total_size = 0;
-            long long received_this_session = 0;
-
-            auto response_handler =
-                [&](const httplib::Response & response) {
-                if (resume_offset > 0 && response.status != 206) {
-                    printe("\nServer does not support resuming. Restarting download.\n");
-                    out.file = freopen(output_file.c_str(), "wb", out.file);
-                    if (!out.file) {
-                        return false;
-                    }
-                    data.file_size = 0;
-                }
-                if (progress) {
-                    if (response.has_header("Content-Length")) {
-                        total_size = std::stoll(response.get_header_value("Content-Length"));
-                    } else if (response.has_header("Content-Range")) {
-                        auto range = response.get_header_value("Content-Range");
-                        auto slash = range.find('/');
-                        if (slash != std::string::npos) {
-                           total_size = std::stoll(range.substr(slash + 1));
-                        }
-                    }
-                }
-                return true;
-            };
-
-            auto content_receiver =
-                [&](const char * chunk, size_t length) {
-                    if (out.file && fwrite(chunk, 1, length, out.file) != length) {
-                        return false;
-                    }
-                    if (response_str) {
-                        response_str->append(chunk, length);
-                    }
-                    received_this_session += length;
-
-                    if (progress && total_size > 0) {
-                        update_progress(&data, total_size, received_this_session, 0, 0);
-                    }
-                    return true;
-                };
-
-            auto res = cli.Get(url_parts.path, headers, response_handler, content_receiver);
-
-            if (data.printed) {
-                 printe("\n");
-            }
-
-            if (!res) {
-                auto err = res.error();
-                printe("Fetching resource '%s' failed: %s\n", url.c_str(), httplib::to_string(err).c_str());
-                return 1;
-            }
-
-            if (res->status >= 400) {
-                printe("Fetching resource '%s' failed with status code: %d\n", url.c_str(), res->status);
-                return 1;
-            }
-
-        } catch (const std::exception & e) {
-            printe("HTTP request failed: %s\n", e.what());
-            return 1;
-        }
-        return 0;
-    }
-
-#endif // LLAMA_USE_CURL
-
-    static std::string human_readable_time(double seconds) {
-        int hrs  = static_cast<int>(seconds) / 3600;
-        int mins = (static_cast<int>(seconds) % 3600) / 60;
-        int secs = static_cast<int>(seconds) % 60;
-
-        if (hrs > 0) {
-            return string_format("%dh %02dm %02ds", hrs, mins, secs);
-        } else if (mins > 0) {
-            return string_format("%dm %02ds", mins, secs);
-        } else {
-            return string_format("%ds", secs);
-        }
-    }
-
-    static std::string human_readable_size(curl_off_t size) {
-        static const char * suffix[] = { "B", "KB", "MB", "GB", "TB" };
-        char                length   = sizeof(suffix) / sizeof(suffix[0]);
-        int                 i        = 0;
-        double              dbl_size = size;
-        if (size > 1024) {
-            for (i = 0; (size / 1024) > 0 && i < length - 1; i++, size /= 1024) {
-                dbl_size = size / 1024.0;
-            }
-        }
-
-        return string_format("%.2f %s", dbl_size, suffix[i]);
-    }
-
-    static int update_progress(void * ptr, curl_off_t total_to_download, curl_off_t now_downloaded, curl_off_t,
-                               curl_off_t) {
-        progress_data * data = static_cast<progress_data *>(ptr);
-        if (total_to_download <= 0) {
-            return 0;
-        }
-
-        total_to_download += data->file_size;
-        const curl_off_t now_downloaded_plus_file_size = now_downloaded + data->file_size;
-        const curl_off_t percentage      = calculate_percentage(now_downloaded_plus_file_size, total_to_download);
-        std::string      progress_prefix = generate_progress_prefix(percentage);
-
-        const double speed = calculate_speed(now_downloaded, data->start_time);
-        const double tim   = (total_to_download - now_downloaded) / speed;
-        std::string  progress_suffix =
-            generate_progress_suffix(now_downloaded_plus_file_size, total_to_download, speed, tim);
-
-        int         progress_bar_width = calculate_progress_bar_width(progress_prefix, progress_suffix);
-        std::string progress_bar;
-        generate_progress_bar(progress_bar_width, percentage, progress_bar);
-
-        print_progress(progress_prefix, progress_bar, progress_suffix);
-        data->printed = true;
-
-        return 0;
-    }
-
-    static curl_off_t calculate_percentage(curl_off_t now_downloaded_plus_file_size, curl_off_t total_to_download) {
-        return (now_downloaded_plus_file_size * 100) / total_to_download;
-    }
-
-    static std::string generate_progress_prefix(curl_off_t percentage) {
-        return string_format("%3ld%% |", static_cast<long int>(percentage));
-    }
-
-    static double calculate_speed(curl_off_t now_downloaded, const std::chrono::steady_clock::time_point & start_time) {
-        const auto                          now             = std::chrono::steady_clock::now();
-        const std::chrono::duration<double> elapsed_seconds = now - start_time;
-        return now_downloaded / elapsed_seconds.count();
-    }
-
-    static std::string generate_progress_suffix(curl_off_t now_downloaded_plus_file_size, curl_off_t total_to_download,
-                                                double speed, double estimated_time) {
-        const int width = 10;
-        return string_format("%*s/%*s%*s/s%*s", width, human_readable_size(now_downloaded_plus_file_size).c_str(),
-                             width, human_readable_size(total_to_download).c_str(), width,
-                             human_readable_size(speed).c_str(), width, human_readable_time(estimated_time).c_str());
-    }
-
-    static int calculate_progress_bar_width(const std::string & progress_prefix, const std::string & progress_suffix) {
-        int progress_bar_width = get_terminal_width() - progress_prefix.size() - progress_suffix.size() - 3;
-        if (progress_bar_width < 1) {
-            progress_bar_width = 1;
-        }
-
-        return progress_bar_width;
-    }
-
-    static std::string generate_progress_bar(int progress_bar_width, curl_off_t percentage,
-                                             std::string & progress_bar) {
-        const curl_off_t pos = (percentage * progress_bar_width) / 100;
-        for (int i = 0; i < progress_bar_width; ++i) {
-            progress_bar.append((i < pos) ? "█" : " ");
-        }
-
-        return progress_bar;
-    }
-
-    static void print_progress(const std::string & progress_prefix, const std::string & progress_bar,
-                               const std::string & progress_suffix) {
-        printe("\r" LOG_CLR_TO_EOL "%s%s| %s", progress_prefix.c_str(), progress_bar.c_str(), progress_suffix.c_str());
-    }
-    // Function to write data to a file
-    static size_t write_data(void * ptr, size_t size, size_t nmemb, void * stream) {
-        FILE * out = static_cast<FILE *>(stream);
-        return fwrite(ptr, size, nmemb, out);
-    }
-
-    // Function to capture data into a string
-    static size_t capture_data(void * ptr, size_t size, size_t nmemb, void * stream) {
-        std::string * str = static_cast<std::string *>(stream);
-        str->append(static_cast<char *>(ptr), size * nmemb);
-        return size * nmemb;
-    }
-
-};
-
 class LlamaData {
   public:
     llama_model_ptr                 model;
@@ -788,113 +403,37 @@ class LlamaData {
     }
 
   private:
-    int download(const std::string & url, const std::string & output_file, const bool progress,
-                 const std::vector<std::string> & headers = {}, std::string * response_str = nullptr) {
-        HttpClient http;
-        if (http.init(url, headers, output_file, progress, response_str)) {
-            return 1;
-        }
 
-        return 0;
-    }
-
-    // Helper function to handle model tag extraction and URL construction
-    std::pair<std::string, std::string> extract_model_and_tag(std::string & model, const std::string & base_url) {
-        std::string  model_tag = "latest";
-        const size_t colon_pos = model.find(':');
-        if (colon_pos != std::string::npos) {
-            model_tag = model.substr(colon_pos + 1);
-            model     = model.substr(0, colon_pos);
-        }
-
-        std::string url = base_url + model + "/manifests/" + model_tag;
-
-        return { model, url };
-    }
-
-    // Helper function to download and parse the manifest
-    int download_and_parse_manifest(const std::string & url, const std::vector<std::string> & headers,
-                                    nlohmann::json & manifest) {
-        std::string manifest_str;
-        int         ret = download(url, "", false, headers, &manifest_str);
-        if (ret) {
-            return ret;
-        }
-
-        manifest = nlohmann::json::parse(manifest_str);
-
-        return 0;
-    }
-
-    int dl_from_endpoint(std::string & model_endpoint, std::string & model, const std::string & bn) {
+    static bool resolve_endpoint(const std::string   & model_endpoint,
+                                 const std::string   & model,
+                                 common_params_model & params) {
         // Find the second occurrence of '/' after protocol string
         size_t pos = model.find('/');
-        pos        = model.find('/', pos + 1);
-        std::string              hfr, hff;
-        std::vector<std::string> headers = { "User-Agent: llama-cpp", "Accept: application/json" };
-        std::string              url;
+        pos = model.find('/', pos + 1);
 
-        if (pos == std::string::npos) {
-            auto [model_name, manifest_url] = extract_model_and_tag(model, model_endpoint + "v2/");
-            hfr                             = model_name;
+        common_hf_file_res res;
 
-            nlohmann::json manifest;
-            int            ret = download_and_parse_manifest(manifest_url, headers, manifest);
-            if (ret) {
-                return ret;
+        try {
+            if (pos == std::string::npos) {
+                res = common_get_hf_file(model, "", false);
+            } else {
+                res.repo     = model.substr(0, pos);
+                res.ggufFile = model.substr(pos + 1);
             }
-
-            hff = manifest["ggufFile"]["rfilename"];
-        } else {
-            hfr = model.substr(0, pos);
-            hff = model.substr(pos + 1);
+        } catch (const std::exception & e) {
+            printe("Invalid repository format\n");
+            return false;
         }
 
-        url = model_endpoint + hfr + "/resolve/main/" + hff;
-
-        return download(url, bn, true, headers);
+        params.url = model_endpoint + res.repo + "/resolve/main/" + res.ggufFile;
+        return true;
     }
 
-    int modelscope_dl(std::string & model, const std::string & bn) {
-        std::string model_endpoint = "https://modelscope.cn/models/";
-        return dl_from_endpoint(model_endpoint, model, bn);
-    }
+    static bool resolve_github(std::string & model, common_params_model & params) {
+        std::string repository = model;
+        std::string branch = "main";
 
-    int huggingface_dl(std::string & model, const std::string & bn) {
-        std::string model_endpoint = get_model_endpoint();
-        return dl_from_endpoint(model_endpoint, model, bn);
-    }
-
-    int ollama_dl(std::string & model, const std::string & bn) {
-        const std::vector<std::string> headers = { "Accept: application/vnd.docker.distribution.manifest.v2+json" };
-        if (model.find('/') == std::string::npos) {
-            model = "library/" + model;
-        }
-
-        auto [model_name, manifest_url] = extract_model_and_tag(model, "https://registry.ollama.ai/v2/");
-        nlohmann::json manifest;
-        int            ret = download_and_parse_manifest(manifest_url, {}, manifest);
-        if (ret) {
-            return ret;
-        }
-
-        std::string layer;
-        for (const auto & l : manifest["layers"]) {
-            if (l["mediaType"] == "application/vnd.ollama.image.model") {
-                layer = l["digest"];
-                break;
-            }
-        }
-
-        std::string blob_url = "https://registry.ollama.ai/v2/" + model_name + "/blobs/" + layer;
-
-        return download(blob_url, bn, true, headers);
-    }
-
-    int github_dl(const std::string & model, const std::string & bn) {
-        std::string  repository = model;
-        std::string  branch     = "main";
-        const size_t at_pos     = model.find('@');
+        const size_t at_pos = model.find('@');
         if (at_pos != std::string::npos) {
             repository = model.substr(0, at_pos);
             branch     = model.substr(at_pos + 1);
@@ -903,113 +442,149 @@ class LlamaData {
         const std::vector<std::string> repo_parts = string_split(repository, "/");
         if (repo_parts.size() < 3) {
             printe("Invalid GitHub repository format\n");
-            return 1;
+            return false;
         }
 
-        const std::string & org          = repo_parts[0];
-        const std::string & project      = repo_parts[1];
-        std::string         url          = "https://raw.githubusercontent.com/" + org + "/" + project + "/" + branch;
+        const std::string & org     = repo_parts[0];
+        const std::string & project = repo_parts[1];
+        std::string url = "https://raw.githubusercontent.com/" + org + "/" + project + "/" + branch;
+
         for (size_t i = 2; i < repo_parts.size(); ++i) {
             url += "/" + repo_parts[i];
         }
 
-        return download(url, bn, true);
+        params.url = url;
+        return true;
     }
 
-    int s3_dl(const std::string & model, const std::string & bn) {
+    static bool resolve_s3(const std::string & model, common_params_model & params, common_header_list & headers) {
         const size_t slash_pos = model.find('/');
         if (slash_pos == std::string::npos) {
-            return 1;
+            return false;
         }
 
-        const std::string bucket     = model.substr(0, slash_pos);
-        const std::string key        = model.substr(slash_pos + 1);
+        const std::string bucket = model.substr(0, slash_pos);
+        const std::string key    = model.substr(slash_pos + 1);
+
         const char * access_key = std::getenv("AWS_ACCESS_KEY_ID");
         const char * secret_key = std::getenv("AWS_SECRET_ACCESS_KEY");
+
         if (!access_key || !secret_key) {
             printe("AWS credentials not found in environment\n");
-            return 1;
+            return false;
         }
 
         // Generate AWS Signature Version 4 headers
         // (Implementation requires HMAC-SHA256 and date handling)
         // Get current timestamp
-        const time_t                   now     = time(nullptr);
-        const tm                       tm      = *gmtime(&now);
-        const std::string              date     = strftime_fmt("%Y%m%d", tm);
-        const std::string              datetime = strftime_fmt("%Y%m%dT%H%M%SZ", tm);
-        const std::vector<std::string> headers  = {
-            "Authorization: AWS4-HMAC-SHA256 Credential=" + std::string(access_key) + "/" + date +
-                "/us-east-1/s3/aws4_request",
-            "x-amz-content-sha256: UNSIGNED-PAYLOAD", "x-amz-date: " + datetime
-        };
+        const time_t      now         = time(nullptr);
+        const tm          tm          = *gmtime(&now);
+        const std::string date        = strftime_fmt("%Y%m%d", tm);
+        const std::string datetime    = strftime_fmt("%Y%m%dT%H%M%SZ", tm);
+        const std::string auth_header = "AWS4-HMAC-SHA256 Credential=" + std::string(access_key) + "/" + date + "/us-east-1/s3/aws4_request";
 
-        const std::string url = "https://" + bucket + ".s3.amazonaws.com/" + key;
+        headers.push_back({"Authorization", auth_header});
+        headers.push_back({"x-amz-content-sha256", "UNSIGNED-PAYLOAD"});
+        headers.push_back({"x-amz-date", datetime});
 
-        return download(url, bn, true, headers);
+        params.url = "https://" + bucket + ".s3.amazonaws.com/" + key;
+        return true;
     }
 
-    std::string basename(const std::string & path) {
-        const size_t pos = path.find_last_of("/\\");
-        if (pos == std::string::npos) {
-            return path;
+    static bool remove_prefix(std::string & url, const std::string & prefix) {
+        if (string_starts_with(url, prefix)) {
+            url = url.substr(prefix.length());
+            return true;
+        }
+        return false;
+    }
+
+    static int resolve_model(std::string & model_) {
+        if (std::filesystem::exists(model_)) {
+            return 0;
         }
 
-        return path.substr(pos + 1);
-    }
+        common_params_model m_params;
+        common_header_list headers;
+        common_oci_params oci_params;
 
-    int rm_until_substring(std::string & model_, const std::string & substring) {
-        const std::string::size_type pos = model_.find(substring);
-        if (pos == std::string::npos) {
+        bool is_ollama = false;
+
+        if (remove_prefix(model_, "file://")) {
+            if (std::filesystem::exists(model_)) {
+                return 0;
+            }
+        } else if (remove_prefix(model_, "hf://") ||
+                   remove_prefix(model_, "huggingface://")) {
+            if (!resolve_endpoint(get_model_endpoint(), model_, m_params)) {
+                return 1;
+            }
+        } else if (remove_prefix(model_, "ms://") ||
+                   remove_prefix(model_, "modelscope://")) {
+            if (!resolve_endpoint("https://modelscope.cn/models/", model_, m_params)) {
+                return 1;
+            }
+        } else if (remove_prefix(model_, "s3://")) {
+            if (!resolve_s3(model_, m_params, headers)) {
+                return 1;
+            }
+        } else if (remove_prefix(model_, "github://")) {
+            if (!resolve_github(model_, m_params)) {
+                return 1;
+            }
+        } else if (remove_prefix(model_, "ollama://") ||
+                   remove_prefix(model_, "https://ollama.com/library/")) {
+            is_ollama = true;
+        } else if (string_starts_with(model_, "http://") ||
+                   string_starts_with(model_, "https://")) {
+            m_params.url = model_;
+        } else {
+            if (model_.find(".gguf") != std::string::npos) {
+                printe("Error: Local file not found: %s\n", model_.c_str());
+                return 1;
+            }
+            // fallback ollama
+            is_ollama = true;
+        }
+        try {
+            if (is_ollama) {
+                oci_params.registry_url = "https://registry.ollama.ai";
+                oci_params.auth_url     = ""; // no auth for ollama
+                oci_params.auth_service = "";
+                oci_params.media_type   = "application/vnd.ollama.image.model";
+
+                if (model_.find('/') == std::string::npos) {
+                    model_ = "library/" + model_;
+                }
+                model_ = common_docker_resolve_model(model_, oci_params);
+            } else {
+                std::string name = std::filesystem::path(m_params.url).filename().string();
+
+                if (name.find('?') != std::string::npos) {
+                    name = name.substr(0, name.find('?'));
+                }
+                m_params.path = fs_get_cache_file(name);
+
+                // token and offline are not supported
+                if (!common_download_model(m_params, "", false, headers)) {
+                    printe("Failed to download model from %s\n", m_params.url.c_str());
+                    return 1;
+                }
+                model_ = m_params.path;
+            }
+        } catch (const std::exception & e) {
+            printe("Model resolution error: %s\n", e.what());
             return 1;
         }
-
-        model_ = model_.substr(pos + substring.size());  // Skip past the substring
         return 0;
     }
 
-    int resolve_model(std::string & model_) {
-        int                            ret     = 0;
-        if (string_starts_with(model_, "file://") || std::filesystem::exists(model_)) {
-            rm_until_substring(model_, "://");
-
-            return ret;
-        }
-
-        const std::string bn = basename(model_);
-        if (string_starts_with(model_, "hf://") || string_starts_with(model_, "huggingface://") ||
-            string_starts_with(model_, "hf.co/")) {
-            rm_until_substring(model_, "hf.co/");
-            rm_until_substring(model_, "://");
-            ret = huggingface_dl(model_, bn);
-        } else if (string_starts_with(model_, "ms://") || string_starts_with(model_, "modelscope://")) {
-            rm_until_substring(model_, "://");
-            ret = modelscope_dl(model_, bn);
-        } else if ((string_starts_with(model_, "https://") || string_starts_with(model_, "http://")) &&
-                   !string_starts_with(model_, "https://ollama.com/library/")) {
-            ret = download(model_, bn, true);
-        } else if (string_starts_with(model_, "github:") || string_starts_with(model_, "github://")) {
-            rm_until_substring(model_, "github:");
-            rm_until_substring(model_, "://");
-            ret = github_dl(model_, bn);
-        } else if (string_starts_with(model_, "s3://")) {
-            rm_until_substring(model_, "://");
-            ret = s3_dl(model_, bn);
-        } else {  // ollama:// or nothing
-            rm_until_substring(model_, "ollama.com/library/");
-            rm_until_substring(model_, "://");
-            ret = ollama_dl(model_, bn);
-        }
-
-        model_ = bn;
-
-        return ret;
-    }
-
     // Initializes the model and returns a unique pointer to it
-    llama_model_ptr initialize_model(Opt & opt) {
+    static llama_model_ptr initialize_model(Opt & opt) {
         ggml_backend_load_all();
-        resolve_model(opt.model_);
+        if (resolve_model(opt.model_)) {
+            return nullptr;
+        }
         printe("\r" LOG_CLR_TO_EOL "Loading model");
         llama_model_ptr model(llama_model_load_from_file(opt.model_.c_str(), opt.model_params));
         if (!model) {
@@ -1021,7 +596,7 @@ class LlamaData {
     }
 
     // Initializes the context with the specified parameters
-    llama_context_ptr initialize_context(const llama_model_ptr & model, const Opt & opt) {
+    static llama_context_ptr initialize_context(const llama_model_ptr & model, const Opt & opt) {
         llama_context_ptr context(llama_init_from_model(model.get(), opt.ctx_params));
         if (!context) {
             printe("%s: error: failed to create the llama_context\n", __func__);
@@ -1031,7 +606,7 @@ class LlamaData {
     }
 
     // Initializes and configures the sampler
-    llama_sampler_ptr initialize_sampler(const Opt & opt) {
+    static llama_sampler_ptr initialize_sampler(const Opt & opt) {
         llama_sampler_ptr sampler(llama_sampler_chain_init(llama_sampler_chain_default_params()));
         llama_sampler_chain_add(sampler.get(), llama_sampler_init_min_p(0.05f, 1));
         llama_sampler_chain_add(sampler.get(), llama_sampler_init_temp(opt.temperature));
@@ -1043,7 +618,7 @@ class LlamaData {
 
 // Add a message to `messages` and store its content in `msg_strs`
 static void add_message(const char * role, const std::string & text, LlamaData & llama_data) {
-    llama_data.msg_strs.push_back(std::move(text));
+    llama_data.msg_strs.push_back(text);
     llama_data.messages.push_back({ role, llama_data.msg_strs.back().c_str() });
 }
 
