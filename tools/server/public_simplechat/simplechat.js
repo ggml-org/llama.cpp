@@ -1499,7 +1499,7 @@ class MultiChatUI {
             if (content.length > 0) {
                 if ((name == "content") && (this.simpleChats[chatId].cfg.chatProps.bMarkdown)) {
                     entry = document.createElement('div')
-                    let md = new mMD.MarkDown()
+                    let md = new mMD.MarkDown(this.simpleChats[chatId].cfg.chatProps.bMarkdownHtmlSanitize)
                     md.process(content)
                     entry.innerHTML = md.html
                     secContents.appendChild(entry)
@@ -2106,6 +2106,7 @@ export class Config {
              */
             iRecentUserMsgCnt: 5,
             bMarkdown: true,
+            bMarkdownHtmlSanitize: false,
             bCompletionFreshChatAlways: true,
             bCompletionInsertStandardRolePrefix: false,
             bTrimGarbage: true,

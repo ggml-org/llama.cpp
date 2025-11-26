@@ -15,7 +15,12 @@
  */
 export class MarkDown {
 
-    constructor() {
+    /**
+     * Markdown parse and convert to html.
+     * @param {boolean} bHtmlSanitize
+     */
+    constructor(bHtmlSanitize) {
+        this.bHtmlSanitize = bHtmlSanitize
         this.in = {
             preFenced: "",
             table: {
@@ -30,7 +35,9 @@ export class MarkDown {
             },
             /** @type {Object<string, number>} */
             empty: {
-            }
+            },
+            /** @type {string} */
+            blockQuote: "",
         }
         /**
          * @type {Array<*>}
@@ -235,14 +242,50 @@ export class MarkDown {
         }
     }
 
+    unwind_blockquote() {
+        for(let i=0; i<this.in.blockQuote.length; i++) {
+            this.html += `</blockquote>\n`
+        }
+        this.in.blockQuote = ""
+    }
+
+    /**
+     * Handle blockquote block one line at a time.
+     * This expects all lines in the block quote to have the marker at the begining.
+     *
+     * @param {string} line
+     * @param {string} startTok
+     */
+    process_blockquote(line, startTok) {
+        if (!line.startsWith(">")) {
+            this.unwind_blockquote()
+            return false
+        }
+        if (startTok.match(/^>+$/) == null) {
+            this.unwind_blockquote()
+            return false
+        }
+        this.unwind_list()
+        if (startTok.length > this.in.blockQuote.length) {
+            this.html += `<blockquote>\n`
+        } else if (startTok.length < this.in.blockQuote.length) {
+            this.html += `</blockquote>\n`
+        }
+        this.in.blockQuote = startTok
+        this.html += `<p>${line}</p>`
+        return true
+    }
+
     /**
      * Process a line from markdown content
      * @param {string} line
      */
     process_line(line) {
-        let elSanitize = document.createElement('div')
-        elSanitize.textContent = line
-        line = elSanitize.innerHTML
+        if (this.bHtmlSanitize) {
+            let elSanitize = document.createElement('div')
+            elSanitize.textContent = line
+            line = elSanitize.innerHTML
+        }
         let lineA = line.split(' ')
         if (this.in.preFenced.length > 0) {
             if (line == this.in.preFenced) {
@@ -276,6 +319,9 @@ export class MarkDown {
             this.unwind_list()
             this.in.preFenced = matchPreFenced[1]
             this.html += `<pre class="${matchPreFenced[2]}">\n`
+            return
+        }
+        if (this.process_blockquote(line, lineA[0])) {
             return
         }
         if (this.process_list(line)) {
