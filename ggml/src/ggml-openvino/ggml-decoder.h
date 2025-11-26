@@ -13,21 +13,20 @@
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
+    struct NodeInfo {
+        ggml_tensor * node;
+        std::map<std::string, ggml_tensor *> node_inputs;
+        std::vector<std::string> node_inputs_names;
+        std::map<std::string, ggml_tensor *> node_outputs;
+        std::vector<std::string> node_outputs_names;
+        int node_op_case = 0;
+        std::string node_op_type;
+        std::string node_name;
+    };
     // Graph decoder
     GgmlOvDecoder(ggml_cgraph * cgraph,
                   std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                   bool is_static);
-
-    // Node decoder, called in GgmlOvDecoder::visit_subgraph
-    GgmlOvDecoder(ggml_tensor * node,
-                  ggml_cgraph * cgraph,
-                  bool is_static,
-                  int context_size,
-                  int context_size_swa,
-                  int num_heads,
-                  int num_heads_kv,
-                  int head_size,
-                  const std::vector<int> & swa_layers);
 
     // Naive graph decoder
     GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::shared_ptr<ov::Node>> & model_weights);
@@ -39,11 +38,17 @@ public:
 
     virtual ov::PartialShape get_input_shape(const std::string & name) const override;
 
+    virtual ov::PartialShape get_input_shape(int node_idx, const std::string & name) const override;
+
     virtual std::vector<size_t> get_input_stride(const std::string & name) const override;
+
+    virtual std::vector<size_t> get_input_stride(int node_idx, const std::string & name) const override;
 
     virtual ov::element::Type get_input_type(const std::string & name) const override;
 
     virtual size_t get_input_size() const override;
+
+    virtual size_t get_input_size(int node_idx) const override;
 
     virtual void get_input_node(size_t input_port_idx,
                                 std::string & producer_name,
@@ -55,11 +60,13 @@ public:
         GGML_UNUSED(producer_output_port_index);
     }
 
-    virtual std::string & get_input_name(size_t index) const override;
-
     virtual std::vector<std::string> get_input_names() const override;
 
+    virtual std::vector<std::string> get_input_names(int node_idx) const override;
+
     virtual ov::PartialShape get_output_shape(const std::string & name) const override;
+
+    virtual ov::PartialShape get_output_shape(int node_idx, const std::string & name) const override;
 
     virtual std::vector<size_t> get_output_stride(const std::string & name) const override;
 
@@ -67,23 +74,31 @@ public:
 
     virtual int32_t * get_input_op_params(const std::string & name) const override;
 
+    virtual int32_t * get_input_op_params(int node_idx, const std::string & name) const override;
+
     virtual int32_t * get_output_op_params(const std::string & name) const override;
 
-    virtual std::string & get_output_name(size_t index) const override;
+    virtual int32_t * get_output_op_params(int node_idx, const std::string & name) const override;
 
     virtual std::vector<std::string> get_output_names() const override;
 
+    virtual std::vector<std::string> get_output_names(int node_idx) const override;
+
     virtual const std::string & get_op_type() const override;
+
+    virtual const std::string & get_op_type(int node_idx) const override;
 
     virtual const std::string & get_op_name() const override;
 
-    virtual void visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const override;
+    virtual const std::string & get_op_name(int node_idx) const override;
+
+    virtual void visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>, int node_idx)> node_visitor) const override;
 
     ggml_tensor * get_input_ggml_tensor(const std::string & name) const { return m_inputs.at(name); }
 
     ggml_tensor * get_output_ggml_tensor(const std::string & name) const { return m_outputs.at(name); }
 
-    virtual int get_op_case() const override { return m_op_case; }
+    virtual int get_op_case(int node_idx) const override { return m_node_info_list[node_idx].node_op_case; }
 
     virtual const std::map<std::string, std::shared_ptr<ov::Node>> & get_model_inputs() const override {
         return m_model_inputs;
@@ -150,6 +165,8 @@ private:
     static std::vector<size_t> get_shape(const ggml_tensor * tensor);
     static std::vector<size_t> get_stride(const ggml_tensor * tensor);
     static ov::element::Type get_ov_type(const ggml_tensor * tensor);
+    int compute_op_case(const ggml_tensor * node);
+    std::string compute_op_type(const ggml_tensor * node);
 
     void set_llm_params();
     void validate_cgraph() const;
@@ -157,21 +174,18 @@ private:
     bool m_is_static = false;
 
     ggml_cgraph * m_cgraph = nullptr;
-    ggml_tensor * m_node = nullptr;
     std::vector<ggml_tensor *> m_nodes;
     std::map<std::string, ggml_tensor *> m_inputs;
     std::vector<std::string> m_input_names;
     std::map<std::string, ggml_tensor *> m_outputs;
     std::vector<std::string> m_output_names;
-    std::string m_op_name;
-    mutable std::string m_name;
-    int m_op_case = 0;
-    std::vector<std::pair<std::string, std::string>> m_op_node_name;
+
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_extra_inputs;
     std::map<std::string, std::shared_ptr<ov::Tensor>> m_model_extra_input_values;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::vector<std::string> m_model_output_names;
+    std::vector<NodeInfo> m_node_info_list;
 
     // Fixed for a model
     int m_ctx = -1;

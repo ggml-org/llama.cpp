@@ -18,13 +18,15 @@ class NodeContext : public frontend::NodeContext {
 public:
     NodeContext(const std::shared_ptr<GgmlDecoder>& decoder,
                 std::shared_ptr<TensorMap>& tensor_map,
+                int node_idx,
                 TranslateSession* translate_session = nullptr)
-        : ov::frontend::NodeContext(decoder->get_op_type()),
+        : ov::frontend::NodeContext(decoder->get_op_type(node_idx)),
           m_decoder(decoder),
           m_tensor_map(tensor_map),
+          m_node_idx(node_idx),
           m_translate_session(translate_session) {
-        m_input_names = decoder->get_input_names();
-        m_output_names = decoder->get_output_names();
+        m_input_names = decoder->get_input_names(m_node_idx);
+        m_output_names = decoder->get_output_names(m_node_idx);
     }
 
     TranslateSession* get_translate_session() const {
@@ -34,7 +36,7 @@ public:
     const std::vector<std::string>& get_input_names() const { return m_input_names; }
 
     size_t get_input_size() const override {
-        return m_decoder->get_input_size();
+        return m_decoder->get_input_size(m_node_idx);
     }
 
     ov::element::Type get_input_type(size_t index) const {
@@ -42,29 +44,25 @@ public:
     }
 
     PartialShape get_input_shape(size_t index) const {
-        return m_decoder->get_input_shape(m_input_names[index]);
+        return m_decoder->get_input_shape(m_node_idx, m_input_names[index]);
     }
 
     std::vector<size_t> get_input_stride(size_t index) const {
-        return m_decoder->get_input_stride(m_input_names[index]);
+        return m_decoder->get_input_stride(m_node_idx, m_input_names[index]);
     }
 
     std::string get_output_name() const { return m_output_names[0]; }
 
     PartialShape get_output_shape(size_t index) const {
-        return m_decoder->get_output_shape(m_output_names[index]);
-    }
-
-    std::vector<size_t> get_output_stride(size_t index) const {
-        return m_decoder->get_output_stride(m_output_names[index]);
+        return m_decoder->get_output_shape(m_node_idx, m_output_names[index]);
     }
 
     int32_t* get_input_op_params(size_t index) const {
-        return m_decoder->get_input_op_params(m_input_names[index]);
+        return m_decoder->get_input_op_params(m_node_idx, m_input_names[index]);
     }
 
     int32_t* get_output_op_params(size_t index) const {
-        return m_decoder->get_output_op_params(m_output_names[index]);
+        return m_decoder->get_output_op_params(m_node_idx, m_output_names[index]);
     }
 
     ov::element::Type get_output_type(size_t index) const {
@@ -72,7 +70,7 @@ public:
     }
 
     Output<Node> get_input(int idx) const override {
-        return m_tensor_map->at(m_decoder->get_input_name(idx));
+        return m_tensor_map->at(m_input_names[idx]);
     }
 
     Output<Node> get_input(const std::string& name) const override {
@@ -87,7 +85,7 @@ public:
     }
 
     const std::string& get_name() const override {
-        return m_decoder->get_op_name();
+        return m_decoder->get_op_name(m_node_idx);
     }
 
     ov::Any get_attribute_as_any(const std::string& name) const override {
@@ -95,13 +93,14 @@ public:
     }
 
     int get_op_case() const {
-        return m_decoder->get_op_case();
+        return m_decoder->get_op_case(m_node_idx);
     }
     bool is_static() const { return m_decoder->is_static(); }
 
 private:
     std::shared_ptr<GgmlDecoder> m_decoder;
     std::shared_ptr<TensorMap>& m_tensor_map;
+    int m_node_idx;
     TranslateSession* m_translate_session;
     std::vector<std::string> m_input_names;
     std::vector<std::string> m_output_names;

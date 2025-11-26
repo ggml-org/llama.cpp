@@ -164,8 +164,8 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         (*tensor_map)[it.first] = it.second;
     }
 
-    auto node_visitor = [&](std::shared_ptr<GgmlDecoder> node) {
-        auto operation_type = node->get_op_type();
+    auto node_visitor = [&](std::shared_ptr<GgmlDecoder> decoder, int node_idx) {
+        auto operation_type = decoder->get_op_type(node_idx);
         if (operation_type == "GGML_OP_NONE") {
             return;
         }
@@ -174,10 +174,10 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         auto it = m_translator_map.find(operation_type);
         FRONT_END_OP_CONVERSION_CHECK(it != m_translator_map.end(), "Translation for operation type ", operation_type,
                                       " is not implemented.");
-        NodeContext node_context(node, tensor_map, this);
+        NodeContext node_context(decoder, tensor_map, node_idx, this);
         converted_outputs = it->second(node_context);
 
-        const auto & node_output_names = node->get_output_names();
+        const auto & node_output_names = decoder->get_output_names(node_idx);
         FRONT_END_OP_CONVERSION_CHECK(node_output_names.size() == converted_outputs.size(), "Number of ",
                                       operation_type, " outputs greater than number of converted outputs, which are ",
                                       node_output_names.size(), " and ", converted_outputs.size(), " respectively.");
