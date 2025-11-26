@@ -1,3 +1,52 @@
+# llama.cpp with sentencepiece
+
+This fork aims to enhance llama.cpp by integrating the SentencePiece library as a tokenizer, enabling more flexible and language-agnostic tokenization for LLM inference. By using SentencePiece, this project supports advanced tokenization strategies, improves compatibility with a wider range of models, and simplifies workflows for users who require custom or multilingual tokenization. The scope of the fork includes adding a new tokenizer option, supporting SentencePiece model blobs, and implementing chat templates for specific models such as "Teuken 7B".
+
+It introduces a new tokenizer named `sentencepiece` for the key `tokenizer.ggml.model`. In this case, the key `tokenizer.ggml.sentencepiece` must contain the binary blob with the SentencePiece model. Tokenization is performed by the SentencePiece library instead of the built-in algorithms in `llama.cpp`.
+
+Additionally, this fork implements the chat template used by the LLM "Teuken 7B".
+
+## Using llama.cpp with sentencepiece
+
+### Setup for Windows
+
+In the release section, you will find a setup for Windows containing `llama.cpp` with SentencePiece support and "Teuken 7B".
+After install browser opens with the chat ui of `llama.cpp` and "Teuken 7B" as the llm.
+
+### Installing from the source
+
+First install sentencepiece static library with headers for your OS and compiler (see sentencepice documentation).
+
+Clone the llama.cpp with sentencepiece repository:
+
+```sh
+git clone https://github.com/awenzel67/llama.cpp.git
+cd llama.cpp
+git switch teuken
+```
+
+Configure the build (see sentencepiece for details):
+```sh
+cmake -B buildFullCuda -DCURL_INCLUDE_DIR=C:/Del/vcpkg/installed/x64-windows/include -DCURL_LIBRARY=C:/Del/vcpkg/installed/x64-windows/lib/libcurl.lib -DSPIE_INCLUDE_DIR=C:\NHKI\llama\sentencepiece\src -DSPIE_LIBRARY=C:\NHKI\llama\sentencepiece\build\src\Release\sentencepiece.lib -DGGML_CUDA=ON
+```
+
+The cmake commands contains a variable to specify the include directory for sentencepiece library: 
+```sh
+-DSPIE_INCLUDE_DIR=C:\NHKI\llama\sentencepiece\src
+```
+
+The cmake commands contains a variable to specify the path to the static sentencepiece library: 
+```sh
+-DSPIE_LIBRARY=C:\NHKI\llama\sentencepiece\build\src\Release\sentencepiece.lib
+```
+Now you can use the common llama.cpp tools like llama-cli or llama-server.
+
+You can use all models for llama.cpp. Additional the following Teuken 7B ggufs can be used:
+
+- Teuken-7.5B-BF16-CM.gguf
+- Teuken-7.5B-Q4_K_M.gguf
+
+
 # llama.cpp
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
