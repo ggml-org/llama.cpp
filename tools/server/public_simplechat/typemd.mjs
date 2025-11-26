@@ -22,8 +22,10 @@ export class MarkDown {
                 columns: 0,
                 rawRow: 0,
             },
-            /** @type {Array<number>} */
-            listUnordered: []
+            list: {
+                /** @type {Array<number>} */
+                offsets: [],
+            }
         }
         /**
          * @type {Array<*>}
@@ -34,10 +36,10 @@ export class MarkDown {
     }
 
     unwind_list_unordered() {
-        for(const i in this.in.listUnordered) {
+        for(const i in this.in.list.offsets) {
             this.html += "</ul>\n"
         }
-        this.in.listUnordered.length = 0
+        this.in.list.offsets.length = 0
     }
 
     unwind_list() {
@@ -54,25 +56,25 @@ export class MarkDown {
         if (matchUnOrdered != null) {
             let sList = 'none'
             let listLvl = 0
-            if (this.in.listUnordered.length == 0) {
+            if (this.in.list.offsets.length == 0) {
                 sList = 'same'
-                this.in.listUnordered.push(matchUnOrdered[1].length)
-                listLvl = this.in.listUnordered.length // ie 1
+                this.in.list.offsets.push(matchUnOrdered[1].length)
+                listLvl = this.in.list.offsets.length // ie 1
                 this.html += "<ul>\n"
             } else {
-                if (this.in.listUnordered[this.in.listUnordered.length-1] < matchUnOrdered[1].length){
+                if (this.in.list.offsets[this.in.list.offsets.length-1] < matchUnOrdered[1].length){
                     sList = 'same'
-                    this.in.listUnordered.push(matchUnOrdered[1].length)
-                    listLvl = this.in.listUnordered.length
+                    this.in.list.offsets.push(matchUnOrdered[1].length)
+                    listLvl = this.in.list.offsets.length
                     this.html += "<ul>\n"
-                } else if (this.in.listUnordered[this.in.listUnordered.length-1] == matchUnOrdered[1].length){
+                } else if (this.in.list.offsets[this.in.list.offsets.length-1] == matchUnOrdered[1].length){
                     sList = 'same'
                 } else {
                     sList = 'same'
-                    while (this.in.listUnordered[this.in.listUnordered.length-1] > matchUnOrdered[1].length) {
-                        this.in.listUnordered.pop()
+                    while (this.in.list.offsets[this.in.list.offsets.length-1] > matchUnOrdered[1].length) {
+                        this.in.list.offsets.pop()
                         this.html += `</ul>\n`
-                        if (this.in.listUnordered.length == 0) {
+                        if (this.in.list.offsets.length == 0) {
                             break
                         }
                     }
