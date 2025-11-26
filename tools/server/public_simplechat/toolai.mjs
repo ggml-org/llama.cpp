@@ -69,6 +69,61 @@ let externalai_meta = {
                 }
             },
             {
+                "description": "Task decomposition and planning",
+                "tool_call": {
+                    "name": "external_ai",
+                    "arguments": {
+                        "system_prompt": `
+                        You are an expert task decomposition / planning assistant.
+                        Your primary role is to understand the user's complex request and break it down into a series of manageable, sequential sub tasks.
+                        Prioritize clarity and efficiency in your breakdown.
+                        Present your plan as a numbered list, detailing each task along with its required tools and corresponding inputs/outputs.
+                        End with a concise Next Step recommendation.
+                        Focus on creating a robust execution plan that another ai can follow.`,
+                        "user_message": "Find the last happening in the field of medicine focussed around ai and robotics",
+                    }
+                },
+                "tool_response": {
+                    "content": `
+                    1. Clarify scope
+                    1.1 Confirm desired depth (overview or deep dive).
+                    1.2 Suggest possible focus areas (diagnostics AI, surgical robotics, rehab robotics).
+
+                    2. Define suitable categories based on user clarification, for example
+                    2.1 Medical AI - diagnostics, predictive analytics. drug discovery.
+                    2.3 Medical robotics - surgical robots, rehabilitation and assistive robotics.
+
+                    3. Identify authoritative sources
+                    3.1 Peer reviewed journals (Nature medicine, The lancet, ...).
+                    3.2 Major conferences.
+                    3.3 Industry press releases from leading companies in these domains.
+
+                    4. Research workflow / Sourcing strategy
+                    4.1 Use search tool to gather recent news articles on “AI in medicine”, “robotic surgery”, ...
+                    4.2 Fetch the top papers and clinical trials wrt each category.
+                    4.3 Collate conference proceedings from last year on emerging research.
+
+                    5. Extract & synthesize
+                    5.1 List key papers/patents with main findings.
+                    5.2 Summarize key clinical trials and their outcomes.
+                    5.3 Highlight notable patents and product launches.
+                    5.4 Note limitations, ethical concerns, regulatory status, ...
+
+                    6. Structure output
+                    6.1 Create Sections - Diagnostics AI, Treatment AI, Surgical Robotics, Rehab Robotics, ...
+                    6.2 Present sub topics under each section with bullet points and concise explanations.
+
+                    7. Review for accuracy and balance
+                    7.1 Cross check facts with at least two independent sources.
+                    7.2 Ensure representation of both benefits and current limitations/challenges.
+
+                    8. Format the final output
+                    8.1 Use Markdown for headings and bullet lists.
+                    8.2 Include citations or links where appropriate.
+                    8.3 Add an executive summary at the beginning.`
+                }
+            },
+            {
                 "description": "Literary critic",
                 "tool_call": {
                     "name": "external_ai",
