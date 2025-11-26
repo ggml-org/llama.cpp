@@ -1731,11 +1731,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             nchunk0 = (nr0 + min_chunk_size - 1) / min_chunk_size;
         }
 
-        if (nth == 1 || nchunk0 < nth || disable_chunking) {
+        int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
+        // Only increase nchunk0 to nth if it won't make chunks too small
+        if (nth == 1 || ((nchunk0 < nth || disable_chunking) && (nr0 + nth - 1) / nth >= min_chunk_size)) {
             nchunk0 = nth;
+            dr0 = (nr0 + nchunk0 - 1) / nchunk0;
         }
-
-        const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
 
         // Ensure nchunk doesn't exceed the number of rows divided by minimum chunk size
         // This prevents creating too many tiny chunks that could overlap after alignment
