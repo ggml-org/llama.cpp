@@ -54,37 +54,28 @@ export class MarkDown {
         // spaces followed by - or + or * followed by a space and actual list item
         let matchUnOrdered = line.match(/^([ ]*)([-+*]|[a-zA-Z0-9]\.)[ ](.*)$/);
         if (matchUnOrdered != null) {
-            let sList = 'none'
             let listLvl = 0
             let curOffset = matchUnOrdered[1].length
-            if (this.in.list.offsets.length == 0) {
-                sList = 'same'
+            let lastOffset = this.in.list.offsets[this.in.list.offsets.length-1];
+            if (lastOffset == undefined) {
+                lastOffset = -1
+            }
+
+            if (lastOffset < curOffset){
                 this.in.list.offsets.push(curOffset)
-                listLvl = this.in.list.offsets.length // ie 1
+                listLvl = this.in.list.offsets.length
                 this.html += "<ul>\n"
-            } else {
-                let lastOffset = this.in.list.offsets[this.in.list.offsets.length-1];
-                if (lastOffset < curOffset){
-                    sList = 'same'
-                    this.in.list.offsets.push(curOffset)
-                    listLvl = this.in.list.offsets.length
-                    this.html += "<ul>\n"
-                } else if (lastOffset == curOffset){
-                    sList = 'same'
-                } else {
-                    sList = 'same'
-                    while (lastOffset > curOffset) {
-                        this.in.list.offsets.pop()
-                        this.html += `</ul>\n`
-                        if (this.in.list.offsets.length == 0) {
-                            break
-                        }
+            } else if (lastOffset > curOffset){
+                while (this.in.list.offsets[this.in.list.offsets.length-1] > curOffset) {
+                    this.in.list.offsets.pop()
+                    this.html += `</ul>\n`
+                    if (this.in.list.offsets.length == 0) {
+                        break
                     }
                 }
             }
-            if (sList == 'same') {
-                this.html += `<li>${matchUnOrdered[3]}</li>\n`
-            }
+
+            this.html += `<li>${matchUnOrdered[3]}</li>\n`
             return true
         }
         return false
