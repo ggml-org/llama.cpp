@@ -19,6 +19,11 @@ import gguf
 logger = logging.getLogger("gguf-convert-endian")
 
 
+def byteswap_noop(tensor, block_offs):
+    # this function is used when byteswapping is not needed
+    pass
+
+
 def byteswap_q4_0(tensor, block_offs):
     # Each block_q4_0 consists of an f16 delta (scaling factor) followed by 16 int8 quantizations.
 
@@ -70,6 +75,10 @@ byteswap_tensors = {
     gguf.GGMLQuantizationType.Q6_K: {
         "block_size": 210, # 210 bytes = <f16 delta scaling factor> + 208 * <int8 quant>
         "byteswap_func": byteswap_q6_k,
+    },
+    gguf.GGMLQuantizationType.MXFP4: {
+        "block_size": 17,
+        "byteswap_func": byteswap_noop,
     },
 }
 
