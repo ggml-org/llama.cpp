@@ -1907,7 +1907,15 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
 
     auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
         if (!use_tools) {
-            return p.rule("content", p.content(p.rest()));
+            if (!params.json_schema.is_null()) {
+                return p.sequence({
+                    p.space(),
+                    p.content(p.schema(p.json(), "response-format", params.json_schema)),
+                    p.space(),
+                    p.end()
+                });
+            }
+            return p.content(p.rest());
         }
 
         auto content = p.rule("content", p.content(p.until_one_of({"<tool_call>", "<function="})));
@@ -1973,27 +1981,38 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
                 p.eps())
         );
 
-        return content
-            + p.repeat(p.space() + tool_call, (tool_required ? 1 : 0), 1)
-            + p.end();
+        return p.sequence({
+            content,
+            p.repeat(p.space() + tool_call, (tool_required ? 1 : 0), 1),
+            p.end()
+        });
     });
 
     data.parser = parser.save();
-    data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-        foreach_function(params.tools, [&](const json & tool) {
-            const auto & function = tool.at("function");
-            auto parameters = function.at("parameters");
-            builder.resolve_refs(parameters);
+
+    if (use_tools || !params.json_schema.is_null()) {
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            if (use_tools) {
+                foreach_function(params.tools, [&](const json & tool) {
+                    const auto & function = tool.at("function");
+                    auto parameters = function.at("parameters");
+                    builder.resolve_refs(parameters);
+                });
+            } else if (!params.json_schema.is_null()) {
+                auto schema = params.json_schema;
+                builder.resolve_refs(schema);
+            }
+            parser.build_grammar(builder, data.grammar_lazy);
         });
-        parser.build_grammar(builder, data.grammar_lazy);
-    });
 
-    data.grammar_triggers = {
-        {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>"},
-        {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function="}
-    };
+        data.grammar_triggers = {
+            {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>"},
+            {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function="}
+        };
 
-    LOG_DBG("Grammar:\n%s\n", data.grammar.c_str());
+        LOG_DBG("Grammar:\n%s\n", data.grammar.c_str());
+    }
+
     return data;
 }
 
