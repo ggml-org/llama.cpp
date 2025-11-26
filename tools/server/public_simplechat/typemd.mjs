@@ -70,8 +70,13 @@ export class MarkDown {
             if (lastOffset < curOffset){
                 this.in.list.offsets.push(curOffset)
                 listLvl = this.in.list.offsets.length
-                this.html += "<ul>\n"
-                this.in.list.endType.push("</ul>\n")
+                if (matchUnOrdered[2][matchUnOrdered[2].length-1] == '.') {
+                    this.html += "<ol>\n"
+                    this.in.list.endType.push("</ol>\n")
+                } else {
+                    this.html += "<ul>\n"
+                    this.in.list.endType.push("</ul>\n")
+                }
             } else if (lastOffset > curOffset){
                 while (this.in.list.offsets[this.in.list.offsets.length-1] > curOffset) {
                     this.in.list.offsets.pop()
@@ -192,7 +197,9 @@ export class MarkDown {
         if (this.process_list_unordered(line)) {
             return
         }
-        this.unwind_list()
+        if (line.trim().length > 0) {
+            this.unwind_list()
+        }
         this.html += `<p>${line}</p>`
     }
 
