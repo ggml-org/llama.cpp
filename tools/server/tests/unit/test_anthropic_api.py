@@ -269,7 +269,6 @@ def test_anthropic_count_tokens_no_max_tokens():
 
 # Tool use tests
 
-@pytest.mark.slow
 def test_anthropic_tool_use_basic():
     """Test basic tool use"""
     server.jinja = True
@@ -317,7 +316,6 @@ def test_anthropic_tool_use_basic():
         assert isinstance(tool_block["input"], dict)
 
 
-@pytest.mark.slow
 def test_anthropic_tool_result():
     """Test sending tool results back
 
@@ -366,7 +364,6 @@ def test_anthropic_tool_result():
     assert res.body["content"][0]["type"] == "text"
 
 
-@pytest.mark.slow
 def test_anthropic_tool_result_with_text():
     """Test tool result mixed with text content
 
@@ -413,7 +410,6 @@ def test_anthropic_tool_result_with_text():
     assert len(res.body["content"]) > 0
 
 
-@pytest.mark.slow
 def test_anthropic_tool_result_error():
     """Test tool result with error flag"""
     server.jinja = True
@@ -453,7 +449,6 @@ def test_anthropic_tool_result_error():
     assert res.body["type"] == "message"
 
 
-@pytest.mark.slow
 def test_anthropic_tool_streaming():
     """Test streaming with tool use"""
     server.jinja = True
@@ -705,7 +700,6 @@ def test_anthropic_empty_messages():
 
 # Content block index tests
 
-@pytest.mark.slow
 def test_anthropic_streaming_content_block_indices():
     """Test that content block indices are correct in streaming"""
     server.jinja = True
@@ -753,7 +747,6 @@ def test_anthropic_streaming_content_block_indices():
 
 # Extended features tests
 
-@pytest.mark.slow
 def test_anthropic_thinking():
     """Test extended thinking parameter"""
     server.jinja = True
