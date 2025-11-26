@@ -59,6 +59,7 @@ void common_chat_peg_native_mapper::map(const common_peg_ast_node & node) {
 void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
     common_chat_peg_mapper::map(node);
 
+    bool is_tool_open = node.tag == common_chat_peg_constructed_builder::TOOL_OPEN;
     bool is_tool_name = node.tag == common_chat_peg_constructed_builder::TOOL_NAME;
     bool is_tool_close = node.tag == common_chat_peg_constructed_builder::TOOL_CLOSE;
     bool is_arg_open = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_OPEN;
@@ -67,11 +68,13 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
     bool is_arg_string = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_STRING_VALUE;
     bool is_arg_json = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_JSON_VALUE;
 
-    if (is_tool_name) {
+    if (is_tool_open) {
         result.tool_calls.emplace_back();
         current_tool = &result.tool_calls.back();
         arg_count = 0;
+    }
 
+    if (is_tool_name) {
         current_tool->name = std::string(node.text);
         current_tool->arguments = "{";
     }
