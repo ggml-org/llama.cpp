@@ -204,7 +204,6 @@ static std::pair<uint32_t, size_t> parse_char_class_char(const std::string & con
     return {static_cast<uint32_t>(static_cast<unsigned char>(content[pos])), 1};
 }
 
-// Helper to parse common_peg_chars_parser pattern and build ranges
 static std::pair<std::vector<common_peg_chars_parser::char_range>, bool> parse_char_classes(const std::string & classes) {
     std::vector<common_peg_chars_parser::char_range> ranges;
     bool negated = false;
@@ -279,7 +278,6 @@ common_peg_parser_id common_peg_arena::get_rule(const std::string & name) const 
     return it->second;
 }
 
-// Parsing executor - uses std::visit to dispatch to appropriate parser
 struct parser_executor {
     const common_peg_arena & arena;
     common_peg_parse_context & ctx;
@@ -800,7 +798,6 @@ void common_peg_arena::resolve_refs() {
     }
 }
 
-// Dump implementation (for debugging)
 std::string common_peg_arena::dump(common_peg_parser_id id) const {
     const auto & parser = parsers_.at(id);
 
@@ -861,7 +858,6 @@ std::string common_peg_arena::dump(common_peg_parser_id id) const {
     }, parser);
 }
 
-// Parser wrapper operator implementations
 common_peg_parser & common_peg_parser::operator=(const common_peg_parser & other) {
     id_ = other.id_;
     return *this;
@@ -889,7 +885,6 @@ common_peg_parser common_peg_parser::operator<<(const common_peg_parser & other)
     return builder_.sequence({id_, builder_.space(), other.id_});
 }
 
-// String literal overloads
 common_peg_parser common_peg_parser::operator+(const char * str) const {
     return *this + builder_.literal(str);
 }
@@ -914,7 +909,6 @@ common_peg_parser common_peg_parser::operator|(const std::string & str) const {
     return *this | builder_.literal(str);
 }
 
-// Free function operators for string + parser
 common_peg_parser operator+(const char * str, const common_peg_parser & p) {
     return p.builder().literal(str) + p;
 }
@@ -939,13 +933,11 @@ common_peg_parser operator|(const std::string & str, const common_peg_parser & p
     return operator|(str.c_str(), p);
 }
 
-// Rule name helper, intended to produce valid GBNF rule names
 static std::string rule_name(const std::string & name) {
     static const std::regex invalid_rule_chars_re("[^a-zA-Z0-9-]+");
     return std::regex_replace(name, invalid_rule_chars_re, "-");
 }
 
-// Builder implementation
 common_peg_parser_builder::common_peg_parser_builder() {}
 
 common_peg_parser common_peg_parser_builder::sequence(const std::vector<common_peg_parser_id> & parsers) {
@@ -1150,7 +1142,6 @@ common_peg_parser common_peg_parser_builder::json_member(const std::string & key
 }
 
 
-// GBNF generation helper functions
 static std::string gbnf_escape_char_class(char c) {
     switch (c) {
         case '\n': return "\\n";
@@ -1192,7 +1183,6 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
     return "(" + pattern + ")*";
 }
 
-// Collect reachable rules from a given rule
 static std::unordered_set<std::string> collect_reachable_rules(
     const common_peg_arena & arena,
     const common_peg_parser_id & rule
@@ -1450,7 +1440,6 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     }
 }
 
-// Serialization helper: convert parser variant to JSON
 static nlohmann::json serialize_parser_variant(const common_peg_parser_variant & variant) {
     using json = nlohmann::json;
 
@@ -1542,7 +1531,6 @@ nlohmann::json common_peg_arena::to_json() const {
     };
 }
 
-// Deserialization helper: convert JSON to parser variant
 static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json & j) {
     if (!j.contains("type") || !j["type"].is_string()) {
         throw std::runtime_error("Parser variant JSON missing or invalid 'type' field");
