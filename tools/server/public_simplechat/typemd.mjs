@@ -279,14 +279,15 @@ export class MarkDown {
      * Handle blockquote block one line at a time.
      * This expects all lines in the block quote to have the marker at the begining.
      *
-     * @param {string} line
-     * @param {string} startTok
+     * @param {string} lineRaw
+     * @param {string} lineSani
      */
-    process_blockquote(line, startTok) {
-        if (!line.startsWith(">")) {
+    process_blockquote(lineRaw, lineSani) {
+        if (!lineRaw.startsWith(">")) {
             this.unwind_blockquote()
             return false
         }
+        let startTok = lineRaw.split(' ', 1)[0]
         if (startTok.match(/^>+$/) == null) {
             this.unwind_blockquote()
             return false
@@ -298,19 +299,22 @@ export class MarkDown {
             this.html += `</blockquote>\n`
         }
         this.in.blockQuote = startTok
-        this.html += `<p>${line}</p>`
+        this.html += `<p>${lineSani}</p>`
         return true
     }
 
     /**
      * Process a line from markdown content
-     * @param {string} line
+     * @param {string} lineRaw
      */
-    process_line(line) {
+    process_line(lineRaw) {
+        let line = ""
         if (this.bHtmlSanitize) {
             let elSanitize = document.createElement('div')
-            elSanitize.textContent = line
+            elSanitize.textContent = lineRaw
             line = elSanitize.innerHTML
+        } else {
+            line = lineRaw
         }
         let lineA = line.split(' ')
         if (this.process_pre_fenced(line)) {
@@ -332,7 +336,7 @@ export class MarkDown {
             this.html += `<h${hLevel}>${line.slice(hLevel)}</h${hLevel}>\n`
             return
         }
-        if (this.process_blockquote(line, lineA[0])) {
+        if (this.process_blockquote(lineRaw, line)) {
             return
         }
         if (this.process_list(line)) {

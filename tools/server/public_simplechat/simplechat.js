@@ -2106,7 +2106,7 @@ export class Config {
              */
             iRecentUserMsgCnt: 5,
             bMarkdown: true,
-            bMarkdownHtmlSanitize: false,
+            bMarkdownHtmlSanitize: true,
             bCompletionFreshChatAlways: true,
             bCompletionInsertStandardRolePrefix: false,
             bTrimGarbage: true,
