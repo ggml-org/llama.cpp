@@ -74,10 +74,21 @@ struct common_params_context {
 
 // parse input arguments from CLI
 // if one argument has invalid value, it will automatically display usage of the specific argument (and not the full usage message)
-bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
+// skip_backend_init: if true, skip calling ggml_backend_load_all() in common_params_parser_init
+bool common_params_parse(int             argc,
+                         char **         argv,
+                         common_params & params,
+                         llama_example   ex,
+                         void (*print_usage)(int, char **) = nullptr,
+                         bool skip_backend_init            = false);
 
 // function to be used by test-arg-parser
-common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
+// skip_backend_init: if true, skip calling ggml_backend_load_all()
+common_params_context common_params_parser_init(common_params & params,
+                                                llama_example   ex,
+                                                void (*print_usage)(int, char **) = nullptr,
+                                                bool skip_backend_init            = false);
+bool                  common_has_curl();
 
 struct common_remote_params {
     std::vector<std::string> headers;

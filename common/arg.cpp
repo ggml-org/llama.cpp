@@ -636,8 +636,8 @@ static void add_rpc_devices(const std::string & servers) {
     }
 }
 
-bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
-    auto ctx_arg = common_params_parser_init(params, ex, print_usage);
+bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **), bool skip_backend_init) {
+    auto ctx_arg = common_params_parser_init(params, ex, print_usage, skip_backend_init);
     const common_params params_org = ctx_arg.params; // the example can modify the default params
 
     try {
@@ -693,9 +693,14 @@ static bool is_autoy(const std::string & value) {
     return value == "auto" || value == "-1";
 }
 
-common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
-    // load dynamic backends
-    ggml_backend_load_all();
+common_params_context common_params_parser_init(common_params & params,
+                                                llama_example   ex,
+                                                void (*print_usage)(int, char **),
+                                                bool skip_backend_init) {
+    // load dynamic backends (unless explicitly skipped)
+    if (!skip_backend_init) {
+        ggml_backend_load_all();
+    }
 
     common_params_context ctx_arg(params);
     ctx_arg.print_usage = print_usage;
