@@ -936,8 +936,14 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag,
 // Docker registry functions
 //
 
-static std::string common_docker_get_token(const std::string & repo) {
-    std::string url = "https://auth.docker.io/token?service=registry.docker.io&scope=repository:" + repo + ":pull";
+static std::string common_docker_get_token(const std::string & repo,
+                                           const common_oci_params & oci_params) {
+    if (oci_params.auth_url.empty()) {
+        return "";
+    }
+    std::string url = oci_params.auth_url
+        + "?service=" + oci_params.auth_service
+        + "&scope=repository:" + repo + ":pull";
 
     common_remote_params params;
     auto                 res = common_remote_get_content(url, params);
@@ -956,7 +962,7 @@ static std::string common_docker_get_token(const std::string & repo) {
     return response["token"].get<std::string>();
 }
 
-std::string common_docker_resolve_model(const std::string & docker) {
+std::string common_docker_resolve_model(const std::string & docker, const common_oci_params & params) {
     // Parse ai/smollm2:135M-Q4_0
     size_t      colon_pos = docker.find(':');
     std::string repo, tag;
@@ -993,14 +999,17 @@ std::string common_docker_resolve_model(const std::string & docker) {
             return normalized;
         };
 
-        std::string token = common_docker_get_token(repo);  // Get authentication token
+        std::string token = common_docker_get_token(repo, params);  // Get authentication token
 
         // Get manifest
         // TODO: cache the manifest response so that it appears in the model list
-        const std::string    url_prefix = "https://registry-1.docker.io/v2/" + repo;
+        const std::string    url_prefix = params.registry_url + "/v2/" + repo;
         std::string          manifest_url = url_prefix + "/manifests/" + tag;
         common_remote_params manifest_params;
-        manifest_params.headers.push_back({"Authorization", "Bearer " + token});
+
+        if (!token.empty()) {
+            manifest_params.headers.push_back({"Authorization", "Bearer " + token});
+        }
         manifest_params.headers.push_back({"Accept",
             "application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json"
         });
@@ -1014,17 +1023,15 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string            gguf_digest;  // Find the GGUF layer
         if (manifest.contains("layers")) {
             for (const auto & layer : manifest["layers"]) {
-                if (layer.contains("mediaType")) {
-                    std::string media_type = layer["mediaType"].get<std::string>();
-                    if (media_type == "application/vnd.docker.ai.gguf.v3" ||
-                        media_type.find("gguf") != std::string::npos) {
-                        gguf_digest = layer["digest"].get<std::string>();
-                        break;
-                    }
+                if (!layer.contains("mediaType") || !layer.contains("digest")) {
+                    continue;
+                }
+                if (layer["mediaType"].get<std::string>() == params.media_type) {
+                    gguf_digest = layer["digest"].get<std::string>();
+                    break;
                 }
             }
         }
-
         if (gguf_digest.empty()) {
             throw std::runtime_error("No GGUF layer found in Docker manifest");
         }

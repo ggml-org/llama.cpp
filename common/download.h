@@ -63,6 +63,16 @@ bool common_download_model(
 // returns list of cached models
 std::vector<common_cached_model_info> common_list_cached_models();
 
+struct common_oci_params {
+    std::string registry_url = "https://registry-1.docker.io";
+    std::string auth_url     = "https://auth.docker.io/token";
+    std::string auth_service = "registry.docker.io";
+    std::string media_type   = "application/vnd.docker.ai.gguf.v3";
+};
+
 // resolve and download model from Docker registry
 // return local path to downloaded model file
-std::string common_docker_resolve_model(const std::string & docker);
+std::string common_docker_resolve_model(
+    const std::string & docker,
+    const common_oci_params & params = {}
+);
