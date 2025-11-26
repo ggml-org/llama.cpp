@@ -28,7 +28,7 @@ export class MarkDown {
                 /** @type {Array<string>} */
                 endType: [],
             },
-            /** @type {Object<string, string>} */
+            /** @type {Object<string, number>} */
             empty: {
             }
         }
@@ -38,6 +38,23 @@ export class MarkDown {
         this.errors = []
         this.raw = ""
         this.html = ""
+    }
+
+    /**
+     * @param {string} key
+     * @param {string} line
+     */
+    empty_tracker(key, line) {
+        if (this.in.empty[key] == undefined) {
+            this.in.empty[key] = 0
+        }
+        let prev = this.in.empty[key]
+        if (line.trim().length == 0) {
+            this.in.empty[key] += 1
+        } else {
+            this.in.empty[key] = 0
+        }
+        return {prev: prev, cur: this.in.empty[key]}
     }
 
     unwind_list() {
@@ -52,10 +69,19 @@ export class MarkDown {
     }
 
     /**
-     * Process list one line at a time
+     * Process list one line at a time.
+     * * Account for ordered lists as well as unordered lists, including intermixing of the lists.
+     *   at different list hierarchy levels.
+     * * Allow a list item line to be split into multiple lines provided the split lines retain
+     *   the same or more line offset compared to the starting line of the item to which they belong.
+     *   * if there is a empty line in between, then the new line will be treated as a new item.
+     * * allows for empty lines inbetween items.
+     *   * currently there is no limit on the number of empty lines.
+     *     but may bring in a limit later.
      * @param {string} line
      */
     process_list(line) {
+        let emptyTracker = this.empty_tracker("list", line)
         // spaces followed by - or + or * followed by a space and actual list item
         let matchList = line.match(/^([ ]*)([-+*]|[a-zA-Z0-9]\.)[ ](.*)$/);
         if (matchList != null) {
@@ -89,7 +115,7 @@ export class MarkDown {
             return true
         } else {
             if (this.in.list.offsets.length > 0) {
-                if (line.trim().length == 0) {
+                if (emptyTracker.cur > 0) {
                     return true
                 }
                 let matchOffset = line.match(/^([ ]*)(.*)$/);
@@ -100,7 +126,12 @@ export class MarkDown {
                 if (matchOffset[1].length < lastOffset) {
                     return false
                 }
-                this.html += `<li>${matchOffset[2]}</li>\n`
+                if ((emptyTracker.prev != 0) || (!this.html.endsWith("</li>\n"))) {
+                    this.html += `<li>${matchOffset[2]}</li>\n`
+                } else {
+                    let html = this.html
+                    this.html = `${html.slice(0,html.length-"</li>\n".length)} ${matchOffset[2]}</li>\n`
+                }
                 return true
             }
         }
