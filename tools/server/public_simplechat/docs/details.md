@@ -486,6 +486,7 @@ The following tools/functions are currently provided by default
     * End user can change this behaviour by changing the corresponding settings of the TCExternalAi
       special chat session, which is internally used for this tool call.
   * Could be used by ai for example to
+    * break down the task at hand into sub tasks that need to be carried out
     * summarise a large text content, where it could use the context of the text to generate a
       suitable system prompt for summarising things suitably
     * create a structured data from a raw textual data
