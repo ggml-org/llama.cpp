@@ -50,7 +50,7 @@ export class MarkDown {
      */
     process_list_unordered(line) {
         // spaces followed by - or + or * followed by a space and actual list item
-        let matchUnOrdered = line.match(/^([ ]*)[-+*][ ](.*)$/);
+        let matchUnOrdered = line.match(/^([ ]*)([-+*]|[a-zA-Z0-9]\.)[ ](.*)$/);
         if (matchUnOrdered != null) {
             let sList = 'none'
             let listLvl = 0
@@ -79,7 +79,7 @@ export class MarkDown {
                 }
             }
             if (sList == 'same') {
-                this.html += `<li>${matchUnOrdered[2]}</li>\n`
+                this.html += `<li>${matchUnOrdered[3]}</li>\n`
             }
             return true
         }
