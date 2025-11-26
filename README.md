@@ -33,11 +33,6 @@ On average, it is 4 tokens/s(≈2 Chinese character/s) faster than the official 
 
 ![cpu](cpu.jpg)
 
-platform : GPU(OpenCL)</br>
-Tests show the GPU can sustain high generation speeds for extended periods, with minimal impact from throttling.
-
-![gpu_opencl](gpu_opencl.jpg)
-
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
 [![Server](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml/badge.svg)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)

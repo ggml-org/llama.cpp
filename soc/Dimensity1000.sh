@@ -22,8 +22,8 @@ mkdir build && cd build
 
 # 修复后的编译器标志 - 移除冲突选项
 cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_FLAGS="-O3 -march=armv8.2-a+dotprod -mtune=cortex-a77 -DNDEBUG" \
-  -DCMAKE_C_FLAGS="-O3 -march=armv8.2-a+dotprod -mtune=cortex-a77 -DNDEBUG" \
+  -DCMAKE_CXX_FLAGS="-O3 -flto -march=armv8.2-a+dotprod -mtune=cortex-a77 -DNDEBUG" \
+  -DCMAKE_C_FLAGS="-O3 -flto -march=armv8.2-a+dotprod -mtune=cortex-a77 -DNDEBUG" \
   -DBUILD_SHARED_LIBS=ON \
   ${opencl_flag} \
   -DGGML_DOTPROD=ON \
