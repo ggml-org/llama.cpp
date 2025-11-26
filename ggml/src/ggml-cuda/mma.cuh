@@ -150,13 +150,20 @@ namespace ggml_cuda_mma {
             }
         }
 #elif defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA4)
         static constexpr int ne = I * J / 32;
         T x[ne] = {0};
 
         static constexpr __device__ bool supported() {
-            if (I == 16 && J == 16) return true;
-            return false;
+            // Integer WMMA is only supported on RDNA4
+            if constexpr (std::is_same_v<T, int>) {
+#if defined(RDNA4)
+                if (I == 16 && J == 16) return true;
+#endif
+                return false;
+            } else {
+                if (I == 16 && J == 16) return true;
+                return false;
+            }
         }
 
         static __device__ __forceinline__ int get_i(const int l) {
@@ -176,7 +183,6 @@ namespace ggml_cuda_mma {
                 return -1;
             }
         }
-#endif
 #else
         static constexpr int ne = I * J / 32;
         T x[ne] = {0};
@@ -223,7 +229,7 @@ namespace ggml_cuda_mma {
                 return -1;
             }
         }
-#endif // defined(GGML_USE_HIP)
+#endif
     };
 
     template <int I_, int J_>
@@ -265,7 +271,11 @@ namespace ggml_cuda_mma {
             }
         }
 #elif defined(AMD_WMMA_AVAILABLE)
-        static constexpr int ne = I * J / 32;
+#if defined(RDNA4)
+        static constexpr int ne = I * J / 32;  // 4 half2 = 8 FP16 for RDNA4
+#else
+        static constexpr int ne = I * J / 16;  // 8 half2 = 16 FP16 for RDNA3 (duplicate layout)
+#endif
         half2 x[ne] = {{0.0f, 0.0f}};
 
         static constexpr __device__ bool supported() {
@@ -341,7 +351,11 @@ namespace ggml_cuda_mma {
         static constexpr int J  = J_;
 
 #if defined(AMD_WMMA_AVAILABLE)
-        static constexpr int ne = I * J / 32;
+#if defined(RDNA4)
+        static constexpr int ne = I * J / 32;  // 4 bfloat162 = 8 BF16 for RDNA4
+#else
+        static constexpr int ne = I * J / 16;  // 8 bfloat162 = 16 BF16 for RDNA3 (duplicate layout)
+#endif
         nv_bfloat162 x[ne] = {{0.0f, 0.0f}};
 
         static constexpr __device__ bool supported() {
@@ -441,6 +455,10 @@ namespace ggml_cuda_mma {
             int64_t * xi = (int64_t *) t.x;
             const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
             xi[0] = xs[0];
+#if !defined(RDNA4)
+            // RDNA3 has double the tile size, load 2 more int64_t
+            xi[1] = xs[1];
+#endif
         }else if constexpr (I == 16 && J == 8) {
             int64_t * xi = (int64_t *) t.x;
             const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I));
@@ -448,6 +466,11 @@ namespace ggml_cuda_mma {
 
             const int64_t * xs1 = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I) + 2);
             xi[1] = xs1[0];
+#if !defined(RDNA4)
+            // RDNA3 has double the tile size, load 2 more int64_t
+            xi[2] = xs[1];
+            xi[3] = xs1[1];
+#endif
         }else{
             NO_DEVICE_CODE;
         }
@@ -738,12 +761,21 @@ namespace ggml_cuda_mma {
             : "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[3]));
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 #elif defined(AMD_WMMA_AVAILABLE)
+#if defined(RDNA4)
         using halfx8_t = __attribute__((ext_vector_type(8))) _Float16;
         using floatx8_t = __attribute__((ext_vector_type(8))) float;
         floatx8_t& acc_frag = reinterpret_cast<floatx8_t&>(D.x[0]);
         const halfx8_t& a_frag = reinterpret_cast<const halfx8_t&>(A.x[0]);
         const halfx8_t& b_frag = reinterpret_cast<const halfx8_t&>(B.x[0]);
         acc_frag = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12(a_frag, b_frag, acc_frag);
+#else  // RDNA3
+        using halfx16_t = __attribute__((ext_vector_type(16))) _Float16;
+        using floatx8_t = __attribute__((ext_vector_type(8))) float;
+        floatx8_t& acc_frag = reinterpret_cast<floatx8_t&>(D.x[0]);
+        const halfx16_t& a_frag = reinterpret_cast<const halfx16_t&>(A.x[0]);
+        const halfx16_t& b_frag = reinterpret_cast<const halfx16_t&>(B.x[0]);
+        acc_frag = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a_frag, b_frag, acc_frag);
+#endif
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
@@ -753,12 +785,21 @@ namespace ggml_cuda_mma {
     static __device__ __forceinline__ void mma(
             tile<16, 16, float> & D, const tile<16, 8, nv_bfloat162> & A, const tile<16, 8, nv_bfloat162> & B) {
 #if defined(AMD_WMMA_AVAILABLE)
+#if defined(RDNA4)
         using bf16x8_t = __attribute__((ext_vector_type(8))) __bf16;
         using floatx8_t = __attribute__((ext_vector_type(8))) float;
         floatx8_t& acc_frag = reinterpret_cast<floatx8_t&>(D.x[0]);
         const bf16x8_t& a_frag = reinterpret_cast<const bf16x8_t&>(A.x[0]);
         const bf16x8_t& b_frag = reinterpret_cast<const bf16x8_t&>(B.x[0]);
         acc_frag = __builtin_amdgcn_wmma_f32_16x16x16_bf16_w32_gfx12(a_frag, b_frag, acc_frag);
+#else  // RDNA3
+        using bf16x16_t = __attribute__((ext_vector_type(16))) __bf16;
+        using floatx8_t = __attribute__((ext_vector_type(8))) float;
+        floatx8_t& acc_frag = reinterpret_cast<floatx8_t&>(D.x[0]);
+        const bf16x16_t& a_frag = reinterpret_cast<const bf16x16_t&>(A.x[0]);
+        const bf16x16_t& b_frag = reinterpret_cast<const bf16x16_t&>(B.x[0]);
+        acc_frag = __builtin_amdgcn_wmma_f32_16x16x16_bf16_w32(a_frag, b_frag, acc_frag);
+#endif
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
@@ -786,15 +827,13 @@ namespace ggml_cuda_mma {
                                                       0, 0, 0);
 #endif // defined(CDNA3)
 
-#elif defined(AMD_WMMA_AVAILABLE)
+#elif defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)
         using int32x2_t = __attribute__((__vector_size__(2 * sizeof(int)))) int;
         int32x2_t * a_vec = (int32x2_t *) A.x;
         int32x2_t * b_vec = (int32x2_t *) B.x;
 
         using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
         int32x8_t * acc = (int32x8_t *) D.x;
-
-#if defined(RDNA4)
 
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(
             true,
@@ -812,8 +851,7 @@ namespace ggml_cuda_mma {
             b_vec[1],
             acc[0],
             true
-        );
-#endif // defined(RDNA4)
+        )
 
 #else
         GGML_UNUSED_VARS(D, A, B);
@@ -889,7 +927,7 @@ namespace ggml_cuda_mma {
 
 static __device__ __forceinline__ void mma(
             tile<16, 16, int> & D, const tile<16, 4, int> & A, const tile<16, 4, int> & B) {
-#if defined(AMD_WMMA_AVAILABLE)
+#if defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)
     using int32x2_t = __attribute__((__vector_size__(2 * sizeof(int)))) int;
     int32x2_t * a_vec = (int32x2_t *) A.x;
     int32x2_t * b_vec = (int32x2_t *) B.x;
