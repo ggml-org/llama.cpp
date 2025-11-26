@@ -4,13 +4,16 @@ find_package(CUDAToolkit)
 
 # Remove once CCCL 3.2 has been released and bundled with CUDA Toolkit
 if (GGML_CUDA_CUB_3DOT2)
-    include(../../../cmake/CPM.cmake)
-    # This will automatically clone CCCL from GitHub and make the exported cmake targets available
-    CPMAddPackage(
-        NAME CCCL
-        GITHUB_REPOSITORY nvidia/cccl
-        GIT_TAG v3.2.0-rc0 # Fetches the latest commit on the main branch
+    include(FetchContent)
+
+    FetchContent_Declare(
+        CCCL
+        GIT_REPOSITORY https://github.com/nvidia/cccl.git
+        GIT_TAG        v3.2.0-rc0
+        GIT_SHALLOW    TRUE
     )
+
+    FetchContent_MakeAvailable(CCCL)
 endif()
 
 if (CUDAToolkit_FOUND)
