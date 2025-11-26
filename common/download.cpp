@@ -570,6 +570,44 @@ static bool common_pull_file(httplib::Client & cli,
     return true;
 }
 
+static void common_set_clean_host_header(httplib::Headers & headers, const std::string & host) {
+    if (headers.count("Host")) {
+        headers.erase("Host");
+    }
+
+    std::string clean_host = host;
+    size_t pos = clean_host.find(':');
+    if (pos != std::string::npos) {
+        clean_host = clean_host.substr(0, pos);
+    }
+
+    headers.emplace("Host", clean_host);
+}
+
+static void common_resolve_redirects(std::string & url, httplib::Headers & headers) {
+    for (int r = 0; r < 5; ++r) {
+        auto [cli, parts] = common_http_client(url);
+        cli.set_follow_location(false);
+        common_set_clean_host_header(headers, parts.host);
+
+        httplib::Headers probe_headers = headers;
+        probe_headers.emplace("Range", "bytes=0-0");
+
+        auto head = cli.Get(parts.path, probe_headers);
+
+        if (head && (head->status >= 300 && head->status < 400) && head->has_header("Location")) {
+            url = head->get_header_value("Location");
+            if (headers.count("Authorization")) {
+                headers.erase("Authorization");
+            }
+            continue;
+        }
+        break;
+    }
+    auto parts = common_http_parse_url(url);
+    common_set_clean_host_header(headers, parts.host);
+}
+
 // download one single file from remote URL to local path
 static bool common_download_file_single_online(const std::string & url,
                                                const std::string & path,
@@ -578,8 +616,6 @@ static bool common_download_file_single_online(const std::string & url,
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
-    auto [cli, parts] = common_http_client(url);
-
     httplib::Headers default_headers = {{"User-Agent", "llama-cpp"}};
     if (!bearer_token.empty()) {
         default_headers.insert({"Authorization", "Bearer " + bearer_token});
@@ -587,6 +623,11 @@ static bool common_download_file_single_online(const std::string & url,
     for (const auto & h : custom_headers) {
         default_headers.emplace(h.first, h.second);
     }
+
+    std::string real_url = url;
+    common_resolve_redirects(real_url, default_headers);
+
+    auto [cli, parts] = common_http_client(real_url);
     cli.set_default_headers(default_headers);
 
     const bool file_exists = std::filesystem::exists(path);
@@ -601,7 +642,9 @@ static bool common_download_file_single_online(const std::string & url,
     for (int i = 0; i < max_attempts; ++i) {
         auto head = cli.Head(parts.path);
         bool head_ok = head && head->status >= 200 && head->status < 300;
-        if (!head_ok) {
+        bool head_403 = head && head->status == 403;
+
+        if (!head_ok && !head_403) {
             LOG_WRN("%s: HEAD invalid http status code received: %d\n", __func__, head ? head->status : -1);
             if (file_exists) {
                 LOG_INF("%s: Using cached file (HEAD failed): %s\n", __func__, path.c_str());
@@ -610,22 +653,26 @@ static bool common_download_file_single_online(const std::string & url,
         }
 
         std::string etag;
-        if (head_ok && head->has_header("ETag")) {
-            etag = head->get_header_value("ETag");
-        }
-
         size_t total_size = 0;
-        if (head_ok && head->has_header("Content-Length")) {
-            try {
-                total_size = std::stoull(head->get_header_value("Content-Length"));
-            } catch (const std::exception& e) {
-                LOG_WRN("%s: Invalid Content-Length in HEAD response: %s\n", __func__, e.what());
-            }
-        }
-
         bool supports_ranges = false;
-        if (head_ok && head->has_header("Accept-Ranges")) {
-            supports_ranges = head->get_header_value("Accept-Ranges") != "none";
+
+        if (head_ok) {
+            if (head->has_header("ETag")) {
+                etag = head->get_header_value("ETag");
+            }
+            if (head->has_header("Content-Length")) {
+                try {
+                    total_size = std::stoull(head->get_header_value("Content-Length"));
+                } catch (const std::exception& e) {
+                    LOG_WRN("%s: Invalid Content-Length in HEAD response: %s\n", __func__, e.what());
+                }
+            }
+            if (head->has_header("Accept-Ranges")) {
+                supports_ranges = head->get_header_value("Accept-Ranges") != "none";
+            }
+        } else if (head_403) {
+            LOG_INF("%s: 403 on HEAD, assuming GET/Resume is allowed\n", __func__);
+            supports_ranges = true;
         }
 
         bool should_download_from_scratch = false;
