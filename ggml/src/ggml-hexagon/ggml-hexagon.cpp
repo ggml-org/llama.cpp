@@ -2302,7 +2302,7 @@ typedef size_t (*init_dsp_req_and_buffer_func_t)(htp_general_req * req,
                                                  const ggml_tensor * op);
 
 template <init_dsp_req_and_buffer_func_t _init_req_func>
-static inline void ggml_hexagon_op_generic(const struct ggml_tensor * op, uint32_t flags) {
+static inline void ggml_hexagon_dispatch_op(const struct ggml_tensor * op, uint32_t flags) {
     const struct ggml_tensor * node = op;
     const struct ggml_tensor * src0 = node->src[0];
     const struct ggml_tensor * src1 = node->src[1];
@@ -2656,41 +2656,41 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
         switch (node->op) {
             case GGML_OP_MUL_MAT:
-                ggml_hexagon_op_generic<init_binary_req_and_bufs<true>>(node, flags);
+                ggml_hexagon_dispatch_op<init_binary_req_and_bufs<true>>(node, flags);
                 prev_quant_op = node;
                 break;
             case GGML_OP_MUL_MAT_ID:
-                ggml_hexagon_op_generic<init_binary_id_req_and_bufs<true>>(node, flags);
+                ggml_hexagon_dispatch_op<init_binary_id_req_and_bufs<true>>(node, flags);
                 prev_quant_op = node;
                 break;
             case GGML_OP_MUL:
             case GGML_OP_ADD:
             case GGML_OP_SUB:
-                ggml_hexagon_op_generic<init_binary_req_and_bufs<false>>(node, flags);
+                ggml_hexagon_dispatch_op<init_binary_req_and_bufs<false>>(node, flags);
                 break;
             case GGML_OP_ADD_ID:
-                ggml_hexagon_op_generic<init_binary_id_req_and_bufs<false>>(node, flags);
+                ggml_hexagon_dispatch_op<init_binary_id_req_and_bufs<false>>(node, flags);
                 break;
             case GGML_OP_RMS_NORM:
-                ggml_hexagon_op_generic<init_unary_req_and_bufs>(node, flags);
+                ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
                 break;
             case GGML_OP_UNARY:
                 if (ggml_get_unary_op(node) == GGML_UNARY_OP_SILU) {
-                    ggml_hexagon_op_generic<init_unary_req_and_bufs>(node, flags);
+                    ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
                 }
                 break;
             case GGML_OP_GLU:
                 if ((ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU) ||
                     (ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU_OAI)) {
-                    ggml_hexagon_op_generic<init_unary_req_and_bufs>(node, flags);
+                    ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
                 }
                 break;
             case GGML_OP_SOFT_MAX:
-                ggml_hexagon_op_generic<init_unary_req_and_bufs>(node, flags);
+                ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
                 break;
 
             case GGML_OP_ROPE:
-                ggml_hexagon_op_generic<init_rope_req_and_bufs>(node, flags);
+                ggml_hexagon_dispatch_op<init_rope_req_and_bufs>(node, flags);
                 break;
 
             default:
