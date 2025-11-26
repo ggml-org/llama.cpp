@@ -300,30 +300,92 @@ struct ggml_cann_graph_lru_cache {
 
 struct ggml_cann_rope_cache {
     ~ggml_cann_rope_cache() {
-        if (theta_scale_cache != nullptr) {
+        if (theta_scale_cache) {
             ACL_CHECK(aclrtFree(theta_scale_cache));
         }
-        if (sin_cache != nullptr) {
+        if (sin_cache) {
             ACL_CHECK(aclrtFree(sin_cache));
         }
-        if (cos_cache != nullptr) {
+        if (cos_cache) {
             ACL_CHECK(aclrtFree(cos_cache));
+        }
+        if (position_select_index) {
+            ACL_CHECK(aclrtFree(position_select_index));
+        }
+        if (theta_scale_exp_host) {
+            free(theta_scale_exp_host);
+        }
+        if(position_select_index_host) {
+            free(position_select_index_host);
         }
     }
 
-    void *  theta_scale_cache  = nullptr;
-    int64_t theta_scale_length = 0;
+    bool equal(int64_t theta_scale_length,
+               int64_t position_length,
+               float   ext_factor,
+               float   theta_scale,
+               float   freq_scale,
+               float   attn_factor,
+               bool    is_neox,
+               bool    indep_sects,
+               bool    mrope_used,
+               bool    is_imrope,
+               int     sections[4]) {
+        return this->theta_scale_length == theta_scale_length && this->position_length == position_length &&
+               this->ext_factor == ext_factor && this->theta_scale == theta_scale && this->freq_scale == freq_scale &&
+               this->attn_factor == attn_factor && this->is_neox == is_neox && this->indep_sects == indep_sects &&
+               this->mrope_used == mrope_used && this->is_imrope == is_imrope && this->sections[0] == sections[0] &&
+               this->sections[1] == sections[1] && this->sections[2] == sections[2] && this->sections[3] == sections[3];
+    }
+
+    void set(int64_t theta_scale_length,
+             int64_t position_length,
+             float    ext_factor,
+             float   theta_scale,
+             float   freq_scale,
+             float   attn_factor,
+             bool    is_neox,
+             bool    indep_sects,
+             bool    mrope_used,
+             bool    is_imrope,
+             int     sections[4]) {
+        this->theta_scale_length = theta_scale_length;
+        this->position_length    = position_length;
+        this->ext_factor         = ext_factor;
+        this->theta_scale        = theta_scale;
+        this->freq_scale         = freq_scale;
+        this->attn_factor        = attn_factor;
+        this->is_neox            = is_neox;
+        this->indep_sects        = indep_sects;
+        this->mrope_used         = mrope_used;
+        this->is_imrope          = is_imrope;
+        this->sections[0]        = sections[0];
+        this->sections[1]        = sections[1];
+        this->sections[2]        = sections[2];
+        this->sections[3]        = sections[3];
+    }
+
+    // memory cache, prepare before inferencing.
+    void *  theta_scale_cache          = nullptr;
+    float * theta_scale_exp_host       = nullptr;
+    int *   position_select_index_host = nullptr;
+    void *  position_select_index      = nullptr;
     // sin/cos cache, used only to accelerate first layer on each device
-    void *  sin_cache          = nullptr;
-    void *  cos_cache          = nullptr;
-    int64_t position_length    = 0;
+    void *  sin_cache                  = nullptr;
+    void *  cos_cache                  = nullptr;
     // Properties to check before reusing the sincos cache
-    bool    cached             = false;
-    float   ext_factor         = 0.0f;
-    float   theta_scale        = 0.0f;
-    float   freq_scale         = 0.0f;
-    float   attn_factor        = 0.0f;
-    bool    is_neox            = false;
+    int64_t theta_scale_length         = 0;
+    int64_t position_length            = 0;
+    bool    cached                     = false;
+    float   ext_factor                 = 0.0f;
+    float   theta_scale                = 0.0f;
+    float   freq_scale                 = 0.0f;
+    float   attn_factor                = 0.0f;
+    bool    is_neox                    = false;
+    bool    indep_sects                = false;
+    bool    mrope_used                 = false;
+    int     sections[4]                = { 0, 0, 0, 0 };
+    bool    is_imrope                  = false;
 };
 
 struct ggml_cann_tensor_cache {
