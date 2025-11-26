@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "download.h"
 
 #include <string>
 #include <vector>
