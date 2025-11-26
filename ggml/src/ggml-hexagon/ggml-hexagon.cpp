@@ -2297,9 +2297,11 @@ static void hex_dump_dspbuf(const struct ggml_tensor * t, const dspqueue_buffer 
                 (unsigned int) d->size);
 }
 
-typedef size_t (*init_dsp_req_and_buffer_t)(htp_general_req * req, dspqueue_buffer (&bufs)[4], const ggml_tensor * op);
+typedef size_t (*init_dsp_req_and_buffer_func_t)(htp_general_req * req,
+                                                 dspqueue_buffer (&bufs)[4],
+                                                 const ggml_tensor * op);
 
-template <init_dsp_req_and_buffer_t init_req>
+template <init_dsp_req_and_buffer_func_t _init_req_func>
 static inline void ggml_hexagon_op_generic(const struct ggml_tensor * op, uint32_t flags) {
     const struct ggml_tensor * node = op;
     const struct ggml_tensor * src0 = node->src[0];
@@ -2314,6 +2316,7 @@ static inline void ggml_hexagon_op_generic(const struct ggml_tensor * op, uint32
 
     // Construct HTP message
     htp_general_req req;
+    memset(&req, 0, sizeof(req));
     req.flags = flags;
 
     // Use opmask to override flags
@@ -2325,7 +2328,7 @@ static inline void ggml_hexagon_op_generic(const struct ggml_tensor * op, uint32
     }
 
     dspqueue_buffer bufs[4];
-    const size_t    n_bufs = init_req(&req, bufs, op);
+    const size_t    n_bufs = _init_req_func(&req, bufs, op);
 
     auto * sess = get_session_from_tensor(src0);
     if (opt_verbose) {
@@ -2468,50 +2471,42 @@ static inline size_t init_binary_id_req_and_bufs(htp_general_req * req,
     return n_bufs;
 }
 
-static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
+static inline size_t init_unary_req_and_bufs(htp_general_req * req,
+                                             dspqueue_buffer (&bufs)[4],
+                                             const ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    uint64_t t1 = 0;
-    uint64_t t2 = 0;
-
-    t1 = ggml_time_us();
-
-    // Construct HTP message
-    htp_general_req req;
-
-    memset(&req, 0, sizeof(htp_general_req));
-    memcpy(&req.op_params, &op->op_params, sizeof(op->op_params));
-    req.flags = flags;
+    memcpy(&req->op_params, &op->op_params, sizeof(op->op_params));
 
     bool supported = false;
 
     switch (op->op) {
         case GGML_OP_RMS_NORM:
-            req.op    = HTP_OP_RMS_NORM;
+            req->op   = HTP_OP_RMS_NORM;
             supported = true;
             break;
 
         case GGML_OP_UNARY:
             if (ggml_get_unary_op(dst) == GGML_UNARY_OP_SILU) {
-                req.op    = HTP_OP_UNARY_SILU;
+                req->op   = HTP_OP_UNARY_SILU;
                 supported = true;
             }
             break;
 
         case GGML_OP_GLU:
             if (ggml_get_glu_op(dst) == GGML_GLU_OP_SWIGLU) {
-                req.op    = HTP_OP_GLU_SWIGLU;
+                req->op   = HTP_OP_GLU_SWIGLU;
                 supported = true;
             } else if (ggml_get_glu_op(dst) == GGML_GLU_OP_SWIGLU_OAI) {
-                req.op    = HTP_OP_GLU_SWIGLU_OAI;
+                req->op   = HTP_OP_GLU_SWIGLU_OAI;
                 supported = true;
             }
             break;
 
         case GGML_OP_SOFT_MAX:
-            req.op    = HTP_OP_SOFTMAX;
+            req->op   = HTP_OP_SOFTMAX;
             supported = true;
 
         default:
@@ -2522,21 +2517,11 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
         GGML_ABORT("ggml-hex: unary : unsupported op:%d\n", op->op);
     }
 
-    init_htp_tensor(&req.dst, dst);
-    init_htp_tensor(&req.src0, src0);
+    init_htp_tensor(&req->dst, dst);
+    init_htp_tensor(&req->src0, src0);
     if (src1) {
-        init_htp_tensor(&req.src1, src1);
+        init_htp_tensor(&req->src1, src1);
     }
-
-    // Use opmask to override flags
-    if (!(opt_opmask & HTP_OPMASK_QUANTIZE)) {
-        req.flags |= HTP_OPFLAGS_SKIP_QUANTIZE;
-    }
-    if (!(opt_opmask & HTP_OPMASK_COMPUTE)) {
-        req.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
-    }
-
-    dspqueue_buffer bufs[3];
 
     // First buffer = Only Operand of Unary op
     // This is a buffer that the CPU writes and the DSP reads, so we'll
@@ -2559,83 +2544,24 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
     // written out before writes from the DSP start.
     n_bufs += dspqueue_buffers_init(&bufs[n_bufs], dst, DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ);
 
-    // Primary DSP session from the src0 tensor
-    auto * sess = get_session_from_tensor(src0);
-
-    if (opt_verbose) {
-        hex_print_op_info(op, sess, req.flags);
-        if (opt_verbose > 1) {
-            hex_dump_dspbuf(src0, &bufs[0]);
-            if (src1) {
-                hex_dump_dspbuf(src1, &bufs[1]);
-                hex_dump_dspbuf(dst, &bufs[2]);
-            } else {
-                hex_dump_dspbuf(dst, &bufs[1]);
-            }
-        }
-    }
-
-    if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        sess->enqueue(req, bufs, n_bufs, opt_opsync);
-    }
-
-    t2 = ggml_time_us();
-
-    if (src1) {
-        HEX_PROFILE(
-            "ggml-hex: %s %s %s %u:%u:%u:%u x %s %u:%u:%u:%u -> %s %u:%u:%u:%u : op-usec %u op-cycles %u op-pkts %u "
-            "(%f) call-usec %llu\n",
-            sess->name.c_str(), ggml_op_name(op->op), src0->name, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1],
-            (uint32_t) src0->ne[2], (uint32_t) src0->ne[3], src1->name, (uint32_t) src1->ne[0], (uint32_t) src1->ne[1],
-            (uint32_t) src1->ne[2], (uint32_t) src1->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1],
-            (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
-            (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
-    } else {
-        HEX_PROFILE(
-            "ggml-hex: %s %s %s %u:%u:%u:%u -> %s %u:%u:%u:%u : op-usec %u op-cycles %u op-pkts %u (%f) call-usec "
-            "%llu\n",
-            sess->name.c_str(), ggml_op_name(op->op), src0->name, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1],
-            (uint32_t) src0->ne[2], (uint32_t) src0->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1],
-            (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
-            (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
-    }
+    return n_bufs;
 }
 
-static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
+static inline size_t init_rope_req_and_bufs(htp_general_req * req, dspqueue_buffer (&bufs)[4], const ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
 
-    uint64_t t1 = 0;
-    uint64_t t2 = 0;
+    memcpy(&req->op_params, &op->op_params, sizeof(op->op_params));
+    req->op    = HTP_OP_ROPE;
 
-    t1 = ggml_time_us();
-
-    // Construct HTP message
-    htp_general_req req;
-
-    memset(&req, 0, sizeof(htp_general_req));
-    memcpy(&req.op_params, &op->op_params, sizeof(op->op_params));
-    req.flags = flags;
-    req.op    = HTP_OP_ROPE;
-
-    init_htp_tensor(&req.dst, dst);
-    init_htp_tensor(&req.src0, src0);
-    init_htp_tensor(&req.src1, src1);
+    init_htp_tensor(&req->dst, dst);
+    init_htp_tensor(&req->src0, src0);
+    init_htp_tensor(&req->src1, src1);
     if (src2) {
-        init_htp_tensor(&req.src2, src2);
+        init_htp_tensor(&req->src2, src2);
     }
-
-    // Use opmask to override flags
-    if (!(opt_opmask & HTP_OPMASK_QUANTIZE)) {
-        req.flags |= HTP_OPFLAGS_SKIP_QUANTIZE;
-    }
-    if (!(opt_opmask & HTP_OPMASK_COMPUTE)) {
-        req.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
-    }
-
-    dspqueue_buffer bufs[4];
 
     // First buffer
     // This is a buffer that the CPU writes and the DSP reads, so we'll
@@ -2665,48 +2591,7 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     // written out before writes from the DSP start.
     n_bufs += dspqueue_buffers_init(&bufs[n_bufs], dst, DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ);
 
-    // Primary DSP session from the src0 tensor
-    auto * sess = get_session_from_tensor(src0);
-
-    if (opt_verbose) {
-        hex_print_op_info(op, sess, req.flags);
-        if (opt_verbose > 1) {
-            hex_dump_dspbuf(src0, &bufs[0]);
-            if (src1) {
-                hex_dump_dspbuf(src1, &bufs[1]);
-                hex_dump_dspbuf(dst, &bufs[2]);
-            } else {
-                hex_dump_dspbuf(dst, &bufs[1]);
-            }
-        }
-    }
-
-    if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        sess->enqueue(req, bufs, n_bufs, opt_opsync);
-    }
-
-    t2 = ggml_time_us();
-
-    if (src2) {
-        HEX_PROFILE(
-            "ggml-hex: %s %s %s %u:%u:%u:%u x %s %u:%u:%u:%u x %s %u:%u:%u:%u -> %s %u:%u:%u:%u : op-usec %u op-cycles "
-            "%u op-pkts %u (%f) call-usec %llu\n",
-            sess->name.c_str(), ggml_op_name(op->op), src0->name, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1],
-            (uint32_t) src0->ne[2], (uint32_t) src0->ne[3], src1->name, (uint32_t) src1->ne[0], (uint32_t) src1->ne[1],
-            (uint32_t) src1->ne[2], (uint32_t) src1->ne[3], src2->name, (uint32_t) src2->ne[0], (uint32_t) src2->ne[1],
-            (uint32_t) src2->ne[2], (uint32_t) src2->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1],
-            (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
-            (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
-    } else {
-        HEX_PROFILE(
-            "ggml-hex: %s %s %s %u:%u:%u:%u x %s %u:%u:%u:%u -> %s %u:%u:%u:%u : op-usec %u op-cycles %u op-pkts %u "
-            "(%f) call-usec %llu\n",
-            sess->name.c_str(), ggml_op_name(op->op), src0->name, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1],
-            (uint32_t) src0->ne[2], (uint32_t) src0->ne[3], src1->name, (uint32_t) src1->ne[0], (uint32_t) src1->ne[1],
-            (uint32_t) src1->ne[2], (uint32_t) src1->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1],
-            (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
-            (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
-    }
+    return n_bufs;
 }
 
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
@@ -2787,25 +2672,25 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_op_generic<init_binary_id_req_and_bufs<false>>(node, flags);
                 break;
             case GGML_OP_RMS_NORM:
-                ggml_hexagon_unary(node, flags);
+                ggml_hexagon_op_generic<init_unary_req_and_bufs>(node, flags);
                 break;
             case GGML_OP_UNARY:
                 if (ggml_get_unary_op(node) == GGML_UNARY_OP_SILU) {
-                    ggml_hexagon_unary(node, flags);
+                    ggml_hexagon_op_generic<init_unary_req_and_bufs>(node, flags);
                 }
                 break;
             case GGML_OP_GLU:
                 if ((ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU) ||
                     (ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU_OAI)) {
-                    ggml_hexagon_unary(node, flags);
+                    ggml_hexagon_op_generic<init_unary_req_and_bufs>(node, flags);
                 }
                 break;
             case GGML_OP_SOFT_MAX:
-                ggml_hexagon_unary(node, flags);
+                ggml_hexagon_op_generic<init_unary_req_and_bufs>(node, flags);
                 break;
 
             case GGML_OP_ROPE:
-                ggml_hexagon_rope(node, flags);
+                ggml_hexagon_op_generic<init_rope_req_and_bufs>(node, flags);
                 break;
 
             default:
