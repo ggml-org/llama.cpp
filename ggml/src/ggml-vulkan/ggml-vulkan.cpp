@@ -13158,24 +13158,6 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
         return false;
     };
 
-    // This function tries to reorder the graph to allow nodes to run in parallel.
-    // This helps with small batches, but for large batches its a slowdown, probably
-    // due to cache contention. So only reorder if the majority of nodes have few rows.
-    int num_small_nodes = 0;
-    int num_counted_nodes = 0;
-    for (int i = 0; i < graph->n_nodes; ++i) {
-        if (!is_empty(graph->nodes[i]) &&
-            graph->nodes[i]->op != GGML_OP_SET_ROWS) {
-            if (ggml_nrows(graph->nodes[i]) <= 8) {
-                num_small_nodes++;
-            }
-            num_counted_nodes++;
-        }
-    }
-    if (num_small_nodes < num_counted_nodes / 2) {
-        return;
-    }
-
     std::vector<ggml_tensor *> new_order;
     std::vector<bool> used(graph->n_nodes, false);
     std::set<ggml_tensor *> used_node_set;
