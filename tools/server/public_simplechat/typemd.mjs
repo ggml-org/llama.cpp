@@ -27,6 +27,9 @@ export class MarkDown {
                 offsets: [],
                 /** @type {Array<string>} */
                 endType: [],
+            },
+            /** @type {Object<string, string>} */
+            empty: {
             }
         }
         /**
@@ -37,7 +40,7 @@ export class MarkDown {
         this.html = ""
     }
 
-    unwind_list_unordered() {
+    unwind_list() {
         while (true) {
             let popped = this.in.list.endType.pop()
             if (popped == undefined) {
@@ -48,29 +51,24 @@ export class MarkDown {
         this.in.list.offsets.length = 0
     }
 
-    unwind_list() {
-        this.unwind_list_unordered()
-    }
-
     /**
-     * Process a unordered list one line at a time
+     * Process list one line at a time
      * @param {string} line
      */
-    process_list_unordered(line) {
+    process_list(line) {
         // spaces followed by - or + or * followed by a space and actual list item
-        let matchUnOrdered = line.match(/^([ ]*)([-+*]|[a-zA-Z0-9]\.)[ ](.*)$/);
-        if (matchUnOrdered != null) {
+        let matchList = line.match(/^([ ]*)([-+*]|[a-zA-Z0-9]\.)[ ](.*)$/);
+        if (matchList != null) {
             let listLvl = 0
-            let curOffset = matchUnOrdered[1].length
+            let curOffset = matchList[1].length
             let lastOffset = this.in.list.offsets[this.in.list.offsets.length-1];
             if (lastOffset == undefined) {
                 lastOffset = -1
             }
-
             if (lastOffset < curOffset){
                 this.in.list.offsets.push(curOffset)
                 listLvl = this.in.list.offsets.length
-                if (matchUnOrdered[2][matchUnOrdered[2].length-1] == '.') {
+                if (matchList[2][matchList[2].length-1] == '.') {
                     this.html += "<ol>\n"
                     this.in.list.endType.push("</ol>\n")
                 } else {
@@ -87,7 +85,7 @@ export class MarkDown {
                     }
                 }
             }
-            this.html += `<li>${matchUnOrdered[3]}</li>\n`
+            this.html += `<li>${matchList[3]}</li>\n`
             return true
         } else {
             if (this.in.list.offsets.length > 0) {
@@ -209,7 +207,7 @@ export class MarkDown {
             this.html += `<pre class="${matchPreFenced[2]}">\n`
             return
         }
-        if (this.process_list_unordered(line)) {
+        if (this.process_list(line)) {
             return
         }
         this.unwind_list()
