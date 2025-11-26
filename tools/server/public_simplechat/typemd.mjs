@@ -25,6 +25,8 @@ export class MarkDown {
             list: {
                 /** @type {Array<number>} */
                 offsets: [],
+                /** @type {Array<string>} */
+                endType: [],
             }
         }
         /**
@@ -36,8 +38,12 @@ export class MarkDown {
     }
 
     unwind_list_unordered() {
-        for(const i in this.in.list.offsets) {
-            this.html += "</ul>\n"
+        while (true) {
+            let popped = this.in.list.endType.pop()
+            if (popped == undefined) {
+                break
+            }
+            this.html += popped
         }
         this.in.list.offsets.length = 0
     }
@@ -65,10 +71,12 @@ export class MarkDown {
                 this.in.list.offsets.push(curOffset)
                 listLvl = this.in.list.offsets.length
                 this.html += "<ul>\n"
+                this.in.list.endType.push("</ul>\n")
             } else if (lastOffset > curOffset){
                 while (this.in.list.offsets[this.in.list.offsets.length-1] > curOffset) {
                     this.in.list.offsets.pop()
-                    this.html += `</ul>\n`
+                    let popped = this.in.list.endType.pop()
+                    this.html += popped;
                     if (this.in.list.offsets.length == 0) {
                         break
                     }
