@@ -61,7 +61,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 
 #pragma unroll
     for (int i = 0; i < n * (k + 1); i += k * WARP_SIZE) {
-        int i0 = i + batch_idx + lane * col_idx;
+        int i0 = i + threadIdx.x + threadIdx.y * blockDim.x;
         if (i0 < n * k) {
             sX[i0] = B_batch[i0];
         }
