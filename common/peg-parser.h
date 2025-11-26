@@ -346,23 +346,23 @@ class common_peg_parser_builder {
 
     // Matches one or more repetitions of a parser.
     //   S -> A+
-    common_peg_parser one_or_more(common_peg_parser p) { return repeat(p, 1, -1); }
+    common_peg_parser one_or_more(const common_peg_parser & p) { return repeat(p, 1, -1); }
 
     // Matches zero or more repetitions of a parser, always succeeds.
     //   S -> A*
-    common_peg_parser zero_or_more(common_peg_parser p) { return repeat(p, 0, -1); }
+    common_peg_parser zero_or_more(const common_peg_parser & p) { return repeat(p, 0, -1); }
 
     // Matches zero or one occurrence of a parser, always succeeds.
     //   S -> A?
-    common_peg_parser optional(common_peg_parser p) { return repeat(p, 0, 1); }
+    common_peg_parser optional(const common_peg_parser & p) { return repeat(p, 0, 1); }
 
     // Positive lookahead: succeeds if child parser succeeds, consumes no input.
     //   S -> &A
-    common_peg_parser peek(common_peg_parser p) { return add(common_peg_and_parser{p}); }
+    common_peg_parser peek(const common_peg_parser & p) { return add(common_peg_and_parser{p}); }
 
     // Negative lookahead: succeeds if child parser fails, consumes no input.
     //   S -> !A
-    common_peg_parser negate(common_peg_parser p) { return add(common_peg_not_parser{p}); }
+    common_peg_parser negate(const common_peg_parser & p) { return add(common_peg_not_parser{p}); }
 
     // Matches any single character.
     //   S -> .
@@ -398,11 +398,11 @@ class common_peg_parser_builder {
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}
     // Use -1 for max to represent unbounded repetition (equivalent to {m,})
-    common_peg_parser repeat(common_peg_parser p, int min, int max) { return add(common_peg_repetition_parser{p, min,max}); }
+    common_peg_parser repeat(const common_peg_parser & p, int min, int max) { return add(common_peg_repetition_parser{p, min,max}); }
 
     // Matches exactly n repetitions of a parser.
     //   S -> A{n}
-    common_peg_parser repeat(common_peg_parser p, int n) { return repeat(p, n, n); }
+    common_peg_parser repeat(const common_peg_parser & p, int n) { return repeat(p, n, n); }
 
     // Creates a complete JSON parser supporting objects, arrays, strings, numbers, booleans, and null.
     //   value -> object | array | string | number | true | false | null
@@ -420,16 +420,16 @@ class common_peg_parser_builder {
 
     // Matches a JSON object member with a key and associated parser as the
     // value.
-    common_peg_parser json_member(const std::string & key, common_peg_parser p);
+    common_peg_parser json_member(const std::string & key, const common_peg_parser & p);
 
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
-    common_peg_parser schema(common_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema, bool raw = false);
+    common_peg_parser schema(const common_peg_parser & p, const std::string & name, const nlohmann::ordered_json & schema, bool raw = false);
 
     // Creates a named rule, stores it in the grammar, and returns a ref.
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
     //   auto json = p.rule("json", json_obj | json_arr | ...)
-    common_peg_parser rule(const std::string & name, common_peg_parser p, bool trigger = false);
+    common_peg_parser rule(const std::string & name, const common_peg_parser & p, bool trigger = false);
 
     // Creates a named rule using a builder function, and returns a ref.
     // If trigger=true, marks this rule as an entry point for lazy grammar generation.
@@ -438,19 +438,19 @@ class common_peg_parser_builder {
 
     // Creates a trigger rule. When generating a lazy grammar from the parser,
     // only trigger rules and descendents are emitted.
-    common_peg_parser trigger_rule(const std::string & name, common_peg_parser p) { return rule(name, p, true); }
+    common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & p) { return rule(name, p, true); }
     common_peg_parser trigger_rule(const std::string & name, const std::function<common_peg_parser()> & builder) { return rule(name, builder, true); }
 
     // Creates an atomic parser. Atomic parsers do not create an AST node if
     // the child results in a partial parse, i.e. NEEDS_MORE_INPUT. This is
     // intended for situations where partial output is undesirable.
-    common_peg_parser atomic(common_peg_parser p) { return add(common_peg_atomic_parser{p}); }
+    common_peg_parser atomic(const common_peg_parser & p) { return add(common_peg_atomic_parser{p}); }
 
     // Tags create nodes in the generated AST for semantic purposes.
     // Unlike rules, you can tag multiple nodes with the same tag.
-    common_peg_parser tag(const std::string & tag, common_peg_parser p) { return add(common_peg_tag_parser{p.id(), tag}); }
+    common_peg_parser tag(const std::string & tag, const common_peg_parser & p) { return add(common_peg_tag_parser{p.id(), tag}); }
 
-    void set_root(common_peg_parser p);
+    void set_root(const common_peg_parser & p);
 
     common_peg_arena build();
 };
