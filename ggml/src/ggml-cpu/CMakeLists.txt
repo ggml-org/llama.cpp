@@ -224,7 +224,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
             include(CheckCXXSourceCompiles)
             set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
-            set(CMAKE_REQUIRED_FLAGS "${ARCH_FLAGS}")
+            string(REPLACE ";" " " ARCH_FLAGS_STR "${ARCH_FLAGS}")
+            set(CMAKE_REQUIRED_FLAGS "${ARCH_FLAGS_STR}")
             foreach(feature DOTPROD SVE MATMUL_INT8 FMA FP16_VECTOR_ARITHMETIC SME)
                 set(ARM_FEATURE "HAVE_${feature}")
                 check_cxx_source_compiles(
