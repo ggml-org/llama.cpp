@@ -299,8 +299,38 @@ export class MarkDown {
             this.html += `</blockquote>\n`
         }
         this.in.blockQuote = startTok
-        this.html += `<p>${lineSani}</p>`
+        this.html += `<p>${lineSani}</p>\n`
         return true
+    }
+
+    /**
+     * Process headline.
+     * @param {string} line
+     */
+    process_headline(line) {
+        if (line.startsWith ("#")) {
+            this.unwind_list()
+            let startTok = line.split(' ', 1)[0]
+            let hLevel = startTok.length
+            this.html += `<h${hLevel}>${line.slice(hLevel)}</h${hLevel}>\n`
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Process horizontal line.
+     * @param {string} line
+     */
+    process_horizline(line) {
+        // 3 or more of --- or ___ or *** followed by space
+        // some online notes seemed to indicate spaces at end, so accepting same
+        if (line.match(/^[-]{3,}|[*]{3,}|[_]{3,}\s*$/) != null) {
+            this.unwind_list()
+            this.html += "<hr>\n"
+            return true
+        }
+        return false
     }
 
     /**
@@ -316,24 +346,16 @@ export class MarkDown {
         } else {
             line = lineRaw
         }
-        let lineA = line.split(' ')
         if (this.process_pre_fenced(line)) {
             return
         }
         if (this.process_table_line(line)) {
             return
         }
-        // 3 or more of --- or ___ or *** followed by space
-        // some online notes seemed to indicate spaces at end, so accepting same
-        if (line.match(/^[-]{3,}|[*]{3,}|[_]{3,}\s*$/) != null) {
-            this.unwind_list()
-            this.html += "<hr>\n"
+        if (this.process_horizline(line)) {
             return
         }
-        if (line.startsWith ("#")) {
-            this.unwind_list()
-            let hLevel = lineA[0].length
-            this.html += `<h${hLevel}>${line.slice(hLevel)}</h${hLevel}>\n`
+        if (this.process_headline(line)) {
             return
         }
         if (this.process_blockquote(lineRaw, line)) {
