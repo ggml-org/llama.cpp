@@ -87,9 +87,24 @@ export class MarkDown {
                     }
                 }
             }
-
             this.html += `<li>${matchUnOrdered[3]}</li>\n`
             return true
+        } else {
+            if (this.in.list.offsets.length > 0) {
+                if (line.trim().length == 0) {
+                    return true
+                }
+                let matchOffset = line.match(/^([ ]*)(.*)$/);
+                if (matchOffset == null) {
+                    return false
+                }
+                let lastOffset = this.in.list.offsets[this.in.list.offsets.length-1];
+                if (matchOffset[1].length < lastOffset) {
+                    return false
+                }
+                this.html += `<li>${matchOffset[2]}</li>\n`
+                return true
+            }
         }
         return false
     }
@@ -197,9 +212,7 @@ export class MarkDown {
         if (this.process_list_unordered(line)) {
             return
         }
-        if (line.trim().length > 0) {
-            this.unwind_list()
-        }
+        this.unwind_list()
         this.html += `<p>${line}</p>`
     }
 
