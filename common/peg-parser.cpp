@@ -1017,10 +1017,6 @@ common_peg_parser common_peg_parser_builder::chars(const std::string & classes, 
     return wrap(arena_.add_parser(common_peg_chars_parser{classes, ranges, negated, min, max}));
 }
 
-common_peg_parser common_peg_parser_builder::json_string_content() {
-    return wrap(arena_.add_parser(common_peg_json_string_parser{}));
-}
-
 common_peg_parser common_peg_parser_builder::schema(common_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema, bool raw) {
     return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::make_shared<nlohmann::ordered_json>(schema), raw}));
 }
@@ -1135,6 +1131,21 @@ common_peg_parser common_peg_parser_builder::json() {
             json_bool(),
             json_null()
         });
+    });
+}
+
+common_peg_parser common_peg_parser_builder::json_string_content() {
+    return wrap(arena_.add_parser(common_peg_json_string_parser{}));
+}
+
+common_peg_parser common_peg_parser_builder::json_member(const std::string & key, common_peg_parser p) {
+    auto ws = space();
+    return sequence({
+        literal("\"" + key + "\""),
+        ws,
+        literal(":"),
+        ws,
+        p,
     });
 }
 

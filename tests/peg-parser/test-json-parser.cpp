@@ -76,4 +76,34 @@ void test_json_parser(testing &t) {
 
         t.assert_equal("result_is_need_more_input", true, result.need_more_input());
     });
+
+    t.test("object member", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+            return p.json_member("name", "\"" + p.chars("[a-z]") + "\"");
+        });
+
+        t.test("success", [&](testing &t) {
+            std::string input = R"("name": "bob")";
+            common_peg_parse_context ctx(input, false);
+
+            auto result = parser.parse(ctx);
+            t.assert_true("success", result.success());
+        });
+
+        t.test("partial", [&](testing &t) {
+            std::string input = R"("name": "bo)";
+            common_peg_parse_context ctx(input, true);
+
+            auto result = parser.parse(ctx);
+            t.assert_true("need more input", result.need_more_input());
+        });
+
+        t.test("failed", [&](testing &t) {
+            std::string input = R"([])";
+            common_peg_parse_context ctx(input, false);
+
+            auto result = parser.parse(ctx);
+            t.assert_true("fail", result.fail());
+        });
+    });
 }

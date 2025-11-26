@@ -418,6 +418,10 @@ class common_peg_parser_builder {
     // Useful for extracting content within a JSON string.
     common_peg_parser json_string_content();
 
+    // Matches a JSON object member with a key and associated parser as the
+    // value.
+    common_peg_parser json_member(const std::string & key, common_peg_parser p);
+
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
     common_peg_parser schema(common_peg_parser p, const std::string & name, const nlohmann::ordered_json & schema, bool raw = false);
