@@ -141,50 +141,7 @@ struct tool_definition {
     json schema;
 };
 
-static void foreach_tool(const json & json_tools, const std::function<void(tool_definition &)> & fn) {
-    if (!json_tools.is_array()) {
-        return;
-    }
-
-    for (const auto & item : json_tools) {
-        if (!item.contains("function") || !item["function"].is_object()) {
-            continue;
-        }
-
-        const auto & func_node = item["function"];
-
-        tool_definition tool;
-        tool.name = func_node.value("name", "unknown_tool");
-        tool.schema = func_node;
-
-        if (func_node.contains("parameters") && func_node["parameters"].is_object()) {
-            const auto& params_node = func_node["parameters"];
-
-            std::vector<std::string> required_list;
-            if (params_node.contains("required") && params_node["required"].is_array()) {
-                required_list = params_node["required"].get<std::vector<std::string>>();
-            }
-
-            if (params_node.contains("properties") && params_node["properties"].is_object()) {
-                for (const auto & [key, value] : params_node["properties"].items()) {
-                    tool_argument arg;
-
-                    arg.name = key;
-                    arg.type = value.value("type", "string");
-                    arg.schema = value;
-
-                    auto it = std::find(required_list.begin(), required_list.end(), arg.name);
-                    arg.is_required = (it != required_list.end());
-
-                    tool.arguments.push_back(arg);
-                }
-            }
-        }
-
-        fn(tool);
-    }
-}
-
+// Test fictitious model output that emits arguments as JSON.
 static void test_example_native(testing & t) {
     struct test_case {
         // Parameters
@@ -256,7 +213,6 @@ static void test_example_native(testing & t) {
             if (tc.json_schema.is_object() && !tc.json_schema.empty()) {
                 return p.sequence({
                     (reasoning_in_content ? p.eps() : reasoning),
-                    p.content(p.until("<tool_call>")),
                     p.content(p.schema(p.json(), "response-output", tc.json_schema)),
                     p.space(),
                     p.end()
@@ -405,6 +361,30 @@ static void test_example_native(testing & t) {
                 /* .arguments = */ R"({"location": "San Francisco, CA", "unit": "fahrenheit", "days": 3})",
             }},
         },
+        {
+            /* .name =                 */ "response_format with thinking_forced_open = true",
+            /* .tools =                */ {},
+            /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
+            /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
+            /* .json_schema =          */ {
+                {"type", "object"},
+                {"properties", {
+                    {"invoice_number", {{"type", "string"}}},
+                    {"amount", {{"type", "number"}}},
+                    {"due_date", {{"type", "string"}}}
+                }},
+                {"required", {"invoice_number", "amount", "due_date"}}
+            },
+            /* .parallel_tool_calls =  */ false,
+            /* .thinking_forced_open = */ true,
+            /* .input =                */ (
+                "I must produce the invoice in the requested format</think>\n"
+                R"({"invoice_number": "INV-2025-001", "amount": 1250.50, "due_date": "2025-12-31"})"
+            ),
+            /* .expect_reasoning =     */ "I must produce the invoice in the requested format",
+            /* .expect_content =       */ R"({"invoice_number": "INV-2025-001", "amount": 1250.50, "due_date": "2025-12-31"})",
+            /* .expect_tool_calls =    */ {},
+        },
     };
 
     for (const auto & tc : test_cases) {
@@ -412,6 +392,11 @@ static void test_example_native(testing & t) {
             auto parser = build_parser(tc);
             auto lazy = !tc.tools.empty() && tc.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
             auto grammar = build_grammar([&](const common_grammar_builder & builder) {
+                for (auto const & def : tc.tools) {
+                    auto function = def.at("function");
+                    auto parameters = function.at("parameters");
+                    builder.resolve_refs(parameters);
+                };
                 parser.build_grammar(builder, lazy);
             });
 
@@ -446,13 +431,24 @@ static void test_example_qwen3_coder(testing & t) {
         auto content = p.rule("content", p.content(p.until("<tool_call>")));
 
         std::vector<common_peg_parser> tool_parsers;
-        foreach_tool(tools, [&](const tool_definition & def) {
+        for (auto const & def : tools) {
+            auto function = def.at("function");
+            std::string name = function.at("name");
+            auto parameters = function.at("parameters");
+            auto properties = parameters.at("properties");
+
+            std::set<std::string> required_properties;
+            if (function.contains("required")) {
+                function.at("required").get_to(required_properties);
+            }
+
             std::vector<common_peg_parser> arg_parsers;
-            for (const auto & arg_def : def.arguments) {
-                auto type = arg_def.schema.value("type", "object");
+            for (const auto & [param_name, param_schema] : properties.items()) {
+                bool is_required = required_properties.find(param_name) != required_properties.end();
+                auto type = param_schema.value("type", "object");
 
                 auto arg = p.tool_arg(p.sequence({
-                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(arg_def.name)) + ">"),
+                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param_name)) + ">"),
                     (type == "string" ?
                         p.tool_arg_string_value(
                             p.schema(
@@ -460,15 +456,15 @@ static void test_example_qwen3_coder(testing & t) {
                                     "</parameter>\n<parameter=",
                                     "</parameter>\n</function>"
                                 }),
-                                "tool-" + def.name + "-arg-" + arg_def.name + "-schema",
-                                arg_def.schema,
+                                "tool-" + name + "-arg-" + param_name + "-schema",
+                                param_schema,
                                 true
                             )
                         ) : p.tool_arg_json_value(
                             p.schema(
                                 p.json(),
-                                "tool-" + def.name + "-arg-" + arg_def.name + "-schema",
-                                arg_def.schema
+                                "tool-" + name + "-arg-" + param_name + "-schema",
+                                param_schema
                             )
                         )
                     ),
@@ -478,17 +474,17 @@ static void test_example_qwen3_coder(testing & t) {
                     )
                 }));
 
-                arg_parsers.push_back(arg_def.is_required ?
-                    p.rule("tool-" + def.name + "-arg-" + arg_def.name, arg) :
-                    p.optional(p.rule("tool-" + def.name + "-arg-" + arg_def.name, arg)));
+                arg_parsers.push_back(is_required ?
+                    p.rule("tool-" + name + "-arg-" + param_name, arg) :
+                    p.optional(p.rule("tool-" + name + "-arg-" + param_name, arg)));
             }
 
-            tool_parsers.push_back(p.rule("tool-" + def.name,
-                p.tool_open("<function=" + p.tool_name(p.literal(def.name)) + ">")
+            tool_parsers.push_back(p.rule("tool-" + name,
+                p.tool_open("<function=" + p.tool_name(p.literal(name)) + ">")
                 << p.sequence(arg_parsers)
                 << p.tool_close(p.literal("</function>"))
             ));
-        });
+        };
 
         auto tool_call = p.trigger_rule("tool-call",
             "<tool_call>"
@@ -500,13 +496,18 @@ static void test_example_qwen3_coder(testing & t) {
     });
 
     auto grammar = build_grammar([&](const common_grammar_builder & builder) {
-        foreach_tool(tools, [&](tool_definition & def) {
-            builder.resolve_refs(def.schema);
-        });
+        for (auto const & def : tools) {
+            auto function = def.at("function");
+            auto parameters = function.at("parameters");
+            builder.resolve_refs(parameters);
+        };
         parser.build_grammar(builder);
     });
 
-    t.log("Grammar:\n" + grammar);
+    t.log("Grammar:");
+    for (auto const & line : string_split(grammar, "\n")) {
+        t.log(line);
+    }
 
     t.test("incremental parsing", [&](testing &t) {
         std::string input =
