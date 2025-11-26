@@ -488,3 +488,118 @@ struct llama_sampler * llama_sampler_backend_init_logit_bias(int32_t   n_vocab,
 
     return sampler;
 }
+
+struct llama_sampler_backend_min_p_ctx {
+    float p;
+
+    // Only required for checking operation support and can be removed later.
+    ggml_backend_dev_t device;
+};
+
+static void llama_sampler_backend_min_p_init_ggml(
+        struct llama_sampler           * smpl,
+        ggml_backend_buffer_type_t       buft) {
+    auto * sctx = (llama_sampler_backend_min_p_ctx *) smpl->ctx;
+    sctx->device = ggml_backend_buft_get_device(buft);
+}
+
+static void llama_sampler_backend_min_p_apply_ggml(
+        struct llama_sampler           * smpl,
+        struct ggml_context            * ctx,
+        struct ggml_cgraph             * gf,
+        struct llama_sampler_ggml_data * ggml_data) {
+    GGML_UNUSED(gf);
+
+    auto * sctx = (llama_sampler_backend_min_p_ctx *) smpl->ctx;
+
+    struct ggml_tensor * softmax = ggml_soft_max(ctx, ggml_data->logits);
+    ggml_set_name(softmax, "softmax");
+
+    // Get the sorted indices of the softmax probabilities in descending order.
+    struct ggml_tensor * sorted_idx = ggml_argsort(ctx, softmax, GGML_SORT_ORDER_DESC);
+    ggml_set_name(sorted_idx, "sorted_idx");
+
+    // Reshape into a row vector.
+    struct ggml_tensor * softmax_rows = ggml_reshape_2d(ctx, softmax, 1, softmax->ne[0]);
+    ggml_set_name(softmax_rows, "softmax_rows");
+
+    // Get the sorted probabilities using the sorted indices so that we can get
+    // the max probability value, which will be the first entry in sorted_probs.
+    struct ggml_tensor * sorted_probs = ggml_get_rows(ctx, softmax_rows, sorted_idx);
+    ggml_set_name(sorted_probs, "sorted_probs");
+
+    // Get the max probability value from sorted_probs.
+    struct ggml_tensor * p_max = ggml_view_1d(ctx, sorted_probs, 1, 0);
+    ggml_set_name(p_max, "p_max");
+
+    // Calculate the threshold value.
+    struct ggml_tensor * threshold = ggml_scale(ctx, p_max, sctx->p);
+    ggml_set_name(threshold, "min_p_threshold");
+
+    // Broadcast the threshold to match the shape of softmax.
+    struct ggml_tensor * threshold_b = ggml_repeat(ctx, threshold, softmax);
+    ggml_set_name(threshold_b, "min_p_threshold_b");
+
+    // Subtract the threshold from softmax probabilities.
+    struct ggml_tensor * sub = ggml_sub(ctx, softmax, threshold_b);
+
+    // Create a mask where probabilities below the threshold are 0 (discard),
+    // and others are 1 (keep).
+    struct ggml_tensor * mask = ggml_step(ctx, sub);
+    ggml_set_name(mask, "min_p_mask");
+
+    // Use ggml_scale_bias (output = (a * s) + b) which in this case becomes:
+    // min_p_bias = (mask * 1e9f) - 1e9f.
+    // So entries in the mask that we want to discard will become -1e9f, and
+    // others will be 0 (meaning that will not effect the logits).
+    const float large_val = 1e9f;
+    struct ggml_tensor * min_p_bias = ggml_scale_bias(ctx, mask, large_val, -large_val);
+    ggml_set_name(min_p_bias, "min_p_bias");
+
+    // Add the min_p bias to the logits.
+    ggml_data->logits = ggml_add(ctx, ggml_data->logits, min_p_bias);
+    ggml_set_name(ggml_data->logits, "min_p_logits");
+
+    ggml_build_forward_expand(gf, ggml_data->logits);
+}
+
+static const char * llama_sampler_backend_min_p_name(const struct llama_sampler *) {
+    return "backend-min-p";
+}
+
+static void llama_sampler_backend_min_p_free(struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_backend_min_p_ctx *) smpl->ctx;
+    delete sctx;
+}
+
+static struct llama_sampler * llama_sampler_backend_min_p_clone(const struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_backend_min_p_ctx *) smpl->ctx;
+    return llama_sampler_backend_init_min_p(sctx->p);
+}
+
+struct llama_sampler * llama_sampler_backend_init_min_p(float p) {
+    static const llama_sampler_i iface = {
+        /*.name                =*/ llama_sampler_backend_min_p_name,
+        /*.accept              =*/ nullptr,
+        /*.apply               =*/ nullptr,
+        /*.reset               =*/ nullptr,
+        /*.clone               =*/ llama_sampler_backend_min_p_clone,
+        /*.free                =*/ llama_sampler_backend_min_p_free,
+        /*.apply_ggml          =*/ llama_sampler_backend_min_p_apply_ggml,
+        /*.accept_ggml         =*/ nullptr,
+        /*.set_input_ggml      =*/ nullptr,
+        /*.init_ggml           =*/ llama_sampler_backend_min_p_init_ggml,
+    };
+
+    auto * sctx = new llama_sampler_backend_min_p_ctx {
+        /*.p       =*/ p,
+        /*.device  =*/ nullptr,
+    };
+
+    auto * sampler = new llama_sampler {
+        /*.iface =*/ &iface,
+        /*.ctx   =*/ sctx,
+    };
+
+    return sampler;
+}

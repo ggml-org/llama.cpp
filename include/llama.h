@@ -1405,6 +1405,9 @@ extern "C" {
     /// @details Distribution sampling on backend - final sampling step that selects a token
     LLAMA_API struct llama_sampler * llama_sampler_backend_init_dist(uint32_t seed);
 
+    /// @details Min-P filtering on backend - filter tokens with a probability less than p times the maximum probability.
+    LLAMA_API struct llama_sampler * llama_sampler_backend_init_min_p(float p);
+
     // Returns the seed used by the sampler if applicable, LLAMA_DEFAULT_SEED otherwise
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);
 

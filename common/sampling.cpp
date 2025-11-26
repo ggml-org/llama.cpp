@@ -173,6 +173,7 @@ static bool sampler_backend_supported(enum common_sampler_type type) {
     switch (type) {
         case COMMON_SAMPLER_TYPE_TOP_K:
         case COMMON_SAMPLER_TYPE_TEMPERATURE:
+        case COMMON_SAMPLER_TYPE_MIN_P:
             return true;
         default:
             return false;
@@ -325,6 +326,12 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                     }
                     backend_idx++;
                     break;
+                case COMMON_SAMPLER_TYPE_MIN_P:
+                    if (params.min_p > 0.0f) {
+                        llama_sampler_chain_add(result->backend_chain, llama_sampler_backend_init_min_p(params.min_p));
+                    }
+                    backend_idx++;
+                    break;
                 default:
                     GGML_ASSERT(false && "unsupported backend sampler");
             }
@@ -465,6 +472,12 @@ struct llama_sampler * common_sampler_backend_init(const struct llama_model * mo
             case COMMON_SAMPLER_TYPE_TEMPERATURE:
                 if (params.temp > 0.0f) {
                     llama_sampler_chain_add(chain, llama_sampler_backend_init_temp(params.temp));
+                }
+                backend_idx++;
+                break;
+            case COMMON_SAMPLER_TYPE_MIN_P:
+                if (params.min_p > 0.0f) {
+                    llama_sampler_chain_add(chain, llama_sampler_backend_init_min_p(params.min_p));
                 }
                 backend_idx++;
                 break;
