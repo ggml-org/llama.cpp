@@ -1727,3 +1727,9 @@ std::string common_peg_arena::save() const {
 void common_peg_arena::load(const std::string & data) {
     *this = from_json(nlohmann::json::parse(data));
 }
+
+common_peg_arena build_peg_parser(const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn) {
+    common_peg_parser_builder builder;
+    builder.set_root(fn(builder));
+    return builder.build();
+}

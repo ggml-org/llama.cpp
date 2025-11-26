@@ -456,9 +456,4 @@ class common_peg_parser_builder {
 };
 
 // Helper function for building parsers
-template<typename F>
-common_peg_arena build_peg_parser(F && fn) {
-    common_peg_parser_builder builder;
-    builder.set_root(fn(builder));
-    return builder.build();
-}
+common_peg_arena build_peg_parser(const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn);
