@@ -4,7 +4,10 @@
 
 #include "chat-parser.h"
 #include "chat-peg-parser.h"
+#include "chat.h"
+#include "common.h"
 #include "json-schema-to-grammar.h"
+#include "peg-parser.h"
 #include "peg-parser/test_harness.h"
 #include "peg-parser/simple_tokenizer.h"
 #include "nlohmann/json.hpp"
@@ -12,6 +15,7 @@
 using json = nlohmann::ordered_json;
 
 static json create_tools();
+static void test_example_native(testing & t);
 static void test_example_qwen3_coder(testing & t);
 static void test_command7_parser_compare(testing & t);
 
@@ -21,6 +25,12 @@ int main(int argc, char *argv[]) {
         t.set_filter(argv[1]);
     }
 
+    const char * verbose = getenv("LLAMA_TEST_VERBOSE");
+    if (verbose) {
+        t.verbose = std::string(verbose) == "1";
+    }
+
+    t.test("native", test_example_native);
     t.test("qwen3 coder", test_example_qwen3_coder);
     t.test("comparison", test_command7_parser_compare);
 
@@ -54,34 +64,35 @@ static json create_tools() {
     };
     tools.push_back(tool_weather);
 
-    json tool_mortgage = {
+    json tool_forecast = {
         {"type", "function"},
         {"function", {
-            {"name", "calculate_mortgage"},
-            {"description", "Calculate the monthly mortgage payment based on principal, rate, and term."},
+            {"name", "get_forecast"},
+            {"description", "Get the weather forecast for a given location"},
             {"parameters", {
                 {"type", "object"},
                 {"properties", {
-                    {"principal", {
-                        {"type", "number"},
-                        {"description", "The loan amount in dollars."}
+                    {"location", {
+                        {"type", "string"},
+                        {"description", "The city and state, e.g. San Francisco, CA"}
                     }},
-                    {"interest_rate", {
-                        {"type", "number"},
-                        {"description", "Annual interest rate in percentage (e.g., 5.5 for 5.5%)."}
+                    {"unit", {
+                        {"type", "string"},
+                        {"enum", {"celsius", "fahrenheit"}},
+                        {"description", "The temperature unit to use. Infer this from the users location."}
                     }},
-                    {"years", {
+                    {"days", {
                         {"type", "integer"},
-                        {"description", "The loan term in years."}
+                        {"description", "Number of days to forecast (1-10)"},
+                        {"minimum", 1},
+                        {"maximum", 10}
                     }}
                 }},
-                {"required", {"principal", "interest_rate", "years"}},
-                {"additionalProperties", false}
+                {"required", {"location", "unit"}},
             }},
-            {"strict", true}
         }}
     };
-    tools.push_back(tool_mortgage);
+    tools.push_back(tool_forecast);
 
     json tool_search = {
         {"type", "function"},
@@ -171,6 +182,261 @@ static void foreach_tool(const json & json_tools, const std::function<void(tool_
         }
 
         fn(tool);
+    }
+}
+
+static void test_example_native(testing & t) {
+    struct test_case {
+        // Parameters
+        std::string name;
+        json tools;
+        common_chat_tool_choice tool_choice;
+        common_reasoning_format reasoning_format;
+        json json_schema;
+        bool parallel_tool_calls;
+        bool thinking_forced_open;
+        std::string input;
+
+        // Expect
+        std::string expect_reasoning;
+        std::string expect_content;
+        std::vector<common_chat_tool_call> expect_tool_calls;
+    };
+
+    auto build_parser = [](const test_case & tc) {
+        return build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+            auto reasoning_in_content = (tc.reasoning_format == COMMON_REASONING_FORMAT_NONE);
+            auto reasoning = p.eps();
+            if (tc.thinking_forced_open) {
+                // If thinking is forced open, expect a closing tag
+                reasoning = p.reasoning(p.until("</think>")) + "</think>" + p.space();
+            } else {
+                // Otherwise, optionally accept thinking wrapped in tags
+                reasoning = p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>" + p.space());
+            }
+
+            // tool calling parser
+            if (tc.tools.is_array() && !tc.tools.empty()) {
+                auto tools = p.choice();
+                for (const auto & tool : tc.tools) {
+                    const auto & function = tool.at("function");
+                    std::string name = function.at("name");
+                    const auto & schema = function.at("parameters");
+
+                    auto tool_name = p.json_member("name", "\"" + p.tool_name(p.literal(name)) + "\"");
+                    auto tool_args = p.json_member("arguments", p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));
+
+                    tools |= p.rule("tool-" + name, p.tool_open(p.literal("{")) << tool_name << "," << tool_args << "}");
+                };
+
+                auto parallel_calls = p.eps();
+                if (tc.parallel_tool_calls) {
+                    parallel_calls = p.zero_or_more("," << tools);
+                }
+
+                auto tool_call = p.trigger_rule("tool-call",
+                    p.sequence({
+                        p.literal("<tool_call>["),
+                        tools,
+                        parallel_calls,
+                        p.literal("]</tool_call>")
+                    })
+                );
+
+                return p.sequence({
+                    (reasoning_in_content ? p.eps() : reasoning),
+                    p.content(p.until("<tool_call>")),
+                    p.optional(p.space() + tool_call),
+                    p.space(),
+                    p.end()
+                });
+            }
+
+            // response_format parser
+            if (tc.json_schema.is_object() && !tc.json_schema.empty()) {
+                return p.sequence({
+                    (reasoning_in_content ? p.eps() : reasoning),
+                    p.content(p.until("<tool_call>")),
+                    p.content(p.schema(p.json(), "response-output", tc.json_schema)),
+                    p.space(),
+                    p.end()
+                });
+            }
+
+            // Content-only parser
+            return p.sequence({
+                (reasoning_in_content ? p.eps() : reasoning),
+                p.content(p.rest()),
+                p.end()
+            });
+        });
+    };
+
+    std::vector<test_case> test_cases = std::vector<test_case>{
+        {
+            /* .name =                 */ "content with thinking_forced_open = false",
+            /* .tools =                */ {},
+            /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
+            /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
+            /* .json_schema =          */ {},
+            /* .parallel_tool_calls =  */ false,
+            /* .thinking_forced_open = */ false,
+            /* .input =                */ (
+                "<think>The user said hello, I must say hello back</think>\nHello"
+            ),
+            /* .expect_reasoning =     */ "The user said hello, I must say hello back",
+            /* .expect_content =       */ "Hello",
+            /* .expect_tool_calls =    */ {},
+        },
+        {
+            /* .name =                 */ "content with thinking_forced_open = false and no reasoning",
+            /* .tools =                */ {},
+            /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
+            /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
+            /* .json_schema =          */ {},
+            /* .parallel_tool_calls =  */ false,
+            /* .thinking_forced_open = */ false,
+            /* .input =                */ (
+                "Hello"
+            ),
+            /* .expect_reasoning =     */ "",
+            /* .expect_content =       */ "Hello",
+            /* .expect_tool_calls =    */ {},
+        },
+        {
+            /* .name =                 */ "content with thinking_forced_open = false and reasoning_format = none",
+            /* .tools =                */ {},
+            /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
+            /* .reasoning_format =     */ COMMON_REASONING_FORMAT_NONE,
+            /* .json_schema =          */ {},
+            /* .parallel_tool_calls =  */ false,
+            /* .thinking_forced_open = */ true,
+            /* .input =                */ (
+                "<think>The user said hello, I must say hello back</think>\nHello"
+            ),
+            /* .expect_reasoning =     */ "",
+            /* .expect_content =       */ "<think>The user said hello, I must say hello back</think>\nHello",
+            /* .expect_tool_calls =    */ {},
+        },
+        {
+            /* .name =                 */ "content with thinking_forced_open = true",
+            /* .tools =                */ {},
+            /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
+            /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
+            /* .json_schema =          */ {},
+            /* .parallel_tool_calls =  */ false,
+            /* .thinking_forced_open = */ true,
+            /* .input =                */ (
+                "The user said hello, I must say hello back</think>\nHello"
+            ),
+            /* .expect_reasoning =     */ "The user said hello, I must say hello back",
+            /* .expect_content =       */ "Hello",
+            /* .expect_tool_calls =    */ {},
+        },
+        {
+            /* .name =                 */ "content with thinking_forced_open = true and reasoning_format = none",
+            /* .tools =                */ {},
+            /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_NONE,
+            /* .reasoning_format =     */ COMMON_REASONING_FORMAT_NONE,
+            /* .json_schema =          */ {},
+            /* .parallel_tool_calls =  */ false,
+            /* .thinking_forced_open = */ true,
+            /* .input =                */ (
+                "The user said hello, I must say hello back</think>\nHello"
+            ),
+            /* .expect_reasoning =     */ "",
+            /* .expect_content =       */ "The user said hello, I must say hello back</think>\nHello",
+            /* .expect_tool_calls =    */ {},
+        },
+        {
+            /* .name =                 */ "tools with tool_choice = auto and no parallel_tool_calls",
+            /* .tools =                */ create_tools(),
+            /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_AUTO,
+            /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
+            /* .json_schema =          */ {},
+            /* .parallel_tool_calls =  */ false,
+            /* .thinking_forced_open = */ true,
+            /* .input =                */ (
+                "I must get the weather in New York</think>\n"
+                "<tool_call>["
+                R"({"name": "get_current_weather", "arguments": {"location": "New York City, NY", "unit": "fahrenheit"}})"
+                "]</tool_call>"
+            ),
+            /* .expect_reasoning =     */ "I must get the weather in New York",
+            /* .expect_content =       */ "",
+            /* .expect_tool_calls =    */ {{
+                /* .name =      */ "get_current_weather",
+                /* .arguments = */ R"({"location": "New York City, NY", "unit": "fahrenheit"})",
+            }},
+        },
+        {
+            /* .name =                 */ "tools with tool_choice = auto and parallel_tool_calls",
+            /* .tools =                */ create_tools(),
+            /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_AUTO,
+            /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
+            /* .json_schema =          */ {},
+            /* .parallel_tool_calls =  */ true,
+            /* .thinking_forced_open = */ true,
+            /* .input =                */ (
+                "I must get the weather in New York and San Francisco and a 3 day forecast of each.</think>\nLet me search that for you."
+                "<tool_call>["
+                R"({"name": "get_current_weather", "arguments": {"location": "New York City, NY", "unit": "fahrenheit"}})"
+                ", "
+                R"({"name": "get_current_weather", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit"}})"
+                ", "
+                R"({"name": "get_forecast", "arguments": {"location": "New York City, NY", "unit": "fahrenheit", "days": 3}})"
+                ", "
+                R"({"name": "get_forecast", "arguments": {"location": "San Francisco, CA", "unit": "fahrenheit", "days": 3}})"
+                "]</tool_call>"
+            ),
+            /* .expect_reasoning =     */ "I must get the weather in New York and San Francisco and a 3 day forecast of each.",
+            /* .expect_content =       */ "Let me search that for you.",
+            /* .expect_tool_calls =    */ {{
+                /* .name =      */ "get_current_weather",
+                /* .arguments = */ R"({"location": "New York City, NY", "unit": "fahrenheit"})",
+            }, {
+                /* .name =      */ "get_current_weather",
+                /* .arguments = */ R"({"location": "San Francisco, CA", "unit": "fahrenheit"})",
+            }, {
+                /* .name =      */ "get_forecast",
+                /* .arguments = */ R"({"location": "New York City, NY", "unit": "fahrenheit", "days": 3})",
+            }, {
+                /* .name =      */ "get_forecast",
+                /* .arguments = */ R"({"location": "San Francisco, CA", "unit": "fahrenheit", "days": 3})",
+            }},
+        },
+    };
+
+    for (const auto & tc : test_cases) {
+        t.test(tc.name, [&](testing & t) {
+            auto parser = build_parser(tc);
+            auto lazy = !tc.tools.empty() && tc.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+            auto grammar = build_grammar([&](const common_grammar_builder & builder) {
+                parser.build_grammar(builder, lazy);
+            });
+
+            t.log("Grammar:");
+            for (auto const & line : string_split(grammar, "\n")) {
+                t.log(line);
+            }
+
+            common_peg_parse_context ctx(tc.input, false);
+            auto result = parser.parse(ctx);
+
+            t.assert_true("success", result.success());
+
+            common_chat_msg msg;
+            auto mapper = common_chat_peg_native_mapper(msg);
+            mapper.from_ast(ctx.ast, result);
+
+            t.assert_equal("content equal", tc.expect_content, msg.content);
+            t.assert_equal("reasoning equal", tc.expect_reasoning, msg.reasoning_content);
+            t.assert_equal("number of tool calls", tc.expect_tool_calls.size(), msg.tool_calls.size());
+            for (auto i = 0u; i < std::min(tc.expect_tool_calls.size(), msg.tool_calls.size()); i++) {
+                t.assert_equal("tool name", tc.expect_tool_calls[i].name, msg.tool_calls[i].name);
+                t.assert_equal("tool args", tc.expect_tool_calls[i].arguments, msg.tool_calls[i].arguments);
+            }
+        });
     }
 }
 

@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <string>
 #include <iostream>
 
@@ -7,6 +8,11 @@ int main(int argc, char *argv[]) {
     testing t(std::cout);
     if (argc >= 2) {
         t.set_filter(argv[1]);
+    }
+
+    const char * verbose = getenv("LLAMA_TEST_VERBOSE");
+    if (verbose) {
+        t.verbose = std::string(verbose) == "1";
     }
 
     t.test("basic", test_basic);

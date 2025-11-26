@@ -15,6 +15,7 @@ struct testing {
     std::regex filter;
     bool filter_tests = false;
     bool throw_exception = false;
+    bool verbose = false;
     int tests = 0;
     int assertions = 0;
     int failures = 0;
@@ -37,7 +38,9 @@ struct testing {
     }
 
     void log(const std::string & msg) {
-        out << indent() << "  " << msg << "\n";
+        if (verbose) {
+            out << indent() << "  " << msg << "\n";
+        }
     }
 
     void set_filter(const std::string & re) {
