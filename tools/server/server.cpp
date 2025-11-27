@@ -3431,12 +3431,10 @@ private:
                 json res_json = result->to_json();
                 if (result->is_error()) {
                     if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
-                        json error_event = json::object();
-                        error_event["event"] = "error";
-                        error_event["data"] = res_json;
-                        json error_array = json::array();
-                        error_array.push_back(error_event);
-                        output = format_anthropic_sse(error_array);
+                        output = format_anthropic_sse({
+                            {"event", "error"},
+                            {"data", res_json},
+                        });
                     } else {
                         output = format_sse(json {{ "error", res_json }});
                     }

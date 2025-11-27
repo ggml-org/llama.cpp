@@ -7,8 +7,6 @@
 #include "sampling.h"
 #include "json-schema-to-grammar.h"
 
-#include <set>
-
 using json = nlohmann::ordered_json;
 
 //
@@ -840,7 +838,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
     size_t num_tool_calls = oaicompat_msg.tool_calls.size();
 
     bool text_block_started = false;
-    std::set<size_t> tool_calls_started;
+    std::unordered_set<size_t> tool_calls_started;
 
     for (const auto & diff : oaicompat_msg_diffs) {
         if (!diff.content_delta.empty()) {
