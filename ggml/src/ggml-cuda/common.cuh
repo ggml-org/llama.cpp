@@ -1007,7 +1007,7 @@ struct ggml_cuda_concurrent_event {
         other.fork_event = nullptr;
     }
 
-    // 1. check if all branches don't write to the overlapping memory ranges (except the join node)
+    // 1. check if any branches write to overlapping memory ranges (except the join node)
     // 2. check all srcs are either within the branch or outside the event
     // we assume all nodes have the same buffer
     bool is_valid() const {
