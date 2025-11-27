@@ -299,6 +299,9 @@ struct input_chunks {
     }
 };
 
+// insert mtmd_default_marker() into given string, position depends on the projector
+std::string mtmd_add_default_marker(mtmd_context *ctx, const std::string &str);
+
 } // namespace mtmd
 
 #endif
