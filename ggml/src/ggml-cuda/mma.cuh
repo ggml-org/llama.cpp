@@ -965,8 +965,8 @@ namespace ggml_cuda_mma {
     template <typename T1, typename T2, int J, int K>
     static __device__ __forceinline__ void mma(
             tile<32, J, T1> & D, const tile<32, K, T2> & A, const tile<J, K, T2> & B) {
-        tile<16, J, T1> * D16 = (tile<16, J, T1> *) &D;
-        tile<16, K, T2> * A16 = (tile<16, K, T2> *) &A;
+        tile      <16, J, T1> * D16 = reinterpret_cast<      tile<16, J, T1> *>(&D);
+        const tile<16, K, T2> * A16 = reinterpret_cast<const tile<16, K, T2> *>(&A);
         mma(D16[0], A16[0], B);
         mma(D16[1], A16[1], B);
     }
