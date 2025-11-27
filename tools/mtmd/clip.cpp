@@ -2787,7 +2787,7 @@ struct clip_model_loader {
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         // ref: https://huggingface.co/LiquidAI/LFM2-VL-3B/blob/main/preprocessor_config.json
-                        hparams.set_limit_image_tokens(64, 256);
+                        hparams.set_limit_image_tokens(64, 1024);
                     } break;
                 case PROJECTOR_TYPE_PIXTRAL:
                 case PROJECTOR_TYPE_LIGHTONOCR:
