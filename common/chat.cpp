@@ -1948,38 +1948,39 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
                     ));
                 }
 
-                auto arg = p.tool_arg(
-                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">\n")
-                    + arg_value
-                    << p.tool_arg_close(
+                auto arg = p.tool_arg(p.sequence({
+                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">\n"),
+                    arg_value,
+                    p.space(),
+                    p.tool_arg_close(
                         "</parameter>\n" +
                         p.peek(p.literal("<parameter=") | p.literal("</function>"))
-                    )
-                );
+                    ),
+                }));
 
                 auto arg_rule = p.rule("tool-" + fn_name + "-arg-" + name, arg);
                 args += p.repeat(arg_rule, (is_required ? 1 : 0), 1);
             });
 
-            tools |= p.rule("tool-" + fn_name,
-                p.tool_open("<function=" + p.tool_name(p.literal(fn_name)) + ">")
-                << args
-                << p.tool_close(p.literal("</function>")));
+            tools |= p.rule("tool-" + fn_name, p.sequence({
+                p.tool_open("<function=" + p.tool_name(p.literal(fn_name)) + ">\n"),
+                args,
+                p.tool_close(p.literal("</function>\n"))
+            }));
         });
 
-        auto tool_call = p.trigger_rule("tool-call",
+        auto tool_call = p.trigger_rule("tool-call", p.sequence({
             // Qwen3-Coder may emit <tool_call> or <function= first, so we make the first
             // <tool_call> optional but required in parallel calls
-            p.optional("<tool_call>" + p.space())
-            + tools
-            + p.space()
-            + "</tool_call>"
+            p.optional(p.literal("<tool_call>\n")),
+            tools,
+            p.literal("</tool_call>"),
             // It seems more intuitive to place parallel calls as a repetition in the root rule, but
             // it is here because it needs to be wrapped in a trigger rule.
-            + (params.parallel_tool_calls ?
-                p.zero_or_more(p.space() + "<tool_call>" << tools << "</tool_call>") :
-                p.eps())
-        );
+            (params.parallel_tool_calls ?
+                p.zero_or_more("\n<tool_call>\n" + tools + "</tool_call>") :
+                p.eps()),
+        }));
 
         return p.sequence({
             content,
