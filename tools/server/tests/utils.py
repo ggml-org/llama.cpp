@@ -205,6 +205,8 @@ class ServerProcess:
             server_args.append("--no-webui")
         if self.jinja:
             server_args.append("--jinja")
+        else:
+            server_args.append("--no-jinja")
         if self.reasoning_format is not None:
             server_args.extend(("--reasoning-format", self.reasoning_format))
         if self.reasoning_budget is not None:
