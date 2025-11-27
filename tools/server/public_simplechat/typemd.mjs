@@ -109,15 +109,23 @@ export class MarkDown {
         }
     }
 
-    unwind_list() {
-        while (true) {
+    /**
+     * Unwind till the specified offset level.
+     * @param {number} unwindTillOffset
+     */
+    unwind_list(unwindTillOffset=-1) {
+        if (this.in.list.offsets.length == 0) {
+            return { done: true, remaining: 0 }
+        }
+        while (this.in.list.offsets[this.in.list.offsets.length-1] > unwindTillOffset) {
+            this.in.list.offsets.pop()
             let popped = this.in.list.endType.pop()
-            if (popped == undefined) {
+            this.html += popped;
+            if (this.in.list.offsets.length == 0) {
                 break
             }
-            this.html += popped
         }
-        this.in.list.offsets.length = 0
+        return { done: true, remaining: this.in.list.offsets.length }
     }
 
     /**
@@ -154,20 +162,14 @@ export class MarkDown {
                     this.in.list.endType.push("</ul>\n")
                 }
             } else if (lastOffset > curOffset){
-                while (this.in.list.offsets[this.in.list.offsets.length-1] > curOffset) {
-                    this.in.list.offsets.pop()
-                    let popped = this.in.list.endType.pop()
-                    this.html += popped;
-                    if (this.in.list.offsets.length == 0) {
-                        break
-                    }
-                }
+                this.unwind_list(curOffset)
             }
             this.html += `<li>${matchList[3]}</li>\n`
             return true
         } else {
             if (this.in.list.offsets.length > 0) {
                 if (emptyTracker.cur > 0) {
+                    // skip empty line
                     return true
                 }
                 let matchOffset = line.match(/^([ ]*)(.*)$/);
