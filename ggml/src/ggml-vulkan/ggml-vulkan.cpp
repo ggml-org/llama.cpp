@@ -5289,7 +5289,8 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->prealloc_size_x = 0;
     ctx->prealloc_size_y = 0;
     ctx->prealloc_size_split_k = 0;
-    ctx->prealloc_size_add_rms_partials = 0;
+    // Fixed size of 1KB, for deterministic behavior
+    ctx->prealloc_size_add_rms_partials = 1024;
 
     ctx->fence = ctx->device->device.createFence({});
     ctx->almost_ready_fence = ctx->device->device.createFence({});
@@ -13095,7 +13096,6 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->fused_ops_write_mask = 0;
     }
 
-    ctx->prealloc_size_add_rms_partials = std::max(ctx->prealloc_size_add_rms_partials, ctx->prealloc_size_add_rms_partials_offset);
     ctx->last_total_mul_mat_bytes = total_mul_mat_bytes;
 
     if (vk_perf_logger_enabled) {
