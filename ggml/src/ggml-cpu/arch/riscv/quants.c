@@ -24,8 +24,8 @@
 
 #define UNUSED GGML_UNUSED
 
-// defined in cpu-feats.cpp
-extern int kernel_idx;
+// defined in rvv-init.cpp
+extern int ggml_rvv_kernel_idx;
 
 void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
@@ -754,7 +754,7 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     static _Atomic ggml_vec_dot_t func_ptr = NULL;
     ggml_vec_dot_t func = atomic_load_explicit(&func_ptr, memory_order_relaxed);
     if (func == NULL) {
-        func = func_table[kernel_idx];
+        func = func_table[ggml_rvv_kernel_idx];
         atomic_compare_exchange_strong_explicit(&func_ptr, &(ggml_vec_dot_t){NULL}, func, memory_order_relaxed, memory_order_relaxed);
     }
 
