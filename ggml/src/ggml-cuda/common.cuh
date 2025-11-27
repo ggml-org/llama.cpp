@@ -1008,7 +1008,7 @@ struct ggml_cuda_concurrent_event {
     }
 
     // 1. check if any branches write to overlapping memory ranges (except the join node)
-    // 2. check all srcs are either within the branch or outside the event
+    // 2. check whether all srcs are either within the branch or outside the nodes covered by ggml_cuda_concurrent_event
     // we assume all nodes have the same buffer
     bool is_valid() const {
         std::vector<std::vector<std::pair<int64_t, int64_t>>> write_ranges;
