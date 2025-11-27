@@ -3613,7 +3613,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
 }
 
 common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
-    if (!syntax.parser.empty()) {
+    if (syntax.format == COMMON_CHAT_FORMAT_PEG_SIMPLE ||
+        syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE ||
+        syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
         return common_chat_peg_parse(syntax.parser, input, is_partial, syntax);
     }
     common_chat_msg_parser builder(input, is_partial, syntax);
@@ -3635,12 +3637,15 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
 }
 
 common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
+    if (parser.empty()) {
+        throw std::runtime_error("Failed to parse due to missing parser definition.");
+    }
+
     LOG_DBG("Parsing input with format %s: %s\n", common_chat_format_name(syntax.format), input.c_str());
 
     common_peg_parse_context ctx(input, is_partial);
     auto result = parser.parse(ctx);
     if (result.fail()) {
-        // TODO: Add commit/expect parsers to formulate descriptive errors
         throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end));
     }
 
