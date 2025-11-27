@@ -151,9 +151,9 @@ static void init_rope_ctx(struct rope_th_ctx * rope_ctx, struct htp_ops_context 
 }
 
 static void hvx_calc_rope_neox_f32(const float * restrict src0,
-                              float * restrict dst,
-                              const int num_elems,
-                              const float * restrict theta_cache) {
+                                   float * restrict dst,
+                                   const int num_elems,
+                                   const float * restrict theta_cache) {
     // for (int i = 0; i < num_elems; i += 2) {
     //const float cos_theta = theta_cache[i + 0];
     //const float sin_theta = theta_cache[i + 1];
@@ -192,7 +192,7 @@ static void hvx_calc_rope_neox_f32(const float * restrict src0,
         HVX_Vector v4 = Q6_Vqf32_vsub_Vqf32Vqf32(vx0_c, vx1_s);
         HVX_Vector v5 = Q6_Vqf32_vadd_Vqf32Vqf32(vx0_s, vx1_c);
 
-        *(HVX_Vector *) dst_curr          = Q6_Vsf_equals_Vqf32(v4);
+        *(HVX_Vector *) dst_curr               = Q6_Vsf_equals_Vqf32(v4);
         *(HVX_Vector *) (dst_curr + half_size) = Q6_Vsf_equals_Vqf32(v5);
 
         src0_curr += VLEN;
@@ -259,7 +259,7 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
                          const uint32_t       ir1,
                          int                  nth,
                          int                  ith,
-                         int                  opt_path) {
+                         const int            opt_path) {
     struct htp_ops_context * octx = rope_ctx->octx;
 
     const struct htp_tensor * src0 = &octx->src0;
@@ -267,8 +267,8 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
     const struct htp_tensor * src2 = &octx->src2;
     struct htp_tensor *       dst  = &octx->dst;
 
-    const int32_t mode  = rope_ctx->mode;
-    const bool is_neox  = mode & HTP_ROPE_TYPE_NEOX;
+    const int32_t mode    = rope_ctx->mode;
+    const bool    is_neox = mode & HTP_ROPE_TYPE_NEOX;
 
     htp_rope_preamble;
 
@@ -317,10 +317,10 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
 
                         if (is_neox) {
                             const float x0 = src_loc[0];
-                            const float x1 = src_loc[rope_ctx->n_dims/2];
+                            const float x1 = src_loc[rope_ctx->n_dims / 2];
 
-                            dst_data_loc[0] = x0 * cos_theta - x1 * sin_theta;
-                            dst_data_loc[rope_ctx->n_dims/2] = x0 * sin_theta + x1 * cos_theta;
+                            dst_data_loc[0]                    = x0 * cos_theta - x1 * sin_theta;
+                            dst_data_loc[rope_ctx->n_dims / 2] = x0 * sin_theta + x1 * cos_theta;
 
                             src_loc += 1;
                             dst_data_loc += 1;
@@ -337,6 +337,8 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
                     }
                 }
 
+                src_loc += is_neox ? (rope_ctx->n_dims / 2) : 0;
+                dst_data_loc += is_neox ? (rope_ctx->n_dims / 2) : 0;
                 for (uint32_t i0 = rope_ctx->n_dims; i0 < ne0; i0 += 2) {
                     dst_data_loc[0] = src_loc[0];
                     dst_data_loc[1] = src_loc[1];
