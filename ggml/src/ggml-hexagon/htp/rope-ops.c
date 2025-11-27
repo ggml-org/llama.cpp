@@ -73,15 +73,15 @@ static float rope_yarn_ramp(const float low, const float high, const int i0) {
     return (1 - MIN(1, MAX(0, y)));
 }
 
-static void rope_cache_init(const float   theta_base,
-                            float         freq_scale,
-                            const float * freq_factors,
-                            float *       corr_dims,
-                            uint32_t      ne0,
-                            float         ext_factor,
-                            float         mscale,
-                            float *       cache,
-                            float         theta_scale) {
+static void rope_cache_init(const float    theta_base,
+                            const float    freq_scale,
+                            const float *  freq_factors,
+                            float *        corr_dims,
+                            const uint32_t ne0,
+                            const float    ext_factor,
+                            const float    mscale,
+                            float *        cache,
+                            const float    theta_scale) {
     // ref: https://github.com/jquesnelle/yarn/blob/master/scaled_rope/LlamaYaRNScaledRotaryEmbedding.py
     float theta = theta_base;
 
