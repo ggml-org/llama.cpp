@@ -1495,11 +1495,22 @@ class MultiChatUI {
         if (msg.ns.getContent().trim().length > 0) {
             showList.push(['content', msg.ns.getContent().trim()])
         }
+        let chatSessionMarkdown = this.simpleChats[chatId].cfg.chatProps.markdown
         for (const [name, content] of showList) {
             if (content.length > 0) {
-                if ((name == "content") && (this.simpleChats[chatId].cfg.chatProps.bMarkdown)) {
+                let bMarkdown = false
+                if ((name == "content") && (chatSessionMarkdown.enabled)) {
+                    if (chatSessionMarkdown.always) {
+                        bMarkdown = true
+                    } else {
+                        if (msg.ns.role == Roles.Assistant) {
+                            bMarkdown = true
+                        }
+                    }
+                }
+                if (bMarkdown) {
                     entry = document.createElement('div')
-                    let md = new mMD.MarkDown(this.simpleChats[chatId].cfg.chatProps.bMarkdownHtmlSanitize)
+                    let md = new mMD.MarkDown(chatSessionMarkdown.htmlSanitize)
                     md.process(content)
                     entry.innerHTML = md.html
                     secContents.appendChild(entry)
@@ -2105,8 +2116,11 @@ export class Config {
              * * only user messages following the latest system prompt is considered.
              */
             iRecentUserMsgCnt: 5,
-            bMarkdown: true,
-            bMarkdownHtmlSanitize: true,
+            markdown: {
+                enabled: true,
+                always: false,
+                htmlSanitize: true,
+            },
             bCompletionFreshChatAlways: true,
             bCompletionInsertStandardRolePrefix: false,
             bTrimGarbage: true,
