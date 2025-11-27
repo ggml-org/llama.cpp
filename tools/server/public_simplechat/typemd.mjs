@@ -130,14 +130,24 @@ export class MarkDown {
 
     /**
      * Process list one line at a time.
-     * * Account for ordered lists as well as unordered lists, including intermixing of the lists.
-     *   at different list hierarchy levels.
-     * * Allow a list item line to be split into multiple lines provided the split lines retain
-     *   the same or more line offset compared to the starting line of the item to which they belong.
-     *   * if there is a empty line in between, then the new line will be treated as a new item.
-     * * allows for empty lines inbetween items.
-     *   * currently there is no limit on the number of empty lines.
-     *     but may bring in a limit later.
+     *
+     * Account for ordered lists as well as unordered lists, including intermixing of the lists.
+     * * inturn at different list hierarchy levels.
+     *
+     * Allow a list item line to be split into multiple lines provided the split lines retain
+     * the same or more line offset compared to the starting line of the item to which they belong.
+     * * these following split lines wont have the list marker in front of them.
+     *
+     * Allows for empty lines inbetween items (ie lines with list marker)
+     * * currently there is no limit on the number of empty lines, but may bring in a limit later.
+     *
+     * If empty line between a list item and new line with some content, but without a list marker
+     * * if content offset less than last list item, then unwind the lists before such a line.
+     * * if content offset larger than last list item, then line will be added as new list item
+     *   at the same level as the last list item.
+     * * if content offset same as last list item, then unwind list by one level and insert line
+     *   as a new list item at this new unwound level.
+     *
      * @param {string} line
      */
     process_list(line) {
@@ -168,6 +178,7 @@ export class MarkDown {
             return true
         } else {
             if (this.in.list.offsets.length > 0) {
+
                 if (emptyTracker.cur > 0) {
                     // skip empty line
                     return true
@@ -180,8 +191,24 @@ export class MarkDown {
                 if (matchOffset[1].length < lastOffset) {
                     return false
                 }
-                this.extend_else_appendnew(matchOffset[2], "</li>\n", '<li>', emptyTracker)
-                return true
+
+                if (emptyTracker.prev == 0) {
+                    if (this.html.endsWith("</li>\n")) {
+                        this.extend(matchOffset[2], "</li>\n")
+                        return true
+                    }
+                } else {
+                    if (matchOffset[1].length > lastOffset) {
+                        this.appendnew(matchOffset[2], "<li>", "</li>\n")
+                        return true
+                    }
+                    let uw = this.unwind_list(lastOffset-1)
+                    if (uw.remaining > 0) {
+                        this.appendnew(matchOffset[2], "<li>", "</li>\n")
+                        return true
+                    }
+                }
+                return false
             }
         }
         return false
