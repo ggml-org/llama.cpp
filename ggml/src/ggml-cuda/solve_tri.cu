@@ -47,7 +47,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     float *             X_batch = (float *) ((char *) X + i02 * nb2 + i03 * nb3);
 
     __shared__ float sA[MAX_N_FAST * MAX_N_FAST];
-    __shared__ float sX[MAX_N_FAST * (MAX_K_FAST + 1)];
+    __shared__ float sXt[MAX_N_FAST * (MAX_K_FAST + 1)];
 
     const int offset = threadIdx.x + threadIdx.y * blockDim.x;
 
@@ -59,11 +59,13 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
         }
     }
 
+const int rows_per_warp = (n + WARP_SIZE - 1) / WARP_SIZE;
+
 #pragma unroll
-    for (int i = 0; i < n * (k + 1); i += k * WARP_SIZE) {
-        int i0 = i + offset;
-        if (i0 < n * k) {
-            sX[i0] = B_batch[i0];
+    for (int i = 0; i < rows_per_warp; i++) {
+        const int i0 = lane + i * WARP_SIZE;
+        if (i0 < n) {
+            sXt[col_idx * n + i0] = B_batch[i0 * k +  col_idx];
         }
     }
 
@@ -73,28 +75,38 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     for (int row = 0; row < n; ++row) {
         float sum = 0.0f;
 
-#pragma unroll
-        for (int j = lane; j < row; j += WARP_SIZE) {
-            sum += sA[row * n + j] * sX[j * k + col_idx];
+        // First warp
+            {
+            int j = lane;
+            if (j < row) {
+                sum += sA[row * n + j] * sXt[col_idx * n + j];
+            }
+        }
+        // Second warp
+            if (row >= WARP_SIZE) {
+            int j = WARP_SIZE + lane;
+            if (j < row) {
+                sum += sA[row * n + j] * sXt[col_idx * n + j];
+            }
         }
 
         sum = warp_reduce_sum(sum);
 
         if (lane == 0) {
-            const float b_val  = sX[row * k + col_idx];  // Value from B
+            const float b_val = sXt[col_idx * n + row];
             const float a_diag = sA[row * n + row];
             // no safeguards for division by zero because that indicates corrupt data anyway
-            sX[row * k + col_idx] = (b_val - sum) / a_diag;
+            sXt[col_idx * n + row] = (b_val - sum) / a_diag;
         }
     }
 
     __syncthreads();
 
 #pragma unroll
-    for (int i = 0; i < n * k; i += k * WARP_SIZE) {
-        const int i0 = i + offset;
-        if (i0 < n * k) {
-            X_batch[i0]  = sX[i0];
+    for (int i = 0; i < rows_per_warp; i++) {
+        const int i0 = lane + i * WARP_SIZE;
+        if (i0 < n) {
+            X_batch[i0 * k + col_idx] = sXt[col_idx * n + i0];
         }
     }
 }
