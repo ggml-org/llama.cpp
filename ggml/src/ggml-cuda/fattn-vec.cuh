@@ -155,8 +155,7 @@ static __global__ void flash_attn_ext_vec(
                 for (int i0 = 0; i0 < int(D/sizeof(int)); i0 += WARP_SIZE) {
                     const int i = i0 + threadIdx.x;
 
-                    const int D_int = static_cast<int>(D / sizeof(int));
-                    if (i0 + WARP_SIZE <= D_int || i < D_int) {
+                    if (i0 + WARP_SIZE <= int(D/sizeof(int)) || i < int(D/sizeof(int))) {
                         tmp_q_i32[i] = 0;
                     }
                 }
