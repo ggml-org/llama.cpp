@@ -431,8 +431,8 @@ void ggml_gemv_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                 utmp[sb * 4 + 0] &= kmask1;
             }
             for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                uint8_t *scales_0 = (uint8_t*) utmp + (k / 8) * 32;
-                uint8_t *scales_1 = (uint8_t*) utmp + (k / 8) * 32 + 16;
+                uint8_t * scales_0 = (uint8_t *) utmp + (k / 8) * 32;
+                uint8_t * scales_1 = (uint8_t *) utmp + (k / 8) * 32 + 16;
                 for (int j = 0; j < ncols_interleaved; j++) {
                     sumi1 = 0;
                     sumi2 = 0;
@@ -450,7 +450,7 @@ void ggml_gemv_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                 }
             }
             for (int sb = 0; sb < 8; sb++) {
-                uint8_t *mins = (uint8_t*) utmp + 8 + sb * 16;
+                uint8_t * mins = (uint8_t *) utmp + 8 + sb * 16;
                 for (int j = 0; j < ncols_interleaved; j++) {
                     sum_minf[j] += mins[j] * (a_ptr[l].bsums[sb * 2] + a_ptr[l].bsums[sb * 2 + 1]) * GGML_CPU_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d;
                 }
@@ -900,8 +900,8 @@ void ggml_gemm_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                     utmp[sb * 4 + 0] &= kmask1;
                 }
                 for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                    uint8_t *scales_0 = (uint8_t*) utmp + (k / 8) * 32;
-                    uint8_t *scales_1 = (uint8_t*) utmp + (k / 8) * 32 + 16;
+                    uint8_t * scales_0 = (uint8_t *) utmp + (k / 8) * 32;
+                    uint8_t * scales_1 = (uint8_t *) utmp + (k / 8) * 32 + 16;
                     for (int m = 0; m < 4; m++) {
                         for (int j = 0; j < ncols_interleaved; j++) {
                             sumi1 = 0;
@@ -921,9 +921,9 @@ void ggml_gemm_q4_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                     }
                 }
                 for (int sb = 0; sb < 8; sb++) {
-                    uint8_t *mins = (uint8_t*) utmp + 8 + sb * 16;
+                    uint8_t * mins = (uint8_t *) utmp + 8 + sb * 16;
                     for(int m = 0; m < 4; m++) {
-                        const int16_t *bsums = a_ptr[l].bsums + (sb * 8) + (m * 4) - ((sb % 2) * 6);
+                        const int16_t * bsums = a_ptr[l].bsums + (sb * 8) + (m * 4) - ((sb % 2) * 6);
                         for(int j = 0; j < ncols_interleaved; j++) {
                             sum_minf[m][j] += mins[j] * (bsums[0] + bsums[1]) * GGML_CPU_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d[m];
                         }
