@@ -1070,48 +1070,10 @@ json oaicompat_chat_params_parse(
     return llama_params;
 }
 
-json anthropic_params_from_json(
-    const json & body_in, /* anthropic messages api json semantics */
-    const oaicompat_parser_options & opt,
-    std::vector<raw_buffer> & out_files)
-{
-    json body = body_in;
-    json llama_params;
+json convert_anthropic_to_oai(const json & body) {
+    json oai_body;
 
-    if (body.contains("stop_sequences")) {
-        llama_params["stop"] = body.at("stop_sequences");
-    } else {
-        llama_params["stop"] = json::array();
-    }
-
-    // handle max_tokens (required in Anthropic, but we're permissive)
-    if (!body.contains("max_tokens")) {
-        llama_params["n_predict"] = 4096;
-    } else {
-        llama_params["n_predict"] = body.at("max_tokens");
-    }
-
-    if (body.contains("top_k")) {
-        llama_params["top_k"] = body.at("top_k");
-    }
-
-    if (body.contains("thinking")) {
-        json thinking = json_value(body, "thinking", json::object());
-        std::string thinking_type = json_value(thinking, "type", std::string());
-        if (thinking_type == "enabled") {
-            int budget_tokens = json_value(thinking, "budget_tokens", 10000);
-            llama_params["thinking_budget_tokens"] = budget_tokens;
-        }
-    }
-
-    if (body.contains("metadata")) {
-        json metadata = json_value(body, "metadata", json::object());
-        std::string user_id = json_value(metadata, "user_id", std::string());
-        if (!user_id.empty()) {
-            llama_params["__metadata_user_id"] = user_id;
-        }
-    }
-
+    // Convert system prompt
     json oai_messages = json::array();
     auto system_param = json_value(body, "system", json());
     if (!system_param.is_null()) {
@@ -1133,103 +1095,101 @@ json anthropic_params_from_json(
         });
     }
 
+    // Convert messages
     if (!body.contains("messages")) {
         throw std::runtime_error("'messages' is required");
     }
-    json & messages = body.at("messages");
-    if (!messages.is_array()) {
-        throw std::runtime_error("Expected 'messages' to be an array");
-    }
+    const json & messages = body.at("messages");
+    if (messages.is_array()) {
+        for (const auto & msg : messages) {
+            std::string role = json_value(msg, "role", std::string());
 
-    for (auto & msg : messages) {
-        std::string role = json_value(msg, "role", std::string());
-        if (role != "assistant" && !msg.contains("content")) {
-            throw std::runtime_error("All non-assistant messages must contain 'content'");
-        }
-        if (role == "assistant") {
             if (!msg.contains("content")) {
+                if (role == "assistant") {
+                    continue;
+                }
+                oai_messages.push_back(msg);
                 continue;
             }
-        }
 
-        json & content = msg.at("content");
+            const json & content = msg.at("content");
 
-        if (content.is_string()) {
-            oai_messages.push_back(msg);
-            continue;
-        }
+            if (content.is_string()) {
+                oai_messages.push_back(msg);
+                continue;
+            }
 
-        if (!content.is_array()) {
-            throw std::runtime_error("Expected 'content' to be a string or an array");
-        }
+            if (!content.is_array()) {
+                oai_messages.push_back(msg);
+                continue;
+            }
 
-        json tool_calls = json::array();
-        json converted_content = json::array();
-        json tool_results = json::array();
-        bool has_tool_calls = false;
+            json tool_calls = json::array();
+            json converted_content = json::array();
+            json tool_results = json::array();
+            bool has_tool_calls = false;
 
-        for (auto & block : content) {
-            std::string type = json_value(block, "type", std::string());
+            for (const auto & block : content) {
+                std::string type = json_value(block, "type", std::string());
 
-            if (type == "text") {
-                converted_content.push_back(block);
-            } else if (type == "image") {
-                json source = json_value(block, "source", json::object());
-                std::string source_type = json_value(source, "type", std::string());
+                if (type == "text") {
+                    converted_content.push_back(block);
+                } else if (type == "image") {
+                    json source = json_value(block, "source", json::object());
+                    std::string source_type = json_value(source, "type", std::string());
 
-                if (source_type == "base64") {
-                    std::string media_type = json_value(source, "media_type", std::string("image/jpeg"));
-                    std::string data = json_value(source, "data", std::string());
+                    if (source_type == "base64") {
+                        std::string media_type = json_value(source, "media_type", std::string("image/jpeg"));
+                        std::string data = json_value(source, "data", std::string());
 
-                    converted_content.push_back({
-                        {"type", "image_url"},
-                        {"image_url", {
-                            {"url", "data:" + media_type + ";base64," + data}
+                        converted_content.push_back({
+                            {"type", "image_url"},
+                            {"image_url", {
+                                {"url", "data:" + media_type + ";base64," + data}
+                            }}
+                        });
+                    } else if (source_type == "url") {
+                        std::string url = json_value(source, "url", std::string());
+                        converted_content.push_back({
+                            {"type", "image_url"},
+                            {"image_url", {
+                                {"url", url}
+                            }}
+                        });
+                    }
+                } else if (type == "tool_use") {
+                    tool_calls.push_back({
+                        {"id", json_value(block, "id", std::string())},
+                        {"type", "function"},
+                        {"function", {
+                            {"name", json_value(block, "name", std::string())},
+                            {"arguments", json_value(block, "input", json::object()).dump()}
                         }}
                     });
-                } else if (source_type == "url") {
-                    std::string url = json_value(source, "url", std::string());
-                    converted_content.push_back({
-                        {"type", "image_url"},
-                        {"image_url", {
-                            {"url", url}
-                        }}
-                    });
-                }
-            } else if (type == "tool_use") {
-                tool_calls.push_back({
-                    {"id", json_value(block, "id", std::string())},
-                    {"type", "function"},
-                    {"function", {
-                        {"name", json_value(block, "name", std::string())},
-                        {"arguments", json_value(block, "input", json::object()).dump()}
-                    }}
-                });
-                has_tool_calls = true;
-            } else if (type == "tool_result") {
-                std::string tool_use_id = json_value(block, "tool_use_id", std::string());
+                    has_tool_calls = true;
+                } else if (type == "tool_result") {
+                    std::string tool_use_id = json_value(block, "tool_use_id", std::string());
 
-                auto result_content = json_value(block, "content", json());
-                std::string result_text;
-                if (result_content.is_string()) {
-                    result_text = result_content.get<std::string>();
-                } else if (result_content.is_array()) {
-                    for (const auto & c : result_content) {
-                        if (json_value(c, "type", std::string()) == "text") {
-                            result_text += json_value(c, "text", std::string());
+                    auto result_content = json_value(block, "content", json());
+                    std::string result_text;
+                    if (result_content.is_string()) {
+                        result_text = result_content.get<std::string>();
+                    } else if (result_content.is_array()) {
+                        for (const auto & c : result_content) {
+                            if (json_value(c, "type", std::string()) == "text") {
+                                result_text += json_value(c, "text", std::string());
+                            }
                         }
                     }
+
+                    tool_results.push_back({
+                        {"role", "tool"},
+                        {"tool_call_id", tool_use_id},
+                        {"content", result_text}
+                    });
                 }
-
-                tool_results.push_back({
-                    {"role", "tool"},
-                    {"tool_call_id", tool_use_id},
-                    {"content", result_text}
-                });
             }
-        }
 
-        if (!tool_results.empty()) {
             if (!converted_content.empty() || has_tool_calls) {
                 json new_msg = {{"role", role}};
                 if (!converted_content.empty()) {
@@ -1242,30 +1202,21 @@ json anthropic_params_from_json(
                 }
                 oai_messages.push_back(new_msg);
             }
+
             for (const auto & tool_msg : tool_results) {
                 oai_messages.push_back(tool_msg);
             }
-        } else {
-            if (!converted_content.empty() || has_tool_calls) {
-                json new_msg = {{"role", role}};
-                if (!converted_content.empty()) {
-                    new_msg["content"] = converted_content;
-                } else if (has_tool_calls) {
-                    new_msg["content"] = "";
-                }
-                if (!tool_calls.empty()) {
-                    new_msg["tool_calls"] = tool_calls;
-                }
-                oai_messages.push_back(new_msg);
-            }
         }
     }
 
-    json oai_tools = json::array();
+    oai_body["messages"] = oai_messages;
+
+    // Convert tools
     if (body.contains("tools")) {
-        json & tools = body.at("tools");
+        const json & tools = body.at("tools");
         if (tools.is_array()) {
-            for (auto & tool : tools) {
+            json oai_tools = json::array();
+            for (const auto & tool : tools) {
                 oai_tools.push_back({
                     {"type", "function"},
                     {"function", {
@@ -1275,205 +1226,71 @@ json anthropic_params_from_json(
                     }}
                 });
             }
+            oai_body["tools"] = oai_tools;
         }
     }
 
-    std::string oai_tool_choice = "auto";
+    // Convert tool_choice
     if (body.contains("tool_choice")) {
-        json & tc = body.at("tool_choice");
+        const json & tc = body.at("tool_choice");
         if (tc.is_object()) {
             std::string type = json_value(tc, "type", std::string());
             if (type == "auto") {
-                oai_tool_choice = "auto";
-            } else if (type == "any") {
-                oai_tool_choice = "required";
-            } else if (type == "tool") {
-                oai_tool_choice = "required";
+                oai_body["tool_choice"] = "auto";
+            } else if (type == "any" || type == "tool") {
+                oai_body["tool_choice"] = "required";
             }
         }
     }
 
-    for (auto & msg : oai_messages) {
-        if (!msg.contains("content")) {
-            continue;
-        }
-        json & content = msg.at("content");
-        if (content.is_string() || content.is_null()) {
-            continue;
-        }
-        if (!content.is_array()) {
-            continue;
-        }
+    // Convert stop_sequences to stop
+    if (body.contains("stop_sequences")) {
+        oai_body["stop"] = body.at("stop_sequences");
+    }
 
-        for (auto & p : content) {
-            std::string type = json_value(p, "type", std::string());
-            if (type == "image_url") {
-                if (!opt.allow_image) {
-                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
+    // Handle max_tokens (required in Anthropic, but we're permissive)
+    if (body.contains("max_tokens")) {
+        oai_body["max_tokens"] = body.at("max_tokens");
+    } else {
+        oai_body["max_tokens"] = 4096;
+    }
 
-                json image_url  = json_value(p, "image_url", json::object());
-                std::string url = json_value(image_url, "url", std::string());
-                if (string_starts_with(url, "http")) {
-                    // download remote image
-                    common_remote_params params;
-                    params.headers.push_back("User-Agent: llama.cpp/" + build_info);
-                    params.max_size = 1024 * 1024 * 10; // 10MB
-                    params.timeout  = 10; // seconds
-                    SRV_INF("downloading image from '%s'\n", url.c_str());
-                    auto res = common_remote_get_content(url, params);
-                    if (200 <= res.first && res.first < 300) {
-                        SRV_INF("downloaded %ld bytes\n", res.second.size());
-                        raw_buffer data;
-                        data.insert(data.end(), res.second.begin(), res.second.end());
-                        out_files.push_back(data);
-                    } else {
-                        throw std::runtime_error("Failed to download image");
-                    }
-                } else {
-                    // try to decode base64 image
-                    std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
-                    if (parts.size() != 2) {
-                        throw std::runtime_error("Invalid image_url.url value");
-                    } else if (!string_starts_with(parts[0], "data:image/")) {
-                        throw std::runtime_error("Invalid image_url.url format: " + parts[0]);
-                    } else if (!string_ends_with(parts[0], "base64")) {
-                        throw std::runtime_error("image_url.url must be base64 encoded");
-                    } else {
-                        auto base64_data = parts[1];
-                        auto decoded_data = base64_decode(base64_data);
-                        out_files.push_back(decoded_data);
-                    }
-                }
-
-                // replace this chunk with a marker
-                p["type"] = "text";
-                p["text"] = mtmd_default_marker();
-                p.erase("image_url");
-            } else if (type == "input_audio") {
-                if (!opt.allow_audio) {
-                    throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                json input_audio   = json_value(p, "input_audio", json::object());
-                std::string data   = json_value(input_audio, "data", std::string());
-                std::string format = json_value(input_audio, "format", std::string());
-                if (format != "wav" && format != "mp3") {
-                    throw std::runtime_error("input_audio.format must be either 'wav' or 'mp3'");
-                }
-                auto decoded_data = base64_decode(data);
-                out_files.push_back(decoded_data);
-
-                // replace this chunk with a marker
-                p["type"] = "text";
-                p["text"] = mtmd_default_marker();
-                p.erase("input_audio");
-            }
+    // Pass through common params
+    for (const auto & key : {"temperature", "top_p", "top_k", "stream"}) {
+        if (body.contains(key)) {
+            oai_body[key] = body.at(key);
         }
     }
 
-    common_chat_templates_inputs inputs;
-    inputs.messages              = common_chat_msgs_parse_oaicompat(oai_messages);
-    inputs.tools                 = common_chat_tools_parse_oaicompat(oai_tools);
-    inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(oai_tool_choice);
-    inputs.json_schema           = "";
-    inputs.grammar               = "";
-    inputs.use_jinja             = opt.use_jinja;
-    inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
-    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
-    inputs.reasoning_format      = opt.reasoning_format;
-    inputs.enable_thinking       = opt.enable_thinking;
-
-    if (opt.enable_thinking && opt.prefill_assistant) {
-        if (!inputs.messages.empty() && inputs.messages.back().role == "assistant") {
-            inputs.enable_thinking = false;
+    // Handle Anthropic-specific thinking param
+    if (body.contains("thinking")) {
+        json thinking = json_value(body, "thinking", json::object());
+        std::string thinking_type = json_value(thinking, "type", std::string());
+        if (thinking_type == "enabled") {
+            int budget_tokens = json_value(thinking, "budget_tokens", 10000);
+            oai_body["thinking_budget_tokens"] = budget_tokens;
         }
     }
 
-    if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
-        llama_params["parse_tool_calls"] = true;
-    }
-
-    // merge the template args provided from command line with the args provided in the user request
-    auto chat_template_kwargs_object = json_value(body, "chat_template_kwargs", json::object());
-    inputs.chat_template_kwargs = opt.chat_template_kwargs;
-    for (const auto & item : chat_template_kwargs_object.items()) {
-        inputs.chat_template_kwargs[item.key()] = item.value().dump();
-    }
-
-    // parse the "enable_thinking" kwarg to override the default value
-    auto enable_thinking_kwarg = json_value(inputs.chat_template_kwargs, "enable_thinking", std::string(""));
-    if (enable_thinking_kwarg == "true") {
-        inputs.enable_thinking = true;
-    } else if (enable_thinking_kwarg == "false") {
-        inputs.enable_thinking = false;
-    } else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
-        throw std::runtime_error("invalid type for \"enable_thinking\" (expected boolean, got string)");
-    }
-
-    // if the assistant message appears at the end of list, we do not add end-of-turn token
-    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
-    common_chat_msg last_message;
-    if (prefill_assistant_message) {
-        last_message = inputs.messages.back();
-        inputs.messages.pop_back();
-
-        // sanity check, max one assistant message at the end of the list
-        if (!inputs.messages.empty() && inputs.messages.back().role == "assistant"){
-            throw std::runtime_error("Cannot have 2 or more assistant messages at the end of the list.");
-        }
-
-        inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
-
-        if (inputs.enable_thinking) {
-            throw std::runtime_error("Assistant response prefill is incompatible with enable_thinking.");
-        }
-
-        inputs.add_generation_prompt = true;
-    }
-
-    // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
-
-    // Append assistant prefilled message
-    if (prefill_assistant_message) {
-        if (!last_message.content_parts.empty()) {
-            for (auto & p : last_message.content_parts) {
-                chat_params.prompt += p.text;
-            }
-        } else {
-            chat_params.prompt += last_message.content;
+    // Handle Anthropic-specific metadata param
+    if (body.contains("metadata")) {
+        json metadata = json_value(body, "metadata", json::object());
+        std::string user_id = json_value(metadata, "user_id", std::string());
+        if (!user_id.empty()) {
+            oai_body["__metadata_user_id"] = user_id;
         }
     }
 
-    llama_params["chat_format"]      = static_cast<int>(chat_params.format);
-    llama_params["prompt"]           = chat_params.prompt;
-    if (!chat_params.grammar.empty()) {
-        llama_params["grammar"] = chat_params.grammar;
-    }
-    llama_params["grammar_lazy"]     = chat_params.grammar_lazy;
-    auto grammar_triggers = json::array();
-    for (const auto & trigger : chat_params.grammar_triggers) {
-        server_grammar_trigger ct(trigger);
-        grammar_triggers.push_back(ct.to_json());
-    }
-    llama_params["grammar_triggers"] = grammar_triggers;
-    llama_params["preserved_tokens"] = chat_params.preserved_tokens;
-    llama_params["thinking_forced_open"] = chat_params.thinking_forced_open;
-    for (const auto & stop : chat_params.additional_stops) {
-        llama_params["stop"].push_back(stop);
-    }
+    return oai_body;
+}
 
-    // Copy remaining properties to llama_params
-    // This allows user to use llama.cpp-specific params like "mirostat", ... via Anthropic endpoint.
-    // See "launch_slot_with_task()" for a complete list of params supported by llama.cpp
-    for (const auto & item : body.items()) {
-        if (!llama_params.contains(item.key())) {
-            llama_params[item.key()] = item.value();
-        }
-    }
-
-    return llama_params;
+json anthropic_params_from_json(
+    const json & body,
+    const oaicompat_parser_options & opt,
+    std::vector<raw_buffer> & out_files)
+{
+    json oai_body = convert_anthropic_to_oai(body);
+    return oaicompat_chat_params_parse(oai_body, opt, out_files);
 }
 
 json format_embeddings_response_oaicompat(const json & request, const json & embeddings, bool use_base64) {

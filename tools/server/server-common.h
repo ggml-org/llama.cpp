@@ -294,6 +294,9 @@ json oaicompat_chat_params_parse(
     const oaicompat_parser_options & opt,
     std::vector<raw_buffer> & out_files);
 
+// convert Anthropic Messages API format to OpenAI Chat Completions API format
+json convert_anthropic_to_oai(const json & body);
+
 // used by Anthropic /v1/messages endpoint
 json anthropic_params_from_json(
     const json & body, /* anthropic messages api json semantics */
