@@ -154,16 +154,9 @@ namespace ggml_cuda_mma {
         T x[ne] = {0};
 
         static constexpr __device__ bool supported() {
-            // Integer WMMA is only supported on RDNA4
-            if constexpr (std::is_same_v<T, int>) {
-#if defined(RDNA4)
-                if (I == 16 && J == 16) return true;
-#endif
-                return false;
-            } else {
-                if (I == 16 && J == 16) return true;
-                return false;
-            }
+            // Integer and FP16 WMMA are supported on RDNA3/RDNA4
+            if (I == 16 && J == 16) return true;
+            return false;
         }
 
         static __device__ __forceinline__ int get_i(const int l) {
@@ -827,13 +820,15 @@ namespace ggml_cuda_mma {
                                                       0, 0, 0);
 #endif // defined(CDNA3)
 
-#elif defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)
+#elif defined(AMD_WMMA_INT_AVAILABLE)
+        using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
+        int32x8_t * acc = (int32x8_t *) D.x;
+
+#if defined(RDNA4)
+        // RDNA4 uses gfx12-specific intrinsic with int32x2_t
         using int32x2_t = __attribute__((__vector_size__(2 * sizeof(int)))) int;
         int32x2_t * a_vec = (int32x2_t *) A.x;
         int32x2_t * b_vec = (int32x2_t *) B.x;
-
-        using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
-        int32x8_t * acc = (int32x8_t *) D.x;
 
         acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(
             true,
@@ -851,7 +846,22 @@ namespace ggml_cuda_mma {
             b_vec[1],
             acc[0],
             true
-        )
+        );
+#else  // RDNA3
+        // RDNA3 uses generic intrinsic with int32x4_t
+        using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
+        const int32x4_t& a0 = reinterpret_cast<const int32x4_t&>(A.x[0]);
+        const int32x4_t& b0 = reinterpret_cast<const int32x4_t&>(B.x[0]);
+
+        acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(
+            true,
+            a0,
+            true,
+            b0,
+            acc[0],
+            true
+        );
+#endif
 
 #else
         GGML_UNUSED_VARS(D, A, B);
@@ -927,13 +937,15 @@ namespace ggml_cuda_mma {
 
 static __device__ __forceinline__ void mma(
             tile<16, 16, int> & D, const tile<16, 4, int> & A, const tile<16, 4, int> & B) {
-#if defined(AMD_WMMA_AVAILABLE) && defined(RDNA4)
+#if defined(AMD_WMMA_INT_AVAILABLE)
+    using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
+    int32x8_t * acc = (int32x8_t *) D.x;
+
+#if defined(RDNA4)
+    // RDNA4 uses gfx12-specific intrinsic with int32x2_t
     using int32x2_t = __attribute__((__vector_size__(2 * sizeof(int)))) int;
     int32x2_t * a_vec = (int32x2_t *) A.x;
     int32x2_t * b_vec = (int32x2_t *) B.x;
-
-    using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
-    int32x8_t * acc = (int32x8_t *) D.x;
 
     acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(
         true,
@@ -943,6 +955,21 @@ static __device__ __forceinline__ void mma(
         acc[0],
         false
     );
+#else  // RDNA3
+    // RDNA3 uses generic intrinsic with int32x4_t
+    using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
+    const int32x4_t& a0 = reinterpret_cast<const int32x4_t&>(A.x[0]);
+    const int32x4_t& b0 = reinterpret_cast<const int32x4_t&>(B.x[0]);
+
+    acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(
+        true,
+        a0,
+        true,
+        b0,
+        acc[0],
+        false
+    );
+#endif
 #else
         GGML_UNUSED(D);
         GGML_UNUSED(A);
