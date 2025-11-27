@@ -1464,18 +1464,11 @@ json anthropic_params_from_json(
         llama_params["stop"].push_back(stop);
     }
 
-    // Handle "n" field
-    int n_choices = json_value(body, "n", 1);
-    if (n_choices != 1) {
-        throw std::runtime_error("Only one completion choice is allowed");
-    }
-
     // Copy remaining properties to llama_params
     // This allows user to use llama.cpp-specific params like "mirostat", ... via Anthropic endpoint.
     // See "launch_slot_with_task()" for a complete list of params supported by llama.cpp
     for (const auto & item : body.items()) {
-        // Exception: if "n_predict" is present, we overwrite the value specified earlier by "max_tokens"
-        if (!llama_params.contains(item.key()) || item.key() == "n_predict") {
+        if (!llama_params.contains(item.key())) {
             llama_params[item.key()] = item.value();
         }
     }
