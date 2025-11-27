@@ -596,7 +596,12 @@ static void common_resolve_redirects(std::string & url, httplib::Headers & heade
         auto head = cli.Get(parts.path, probe_headers);
 
         if (head && (head->status >= 300 && head->status < 400) && head->has_header("Location")) {
-            url = head->get_header_value("Location");
+            std::string location = head->get_header_value("Location");
+            if (location.find("://") == std::string::npos) {
+                url = parts.scheme + "://" + parts.host + location;
+            } else {
+                url = location;
+            }
             if (headers.count("Authorization")) {
                 headers.erase("Authorization");
             }
