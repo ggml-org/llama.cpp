@@ -43,9 +43,9 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
 
-    const float * const A_batch = (const float *) (A + i02 * nb02 / sizeof(float) + i03 * nb03 / sizeof(float));
-    const float * const B_batch = (const float *) (B + i02 * nb12 / sizeof(float) + i03 * nb13 / sizeof(float));
-    float *             X_batch = (float *) (X + i02 * nb2 / sizeof(float) + i03 * nb3 / sizeof(float));
+    const float * const A_batch = (const float *) (A + i02 * nb02 + i03 * nb03);
+    const float * const B_batch = (const float *) (B + i02 * nb12 + i03 * nb13);
+    float *             X_batch = (float *) (X + i02 * nb2 + i03 * nb3);
 
     __shared__ float sA[MAX_N_FAST * MAX_N_FAST];
     __shared__ float sXt[MAX_N_FAST * (MAX_K_FAST + 1)];
@@ -76,14 +76,12 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     for (int row = 0; row < n; ++row) {
         float sum = 0.0f;
 
-        // First warp
         {
             int j = lane;
             if (j < row) {
                 sum += sA[row * n + j] * sXt[col_idx * n + j];
             }
         }
-        // Second warp
         if (row >= WARP_SIZE) {
             int j = WARP_SIZE + lane;
             if (j < row) {
@@ -116,7 +114,6 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 #    pragma clang diagnostic pop
 #endif  // __clang__
 
-// Launcher
 static void solve_tri_f32_cuda(const float * A,
                                const float * B,
                                float *       X,
@@ -131,7 +128,6 @@ static void solve_tri_f32_cuda(const float * A,
                                size_t        nb2,
                                size_t        nb3,
                                cudaStream_t  stream) {
-    // n <= 64, k <= 32
     const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
     dim3        threads(WARP_SIZE, k);
     dim3        grid(ne02 * ne03);
@@ -188,8 +184,8 @@ static void solve_tri_f32_cuda(const float * A,
 }
 
 void ggml_cuda_op_solve_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    const ggml_tensor * src0 = dst->src[0];  // A
-    const ggml_tensor * src1 = dst->src[1];  // B
+    const ggml_tensor * src0 = dst->src[0];  // A (triangular n x x matrix)
+    const ggml_tensor * src1 = dst->src[1];  // B (right hand side of n x k equation columns)
 
     ggml_is_contiguous(src0);
     ggml_is_contiguous(src1);
@@ -201,6 +197,7 @@ void ggml_cuda_op_solve_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     GGML_ASSERT(k <= 32);
 
     solve_tri_f32_cuda((const float *) src0->data, (const float *) src1->data, (float *) dst->data, n, k, src0->ne[2],
-                       src0->ne[3], src0->nb[2], src0->nb[3], src1->nb[2], src1->nb[3], dst->nb[2], dst->nb[3],
-                       ctx.stream());
+                       src0->ne[3], src0->nb[2] / sizeof(float), src0->nb[3] / sizeof(float),
+                       src1->nb[2] / sizeof(float), src1->nb[3] / sizeof(float), dst->nb[2] / sizeof(float),
+                       dst->nb[3] / sizeof(float), ctx.stream());
 }
