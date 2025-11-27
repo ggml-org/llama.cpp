@@ -14,6 +14,7 @@
 #include <float.h>
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
+#include <stdatomic.h>
 
 #define GROUP_MAX_EPS 1e-15f
 #define GROUP_MAX_EPS_IQ3_XXS 1e-8f
@@ -22,6 +23,9 @@
 #define GROUP_MAX_EPS_IQ1_S 1e-12f
 
 #define UNUSED GGML_UNUSED
+
+// defined in cpu-feats.cpp
+extern int kernel_idx;
 
 void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
@@ -740,20 +744,18 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     UNUSED(y);
     UNUSED(nb);
 
-    // allow benign data race here
-    static volatile ggml_vec_dot_t func_ptr = NULL;
-    ggml_vec_dot_t func = func_ptr;
-    if (func == NULL) {
-        func = ggml_vec_dot_q2_K_q8_K_generic;
+    const static ggml_vec_dot_t func_table[] = {
+        ggml_vec_dot_q2_K_q8_K_generic,
     #if defined(__riscv_v)
-        const int vlen = ggml_cpu_get_riscv_vlen();
-        if (vlen >= 256) {
-            func = ggml_vec_dot_q2_K_q8_K_rvv256;
-        } else if (vlen >= 128) {
-            func = ggml_vec_dot_q2_K_q8_K_rvv128;
-        }
+        ggml_vec_dot_q2_K_q8_K_rvv128,
+        ggml_vec_dot_q2_K_q8_K_rvv256,
     #endif
-        func_ptr = func;
+    };
+    static _Atomic ggml_vec_dot_t func_ptr = NULL;
+    ggml_vec_dot_t func = atomic_load_explicit(&func_ptr, memory_order_relaxed);
+    if (func == NULL) {
+        func = func_table[kernel_idx];
+        atomic_compare_exchange_strong_explicit(&func_ptr, &(ggml_vec_dot_t){NULL}, func, memory_order_relaxed, memory_order_relaxed);
     }
 
     func(n, s, bs, vx, bx, vy, by, nrc);

@@ -1,4 +1,16 @@
+#include <algorithm>
+
 #include "ggml-backend-impl.h"
+#include "ggml-cpu.h"
+
+// static kernel selection for fixed-length kernels
+static int ggml_get_riscv_v_kernel_idx() {
+    int vlen = ggml_cpu_get_riscv_vlen();
+    vlen = std::min(vlen, 256);
+    return vlen / 128;
+}
+
+extern "C" int kernel_idx = ggml_get_riscv_v_kernel_idx();
 
 #if defined(__riscv) && __riscv_xlen == 64
 #include <sys/auxv.h>
