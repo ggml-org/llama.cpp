@@ -93,17 +93,18 @@ static void rope_cache_init(const float   theta_base,
         // Get n-d rotational scaling corrected for extrapolation
         float theta_interp = freq_scale * theta_extrap;
         float theta2       = theta_interp;
+        float mscale2      = mscale;
 
         if (ext_factor != 0.0f) {
             float ramp_mix = rope_yarn_ramp(corr_dims[0], corr_dims[1], i0) * ext_factor;
             theta2         = theta_interp * (1 - ramp_mix) + theta_extrap * ramp_mix;
 
             // Get n-d magnitude scaling corrected for interpolation
-            mscale *= 1.0f + 0.1f * logf(1.0f / freq_scale);
+            mscale2 *= 1.0f + 0.1f * logf(1.0f / freq_scale);
         }
 
-        cache[i0 + 0] = cosf(theta2) * mscale;
-        cache[i0 + 1] = sinf(theta2) * mscale;
+        cache[i0 + 0] = cosf(theta2) * mscale2;
+        cache[i0 + 1] = sinf(theta2) * mscale2;
 
         theta *= theta_scale;
     }
@@ -337,8 +338,8 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
                     }
                 }
 
-                src_loc += is_neox ? (rope_ctx->n_dims / 2) : 0;
-                dst_data_loc += is_neox ? (rope_ctx->n_dims / 2) : 0;
+                src_loc += (is_neox ? (rope_ctx->n_dims / 2) : 0);
+                dst_data_loc += (is_neox ? (rope_ctx->n_dims / 2) : 0);
                 for (uint32_t i0 = rope_ctx->n_dims; i0 < ne0; i0 += 2) {
                     dst_data_loc[0] = src_loc[0];
                     dst_data_loc[1] = src_loc[1];
