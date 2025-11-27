@@ -266,9 +266,12 @@ It is attached to the document object. Some of these can also be updated using t
 
       * NOTE: the latest user message (query/response/...) for which we need a ai response, will also be counted as belonging to the iRecentUserMsgCnt.
 
-    * bMarkdown - text contents in the messages are interpreted as Markdown based text and inturn converted to html form for viewing by the end user.
+    * Markdown
 
-    * bMarkdownHtmlSanitize - the text content is sanitized using the browser's dom parser, so that any html tags get converted to normal visually equivalent text representation, before processing by the markdown to html conversion logic.
+      - enabled: whether markdown support is enabled or not.
+      - always: if true, all messages text content interpreted as Markdown based text and converted to html for viewing.
+        if false, then interpret only ai assistant's text content as markdown.
+      - htmlSanitize: text content sanitized using browser's dom parser, so html/xml tags get converted to normal visually equivalent text representation, before processing by markdown to html conversion logic.
 
     * bCompletionFreshChatAlways - whether Completion mode collates complete/sliding-window history when communicating with the server or only sends the latest user query/message.
 
@@ -312,11 +315,11 @@ It is attached to the document object. Some of these can also be updated using t
 
       * this is specified in seconds, so that users by default will normally not overload any website through the proxy server.
 
-    the builtin tools' meta data is sent to the ai model in the requests sent to it.
+    1. the builtin tools' meta data is sent to the ai model in the requests sent to it.
 
-    inturn if the ai model requests a tool call to be made, the same will be done and the response sent back to the ai model, under user control, by default.
+    2. inturn if the ai model requests a tool call to be made, the same will be done and the response sent back to the ai model, under user control, by default.
 
-    as tool calling will involve a bit of back and forth between ai assistant and end user, it is recommended to set iRecentUserMsgCnt to 10 or so, so that enough context is retained during chatting with ai models with tool support. Decide based on your available system and video ram and the type of chat you are having.
+    3. as tool calling will involve a bit of back and forth between ai assistant and end user, it is recommended to set iRecentUserMsgCnt to 10 or so, so that enough context is retained during chatting with ai models with tool support. Decide based on your available system and video ram and the type of chat you are having.
 
   * apiRequestOptions - maintains the list of options/fields to send along with api request, irrespective of whether /chat/completions or /completions endpoint.
 

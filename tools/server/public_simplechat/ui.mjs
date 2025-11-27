@@ -51,7 +51,7 @@ export function el_create_button(id, callback, name=undefined, innerText=undefin
 
 /**
  * Create a para and set it up. Optionaly append it to a passed parent.
- * @param {string} text
+ * @param {string} text - assigned to innerText
  * @param {HTMLElement | undefined} elParent
  * @param {string | undefined} id
  */
