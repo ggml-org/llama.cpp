@@ -31,7 +31,7 @@ OutputVector translate_soft_max(const NodeContext & context) {
 
     float scale = 1.0f;
     float max_bias = 0.0f;
-    auto * op_params = context.get_output_op_params(0);
+    auto * op_params = context.get_output_op_params();
     memcpy(&scale, (float *) op_params + 0, sizeof(float));
     memcpy(&max_bias, (float *) op_params + 1, sizeof(float));
     auto src0_shape = context.get_input_shape(0).get_shape();

@@ -89,32 +89,60 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
         m_node_info_list[node_n].node_op_case = compute_op_case(m_node_info_list[node_n].node);
         m_node_info_list[node_n].node_op_type = compute_op_type(m_node_info_list[node_n].node);
     }
+    // Iterate through node_info_list to create model inputs and outputs.
+    // For inputs: if an input of a node is not seen as an output of any previous node, it is a model input.
+    // For outputs: every node output is a model output unless its data_addr is overridden by a later node.
+    std::map<void *, ggml_tensor *> data_addr_map;
+    std::unordered_set<std::string> output_name_set;
+    for (const auto & node_info : m_node_info_list) {
+        for (const auto & it : node_info.node_inputs) {
+            const auto & src_name = it.first;
+            const auto & src_node = it.second;
+
+            if (output_name_set.find(src_name) == output_name_set.end() &&
+                m_model_weights.find(src_name) == m_model_weights.end() &&
+                m_model_inputs.find(src_name) == m_model_inputs.end()) {
+                auto param_node =
+                    std::make_shared<ov::op::v0::Parameter>(get_ov_type(src_node), ov::Shape(get_shape(src_node)));
+                param_node->set_friendly_name(src_name);
+                param_node->output(0).get_tensor().set_names({src_name});
+                m_model_inputs[src_name] = param_node;
+            }
+        }
+        output_name_set.emplace(node_info.node_output_name);
+        data_addr_map[node_info.data_addr] = node_info.node_output;
+    }
+    for (const auto & it : data_addr_map) {
+        // No need to add view tensors as model outputs
+        if (it.second->op != GGML_OP_VIEW) {
+            m_model_outputs[std::string(it.second->name)] = it.second;
+        }
+    }
 }
 
-// Called in GgmlOvDecoder constructor. Two cases: 1. constructing a decoder for the whole graph;
-// 2. constructing a decoder for a node;
-// 3. constructing a decoder for the whole graph naively (op test case)
 void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
-    std::string node_name;
     NodeInfo current_node_info;
+    auto node_name = std::string(node->name);
+    auto node_output_name = node_name;
+    auto * node_output = node;
     if (node->op == GGML_OP_SET_ROWS) {
         // SET_ROWS updates the tensor in place. For later ov op that uses the
         // the view_src of SET_ROWS, we need to make sure they get the updated tensor
         // by putting the view_src name in the tensor_map in
         // <openvino>/src/frontends/ggml/src/translate_session.cpp
-        node_name = std::string(node->view_src->name);
-    } else {
-        node_name = std::string(node->name);
+        node_output_name = std::string(node->view_src->name);
+        node_output = node->view_src;
     }
 
-    m_output_names.push_back(node_name);
-    m_outputs[node_name] = node;
+    m_output_names.push_back(node_output_name);
+    m_outputs[node_output_name] = node_output;
 
     current_node_info.node = node;
     current_node_info.node_name = node_name;
-    current_node_info.node_outputs[node_name] = node;
-    current_node_info.node_outputs_names.push_back(node_name);
+    current_node_info.node_output = node_output;
+    current_node_info.node_output_name = node_output_name;
     current_node_info.node_op_case = 0;
+    current_node_info.data_addr = node->data;
 
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         auto * src = node->src[i];
@@ -127,17 +155,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
         current_node_info.node_inputs[src_name] = src;
         current_node_info.node_inputs_names.push_back(src_name);
 
-        // Add model inputs and weights constants, if called for the whole graph
-        if (naive) {
-            if (m_model_weights.find(src_name) == m_model_weights.end()) {
-                auto param_node =
-                    std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), get_graph_input_shape(node, src));
-                param_node->set_friendly_name(src_name);
-                param_node->output(0).get_tensor().set_names({src_name});
-                m_model_inputs[src_name] = param_node;
-            }
-
-        } else if (!src->view_src) {
+        // Add model inputs
+        if (!naive && !src->view_src) {
             ggml_backend_buffer * buffer = src->buffer;
 
             if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || src->flags & GGML_TENSOR_FLAG_INPUT) {
@@ -157,18 +176,15 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
         }
     }
 
-    // Add model outputs, if called for the whole graph
-    if (naive) {
-        m_model_output_names.push_back(node_name);
-    } else {
+    // Add model outputs
+    if (!naive) {
         // Model outputs are tensors with GGML_TENSOR_FLAG_OUTPUT flag and kv_caches
         static std::set<std::string> debug_output_names = {};
         // Workaround: the final tensor "result_output" does not have GGML_TENSOR_FLAG_OUTPUT flag set in cgraph
         if (node->op == GGML_OP_SET_ROWS || node->flags & GGML_TENSOR_FLAG_OUTPUT ||
-            node_name.find("output") != std::string::npos || debug_output_names.count(node_name)) {
-            if (auto it = std::find(m_model_output_names.begin(), m_model_output_names.end(), node_name);
-                it == m_model_output_names.end()) {
-                m_model_output_names.push_back(node_name);
+            node_output_name.find("output") != std::string::npos || debug_output_names.count(node_output_name)) {
+            if (m_model_outputs.find(node_output_name) == m_model_outputs.end()) {
+                m_model_outputs[node_output_name] = node_output;
             }
         }
     }
@@ -176,7 +192,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
     m_node_info_list.push_back(current_node_info);
 }
 
-int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) {
+int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
     int op_case = 0;
     switch (node->op) {
     case GGML_OP_RESHAPE: {
@@ -370,9 +386,6 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
         int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
         input_shape = ov::PartialShape{1, 1, 1, len};
 
-    } else if (input->op == GGML_OP_VIEW) {
-        // This case is added to make test-backend-ops work
-        input_shape = ov::PartialShape{get_shape(input->view_src)};
     } else {
         input_shape = ov::PartialShape{get_shape(input)};
     }
@@ -762,17 +775,11 @@ std::vector<size_t> GgmlOvDecoder::get_output_stride(const std::string & name) c
 
 ov::PartialShape GgmlOvDecoder::get_output_shape(const std::string & name) const {
     auto * ggml_tensor = m_outputs.at(name);
-    if (ggml_tensor->op == GGML_OP_SET_ROWS) {
-        ggml_tensor = ggml_tensor->view_src;
-    }
     return ov::PartialShape(get_shape(ggml_tensor));
 }
 
-ov::PartialShape GgmlOvDecoder::get_output_shape(int node_idx, const std::string & name) const {
-    auto * ggml_tensor = m_node_info_list[node_idx].node_outputs.at(name);
-    if (ggml_tensor->op == GGML_OP_SET_ROWS) {
-        ggml_tensor = ggml_tensor->view_src;
-    }
+ov::PartialShape GgmlOvDecoder::get_output_shape(int node_idx) const {
+    auto * ggml_tensor = m_node_info_list[node_idx].node_output;
     return ov::PartialShape(get_shape(ggml_tensor));
 }
 
@@ -785,7 +792,7 @@ std::vector<std::string> GgmlOvDecoder::get_output_names() const {
 }
 
 std::vector<std::string> GgmlOvDecoder::get_output_names(int node_idx) const {
-    return m_node_info_list[node_idx].node_outputs_names;
+    return {m_node_info_list[node_idx].node_output_name};
 }
 
 const std::string & GgmlOvDecoder::get_op_name() const {
@@ -809,8 +816,8 @@ int32_t * GgmlOvDecoder::get_output_op_params(const std::string & name) const {
     return m_outputs.at(name)->op_params;
 }
 
-int32_t * GgmlOvDecoder::get_output_op_params(int node_idx, const std::string & name) const {
-    return m_node_info_list[node_idx].node_outputs.at(name)->op_params;
+int32_t * GgmlOvDecoder::get_output_op_params(int node_idx) const {
+    return m_node_info_list[node_idx].node->op_params;
 }
 
 void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>, int node_idx)> node_visitor) const {

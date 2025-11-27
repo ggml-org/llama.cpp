@@ -15,7 +15,7 @@ OutputVector translate_scale(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
     float scale;
-    memcpy(&scale, context.get_output_op_params(0), sizeof(float));
+    memcpy(&scale, context.get_output_op_params(), sizeof(float));
     auto scale_node = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{scale});
 
     auto res = std::make_shared<ov::op::v1::Multiply>(context.get_input(0), scale_node);

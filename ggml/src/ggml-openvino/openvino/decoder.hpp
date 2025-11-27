@@ -39,7 +39,7 @@ public:
 
     virtual PartialShape get_output_shape(const std::string& name) const = 0;
 
-    virtual PartialShape get_output_shape(int node_idx, const std::string& name) const = 0;
+    virtual PartialShape get_output_shape(int node_idx) const = 0;
 
     virtual std::vector<size_t> get_output_stride(const std::string& name) const = 0;
 
@@ -51,7 +51,7 @@ public:
 
     virtual int32_t* get_output_op_params(const std::string& name) const = 0;
 
-    virtual int32_t* get_output_op_params(int node_idx, const std::string& name) const = 0;
+    virtual int32_t * get_output_op_params(int node_idx) const = 0;
 
     virtual std::vector<std::string> get_output_names() const = 0;
 
@@ -72,7 +72,7 @@ public:
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_inputs() const = 0;
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_extra_inputs() const = 0;
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_weights() const = 0;
-    virtual const std::vector<std::string>& get_model_output_names() const = 0;
+    virtual std::vector<std::string> get_model_output_names() const = 0;
 
     virtual int32_t* get_rope_params() const = 0;
     // virtual std::map<std::string, std::string> get_kv_param_res_names() const = 0;

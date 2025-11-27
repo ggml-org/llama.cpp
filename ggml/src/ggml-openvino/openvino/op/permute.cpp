@@ -32,10 +32,12 @@ OutputVector translate_permute(const NodeContext & context) {
     if (op_case == 1) {
         res = std::make_shared<ov::op::v1::Transpose>(src, perm);
     } else if (op_case == 4) {
-        auto output_shape = context.get_output_shape(0).to_shape();
+        auto output_shape = context.get_output_shape().to_shape();
         auto n_heads = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[1]});
         auto head_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[3]});
-        auto n_seq_active = context.get_input("n_seq_active");
+        auto n_seq_active = context.has_input("n_seq_active") ?
+                                context.get_input("n_seq_active") :
+                                ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[0]});
         auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
 
         auto new_shape =
@@ -49,26 +51,39 @@ OutputVector translate_permute(const NodeContext & context) {
         res = std::make_shared<ov::op::v1::Transpose>(reshaped, perm);
     } else {
         auto cache_shape = src.get_partial_shape();
-        auto output_shape = context.get_output_shape(0).to_shape();
+        auto output_shape = context.get_output_shape().to_shape();
         int64_t head_size = output_shape[3];
         int64_t n_heads = output_shape[1];
         int64_t ctx_per_seq = cache_shape[2].is_static() ? cache_shape[2].get_length() : -1;
         int64_t n_seq = cache_shape[1].get_length();
 
         Output<Node> attention_size;
-        if (op_case == 2) {
+        if (!context.has_input("attention_size")) {
+            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[2]});
+        } else if (op_case == 2) {
             attention_size = context.get_input("attention_size");
         } else {
             attention_size = context.get_input("attention_size_swa");
+        }
+
+        Output<Node> seq_active_start;
+        Output<Node> seq_active_end;
+        if (context.has_input("seq_active_start")) {
+            seq_active_start = context.get_input("seq_active_start");
+            seq_active_end = context.get_input("seq_active_end");
+        } else {
+            int64_t n_seq_active = output_shape[0];
+            size_t offset = *((size_t *) context.get_input_op_params(0));
+            int64_t seq_active_start_val = offset / context.get_input_stride(0)[0];
+            int64_t seq_active_end_val = seq_active_start_val + n_seq_active;
+            seq_active_start = ov::op::v0::Constant::create(ov::element::i64, {1}, {seq_active_start_val});
+            seq_active_end = ov::op::v0::Constant::create(ov::element::i64, {1}, {seq_active_end_val});
         }
 
         // 1. reshape to [n_seq, ctx_per_seq, n_heads, head_size]
         // 2. slice out the active sequences
         // 3. slice out the attention part in each sequence
         // 4. permute
-        auto seq_active_start = context.get_input("seq_active_start");
-        auto seq_active_end = context.get_input("seq_active_end");
-
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
 

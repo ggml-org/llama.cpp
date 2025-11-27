@@ -362,7 +362,7 @@ std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & dev
 }
 
 bool is_naive(ggml_cgraph * cgraph) {
-    constexpr int naive_graph_size_threshold = 20;
+    constexpr int naive_graph_size_threshold = 100;
     return cgraph->n_nodes < naive_graph_size_threshold;
 }
 
@@ -412,7 +412,7 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
     ov::Shape input_shape;
     if (ggml_tensor->op == GGML_OP_VIEW) {
         // This case is added to make test-backend-ops work
-        input_shape = ggml_decoder->get_graph_input_shape(ggml_tensor, ggml_tensor->view_src).to_shape();
+        input_shape = ggml_decoder->get_shape(ggml_tensor->view_src);
     } else {
         input_shape = ggml_decoder->get_input_shape(name).to_shape();
     }
@@ -545,15 +545,13 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
 }
 
 ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & result_name) {
-    auto * ggml_tensor = ggml_decoder->get_output_ggml_tensor(result_name);
-    auto output_type = ggml_decoder->get_output_type(result_name);
-    ov::Shape output_shape;
-    output_shape = ggml_decoder->get_output_shape(result_name).to_shape();
+    auto * ggml_tensor = ggml_decoder->get_model_outputs().at(result_name);
+    auto output_type = ggml_decoder->get_ov_type(ggml_tensor);
+    auto output_shape = ggml_decoder->get_shape(ggml_tensor);
 
     if (ggml_decoder->is_static() && result_name == "result_output") {
         output_shape[1] = 1;
     }
-
     ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
     return output_tensor;
 }

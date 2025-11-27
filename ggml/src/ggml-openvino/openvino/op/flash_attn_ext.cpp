@@ -26,7 +26,7 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     auto v = context.get_input(2);
     auto mask = context.get_input(3);
 
-    float * params = reinterpret_cast<float *>(context.get_output_op_params(0));
+    float * params = reinterpret_cast<float *>(context.get_output_op_params());
     float scale = params[0];
     // float max_bias      = params[1];
     // float logit_softcap = params[2];

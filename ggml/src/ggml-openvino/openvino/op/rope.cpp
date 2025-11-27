@@ -31,8 +31,8 @@ OutputVector translate_rope(const NodeContext & context) {
     ov::Output<Node> res;
 
     auto data_node = context.get_input(0).get_node_shared_ptr();
-    auto output_shape = context.get_output_shape(0).to_shape();
-    int32_t * op_params = context.get_output_op_params(0);
+    auto output_shape = context.get_output_shape().to_shape();
+    int32_t * op_params = context.get_output_op_params();
 
     Output<Node> cos_theta_node;
     Output<Node> sin_theta_node;

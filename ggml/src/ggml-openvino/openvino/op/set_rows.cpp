@@ -34,7 +34,7 @@ OutputVector translate_set_rows(const NodeContext & context) {
 
     data = std::make_shared<ov::op::v0::Convert>(data, context.get_output_type(0));
 
-    auto dst_shape = context.get_output_shape(0).to_shape();
+    auto dst_shape = context.get_output_shape().to_shape();
 
     auto ind_squeezed =
         std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {3}, {0, 1, 2}));

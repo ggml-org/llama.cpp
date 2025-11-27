@@ -10,7 +10,7 @@ OutputVector translate_view(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
     if (context.get_op_case() == 2) {
-        auto dst_shape = context.get_output_shape(0).to_shape();
+        auto dst_shape = context.get_output_shape().to_shape();
         return rename_outputs_with_suffix({process_view_input(context, 0, dst_shape[2] * dst_shape[3])},
                                           context.get_name());
     }

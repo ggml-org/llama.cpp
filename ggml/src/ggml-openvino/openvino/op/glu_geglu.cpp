@@ -32,7 +32,7 @@ OutputVector translate_glu_geglu(const NodeContext & context) {
         src1 = split->output(1);
     }
 
-    int32_t * params = context.get_output_op_params(0);
+    int32_t * params = context.get_output_op_params();
     const int32_t swapped = params[1];
     if (swapped) {
         std::swap(src0, src1);

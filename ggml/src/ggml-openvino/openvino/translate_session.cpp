@@ -203,7 +203,16 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         results.push_back(result);
     }
 
-    resulting_model = std::make_shared<Model>(results, params);
+    ov::ParameterVector used_params;
+    for (const auto & param : params) {
+        if (!param->output(0).get_target_inputs().empty()) {
+            used_params.push_back(param);
+        }
+    }
+    // if (auto diff = params.size() - used_params.size()) {
+    //     GGML_LOG_INFO("%zu parameters are not used in the model.", diff);
+    // }
+    resulting_model = std::make_shared<Model>(results, used_params);
 
     apply_transformations(resulting_model);
     return resulting_model;
