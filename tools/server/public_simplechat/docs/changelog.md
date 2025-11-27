@@ -339,3 +339,10 @@ their respective functionalities.
 
 Add support for base64 encoded pdf passing to ai models, when the models and llama engine gain that capability
 in turn using openai file - file-data type sub block within content array or so ...
+
+See why the ai streamed response not showing up in TCExternalAi chat session ui, even thou the content is getting
+appended to its DivStream. IE why it is hidden.
+
+Markdown if a line which doesnt have any list marker appears at the same offset level as the last list item,
+that too after a new line before this ambiguous line, then maybe pop out 1 level wrt the list.
+
