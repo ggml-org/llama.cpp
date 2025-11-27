@@ -58,7 +58,9 @@ llama_context::llama_context(
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
-    // backend samplers
+    // Initialize backend samplers here so they are part of the sampling graph
+    // before the reserve passes run later in this function. This avoids a later
+    // re-reserve when graph nodes change.
     if (params.samplers != nullptr && params.n_samplers > 0) {
         sampling.samplers.reserve(params.n_samplers);
 
