@@ -153,7 +153,7 @@ export class MarkDown {
     process_list(line) {
         let emptyTracker = this.empty_tracker("list", line)
         // spaces followed by - or + or * followed by a space and actual list item
-        let matchList = line.match(/^([ ]*)([-+*]|[a-zA-Z0-9]\.)[ ](.*)$/);
+        let matchList = line.match(/^([ ]*)([-+*]|[0-9]+\.)[ ](.*)$/);
         if (matchList != null) {
             let listLvl = 0
             let curOffset = matchList[1].length
