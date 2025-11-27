@@ -504,6 +504,14 @@
 		background: hsl(var(--muted) / 0.1);
 	}
 
+	/* User message markdown should keep table borders visible on light primary backgrounds */
+	div.markdown-user-content :global(table),
+	div.markdown-user-content :global(th),
+	div.markdown-user-content :global(td),
+	div.markdown-user-content :global(.table-wrapper) {
+		border-color: currentColor;
+	}
+
 	/* Horizontal rules */
 	div :global(hr) {
 		border: none;
