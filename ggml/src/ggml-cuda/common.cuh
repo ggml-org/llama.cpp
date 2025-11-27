@@ -224,6 +224,10 @@ static const char * cu_get_error_str(CUresult err) {
 #define AMD_MFMA_AVAILABLE
 #endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 
+#if defined(GGML_USE_HIP) && defined(RDNA4)
+#define AMD_WMMA_AVAILABLE
+#endif // defined(GGML_USE_HIP) && defined(RDNA4)
+
 // The Volta instructions are in principle available on Turing or newer but they are effectively unusable:
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
 #define VOLTA_MMA_AVAILABLE
@@ -281,6 +285,10 @@ static bool amd_mfma_available(const int cc) {
 #else
     return false;
 #endif //!defined(GGML_HIP_NO_MMQ_MFMA)
+}
+
+static bool amd_wmma_available(const int cc) {
+    return GGML_CUDA_CC_IS_RDNA4(cc);
 }
 
 static bool volta_mma_available(const int cc) {
