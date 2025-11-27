@@ -303,6 +303,7 @@ Chat Session specific settings
 * A simple minded basic Markdown to Html logic with support for below to some extent
   * headings, horiz line,
   * lists (ordered, unordered, intermixed at diff leves)
+    accomodate lines without list markers inbetween list items to some extent, hopefully in a sane way.
   * tables, fenced code blocks, blockquotes
 * Rename fetch_web_url_raw to fetch_url_raw, avoids confusion and matchs semantic of access to local and web.
 
@@ -342,7 +343,3 @@ in turn using openai file - file-data type sub block within content array or so 
 
 See why the ai streamed response not showing up in TCExternalAi chat session ui, even thou the content is getting
 appended to its DivStream. IE why it is hidden.
-
-Markdown if a line which doesnt have any list marker appears at the same offset level as the last list item,
-that too after a new line before this ambiguous line, then maybe pop out 1 level wrt the list.
-
