@@ -27,12 +27,12 @@ enum server_task_type {
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
-enum oaicompat_type {
-    OAICOMPAT_TYPE_NONE,
-    OAICOMPAT_TYPE_CHAT,
-    OAICOMPAT_TYPE_COMPLETION,
-    OAICOMPAT_TYPE_EMBEDDING,
-    OAICOMPAT_TYPE_ANTHROPIC,
+enum task_response_type {
+    TASK_RESPONSE_TYPE_NONE, // llama.cpp native format
+    TASK_RESPONSE_TYPE_OAI_CHAT,
+    TASK_RESPONSE_TYPE_OAI_CMPL,
+    TASK_RESPONSE_TYPE_OAI_EMBD,
+    TASK_RESPONSE_TYPE_ANTHROPIC,
 };
 
 enum stop_type {
@@ -67,9 +67,9 @@ struct task_params {
     struct common_params_sampling sampling;
     struct common_params_speculative speculative;
 
-    // OAI-compat fields
+    // response formatting
     bool                         verbose                   = false;
-    oaicompat_type               oaicompat                 = OAICOMPAT_TYPE_NONE;
+    task_response_type           res_type                  = TASK_RESPONSE_TYPE_NONE;
     std::string                  oaicompat_model;
     std::string                  oaicompat_cmpl_id;
     common_chat_syntax           oaicompat_chat_syntax;
@@ -228,12 +228,12 @@ struct server_task_result_cmpl_final : server_task_result {
 
     task_params generation_params;
 
-    // OAI-compat fields
-    bool            verbose   = false;
-    oaicompat_type  oaicompat = OAICOMPAT_TYPE_NONE;
-    std::string     oaicompat_model;
-    std::string     oaicompat_cmpl_id;
-    common_chat_msg oaicompat_msg;
+    // response formatting
+    bool               verbose  = false;
+    task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
+    std::string        oaicompat_model;
+    std::string        oaicompat_cmpl_id;
+    common_chat_msg    oaicompat_msg;
 
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs;
 
@@ -275,11 +275,11 @@ struct server_task_result_cmpl_partial : server_task_result {
     result_timings timings;
     result_prompt_progress progress;
 
-    // OAI-compat fields
-    bool            verbose   = false;
-    oaicompat_type  oaicompat = OAICOMPAT_TYPE_NONE;
-    std::string     oaicompat_model;
-    std::string     oaicompat_cmpl_id;
+    // response formatting
+    bool               verbose  = false;
+    task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
+    std::string        oaicompat_model;
+    std::string        oaicompat_cmpl_id;
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs;
 
     virtual int get_index() override {
@@ -307,8 +307,8 @@ struct server_task_result_embd : server_task_result {
 
     int32_t n_tokens;
 
-    // OAI-compat fields
-    oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
+    // response formatting
+    task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
 
     virtual int get_index() override {
         return index;

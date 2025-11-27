@@ -565,17 +565,17 @@ std::vector<unsigned char> completion_token_output::str_to_bytes(const std::stri
 // server_task_result_cmpl_final
 //
 json server_task_result_cmpl_final::to_json() {
-    switch (oaicompat) {
-        case OAICOMPAT_TYPE_NONE:
+    switch (res_type) {
+        case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();
-        case OAICOMPAT_TYPE_COMPLETION:
+        case TASK_RESPONSE_TYPE_OAI_CMPL:
             return to_json_oaicompat();
-        case OAICOMPAT_TYPE_CHAT:
+        case TASK_RESPONSE_TYPE_OAI_CHAT:
             return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat();
-        case OAICOMPAT_TYPE_ANTHROPIC:
+        case TASK_RESPONSE_TYPE_ANTHROPIC:
             return stream ? to_json_anthropic_stream() : to_json_anthropic();
         default:
-            GGML_ASSERT(false && "Invalid oaicompat_type");
+            GGML_ASSERT(false && "Invalid task_response_type");
     }
 }
 
@@ -956,17 +956,17 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 // server_task_result_cmpl_partial
 //
 json server_task_result_cmpl_partial::to_json() {
-    switch (oaicompat) {
-        case OAICOMPAT_TYPE_NONE:
+    switch (res_type) {
+        case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();
-        case OAICOMPAT_TYPE_COMPLETION:
+        case TASK_RESPONSE_TYPE_OAI_CMPL:
             return to_json_oaicompat();
-        case OAICOMPAT_TYPE_CHAT:
+        case TASK_RESPONSE_TYPE_OAI_CHAT:
             return to_json_oaicompat_chat();
-        case OAICOMPAT_TYPE_ANTHROPIC:
+        case TASK_RESPONSE_TYPE_ANTHROPIC:
             return to_json_anthropic();
         default:
-            GGML_ASSERT(false && "Invalid oaicompat_type");
+            GGML_ASSERT(false && "Invalid task_response_type");
     }
 }
 
@@ -1091,7 +1091,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
 // server_task_result_embd
 //
 json server_task_result_embd::to_json() {
-    return oaicompat == OAICOMPAT_TYPE_EMBEDDING
+    return res_type == TASK_RESPONSE_TYPE_OAI_EMBD
         ? to_json_oaicompat()
         : to_json_non_oaicompat();
 }

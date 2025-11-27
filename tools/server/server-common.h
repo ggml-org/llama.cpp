@@ -297,12 +297,6 @@ json oaicompat_chat_params_parse(
 // convert Anthropic Messages API format to OpenAI Chat Completions API format
 json convert_anthropic_to_oai(const json & body);
 
-// used by Anthropic /v1/messages endpoint
-json anthropic_params_from_json(
-    const json & body, /* anthropic messages api json semantics */
-    const oaicompat_parser_options & opt,
-    std::vector<raw_buffer> & out_files);
-
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(const json & request, const json & embeddings, bool use_base64 = false);
 
@@ -329,7 +323,7 @@ std::string tokens_to_output_formatted_string(const llama_context * ctx, const l
 
 // format server-sent event (SSE), return the formatted string to send
 // note: if data is a json array, it will be sent as multiple events, one per item
-std::string format_sse(const json & data);
+std::string format_oai_sse(const json & data);
 
 // format Anthropic-style SSE with event types
 std::string format_anthropic_sse(const json & data);

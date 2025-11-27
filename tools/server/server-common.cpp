@@ -593,29 +593,6 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
     return prompt_tokens;
 }
 
-std::string format_anthropic_sse(const json & data) {
-    std::ostringstream ss;
-
-    auto send_event = [&ss](const json & event_obj) {
-        if (event_obj.contains("event") && event_obj.contains("data")) {
-            ss << "event: " << event_obj.at("event").get<std::string>() << "\n";
-            ss << "data: " << safe_json_to_str(event_obj.at("data")) << "\n\n";
-        } else {
-            ss << "data: " << safe_json_to_str(event_obj) << "\n\n";
-        }
-    };
-
-    if (data.is_array()) {
-        for (const auto & event : data) {
-            send_event(event);
-        }
-    } else {
-        send_event(data);
-    }
-
-    return ss.str();
-}
-
 size_t validate_utf8(const std::string& text) {
     size_t len = text.size();
     if (len == 0) return 0;
@@ -1141,11 +1118,13 @@ json convert_anthropic_to_oai(const json & body) {
                     if (source_type == "base64") {
                         std::string media_type = json_value(source, "media_type", std::string("image/jpeg"));
                         std::string data = json_value(source, "data", std::string());
+                        std::ostringstream ss;
+                        ss << "data:" << media_type << ";base64," << data;
 
                         converted_content.push_back({
                             {"type", "image_url"},
                             {"image_url", {
-                                {"url", "data:" + media_type + ";base64," + data}
+                                {"url", ss.str()}
                             }}
                         });
                     } else if (source_type == "url") {
@@ -1282,15 +1261,6 @@ json convert_anthropic_to_oai(const json & body) {
     }
 
     return oai_body;
-}
-
-json anthropic_params_from_json(
-    const json & body,
-    const oaicompat_parser_options & opt,
-    std::vector<raw_buffer> & out_files)
-{
-    json oai_body = convert_anthropic_to_oai(body);
-    return oaicompat_chat_params_parse(oai_body, opt, out_files);
 }
 
 json format_embeddings_response_oaicompat(const json & request, const json & embeddings, bool use_base64) {
@@ -1456,7 +1426,7 @@ std::string tokens_to_output_formatted_string(const llama_context * ctx, const l
 
 // format server-sent event (SSE), return the formatted string to send
 // note: if data is a json array, it will be sent as multiple events, one per item
-std::string format_sse(const json & data) {
+std::string format_oai_sse(const json & data) {
     std::ostringstream ss;
     auto send_single = [&ss](const json & data) {
         ss << "data: " <<
@@ -1470,6 +1440,29 @@ std::string format_sse(const json & data) {
         }
     } else {
         send_single(data);
+    }
+
+    return ss.str();
+}
+
+std::string format_anthropic_sse(const json & data) {
+    std::ostringstream ss;
+
+    auto send_event = [&ss](const json & event_obj) {
+        if (event_obj.contains("event") && event_obj.contains("data")) {
+            ss << "event: " << event_obj.at("event").get<std::string>() << "\n";
+            ss << "data: " << safe_json_to_str(event_obj.at("data")) << "\n\n";
+        } else {
+            ss << "data: " << safe_json_to_str(event_obj) << "\n\n";
+        }
+    };
+
+    if (data.is_array()) {
+        for (const auto & event : data) {
+            send_event(event);
+        }
+    } else {
+        send_event(data);
     }
 
     return ss.str();
