@@ -207,7 +207,7 @@ static bool is_sampler_enabled(enum common_sampler_type type, const struct commo
             }
             break;
         case COMMON_SAMPLER_TYPE_TEMPERATURE:
-            if (params.temp <= 0.0f) {
+            if (params.temp < 0.0f) {
                 return false;
             }
             break;
