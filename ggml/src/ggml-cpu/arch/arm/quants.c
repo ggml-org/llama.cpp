@@ -1429,7 +1429,7 @@ void ggml_vec_dot_ifairy_q16_K(
         int nrc) {
     (void)nrc; (void)bx; (void)by; (void)bs;
 
-#if defined(__ARM_NEON)
+#if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     const block_ifairy     * GGML_RESTRICT w = vx;
     const block_ifairy_q16 * GGML_RESTRICT x = vy;
     const int nb = n / QK_K;
@@ -1449,10 +1449,22 @@ void ggml_vec_dot_ifairy_q16_K(
 
     // ------------ 常量准备 ------------
     // 静态分配，避免栈上重复初始化
-    static const uint8_t perm_mask_data[16] = {
+    static const uint8_t perm0_data[16] = {
         0,0,0,0, 1,1,1,1, 2,2,2,2, 3,3,3,3
     };
-    const uint8x16_t v_perm_mask = vld1q_u8(perm_mask_data);    
+    static const uint8_t perm1_data[16] = {
+        4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7
+    };
+    static const uint8_t perm2_data[16] = {
+        8,8,8,8, 9,9,9,9, 10,10,10,10, 11,11,11,11
+    };
+    static const uint8_t perm3_data[16] = {
+        12,12,12,12, 13,13,13,13, 14,14,14,14, 15,15,15,15
+    };
+    const uint8x16_t v_perm0 = vld1q_u8(perm0_data);
+    const uint8x16_t v_perm1 = vld1q_u8(perm1_data);
+    const uint8x16_t v_perm2 = vld1q_u8(perm2_data);
+    const uint8x16_t v_perm3 = vld1q_u8(perm3_data);
     static const int8_t shift_mask_data[16] = {
          0, -2, -4, -6,  0, -2, -4, -6,
          0, -2, -4, -6,  0, -2, -4, -6
@@ -1474,11 +1486,18 @@ void ggml_vec_dot_ifairy_q16_K(
     const int8x16_t v_lut_imag = vld1q_s8(lut_imag_data);
 
     for (int i = 0; i < nb; ++i) {
+        __builtin_prefetch(w + i + 1, 0, 1);
+        __builtin_prefetch(x + i + 1, 0, 1);
+
         // 累加器初始化
         int32x4_t acc_ac0 = vzero, acc_ac1 = vzero;
+        int32x4_t acc_ac2 = vzero, acc_ac3 = vzero;
         int32x4_t acc_ad0 = vzero, acc_ad1 = vzero;
+        int32x4_t acc_ad2 = vzero, acc_ad3 = vzero;
         int32x4_t acc_bc0 = vzero, acc_bc1 = vzero;
+        int32x4_t acc_bc2 = vzero, acc_bc3 = vzero;
         int32x4_t acc_bd0 = vzero, acc_bd1 = vzero;
+        int32x4_t acc_bd2 = vzero, acc_bd3 = vzero;
 
         const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
         const int8_t  * GGML_RESTRICT x_r_ptr = x[i].x_real;
@@ -1496,7 +1515,7 @@ void ggml_vec_dot_ifairy_q16_K(
             // --- 处理 第 1 组 (Indices 0-15) ---
             {
                 // 解码权重
-                uint8x16_t w_idx = vqtbl1q_u8(w_all_64, v_perm_mask);
+                uint8x16_t w_idx = vqtbl1q_u8(w_all_64, v_perm0);
                 w_idx = vandq_u8(vshlq_u8(w_idx, v_shift_mask), v_mask_3);
                 
                 const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx);
@@ -1514,11 +1533,8 @@ void ggml_vec_dot_ifairy_q16_K(
             }
 
             // --- 处理 第 2 组 (Indices 16-31) ---
-            // 使用 vext 偏移权重，利用上一组计算的时间窗口来掩盖 vext 延迟
             {
-                const uint8x16_t w_shifted = vextq_u8(w_all_64, w_all_64, 4);
-                
-                uint8x16_t w_idx = vqtbl1q_u8(w_shifted, v_perm_mask);
+                uint8x16_t w_idx = vqtbl1q_u8(w_all_64, v_perm1);
                 w_idx = vandq_u8(vshlq_u8(w_idx, v_shift_mask), v_mask_3);
 
                 const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx);
@@ -1530,18 +1546,16 @@ void ggml_vec_dot_ifairy_q16_K(
                 // (Bank 0 - 继续累加，因为没有 Bank 0 的 RAW 依赖冲突，或者可以切到 Bank 1)
                 // 为了更好地掩盖延迟，这里依然用 Bank 0，但因为中间隔了 instructions，流水线应该能跟上
                 // 也可以选择这里用 acc_ac0, 下一组用 acc_ac1
-                acc_ac0 = vdotq_s32(acc_ac0, xr_vec, wr);
-                acc_ad0 = vdotq_s32(acc_ad0, xi_vec, wr);
-                acc_bc0 = vdotq_s32(acc_bc0, xr_vec, wi);
-                acc_bd0 = vdotq_s32(acc_bd0, xi_vec, wi);
+                acc_ac1 = vdotq_s32(acc_ac1, xr_vec, wr);
+                acc_ad1 = vdotq_s32(acc_ad1, xi_vec, wr);
+                acc_bc1 = vdotq_s32(acc_bc1, xr_vec, wi);
+                acc_bd1 = vdotq_s32(acc_bd1, xi_vec, wi);
             }
 
             // --- 处理 第 3 组 (Indices 32-47) ---
             // 切换到 Bank 1 以打破长依赖链，并最大化利用执行端口
             {
-                const uint8x16_t w_shifted = vextq_u8(w_all_64, w_all_64, 8);
-                
-                uint8x16_t w_idx = vqtbl1q_u8(w_shifted, v_perm_mask);
+                uint8x16_t w_idx = vqtbl1q_u8(w_all_64, v_perm2);
                 w_idx = vandq_u8(vshlq_u8(w_idx, v_shift_mask), v_mask_3);
 
                 const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx);
@@ -1551,17 +1565,15 @@ void ggml_vec_dot_ifairy_q16_K(
                 const int8x16_t xi_vec = vld1q_s8(xi + 32);
 
                 // 切换 Bank 1
-                acc_ac1 = vdotq_s32(acc_ac1, xr_vec, wr);
-                acc_ad1 = vdotq_s32(acc_ad1, xi_vec, wr);
-                acc_bc1 = vdotq_s32(acc_bc1, xr_vec, wi);
-                acc_bd1 = vdotq_s32(acc_bd1, xi_vec, wi);
+                acc_ac2 = vdotq_s32(acc_ac2, xr_vec, wr);
+                acc_ad2 = vdotq_s32(acc_ad2, xi_vec, wr);
+                acc_bc2 = vdotq_s32(acc_bc2, xr_vec, wi);
+                acc_bd2 = vdotq_s32(acc_bd2, xi_vec, wi);
             }
 
             // --- 处理 第 4 组 (Indices 48-63) ---
             {
-                const uint8x16_t w_shifted = vextq_u8(w_all_64, w_all_64, 12);
-                
-                uint8x16_t w_idx = vqtbl1q_u8(w_shifted, v_perm_mask);
+                uint8x16_t w_idx = vqtbl1q_u8(w_all_64, v_perm3);
                 w_idx = vandq_u8(vshlq_u8(w_idx, v_shift_mask), v_mask_3);
 
                 const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx);
@@ -1571,18 +1583,29 @@ void ggml_vec_dot_ifairy_q16_K(
                 const int8x16_t xi_vec = vld1q_s8(xi + 48);
 
                 // Bank 1
-                acc_ac1 = vdotq_s32(acc_ac1, xr_vec, wr);
-                acc_ad1 = vdotq_s32(acc_ad1, xi_vec, wr);
-                acc_bc1 = vdotq_s32(acc_bc1, xr_vec, wi);
-                acc_bd1 = vdotq_s32(acc_bd1, xi_vec, wi);
+                acc_ac3 = vdotq_s32(acc_ac3, xr_vec, wr);
+                acc_ad3 = vdotq_s32(acc_ad3, xi_vec, wr);
+                acc_bc3 = vdotq_s32(acc_bc3, xr_vec, wi);
+                acc_bd3 = vdotq_s32(acc_bd3, xi_vec, wi);
             }
         } // j loop
 
-        // 合并 Bank 0 和 Bank 1
+        // 合并四个累加 Bank
         acc_ac0 = vaddq_s32(acc_ac0, acc_ac1);
+        acc_ac2 = vaddq_s32(acc_ac2, acc_ac3);
+        acc_ac0 = vaddq_s32(acc_ac0, acc_ac2);
+
         acc_ad0 = vaddq_s32(acc_ad0, acc_ad1);
+        acc_ad2 = vaddq_s32(acc_ad2, acc_ad3);
+        acc_ad0 = vaddq_s32(acc_ad0, acc_ad2);
+
         acc_bc0 = vaddq_s32(acc_bc0, acc_bc1);
+        acc_bc2 = vaddq_s32(acc_bc2, acc_bc3);
+        acc_bc0 = vaddq_s32(acc_bc0, acc_bc2);
+
         acc_bd0 = vaddq_s32(acc_bd0, acc_bd1);
+        acc_bd2 = vaddq_s32(acc_bd2, acc_bd3);
+        acc_bd0 = vaddq_s32(acc_bd0, acc_bd2);
 
         // 水平求和
         const int32_t sum_ac = vaddvq_s32(acc_ac0);
