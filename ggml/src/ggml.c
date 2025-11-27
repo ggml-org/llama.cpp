@@ -878,7 +878,9 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = QK_K,
         .type_size                = sizeof(block_ifairy),
         .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_ifairy,
+        // complex weights are handled by dedicated kernels; there is no generic
+        // single-buffer dequantization compatible with ggml_to_float_t
+        .to_float                 = NULL,
         .from_float_ref           = (ggml_from_float_t) quantize_row_ifairy_ref,
     },
     [GGML_TYPE_IFAIRY_Q16] = {
