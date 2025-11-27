@@ -2,20 +2,10 @@
 import pytest
 import base64
 import requests
-import os
-
-# ensure grandparent path is in sys.path
-from pathlib import Path
-import sys
-path = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(path))
 
 from utils import *
 
 server: ServerProcess
-
-TIMEOUT_START_SLOW = 15 * 60
-TIMEOUT_HTTP_REQUEST = 60
 
 
 def get_test_image_base64() -> str:
@@ -541,22 +531,8 @@ def test_anthropic_vision_format_accepted():
     assert "image input is not supported" in res.body.get("error", {}).get("message", "").lower()
 
 
-@pytest.mark.slow
-@pytest.mark.skipif(
-    "SLOW_TESTS" not in os.environ,
-    reason="Vision test requires tinygemma3 model download (~100MB) - use SLOW_TESTS=1 to run"
-)
 def test_anthropic_vision_base64_with_multimodal_model(vision_server):
-    """
-    Test vision with base64 image using Anthropic format with multimodal model
-
-    NOTE: This test requires downloading:
-    - tinygemma3 model (~100MB)
-    - mmproj file for vision support
-
-    To run this test:
-    SLOW_TESTS=1 ./tests.sh unit/test_anthropic_api.py::test_anthropic_vision_base64_with_multimodal_model -v
-    """
+    """Test vision with base64 image using Anthropic format with multimodal model"""
     global server
     server = vision_server
     server.start()
