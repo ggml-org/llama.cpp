@@ -642,6 +642,21 @@
 		background: var(--muted);
 	}
 
+	/* Disable hover effects when rendering user messages */
+	.markdown-user-content :global(a),
+	.markdown-user-content :global(a:hover) {
+		color: var(--primary-foreground);
+	}
+
+	.markdown-user-content :global(table:hover) {
+		box-shadow: none;
+	}
+
+	.markdown-user-content :global(th:hover),
+	.markdown-user-content :global(td:hover) {
+		background: inherit;
+	}
+
 	/* Enhanced blockquotes */
 	div :global(blockquote) {
 		transition: all 0.2s ease;
