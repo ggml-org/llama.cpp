@@ -106,7 +106,6 @@ struct common_sampler {
 
     struct llama_sampler * grmr;
     struct llama_sampler * chain;          // CPU sampling chain
-    struct llama_sampler * backend_chain;  // Backend sampling chain
 
     ring_buffer<llama_token> prev;
 
@@ -119,9 +118,6 @@ struct common_sampler {
 
         llama_sampler_reset(grmr);
         llama_sampler_reset(chain);
-        if (backend_chain) {
-            llama_sampler_reset(backend_chain);
-        }
     }
 
     void set_logits(struct llama_context * ctx, int idx) {
@@ -365,15 +361,12 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         /* .params        = */ params,
         /* .grmr          = */ grmr,
         /* .chain         = */ llama_sampler_chain_init(lparams),
-        /* .backend_chain = */ nullptr,
         /* .prev          = */ ring_buffer<llama_token>(std::max(32, params.n_prev)),
         /* .cur           = */ {},
         /* .cur_p         = */ {},
     };
 
     struct active_samplers active_samplers = get_active_samplers(params);
-    backend_chain_data backend_data = backend_samplers_init(model, params, active_samplers);
-    result->backend_chain = backend_data.chain;
 
     // Build CPU chain
     if (!params.backend_sampling || !has_logit_bias(params)) {
@@ -501,10 +494,6 @@ void common_sampler_free(struct common_sampler * gsmpl) {
         llama_sampler_free(gsmpl->grmr);
         llama_sampler_free(gsmpl->chain);
 
-        if (gsmpl->backend_chain) {
-            llama_sampler_free(gsmpl->backend_chain);
-        }
-
         delete gsmpl;
     }
 }
@@ -530,7 +519,6 @@ struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
         /* .params        = */ gsmpl->params,
         /* .grmr          = */ llama_sampler_clone(gsmpl->grmr),
         /* .chain         = */ llama_sampler_clone(gsmpl->chain),
-        /* .backend_chain = */ gsmpl->backend_chain ? llama_sampler_clone(gsmpl->backend_chain) : nullptr,
         /* .prev          = */ gsmpl->prev,
         /* .cur           = */ gsmpl->cur,
         /* .cur_p         = */ gsmpl->cur_p,
