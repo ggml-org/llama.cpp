@@ -399,6 +399,18 @@ struct vk_conv2d_pipeline_state {
     }
 };
 
+struct vk_solve_tri_pipeline_state {
+    vk_solve_tri_pipeline_state(uint32_t N, uint32_t K)
+        : N(N), K(K) {}
+
+    uint32_t N, K;
+
+    bool operator<(const vk_solve_tri_pipeline_state &b) const {
+        return std::tie(N, K) <
+               std::tie(b.N, b.K);
+    }
+};
+
 enum shader_reduction_mode {
     SHADER_REDUCTION_MODE_SHMEM,
     SHADER_REDUCTION_MODE_HYBRID,
@@ -711,6 +723,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_cumsum_f32;
     vk_pipeline pipeline_argmax_f32;
     vk_pipeline pipeline_count_equal_i32;
+    std::map<vk_solve_tri_pipeline_state, vk_pipeline> pipeline_solve_tri_f32;
     vk_pipeline pipeline_im2col_f32, pipeline_im2col_f32_f16;
     vk_pipeline pipeline_im2col_3d_f32, pipeline_im2col_3d_f32_f16;
     vk_pipeline pipeline_timestep_embedding_f32;
@@ -4001,6 +4014,14 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_cumsum_f32, "cumsum_f32", cumsum_f32_len, cumsum_f32_data, "main", 2, sizeof(vk_op_sum_rows_push_constants), {1, 1, 1}, { 128, device->subgroup_size }, 1, true, true, device->subgroup_size);
 
     ggml_vk_create_pipeline(device, device->pipeline_count_equal_i32, "count_equal_i32", count_equal_i32_len, count_equal_i32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, { device->subgroup_size }, 1);
+
+    for (auto &s : device->pipeline_solve_tri_f32) {
+        const vk_solve_tri_pipeline_state &state = s.first;
+        ggml_vk_create_pipeline(
+            device, s.second, "solve_tri_f32",
+            solve_tri_f32_len, solve_tri_f32_data, "main", 3,
+            sizeof(vk_op_binary_push_constants), {1, 1, 1}, { 0, state.N, state.K }, 1, true);
+    }
 
 #define IM2COL(bda) \
     ggml_vk_create_pipeline(device, device->pipeline_im2col_f32, "im2col_f32", im2col_f32 ## bda ## _len, im2col_f32 ## bda ## _data, "main", 2, sizeof(vk_op_im2col_push_constants), {512, 1, 1}, { device->subgroup_size }, 1, true);   \
@@ -8496,6 +8517,26 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_cumsum_f32;
         }
         return nullptr;
+    case GGML_OP_SOLVE_TRI:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+
+            vk_solve_tri_pipeline_state solve_tri_pipeline_state(src0->ne[0], src1->ne[0]);
+
+            vk_pipeline pipeline = nullptr;
+
+            {
+                std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+                auto it = ctx->device->pipeline_solve_tri_f32.find(solve_tri_pipeline_state);
+                if (it != ctx->device->pipeline_solve_tri_f32.end()) {
+                    pipeline = it->second;
+                } else {
+                    ctx->device->pipeline_solve_tri_f32[solve_tri_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
+                }
+            }
+
+            return pipeline;
+        }
+        return nullptr;
     case GGML_OP_ARGMAX:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_I32) {
             return ctx->device->pipeline_argmax_f32;
@@ -8832,6 +8873,18 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 elements = { nr, 1, 1 };
             }
         } break;
+    case GGML_OP_SOLVE_TRI:
+        {
+            uint32_t nr = (uint32_t)(ne02 * ne03);
+            if (nr > 262144) {
+                elements = { 512, 512, CEIL_DIV(nr, 262144) };
+            } else if (nr > 512) {
+                elements = { 512, CEIL_DIV(nr, 512), 1 };
+            } else {
+                elements = { nr, 1, 1 };
+            }
+        }
+        break;
     case GGML_OP_RMS_NORM:
         if (ctx->do_add_rms_partials) {
             // Run one element per thread, 128 threads per workgroup
@@ -10258,6 +10311,21 @@ static void ggml_vk_argmax(ggml_backend_vk_context * ctx, vk_context& subctx, co
 
 static void ggml_vk_count_equal(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_COUNT_EQUAL, { (uint32_t)ggml_nelements(src0), 0, 0.0f, 0.0f });
+}
+
+static void ggml_vk_solve_tri(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    const uint32_t src0_type_size = ggml_type_size(src0->type);
+    const uint32_t src1_type_size = ggml_type_size(src1->type);
+    const uint32_t dst_type_size = ggml_type_size(dst->type);
+
+    ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_SOLVE_TRI, {
+        (uint32_t)ggml_nelements(src0),
+        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],(uint32_t)src0->ne[3], (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)src0->nb[1] / src0_type_size, (uint32_t)src0->nb[2] / src0_type_size, (uint32_t)src0->nb[3] / src0_type_size,
+        (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2],(uint32_t)src1->ne[3], (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
+        (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2],(uint32_t) dst->ne[3], (uint32_t) dst->nb[0] /  dst_type_size, (uint32_t) dst->nb[1] /  dst_type_size, (uint32_t) dst->nb[2] /  dst_type_size, (uint32_t) dst->nb[3] /  dst_type_size,
+        0,
+        0.0f, 0.0f, 0,
+    });
 }
 
 static void ggml_vk_im2col(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -11870,6 +11938,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_COUNT_EQUAL:
         ggml_vk_count_equal(ctx, compute_ctx, src0, src1, node);
+
+        break;
+    case GGML_OP_SOLVE_TRI:
+        ggml_vk_solve_tri(ctx, compute_ctx, src0, src1, node);
 
         break;
     case GGML_OP_IM2COL:
@@ -13916,6 +13988,25 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
                 return false;
             }
+        case GGML_OP_SOLVE_TRI:
+            {
+                ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+                const vk_device& device = ggml_vk_get_device(ctx->device);
+
+                if (op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32) {
+                    return false;
+                }
+                const uint32_t N = op->src[0]->ne[0];
+                const uint32_t K = op->src[1]->ne[0];
+                // K dimension limited to workgroup size
+                if (K > 128) {
+                    return false;
+                }
+                if (N * N * sizeof(float) + N * K * sizeof(float) > device->properties.limits.maxComputeSharedMemorySize) {
+                    return false;
+                }
+                return true;
+            }
         case GGML_OP_ARGMAX:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_COUNT_EQUAL:
@@ -14588,6 +14679,8 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             tensor_clone = ggml_argmax(ggml_ctx, src_clone[0]);
         } else if (tensor->op == GGML_OP_COUNT_EQUAL) {
             tensor_clone = ggml_count_equal(ggml_ctx, src_clone[0], src_clone[1]);
+        } else if (tensor->op == GGML_OP_SOLVE_TRI) {
+            tensor_clone = ggml_solve_tri(ggml_ctx, src_clone[0], src_clone[1], true, true, false);
         } else if (tensor->op == GGML_OP_IM2COL) {
             const int32_t s0 = tensor->op_params[0];
             const int32_t s1 = tensor->op_params[1];
