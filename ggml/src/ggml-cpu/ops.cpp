@@ -7506,6 +7506,93 @@ static void ggml_compute_forward_upscale_f32(
                 }
             }
         }
+    } else if (mode == GGML_SCALE_MODE_BILINEAR_AA) {
+        // Bilinear with antialiasing - matches PyTorch's F.interpolate(..., mode='bilinear', antialias=True)
+        // This implementation follows PyTorch's approach:
+        // - scale = input_size / output_size (NOT output/input!)
+        // - For downsampling (scale > 1): support = 1.0 * scale, invscale = 1.0 / scale
+        // - For upsampling (scale <= 1): support = 1.0, invscale = 1.0
+        // See: https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/cpu/UpSampleKernel.cpp
+
+        const int interp_size = 2;  // bilinear
+
+        // PyTorch's bilinear filter function: f(x) = max(0, 1 - |x|)
+        auto bilinear_filter = [](float x) -> float {
+            x = fabsf(x);
+            if (x < 1.0f) {
+                return 1.0f - x;
+            }
+            return 0.0f;
+        };
+
+        // Compute scales as input_size / output_size
+        const float scale0 = (float)ne00 / (float)ne0;
+        const float scale1 = (float)ne01 / (float)ne1;
+
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            const int64_t i03 = i3 / sf3;
+            for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+                const int64_t i02 = i2 / sf2;
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    // Compute center position in source coordinates
+                    // PyTorch formula: center = scale * (i + 0.5)
+                    const float center_y = scale1 * ((float)i1 + 0.5f);
+
+                    // Compute support and invscale for y direction
+                    // When downsampling (scale > 1), we need wider support for antialiasing
+                    const float support_y = (scale1 > 1.0f) ? (interp_size * 0.5f) * scale1 : interp_size * 0.5f;
+                    const float invscale_y = (scale1 > 1.0f) ? (1.0f / scale1) : 1.0f;
+
+                    for (int64_t i0 = 0; i0 < ne0; i0++) {
+                        const float center_x = scale0 * ((float)i0 + 0.5f);
+
+                        // Compute support and invscale for x direction
+                        const float support_x = (scale0 > 1.0f) ? (interp_size * 0.5f) * scale0 : interp_size * 0.5f;
+                        const float invscale_x = (scale0 > 1.0f) ? (1.0f / scale0) : 1.0f;
+
+                        // Calculate the range of source pixels that contribute
+                        const int64_t x_min = std::max(int64_t(0), (int64_t)(center_x - support_x + 0.5f));
+                        const int64_t x_max = std::min(ne00, (int64_t)(center_x + support_x + 0.5f));
+                        const int64_t y_min = std::max(int64_t(0), (int64_t)(center_y - support_y + 0.5f));
+                        const int64_t y_max = std::min(ne01, (int64_t)(center_y + support_y + 0.5f));
+
+                        float val = 0.0f;
+                        float total_weight = 0.0f;
+
+                        // Apply bilinear filter with antialiasing
+                        for (int64_t sy = y_min; sy < y_max; sy++) {
+                            // Compute bilinear weight for y direction
+                            const float weight_y = bilinear_filter((sy - center_y + 0.5f) * invscale_y);
+
+                            for (int64_t sx = x_min; sx < x_max; sx++) {
+                                // Compute bilinear weight for x direction
+                                const float weight_x = bilinear_filter((sx - center_x + 0.5f) * invscale_x);
+
+                                const float weight = weight_x * weight_y;
+
+                                if (weight > 0.0f) {
+                                    const float pixel = *(const float *)((const char *)src0->data +
+                                                                         sx*nb00 +
+                                                                         sy*nb01 +
+                                                                         i02*nb02 +
+                                                                         i03*nb03);
+                                    val += pixel * weight;
+                                    total_weight += weight;
+                                }
+                            }
+                        }
+
+                        // Normalize by total weight
+                        if (total_weight > 0.0f) {
+                            val /= total_weight;
+                        }
+
+                        float * y_dst = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+                        *y_dst = val;
+                    }
+                }
+            }
+        }
     } else {
         GGML_ABORT("unsupported upscale mode");
     }

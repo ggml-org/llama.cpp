@@ -2012,7 +2012,7 @@ private:
         ggml_tensor * pos_embd = model.position_embeddings;
         const int height       = img.ny / patch_size;
         const int width        = img.nx / patch_size;
-        const uint32_t mode    = GGML_SCALE_MODE_BILINEAR;
+        const uint32_t mode    = GGML_SCALE_MODE_BILINEAR_AA;
         const int n_per_side   = (int)std::sqrt(pos_embd->ne[1]);
 
         GGML_ASSERT(pos_embd);
