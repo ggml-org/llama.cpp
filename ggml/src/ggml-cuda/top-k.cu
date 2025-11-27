@@ -50,7 +50,7 @@ static void top_k_cub(ggml_cuda_pool & pool,
     DeviceTopK::MaxPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys, temp_indices, dst, ncols, k, env);
 }
 
-#else
+#elif defined(GGML_CUDA_USE_CUB) // CUB_TOP_K_AVAILABLE
 
 static int next_power_of_2(int x) {
     int n = 1;
@@ -84,7 +84,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     for (int i = 0; i < nrows; i++) {
         top_k_cub(pool, src0_d + i * ncols, dst_d + i * k, ncols, k, stream);
     }
-#else
+#elif defined(GGML_CUDA_USE_CUB) // CUB_TOP_K_AVAILABLE
     // Fall back to argsort + copy
     const int    ncols_pad      = next_power_of_2(ncols);
     const size_t shared_mem     = ncols_pad * sizeof(int);
@@ -94,15 +94,17 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     int *                     tmp_dst = temp_dst_alloc.get();
 
     if (shared_mem > max_shared_mem || ncols > 1024) {
-#ifdef GGML_CUDA_USE_CUB
         argsort_f32_i32_cuda_cub(pool, src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
-#else
-        argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
-#endif
     } else {
         argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
     }
     CUDA_CHECK(cudaMemcpy2DAsync(dst_d, k * sizeof(int), tmp_dst, ncols * sizeof(int), k * sizeof(int), nrows,
                                  cudaMemcpyDeviceToDevice, stream));
-#endif  // CUB_TOP_K_AVAILABLE
+#else  // GGML_CUDA_USE_CUB
+    ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * nrows);
+    int *                     tmp_dst = temp_dst_alloc.get();
+    argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
+    CUDA_CHECK(cudaMemcpy2DAsync(dst_d, k * sizeof(int), tmp_dst, ncols * sizeof(int), k * sizeof(int), nrows,
+                                 cudaMemcpyDeviceToDevice, stream));
+#endif
 }
