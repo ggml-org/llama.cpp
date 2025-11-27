@@ -1014,13 +1014,28 @@ struct ggml_cuda_concurrent_event {
         std::vector<std::vector<std::pair<int64_t, int64_t>>> write_ranges;
         write_ranges.resize(n_streams);
 
+        // Get join_node's memory range to exclude from overlap checking.
+        // Multiple nodes can use join_node's buffer; we synchronize on the join node.
+        const ggml_tensor * join_t     = join_node->view_src ? join_node->view_src : join_node;
+        const int64_t       join_start = (int64_t) join_t->data;
+        const int64_t       join_end   = join_start + ggml_nbytes(join_t);
+
         for (const auto & [tensor, stream] : stream_mapping) {
             const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
-            //concurrent streams begin from 1
-            write_ranges[stream - 1].emplace_back((int64_t) t->data, (int64_t) t->data + ggml_nbytes(t));
+            const int64_t       t_start = (int64_t) t->data;
+            const int64_t       t_end   = t_start + ggml_nbytes(t);
+
+            // Skip tensors that overlap with join_node's buffer.
+            if (t_start < join_end && join_start < t_end) {
+                continue;
+            }
+
+            // concurrent streams begin from 1
+            write_ranges[stream - 1].emplace_back(t_start, t_end);
         }
 
         for (int i = 0; i < n_streams; ++i) {
+            // sorts first by start then by end of write range
             std::sort(write_ranges[i].begin(), write_ranges[i].end());
         }
 
@@ -1028,14 +1043,16 @@ struct ggml_cuda_concurrent_event {
         bool dependent_srcs = false;
         for (const auto & [tensor, stream] : stream_mapping) {
             const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
+            const int64_t       t_start = (int64_t) t->data;
+            const int64_t       t_end   = t_start + ggml_nbytes(t);
 
-            // multiple nodes can use join_node's buffer. That is fine because we synchronize on the join node.
-            if (t->data == join_node->data) {
+            // Skip tensors that overlap with join_node's buffer (already excluded from write_ranges).
+            if (t_start < join_end && join_start < t_end) {
                 continue;
             }
+
             // check if this buffer's write data overlaps with another stream's
-            std::pair<int64_t, int64_t> data_range =
-                std::make_pair((int64_t) t->data, (int64_t) t->data + ggml_nbytes(t));
+            std::pair<int64_t, int64_t> data_range = std::make_pair(t_start, t_end);
             for (int i = 0; i < n_streams; ++i) {
                 if (i == stream - 1) {
                     continue;
@@ -1044,8 +1061,12 @@ struct ggml_cuda_concurrent_event {
 
                 if (it != write_ranges[i].end()) {
                     const std::pair<int64_t, int64_t> & other = *it;
-                    if ((other.first >= data_range.first && other.second <= data_range.second) ||
-                        (other.first <= data_range.first && other.second >= data_range.second)) {
+
+                    // std::lower_bound returns the first element where other >= data_range (lexicographically).
+                    // This guarantees other.first >= data_range.first.
+                    // Therefore, overlap occurs iff other.first < data_range.second
+                    // (i.e., the other range starts before this range ends).
+                    if (other.first < data_range.second) {
                         GGML_LOG_DEBUG("Writes overlap for %s", tensor->name);
                         writes_overlap = true;
                         break;
