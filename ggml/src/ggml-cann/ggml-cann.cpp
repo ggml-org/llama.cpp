@@ -2308,7 +2308,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
 
     bool cann_graph_update_required = false;
 #ifdef USE_ACL_GRAPH
-    bool use_cann_graph             = true;
+    bool use_cann_graph = true;
 
     static bool prefill_use_graph = parse_bool(get_env("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
     if (!prefill_use_graph) {
@@ -2338,7 +2338,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
         }
     }
 #else
-    bool use_cann_graph             = false;
+    bool use_cann_graph = false;
 #endif  // USE_ACL_GRAPH
     evaluate_and_capture_cann_graph(cann_ctx, cgraph, use_cann_graph, cann_graph_update_required);
 
@@ -2474,16 +2474,14 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             }
         case GGML_OP_ROPE:
             {
-                // TODO: with ops-test v == 1
-                // TODO: n_dims <= ne0
-                if (op->src[0]->ne[0] != op->op_params[1]) {
-                    return false;
-                }
-
                 if (op->src[0]->ne[0] > 896) {
                     return false;
                 }
 #ifdef ASCEND_310P
+                // TODO: Support rope_dim < ne00(dim)
+                if (op->src[0]->ne[0] != op->op_params[1]) {
+                    return false;
+                }
                 if (!ggml_is_contiguous(op->src[0])) {
                     return false;
                 }

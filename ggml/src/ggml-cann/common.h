@@ -315,7 +315,7 @@ struct ggml_cann_rope_cache {
         if (theta_scale_exp_host) {
             free(theta_scale_exp_host);
         }
-        if(position_select_index_host) {
+        if (position_select_index_host) {
             free(position_select_index_host);
         }
     }
@@ -330,17 +330,19 @@ struct ggml_cann_rope_cache {
                bool    indep_sects,
                bool    mrope_used,
                bool    is_imrope,
-               int     sections[4]) {
+               int     sections[4],
+               int64_t rope_dims) {
         return this->theta_scale_length == theta_scale_length && this->position_length == position_length &&
                this->ext_factor == ext_factor && this->theta_scale == theta_scale && this->freq_scale == freq_scale &&
                this->attn_factor == attn_factor && this->is_neox == is_neox && this->indep_sects == indep_sects &&
                this->mrope_used == mrope_used && this->is_imrope == is_imrope && this->sections[0] == sections[0] &&
-               this->sections[1] == sections[1] && this->sections[2] == sections[2] && this->sections[3] == sections[3];
+               this->sections[1] == sections[1] && this->sections[2] == sections[2] &&
+               this->sections[3] == sections[3] && this->rope_dims == rope_dims;
     }
 
     void set(int64_t theta_scale_length,
              int64_t position_length,
-             float    ext_factor,
+             float   ext_factor,
              float   theta_scale,
              float   freq_scale,
              float   attn_factor,
@@ -348,7 +350,8 @@ struct ggml_cann_rope_cache {
              bool    indep_sects,
              bool    mrope_used,
              bool    is_imrope,
-             int     sections[4]) {
+             int     sections[4],
+             int64_t rope_dims) {
         this->theta_scale_length = theta_scale_length;
         this->position_length    = position_length;
         this->ext_factor         = ext_factor;
@@ -363,6 +366,7 @@ struct ggml_cann_rope_cache {
         this->sections[1]        = sections[1];
         this->sections[2]        = sections[2];
         this->sections[3]        = sections[3];
+        this->rope_dims          = rope_dims;
     }
 
     // memory cache, prepare before inferencing.
@@ -386,6 +390,7 @@ struct ggml_cann_rope_cache {
     bool    mrope_used                 = false;
     int     sections[4]                = { 0, 0, 0, 0 };
     bool    is_imrope                  = false;
+    int64_t rope_dims                  = 0;
 };
 
 struct ggml_cann_tensor_cache {
