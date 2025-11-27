@@ -50,6 +50,7 @@
 #define GGML_CUDA_CC_TURING          750
 #define GGML_CUDA_CC_AMPERE          800
 #define GGML_CUDA_CC_ADA_LOVELACE    890
+#define GGML_CUDA_CC_BLACKWELL       1000
 #define GGML_CUDA_CC_OFFSET_AMD      0x1000000
 #define GGML_CUDA_CC_OFFSET_MTHREADS 0x0100000
 #define GGML_CUDA_CC_IS_NVIDIA(cc)   (cc < GGML_CUDA_CC_OFFSET_MTHREADS)
@@ -246,6 +247,10 @@ static const char * cu_get_error_str(CUresult err) {
 #define AMPERE_MMA_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL
+#    define BLACKWELL_MMA_AVAILABLE
+#endif
+
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 #define CP_ASYNC_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
@@ -314,6 +319,10 @@ static bool ampere_mma_available(const int cc) {
 
 static bool cp_async_available(const int cc) {
     return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_AMPERE;
+}
+
+static bool blackwell_mma_available(const int cc) {
+    return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_BLACKWELL;
 }
 
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
@@ -699,6 +708,41 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
     memcpy(&result, &bits, sizeof(float));
     return result;
 #endif // CUDART_VERSION >= 12050
+}
+
+__device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e) {
+    // Handle exact zero early
+    if (x == 0.0f) {
+        return 0;
+    }
+
+    const float sign = x < 0.0f ? -1.0f : 1.0f;
+    float       ax   = fabsf(x) * e;
+
+    // Positive LUT
+    static constexpr float pos_lut[8] = { 0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f };
+
+    // Saturate to max representable magnitude
+    if (ax > pos_lut[7]) {
+        ax = pos_lut[7];
+    }
+
+    int   best_i   = 0;
+    float best_err = fabsf(ax - pos_lut[0]);
+    for (int i = 1; i < 8; ++i) {
+        float err = fabsf(ax - pos_lut[i]);
+        if (err < best_err) {
+            best_err = err;
+            best_i   = i;
+        }
+    }
+
+    // Positive codes: 0..7, negative: 8..15 (sign bit = MSB)
+    if (sign > 0.0f) {
+        return static_cast<uint8_t>(best_i);        // 0..7
+    } else {
+        return static_cast<uint8_t>(best_i | 0x8);  // 8..15
+    }
 }
 
 // See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
