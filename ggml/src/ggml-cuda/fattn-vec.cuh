@@ -155,7 +155,8 @@ static __global__ void flash_attn_ext_vec(
                 for (int i0 = 0; i0 < int(D/sizeof(int)); i0 += WARP_SIZE) {
                     const int i = i0 + threadIdx.x;
 
-                    if (i0 + WARP_SIZE <= D/sizeof(int) || i < D/sizeof(int)) {
+                    const int D_int = static_cast<int>(D / sizeof(int));
+                    if (i0 + WARP_SIZE <= D_int || i < D_int) {
                         tmp_q_i32[i] = 0;
                     }
                 }
@@ -272,7 +273,8 @@ static __global__ void flash_attn_ext_vec(
 
                 KQ_max_new[j] = fmaxf(KQ_max_new[j], sum);
 
-                if ((nthreads_KQ == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_KQ) == i_KQ_0) {
+                const unsigned int i_KQ_0_u = static_cast<unsigned int>(i_KQ_0);
+                if ((nthreads_KQ == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_KQ) == i_KQ_0_u) {
                     KQ_reg[j] = sum;
                 }
             }
