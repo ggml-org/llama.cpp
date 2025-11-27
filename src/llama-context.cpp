@@ -212,7 +212,10 @@ llama_context::llama_context(
         // graph outputs buffer
         {
             // resized during inference when a batch uses more outputs
-            if (output_reserve(params.n_seq_max) < params.n_seq_max) {
+            // Create a dummy batch for initialization.
+            llama_batch dummy_batch = {};
+            dummy_batch.n_tokens = 0;
+            if (output_reserve(params.n_seq_max, dummy_batch) < params.n_seq_max) {
                 throw std::runtime_error("failed to reserve initial output buffer");
             }
 
@@ -1075,7 +1078,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     n_queued_tokens += n_tokens;
 
     // reserve output buffer
-    if (output_reserve(n_tokens) < n_tokens) {
+    if (output_reserve(n_tokens, batch_inp) < n_tokens) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_tokens);
         return -2;
     };
@@ -1403,7 +1406,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     }
 
     // reserve output buffer
-    if (output_reserve(n_outputs_all) < n_outputs_all) {
+    if (output_reserve(n_outputs_all, balloc->get_batch()) < n_outputs_all) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
         return -2;
     };
@@ -1493,82 +1496,83 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         }
 
-        if (!backend_has_sampled) {
-            auto * t_logits = res->get_logits();
-            auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
+        auto * t_logits = res->get_logits();
+        auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
 
-            if (t_embd && res->get_embd_pooled()) {
-                t_embd = res->get_embd_pooled();
+        if (t_embd && res->get_embd_pooled()) {
+            t_embd = res->get_embd_pooled();
+        }
+
+        // extract logits
+        // For multipsequence batches that mix backend samplers and CPU sampler
+        // this is currently inefficient as we copy all logits even for the
+        // backend sampled tokens.
+        if (logits && t_logits && n_outputs > 0) {
+            ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
+            GGML_ASSERT(backend_res != nullptr);
+            GGML_ASSERT(logits != nullptr);
+
+            float * logits_out = logits + n_outputs_prev*n_vocab;
+
+            if (n_outputs) {
+                GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_size);
+                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
             }
+        }
 
-            // extract logits
-            if (t_logits && n_outputs > 0) {
-                ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
-                GGML_ASSERT(backend_res != nullptr);
-                GGML_ASSERT(logits != nullptr);
+        // extract embeddings
+        if (embd && t_embd && n_outputs > 0) {
+            ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
+            GGML_ASSERT(backend_embd != nullptr);
 
-                float * logits_out = logits + n_outputs_prev*n_vocab;
+            switch (cparams.pooling_type) {
+                case LLAMA_POOLING_TYPE_NONE:
+                    {
+                        // extract token embeddings
+                        GGML_ASSERT(embd != nullptr);
+                        float * embd_out = embd + n_outputs_prev*n_embd;
 
-                if (n_outputs) {
-                    GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
-                    GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_size);
-                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
-                }
-            }
-
-            // extract embeddings
-            if (t_embd && n_outputs > 0) {
-                ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
-                GGML_ASSERT(backend_embd != nullptr);
-
-                switch (cparams.pooling_type) {
-                    case LLAMA_POOLING_TYPE_NONE:
-                        {
-                            // extract token embeddings
-                            GGML_ASSERT(embd != nullptr);
-                            float * embd_out = embd + n_outputs_prev*n_embd;
-
-                            if (n_outputs) {
-                                GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
-                                GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd <= (int64_t) embd_size);
-                                ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd*sizeof(float));
-                            }
-                        } break;
-                    case LLAMA_POOLING_TYPE_MEAN:
-                    case LLAMA_POOLING_TYPE_CLS:
-                    case LLAMA_POOLING_TYPE_LAST:
-                        {
-                            // extract sequence embeddings (cleared before processing each batch)
-                            auto & embd_seq_out = embd_seq;
-
-                            for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-                                const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
-                                const int32_t      seq_idx = ubatch.seq_idx[seq_id];
-
-                                embd_seq_out[seq_id].resize(n_embd);
-                                ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
-                            }
-                        } break;
-                    case LLAMA_POOLING_TYPE_RANK:
-                        {
-                            // extract the rerank score - n_cls_out floats per sequence
-                            auto & embd_seq_out = embd_seq;
-
-                            const uint32_t n_cls_out = hparams.n_cls_out;
-
-                            for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-                                const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
-                                const int32_t      seq_idx = ubatch.seq_idx[seq_id];
-
-                                embd_seq_out[seq_id].resize(n_cls_out);
-                                ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_cls_out*seq_idx)*sizeof(float), n_cls_out*sizeof(float));
-                            }
-                        } break;
-                    case LLAMA_POOLING_TYPE_UNSPECIFIED:
-                        {
-                            GGML_ABORT("unknown pooling type");
+                        if (n_outputs) {
+                            GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                            GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd <= (int64_t) embd_size);
+                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd*sizeof(float));
                         }
-                }
+                    } break;
+                case LLAMA_POOLING_TYPE_MEAN:
+                case LLAMA_POOLING_TYPE_CLS:
+                case LLAMA_POOLING_TYPE_LAST:
+                    {
+                        // extract sequence embeddings (cleared before processing each batch)
+                        auto & embd_seq_out = embd_seq;
+
+                        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+                            const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
+                            const int32_t      seq_idx = ubatch.seq_idx[seq_id];
+
+                            embd_seq_out[seq_id].resize(n_embd);
+                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
+                        }
+                    } break;
+                case LLAMA_POOLING_TYPE_RANK:
+                    {
+                        // extract the rerank score - n_cls_out floats per sequence
+                        auto & embd_seq_out = embd_seq;
+
+                        const uint32_t n_cls_out = hparams.n_cls_out;
+
+                        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+                            const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
+                            const int32_t      seq_idx = ubatch.seq_idx[seq_id];
+
+                            embd_seq_out[seq_id].resize(n_cls_out);
+                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_cls_out*seq_idx)*sizeof(float), n_cls_out*sizeof(float));
+                        }
+                    } break;
+                case LLAMA_POOLING_TYPE_UNSPECIFIED:
+                    {
+                        GGML_ABORT("unknown pooling type");
+                    }
             }
         }
 
@@ -1635,7 +1639,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 // output
 //
 
-uint32_t llama_context::output_reserve(int32_t n_outputs) {
+uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & batch) {
     const auto & hparams = model.hparams;
     const auto & vocab   = model.vocab;
 
@@ -1654,23 +1658,37 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         has_embd   = true;
     }
 
-    const bool backend_sampling = !sampling.samplers.empty();
+    // Check which sampling modes are needed by sequences in the current batch.
+    bool batch_has_backend_sampling = false;
+    bool batch_needs_cpu_logits     = false;
+
+    for (int32_t i = 0; i < batch.n_tokens; i++) {
+        if (!batch.logits[i]) {
+            continue;
+        }
+        for (int32_t j = 0; j < batch.n_seq_id[i]; j++) {
+            llama_seq_id seq_id = batch.seq_id[i][j];
+            if (sampling.samplers.find(seq_id) != sampling.samplers.end()) {
+                batch_has_backend_sampling = true;
+            } else {
+                batch_needs_cpu_logits = true;
+            }
+        }
+    }
+
     size_t backend_float_count = 0;
     size_t backend_token_count = 0;
 
-    if (!backend_sampling) {
-        logits_size = has_logits ? n_vocab*n_outputs_max : 0;
-        embd_size   = has_embd   ?  n_embd*n_outputs_max : 0;
+    // Allocate CPU logits buffer only if needed by sequences in this batch
+    logits_size = (has_logits && batch_needs_cpu_logits) ? n_vocab*n_outputs_max : 0;
+    embd_size   = has_embd ? n_embd*n_outputs_max : 0;
 
-        // reset backend sampling values.
+    if (!batch_has_backend_sampling) {
         sampling.logits_size       = 0;
         sampling.probs_size        = 0;
         sampling.sampled_size      = 0;
         sampling.candidates_size   = 0;
     } else {
-        logits_size = 0;
-        embd_size   = 0;
-
         sampling.logits_size     = n_vocab*n_outputs_max;
         sampling.probs_size      = n_vocab*n_outputs_max;
         sampling.sampled_size    = n_outputs_max;
@@ -1727,15 +1745,16 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     sampling.sampled    = nullptr;
     sampling.candidates = nullptr;
 
-    if (!backend_sampling) {
-        logits = has_logits ? output_base : nullptr;
-        embd   = has_embd   ? output_base + logits_size : nullptr;
-    } else {
-        // Allocate worst case (full vocabulary size) for backend sampled
-        // data in the pinned memory buffer.
-        size_t offset = 0;
-        uint8_t * base = (uint8_t *) output_base;
+    size_t offset = 0;
+    uint8_t * base = (uint8_t *) output_base;
 
+    logits = (has_logits && batch_needs_cpu_logits) ? output_base : nullptr;
+    offset += logits_size * sizeof(float);
+
+    embd = has_embd ? (float *) (base + offset) : nullptr;
+    offset += embd_size * sizeof(float);
+
+    if (batch_has_backend_sampling) {
         sampling.logits = (float *) (base + offset);
         offset += sampling.logits_size * sizeof(float);
 
@@ -2400,7 +2419,10 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
         auto n_outputs = this->n_outputs;
         io.read_to(&n_outputs, sizeof(n_outputs));
 
-        if (n_outputs > output_reserve(n_outputs)) {
+        // Create a dummy batch for state loading.
+        llama_batch dummy_batch = {};
+        dummy_batch.n_tokens = 0;
+        if (n_outputs > output_reserve(n_outputs, dummy_batch)) {
             throw std::runtime_error("could not reserve outputs");
         }
 
@@ -2631,7 +2653,7 @@ void llama_context::opt_epoch_iter(
         }
 
         // reserve output buffer
-        if (output_reserve(n_outputs_all) < n_outputs_all) {
+        if (output_reserve(n_outputs_all, balloc->get_batch()) < n_outputs_all) {
             LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
             GGML_ABORT("TODO: handle this error");
         };
