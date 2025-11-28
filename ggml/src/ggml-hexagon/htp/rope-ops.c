@@ -282,8 +282,9 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
         freq_factors = (const float *) src2->data;
     }
 
-    const uint32_t i1_end    = MIN(ir1, ne1);
-    const int32_t  half_dims = rope_ctx->n_dims / 2;
+    const uint32_t i1_end       = MIN(ir1, ne1);
+    const int32_t  half_dims    = rope_ctx->n_dims / 2;
+    const size_t   remain_bytes = (ne0 - rope_ctx->n_dims) * sizeof(float);
     for (uint32_t i3 = 0; i3 < ne3; i3++) {      // batch
         for (uint32_t i2 = 0; i2 < ne2; i2++) {  // seq-len
             const int32_t p = pos[i2];
@@ -338,7 +339,7 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
                 }
 
                 // TODO: use simd to speed up the remaining elements copy
-                memcpy(dst_data_loc, src_loc, (ne0 - rope_ctx->n_dims) * sizeof(float));
+                memcpy(dst_data_loc, src_loc, remain_bytes);
             }
         }
     }
