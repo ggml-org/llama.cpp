@@ -49,8 +49,11 @@ struct diffusion_params {
     int32_t block_length     = 0;      // Block size (for block scheduling)
     float   alg_temp         = 0;      // algorithm temperature (0.0 = deterministic)
     bool    add_gumbel_noise = false;  // Add gumbel noise to the logits if temp > 0.0
+    float   threshold        = -1.0f;  // Confidence threshold for transfer (-1.0 = not set, use alg_temp-based sampling)
 
-    int32_t max_length = 0;            // Maximum sequence length
+    int32_t max_length        = 0;     // Maximum sequence length
+    bool    eos_early_stop    = false; // Enable early EOS termination
+    bool    hybrid_diffusion  = false; // Enable hybrid diffusion optimization with KV cache
 };
 
 struct callback_data {
@@ -232,6 +235,16 @@ static void diffusion_generate(llama_context *          ctx,
     std::vector<int32_t> mask_positions;
     mask_positions.reserve(params.max_length);
 
+    // Get EOS token for early termination
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    llama_token eos_token_id = llama_vocab_eos(vocab);
+    
+    if (params.eos_early_stop) {
+        GGML_ASSERT(eos_token_id != LLAMA_TOKEN_NULL);
+    }
+    
+    LOG_DBG("DEBUG: EOS token ID = %d\n", eos_token_id);
+    
     // Setup sampler chain
     struct llama_sampler * sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
     if (params.top_k > 0) {
@@ -277,7 +290,26 @@ static void diffusion_generate(llama_context *          ctx,
     int64_t total_time          = 0;
     int64_t time_start          = ggml_time_us();
 
-    for (int block_num = 0; block_num < num_blocks; block_num++) {
+    bool all_tokens_filled = false;
+
+    // Hybrid Diffusion: Pre-fill prompt if enabled and n_input > 0
+    if (params.hybrid_diffusion && n_input > 0) {
+        // Decode prompt (0..n_input) to KV cache
+        batch.n_tokens = n_input;
+        for (int32_t i = 0; i < n_input; i++) {
+            batch.token[i]     = output_tokens[i];
+            batch.pos[i]       = i;
+            batch.n_seq_id[i]  = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i]    = false; // No logits needed for prompt
+        }
+        
+        if (llama_decode(ctx, batch) != 0) {
+            LOG_ERR("%s: failed to decode prompt\n", __func__);
+            return;
+        }
+    }
+    for (int block_num = 0; block_num < num_blocks && !all_tokens_filled; block_num++) {
         int32_t block_start = (params.schedule == BLOCK_BASED) ? n_input + block_num * params.block_length : 0;
         int32_t block_end   = (params.schedule == BLOCK_BASED) ?
                                   std::min(n_input + (block_num + 1) * params.block_length, params.max_length) :
@@ -305,12 +337,59 @@ static void diffusion_generate(llama_context *          ctx,
             }
 
             // Setup batch
-            for (int32_t i = 0; i < params.max_length; i++) {
-                batch.token[i]     = output_tokens[i];
-                batch.pos[i]       = i;
+            int32_t batch_size;
+            int32_t batch_start_pos;
+            
+            // Hybrid Diffusion: Commit previous block to KV cache
+            if (params.hybrid_diffusion && block_num > 0 && step == 0) {
+                int32_t prev_block_start = (params.schedule == BLOCK_BASED) ? n_input + (block_num - 1) * params.block_length : 0;
+                int32_t prev_block_end   = block_start;
+                
+                int32_t pb_size = prev_block_end - prev_block_start;
+                if (pb_size > 0) {
+                    batch.n_tokens = pb_size;
+                    for (int32_t i = 0; i < pb_size; i++) {
+                        int32_t pos = prev_block_start + i;
+                        batch.token[i]     = output_tokens[pos];
+                        batch.pos[i]       = pos;
+                        batch.n_seq_id[i]  = 1;
+                        batch.seq_id[i][0] = 0;
+                        batch.logits[i]    = false; 
+                    }
+                    
+                    // Remove old KV for this range to ensure we write the fresh finalized tokens
+                    llama_memory_seq_rm(llama_get_memory(ctx), 0, prev_block_start, prev_block_end);
+                    
+                    if (llama_decode(ctx, batch) != 0) {
+                        LOG_ERR("%s: failed to commit previous block %d\n", __func__, block_num - 1);
+                        break;
+                    }
+                }
+            }
+
+            if (params.hybrid_diffusion) {
+                // Hybrid Diffusion: Truncate to active block only
+                batch_start_pos = block_start;
+                batch_size      = block_end - block_start;
+            } else {
+                // Process full sequence
+                batch_start_pos = 0;
+                batch_size      = params.max_length;
+            }
+            
+            // Hybrid Diffusion: Remove old KV for the active region before re-decoding
+            if (params.hybrid_diffusion) {
+                llama_memory_seq_rm(llama_get_memory(ctx), 0, batch_start_pos, batch_start_pos + batch_size);
+            }
+            
+            batch.n_tokens = batch_size;
+            for (int32_t i = 0; i < batch_size; i++) {
+                int32_t pos = batch_start_pos + i;
+                batch.token[i]     = output_tokens[pos];
+                batch.pos[i]       = pos;
                 batch.n_seq_id[i]  = 1;
                 batch.seq_id[i][0] = 0;
-                batch.logits[i]    = 1;
+                batch.logits[i]    = true;
             }
 
             float * logits = nullptr;
@@ -330,8 +409,9 @@ static void diffusion_generate(llama_context *          ctx,
                     un_x_buffer[i] = params.mask_token_id;
                 }
 
-                for (int32_t i = 0; i < params.max_length; i++) {
-                    batch.token[i] = un_x_buffer[i];
+                for (int32_t i = 0; i < batch_size; i++) {
+                    int32_t pos = batch_start_pos + i;
+                    batch.token[i] = un_x_buffer[pos];
                 }
                 ret = llama_decode(ctx, batch);
                 if (ret != 0) {
@@ -361,10 +441,17 @@ static void diffusion_generate(llama_context *          ctx,
             }
 
             auto get_logits_for_pos = [&](int32_t pos) -> const float * {
-                if (params.shift_logits) {
-                    return pos == 0 ? logits : logits + (pos - 1) * n_vocab;
+                // Hybrid Diffusion: Map absolute pos to relative pos in logits
+                int32_t rel_pos = params.hybrid_diffusion ? (pos - batch_start_pos) : pos;
+                
+                if (params.hybrid_diffusion && (pos < batch_start_pos || pos >= batch_start_pos + batch_size)) {
+                    return nullptr; // Position out of active batch range
                 }
-                return logits + (pos) *n_vocab;
+               
+                if (params.shift_logits) {
+                    return rel_pos == 0 ? logits : logits + (rel_pos - 1) * n_vocab;
+                }
+                return logits + (rel_pos) * n_vocab;
             };
 
             int64_t time_start_sampling = ggml_time_us();
@@ -416,6 +503,10 @@ static void diffusion_generate(llama_context *          ctx,
                 std::vector<std::pair<float, int32_t>> confidences;
                 std::vector<llama_token>               sampled_tokens(mask_positions.size());
 
+                int32_t transfer_count = calculate_transfer_count(
+                    step, steps_per_block, mask_positions.size(), params.schedule, params.eps, num_transfer_tokens);
+                int32_t high_conf_count = 0;
+                
                 for (size_t i = 0; i < mask_positions.size(); i++) {
                     int32_t       pos        = mask_positions[i];
                     const float * pos_logits = get_logits_for_pos(pos);
@@ -438,60 +529,147 @@ static void diffusion_generate(llama_context *          ctx,
 
                     float conf = calculate_confidence(cur_p, params.algorithm, rng);
 
+                    if (params.threshold > 0.0f && conf > params.threshold) {
+                        high_conf_count++;
+                    }
+    
                     sampled_tokens[i] = sampled_token;
                     confidences.emplace_back(conf, i);
                 }
 
-                int32_t transfer_count = calculate_transfer_count(
-                    step, steps_per_block, mask_positions.size(), params.schedule, params.eps, num_transfer_tokens);
-
                 if (transfer_count > 0) {
-                    if (params.alg_temp == 0.0f) {
-                        std::partial_sort(confidences.begin(),
-                                          confidences.begin() + std::min(transfer_count, (int32_t) confidences.size()),
-                                          confidences.end(),
-                                          [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
-                                              if (a.first != b.first) {
-                                                  return a.first > b.first;
-                                              }
-                                              return a.second < b.second;
-                                          });
-
-                        for (int32_t i = 0; i < std::min(transfer_count, (int32_t) confidences.size()); i++) {
-                            int32_t mask_idx   = confidences[i].second;
-                            int32_t pos        = mask_positions[mask_idx];
-                            output_tokens[pos] = sampled_tokens[mask_idx];
+                    int32_t actual_transfer_count;
+                    
+                    if (params.threshold > 0.0f) {
+                        // Threshold-based confidence approach
+                        if (high_conf_count >= transfer_count) {
+                            // If we have enough high-confidence tokens,
+                            // use stable_partition to move them to the front, preserving relative order (by position).
+                            // This avoids a full sort.
+                            std::stable_partition(confidences.begin(),
+                                                  confidences.end(),
+                                                  [threshold = params.threshold](const std::pair<float, int32_t>& item) {
+                                                      return item.first > threshold;
+                                                  });
+                            actual_transfer_count = high_conf_count;
+                        } else {
+                            // Fallback: Not enough high-confidence tokens to meet the schedule.
+                            // Sort to find the top 'transfer_count' tokens.
+                            std::partial_sort(confidences.begin(),
+                                              confidences.begin() + std::min(transfer_count, (int32_t) confidences.size()),
+                                              confidences.end(),
+                                              [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
+                                                  if (a.first != b.first) {
+                                                      return a.first > b.first;
+                                                  }
+                                                  return a.second < b.second;
+                                              });
+                            actual_transfer_count = transfer_count;
                         }
+                        actual_transfer_count = std::min(actual_transfer_count, (int32_t)confidences.size());
+                           
                     } else {
-                        conf_candidates.clear();
-                        for (size_t i = 0; i < confidences.size(); i++) {
-                            float conf_logit = confidences[i].first / params.alg_temp;
-                            conf_candidates.emplace_back(llama_token_data{ (int32_t) i, conf_logit, 0.0f });
-                        }
+                        // alg_temp-based approach (fallback when threshold not set)
+                        if (params.alg_temp == 0.0f) {
+                            // Deterministic selection: sort and take top transfer_count
+                            std::partial_sort(confidences.begin(),
+                                              confidences.begin() + std::min(transfer_count, (int32_t) confidences.size()),
+                                              confidences.end(),
+                                              [](const std::pair<float, int32_t> & a, const std::pair<float, int32_t> & b) {
+                                                  if (a.first != b.first) {
+                                                      return a.first > b.first;
+                                                  }
+                                                  return a.second < b.second;
+                                              });
+                            actual_transfer_count = std::min(transfer_count, (int32_t) confidences.size());
+                        } else {
+                            // Stochastic selection using alg_temp
+                            conf_candidates.clear();
+                            for (size_t i = 0; i < confidences.size(); i++) {
+                                float conf_logit = confidences[i].first / params.alg_temp;
+                                conf_candidates.emplace_back(llama_token_data{ (int32_t) i, conf_logit, 0.0f });
+                            }
 
-                        llama_token_data_array conf_array = {
-                            conf_candidates.data(),
-                            conf_candidates.size(),
-                            -1,
-                            false,
-                        };
+                            llama_token_data_array conf_array = {
+                                conf_candidates.data(),
+                                conf_candidates.size(),
+                                -1,
+                                false,
+                            };
 
-                        for (int32_t i = 0; i < std::min(transfer_count, (int32_t) confidences.size()); i++) {
-                            llama_sampler_apply(dist_sampler, &conf_array);
-                            int32_t selected_idx = conf_array.selected;
-                            int32_t mask_idx     = selected_idx;
-                            int32_t pos          = mask_positions[mask_idx];
-                            output_tokens[pos]   = sampled_tokens[mask_idx];
+                            // Sample transfer_count positions stochastically
+                            actual_transfer_count = std::min(transfer_count, (int32_t) confidences.size());
+                            for (int32_t i = 0; i < actual_transfer_count; i++) {
+                                llama_sampler_apply(dist_sampler, &conf_array);
+                                int32_t selected_idx = conf_array.selected;
+                                int32_t mask_idx     = selected_idx;
+                                int32_t pos          = mask_positions[mask_idx];
+                                output_tokens[pos]   = sampled_tokens[mask_idx];
 
-                            conf_candidates[selected_idx].p = 0.0f;
-                            conf_array.selected             = -1;
+                                // Mark as used by setting p to 0
+                                conf_candidates[selected_idx].p = 0.0f;
+                                conf_array.selected             = -1;
+                            }
+                            // Skip the common transfer loop below for stochastic case
+                            actual_transfer_count = 0;
                         }
                     }
+
+                    // Transfer tokens (deterministic case for both models)
+                    for (int32_t i = 0; i < actual_transfer_count; i++) {
+                        int32_t mask_idx   = confidences[i].second;
+                        int32_t pos        = mask_positions[mask_idx];
+                        llama_token transferred_token = sampled_tokens[mask_idx];
+                        output_tokens[pos] = transferred_token;
+                       
+                        // EOS early stop
+                        if (params.eos_early_stop && transferred_token == eos_token_id) {
+                            // Verify all tokens from n_input to pos are filled
+                            bool all_filled_before_eos = true;
+                            for (int32_t j = n_input; j < pos; j++) {
+                                if (output_tokens[j] == params.mask_token_id) {
+                                    all_filled_before_eos = false;
+                                    break;
+                                }
+                            }
+                            if (all_filled_before_eos) {
+                                LOG_DBG("\nEOS detected at position %d, all prior tokens filled. Terminating.\n", pos);
+                                n_generated = pos + 1 - n_input;
+                                all_tokens_filled = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (params.eos_early_stop && all_tokens_filled) break; // Exit step loop
+                } else {
+                    LOG_DBG("DEBUG: Transfer count is 0!\n");
                 }
             }
 
             int64_t time_end_sampling = ggml_time_us();
             total_sampling_time += time_end_sampling - time_start_sampling;
+        }
+
+        // Check for EOS after block completes
+        if (params.eos_early_stop) {
+            for (int32_t i = n_input; i < block_end; i++) {
+                if (output_tokens[i] == eos_token_id) {
+                    // Check if all tokens before EOS are filled
+                    bool all_filled = true;
+                    for (int32_t j = n_input; j < i; j++) {
+                        if (output_tokens[j] == params.mask_token_id) {
+                            all_filled = false;
+                            break;
+                        }
+                    }
+                    if (all_filled) {
+                        LOG_DBG("\nEOS found at position %d after block %d. Terminating.\n", i, block_num);
+                        n_generated = i + 1 - n_input;
+                        all_tokens_filled = true;
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -567,7 +745,14 @@ int main(int argc, char ** argv) {
         llama_model_free(model);
         return 1;
     }
-
+    
+    // Compute max_length early to ensure n_ubatch is large enough
+    int32_t max_length = params.n_predict > 0 ? params.n_predict : params.n_ctx;
+    
+    LOG_DBG("DEBUG: params.n_ctx = %d\n", params.n_ctx);
+    LOG_DBG("DEBUG: params.n_predict = %d\n", params.n_predict);
+    LOG_DBG("DEBUG: max_length = %d\n", max_length);
+    
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx                = params.n_ctx;
     ctx_params.n_batch              = params.n_batch;
@@ -611,7 +796,7 @@ int main(int argc, char ** argv) {
     bool visual_mode = params.diffusion.visual_mode;
 
     int32_t                  n_generated = 0;
-    std::vector<llama_token> output_tokens(params.n_ubatch);
+    std::vector<llama_token> output_tokens(max_length);
 
     struct diffusion_params diff_params;
 
@@ -622,6 +807,15 @@ int main(int argc, char ** argv) {
         diff_params.shift_logits = true;
     }
 
+    // EOS early stop parameter from CLI
+    diff_params.eos_early_stop = params.diffusion.eos_early_stop;
+
+    // Threshold parameter from CLI
+    diff_params.threshold = params.diffusion.threshold;
+
+    // Hybrid diffusion parameter from CLI
+    diff_params.hybrid_diffusion = params.diffusion.hybrid_diffusion;
+        
     //Use either eps or block length, but not both
     GGML_ASSERT((params.diffusion.eps == 0) ^ (params.diffusion.block_length == 0));
 

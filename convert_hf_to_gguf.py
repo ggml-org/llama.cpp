@@ -8729,6 +8729,13 @@ class BailingMoeV2Model(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
+@ModelBase.register("LLaDA2MoeModelLM")
+class LLaDA2MoeModel(BailingMoeV2Model):
+    model_arch = gguf.MODEL_ARCH.LLADA2
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_diffusion_shift_logits(False)
 
 @ModelBase.register("GroveMoeForCausalLM", "modeling_grove_moe.GroveMoeForCausalLM")
 class GroveMoeModel(TextModel):

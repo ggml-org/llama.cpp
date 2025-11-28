@@ -1984,6 +1984,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_LLADA2:
         case LLM_ARCH_BAILINGMOE2:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
@@ -5649,6 +5650,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
                     }
                 } break;
+            case LLM_ARCH_LLADA2:
             case LLM_ARCH_BAILINGMOE2:
                 {
                     const int64_t n_ff_exp        = hparams.n_ff_exp;
@@ -5660,8 +5662,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
                     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
 
-                    GGML_ASSERT(n_expert > 0 && "n_expert must be > 0 for bailingmoe2");
-                    GGML_ASSERT(n_expert_used > 0 && "n_expert_used must be > 0 for bailingmoe2");
+                    GGML_ASSERT(n_expert > 0 && "n_expert must be > 0 for bailingmoe2/llada2");
+                    GGML_ASSERT(n_expert_used > 0 && "n_expert_used must be > 0 for bailingmoe2/llada2");
 
                     for (int i = 0; i < n_layer; ++i) {
                         int flags = 0;
@@ -6756,7 +6758,7 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: expert_weights_norm  = %d\n",     __func__, hparams.expert_weights_norm);
     }
 
-    if (arch == LLM_ARCH_BAILINGMOE2) {
+    if (arch == LLM_ARCH_BAILINGMOE2 || arch == LLM_ARCH_LLADA2) {
         LLAMA_LOG_INFO("%s: n_layer_dense_lead   = %d\n",     __func__, hparams.n_layer_dense_lead);
         LLAMA_LOG_INFO("%s: n_ff_exp             = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: n_ff_shexp           = %d\n",     __func__, hparams.n_ff_shexp);
@@ -7350,6 +7352,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_bailingmoe2>(*this, params);
             } break;
+        case LLM_ARCH_LLADA2:
+            {
+                llm = std::make_unique<llm_build_llada2>(*this, params);
+            } break;
         case LLM_ARCH_SEED_OSS:
             {
                 llm = std::make_unique<llm_build_seed_oss>(*this, params);
@@ -7653,6 +7659,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_COGVLM:
         case LLM_ARCH_PANGU_EMBED:
         case LLM_ARCH_AFMOE:
+        case LLM_ARCH_LLADA2:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
