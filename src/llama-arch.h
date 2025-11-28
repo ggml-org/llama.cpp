@@ -498,9 +498,11 @@ enum llm_tensor {
     LLM_TENSOR_KDA_F_B,
     LLM_TENSOR_KDA_B,
     LLM_TENSOR_KDA_A_LOG,
+    LLM_TENSOR_KDA_DT_BIAS,
     LLM_TENSOR_KDA_G_A,
     LLM_TENSOR_KDA_G_B,
     LLM_TENSOR_KDA_O_NORM,
+    LLM_TENSOR_KDA_STATE,
 };
 
 enum llm_tensor_layer {

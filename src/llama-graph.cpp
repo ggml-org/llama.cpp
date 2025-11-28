@@ -1819,11 +1819,14 @@ ggml_tensor * llm_graph_context::build_rs(
     ggml_build_forward_expand(gf, output_states);
 
     // copy extra states which won't be changed further (between n_seqs and n_rs)
-    ggml_tensor * states_extra = ggml_get_rows(ctx0, states, state_copy_extra);
-    ggml_build_forward_expand(gf,
-        ggml_cpy(ctx0,
-            states_extra,
-            ggml_view_1d(ctx0, s, state_size*(n_rs - n_seqs), (rs_head + n_seqs)*state_size*ggml_element_size(s))));
+    // Skip if there are no extra states to copy (n_rs == n_seqs)
+    if (n_rs > n_seqs) {
+        ggml_tensor * states_extra = ggml_get_rows(ctx0, states, state_copy_extra);
+        ggml_build_forward_expand(gf,
+            ggml_cpy(ctx0,
+                states_extra,
+                ggml_view_1d(ctx0, s, state_size*(n_rs - n_seqs), (rs_head + n_seqs)*state_size*ggml_element_size(s))));
+    }
 
     return output_states;
 }

@@ -563,6 +563,10 @@ class ModelBase:
                             gguf.MODEL_TENSOR.A_ENC_EMBD_POS,
                             gguf.MODEL_TENSOR.ALTUP_CORRECT_COEF,
                             gguf.MODEL_TENSOR.ALTUP_PREDICT_COEF,
+                            # KDA conv weights should be F32
+                            gguf.MODEL_TENSOR.KDA_Q_CONV,
+                            gguf.MODEL_TENSOR.KDA_K_CONV,
+                            gguf.MODEL_TENSOR.KDA_V_CONV,
                         )
                     )
                     or new_name[-7:] not in (".weight", ".lora_a", ".lora_b")
@@ -5125,9 +5129,14 @@ class KimiLinearModel(TextModel):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
         
         # Use find_hparam for context length
-        n_ctx = self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions"], optional=True)
+        # Kimi uses model_max_length
+        n_ctx = self.find_hparam(["max_position_embeddings", "model_max_length", "n_ctx", "n_positions"], optional=True)
         if n_ctx is not None:
             self.gguf_writer.add_context_length(n_ctx)
+        else:
+            # Default to 4096 if not found
+            logger.warning("No context length found in config, defaulting to 4096")
+            self.gguf_writer.add_context_length(4096)
         
         self.gguf_writer.add_block_count(self.hparams["num_hidden_layers"])
         self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
@@ -5138,9 +5147,11 @@ class KimiLinearModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
         # KDA & MLA params
-        # Assuming these keys exist in config.json for Kimi models
-        if "ssm_d_conv" in self.hparams:
-             self.gguf_writer.add_ssm_conv_kernel(self.hparams["ssm_d_conv"])
+        # Get ssm_d_conv from linear_attn_config.short_conv_kernel_size or ssm_d_conv
+        linear_attn_config = self.hparams.get("linear_attn_config", {})
+        ssm_d_conv = self.hparams.get("ssm_d_conv") or linear_attn_config.get("short_conv_kernel_size")
+        if ssm_d_conv is not None:
+             self.gguf_writer.add_ssm_conv_kernel(ssm_d_conv)
         
         # MLA params - use add_* methods that handle arch substitution
         # Support both HuggingFace naming (q_lora_rank, kv_lora_rank) and internal naming (n_lora_q, n_lora_kv)
@@ -5171,10 +5182,10 @@ class KimiLinearModel(TextModel):
         elif v_head_dim is not None:
              self.gguf_writer.add_value_length_mla(v_head_dim)
         
-        # Rotation
-        # Kimi likely uses n_rot
-        if "n_rot" in self.hparams:
-             self.gguf_writer.add_rope_dimension_count(self.hparams["n_rot"])
+        # Rotation - use qk_rope_head_dim for Kimi
+        rope_dim = self.hparams.get("qk_rope_head_dim") or self.hparams.get("n_rot")
+        if rope_dim is not None:
+             self.gguf_writer.add_rope_dimension_count(rope_dim)
         else:
              # Default to head_dim
              head_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
@@ -5186,8 +5197,40 @@ class KimiLinearModel(TextModel):
         n_experts = self.hparams.get("num_local_experts", self.hparams.get("num_experts"))
         if n_experts is not None:
             self.gguf_writer.add_expert_count(n_experts)
-        if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
+        # Support both num_experts_per_tok and num_experts_per_token
+        n_experts_used = self.hparams.get("num_experts_per_tok", self.hparams.get("num_experts_per_token"))
+        if n_experts_used is not None:
             self.gguf_writer.add_expert_used_count(n_experts_used)
+        
+        # moe_intermediate_size (1024 for Kimi)
+        moe_intermediate_size = self.hparams.get("moe_intermediate_size")
+        if moe_intermediate_size is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+        
+        # num_shared_experts (1 for Kimi)
+        num_shared_experts = self.hparams.get("num_shared_experts")
+        if num_shared_experts is not None:
+            self.gguf_writer.add_expert_shared_count(num_shared_experts)
+        
+        # first_k_dense_replace (1 for Kimi - first layer uses dense MLP)
+        first_k_dense_replace = self.hparams.get("first_k_dense_replace")
+        if first_k_dense_replace is not None:
+            self.gguf_writer.add_leading_dense_block_count(first_k_dense_replace)
+        
+        # Expert gating function (sigmoid for Kimi)
+        moe_router_activation_func = self.hparams.get("moe_router_activation_func", "sigmoid")
+        if moe_router_activation_func == "sigmoid":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        elif moe_router_activation_func == "softmax":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+        else:
+            logger.warning(f"Unknown moe_router_activation_func: {moe_router_activation_func}, defaulting to sigmoid")
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        
+        # Routed scaling factor (expert_weights_scale = 2.446 for Kimi)
+        routed_scaling_factor = self.hparams.get("routed_scaling_factor")
+        if routed_scaling_factor is not None:
+            self.gguf_writer.add_expert_weights_scale(routed_scaling_factor)
 
     def set_vocab(self):
         # Kimi uses TikToken tokenizer - load via transformers
@@ -5287,26 +5330,32 @@ class KimiLinearModel(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         logger.info(f"Processing {name}: shape before = {tuple(data_torch.shape)}")
         
-        # GGUF writer automatically reverses tensor dimensions!
-        # For Kimi dummy models: tensors are created in llama.cpp format
-        # Since GGUF will reverse them, we DON'T transpose (no-op means they'll be reversed once by GGUF)
-        # But wait - that means we need NO transpose at all!
-        # Let's trace through an example:
-        #   HF model: q_a_proj = [128, 32] (llama.cpp format)
-        #   If we DON'T transpose: GGUF writer reverses → [32, 128] in file ✗
-        #   If we DO transpose: [32, 128] → GGUF writer reverses → [128, 32] in file ✓
-        # 
-        # So actually, for Kimi we should transpose ALL weights to cancel out GGUF's reversal!
+        # Handle KDA conv1d weights
+        # HuggingFace/vLLM stores as [d_inner, d_conv] (2D), memory layout: conv_step changes fastest
+        # llama.cpp expects ggml ne = [d_conv, 1, d_inner, 1], memory layout: ne[0]=d_conv changes fastest
+        # GGUF reverses numpy shape when writing, so numpy (1, d_inner, 1, d_conv) -> ggml ne = [d_conv, 1, d_inner, 1]
+        # Memory layouts match: both have conv_step (d_conv) changing fastest
+        if name.endswith((".q_conv1d.weight", ".k_conv1d.weight", ".v_conv1d.weight")):
+            # HF shape: [d_inner, d_conv] e.g. [4096, 4]
+            # Target numpy shape: (1, d_inner, 1, d_conv) -> ggml ne = [d_conv, 1, d_inner, 1]
+            if data_torch.ndim == 2:
+                d_inner, d_conv = data_torch.shape
+                # Reshape to (1, d_inner, 1, d_conv) - memory layout preserved (d_conv fastest)
+                data_torch = data_torch.reshape(1, d_inner, 1, d_conv)
+                logger.info(f"Reshaped conv1d weight {name}: [d_inner={d_inner}, d_conv={d_conv}] -> numpy {tuple(data_torch.shape)} -> ggml ne=[{d_conv}, 1, {d_inner}, 1]")
+            elif data_torch.ndim == 3:
+                # Already 3D [d_inner, 1, d_conv] from unsqueeze
+                d_inner, _, d_conv = data_torch.shape
+                data_torch = data_torch.reshape(1, d_inner, 1, d_conv)
+                logger.info(f"Reshaped conv1d weight {name}: [d_inner={d_inner}, 1, d_conv={d_conv}] -> numpy {tuple(data_torch.shape)} -> ggml ne=[{d_conv}, 1, {d_inner}, 1]")
         
-        # GGUF dimension handling:
-        # When numpy array (rows, cols) is written to GGUF, the reader reports (cols, rows).
-        # llama.cpp create_tensor specifies {n_embd, n_vocab} = {2304, 163840}
-        # HF embedding is [vocab, n_embd] = [163840, 2304]
-        # If we DON'T transpose: write (163840, 2304) → GGUF shows [2304, 163840] ✓
-        # If we DO transpose: write (2304, 163840) → GGUF shows [163840, 2304] ✗
-        # So: NO transpose needed for embeddings!
-        if len(data_torch.shape) == 2 and "weight" in name:
-            logger.info(f"Keeping {name} as-is: {tuple(data_torch.shape)} (GGUF will show reversed)")
+        # Handle A_log: HF stores as [1, 1, num_heads, 1]
+        # llama.cpp expects ggml ne = [1, num_heads, 1, 1]
+        # GGUF reverses numpy shape: numpy (1, 1, num_heads, 1) -> ggml ne = [1, num_heads, 1, 1]
+        # So no transformation needed! The shapes already match after GGUF reversal.
+        if name.endswith(".A_log"):
+            if data_torch.ndim == 4:
+                logger.info(f"A_log {name}: numpy {tuple(data_torch.shape)} -> ggml ne={list(reversed(data_torch.shape))}")
         
         # Kimi specific bias
         if name.endswith("block_sparse_moe.gate.e_score_correction_bias"):

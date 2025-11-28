@@ -84,6 +84,7 @@ enum llm_type {
     LLM_TYPE_35B,
     LLM_TYPE_36B,
     LLM_TYPE_40B,
+    LLM_TYPE_48B,
     LLM_TYPE_65B,
     LLM_TYPE_70B,
     LLM_TYPE_120B,
@@ -414,11 +415,16 @@ struct llama_layer {
     struct ggml_tensor * kda_f_a    = nullptr;
     struct ggml_tensor * kda_f_b    = nullptr;
     struct ggml_tensor * kda_b      = nullptr;
-    struct ggml_tensor * kda_a_log  = nullptr;
-    struct ggml_tensor * kda_g_a    = nullptr;
+    struct ggml_tensor * kda_a_log   = nullptr;
+    struct ggml_tensor * kda_dt_bias = nullptr;  // forget gate bias
+    struct ggml_tensor * kda_g_a     = nullptr;
     struct ggml_tensor * kda_g_b    = nullptr;
     struct ggml_tensor * kda_o_norm = nullptr;
     struct ggml_tensor * kda_o_norm_b = nullptr;
+    
+    // KDA state tensor: hidden state for delta attention recurrence
+    // Shape: [head_dim, head_dim, n_head] - persistent state for recurrent computation
+    struct ggml_tensor * kda_state = nullptr;
 
     struct llama_layer_posnet posnet;
 

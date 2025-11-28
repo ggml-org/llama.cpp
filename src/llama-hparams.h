@@ -133,6 +133,10 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
+    // for Kimi Delta Attention (KDA)
+    uint32_t kda_head_dim  = 0;  // head_dim for KDA layers (128 for Kimi)
+    uint32_t kda_d_conv    = 0;  // conv kernel size for KDA (4 for Kimi)
+
     // for hybrid state space models
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
