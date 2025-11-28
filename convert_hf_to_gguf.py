@@ -10061,6 +10061,25 @@ class LazyTorchTensor(gguf.LazyBase):
         torch.uint8: np.uint8,
     }
 
+    # only used when byteswapping data. Only correct size is needed
+    _dtype_byteswap_map: dict[torch.dtype, type] = {
+        torch.float64: np.float64,
+        torch.float32: np.float32,
+        torch.bfloat16: np.float16,
+        torch.float16: np.float16,
+        torch.int64: np.int64,
+        torch.uint64: np.uint64,
+        torch.int32: np.int32,
+        torch.uint32: np.uint32,
+        torch.int16: np.int16,
+        torch.uint16: np.uint16,
+        torch.int8: np.int8,
+        torch.uint8: np.uint8,
+        torch.bool: np.uint8,
+        torch.float8_e4m3fn: np.uint8,
+        torch.float8_e5m2: np.uint8,
+    }
+
     # used for safetensors slices
     # ref: https://github.com/huggingface/safetensors/blob/079781fd0dc455ba0fe851e2b4507c33d0c0d407/bindings/python/src/lib.rs#L1046
     # TODO: uncomment U64, U32, and U16, ref: https://github.com/pytorch/pytorch/issues/58734
@@ -10104,8 +10123,14 @@ class LazyTorchTensor(gguf.LazyBase):
     @classmethod
     def from_local_tensor(cls, t: gguf.utility.LocalTensor) -> Tensor:
         def load_tensor(tensor: gguf.utility.LocalTensor) -> Tensor:
+            def byteswap_tensor(tensor: np.ndarray, dtype: type) -> np.ndarray:
+                if sys.byteorder == 'big':
+                    # switch data back to big endian
+                    tensor = tensor.view(dtype).byteswap(inplace=False)
+                return tensor
             dtype = cls._dtype_str_map[tensor.dtype]
-            return torch.from_numpy(tensor.mmap_bytes()).view(dtype).reshape(tensor.shape)
+            numpy_dtype = cls._dtype_byteswap_map[dtype]
+            return torch.from_numpy(byteswap_tensor(tensor.mmap_bytes(), numpy_dtype)).view(dtype).reshape(tensor.shape)
         dtype = cls._dtype_str_map[t.dtype]
         shape = t.shape
         lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(t,), func=lambda r: load_tensor(r))
@@ -10113,10 +10138,16 @@ class LazyTorchTensor(gguf.LazyBase):
 
     @classmethod
     def from_remote_tensor(cls, remote_tensor: gguf.utility.RemoteTensor):
+        def byteswap_tensor(tensor: np.ndarray, dtype: type) -> np.ndarray:
+            if sys.byteorder == 'big':
+                # switch data back to big endian
+                tensor = tensor.view(dtype).byteswap(inplace=False)
+            return tensor
         dtype = cls._dtype_str_map[remote_tensor.dtype]
+        numpy_dtype = cls._dtype_byteswap_map[dtype]
         shape = remote_tensor.shape
         meta = cls.meta_with_dtype_and_shape(dtype, shape)
-        lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.frombuffer(r.data(), dtype=dtype).reshape(shape))
+        lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.from_numpy(byteswap_tensor(np.frombuffer(r.data(), dtype=numpy_dtype), numpy_dtype)).view(dtype).reshape(shape))
         return cast(torch.Tensor, lazy)
 
     @classmethod

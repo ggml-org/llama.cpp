@@ -114,19 +114,31 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
 };
 
 static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
-    { LLM_KV_GENERAL_TYPE,                 "general.type"                          },
-    { LLM_KV_GENERAL_ARCHITECTURE,         "general.architecture"                  },
-    { LLM_KV_GENERAL_QUANTIZATION_VERSION, "general.quantization_version"          },
-    { LLM_KV_GENERAL_ALIGNMENT,            "general.alignment"                     },
-    { LLM_KV_GENERAL_FILE_TYPE,            "general.file_type"                     },
-    { LLM_KV_GENERAL_NAME,                 "general.name"                          },
-    { LLM_KV_GENERAL_AUTHOR,               "general.author"                        },
-    { LLM_KV_GENERAL_VERSION,              "general.version"                       },
-    { LLM_KV_GENERAL_URL,                  "general.url"                           },
-    { LLM_KV_GENERAL_DESCRIPTION,          "general.description"                   },
-    { LLM_KV_GENERAL_LICENSE,              "general.license"                       },
-    { LLM_KV_GENERAL_SOURCE_URL,           "general.source.url"                    },
-    { LLM_KV_GENERAL_SOURCE_HF_REPO,       "general.source.huggingface.repository" },
+    { LLM_KV_GENERAL_TYPE,                     "general.type"                          },
+    { LLM_KV_GENERAL_ARCHITECTURE,             "general.architecture"                  },
+    { LLM_KV_GENERAL_QUANTIZATION_VERSION,     "general.quantization_version"          },
+    { LLM_KV_GENERAL_ALIGNMENT,                "general.alignment"                     },
+    { LLM_KV_GENERAL_FILE_TYPE,                "general.file_type"                     },
+    { LLM_KV_GENERAL_SAMPLING_SEQUENCE,        "general.sampling.sequence"             },
+    { LLM_KV_GENERAL_SAMPLING_TOP_K,           "general.sampling.top_k"                },
+    { LLM_KV_GENERAL_SAMPLING_TOP_P,           "general.sampling.top_p"                },
+    { LLM_KV_GENERAL_SAMPLING_MIN_P,           "general.sampling.min_p"                },
+    { LLM_KV_GENERAL_SAMPLING_XTC_PROBABILITY, "general.sampling.xtc_probability"      },
+    { LLM_KV_GENERAL_SAMPLING_XTC_THRESHOLD,   "general.sampling.xtc_threshold"        },
+    { LLM_KV_GENERAL_SAMPLING_TEMP,            "general.sampling.temp"                 },
+    { LLM_KV_GENERAL_SAMPLING_PENALTY_LAST_N,  "general.sampling.penalty_last_n"       },
+    { LLM_KV_GENERAL_SAMPLING_PENALTY_REPEAT,  "general.sampling.penalty_repeat"       },
+    { LLM_KV_GENERAL_SAMPLING_MIROSTAT,        "general.sampling.mirostat"             },
+    { LLM_KV_GENERAL_SAMPLING_MIROSTAT_TAU,    "general.sampling.mirostat_tau"         },
+    { LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,    "general.sampling.mirostat_eta"         },
+    { LLM_KV_GENERAL_NAME,                     "general.name"                          },
+    { LLM_KV_GENERAL_AUTHOR,                   "general.author"                        },
+    { LLM_KV_GENERAL_VERSION,                  "general.version"                       },
+    { LLM_KV_GENERAL_URL,                      "general.url"                           },
+    { LLM_KV_GENERAL_DESCRIPTION,              "general.description"                   },
+    { LLM_KV_GENERAL_LICENSE,                  "general.license"                       },
+    { LLM_KV_GENERAL_SOURCE_URL,               "general.source.url"                    },
+    { LLM_KV_GENERAL_SOURCE_HF_REPO,           "general.source.huggingface.repository" },
 
     { LLM_KV_VOCAB_SIZE,                        "%s.vocab_size"                        },
     { LLM_KV_CONTEXT_LENGTH,                    "%s.context_length"                    },
@@ -2225,7 +2237,7 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             { LLM_TENSOR_SHORTCONV_INPROJ,  "blk.%d.shortconv.in_proj" },
             { LLM_TENSOR_SHORTCONV_OUTPROJ, "blk.%d.shortconv.out_proj" },
             { LLM_TENSOR_TOKEN_EMBD,        "token_embd" },
-            { LLM_TENSOR_TOKEN_EMBD_NORM,   "token_embd_norm" },
+            { LLM_TENSOR_OUTPUT_NORM,       "token_embd_norm" }, // note: wrong tensor name
             { LLM_TENSOR_OUTPUT,            "output" },
         }
     },
@@ -2247,7 +2259,7 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             { LLM_TENSOR_SHORTCONV_INPROJ,  "blk.%d.shortconv.in_proj" },
             { LLM_TENSOR_SHORTCONV_OUTPROJ, "blk.%d.shortconv.out_proj" },
             { LLM_TENSOR_TOKEN_EMBD,        "token_embd" },
-            { LLM_TENSOR_TOKEN_EMBD_NORM,   "token_embd_norm" },
+            { LLM_TENSOR_OUTPUT_NORM,       "token_embd_norm" }, // note: wrong tensor name
             { LLM_TENSOR_FFN_GATE_INP,      "blk.%d.ffn_gate_inp" },
             { LLM_TENSOR_FFN_GATE_EXPS,     "blk.%d.ffn_gate_exps" },
             { LLM_TENSOR_FFN_DOWN_EXPS,     "blk.%d.ffn_down_exps" },
@@ -2475,11 +2487,21 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
     },
 };
 
+// declare information about the model weight tensors:
+// - the layer in which the tensor is going to be used. this is needed in order to assign the correct buffer type for the weight
+// - the operator which is going to use the weight. this is needed to determine if the respective backend supports the operator
+//
+// for example, input layers are usually assigned to CPU/host buffer types
+//
+// a mismatch between the declared information and the actual layer/op in which the tensor is used can lead to sub-optimal
+//   assignment of the buffer types and extra overhead during computation
+// example: https://github.com/ggml-org/llama.cpp/pull/17548
+//
 static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_TOKEN_EMBD,                 {LLM_TENSOR_LAYER_INPUT, GGML_OP_GET_ROWS}},
     {LLM_TENSOR_POS_EMBD,                   {LLM_TENSOR_LAYER_INPUT, GGML_OP_GET_ROWS}},
-    {LLM_TENSOR_TOKEN_EMBD_NORM,            {LLM_TENSOR_LAYER_INPUT, GGML_OP_GET_ROWS}},
     {LLM_TENSOR_TOKEN_TYPES,                {LLM_TENSOR_LAYER_INPUT, GGML_OP_GET_ROWS}},
+    {LLM_TENSOR_TOKEN_EMBD_NORM,            {LLM_TENSOR_LAYER_INPUT, GGML_OP_MUL}},
     {LLM_TENSOR_OUTPUT,                     {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CLS,                        {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CLS_OUT,                    {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
