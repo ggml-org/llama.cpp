@@ -484,6 +484,19 @@ struct llama_model {
     void load_vocab  (llama_model_loader & ml);
     bool load_tensors(llama_model_loader & ml); // returns false if cancelled by progress_callback
 
+    // Initialize layer device mappings (called by safetensors loader)
+    void init_layer_devices();
+
+    // Get buffer type for a tensor based on layer index (called by safetensors loader)
+    // layer_idx: -1 for input/embedding layer, -2 for output layer, >=0 for transformer layers
+    ggml_backend_buffer_type_t get_layer_buft(int layer_idx);
+
+    // Add context and buffers to model (called by safetensors loader)
+    void add_context_with_buffers(ggml_context * ctx, std::vector<ggml_backend_buffer_ptr> buffers);
+
+    // Set model stats (called by safetensors loader)
+    void set_stats(uint64_t n_elements, size_t n_bytes);
+
     std::string arch_name() const;
     std::string type_name() const;
 

@@ -68,6 +68,13 @@ struct llama_vocab {
 
     void load(llama_model_loader & ml, const LLM_KV & kv);
 
+    // Load vocabulary from HuggingFace tokenizer.json format
+    // Used by safetensors loader
+    bool load_from_hf_tokenizer(
+        const std::string & tokenizer_json_path,
+        const std::string & tokenizer_config_path
+    );
+
     std::string get_tokenizer_model() const;
     std::string get_tokenizer_pre() const;
 

@@ -463,6 +463,106 @@ llama_model::llama_model(const llama_model_params & params) : params(params), pi
 
 llama_model::~llama_model() {}
 
+void llama_model::init_layer_devices() {
+    // Initialize buffer type lists and layer device mappings
+    // This is called by the safetensors loader after devices have been set up
+
+    ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (cpu_dev == nullptr) {
+        throw std::runtime_error("no CPU backend found");
+    }
+
+    // Build CPU buffer type list (simplified version - just use CPU buffer type)
+    // buft_list_t is std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>
+    pimpl->cpu_buft_list.clear();
+    pimpl->cpu_buft_list.push_back({cpu_dev, ggml_backend_dev_buffer_type(cpu_dev)});
+
+    // Build GPU buffer type lists for each device
+    for (auto * dev : devices) {
+        auto buft_list = pimpl->cpu_buft_list; // Start with CPU as fallback
+        // Add device-specific buffer type at the front
+        auto * dev_buft = ggml_backend_dev_buffer_type(dev);
+        if (dev_buft) {
+            buft_list.insert(buft_list.begin(), {dev, dev_buft});
+        }
+        pimpl->gpu_buft_list.emplace(dev, std::move(buft_list));
+    }
+
+    // Assign input layer to CPU (always keep input on CPU for better performance)
+    pimpl->dev_input = {cpu_dev, &pimpl->cpu_buft_list};
+
+    // Calculate which layers to offload to GPU
+    const int n_layer = hparams.n_layer;
+    const int n_gpu_layers = params.n_gpu_layers;
+    const int i_gpu_start = std::max((int)n_layer - n_gpu_layers, (int)0);
+    const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, (int)n_layer + 1);
+
+    pimpl->dev_layer.resize(n_layer);
+    int n_layers_on_gpu = 0;
+    int n_layers_on_cpu = 0;
+
+    for (int il = 0; il < n_layer; ++il) {
+        if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers || devices.empty()) {
+            // Assign to CPU
+            pimpl->dev_layer[il] = {cpu_dev, &pimpl->cpu_buft_list};
+            n_layers_on_cpu++;
+            LLAMA_LOG_DEBUG("%s: layer %3d assigned to device %s\n", __func__, il, ggml_backend_dev_name(cpu_dev));
+        } else {
+            // Assign to GPU (use first GPU device for now - could be extended for multi-GPU)
+            auto * dev = devices[0];
+            pimpl->dev_layer[il] = {dev, &pimpl->gpu_buft_list.at(dev)};
+            n_layers_on_gpu++;
+            LLAMA_LOG_DEBUG("%s: layer %3d assigned to device %s\n", __func__, il, ggml_backend_dev_name(dev));
+        }
+    }
+
+    // Assign output layer
+    if (n_layer < i_gpu_start || (n_layer - i_gpu_start) >= act_gpu_layers || devices.empty()) {
+        pimpl->dev_output = {cpu_dev, &pimpl->cpu_buft_list};
+        LLAMA_LOG_DEBUG("%s: output layer assigned to device %s\n", __func__, ggml_backend_dev_name(cpu_dev));
+    } else {
+        auto * dev = devices[0];
+        pimpl->dev_output = {dev, &pimpl->gpu_buft_list.at(dev)};
+        LLAMA_LOG_DEBUG("%s: output layer assigned to device %s\n", __func__, ggml_backend_dev_name(dev));
+    }
+
+    if (n_layers_on_gpu > 0) {
+        LLAMA_LOG_INFO("%s: assigned %d layers to GPU (%s), %d layers to CPU\n",
+                       __func__, n_layers_on_gpu, ggml_backend_dev_name(devices[0]), n_layers_on_cpu);
+    } else {
+        LLAMA_LOG_INFO("%s: assigned %d layers to CPU\n", __func__, n_layers_on_cpu);
+    }
+}
+
+ggml_backend_buffer_type_t llama_model::get_layer_buft(int layer_idx) {
+    // layer_idx: -1 for input/embedding layer, -2 for output layer, >=0 for transformer layers
+
+    if (layer_idx == -1) {
+        // Input/embedding layer
+        if (pimpl->dev_input.buft_list && !pimpl->dev_input.buft_list->empty()) {
+            return pimpl->dev_input.buft_list->at(0).second;
+        }
+    } else if (layer_idx == -2) {
+        // Output layer
+        if (pimpl->dev_output.buft_list && !pimpl->dev_output.buft_list->empty()) {
+            return pimpl->dev_output.buft_list->at(0).second;
+        }
+    } else if (layer_idx >= 0 && layer_idx < (int)pimpl->dev_layer.size()) {
+        // Transformer layer
+        if (pimpl->dev_layer[layer_idx].buft_list && !pimpl->dev_layer[layer_idx].buft_list->empty()) {
+            return pimpl->dev_layer[layer_idx].buft_list->at(0).second;
+        }
+    }
+
+    // Fallback to CPU
+    ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (cpu_dev) {
+        return ggml_backend_dev_buffer_type(cpu_dev);
+    }
+
+    return nullptr;
+}
+
 void llama_model::load_stats(llama_model_loader & ml) {
     pimpl->n_elements = ml.n_elements;
     pimpl->n_bytes = ml.n_bytes;
@@ -6645,6 +6745,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     }
 
     return true;
+}
+
+void llama_model::add_context_with_buffers(ggml_context * ctx, std::vector<ggml_backend_buffer_ptr> buffers) {
+    ggml_context_ptr ctx_ptr(ctx);
+    pimpl->ctxs_bufs.push_back({std::move(ctx_ptr), std::move(buffers)});
+}
+
+void llama_model::set_stats(uint64_t n_elements, size_t n_bytes) {
+    pimpl->n_elements = n_elements;
+    pimpl->n_bytes = n_bytes;
 }
 
 std::string llama_model::arch_name() const {

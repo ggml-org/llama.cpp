@@ -1113,12 +1113,20 @@ static int check_context_size(const llama_context_ptr & ctx, const llama_batch &
 static int convert_token_to_string(const llama_vocab * vocab, const llama_token token_id, std::string & piece) {
     char buf[256];
     int  n = llama_token_to_piece(vocab, token_id, buf, sizeof(buf), 0, true);
+
+    // DEBUG: Log token ID and decoded length
+    fprintf(stderr, "[DEBUG] Token ID: %d, decoded length: %d\n", token_id, n);
+
     if (n < 0) {
         printe("failed to convert token to piece\n");
         return 1;
     }
 
     piece = std::string(buf, n);
+
+    // DEBUG: Log decoded piece
+    fprintf(stderr, "[DEBUG] Decoded piece (len=%d): '%s'\n", (int)piece.size(), piece.c_str());
+
     return 0;
 }
 
@@ -1149,7 +1157,12 @@ static int generate(LlamaData & llama_data, const std::string & prompt, std::str
 
         // sample the next token, check is it an end of generation?
         new_token_id = llama_sampler_sample(llama_data.sampler.get(), llama_data.context.get(), -1);
-        if (llama_vocab_is_eog(vocab, new_token_id)) {
+
+        // DEBUG: Log sampled token and EOG check
+        bool is_eog = llama_vocab_is_eog(vocab, new_token_id);
+        fprintf(stderr, "[DEBUG] Sampled token ID: %d, is_eog: %s\n", new_token_id, is_eog ? "TRUE" : "FALSE");
+
+        if (is_eog) {
             break;
         }
 

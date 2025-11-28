@@ -4,6 +4,7 @@
 #include "gguf.h"
 #include "llama-impl.h"
 #include "llama-model-loader.h"
+#include "llama-hf-config.h"
 
 #include "unicode.h"
 
@@ -14,6 +15,8 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <forward_list>
 #include <limits>
 #include <map>
@@ -1612,6 +1615,11 @@ struct llama_vocab::impl {
 
     void load(llama_model_loader & ml, const LLM_KV & kv);
 
+    bool load_from_hf_tokenizer(
+        const std::string & tokenizer_json_path,
+        const std::string & tokenizer_config_path
+    );
+
     enum llama_vocab_type get_type() const;
 
     std::string type_name() const;
@@ -2608,6 +2616,216 @@ llama_token_attr llama_vocab::impl::token_get_attr(llama_token id) const {
     return id_to_token.at(id).attr;
 }
 
+bool llama_vocab::impl::load_from_hf_tokenizer(
+        const std::string & tokenizer_json_path,
+        const std::string & tokenizer_config_path) {
+
+    LLAMA_LOG_INFO("%s: loading HuggingFace tokenizer from %s\n", __func__, tokenizer_json_path.c_str());
+
+    // Read tokenizer.json file
+    std::ifstream file(tokenizer_json_path);
+    if (!file.is_open()) {
+        LLAMA_LOG_ERROR("%s: failed to open %s\n", __func__, tokenizer_json_path.c_str());
+        return false;
+    }
+
+    nlohmann::json root;
+    try {
+        file >> root;
+    } catch (const std::exception & e) {
+        LLAMA_LOG_ERROR("%s: failed to parse tokenizer.json: %s\n", __func__, e.what());
+        return false;
+    }
+    file.close();
+
+    // Get model section
+    if (!root.contains("model") || !root["model"].is_object()) {
+        LLAMA_LOG_ERROR("%s: tokenizer.json missing 'model' section\n", __func__);
+        return false;
+    }
+
+    auto model = root["model"];
+
+    // Determine tokenizer type from model.type
+    std::string model_type_str;
+    if (model.contains("type") && model["type"].is_string()) {
+        model_type_str = model["type"].get<std::string>();
+    }
+
+    // Set tokenizer type based on HF type
+    if (model_type_str == "BPE") {
+        type = LLAMA_VOCAB_TYPE_BPE;
+        tokenizer_model = "gpt2";
+    } else if (model_type_str == "WordPiece") {
+        type = LLAMA_VOCAB_TYPE_WPM;
+        tokenizer_model = "bert";
+    } else if (model_type_str == "Unigram") {
+        type = LLAMA_VOCAB_TYPE_UGM;
+        tokenizer_model = "t5";
+    } else {
+        // Default to BPE
+        LLAMA_LOG_WARN("%s: unknown tokenizer type '%s', defaulting to BPE\n", __func__, model_type_str.c_str());
+        type = LLAMA_VOCAB_TYPE_BPE;
+        tokenizer_model = "gpt2";
+    }
+
+    // Load vocabulary from model.vocab
+    if (!model.contains("vocab") || !model["vocab"].is_object()) {
+        LLAMA_LOG_ERROR("%s: tokenizer.json missing 'model.vocab' section\n", __func__);
+        return false;
+    }
+
+    auto vocab_obj = model["vocab"];
+
+    // Extract vocab - it's a map of token -> id
+    std::map<llama_token, std::string> id_to_token_temp;
+    for (auto it = vocab_obj.begin(); it != vocab_obj.end(); ++it) {
+        const std::string & token_str = it.key();
+        if (it.value().is_number_integer()) {
+            llama_token token_id = it.value().get<llama_token>();
+            token_to_id[token_str] = token_id;
+            id_to_token_temp[token_id] = token_str;
+        }
+    }
+
+    // Build id_to_token vector
+    if (!id_to_token_temp.empty()) {
+        llama_token max_id = id_to_token_temp.rbegin()->first;
+        id_to_token.resize(max_id + 1);
+
+        for (const auto & pair : id_to_token_temp) {
+            llama_token id = pair.first;
+            const std::string & text = pair.second;
+
+            id_to_token[id].text = text;
+            id_to_token[id].score = 0.0f;  // HF doesn't use scores
+            id_to_token[id].attr = LLAMA_TOKEN_ATTR_NORMAL;
+        }
+    }
+
+    LLAMA_LOG_INFO("%s: loaded %zu tokens\n", __func__, token_to_id.size());
+
+    // Load BPE merges if this is a BPE tokenizer
+    if (type == LLAMA_VOCAB_TYPE_BPE && model.contains("merges") && model["merges"].is_array()) {
+        int rank = 0;
+        for (const auto & merge_item : model["merges"]) {
+            if (merge_item.is_string()) {
+                std::string merge_str = merge_item.get<std::string>();
+                size_t pos = merge_str.find(' ');
+                if (pos != std::string::npos) {
+                    std::string first = merge_str.substr(0, pos);
+                    std::string second = merge_str.substr(pos + 1);
+                    bpe_ranks[std::make_pair(first, second)] = rank++;
+                }
+            }
+        }
+        LLAMA_LOG_INFO("%s: loaded %zu BPE merges\n", __func__, bpe_ranks.size());
+    }
+
+    // Load added_tokens (special tokens)
+    if (root.contains("added_tokens") && root["added_tokens"].is_array()) {
+        for (const auto & token_obj : root["added_tokens"]) {
+            if (!token_obj.is_object()) continue;
+
+            if (token_obj.contains("id") && token_obj.contains("content") &&
+                token_obj["id"].is_number_integer() && token_obj["content"].is_string()) {
+
+                llama_token id = token_obj["id"].get<llama_token>();
+                std::string content = token_obj["content"].get<std::string>();
+                bool is_special = token_obj.value("special", false);
+
+                // Update token attributes
+                if (id < (llama_token)id_to_token.size()) {
+                    if (is_special) {
+                        id_to_token[id].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                    } else {
+                        id_to_token[id].attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
+                    }
+                }
+
+                // Try to identify common special tokens
+                if (content == "<s>" || content == "<|begin_of_text|>" || content == "<|startoftext|>") {
+                    special_bos_id = id;
+                } else if (content == "</s>" || content == "<|end_of_text|>" || content == "<|endoftext|>") {
+                    special_eos_id = id;
+                } else if (content == "<unk>" || content == "<|unknown|>") {
+                    special_unk_id = id;
+                } else if (content == "<pad>" || content == "<|pad|>") {
+                    special_pad_id = id;
+                } else if (content == "\n") {
+                    linefeed_id = id;
+                }
+            }
+        }
+    }
+
+    // Try to load special tokens from tokenizer_config.json if provided
+    if (!tokenizer_config_path.empty() && std::filesystem::exists(tokenizer_config_path)) {
+        std::ifstream config_file(tokenizer_config_path);
+        if (config_file.is_open()) {
+            nlohmann::json config_root;
+            try {
+                config_file >> config_root;
+
+                auto get_token_id = [&](const nlohmann::json & val) -> llama_token {
+                    if (val.is_string()) {
+                        std::string token_str = val.get<std::string>();
+                        auto it = token_to_id.find(token_str);
+                        if (it != token_to_id.end()) return it->second;
+                    } else if (val.is_object() && val.contains("content") && val["content"].is_string()) {
+                        std::string token_str = val["content"].get<std::string>();
+                        auto it = token_to_id.find(token_str);
+                        if (it != token_to_id.end()) return it->second;
+                    }
+                    return LLAMA_TOKEN_NULL;
+                };
+
+                if (config_root.contains("bos_token")) {
+                    llama_token bos = get_token_id(config_root["bos_token"]);
+                    if (bos != LLAMA_TOKEN_NULL) special_bos_id = bos;
+                }
+                if (config_root.contains("eos_token")) {
+                    llama_token eos = get_token_id(config_root["eos_token"]);
+                    if (eos != LLAMA_TOKEN_NULL) special_eos_id = eos;
+                }
+                if (config_root.contains("unk_token")) {
+                    llama_token unk = get_token_id(config_root["unk_token"]);
+                    if (unk != LLAMA_TOKEN_NULL) special_unk_id = unk;
+                }
+                if (config_root.contains("pad_token")) {
+                    llama_token pad = get_token_id(config_root["pad_token"]);
+                    if (pad != LLAMA_TOKEN_NULL) special_pad_id = pad;
+                }
+            } catch (const std::exception & e) {
+                LLAMA_LOG_WARN("%s: failed to parse tokenizer_config.json: %s\n", __func__, e.what());
+            }
+        }
+    }
+
+    // Log special tokens
+    LLAMA_LOG_INFO("%s: special tokens: bos=%d eos=%d unk=%d pad=%d\n",
+                   __func__, special_bos_id, special_eos_id, special_unk_id, special_pad_id);
+
+    // Initialize tokenizer for this type
+    init_tokenizer(type);
+
+    // Build cache
+    // IMPORTANT: Build in a temporary vector first, then swap it in atomically!
+    // If we push_back directly to cache_token_to_piece, after the first iteration
+    // the cache becomes non-empty, causing token_to_piece() to try using cache.at()
+    // for indices that don't exist yet, throwing std::out_of_range("vector").
+    std::vector<std::string> temp_cache;
+    temp_cache.reserve(id_to_token.size());
+    for (llama_token id = 0; id < (llama_token)id_to_token.size(); ++id) {
+        temp_cache.push_back(token_to_piece_for_cache(id, true));
+    }
+    // Atomically swap in the fully-built cache
+    cache_token_to_piece.swap(temp_cache);
+
+    LLAMA_LOG_INFO("%s: HuggingFace tokenizer loaded successfully\n", __func__);
+    return true;
+}
+
 void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
     LLAMA_LOG_DEBUG("%s: initializing tokenizer for type %d\n", __func__, type);
 
@@ -3258,6 +3476,12 @@ llama_vocab::~llama_vocab() {
 
 void llama_vocab::load(llama_model_loader & ml, const LLM_KV & kv) {
     pimpl->load(ml, kv);
+}
+
+bool llama_vocab::load_from_hf_tokenizer(
+        const std::string & tokenizer_json_path,
+        const std::string & tokenizer_config_path) {
+    return pimpl->load_from_hf_tokenizer(tokenizer_json_path, tokenizer_config_path);
 }
 
 std::string llama_vocab::get_tokenizer_model() const {

@@ -6,6 +6,7 @@
 #include "llama-model-loader.h"
 #include "llama-model-saver.h"
 #include "llama-model.h"
+#include "llama-model-from-safetensors.h"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -16,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -98,6 +100,49 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
+// Helper function to detect if a path is a safetensors model
+static bool is_safetensors_model(const std::string & path) {
+    namespace fs = std::filesystem;
+
+    // Check if path is a directory
+    if (fs::is_directory(path)) {
+        // Look for config.json and at least one .safetensors file
+        bool has_config = fs::exists(path + "/config.json");
+        bool has_safetensors = false;
+
+        try {
+            for (const auto & entry : fs::directory_iterator(path)) {
+                if (entry.is_regular_file()) {
+                    std::string filename = entry.path().filename().string();
+                    // Check if filename ends with ".safetensors"
+                    const std::string suffix = ".safetensors";
+                    if (filename.size() >= suffix.size() &&
+                        filename.compare(filename.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                        has_safetensors = true;
+                        break;
+                    }
+                }
+            }
+        } catch (...) {
+            return false;
+        }
+
+        return has_config && has_safetensors;
+    }
+
+    // Check if path is a .safetensors file
+    const std::string suffix = ".safetensors";
+    if (path.size() >= suffix.size() &&
+        path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        // Check if config.json exists in the same directory
+        fs::path safetensors_path(path);
+        fs::path config_path = safetensors_path.parent_path() / "config.json";
+        return fs::exists(config_path);
+    }
+
+    return false;
+}
+
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
 static int llama_model_load(const std::string & fname, std::vector<std::string> & splits, llama_model & model, llama_model_params & params) {
     // loading time will be recalculated after the first eval, so
@@ -163,6 +208,27 @@ static struct llama_model * llama_model_load_from_file_impl(
         return nullptr;
     }
 
+    // Check if this is a safetensors model
+    if (is_safetensors_model(path_model)) {
+        LLAMA_LOG_INFO("%s: detected safetensors model format\n", __func__);
+        if (!splits.empty()) {
+            LLAMA_LOG_WARN("%s: safetensors models do not support splits parameter (will be ignored)\n", __func__);
+        }
+
+        // Load via safetensors loader
+        try {
+            llama_model * model = llama_model_load_from_safetensors(path_model.c_str(), params);
+            if (model) {
+                LLAMA_LOG_INFO("%s: safetensors model loaded successfully\n", __func__);
+            }
+            return model;
+        } catch (const std::exception & e) {
+            LLAMA_LOG_ERROR("%s: failed to load safetensors model: %s\n", __func__, e.what());
+            return nullptr;
+        }
+    }
+
+    // Continue with GGUF loading for non-safetensors models
     unsigned cur_percentage = 0;
     if (params.progress_callback == NULL) {
         params.progress_callback_user_data = &cur_percentage;

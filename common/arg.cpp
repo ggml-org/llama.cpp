@@ -224,30 +224,99 @@ static handle_model_result common_params_handle_model(
             if (model.hf_file.empty()) {
                 if (model.path.empty()) {
                     auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token, offline);
-                    if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
+                    if (auto_detected.repo.empty()) {
                         exit(1); // built without CURL, error message already printed
                     }
+
                     model.hf_repo = auto_detected.repo;
-                    model.hf_file = auto_detected.ggufFile;
-                    if (!auto_detected.mmprojFile.empty()) {
-                        result.found_mmproj   = true;
-                        result.mmproj.hf_repo = model.hf_repo;
-                        result.mmproj.hf_file = auto_detected.mmprojFile;
+
+                    // Handle safetensors format
+                    if (auto_detected.is_safetensors) {
+                        LOG_INF("%s: detected safetensors format for %s\n", __func__, model.hf_repo.c_str());
+
+                        // Create a directory for the safetensors files
+                        std::string dir_name = model.hf_repo;
+                        string_replace_all(dir_name, "/", "_");
+                        model.path = fs_get_cache_directory() + "/" + dir_name;
+
+                        // Create directory if it doesn't exist
+                        std::filesystem::create_directories(model.path);
+
+                        // Download required files: config.json, tokenizer.json, tokenizer_config.json, and .safetensors files
+                        std::string model_endpoint = get_model_endpoint();
+                        std::vector<std::pair<std::string, std::string>> files_to_download;
+
+                        // Required config files
+                        files_to_download.push_back({
+                            model_endpoint + model.hf_repo + "/resolve/main/config.json",
+                            model.path + "/config.json"
+                        });
+                        files_to_download.push_back({
+                            model_endpoint + model.hf_repo + "/resolve/main/tokenizer.json",
+                            model.path + "/tokenizer.json"
+                        });
+                        files_to_download.push_back({
+                            model_endpoint + model.hf_repo + "/resolve/main/tokenizer_config.json",
+                            model.path + "/tokenizer_config.json"
+                        });
+
+                        // Safetensors files
+                        for (const auto & st_file : auto_detected.safetensors_files) {
+                            files_to_download.push_back({
+                                model_endpoint + model.hf_repo + "/resolve/main/" + st_file,
+                                model.path + "/" + st_file
+                            });
+                        }
+
+                        // Download all files
+                        LOG_INF("%s: downloading %zu files for safetensors model...\n", __func__, files_to_download.size());
+                        for (const auto & [url, path] : files_to_download) {
+                            bool ok = common_download_file_single(url, path, bearer_token, offline);
+                            if (!ok) {
+                                LOG_ERR("error: failed to download file from %s\n", url.c_str());
+                                exit(1);
+                            }
+                        }
+
+                        LOG_INF("%s: safetensors model downloaded to %s\n", __func__, model.path.c_str());
+                    } else {
+                        // Handle GGUF format (existing logic)
+                        if (auto_detected.ggufFile.empty()) {
+                            exit(1); // no GGUF file found
+                        }
+                        model.hf_file = auto_detected.ggufFile;
+                        if (!auto_detected.mmprojFile.empty()) {
+                            result.found_mmproj   = true;
+                            result.mmproj.hf_repo = model.hf_repo;
+                            result.mmproj.hf_file = auto_detected.mmprojFile;
+                        }
+
+                        std::string model_endpoint = get_model_endpoint();
+                        model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
+                        // make sure model path is present (for caching purposes)
+                        if (model.path.empty()) {
+                            // this is to avoid different repo having same file name, or same file name in different subdirs
+                            std::string filename = model.hf_repo + "_" + model.hf_file;
+                            // to make sure we don't have any slashes in the filename
+                            string_replace_all(filename, "/", "_");
+                            model.path = fs_get_cache_file(filename);
+                        }
                     }
                 } else {
                     model.hf_file = model.path;
                 }
-            }
-
-            std::string model_endpoint = get_model_endpoint();
-            model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
-            // make sure model path is present (for caching purposes)
-            if (model.path.empty()) {
-                // this is to avoid different repo having same file name, or same file name in different subdirs
-                std::string filename = model.hf_repo + "_" + model.hf_file;
-                // to make sure we don't have any slashes in the filename
-                string_replace_all(filename, "/", "_");
-                model.path = fs_get_cache_file(filename);
+            } else {
+                // User specified hf_file explicitly - use GGUF download path
+                std::string model_endpoint = get_model_endpoint();
+                model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
+                // make sure model path is present (for caching purposes)
+                if (model.path.empty()) {
+                    // this is to avoid different repo having same file name, or same file name in different subdirs
+                    std::string filename = model.hf_repo + "_" + model.hf_file;
+                    // to make sure we don't have any slashes in the filename
+                    string_replace_all(filename, "/", "_");
+                    model.path = fs_get_cache_file(filename);
+                }
             }
 
         } else if (!model.url.empty()) {

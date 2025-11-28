@@ -715,10 +715,10 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
 
 #if defined(LLAMA_USE_CURL) || defined(LLAMA_USE_HTTPLIB)
 
-static bool common_download_file_single(const std::string & url,
-                                        const std::string & path,
-                                        const std::string & bearer_token,
-                                        bool                offline) {
+bool common_download_file_single(const std::string & url,
+                                 const std::string & path,
+                                 const std::string & bearer_token,
+                                 bool                offline) {
     if (!offline) {
         return common_download_file_single_online(url, path, bearer_token);
     }
@@ -897,16 +897,93 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag, cons
         }
     } else if (res_code == 401) {
         throw std::runtime_error("error: model is private or does not exist; if you are accessing a gated model, please provide a valid HF token");
+    } else if (res_code == 400) {
+        // 400 typically means "not a GGUF repo" - we'll check for safetensors below
+        LOG_INF("%s: manifest endpoint returned 400 (not a GGUF repo), will check for safetensors...\n", __func__);
     } else {
         throw std::runtime_error(string_format("error from HF API, response code: %ld, data: %s", res_code, res_str.c_str()));
     }
 
     // check response
     if (ggufFile.empty()) {
-        throw std::runtime_error("error: model does not have ggufFile");
+        // No GGUF found - try to detect safetensors format
+        LOG_INF("%s: no GGUF file found, checking for safetensors format...\n", __func__);
+
+        // Query HF API to list files in the repo
+        std::string files_url = get_model_endpoint() + "api/models/" + hf_repo + "/tree/main";
+
+        common_remote_params files_params;
+        files_params.headers = headers;
+
+        long files_res_code = 0;
+        std::string files_res_str;
+
+        if (!offline) {
+            try {
+                auto files_res = common_remote_get_content(files_url, files_params);
+                files_res_code = files_res.first;
+                files_res_str = std::string(files_res.second.data(), files_res.second.size());
+            } catch (const std::exception & e) {
+                throw std::runtime_error("error: model does not have ggufFile and failed to check for safetensors: " + std::string(e.what()));
+            }
+        } else {
+            throw std::runtime_error("error: model does not have ggufFile (offline mode, cannot check for safetensors)");
+        }
+
+        if (files_res_code != 200) {
+            throw std::runtime_error("error: model does not have ggufFile");
+        }
+
+        // Parse the files list
+        std::vector<std::string> safetensors_files;
+        bool has_config = false;
+        bool has_tokenizer = false;
+
+        try {
+            auto files_json = json::parse(files_res_str);
+
+            for (const auto & file : files_json) {
+                if (file.contains("path")) {
+                    std::string path = file["path"].get<std::string>();
+
+                    if (path == "config.json") {
+                        has_config = true;
+                    } else if (path == "tokenizer.json") {
+                        has_tokenizer = true;
+                    } else {
+                        // Check for .safetensors extension
+                        const std::string suffix = ".safetensors";
+                        if (path.size() >= suffix.size() &&
+                            path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                            safetensors_files.push_back(path);
+                        }
+                    }
+                }
+            }
+        } catch (const std::exception & e) {
+            throw std::runtime_error("error: model does not have ggufFile and failed to parse file list: " + std::string(e.what()));
+        }
+
+        // Check if we have the required safetensors files
+        if (!has_config || !has_tokenizer || safetensors_files.empty()) {
+            throw std::runtime_error("error: model does not have ggufFile or valid safetensors format");
+        }
+
+        LOG_INF("%s: detected safetensors format with %zu tensor files\n", __func__, safetensors_files.size());
+
+        common_hf_file_res result;
+        result.repo = hf_repo;
+        result.is_safetensors = true;
+        result.safetensors_files = safetensors_files;
+        return result;
     }
 
-    return { hf_repo, ggufFile, mmprojFile };
+    common_hf_file_res result;
+    result.repo = hf_repo;
+    result.ggufFile = ggufFile;
+    result.mmprojFile = mmprojFile;
+    result.is_safetensors = false;
+    return result;
 }
 
 //

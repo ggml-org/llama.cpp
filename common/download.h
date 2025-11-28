@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 struct common_params_model;
 
@@ -23,6 +24,10 @@ struct common_hf_file_res {
     std::string repo; // repo name with ":tag" removed
     std::string ggufFile;
     std::string mmprojFile;
+
+    // Safetensors support
+    bool is_safetensors = false;  // true if model is in safetensors format
+    std::vector<std::string> safetensors_files; // list of .safetensors files to download
 };
 
 /**
@@ -40,6 +45,13 @@ common_hf_file_res common_get_hf_file(
     const std::string & hf_repo_with_tag,
     const std::string & bearer_token,
     bool offline);
+
+// download a single file (no GGUF validation)
+bool common_download_file_single(
+    const std::string & url,
+    const std::string & path,
+    const std::string & bearer_token,
+    bool                offline);
 
 // returns true if download succeeded
 bool common_download_model(
