@@ -6,7 +6,6 @@
 //    cmake -B build && cmake --build build --parallel && ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null
 //
 #include "chat.h"
-#include "peg-parser.h"
 
 #include "log.h"
 
@@ -2769,51 +2768,19 @@ Hey there!<|im_end|>
 
     // Test Qwen3-Coder XML format
     {
-        auto tmpls = read_templates("models/templates/Qwen3-Coder.jinja");
-
-        // We need to construct a parser with specific tools
-        struct make_parser {
-            common_chat_params params_;
-            common_peg_arena arena_;
-            bool is_partial_;
-
-            make_parser(common_chat_templates * tmpls, bool is_partial, const std::vector<common_chat_tool> & tools) {
-                common_chat_templates_inputs inputs;
-                inputs.messages = { message_user };
-                inputs.tools = tools;
-                params_ = common_chat_templates_apply(tmpls, inputs);
-                assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, params_.format);
-                arena_.load(params_.parser);
-                is_partial_ = is_partial;
-            }
-
-            common_chat_msg operator()(const std::string & msg) {
-                return common_chat_peg_parse(arena_, msg, /* is_partial = */ is_partial_, /* syntax = */ {params_.format});
-            }
-        };
-
         // Basic XML tool call parsing
         assert_msg_equals(
             message_assist_call,
-            make_parser(tmpls.get(), /* is_partial = */ false, /* tools */ {{
-                /* .name = */ "special_function",
-                /* .description = */ "special function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "arg1": { "type": "number" }
-                    },
-                    "required": []
-                })",
-            }})(
+            common_chat_parse(
                 "<tool_call>\n"
-                "<function=special_function>\n"
-                "<parameter=arg1>\n"
-                "1\n"
-                "</parameter>\n"
-                "</function>\n"
-                "</tool_call>"
-            ));
+                "  <function=special_function>\n"
+                "    <parameter=arg1>\n"
+                "      1\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
 
         // Multiple parameters with different types
         common_chat_msg expected_multi_param;
@@ -2824,35 +2791,22 @@ Hey there!<|im_end|>
 
         test_parser_with_streaming(expected_multi_param,
                 "<tool_call>\n"
-                "<function=complex_function>\n"
-                "<parameter=name>\n"
-                "John Doe\n"
-                "</parameter>\n"
-                "<parameter=age>\n"
-                "30\n"
-                "</parameter>\n"
-                "<parameter=active>\n"
-                "true\n"
-                "</parameter>\n"
-                "<parameter=score>\n"
-                "95.5\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=complex_function>\n"
+                "    <parameter=name>\n"
+                "      John Doe\n"
+                "    </parameter>\n"
+                "    <parameter=age>\n"
+                "      30\n"
+                "    </parameter>\n"
+                "    <parameter=active>\n"
+                "      true\n"
+                "    </parameter>\n"
+                "    <parameter=score>\n"
+                "      95.5\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "complex_function",
-                /* .description = */ "complex function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "age": {"type": "number"},
-                        "active": {"type": "boolean"},
-                        "score": {"type": "number"}
-                    }
-                })"
-            }})
-        );
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Special characters and Unicode
         common_chat_msg expected_special_chars;
@@ -2863,23 +2817,13 @@ Hey there!<|im_end|>
 
         test_parser_with_streaming(expected_special_chars,
                 "<tool_call>\n"
-                "<function=unicode_function>\n"
-                "<parameter=message>\n"
-                "Hello 世界! 🌍 Special chars: @#$%^&*()\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=unicode_function>\n"
+                "    <parameter=message>\n"
+                "      Hello 世界! 🌍 Special chars: @#$%^&*()\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "unicode_function",
-                /* .description = */ "unicode function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"}
-                    }
-                })"
-            }})
-        );
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Multiline content with newlines and indentation
         common_chat_msg expected_multiline;
@@ -2890,24 +2834,15 @@ Hey there!<|im_end|>
 
         test_parser_with_streaming(expected_multiline,
                 "<tool_call>\n"
-                "<function=code_function>\n"
-                "<parameter=code>\n"
+                "  <function=code_function>\n"
+                "    <parameter=code>\n"
                 "def hello():\n"
                 "    print(\"Hello, World!\")\n"
                 "    return True\n"
-                "</parameter>\n"
-                "</function>\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "code_function",
-                /* .description = */ "code function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "code": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // JSON object as parameter value
         common_chat_msg expected_json_param;
@@ -2919,22 +2854,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_json_param,
                 "<tool_call>\n"
-                "<function=json_function>\n"
-                "<parameter=config>\n"
-                "{\"host\": \"localhost\", \"port\": 8080, \"ssl\": false}\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=json_function>\n"
+                "    <parameter=config>\n"
+                "      {\"host\": \"localhost\", \"port\": 8080, \"ssl\": false}\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "json_function",
-                /* .description = */ "json function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "config": {"type": "object"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Array as parameter value
         common_chat_msg expected_array_param;
@@ -2946,22 +2872,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_array_param,
                 "<tool_call>\n"
-                "<function=array_function>\n"
-                "<parameter=items>\n"
-                "[\"apple\", \"banana\", \"cherry\"]\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=array_function>\n"
+                "    <parameter=items>\n"
+                "      [\"apple\", \"banana\", \"cherry\"]\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "array_function",
-                /* .description = */ "array function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "items": {"type": "array"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Empty parameter
         common_chat_msg expected_empty_param;
@@ -2973,22 +2890,12 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_empty_param,
                 "<tool_call>\n"
-                "<function=empty_function>\n"
-                "<parameter=empty_param>\n"
-                "\n" // Qwen3 will always produce \n</parameter>\n
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=empty_function>\n"
+                "    <parameter=empty_param>\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "empty_function",
-                /* .description = */ "empty function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "empty_param": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Boolean values (true/false)
         common_chat_msg expected_boolean;
@@ -3000,26 +2907,16 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_boolean,
                 "<tool_call>\n"
-                "<function=boolean_function>\n"
-                "<parameter=enabled>\n"
-                "true\n"
-                "</parameter>\n"
-                "<parameter=debug>\n"
-                "false\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=boolean_function>\n"
+                "    <parameter=enabled>\n"
+                "      true\n"
+                "    </parameter>\n"
+                "    <parameter=debug>\n"
+                "      false\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "boolean_function",
-                /* .description = */ "boolean function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "enabled": {"type": "boolean"},
-                        "debug": {"type": "boolean"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Null value
         common_chat_msg expected_null;
@@ -3031,22 +2928,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_null,
                 "<tool_call>\n"
-                "<function=null_function>\n"
-                "<parameter=optional_param>\n"
-                "null\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=null_function>\n"
+                "    <parameter=optional_param>\n"
+                "      null\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "null_function",
-                /* .description = */ "null function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "optional_param": {"type": "null"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Negative numbers and scientific notation
         common_chat_msg expected_numbers;
@@ -3058,30 +2946,19 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_numbers,
                 "<tool_call>\n"
-                "<function=math_function>\n"
-                "<parameter=negative>\n"
-                "-42\n"
-                "</parameter>\n"
-                "<parameter=decimal>\n"
-                "-3.14\n"
-                "</parameter>\n"
-                "<parameter=scientific>\n"
-                "1.23e-4\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=math_function>\n"
+                "    <parameter=negative>\n"
+                "      -42\n"
+                "    </parameter>\n"
+                "    <parameter=decimal>\n"
+                "      -3.14\n"
+                "    </parameter>\n"
+                "    <parameter=scientific>\n"
+                "      1.23e-4\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "math_function",
-                /* .description = */ "math function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "negative": {"type": "number"},
-                        "decimal": {"type": "number"},
-                        "scientific": {"type": "number"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // XML-like content in parameters (should be escaped)
         common_chat_msg expected_xml_content;
@@ -3093,22 +2970,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_xml_content,
                 "<tool_call>\n"
-                "<function=xml_function>\n"
-                "<parameter=xml_content>\n"
-                "<root><item>value</item></root>\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=xml_function>\n"
+                "    <parameter=xml_content>\n"
+                "      <root><item>value</item></root>\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "xml_function",
-                /* .description = */ "xml function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "xml_content": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Quotes and escape characters
         common_chat_msg expected_quotes;
@@ -3120,22 +2988,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_quotes,
                 "<tool_call>\n"
-                "<function=quote_function>\n"
-                "<parameter=message>\n"
-                "She said \"Hello!\" and left.\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=quote_function>\n"
+                "    <parameter=message>\n"
+                "      She said \"Hello!\" and left.\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "quote_function",
-                /* .description = */ "quote function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Long parameter value (simplified)
         std::string long_text = "This is a long text parameter that should test the parser's ability to handle larger amounts of text data.";
@@ -3149,22 +3008,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_long_text,
                 "<tool_call>\n"
-                "<function=long_function>\n"
-                "<parameter=long_text>\n"
-                + long_text + "\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=long_function>\n"
+                "    <parameter=long_text>\n"
+                "      " + long_text + "\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "long_function",
-                /* .description = */ "long function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "long_text": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Mixed content with text before and after tool call
         common_chat_msg expected_mixed_content;
@@ -3177,22 +3027,25 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_mixed_content,
                 "I'll help you search for products. <tool_call>\n"
-                "<function=search_function>\n"
-                "<parameter=query>\n"
-                "laptops\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=search_function>\n"
+                "    <parameter=query>\n"
+                "      laptops\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "search_function",
-                /* .description = */ "search function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Compact format (no extra whitespace)
+        common_chat_msg expected_compact;
+        expected_compact.role = "assistant";
+        expected_compact.tool_calls = {
+            { "compact_function", "{\"param\":\"value\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_compact,
+                "<tool_call><function=compact_function><parameter=param>value</parameter></function></tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Function name with underscores and numbers
         common_chat_msg expected_complex_name;
@@ -3204,22 +3057,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_complex_name,
                 "<tool_call>\n"
-                "<function=get_user_data_v2>\n"
-                "<parameter=user_id>\n"
-                "12345\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=get_user_data_v2>\n"
+                "    <parameter=user_id>\n"
+                "      12345\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "get_user_data_v2",
-                /* .description = */ "get user data v2",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "user_id": {"type": "number"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Parameter names with underscores and numbers
         common_chat_msg expected_complex_params;
@@ -3231,30 +3075,19 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_complex_params,
                 "<tool_call>\n"
-                "<function=test_function>\n"
-                "<parameter=param_1>\n"
-                "value1\n"
-                "</parameter>\n"
-                "<parameter=param_2_name>\n"
-                "value2\n"
-                "</parameter>\n"
-                "<parameter=param3>\n"
-                "123\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=test_function>\n"
+                "    <parameter=param_1>\n"
+                "      value1\n"
+                "    </parameter>\n"
+                "    <parameter=param_2_name>\n"
+                "      value2\n"
+                "    </parameter>\n"
+                "    <parameter=param3>\n"
+                "      123\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "test_function",
-                /* .description = */ "test function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "param_1": {"type": "string"},
-                        "param_2_name": {"type": "string"},
-                        "param3": {"type": "number"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Very deeply nested XML content in parameter
         common_chat_msg expected_deep_xml;
@@ -3266,22 +3099,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_deep_xml,
                 "<tool_call>\n"
-                "<function=xml_parser>\n"
-                "<parameter=xml>\n"
-                "<root><level1><level2><level3>deep content</level3></level2></level1></root>\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=xml_parser>\n"
+                "    <parameter=xml>\n"
+                "      <root><level1><level2><level3>deep content</level3></level2></level1></root>\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "xml_parser",
-                /* .description = */ "xml parser",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "xml": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Parameter with only whitespace
         common_chat_msg expected_whitespace_param;
@@ -3293,22 +3117,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_whitespace_param,
                 "<tool_call>\n"
-                "<function=whitespace_function>\n"
-                "<parameter=spaces>\n"
-                "\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=whitespace_function>\n"
+                "    <parameter=spaces>\n"
+                "      \n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "whitespace_function",
-                /* .description = */ "whitespace function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "spaces": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Parameter with tabs and mixed whitespace
         common_chat_msg expected_mixed_whitespace;
@@ -3320,24 +3135,15 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_mixed_whitespace,
                 "<tool_call>\n"
-                "<function=tab_function>\n"
-                "<parameter=content>\n"
+                "  <function=tab_function>\n"
+                "    <parameter=content>\n"
                 "line1\n"
                 "\tindented line\n"
                 "    spaces\n"
-                "</parameter>\n"
-                "</function>\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "tab_function",
-                /* .description = */ "tab function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Control characters and special Unicode
         common_chat_msg expected_control_chars;
@@ -3349,22 +3155,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_control_chars,
                 "<tool_call>\n"
-                "<function=control_function>\n"
-                "<parameter=text>\n"
+                "  <function=control_function>\n"
+                "    <parameter=text>\n"
                 "Line1\nLine2\tTabbed\rCarriage return\n"
-                "</parameter>\n"
-                "</function>\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "control_function",
-                /* .description = */ "control function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "text": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Emoji and extended Unicode characters
         common_chat_msg expected_emoji;
@@ -3376,22 +3173,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_emoji,
                 "<tool_call>\n"
-                "<function=emoji_function>\n"
-                "<parameter=message>\n"
-                "Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=emoji_function>\n"
+                "    <parameter=message>\n"
+                "      Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "emoji_function",
-                /* .description = */ "emoji function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "message": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Mathematical expressions and formulas
         common_chat_msg expected_math;
@@ -3403,22 +3191,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_math,
                 "<tool_call>\n"
-                "<function=math_function>\n"
-                "<parameter=formula>\n"
-                "E = mc² and ∫f(x)dx = F(x) + C\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=math_function>\n"
+                "    <parameter=formula>\n"
+                "      E = mc² and ∫f(x)dx = F(x) + C\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "math_function",
-                /* .description = */ "math function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "formula": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // SQL injection-like content (should be safely escaped)
         common_chat_msg expected_sql;
@@ -3430,22 +3209,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_sql,
                 "<tool_call>\n"
-                "<function=sql_function>\n"
-                "<parameter=query>\n"
-                "SELECT * FROM users WHERE id = 1; DROP TABLE users; --\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=sql_function>\n"
+                "    <parameter=query>\n"
+                "      SELECT * FROM users WHERE id = 1; DROP TABLE users; --\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "sql_function",
-                /* .description = */ "sql function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // HTML/XML injection content
         common_chat_msg expected_html;
@@ -3457,22 +3227,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_html,
                 "<tool_call>\n"
-                "<function=html_function>\n"
-                "<parameter=content>\n"
-                "<script>alert('xss')</script><img src=x onerror=alert(1)>\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=html_function>\n"
+                "    <parameter=content>\n"
+                "      <script>alert('xss')</script><img src=x onerror=alert(1)>\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "html_function",
-                /* .description = */ "html function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Binary-like content (base64)
         common_chat_msg expected_binary;
@@ -3484,22 +3245,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_binary,
                 "<tool_call>\n"
-                "<function=binary_function>\n"
-                "<parameter=data>\n"
-                "SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IGVuY29kZWQgdGV4dC4=\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=binary_function>\n"
+                "    <parameter=data>\n"
+                "      SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IGVuY29kZWQgdGV4dC4=\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "binary_function",
-                /* .description = */ "binary function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "data": {"type": "string"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
 
         // Very large numbers (should be parsed as scientific notation)
         common_chat_msg expected_large_numbers;
@@ -3511,22 +3263,13 @@ Hey there!<|im_end|>
         test_parser_with_streaming(
             expected_large_numbers,
                 "<tool_call>\n"
-                "<function=number_function>\n"
-                "<parameter=big_int>\n"
-                "999999999999999999999999999999999999999999999999999999999999\n"
-                "</parameter>\n"
-                "</function>\n"
+                "  <function=number_function>\n"
+                "    <parameter=big_int>\n"
+                "      999999999999999999999999999999999999999999999999999999999999\n"
+                "    </parameter>\n"
+                "  </function>\n"
                 "</tool_call>",
-            make_parser(tmpls.get(), /* is_partial = */ true, /* tools */ {{
-                /* .name = */ "number_function",
-                /* .description = */ "number function",
-                /* .parameters = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "big_int": {"type": "number"}
-                    }
-                })"
-            }}));
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
     }
 
     {
@@ -3551,7 +3294,7 @@ Hey there!<|im_end|>
         inputs.tools = { qwen_union_tool };
 
         auto params = common_chat_templates_apply(tmpls.get(), inputs);
-        assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, params.format);
+        assert_equals(COMMON_CHAT_FORMAT_QWEN3_CODER_XML, params.format);
         assert_equals(false, params.grammar.empty());
 
         // Grammar should compile successfully

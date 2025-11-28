@@ -648,6 +648,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
         case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         case COMMON_CHAT_FORMAT_KIMI_K2: return "Kimi K2";
+        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
@@ -797,25 +798,6 @@ static void foreach_function(const json & tools, const std::function<void(const 
             continue;
         }
         fn(tool);
-    }
-}
-
-static void foreach_parameter(const json & function, const std::function<void(const std::string &, const json &, bool)> & fn) {
-    if (!function.contains("parameters") || !function.at("parameters").is_object()) {
-        return;
-    }
-    const auto & params = function.at("parameters");
-    if (!params.contains("properties") || !params.at("properties").is_object()) {
-        return;
-    }
-    const auto & props = params.at("properties");
-    std::set<std::string> required;
-    if (params.contains("required") && params.at("required").is_array()) {
-        params.at("required").get_to(required);
-    }
-    for (const auto & [name, prop] : props.items()) {
-        bool is_required = (required.find(name) != required.end());
-        fn(name, prop, is_required);
     }
 }
 
@@ -1895,132 +1877,51 @@ static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
-
-    bool use_tools = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
-    bool tool_required = params.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
     data.prompt = apply(tmpl, params);
-    data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
+    data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
 
-    data.grammar_lazy = use_tools && !tool_required;
-    data.preserved_tokens = {"<tool_call>", "</tool_call>"};
+    data.preserved_tokens = {
+        "<tool_call>",
+        "</tool_call>",
+        "<function=",
+        "</function>",
+        "<parameter=",
+        "</parameter>",
+    };
 
-    auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
-        if (!use_tools) {
-            if (!params.json_schema.is_null()) {
-                return p.sequence({
-                    p.space(),
-                    p.content(p.schema(p.json(), "response-format", params.json_schema)),
-                    p.space(),
-                    p.end()
-                });
-            }
-            return p.content(p.rest());
-        }
-
-        auto content = p.rule("content", p.content(p.until_one_of({"<tool_call>", "<function="})));
-
-        auto until_end_of_param = p.rule("string-arg-value", p.until_one_of({
-            "\n</parameter>\n<parameter=",
-            "\n</parameter>\n</function>"
-        }));
-
-        auto tools = p.choice();
-        foreach_function(params.tools, [&](const json & tool) {
-            const auto & function = tool.at("function");
-            std::string fn_name = function.at("name");
-
-            auto args = p.sequence();
-            foreach_parameter(function, [&](const std::string & name, const json & schema, bool is_required) {
-                if (schema.contains("type") && schema.at("type").is_string() && schema.at("type") == "string") {
-                    auto arg = p.tool_arg(p.sequence({
-                        p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">\n"),
-                        p.tool_arg_string_value(p.schema(
-                            until_end_of_param,
-                            /* name   = */ "tool-" + fn_name + "-arg-" + name + "-schema",
-                            /* schema = */ schema,
-                            /* raw    = */ true
-                        )),
-                        // Every arguments ends with "\n</parameter>\n". This isn't usually a
-                        // problem with JSON, but with string arguments we need to ensure we don't
-                        // include the leading `\n` in the argument value. We also peek to avoid
-                        // prematurely matching a closing tag that may be part of the value.
-                        p.tool_arg_close(
-                            "\n</parameter>\n" +
-                            p.peek(p.literal("<parameter=") | p.literal("</function>"))
-                        ),
-                    }));
-
-                    auto arg_rule = p.rule("tool-" + fn_name + "-arg-" + name, arg);
-                    args += p.repeat(arg_rule, (is_required ? 1 : 0), 1);
-                } else {
-                    auto arg = p.tool_arg(p.sequence({
-                        p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">\n"),
-                        p.tool_arg_json_value(p.schema(
-                            p.json(),
-                            /* name   = */ "tool-" + fn_name + "-arg-" + name + "-schema",
-                            /* schema = */ schema
-                        )),
-                        p.space(),
-                        p.tool_arg_close(p.literal("</parameter>\n"))
-                    }));
-
-                    auto arg_rule = p.rule("tool-" + fn_name + "-arg-" + name, arg);
-                    args += p.repeat(arg_rule, (is_required ? 1 : 0), 1);
-                }
-            });
-
-            tools |= p.rule("tool-" + fn_name, p.sequence({
-                p.tool_open("<function=" + p.tool_name(p.literal(fn_name)) + ">\n"),
-                args,
-                p.tool_close(p.literal("</function>\n"))
-            }));
-        });
-
-        auto tool_call = p.trigger_rule("tool-call", p.sequence({
-            // Qwen3-Coder may emit <tool_call> or <function= first, so we make the first
-            // <tool_call> optional but required in parallel calls
-            p.optional(p.literal("<tool_call>\n")),
-            tools,
-            p.literal("</tool_call>"),
-            // It seems more intuitive to place parallel calls as a repetition in the root rule, but
-            // it is here because it needs to be wrapped in a trigger rule.
-            (params.parallel_tool_calls ?
-                p.zero_or_more("\n<tool_call>\n" + tools + "</tool_call>") :
-                p.eps()),
-        }));
-
-        return p.sequence({
-            content,
-            p.repeat(p.space() + tool_call, (tool_required ? 1 : 0), 1),
-            p.end()
-        });
-    });
-
-    data.parser = parser.save();
-
-    if (use_tools || !params.json_schema.is_null()) {
-        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            if (use_tools) {
-                foreach_function(params.tools, [&](const json & tool) {
-                    const auto & function = tool.at("function");
-                    auto parameters = function.at("parameters");
-                    builder.resolve_refs(parameters);
-                });
-            } else if (!params.json_schema.is_null()) {
-                auto schema = params.json_schema;
-                builder.resolve_refs(schema);
-            }
-            parser.build_grammar(builder, data.grammar_lazy);
-        });
-
-        data.grammar_triggers = {
-            {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>"},
-            {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function="}
-        };
-    }
+    // build grammar for tool call
+    static const xml_tool_call_format form {
+        /* form.scope_start = */ "<tool_call>\n",
+        /* form.tool_start  = */ "<function=",
+        /* form.tool_sep    = */ ">\n",
+        /* form.key_start   = */ "<parameter=",
+        /* form.key_val_sep = */ ">\n",
+        /* form.val_end     = */ "\n</parameter>\n",
+        /* form.tool_end    = */ "</function>\n",
+        /* form.scope_end   = */ "</tool_call>",
+    };
+    build_grammar_xml_tool_call(data, params.tools, form);
 
     return data;
+}
+
+static void common_chat_parse_qwen3_coder_xml(common_chat_msg_parser & builder) {
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "<tool_call>";
+        form.tool_start  = "<function=";
+        form.tool_sep    = ">";
+        form.key_start   = "<parameter=";
+        form.key_val_sep = ">";
+        form.val_end     = "</parameter>";
+        form.tool_end    = "</function>";
+        form.scope_end   = "</tool_call>";
+        form.trim_raw_argval = true;
+        return form;
+    })();
+    builder.consume_reasoning_with_xml_tool_calls(form);
 }
 
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
@@ -3607,6 +3508,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_KIMI_K2:
             common_chat_parse_kimi_k2(builder);
+            break;
+        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML:
+            common_chat_parse_qwen3_coder_xml(builder);
             break;
         case COMMON_CHAT_FORMAT_APRIEL_1_5:
             common_chat_parse_apriel_1_5(builder);
