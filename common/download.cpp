@@ -712,8 +712,9 @@ static bool common_download_file_single_online(const std::string & url,
         }
 
         // start the download
+        std::string masked_url = common_http_show_masked_url(common_http_parse_url(url));
         LOG_INF("%s: trying to download model from %s to %s (etag:%s)...\n",
-                __func__, common_http_show_masked_url(parts).c_str(), path_temporary.c_str(), etag.c_str());
+                __func__, masked_url.c_str(), path_temporary.c_str(), etag.c_str());
         const bool was_pull_successful = common_pull_file(cli, parts.path, path_temporary, supports_ranges, existing_size, total_size);
         if (!was_pull_successful) {
             if (i + 1 < max_attempts) {
