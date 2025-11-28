@@ -1,6 +1,6 @@
 # llama.cpp for aarch64
 
-In short, this repository is designed to make llama.cpp easily accessible for Android users, particularly those on Termux. It provides pre-compiled binaries, Deepseek-R1 1.5b Model, along with the source code and build files, saving you the hassle of navigating complex dependency hell and the expense of your valuable time.Due to dependency hell, this repository does not support Vulkan acceleration yet, but we have OpenCL.
+In short, this repository is designed to make llama.cpp easily accessible for Android users, particularly those on Termux. It provides pre-compiled binaries, Deepseek-R1 1.5b Model, along with the source code and build files, saving you the hassle of navigating complex dependency hell and the expense of your valuable time.This repository supports Vulkan banked on some SoCs.Please read the "Build on arm64" to check.
 
 ![llamacppforaarch64](logo.png)
 
@@ -48,7 +48,7 @@ LLM inference in C/C++
 
 ## Hot topics
 
-- The llama.cpp project for aarch64 has now added GPU support (OpenCL) and enabled it by default
+- The llama.cpp project for aarch64 has Vulkan support now.Please check "Build on arm64"
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
 - [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
