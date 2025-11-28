@@ -1676,6 +1676,10 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
                 }
             }
         }
+    } else {
+        // When batch.logits is nullptr (when loading state with a dummy batch),
+        // allocate CPU logits.
+        batch_needs_cpu_logits = true;
     }
 
     size_t backend_float_count = 0;
