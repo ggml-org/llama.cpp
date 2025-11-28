@@ -32,6 +32,10 @@ static __global__ void cumsum_kernel(
     const int tid = threadIdx.x;
     const int lane_id = tid % WARP_SIZE;
 
+    if (tid >= ne00) {
+        return;
+    }
+
     // Phase 1: Each thread processes elements at stride blockDim.x
     // Compute warp-level prefix sums
     for (int64_t i0 = tid; i0 < ne00; i0 += blockDim.x) {
@@ -69,12 +73,17 @@ static void cumsum_cuda(
     const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3,
     cudaStream_t stream) {
 
-    dim3 block_dims(CUDA_CUMSUM_BLOCK_SIZE, 1, 1);
     dim3 grid_dims(ne01, ne02, ne03);
 
     // Shared memory size: one float per warp
     const int num_warps = (ne00 + WARP_SIZE - 1) / WARP_SIZE;
     const size_t shmem_size = num_warps * sizeof(float);
+
+    int block_size = num_warps * WARP_SIZE;
+    if (block_size > CUDA_CUMSUM_BLOCK_SIZE) {
+        block_size = CUDA_CUMSUM_BLOCK_SIZE;
+    }
+    dim3 block_dims(block_size, 1, 1);
 
     cumsum_kernel<<<grid_dims, block_dims, shmem_size, stream>>>(
         src, dst,
