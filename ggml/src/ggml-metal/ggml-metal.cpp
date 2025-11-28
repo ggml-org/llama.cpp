@@ -457,7 +457,15 @@ static ggml_guid_t ggml_backend_metal_guid(void) {
 
 ggml_backend_t ggml_backend_metal_init(void) {
     ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_metal_reg(), 0);
+    if (dev == NULL) {
+        GGML_LOG_ERROR("%s: Metal device not available\n", __func__);
+        return NULL;
+    }
     ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
+    if (ctx_dev == NULL) {
+        GGML_LOG_ERROR("%s: Metal device context not available\n", __func__);
+        return NULL;
+    }
 
     ggml_metal_t ctx = ggml_metal_init(ctx_dev);
     if (ctx == NULL) {
@@ -653,13 +661,17 @@ static const char * ggml_backend_metal_reg_get_name(ggml_backend_reg_t reg) {
 }
 
 static size_t ggml_backend_metal_reg_device_count(ggml_backend_reg_t reg) {
-    return 1;
+    // if Metal device failed to initialize, disable this backend
+    return g_ggml_metal_device.context ? 1 : 0;
 
     GGML_UNUSED(reg);
 }
 
 static ggml_backend_dev_t ggml_backend_metal_reg_device_get(ggml_backend_reg_t reg, size_t index) {
     GGML_ASSERT(index == 0);
+    if (!g_ggml_metal_device.context) {
+        return NULL;
+    }
 
     return &g_ggml_metal_device;
 
