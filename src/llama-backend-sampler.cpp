@@ -596,3 +596,125 @@ struct llama_sampler * llama_sampler_backend_init_min_p(float p) {
 
     return sampler;
 }
+
+
+struct llama_sampler_backend_top_p_ctx {
+    float p;
+
+    // Only required for checking operation support and can be removed later.
+    ggml_backend_dev_t device;
+};
+
+
+static void llama_sampler_backend_top_p_init_ggml(
+        struct llama_sampler           * smpl,
+        ggml_backend_buffer_type_t       buft) {
+    auto * sctx = (llama_sampler_backend_top_p_ctx *) smpl->ctx;
+    sctx->device = ggml_backend_buft_get_device(buft);
+}
+
+static void llama_sampler_backend_top_p_apply_ggml(
+        struct llama_sampler           * smpl,
+        struct ggml_context            * ctx,
+        struct ggml_cgraph             * gf,
+        struct llama_sampler_ggml_data * ggml_data) {
+    GGML_UNUSED(gf);
+
+    auto * sctx = (llama_sampler_backend_top_p_ctx *) smpl->ctx;
+
+    struct ggml_tensor * softmax = ggml_soft_max(ctx, ggml_data->logits);
+    ggml_set_name(softmax, "top_p_softmax");
+
+    // Get the sorted indices of the softmax probabilities in descending order.
+    struct ggml_tensor * sorted_idx = ggml_argsort(ctx, softmax, GGML_SORT_ORDER_DESC);
+    ggml_set_name(sorted_idx, "top_p_sorted_idx");
+
+    // Do the sorting via reshape + get_rows
+    struct ggml_tensor * softmax_reshaped = ggml_reshape_2d(ctx, softmax, 1, softmax->ne[0]);
+    ggml_set_name(softmax_reshaped, "top_p_softmax_reshaped");
+
+    struct ggml_tensor * sorted_probs = ggml_get_rows(ctx, softmax_reshaped, sorted_idx);
+    ggml_set_name(sorted_probs, "top_p_sorted_probs");
+
+    struct ggml_tensor * sorted_probs_reshaped = ggml_reshape_2d(ctx, sorted_probs, softmax->ne[0], 1);
+    ggml_set_name(sorted_probs_reshaped, "top_p_sorted_probs_reshaped");
+    // Compute Cumulative Distribution Function (CDF) by means of GGML_OP_CUMSUM.
+    struct ggml_tensor * sorted_cdf = ggml_cumsum(ctx, sorted_probs_reshaped);
+    ggml_set_name(sorted_cdf, "top_p_sorted_cdf");
+
+    // Invert CDF and add top-p value so that ggml_step yields 1 for values we want to keep
+    struct ggml_tensor * sorted_cdf_scaled = ggml_scale_bias(ctx, sorted_cdf, -1.0f, sctx->p);
+    ggml_set_name(sorted_cdf_scaled, "top_p_sorted_cdf_scaled");
+
+    struct ggml_tensor * sorted_mask = ggml_step(ctx, sorted_cdf_scaled);
+    ggml_set_name(sorted_mask, "top_p_sorted_mask");
+
+    // reverse sorting by argsort(argsort)
+    // cast to F32 since cuda only supports float inputs
+    struct ggml_tensor * reverse_argsort = ggml_argsort(ctx, ggml_cast(ctx, sorted_idx, GGML_TYPE_F32), GGML_SORT_ORDER_ASC);
+    ggml_set_name(reverse_argsort, "top_p_reverse_argsort");
+    
+    // Do the sorting via reshape + get_rows
+    struct ggml_tensor * sorted_reshaped_mask = ggml_reshape_2d(ctx, sorted_mask, 1, sorted_mask->ne[0]);
+    ggml_set_name(sorted_reshaped_mask, "top_p_sorted_reshaped_mask");
+
+    struct ggml_tensor * reshaped_mask = ggml_get_rows(ctx, sorted_reshaped_mask, reverse_argsort);
+    ggml_set_name(reshaped_mask, "top_p_reshaped_mask");
+
+    struct ggml_tensor * mask = ggml_reshape_2d(ctx, reshaped_mask, sorted_mask->ne[0], 1);
+    ggml_set_name(mask, "top_p_mask");
+
+    // Use ggml_scale_bias (output = (a * s) + b) which in this case becomes:
+    // top_p_bias = (mask * 1e9f) - 1e9f.
+    // So entries in the mask that we want to discard will become -1e9f, and
+    // others will be 0 (meaning that will not effect the logits).
+    const float large_val = 1e9f;
+    struct ggml_tensor * top_p_bias = ggml_scale_bias(ctx, mask, large_val, -large_val);
+    ggml_set_name(top_p_bias, "top_p_bias");
+
+    ggml_data->logits = ggml_add(ctx, ggml_data->logits, top_p_bias);
+    ggml_set_name(ggml_data->logits, "top_p_logits");
+
+    ggml_build_forward_expand(gf, ggml_data->logits);
+}
+
+static const char * llama_sampler_backend_top_p_name(const struct llama_sampler *) {
+    return "backend-top-p";
+}
+
+static void llama_sampler_backend_top_p_free(struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_backend_top_p_ctx *) smpl->ctx;
+    delete sctx;
+}
+
+static struct llama_sampler * llama_sampler_backend_top_p_clone(const struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_backend_top_p_ctx *) smpl->ctx;
+    return llama_sampler_backend_init_top_p(sctx->p);
+}
+
+struct llama_sampler * llama_sampler_backend_init_top_p(float p) {
+    static const llama_sampler_i iface = {
+        /*.name                =*/ llama_sampler_backend_top_p_name,
+        /*.accept              =*/ nullptr,
+        /*.apply               =*/ nullptr,
+        /*.reset               =*/ nullptr,
+        /*.clone               =*/ llama_sampler_backend_top_p_clone,
+        /*.free                =*/ llama_sampler_backend_top_p_free,
+        /*.apply_ggml          =*/ llama_sampler_backend_top_p_apply_ggml,
+        /*.accept_ggml         =*/ nullptr,
+        /*.set_input_ggml      =*/ nullptr,
+        /*.init_ggml           =*/ llama_sampler_backend_top_p_init_ggml,
+    };
+
+    auto * sctx = new llama_sampler_backend_top_p_ctx {
+        /*.p       =*/ p,
+        /*.device  =*/ nullptr,
+    };
+
+    auto * sampler = new llama_sampler {
+        /*.iface =*/ &iface,
+        /*.ctx   =*/ sctx,
+    };
+
+    return sampler;
+}

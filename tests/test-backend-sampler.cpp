@@ -481,6 +481,61 @@ static void test_backend_min_p_sampling(const char * model_path) {
     llama_sampler_free(chain);
 }
 
+static void test_backend_top_p_sampling(const char * model_path) {
+    test_model_context test_ctx;
+
+    const int seq_id = 0;
+    const float p = 0.9;
+    struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
+    struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_top_p(p));
+    std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
+
+    if (!test_ctx.setup(model_path, backend_sampler_configs)) {
+        return;
+    }
+
+    if (!test_ctx.decode({{seq_id, "Hello"}})) {
+        return;
+    }
+
+    int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
+
+    float * logits = llama_get_backend_sampled_logits_ith(test_ctx.ctx, batch_idx);
+    uint32_t n_logits = llama_get_backend_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+
+    // Print the logits that are above the min-p threshold
+    std::vector<float> filtered_logits;
+    for (size_t i = 0; i < n_logits; ++i) {
+        if (logits[i] > -1e9f) {
+            filtered_logits.push_back(logits[i]);
+        }
+    }
+    GGML_ASSERT(filtered_logits.size() < (size_t) test_ctx.n_vocab);
+
+    // Sample using CPU sampler for verification to inspect they are reasonable
+    struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
+    struct llama_sampler * chain = llama_sampler_chain_init(chain_params);
+    llama_sampler_chain_add(chain, llama_sampler_init_dist(88));
+
+    llama_token token = llama_sampler_sample(chain, test_ctx.ctx, batch_idx);
+    const std::string token_str = test_ctx.token_to_piece(token, false);
+    printf("top-p cpu sampled token id:%d, string: '%s'\n", token, token_str.c_str());
+    GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
+
+    // Decode and sampler 10 more tokens
+    for (int i = 0; i < 10; i++) {
+        int32_t loop_idx = test_ctx.idx_for_seq(seq_id);
+        llama_token token = llama_sampler_sample(chain, test_ctx.ctx, loop_idx);
+        printf("top-p gen step %d: token id :%5.d, string: %s\n", i, token, test_ctx.token_to_piece(token, false).c_str());
+        test_ctx.decode_token(token, 0);
+    }
+
+    printf("top-p sampling test PASSED\n");
+
+    llama_sampler_free(chain);
+}
+
 static void test_backend_multi_sequence_sampling(const char * model_path) {
     test_model_context test_ctx;
 
@@ -934,6 +989,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "mixed",           test_backend_mixed_sampling,          true  },
     { "min_p",           test_backend_min_p_sampling,          true  },
     { "cpu_mixed",       test_backend_cpu_mixed_batch,         true  },
+    { "top_p",           test_backend_top_p_sampling,          true  },
 };
 
 struct backend_cli_args {
