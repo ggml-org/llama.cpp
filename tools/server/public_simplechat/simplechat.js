@@ -539,11 +539,18 @@ class ELDivStream {
         this.divData = elDivData
     }
 
+    /**
+     * Unhide ElDivStream.
+     */
     show() {
         this.div.hidden = false
         this.div.style.visibility = "visible"
     }
 
+    /**
+     * Clear contents from the immidiate Child (ie Role and Data) elements.
+     * Hide ElDivStream.
+     */
     clear() {
         this.divRole.replaceChildren()
         this.divData.replaceChildren()
@@ -1603,9 +1610,9 @@ class MultiChatUI {
      *
      * @param {string} chatId
      * @param {boolean} bClear
-     * @param {boolean} bShowInfoAll
+     * @param {boolean} bShowOwnDivStream
      */
-    chat_show(chatId, bClear=true, bShowInfoAll=false) {
+    chat_show(chatId, bClear=true, bShowOwnDivStream=false) {
         if (chatId != this.curChatId) {
             return false
         }
@@ -1614,6 +1621,9 @@ class MultiChatUI {
             this.elDivChat.replaceChildren();
             this.ui_userinput_reset()
             this.elDivStreams[chatId]?.clear()
+        }
+        if (bShowOwnDivStream) {
+            this.elDivStreams[chatId]?.show()
         }
         this.ui_toolcallvalidated_as_needed(new ChatMessageEx());
         this.elLastChatMessage = null
@@ -1634,7 +1644,7 @@ class MultiChatUI {
             if (bClear) {
                 this.elDivChat.innerHTML = usage_note(chat.cfg.get_sRecentUserMsgCnt());
                 this.me.setup_load(this.elDivChat, chat);
-                chat.cfg.show_info(this.elDivChat, bShowInfoAll);
+                chat.cfg.show_info(this.elDivChat);
                 this.me.show_title(this.elDivChat);
             }
         }
@@ -1842,7 +1852,7 @@ class MultiChatUI {
                 this.elInSystem.value = value.substring(0,value.length-1);
                 let chat = this.simpleChats[this.curChatId];
                 chat.add_system_anytime(this.elInSystem.value, this.curChatId);
-                this.chat_show(chat.chatId)
+                this.chat_show(chat.chatId, true, true)
                 ev.preventDefault();
             }
         });
@@ -2226,13 +2236,9 @@ export class Config {
     /**
      * Show the configurable parameters info in the passed Div element.
      * @param {HTMLDivElement} elDiv
-     * @param {boolean} bAll
      */
-    show_info(elDiv, bAll=false) {
+    show_info(elDiv) {
         let props = ["baseURL", "modelInfo","headers", "tools", "apiRequestOptions", "chatProps"];
-        if (!bAll) {
-            props = [ "baseURL", "modelInfo", "tools", "chatProps" ];
-        }
         let elInfo = document.createElement("div")
         elInfo.id = "DefaultInfo"
         elDiv.appendChild(elInfo)
