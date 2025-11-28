@@ -33,6 +33,12 @@ struct llama_hparams_convnext {
 };
 
 struct llama_hparams {
+        // === SparseK Dynamic Attention ===
+    bool    sparsek_enable  = false;
+    int32_t sparsek_topk    = 0;
+    int32_t sparsek_window  = 0;
+    int32_t sparsek_stride  = 0;
+
     bool vocab_only;
     bool rope_finetuned;
     bool use_par_res;

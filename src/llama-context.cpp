@@ -1386,7 +1386,18 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes() const {
-    return std::max<uint32_t>(1024u, 8u*model.n_tensors());
+    uint32_t base = std::max<uint32_t>(1024u, 8u * model.n_tensors());
+
+    // SparseK: extra graph nodes for dynamic KQ mask builder.
+    // Per layer we add:
+    //   - mul_mat, (optional) cont, reshape_2d
+    //   - top_k, new_tensor_2d, reshape_3d
+    //   - get_rows, sub, set_rows
+    //   - 3x reshape/add steps for broadcast & merge
+    // ~= 12–14 nodes per layer → budget 16 for safety.
+    uint32_t extra_sparsek_per_layer = 16u;
+
+    return base + extra_sparsek_per_layer * model.hparams.n_layer;
 }
 
 llm_graph_result * llama_context::get_gf_res_reserve() const {

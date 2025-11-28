@@ -595,6 +595,37 @@ struct llm_graph_context {
     // common
     //
 
+    // ===[ SPARSEK: config & builders ]===========================================
+    // Runtime config toggles (copied from llama_hparams; default = disabled)
+    bool  sparsek_enable      = false;   // enable/disable dynamic Sparse-K
+    int32_t sparsek_topk      = 0;       // top-K per row (0 -> disabled unless window/stride applies)
+    int32_t sparsek_win_local = 0;       // local window radius (tokens to each side)
+    int32_t sparsek_stride    = 0;       // global stride period
+    bool  sparsek_en_local    = true;    // enable local window
+    bool  sparsek_en_stride   = true;    // enable global stride
+
+    // Build a dynamic Sparse-K mask inside the compute graph.
+    // q, k: projected tensors (per-head layout consistent with current layer)
+    // base_mask: the pre-existing KQ mask (causal/cross/SWA) encoded as 0 / -INF
+    // il: layer index for cb(...) tracing
+    ggml_tensor * build_sparsek_mask(
+            ggml_tensor * q,
+            ggml_tensor * k,
+            ggml_tensor * base_mask,
+            int          il) const;
+
+    // Apply Sparse-K on top of an existing base mask when enabled.
+    // n_kv / n_rows / n_stream are used to validate/reshape mask layout.
+    ggml_tensor * maybe_apply_sparsek_mask(
+            ggml_tensor * base_mask,
+            ggml_tensor * q,
+            ggml_tensor * k,
+            int64_t      n_kv,
+            int64_t      n_rows,
+            int64_t      n_stream,
+            int          il) const;
+    // ============================================================================
+
     ggml_tensor * build_cvec(
              ggml_tensor * cur,
                      int   il) const;

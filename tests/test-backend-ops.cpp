@@ -1243,6 +1243,35 @@ struct test_case {
             ggml_free(ctx);
             return test_status_t::SKIPPED;
         }
+            // Temporarily mark SparseK-related tests as not supported on Vulkan backends
+    {
+        const char * backend1_name = ggml_backend_name(backend1);
+
+        // backend name starts with "Vulkan" (e.g. "Vulkan0")
+        bool is_vulkan = (std::strncmp(backend1_name, "Vulkan", 6) == 0);
+
+        // SparseK tests encode their parameters with "sparsek_..." in vars()
+        bool is_sparsek_test = (vars().find("sparsek_") != std::string::npos);
+
+        if (is_vulkan && is_sparsek_test) {
+            test_result result(
+                backend1_name,
+                current_op_name,
+                vars(),
+                "test",
+                /* supported */ false,
+                /* passed    */ false,
+                "SparseK not supported on Vulkan backend yet"
+            );
+
+            if (output_printer) {
+                output_printer->print_test_result(result);
+            }
+
+            ggml_free(ctx);
+            return test_status_t::NOT_SUPPORTED;
+        }
+    }
 
         // check if the backends support the ops
         bool supported = true;
@@ -4225,6 +4254,164 @@ struct test_diag_mask_inf : public test_case {
     }
 };
 
+// SparseK dynamic KQ mask builder (matching build_sparsek_mask logic)
+struct test_sparsek_mask_builder : public test_case {
+    const int64_t d;
+    const int64_t n_kv;
+    const int64_t n_rows;
+    const int64_t n_head;
+    const int64_t n_stream;
+    const int32_t topk;
+
+    // Large negative value used for masked positions (same idea as in build_sparsek_mask)
+    static constexpr float sparsek_neg = -1e9f;
+
+    std::string vars() override {
+        return std::string("sparsek_") +
+            VARS_TO_STR6(d, n_kv, n_rows, n_head, n_stream, topk);
+    }
+
+    test_sparsek_mask_builder(
+        int64_t d_        = 64,
+        int64_t n_kv_     = 32,
+        int64_t n_rows_   = 8,
+        int64_t n_head_   = 2,
+        int64_t n_stream_ = 1,
+        int32_t topk_     = 4)
+        : d(d_)
+        , n_kv(n_kv_)
+        , n_rows(n_rows_)
+        , n_head(n_head_)
+        , n_stream(n_stream_)
+        , topk(topk_) {
+    }
+
+    // Initialize tensors so that we exactly mirror the dynamic SparseK mask builder logic:
+    //  - "sparsek_neg_row"    → filled with sparsek_neg
+    //  - "sparsek_zero_rows"  → filled with true zeros
+    //  - all other tensors    → standard uniform init
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx);
+             t != nullptr;
+             t = ggml_get_next_tensor(ctx, t)) {
+
+            if (t->name[0] == '\0') {
+                // tensor has no name assigned
+                init_tensor_uniform(t, -0.5f, 0.5f);
+                continue;
+            }
+
+
+            // 1) Template row that should be all sparsek_neg
+            if (std::strcmp(t->name, "sparsek_neg_row") == 0) {
+                const int64_t n = ggml_nelements(t);
+                std::vector<float> data(n, sparsek_neg);
+                ggml_backend_tensor_set(t, data.data(), 0, n * sizeof(float));
+                continue;
+            }
+
+            // 2) Tensor that holds true zeros for selected rows
+            if (std::strcmp(t->name, "sparsek_zero_rows") == 0) {
+                const int64_t n = ggml_nelements(t);
+                std::vector<float> data(n, 0.0f);
+                ggml_backend_tensor_set(t, data.data(), 0, n * sizeof(float));
+                continue;
+            }
+
+            // 3) All other tensors (Q, K, base_mask, etc.) get standard random init
+            init_tensor_uniform(t, -0.5f, 0.5f);
+        }
+    }
+        ggml_tensor * build_graph(ggml_context * ctx) override {
+            const int64_t hs   = n_head * n_stream;   // number of head-stream combinations
+            const int64_t cols = n_rows * hs;         // flattened "columns" per KV position
+
+            // Q  [d, n_rows, n_head, n_stream]
+            std::array<int64_t,4> ne_q = { d, n_rows, n_head, n_stream };
+            ggml_tensor * q = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_q.data());
+            ggml_set_param(q);
+
+            // K  [d, n_kv, n_head, n_stream]
+            std::array<int64_t,4> ne_k = { d, n_kv, n_head, n_stream };
+            ggml_tensor * k = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_k.data());
+            ggml_set_param(k);
+
+            // base_mask [n_kv, n_rows, n_head, n_stream]
+            std::array<int64_t,4> ne_m = { n_kv, n_rows, n_head, n_stream };
+            ggml_tensor * base_mask = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_m.data());
+            ggml_set_param(base_mask);
+
+            // 1) scores4 ~ K * Q  [n_kv, n_rows, n_head, n_stream]
+            ggml_tensor * scores4 = ggml_mul_mat(ctx, k, q);
+
+            // make sure scores4 is contiguous before reshape
+            ggml_tensor * scores4_cont = ggml_cont(ctx, scores4);
+
+            // 2D: [n_kv, cols]
+            ggml_tensor * scores2d = ggml_reshape_2d(ctx, scores4_cont, n_kv, cols);
+
+            // 2) Top-K
+            const int32_t topk_safe =
+                std::max<int32_t>(0, std::min<int32_t>(topk, (int32_t) n_kv));
+            if (topk_safe == 0) {
+                return base_mask;
+            }
+
+            ggml_tensor * topk_idx = ggml_top_k(ctx, scores2d, topk_safe); // [topk_safe, cols]
+
+            // 3) neg row template [n_kv]
+            ggml_tensor * neg_row = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_kv);
+            ggml_set_param(neg_row);
+            ggml_set_name(neg_row, "sparsek_neg_row");
+
+            // repeat to [n_kv, cols]
+            ggml_tensor * neg2d = ggml_repeat(ctx, neg_row, scores2d);
+
+            // enforce contiguity before reshape_3d
+            ggml_tensor * neg2d_cont = ggml_cont(ctx, neg2d);
+
+            // rows3d: [n_kv, 1, cols]
+            // rows3d: [1, n_kv, cols]
+            ggml_tensor * rows3d = ggml_reshape_3d(ctx, neg2d_cont, 1, n_kv, cols);
+
+            // zeros for selected rows: [1, topk_safe, cols]
+            ggml_tensor * zeros = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
+                                                    1, topk_safe, cols);
+            ggml_set_param(zeros);
+            ggml_set_name(zeros, "sparsek_zero_rows");
+
+            // set rows -> merged3d [1, n_kv, cols]
+            ggml_tensor * merged3d = ggml_set_rows(ctx, rows3d, zeros, topk_idx);
+
+
+            // cont before reshape
+            ggml_tensor * merged3d_cont = ggml_cont(ctx, merged3d);
+
+            // 4) mask3: [n_kv, n_rows, hs]
+            ggml_tensor * mask3 = ggml_reshape_3d(ctx, merged3d_cont,
+                                                n_kv, n_rows, hs);
+
+            // base3: [n_kv, n_rows, hs] – גם עליו נעשה cont ליתר בטחון
+            ggml_tensor * base_mask_cont = ggml_cont(ctx, base_mask);
+            ggml_tensor * base3 = ggml_reshape_3d(ctx, base_mask_cont,
+                                                n_kv, n_rows, hs);
+
+            // 5) add
+            ggml_tensor * final3 = ggml_add(ctx, mask3, base3); // [n_kv, n_rows, hs]
+
+            // reshape חזרה לצורה 4D של המסכה
+            ggml_tensor * final4 = ggml_reshape_4d(
+                ctx,
+                final3,
+                n_kv,
+                n_rows,
+                n_head,
+                n_stream);
+
+            return final4;
+        }
+};
+
 // GGML_OP_SOFT_MAX
 struct test_soft_max : public test_case {
     const ggml_type type;
@@ -4432,7 +4619,9 @@ struct test_rope : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx);
+         t != NULL;
+         t = ggml_get_next_tensor(ctx, t)) {
             if (t->type == GGML_TYPE_I32) {
                 // pos
                 const int num_pos_ids = (mode & GGML_ROPE_TYPE_MROPE) ? ne_a[2] * 4 : ne_a[2];
@@ -7481,6 +7670,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 1, 1}, 5));
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 3, 1}, 5));
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 3, 2}, 5));
+       // SparseK dynamic KQ mask builder tests (new sparse mask constructors)
+    test_cases.emplace_back(new test_sparsek_mask_builder(
+        /* d        */ 64,
+        /* n_kv     */ 32,
+        /* n_rows   */ 8,
+        /* n_head   */ 2,
+        /* n_stream */ 1,
+        /* topk     */ 4));
+
+    test_cases.emplace_back(new test_sparsek_mask_builder(
+        /* d        */ 128,
+        /* n_kv     */ 64,
+        /* n_rows   */ 4,
+        /* n_head   */ 4,
+        /* n_stream */ 1,
+        /* topk     */ 8));
 
 #if 0
     std::uniform_int_distribution<> dist_ne1(1, 50);
