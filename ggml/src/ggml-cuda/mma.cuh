@@ -889,8 +889,8 @@ namespace ggml_cuda_mma {
             : "+r"(Dxi[0]), "+r"(Dxi[1]), "+r"(Dxi[2]), "+r"(Dxi[3]), "+r"(Dxi[4]), "+r"(Dxi[5]), "+r"(Dxi[6]), "+r"(Dxi[7])
             : "r"(Axi[6]), "r"(Axi[7]), "r"(Bxi[6]), "r"(Bxi[7]));
 #else
-        tile<16, 8, float> * D16 = (tile<16, 8, float> *) &D;
-        tile<16, 8, half2> * A16 = (tile<16, 8, half2> *) &A;
+        tile      <16, 8, float> * D16 = reinterpret_cast<tile      <16, 8, float> *>(&D);
+        const tile<16, 8, half2> * A16 = reinterpret_cast<const tile<16, 8, half2> *>(&A);
         mma(D16[0], A16[0], B);
         mma(D16[1], A16[1], B);
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
