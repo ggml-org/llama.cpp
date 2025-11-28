@@ -108,10 +108,10 @@ static __global__ void upscale_f32_bilinear_antialias(const float * src0, float 
     const float x = ((float)i10_dst + pixel_offset) / sf0;
 
     // support and invscale, maximum 1 pixel for bilinear
-    const float support1  = max(1.f / sf1, 1.f);
-    const float invscale1 = 1.0 / support1;
-    const float support0  = max(1.f / sf0, 1.f);
-    const float invscale0 = 1.f / support0;
+    const float support1  = max(1.0f / sf1, 1.0f);
+    const float invscale1 = 1.0f / support1;
+    const float support0  = max(1.0f / sf0, 1.0f);
+    const float invscale0 = 1.0f / support0;
 
     // the range of source pixels that contribute
     const int64_t x_min = max(int64_t(0), int64_t(x - support0 + pixel_offset));
@@ -124,7 +124,7 @@ static __global__ void upscale_f32_bilinear_antialias(const float * src0, float 
     float total_weight = 0.0f;
 
     auto triangle_filter = [](float x) -> float {
-        return max(1.0f - fabsf(x), 0.f);
+        return max(1.0f - fabsf(x), 0.0f);
     };
 
     for (int64_t sy = y_min; sy < y_max; sy++) {

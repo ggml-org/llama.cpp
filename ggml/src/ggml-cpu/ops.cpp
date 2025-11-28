@@ -7424,14 +7424,14 @@ static void ggml_compute_forward_upscale_f32(
         // Similar to F.interpolate(..., mode="bilinear", align_corners=False, antialias=True)
         // https://github.com/pytorch/pytorch/blob/8871ff29b743948d1225389d5b7068f37b22750b/aten/src/ATen/native/cpu/UpSampleKernel.cpp
         auto triangle_filter = [](float x) -> float {
-            return std::max(1.0f - fabsf(x), 0.f);
+            return std::max(1.0f - fabsf(x), 0.0f);
         };
 
         // support and invscale, maximum 1 pixel for bilinear
-        const float support1  = std::max(1.f, 1.f / sf1);
-        const float invscale1 = 1.0 / support1;
-        const float support0  = std::max(1.f, 1.f / sf0);
-        const float invscale0 = 1.f / support0;
+        const float support1  = std::max(1.0f, 1.0f / sf1);
+        const float invscale1 = 1.0f / support1;
+        const float support0  = std::max(1.0f, 1.0f / sf0);
+        const float invscale0 = 1.0f / support0;
 
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             const int64_t i03 = i3 / sf3;
