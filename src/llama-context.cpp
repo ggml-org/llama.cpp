@@ -1386,7 +1386,10 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes() const {
-    return std::max<uint32_t>(1024u, 8u*model.n_tensors());
+    // Megrez-MoE creates many intermediate tensors (~35 per MoE layer)
+    // Use higher factor (9u) instead of base 8u to account for this overhead
+    uint32_t factor = (model.arch == LLM_ARCH_MEGREZ_MOE) ? 9u : 8u;
+    return std::max<uint32_t>(1024u, factor * model.n_tensors());
 }
 
 llm_graph_result * llama_context::get_gf_res_reserve() const {

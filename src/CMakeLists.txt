@@ -90,6 +90,7 @@ add_library(llama
             models/mamba.cpp
             models/minicpm3.cpp
             models/minimax-m2.cpp
+            models/megrez-moe.cpp
             models/mpt.cpp
             models/nemotron-h.cpp
             models/nemotron.cpp

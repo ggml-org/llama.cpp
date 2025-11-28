@@ -9066,6 +9066,141 @@ class FalconH1Model(Mamba2Model):
         self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
 
 
+@ModelBase.register("MegrezMoeForCausalLM", "MegrezMoEForCausalLM")
+class MegrezMoEModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.MEGREZ_MOE
+
+    def set_vocab(self):
+        # Megrez-MoE uses Qwen-style BPE tokenizer
+        # Use standard GPT2 vocab loading which handles BPE correctly
+        try:
+            self._set_vocab_gpt2()
+        except Exception:
+            # Fallback to Qwen-specific handling if needed
+            self._set_vocab_qwen()
+        # Note: special_vocab.add_to_gguf() is already called within
+        # _set_vocab_gpt2() and _set_vocab_qwen(), so no need to call it again
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        # MoE expert configuration
+        num_experts = hparams.get("num_experts") or hparams.get("n_routed_experts")
+        if num_experts is None:
+            raise ValueError("Missing 'num_experts' or 'n_routed_experts' in model config")
+        self.gguf_writer.add_expert_count(num_experts)
+
+        # Shared expert FFN size
+        hidden_size = hparams.get("hidden_size", 2048)
+        shared_expert_ffn_size = int(hidden_size * 2.75)
+        self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_ffn_size)
+
+        # Per-expert FFN size (should be consistent across all experts)
+        moe_intermediate_size = hparams.get("moe_intermediate_size")
+        if moe_intermediate_size is None:
+            raise ValueError("Missing 'moe_intermediate_size' in model config")
+        if not isinstance(moe_intermediate_size, list):
+            moe_intermediate_size = [moe_intermediate_size]
+
+        # Validate all experts have same size
+        if not all(n == moe_intermediate_size[0] for n in moe_intermediate_size):
+            raise ValueError(f"All experts must have same FFN size, got: {moe_intermediate_size}")
+        self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size[0])
+
+        # Shared expert count
+        num_shared_expert = hparams.get("num_shared_expert") or hparams.get("n_shared_experts")
+        if num_shared_expert is None:
+            raise ValueError("Missing 'num_shared_expert' or 'n_shared_experts' in model config")
+        if not isinstance(num_shared_expert, list):
+            num_shared_expert = [num_shared_expert]
+
+        if not all(n == num_shared_expert[0] for n in num_shared_expert):
+            raise ValueError(f"All layers must have same shared expert count, got: {num_shared_expert}")
+        self.gguf_writer.add_expert_shared_count(num_shared_expert[0])
+
+        # RoPE scaling (Megrez may use dynamic scaling)
+        rope_scaling = hparams.get("rope_scaling")
+        if rope_scaling and rope_scaling.get("type") == "dynamic":
+            alpha = rope_scaling.get("alpha", 1000)
+            base = hparams.get("rope_theta", 10000.0)
+            hidden_size = hparams.get("hidden_size")
+            num_attention_heads = hparams.get("num_attention_heads")
+
+            if hidden_size is None or num_attention_heads is None:
+                raise ValueError("Missing 'hidden_size' or 'num_attention_heads' for RoPE scaling")
+
+            dim = hidden_size // num_attention_heads
+            scaled_base = base * (alpha ** (dim / (dim - 2)))
+
+            self.gguf_writer.add_rope_freq_base(scaled_base)
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+            self.gguf_writer.add_rope_scaling_factor(1)
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024)
+            self.gguf_writer.add_context_length(256 * 1024)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "lm_head.weight":
+            if self.hparams.get("tie_word_embeddings", False):
+                logger.info("Skipping tied output layer 'lm_head.weight'")
+                return []
+
+        # Handle MoE gate bias (e_score_correction_bias) - map to exp_probs_b
+        if "e_score_correction_bias" in name:
+            # This is the expert selection bias - map to blk.N.exp_probs_b
+            # Format: model.layers.N.mlp.gate.e_score_correction_bias -> blk.N.exp_probs_b
+            layer_num = int(name.split(".")[2])  # Extract layer number
+            new_name = f"blk.{layer_num}.exp_probs_b"
+            return [(new_name, data_torch)]
+
+        # Handle shared FFN (non-expert layers) - pass through directly
+        if name.find("mlp.down_proj") != -1 or name.find("mlp.gate_proj") != -1 or name.find("mlp.up_proj") != -1:
+            if name.find("mlp.experts") == -1:
+                # This is a shared FFN layer, not an expert - pass through
+                return [(self.map_tensor_name(name), data_torch)]
+
+        if name.find("mlp.experts") != -1:
+            n_experts = self.hparams.get("num_experts") or self.hparams.get("n_routed_experts")
+            if n_experts is None:
+                raise ValueError("Missing 'num_experts' or 'n_routed_experts' in config")
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    new_name = self.map_tensor_name(merged_name)
+                    tensors.append((new_name, data_torch))
+
+                return tensors
+            else:
+                return []
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
 class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE

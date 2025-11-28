@@ -114,6 +114,7 @@ enum llm_arch {
     LLM_ARCH_COGVLM,
     LLM_ARCH_RND1,
     LLM_ARCH_PANGU_EMBED,
+    LLM_ARCH_MEGREZ_MOE,
     LLM_ARCH_UNKNOWN,
 };
 
