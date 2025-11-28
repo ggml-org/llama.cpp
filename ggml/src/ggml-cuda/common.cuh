@@ -476,7 +476,7 @@ static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
 }
 
 template<int width = WARP_SIZE>
-static __device__ __forceinline__ float warp_prefix_inclusive_sum(float2 a) {
+static __device__ __forceinline__ float2 warp_prefix_inclusive_sum(float2 a) {
     const int lane_id = threadIdx.x % width;
     const auto mask = __activemask();
 #pragma unroll
