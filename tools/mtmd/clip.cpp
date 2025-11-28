@@ -4355,9 +4355,11 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     params.patch_size * params.n_merge,
                     params.image_min_pixels,
                     params.image_max_pixels);
+                const std::array<uint8_t, 3> pad_color = {122, 116, 104};
 
                 clip_image_u8 resized_img;
-                img_tool::resize(*img, resized_img, target_size, img_tool::RESIZE_ALGO_BILINEAR, false);
+                const bool pad = (ctx->proj_type() != PROJECTOR_TYPE_LFM2);
+                img_tool::resize(*img, resized_img, target_size, img_tool::RESIZE_ALGO_BILINEAR, pad, pad_color);
                 clip_image_f32_ptr res(clip_image_f32_init());
                 normalize_image_u8_to_f32(resized_img, *res, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(res));
