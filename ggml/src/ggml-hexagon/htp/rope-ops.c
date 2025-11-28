@@ -282,8 +282,8 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
         freq_factors = (const float *) src2->data;
     }
 
-    int           ir        = 0;
-    const int32_t half_dims = rope_ctx->n_dims / 2;
+    const uint32_t i0_end    = MIN(ir1, ne1);
+    const int32_t  half_dims = rope_ctx->n_dims / 2;
     for (uint32_t i3 = 0; i3 < ne3; i3++) {      // batch
         for (uint32_t i2 = 0; i2 < ne2; i2++) {  // seq-len
             const int32_t p = pos[i2];
@@ -291,14 +291,7 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
             rope_cache_init(p, rope_ctx->freq_scale, freq_factors, rope_ctx->corr_dims, ne0, rope_ctx->ext_factor,
                             rope_ctx->attn_factor, wp0, rope_ctx->theta_scale);
 
-            for (uint32_t i1 = 0; i1 < ne1; i1++) {  // attn-heads
-                if (ir++ < ir0) {
-                    continue;
-                }
-                if (ir > ir1) {
-                    break;
-                }
-
+            for (uint32_t i1 = ir0; i1 < i0_end; i1++) {  // attn-heads
                 const float * src      = (float *) ((char *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01);
                 float *       dst_data = (float *) ((char *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1);
 
