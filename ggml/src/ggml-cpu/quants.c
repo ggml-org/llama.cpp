@@ -479,8 +479,11 @@ void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs
 
         // QK_K 个元素，每 4 个权重 packed 在一个 byte 里
         for (int j = 0; j < QK_K; ++j) {
-            const int byte_idx = j >> 2;          // j / 4
-            const int bit_off  = (j & 3) * 2;     // (j % 4) * 2
+            const int chunk    = j >> 6;          // 0..3 blocks of 64
+            const int lane     = j & 0xF;         // 0..15 within each 16-lane stripe
+            const int part     = (j >> 4) & 0x3;  // which 16-lane group inside the chunk
+            const int byte_idx = (chunk << 4) + lane;
+            const int bit_off  = part * 2;
 
             const uint8_t packed = w_ptr[byte_idx];
             const uint8_t code   = (packed >> bit_off) & 0x3;

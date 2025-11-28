@@ -1447,30 +1447,7 @@ void ggml_vec_dot_ifairy_q16_K(
     const float coeff_w_real = w[0].d_real;
     const float coeff_w_imag = w[0].d_imag;
 
-    // ------------ 常量准备 ------------
-    // 静态分配，避免栈上重复初始化
-    static const uint8_t perm0_data[16] = {
-        0,0,0,0, 1,1,1,1, 2,2,2,2, 3,3,3,3
-    };
-    static const uint8_t perm1_data[16] = {
-        4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7
-    };
-    static const uint8_t perm2_data[16] = {
-        8,8,8,8, 9,9,9,9, 10,10,10,10, 11,11,11,11
-    };
-    static const uint8_t perm3_data[16] = {
-        12,12,12,12, 13,13,13,13, 14,14,14,14, 15,15,15,15
-    };
-    const uint8x16_t v_perm0 = vld1q_u8(perm0_data);
-    const uint8x16_t v_perm1 = vld1q_u8(perm1_data);
-    const uint8x16_t v_perm2 = vld1q_u8(perm2_data);
-    const uint8x16_t v_perm3 = vld1q_u8(perm3_data);
-    static const int8_t shift_mask_data[16] = {
-         0, -2, -4, -6,  0, -2, -4, -6,
-         0, -2, -4, -6,  0, -2, -4, -6
-    };
-    const int8x16_t v_shift_mask = vld1q_s8(shift_mask_data);
-
+    // 权重按 |0 16 32 48|1 17 33 49|...|15 31 47 63| 排列，直接用立即数右移解码 4 个 16-lane 组
     const uint8x16_t v_mask_3 = vdupq_n_u8(0x3);
     const int32x4_t  vzero    = vdupq_n_s32(0);
         
@@ -1507,6 +1484,10 @@ void ggml_vec_dot_ifairy_q16_K(
         for (int j = 0; j < QK_K; j += 64) {
             // 1. 加载原始 2-bit 权重 (16 bytes)
             const uint8x16_t w_all_64 = vld1q_u8(w_ptr + (j >> 2));
+            const uint8x16_t w_idx0   = vandq_u8(w_all_64, v_mask_3);
+            const uint8x16_t w_idx1   = vandq_u8(vshrq_n_u8(w_all_64, 2), v_mask_3);
+            const uint8x16_t w_idx2   = vandq_u8(vshrq_n_u8(w_all_64, 4), v_mask_3);
+            const uint8x16_t w_idx3   = vandq_u8(vshrq_n_u8(w_all_64, 6), v_mask_3);
 
             // 2. 准备输入数据指针
             const int8_t * GGML_RESTRICT xr = x_r_ptr + j;
@@ -1515,11 +1496,8 @@ void ggml_vec_dot_ifairy_q16_K(
             // --- 处理 第 1 组 (Indices 0-15) ---
             {
                 // 解码权重
-                uint8x16_t w_idx = vqtbl1q_u8(w_all_64, v_perm0);
-                w_idx = vandq_u8(vshlq_u8(w_idx, v_shift_mask), v_mask_3);
-                
-                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx);
-                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx);
+                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx0);
+                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx0);
 
                 // 加载输入
                 const int8x16_t xr_vec = vld1q_s8(xr);
@@ -1534,11 +1512,8 @@ void ggml_vec_dot_ifairy_q16_K(
 
             // --- 处理 第 2 组 (Indices 16-31) ---
             {
-                uint8x16_t w_idx = vqtbl1q_u8(w_all_64, v_perm1);
-                w_idx = vandq_u8(vshlq_u8(w_idx, v_shift_mask), v_mask_3);
-
-                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx);
-                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx);
+                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx1);
+                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx1);
 
                 const int8x16_t xr_vec = vld1q_s8(xr + 16);
                 const int8x16_t xi_vec = vld1q_s8(xi + 16);
@@ -1555,11 +1530,8 @@ void ggml_vec_dot_ifairy_q16_K(
             // --- 处理 第 3 组 (Indices 32-47) ---
             // 切换到 Bank 1 以打破长依赖链，并最大化利用执行端口
             {
-                uint8x16_t w_idx = vqtbl1q_u8(w_all_64, v_perm2);
-                w_idx = vandq_u8(vshlq_u8(w_idx, v_shift_mask), v_mask_3);
-
-                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx);
-                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx);
+                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx2);
+                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx2);
 
                 const int8x16_t xr_vec = vld1q_s8(xr + 32);
                 const int8x16_t xi_vec = vld1q_s8(xi + 32);
@@ -1573,11 +1545,8 @@ void ggml_vec_dot_ifairy_q16_K(
 
             // --- 处理 第 4 组 (Indices 48-63) ---
             {
-                uint8x16_t w_idx = vqtbl1q_u8(w_all_64, v_perm3);
-                w_idx = vandq_u8(vshlq_u8(w_idx, v_shift_mask), v_mask_3);
-
-                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx);
-                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx);
+                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx3);
+                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx3);
 
                 const int8x16_t xr_vec = vld1q_s8(xr + 48);
                 const int8x16_t xi_vec = vld1q_s8(xi + 48);

@@ -2287,31 +2287,30 @@ void quantize_row_ifairy_ref(const float * GGML_RESTRICT x_real, const float * G
         y[i].d_real = GGML_FP32_TO_FP16(d_real);
         y[i].d_imag = GGML_FP32_TO_FP16(d_imag);
 
-        for (size_t j = 0; j < sizeof(y->qs); j += 32) {
-            for (size_t m = 0; m < 32; ++m) {
-                uint8_t q = 0;
-                for (size_t n = 0; n < 4; ++n) {
-                    // 00, 01, 10, 11 -> -1, 1, -i, i
-                    int xi = 0;
-                    if (x_real[m + n*32] == 0) {
-                        if(x_imag[m + n*32] > 0) {
-                            xi = 3; // i
-                        } else {
-                            xi = 2; // -i
-                        }
+        const float * block_real = x_real + i * QK_K;
+        const float * block_imag = x_imag + i * QK_K;
+
+        for (int chunk = 0; chunk < 4; ++chunk) {
+            uint8_t packed[16] = {0};
+
+            for (int part = 0; part < 4; ++part) {
+                for (int lane = 0; lane < 16; ++lane) {
+                    const int idx = chunk * 64 + part * 16 + lane;
+                    const float xr = block_real[idx];
+                    const float xi = block_imag[idx];
+
+                    int code = 0;
+                    if (xr == 0) {
+                        code = (xi > 0) ? 3 : 2;
                     } else {
-                        if(x_real[m + n*32] > 0) {
-                            xi = 1; // 1
-                        } else {
-                            xi = 0; // -1
-                        }
+                        code = (xr > 0) ? 1 : 0;
                     }
-                    q += xi << (2*n);
+
+                    packed[lane] |= (uint8_t) (code << (2 * part));
                 }
-                y[i].qs[j + m] = q;
             }
-            x_real += 4*32;
-            x_imag += 4*32;
+
+            memcpy(y[i].qs + chunk * 16, packed, sizeof(packed));
         }
     }
 }
@@ -2332,10 +2331,12 @@ void dequantize_row_ifairy(const block_ifairy * GGML_RESTRICT x, float * GGML_RE
         const float d_real = GGML_FP16_TO_FP32(x[i].d_real);
         const float d_imag = GGML_FP16_TO_FP32(x[i].d_imag);
 
-        for (size_t j = 0; j < sizeof(x->qs); j += 32) {
-            for (size_t l = 0; l < 4; ++l) {
-                for (size_t m = 0; m < 32; ++m) {
-                    int8_t q = (x[i].qs[j + m] >> (l*2)) & 3;
+        for (int chunk = 0; chunk < 4; ++chunk) {
+            for (int part = 0; part < 4; ++part) {
+                for (int lane = 0; lane < 16; ++lane) {
+                    const uint8_t packed = x[i].qs[chunk * 16 + lane];
+                    const uint8_t q = (packed >> (2 * part)) & 3;
+
                     *y_real++ = (float) ((q == 1) - (q == 0)) * d_real;
                     *y_imag++ = (float) ((q == 3) - (q == 2)) * d_imag;
                 }

@@ -14,6 +14,7 @@ import torch
 #import tensorflow as tf
 from safetensors import safe_open
 import numpy as np
+from gguf.constants import GGML_QUANT_SIZES, QK_K
 
 
 #bf16 = tf.bfloat16.as_numpy_dtype
@@ -171,6 +172,42 @@ def merge_complex_tensor(q_real: torch.Tensor, q_imag: torch.Tensor) -> torch.Te
     result = uint32_view_with_flag.view(torch.float32)
     
     return result
+
+def repack_ifairy_blocks(data: np.ndarray) -> np.ndarray:
+    """
+    将 ifairy 量化块从顺序 4-element packing 重新排列为
+    |0 16 32 48|1 17 33 49|...|15 31 47 63| 的布局，便于 NEON 直接移位解码。
+    """
+    if data.dtype != np.uint8:
+        return data
+
+    type_size = GGML_QUANT_SIZES[gguf.GGMLQuantizationType.F16_I2][1]
+    q_bytes = QK_K // 4  # 64 bytes of packed 2-bit weights
+
+    if data.size % type_size != 0:
+        return data
+
+    blocks = data.reshape((-1, type_size)).copy()
+    shifts = np.array([0, 2, 4, 6], dtype=np.uint8)
+
+    for idx in range(blocks.shape[0]):
+        qs = blocks[idx, :q_bytes]
+        codes = ((qs.reshape(-1, 1) >> shifts) & 0x3).reshape(-1)  # 256 codes
+
+        repacked = np.empty_like(qs)
+        for chunk in range(4):  # 4 groups of 64 weights
+            base = chunk * 64
+            dst_off = chunk * 16
+            for lane in range(16):
+                c0 = codes[base + lane]
+                c1 = codes[base + lane + 16]
+                c2 = codes[base + lane + 32]
+                c3 = codes[base + lane + 48]
+                repacked[dst_off + lane] = (c0 | (c1 << 2) | (c2 << 4) | (c3 << 6)) & 0xFF
+
+        blocks[idx, :q_bytes] = repacked
+
+    return blocks.reshape(data.shape)
 
 # 接收key和对应的tensor，返回量化后的tensor
 def quant_and_merge(key, tensor, f, weight_map):
@@ -397,6 +434,7 @@ def main():
                     tensor_dtype = gguf.GGMLQuantizationType.F16_I2
                     try:
                         numpy_array = gguf.quants.quantize(raw_numpy, tensor_dtype)
+                        numpy_array = repack_ifairy_blocks(numpy_array)
                     except gguf.QuantError as err:
                         if verbose:
                             print(f"F16_I2 quantization skipped for '{key}' due to: {err}. Falling back to F32 storage.")
