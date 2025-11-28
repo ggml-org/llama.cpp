@@ -104,7 +104,7 @@ static __host__ uint32_t ggml_cuda_fattn_mma_get_config(const int DKQ, const int
     if (ampere_mma_available(cc)) {
         return ggml_cuda_fattn_mma_get_config_ampere(DKQ, DV, ncols);
     }
-    if (ampere_mma_available(cc)) {
+    if (turing_mma_available(cc)) {
         return ggml_cuda_fattn_mma_get_config_turing(DKQ, DV, ncols);
     }
     GGML_ASSERT(volta_mma_available(cc));
