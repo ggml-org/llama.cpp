@@ -277,6 +277,7 @@ export class NSChatMessage {
 
 class Format {
     static Text = {
+        Default: "default",
         Plain: "plain",
         Html: "html",
         Markdown: "markdown",
@@ -309,7 +310,7 @@ export class ChatMessageEx {
         }
         this.uniqId = ChatMessageEx.getUniqId()
         this.trimmedContent = trimmedContent;
-        this.textFormat = Format.Text.Plain
+        this.textFormat = Format.Text.Default
     }
 
     /**
@@ -325,7 +326,7 @@ export class ChatMessageEx {
     clear() {
         this.ns = new NSChatMessage()
         this.trimmedContent = undefined;
-        this.textFormat = Format.Text.Plain
+        this.textFormat = Format.Text.Default
     }
 
     /**
@@ -1531,7 +1532,7 @@ class MultiChatUI {
         for (const [name, stype, content] of showList) {
             let sftype = stype
             if (content.length > 0) {
-                if ((name == "content") && (chatSessionMarkdown.enabled)) {
+                if ((name == "content") && (sftype == Format.Text.Default) && (chatSessionMarkdown.enabled)) {
                     if (chatSessionMarkdown.always) {
                         sftype = Format.Text.Markdown
                     } else {
@@ -1847,6 +1848,15 @@ class MultiChatUI {
         });
 
         // ChatMessage edit popover menu
+
+        this.elPopoverChatMsg.addEventListener('beforetoggle', (tev)=>{
+            let chatSession = this.simpleChats[this.curChatId]
+            let index = chatSession.get_chatmessage_index(this.uniqIdChatMsgPO)
+            let chat = chatSession.xchat[index]
+            if (chat.ns.has_content()) {
+                this.elPopoverChatMsgFormatSelect.value = chat.textFormat
+            }
+        })
 
         this.elPopoverChatMsgDelBtn.addEventListener('click', (ev) => {
             console.log(`DBUG:SimpleChat:MCUI:ChatMsgPO:Del:${this.curChatId}:${this.uniqIdChatMsgPO}`)

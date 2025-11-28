@@ -305,6 +305,7 @@ Chat Session specific settings
   * lists (ordered, unordered, intermixed at diff leves)
     accomodate lines without list markers inbetween list items to some extent, hopefully in a sane way.
   * tables, fenced code blocks, blockquotes
+  * User given control to enable markdown implicitly at a session level, or explicitly set wrt individual msgs.
 * Rename fetch_web_url_raw to fetch_url_raw, avoids confusion and matchs semantic of access to local and web.
 
 

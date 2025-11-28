@@ -268,7 +268,8 @@ It is attached to the document object. Some of these can also be updated using t
 
     * Markdown
 
-      - enabled: whether markdown support is enabled or not.
+      - enabled: whether auto markdown support is enabled or not at a session level.
+        - user can always override explicitly wrt any chat message, as they see fit.
       - always: if true, all messages text content interpreted as Markdown based text and converted to html for viewing.
         if false, then interpret only ai assistant's text content as markdown.
       - htmlSanitize: text content sanitized using browser's dom parser, so html/xml tags get converted to normal visually equivalent text representation, before processing by markdown to html conversion logic.
