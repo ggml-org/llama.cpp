@@ -92,19 +92,19 @@ static void rope_cache_init(const float    theta_base,
 
         // Get n-d rotational scaling corrected for extrapolation
         float theta_interp = freq_scale * theta_extrap;
-        float theta2       = theta_interp;
-        float mscale2      = mscale;
+        float theta_final  = theta_interp;
+        float mscale_final = mscale;
 
         if (ext_factor != 0.0f) {
             float ramp_mix = rope_yarn_ramp(corr_dims[0], corr_dims[1], i0) * ext_factor;
-            theta2         = theta_interp * (1 - ramp_mix) + theta_extrap * ramp_mix;
+            theta_final    = theta_interp * (1 - ramp_mix) + theta_extrap * ramp_mix;
 
             // Get n-d magnitude scaling corrected for interpolation
-            mscale2 *= 1.0f + 0.1f * logf(1.0f / freq_scale);
+            mscale_final *= 1.0f + 0.1f * logf(1.0f / freq_scale);
         }
 
-        cache[i0 + 0] = cosf(theta2) * mscale2;
-        cache[i0 + 1] = sinf(theta2) * mscale2;
+        cache[i0 + 0] = cosf(theta_final) * mscale_final;
+        cache[i0 + 1] = sinf(theta_final) * mscale_final;
 
         theta *= theta_scale;
     }
@@ -282,7 +282,7 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
         freq_factors = (const float *) src2->data;
     }
 
-    const uint32_t i0_end    = MIN(ir1, ne1);
+    const uint32_t i1_end    = MIN(ir1, ne1);
     const int32_t  half_dims = rope_ctx->n_dims / 2;
     for (uint32_t i3 = 0; i3 < ne3; i3++) {      // batch
         for (uint32_t i2 = 0; i2 < ne2; i2++) {  // seq-len
@@ -291,7 +291,7 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
             rope_cache_init(p, rope_ctx->freq_scale, freq_factors, rope_ctx->corr_dims, ne0, rope_ctx->ext_factor,
                             rope_ctx->attn_factor, wp0, rope_ctx->theta_scale);
 
-            for (uint32_t i1 = ir0; i1 < i0_end; i1++) {  // attn-heads
+            for (uint32_t i1 = ir0; i1 < i1_end; i1++) {  // attn-heads
                 const float * src      = (float *) ((char *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01);
                 float *       dst_data = (float *) ((char *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1);
 
