@@ -248,7 +248,7 @@ void test_unicode(testing &t) {
                 {std::string("hello\xE4\xB8"), std::string("hello"), COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT},
 
                 // Complete content, no delimiter (should consume all valid UTF-8)
-                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_PEG_PARSE_RESULT_SUCCESS},
+                {std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), std::string("\xE4\xBD\xA0\xE5\xA5\xBD"), COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT},
             };
 
             auto parser = build_peg_parser([](common_peg_parser_builder& p) {

@@ -655,6 +655,10 @@ struct parser_executor {
             last_valid_pos = pos;
         }
 
+        if (last_valid_pos == ctx.input.size() && ctx.is_partial) {
+            // Reached the end of a partial stream, there might still be more input that we need to consume.
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, last_valid_pos);
+        }
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, last_valid_pos);
     }
 
