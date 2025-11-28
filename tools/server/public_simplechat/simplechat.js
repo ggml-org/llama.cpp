@@ -275,6 +275,15 @@ export class NSChatMessage {
 }
 
 
+class Format {
+    static Text = {
+        Plain: "plain",
+        Html: "html",
+        Markdown: "markdown",
+    }
+    static AllowedText = [ this.Text.Plain, this.Text.Markdown ]
+}
+
 export class ChatMessageEx {
 
     static uniqCounter = 0
@@ -300,6 +309,7 @@ export class ChatMessageEx {
         }
         this.uniqId = ChatMessageEx.getUniqId()
         this.trimmedContent = trimmedContent;
+        this.textFormat = Format.Text.Plain
     }
 
     /**
@@ -307,12 +317,15 @@ export class ChatMessageEx {
      * @param {ChatMessageEx} old
      */
     static newFrom(old) {
-        return new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.ns.tool_call_id, old.ns.name, old.ns.image_urls), old.trimmedContent)
+        let newCMEx = new ChatMessageEx(new NSChatMessage(old.ns.role, old.ns.content, old.ns.reasoning_content, old.ns.tool_calls, old.ns.tool_call_id, old.ns.name, old.ns.image_urls), old.trimmedContent)
+        newCMEx.textFormat = old.textFormat
+        return newCMEx
     }
 
     clear() {
         this.ns = new NSChatMessage()
         this.trimmedContent = undefined;
+        this.textFormat = Format.Text.Plain
     }
 
     /**
@@ -1482,33 +1495,33 @@ class MultiChatUI {
         // Add the content
         let showList = []
         if (msg.ns.has_reasoning()) {
-            showList.push(['reasoning', `!!!Reasoning: ${msg.ns.getReasoningContent()} !!!\n\n`])
+            showList.push(['reasoning', Format.Text.Plain, `!!!Reasoning: ${msg.ns.getReasoningContent()} !!!\n\n`])
         }
         if (msg.ns.has_toolresponse()) {
             if (msg.ns.tool_call_id) {
-                showList.push(['toolcallid', `tool-call-id: ${msg.ns.tool_call_id}`])
+                showList.push(['toolcallid', Format.Text.Plain, `tool-call-id: ${msg.ns.tool_call_id}`])
             }
             if (msg.ns.name) {
-                showList.push(['toolname', `tool-name: ${msg.ns.name}`])
+                showList.push(['toolname', Format.Text.Plain, `tool-name: ${msg.ns.name}`])
             }
         }
         if (msg.ns.getContent().trim().length > 0) {
-            showList.push(['content', msg.ns.getContent().trim()])
+            showList.push(['content', msg.textFormat, msg.ns.getContent().trim()])
         }
         let chatSessionMarkdown = this.simpleChats[chatId].cfg.chatProps.markdown
-        for (const [name, content] of showList) {
+        for (const [name, stype, content] of showList) {
+            let sftype = stype
             if (content.length > 0) {
-                let bMarkdown = false
                 if ((name == "content") && (chatSessionMarkdown.enabled)) {
                     if (chatSessionMarkdown.always) {
-                        bMarkdown = true
+                        sftype = Format.Text.Markdown
                     } else {
                         if (msg.ns.role == Roles.Assistant) {
-                            bMarkdown = true
+                            sftype = Format.Text.Markdown
                         }
                     }
                 }
-                if (bMarkdown) {
+                if (sftype == Format.Text.Markdown) {
                     entry = document.createElement('div')
                     let md = new mMD.MarkDown(chatSessionMarkdown.htmlSanitize)
                     md.process(content)
