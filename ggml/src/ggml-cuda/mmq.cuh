@@ -1544,6 +1544,8 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
                 tile_A A1;
                 A1.x[0] = 0x01010101;
                 A1.x[1] = 0x01010101;
+                A1.x[2] = 0x01010101;
+                A1.x[3] = 0x01010101;
                 mma(Cm, A1, B);
             }
 
