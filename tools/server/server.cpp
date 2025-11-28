@@ -2713,7 +2713,8 @@ public:
 
         res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->t_start);
         res->content_type = "text/plain; version=0.0.4";
-        res->ok(prometheus.str());
+        res->status = 200;
+        res->data = prometheus.str();
         return res;
     };
 
