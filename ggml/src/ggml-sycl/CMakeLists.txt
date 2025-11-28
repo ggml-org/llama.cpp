@@ -121,6 +121,7 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
     find_package(MKL REQUIRED)
     target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_USE_INTEL_ONEMKL)
+
 else()
     find_package(oneMath QUIET)
     if (NOT oneMath_FOUND)

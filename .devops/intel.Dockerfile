@@ -1,4 +1,4 @@
-ARG ONEAPI_VERSION=2025.2.2-0-devel-ubuntu24.04
+ARG ONEAPI_VERSION=2025.3.0-0-devel-ubuntu24.04
 
 ## Build Image
 
@@ -17,7 +17,7 @@ RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
         && export OPT_SYCL_F16="-DGGML_SYCL_F16=ON"; \
     fi && \
     echo "Building with dynamic libs" && \
-    cmake -B build -DGGML_NATIVE=OFF -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_BUILD_TESTS=OFF ${OPT_SYCL_F16} && \
+    cmake -B build -DGGML_NATIVE=ON -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_BUILD_TESTS=OFF -DGGML_SYCL_DEVICE_ARCH=bmg_g21,arl_s ${OPT_SYCL_F16} && \
     cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib && \
@@ -34,7 +34,12 @@ RUN mkdir -p /app/full \
 FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS base
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 curl\
+    && apt-get install -y libgomp1 curl software-properties-common\
+    && add-apt-repository -y ppa:kobuk-team/intel-graphics \
+    && apt-get update  \
+    && apt-get install -y libze-intel-gpu1 libze1 intel-metrics-discovery intel-opencl-icd clinfo intel-gsc \
+    && apt-get install -y intel-media-va-driver-non-free libmfx-gen1 libvpl2 libvpl-tools libva-glx2 va-driver-all vainfo \
+    && apt-get install -y libze-dev intel-ocloc \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \

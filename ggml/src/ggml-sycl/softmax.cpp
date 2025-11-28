@@ -88,6 +88,7 @@ static void soft_max_f32(const float *         x,
     // shared memory buffer to cache values between iterations:
     float *vals = use_shared ? buf_iw + sycl::max(nwarps, WARP_SIZE) : dst;
     float max_val = sinks ? sinks[i02] : -INFINITY;
+
 #pragma unroll
     for (int col0 = 0; col0 < ncols; col0 += block_size) {
         const int col = col0 + tid;
@@ -101,6 +102,7 @@ static void soft_max_f32(const float *         x,
         vals[col] = val;
         max_val   = sycl::max(max_val, val);
     }
+
     // find the max value in the block
     max_val = warp_reduce_max(max_val);
 

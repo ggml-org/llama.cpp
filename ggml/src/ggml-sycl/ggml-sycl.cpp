@@ -52,6 +52,7 @@
 #include "ggml-sycl/repeat_back.hpp"
 #include "ggml-sycl/quantize.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
+#include "ggml-sycl/fattn.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded = false;
@@ -3675,6 +3676,144 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+// Debug: Dump tensor values for NON-FA attention path comparison
+#define NON_FA_DEBUG_DUMP 0
+#if NON_FA_DEBUG_DUMP
+#include <cstring>
+static void dump_non_fa_attention_tensor(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) {
+    // Only dump for specific tensor names related to attention
+    // Key tensors: "kq", "kq_soft_max", "kqv" for non-FA path
+    // Also dump "fattn" for FA path comparison
+    const char* name = dst->name;
+    if (!name || name[0] == '\0') return;
+
+    // Check if this is an attention-related tensor
+    bool is_kq = (strncmp(name, "kq", 2) == 0 && name[2] != 'v');  // kq but not kqv
+    bool is_kq_soft_max = (strncmp(name, "kq_soft_max", 11) == 0);
+    bool is_kqv = (strncmp(name, "kqv", 3) == 0 && name[3] != '_');
+    bool is_fattn = (strncmp(name, "fattn", 5) == 0);
+
+    if (!is_kq && !is_kq_soft_max && !is_kqv && !is_fattn) return;
+
+    // Static call counter for each tensor type
+    static int kq_count = 0;
+    static int kq_soft_max_count = 0;
+    static int kqv_count = 0;
+    static int fattn_count = 0;
+
+    int call_num = 0;
+    if (is_kq) call_num = ++kq_count;
+    else if (is_kq_soft_max) call_num = ++kq_soft_max_count;
+    else if (is_kqv) call_num = ++kqv_count;
+    else if (is_fattn) call_num = ++fattn_count;
+
+    // Only dump first 50 calls of each type
+    if (call_num > 50) return;
+
+    // Wait for computation to complete
+    ctx.stream()->wait();
+
+    // Get tensor info
+    const int64_t ne0 = dst->ne[0];
+    const int64_t ne1 = dst->ne[1];
+    const int64_t ne2 = dst->ne[2];
+    const int64_t ne3 = dst->ne[3];
+    const size_t total_elements = ne0 * ne1 * ne2 * ne3;
+
+    // Only dump F32 tensors for now
+    if (dst->type != GGML_TYPE_F32) {
+        fprintf(stderr, "\n[NON-FA-DEBUG] %s call=%d type=%d (not F32, skipping dump)\n",
+                name, call_num, dst->type);
+        return;
+    }
+
+    fprintf(stderr, "\n[NON-FA-DEBUG] %s call=%d shape=[%lld,%lld,%lld,%lld] total=%zu\n",
+            name, call_num, (long long)ne0, (long long)ne1, (long long)ne2, (long long)ne3, total_elements);
+
+    // Copy data to host
+    std::vector<float> host_data(total_elements);
+    ctx.stream()->memcpy(host_data.data(), dst->data, total_elements * sizeof(float)).wait();
+
+    // Print summary statistics
+    float min_val = host_data[0], max_val = host_data[0], sum = 0;
+    for (size_t i = 0; i < total_elements; i++) {
+        float v = host_data[i];
+        if (v < min_val) min_val = v;
+        if (v > max_val) max_val = v;
+        sum += v;
+    }
+    fprintf(stderr, "  Stats: min=%.6f max=%.6f mean=%.6f\n", min_val, max_val, sum / total_elements);
+
+    // Print first few values for each dimension
+    if (is_kqv || is_fattn) {
+        // For attention output: [D][n_heads][n_queries][batch] or similar
+        // Print first 8 values for first few heads
+        fprintf(stderr, "  Output (first 8 values per head, first query):\n");
+        for (int h = 0; h < std::min((int)ne2, 8); h++) {
+            fprintf(stderr, "    h=%2d: [", h);
+            for (int d = 0; d < std::min((int)ne0, 8); d++) {
+                // Assuming layout [D][n_queries][n_heads][batch] -> index = d + ne0*(q + ne1*(h + ne2*b))
+                size_t idx = d + ne0 * (0 + ne1 * h);  // first query
+                fprintf(stderr, "%.6f%s", host_data[idx], d < 7 ? ", " : "");
+            }
+            fprintf(stderr, "]\n");
+        }
+        // Print a few higher heads
+        for (int h : {8, 16, 32, 63}) {
+            if (h < (int)ne2) {
+                fprintf(stderr, "    h=%2d: [", h);
+                for (int d = 0; d < std::min((int)ne0, 8); d++) {
+                    size_t idx = d + ne0 * (0 + ne1 * h);
+                    fprintf(stderr, "%.6f%s", host_data[idx], d < 7 ? ", " : "");
+                }
+                fprintf(stderr, "]\n");
+            }
+        }
+    } else if (is_kq_soft_max) {
+        // For attention weights: [n_kv][n_queries][n_heads][batch]
+        // Print attention weights for first query of first few heads
+        fprintf(stderr, "  Attention weights (first 16 KV positions, first query):\n");
+        for (int h = 0; h < std::min((int)ne2, 4); h++) {
+            fprintf(stderr, "    h=%2d: [", h);
+            for (int kv = 0; kv < std::min((int)ne0, 16); kv++) {
+                size_t idx = kv + ne0 * (0 + ne1 * h);
+                fprintf(stderr, "%.4f%s", host_data[idx], kv < 15 ? ", " : "");
+            }
+            fprintf(stderr, "]\n");
+        }
+    }
+
+    // Write full dump to file
+    char filename[256];
+    snprintf(filename, sizeof(filename), "/tmp/fa_debug/nonfa_%s_call%03d.txt",
+             is_kq ? "kq" : (is_kq_soft_max ? "kq_softmax" : (is_kqv ? "kqv" : "fattn")), call_num);
+    FILE* f = fopen(filename, "w");
+    if (f) {
+        fprintf(f, "# Tensor: %s call=%d shape=[%lld,%lld,%lld,%lld]\n",
+                name, call_num, (long long)ne0, (long long)ne1, (long long)ne2, (long long)ne3);
+        fprintf(f, "# Strides: nb=[%zu,%zu,%zu,%zu]\n", dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3]);
+        fprintf(f, "\n=== DATA ===\n");
+
+        // Write all data organized by dimensions
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            for (int64_t i2 = 0; i2 < ne2; i2++) {
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    fprintf(f, "[b=%lld,h=%lld,q=%lld]: ", (long long)i3, (long long)i2, (long long)i1);
+                    for (int64_t i0 = 0; i0 < ne0; i0++) {
+                        size_t idx = i0 + ne0 * (i1 + ne1 * (i2 + ne2 * i3));
+                        fprintf(f, "%.6f ", host_data[idx]);
+                    }
+                    fprintf(f, "\n");
+                }
+            }
+        }
+
+        fclose(f);
+        fprintf(stderr, "  [Wrote full dump to %s]\n", filename);
+    }
+}
+#endif
+
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
     if (!g_sycl_loaded) return false;
 
@@ -3941,9 +4080,17 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_ARANGE:
             ggml_sycl_arange(ctx, dst);
             break;
+        case GGML_OP_FLASH_ATTN_EXT:
+            ggml_sycl_flash_attn_ext(ctx, dst);
+            break;
         default:
             return false;
     }
+
+#if NON_FA_DEBUG_DUMP
+    // Dump attention-related tensors after computation
+    dump_non_fa_attention_tensor(ctx, dst);
+#endif
 
     return true;
 } catch (sycl::exception & e) {
@@ -4632,6 +4779,8 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return op->type == GGML_TYPE_F32;
         case GGML_OP_ARANGE:
             return op->type == GGML_TYPE_F32;
+        case GGML_OP_FLASH_ATTN_EXT:
+            return ggml_sycl_flash_attn_ext_supported(op);
         default:
             return false;
     }
