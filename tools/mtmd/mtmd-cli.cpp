@@ -65,7 +65,7 @@ static void sigint_handler(int signo) {
 
 struct mtmd_cli_context {
     mtmd::context_ptr ctx_vision;
-    common_init_result llama_init;
+    common_init_result_ptr llama_init;
 
     llama_model       * model;
     llama_context     * lctx;
@@ -89,8 +89,8 @@ struct mtmd_cli_context {
     llama_pos n_past = 0;
 
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
-        model = llama_init.model.get();
-        lctx = llama_init.context.get();
+        model = llama_init->model();
+        lctx = llama_init->context();
         vocab = llama_model_get_vocab(model);
         smpl = common_sampler_init(model, params.sampling);
         n_threads = params.cpuparams.n_threads;

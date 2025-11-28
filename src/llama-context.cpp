@@ -66,7 +66,15 @@ llama_context::llama_context(
 
         for (size_t i = 0; i < params.n_samplers; ++i) {
             const auto & config = params.samplers[i];
+
+            const int n_samplers = llama_sampler_chain_n(config.sampler);
+            if (n_samplers <= 0) {
+                continue;
+            }
+
             sampling.samplers[config.seq_id] = config.sampler;
+
+            LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
         }
     }
 
@@ -438,8 +446,8 @@ llama_context::llama_context(
 
     // Initialize the full vocabulary token ids for backend samplers.
     {
-        const llama_vocab * vocab = llama_model_get_vocab(&model);
-        const int n_vocab = llama_vocab_n_tokens(vocab);
+        const int n_vocab = model.vocab.n_tokens();
+
         sampling.token_ids_full_vocab.resize(n_vocab);
         for (int i = 0; i < n_vocab; ++i) {
             sampling.token_ids_full_vocab[i] = i;
@@ -449,10 +457,6 @@ llama_context::llama_context(
 
 llama_context::~llama_context() {
     ggml_opt_free(opt_ctx);
-    // TODO: perhaps use a smart pointer for samplers
-    for (auto const& [seq_id, sampler] : sampling.samplers) {
-        llama_sampler_free(sampler);
-    }
 }
 
 void llama_context::synchronize() {
@@ -910,31 +914,10 @@ void llama_context::set_warmup(bool value) {
 void llama_context::set_backend_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
 
-    auto it = sampling.samplers.find(seq_id);
-    if (it != sampling.samplers.end()) {
-        // If the sampler to be set is the same that is already set, do nothing.
-        if (it->second == sampler) {
-            return;
-        }
-
-        llama_sampler_free(it->second);
-
-        // If sampler is nullptr, we remove the samppler chain for this seq_id.
-        // chain for this seq_id.
-        if (sampler == nullptr) {
-            sampling.samplers.erase(it);
-            return;
-        }
-
-        // Otherwise, we replace the existing sampler with the new one.
-        it->second = sampler;
-        return;
-    }
-
-    // If there is no sampler for this seq_id and the caller provides a non-null
-    // sampler, we set it.
-    if (sampler != nullptr) {
+    if (sampler != nullptr && llama_sampler_chain_n(sampler) > 0) {
         sampling.samplers[seq_id] = sampler;
+    } else {
+        sampling.samplers.erase(seq_id);
     }
 }
 
@@ -1700,8 +1683,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
         sampling.sampled_size    = n_outputs_max;
         sampling.candidates_size = n_vocab*n_outputs_max;
 
-        backend_float_count      = sampling.logits_size + sampling.probs_size;
-        backend_token_count      = sampling.sampled_size + sampling.candidates_size;
+        backend_float_count = sampling.logits_size + sampling.probs_size;
+        backend_token_count = sampling.sampled_size + sampling.candidates_size;
     }
 
     if (output_ids.empty()) {

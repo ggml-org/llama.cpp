@@ -151,8 +151,7 @@ struct server_slot {
     // sampling
     json json_schema;
 
-    struct common_sampler * smpl = nullptr;
-    llama_sampler * backend_sampler = nullptr;
+    common_sampler_ptr smpl;
 
     llama_token sampled;
 
@@ -197,13 +196,6 @@ struct server_slot {
         // clear speculative decoding stats
         n_draft_total = 0;
         n_draft_accepted = 0;
-
-        if (backend_sampler != nullptr) {
-            if (ctx != nullptr) {
-                llama_set_backend_sampler(ctx, id, nullptr);
-            }
-            backend_sampler = nullptr;
-        }
 
         task.reset();
         task_prev.reset();
@@ -481,8 +473,8 @@ struct server_context {
     common_params params_base;
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
-    common_init_result llama_init;
-    common_init_result llama_init_dft;
+    common_init_result_ptr llama_init;
+    common_init_result_ptr llama_init_dft;
 
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
@@ -526,16 +518,6 @@ struct server_context {
 
         // Clear any sampling context
         for (server_slot & slot : slots) {
-            common_sampler_free(slot.smpl);
-            slot.smpl = nullptr;
-
-            if (slot.backend_sampler != nullptr) {
-                if (ctx != nullptr) {
-                    llama_set_backend_sampler(ctx, slot.id, nullptr);
-                }
-                slot.backend_sampler = nullptr;
-            }
-
             llama_free(slot.ctx_dft);
             slot.ctx_dft = nullptr;
 
@@ -556,8 +538,8 @@ struct server_context {
 
         llama_init = common_init_from_params(params_base);
 
-        model = llama_init.model.get();
-        ctx   = llama_init.context.get();
+        model = llama_init->model();
+        ctx   = llama_init->context();
 
         if (model == nullptr) {
             SRV_ERR("failed to load model, '%s'\n", params_base.model.path.c_str());
@@ -589,25 +571,25 @@ struct server_context {
 
             llama_init_dft = common_init_from_params(params_dft);
 
-            model_dft = llama_init_dft.model.get();
+            model_dft = llama_init_dft->model();
 
             if (model_dft == nullptr) {
                 SRV_ERR("failed to load draft model, '%s'\n", params_base.speculative.model.path.c_str());
                 return false;
             }
 
-            vocab_dft_compatible = common_speculative_are_compatible(ctx, llama_init_dft.context.get());
+            vocab_dft_compatible = common_speculative_are_compatible(ctx, llama_init_dft->context());
             if (!vocab_dft_compatible) {
                 SRV_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
             }
 
-            const int n_ctx_dft = llama_n_ctx(llama_init_dft.context.get());
+            const int n_ctx_dft = llama_n_ctx(llama_init_dft->context());
 
             cparams_dft = common_context_params_to_llama(params_dft);
             cparams_dft.n_batch = n_ctx_dft;
 
             // the context is not needed - we will create one for each slot
-            llama_init_dft.context.reset();
+            llama_init_dft->free_context();
         }
 
         chat_templates = common_chat_templates_init(model, params_base.chat_template);
@@ -1001,23 +983,17 @@ struct server_context {
 
         // initialize samplers
         {
-            if (slot.smpl != nullptr) {
-                common_sampler_free(slot.smpl);
-            }
-
-            slot.smpl = common_sampler_init(model, task.params.sampling);
+            slot.smpl.reset(common_sampler_init(model, task.params.sampling));
             if (slot.smpl == nullptr) {
                 // for now, the only error that may happen here is invalid grammar
                 send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
 
-            SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl).c_str());
-        }
+            SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
 
-        if (!configure_slot_backend_sampler(slot, task.params.sampling)) {
-            send_error(task, "Failed to configure backend samplers", ERROR_TYPE_SERVER);
-            return false;
+            llama_sampler * backend_chain = common_sampler_chain_backend(slot.smpl.get());
+            llama_set_backend_sampler(ctx, slot.id, backend_chain);
         }
 
         // initialize draft batch
@@ -1034,39 +1010,6 @@ struct server_context {
 
         SLT_INF(slot, "%s", "processing task\n");
 
-        return true;
-    }
-
-    bool configure_slot_backend_sampler(server_slot & slot, const common_params_sampling & sampling) {
-        if (!sampling.backend_sampling) {
-            if (slot.backend_sampler != nullptr) {
-                llama_set_backend_sampler(ctx, slot.id, nullptr);
-                slot.backend_sampler = nullptr;
-            }
-            return true;
-        }
-
-        llama_sampler * backend_chain = common_sampler_backend_init(model, sampling);
-        // The sampler types configured with --samplers might not be supported
-        // by backend samplers in which case we disable backend sampling and
-        // fallback to CPU only sampling.
-        if (backend_chain == nullptr) {
-            if (slot.backend_sampler != nullptr) {
-                llama_set_backend_sampler(ctx, slot.id, nullptr);
-                slot.backend_sampler = nullptr;
-            }
-            SLT_INF(slot, "%s", "no backend samplers configured (sampler chain doesn't start with backend-supported samplers)\n");
-            return true;
-        }
-
-        if (slot.backend_sampler != nullptr) {
-            llama_set_backend_sampler(ctx, slot.id, nullptr);
-            slot.backend_sampler = nullptr;
-        }
-
-        slot.backend_sampler = backend_chain;
-        llama_set_backend_sampler(ctx, slot.id, backend_chain);
-        SLT_INF(slot, "%s", "configured backend samplers\n");
         return true;
     }
 
@@ -1206,7 +1149,7 @@ struct server_context {
         size_t n_vocab = llama_vocab_n_tokens(vocab);
 
         if (post_sampling) {
-            const auto * cur_p = common_sampler_get_candidates(slot.smpl, true);
+            const auto * cur_p = common_sampler_get_candidates(slot.smpl.get(), true);
             const size_t max_probs = cur_p->size;
 
             // set probability for sampled token
@@ -2185,13 +2128,13 @@ struct server_context {
 
                         GGML_ASSERT(batch.n_tokens > 0);
 
-                        common_sampler_reset(slot.smpl);
+                        common_sampler_reset(slot.smpl.get());
 
                         // Process all prompt tokens through sampler system
                         for (int i = 0; i < slot.task->n_tokens(); ++i) {
                             llama_token id = input_tokens[i];
                             if (id != LLAMA_TOKEN_NULL) {
-                                common_sampler_accept(slot.smpl, id, false);
+                                common_sampler_accept(slot.smpl.get(), id, false);
                             }
                         }
 
@@ -2381,11 +2324,11 @@ struct server_context {
 
                 const int tok_idx = slot.i_batch - i;
 
-                llama_token id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+                llama_token id = common_sampler_sample(slot.smpl.get(), ctx, tok_idx);
 
                 slot.i_batch = -1;
 
-                common_sampler_accept(slot.smpl, id, true);
+                common_sampler_accept(slot.smpl.get(), id, true);
 
                 slot.n_decoded += 1;
 
@@ -2488,7 +2431,7 @@ struct server_context {
                 llama_decode(ctx, slot.batch_spec);
 
                 // the accepted tokens from the speculation
-                const auto ids = common_sampler_sample_and_accept_n(slot.smpl, ctx, draft);
+                const auto ids = common_sampler_sample_and_accept_n(slot.smpl.get(), ctx, draft);
 
                 slot.n_decoded += ids.size();
 

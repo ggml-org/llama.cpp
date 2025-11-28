@@ -105,7 +105,8 @@ struct common_sampler {
     common_params_sampling params;
 
     struct llama_sampler * grmr;
-    struct llama_sampler * chain;          // CPU sampling chain
+    struct llama_sampler * chain;
+    struct llama_sampler * chain_backend;
 
     ring_buffer<llama_token> prev;
 
@@ -118,6 +119,7 @@ struct common_sampler {
 
         llama_sampler_reset(grmr);
         llama_sampler_reset(chain);
+        llama_sampler_reset(chain_backend);
     }
 
     void set_logits(struct llama_context * ctx, int idx) {
@@ -161,7 +163,8 @@ struct common_sampler {
     mutable int64_t t_total_us = 0;
 };
 
-static bool sampler_backend_supported(enum common_sampler_type type) {
+// TODO: temporary until all samplers have llama_sampler_backend_ API [LLAMA_SAMPLER_BACKEND]
+static bool common_sampler_type_has_backend_support(enum common_sampler_type type) {
     switch (type) {
         case COMMON_SAMPLER_TYPE_TOP_K:
         case COMMON_SAMPLER_TYPE_TEMPERATURE:
@@ -172,98 +175,69 @@ static bool sampler_backend_supported(enum common_sampler_type type) {
     }
 }
 
-static bool is_sampler_enabled(enum common_sampler_type type, const struct common_params_sampling & params) {
+bool common_params_sampling::is_disabled(enum common_sampler_type type) const {
     switch (type) {
         case COMMON_SAMPLER_TYPE_PENALTIES:
-            if (params.penalty_last_n == 64 &&
-                fabs(params.penalty_repeat) <= 1.0f &&
-                fabs(params.penalty_freq)   <= 0.0f &&
-                fabs(params.penalty_present) <= 0.0f) {
-                return false;
+            if (penalty_last_n == 0 || (penalty_repeat == 1.0f && penalty_freq == 0.0f && penalty_present == 0.0f)) {
+                return true;
             }
             break;
         case COMMON_SAMPLER_TYPE_DRY:
-            if (params.dry_multiplier == 0.0f && params.dry_base == 1.75f) {
-                return false;
+            if (dry_multiplier == 0.0f || dry_base < 1.0f || dry_penalty_last_n == 0) {
+                return true;
             }
             break;
         case COMMON_SAMPLER_TYPE_TYPICAL_P:
-            if (params.typ_p == 1.0) {
-                return false;
+            if (typ_p >= 1.0) {
+                return true;
             }
             break;
         case COMMON_SAMPLER_TYPE_TOP_N_SIGMA:
-            if (params.top_n_sigma == -1.0) {
-                return false;
+            if (top_n_sigma <= 0.0) {
+                return true;
             }
             break;
         case COMMON_SAMPLER_TYPE_TOP_K:
-            if (params.top_k <= 0) {
-                return false;
+            if (top_k <= 0) {
+                return true;
             }
             break;
         case COMMON_SAMPLER_TYPE_TEMPERATURE:
-            if (params.temp < 0.0f) {
-                return false;
+            if (dynatemp_range <= 0.0f) {
+                return true;
             }
             break;
         case COMMON_SAMPLER_TYPE_MIN_P:
-            if (params.min_p <= 0.0f) {
-                return false;
+            if (min_p <= 0.0f) {
+                return true;
             }
             break;
         case COMMON_SAMPLER_TYPE_TOP_P:
-            if (params.top_p >= 1.0f) {
-                return false;
+            if (top_p >= 1.0f) {
+                return true;
             }
             break;
         case COMMON_SAMPLER_TYPE_XTC:
-            if (params.xtc_probability == 0.0f && params.xtc_threshold == 0.10f) {
-                return false;
+            if (xtc_probability <= 0.0f || xtc_threshold == 0.50f) {
+                return true;
             }
             break;
         default:
             break;
     }
-    return true;
+
+    return false;
 }
 
-static bool has_logit_bias(const struct common_params_sampling & params) {
-    return !params.logit_bias.empty();
-}
-
-struct active_samplers {
-    std::vector<common_sampler_type> backend_samplers;
-    std::vector<common_sampler_type> cpu_samplers;
-};
-
-static struct active_samplers get_active_samplers(const struct common_params_sampling & params) {
-    struct active_samplers result;
-
-    if (params.mirostat != 0) {
-        // Mirostat is CPU-only and overrides other samplers
-        for (const auto & sampler_type : params.samplers) {
-            if (is_sampler_enabled(sampler_type, params)) {
-                result.cpu_samplers.push_back(sampler_type);
-            }
-        }
-        return result;
-    }
-
-    bool backend_supported = params.backend_sampling;
-
-    for (const auto & sampler_type : params.samplers) {
-        if (!is_sampler_enabled(sampler_type, params)) {
-            continue;
-        }
-
-        if (backend_supported && sampler_backend_supported(sampler_type)) {
-            result.backend_samplers.push_back(sampler_type);
+void common_params_sampling::filter_disabled() {
+    for (auto it = samplers.begin(); it != samplers.end();) {
+        if (is_disabled(*it)) {
+            LOG_WRN("%s: removing disabled sampler %s\n", __func__, common_sampler_type_to_str(*it).c_str());
+            it = samplers.erase(it);
         } else {
-            result.cpu_samplers.push_back(sampler_type);
+            ++it;
         }
     }
-    return result;
 }
 
 std::string common_params_sampling::print() const {
@@ -282,15 +256,7 @@ std::string common_params_sampling::print() const {
     return std::string(result);
 }
 
-struct backend_chain_data {
-    struct llama_sampler * chain;
-    size_t count;
-};
-
-static struct backend_chain_data backend_samplers_init(const struct llama_model * model, const struct common_params_sampling & params,
-        struct active_samplers get_active_samplers);
-
-struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params) {
+struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();
@@ -357,29 +323,74 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         }
     }
 
+    // TODO: temporary until all samplers have llama_sampler_backend_ API [LLAMA_SAMPLER_BACKEND]
+    if (params.backend_sampling) {
+        params.filter_disabled();
+    }
+
     auto * result = new common_sampler {
         /* .params        = */ params,
         /* .grmr          = */ grmr,
         /* .chain         = */ llama_sampler_chain_init(lparams),
+        /* .chain_backend = */ llama_sampler_chain_init(lparams),
         /* .prev          = */ ring_buffer<llama_token>(std::max(32, params.n_prev)),
         /* .cur           = */ {},
         /* .cur_p         = */ {},
     };
 
-    struct active_samplers active_samplers = get_active_samplers(params);
+    size_t idx_smpl = 0;
 
-    // Build CPU chain
-    if (!params.backend_sampling || !has_logit_bias(params)) {
-        llama_sampler_chain_add(result->chain,
-                llama_sampler_init_logit_bias(
-                    llama_vocab_n_tokens(vocab),
-                    params.logit_bias.size(),
-                    params.logit_bias.data()));
+    bool is_backend = true;
+
+    is_backend = is_backend && params.backend_sampling;
+    is_backend = is_backend && (params.samplers.size() == 0 || common_sampler_type_has_backend_support(params.samplers[idx_smpl]));
+
+    if (params.has_logit_bias()) {
+        if (is_backend) {
+            llama_sampler_chain_add(result->chain_backend,
+                    llama_sampler_backend_init_logit_bias(
+                        llama_vocab_n_tokens(vocab),
+                        params.logit_bias.size(),
+                        params.logit_bias.data()));
+        } else {
+            llama_sampler_chain_add(result->chain,
+                    llama_sampler_init_logit_bias(
+                        llama_vocab_n_tokens(vocab),
+                        params.logit_bias.size(),
+                        params.logit_bias.data()));
+        }
     }
 
     if (params.mirostat == 0) {
+        // backend samplers are added first
+        while (is_backend && idx_smpl < params.samplers.size()) {
+            const auto & cnstr = params.samplers[idx_smpl++];
+
+            if (!common_sampler_type_has_backend_support(cnstr)) {
+                is_backend = false;
+                --idx_smpl;
+                break;
+            }
+
+            switch (cnstr) {
+                case COMMON_SAMPLER_TYPE_TOP_K:
+                    llama_sampler_chain_add(result->chain_backend, llama_sampler_backend_init_top_k(params.top_k));
+                    break;
+                case COMMON_SAMPLER_TYPE_TEMPERATURE:
+                    llama_sampler_chain_add(result->chain_backend, llama_sampler_backend_init_temp(params.temp));
+                    break;
+                case COMMON_SAMPLER_TYPE_MIN_P:
+                    llama_sampler_chain_add(result->chain_backend, llama_sampler_backend_init_min_p(params.min_p));
+                    break;
+                default:
+                    GGML_ASSERT(false && "unsupported backend sampler");
+            }
+        }
+
         // Add remaining CPU samplers
-        for (const auto & cnstr : active_samplers.cpu_samplers) {
+        while (idx_smpl < params.samplers.size()) {
+            const auto & cnstr = params.samplers[idx_smpl++];
+
             switch (cnstr) {
                 case COMMON_SAMPLER_TYPE_DRY:
                     {
@@ -424,7 +435,9 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
             }
         }
 
-        if (!active_samplers.cpu_samplers.empty()) {
+        if (is_backend) {
+            llama_sampler_chain_add(result->chain_backend, llama_sampler_backend_init_dist(params.seed));
+        } else {
             llama_sampler_chain_add(result->chain, llama_sampler_init_dist(params.seed));
         }
     } else if (params.mirostat == 1) {
@@ -440,59 +453,11 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     return result;
 }
 
-
-static struct backend_chain_data backend_samplers_init(const struct llama_model * model, const struct common_params_sampling & params,
-        struct active_samplers active_samplers) {
-    if (active_samplers.backend_samplers.empty()) {
-        return { nullptr, 0 };
-    }
-
-    const llama_vocab * vocab = llama_model_get_vocab(model);
-
-    llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
-    chain_params.no_perf = params.no_perf;
-    struct llama_sampler * chain = llama_sampler_chain_init(chain_params);
-
-    // Add logit_bias to backend chain if present
-    if (has_logit_bias(params)) {
-        llama_sampler_chain_add(chain, llama_sampler_backend_init_logit_bias(
-                    llama_vocab_n_tokens(vocab),
-                    params.logit_bias.size(),
-                    params.logit_bias.data()));
-    }
-
-    for (const auto & sampler_type : active_samplers.backend_samplers) {
-        switch (sampler_type) {
-            case COMMON_SAMPLER_TYPE_TOP_K:
-                llama_sampler_chain_add(chain, llama_sampler_backend_init_top_k(params.top_k));
-                break;
-            case COMMON_SAMPLER_TYPE_TEMPERATURE:
-                llama_sampler_chain_add(chain, llama_sampler_backend_init_temp(params.temp));
-                break;
-            case COMMON_SAMPLER_TYPE_MIN_P:
-                llama_sampler_chain_add(chain, llama_sampler_backend_init_min_p(params.min_p));
-                break;
-            default:
-                GGML_ASSERT(false && "unsupported backend sampler");
-        }
-    }
-
-    if (active_samplers.cpu_samplers.empty()) {
-        llama_sampler_chain_add(chain, llama_sampler_backend_init_dist(params.seed));
-    }
-
-    return { chain, active_samplers.backend_samplers.size() + has_logit_bias(params) };
-}
-
-struct llama_sampler * common_sampler_backend_init(const struct llama_model * model, const struct common_params_sampling & params) {
-    struct active_samplers active_samplers = get_active_samplers(params);
-    return backend_samplers_init(model, params, active_samplers).chain;
-}
-
 void common_sampler_free(struct common_sampler * gsmpl) {
     if (gsmpl) {
         llama_sampler_free(gsmpl->grmr);
         llama_sampler_free(gsmpl->chain);
+        llama_sampler_free(gsmpl->chain_backend);
 
         delete gsmpl;
     }
@@ -519,6 +484,7 @@ struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
         /* .params        = */ gsmpl->params,
         /* .grmr          = */ llama_sampler_clone(gsmpl->grmr),
         /* .chain         = */ llama_sampler_clone(gsmpl->chain),
+        /* .chain_backend = */ llama_sampler_clone(gsmpl->chain_backend),
         /* .prev          = */ gsmpl->prev,
         /* .cur           = */ gsmpl->cur,
         /* .cur_p         = */ gsmpl->cur_p,
@@ -568,6 +534,10 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
 
         llama_memory_breakdown_print(ctx);
     }
+}
+
+struct llama_sampler * common_sampler_chain_backend(const struct common_sampler * gsmpl) {
+    return gsmpl->chain_backend;
 }
 
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
@@ -707,7 +677,12 @@ llama_token common_sampler_last(const struct common_sampler * gsmpl) {
 }
 
 std::string common_sampler_print(const struct common_sampler * gsmpl) {
-    std::string result = "logits ";
+    std::string result = llama_sampler_chain_n(gsmpl->chain_backend) > 0 ? "*logits " : "logits ";
+
+    for (int i = 0; i < llama_sampler_chain_n(gsmpl->chain_backend); i++) {
+        const auto * smpl = llama_sampler_chain_get(gsmpl->chain_backend, i);
+        result += std::string("-> *") + llama_sampler_name(smpl) + " ";
+    }
 
     for (int i = 0; i < llama_sampler_chain_n(gsmpl->chain); i++) {
         const auto * smpl = llama_sampler_chain_get(gsmpl->chain, i);

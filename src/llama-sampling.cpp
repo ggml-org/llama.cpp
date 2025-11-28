@@ -439,10 +439,10 @@ void llama_sampler_free(struct llama_sampler * smpl) {
 }
 
 llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
-    const llama_token   sampled_token        = llama_get_backend_sampled_token_ith(ctx, idx);
-    const float *       sampled_probs        = llama_get_backend_sampled_probs_ith(ctx, idx);
-    const float *       sampled_logits       = llama_get_backend_sampled_logits_ith(ctx, idx);
-    const llama_token * sampled_ids          = llama_get_backend_sampled_candidates_ith(ctx, idx);
+    const llama_token   sampled_token  = llama_get_backend_sampled_token_ith     (ctx, idx);
+    const float *       sampled_probs  = llama_get_backend_sampled_probs_ith     (ctx, idx);
+    const float *       sampled_logits = llama_get_backend_sampled_logits_ith    (ctx, idx);
+    const llama_token * sampled_ids    = llama_get_backend_sampled_candidates_ith(ctx, idx);
 
     // If a backend sampler has already sampled a token, return it.
     if (sampled_token != LLAMA_TOKEN_NULL) {

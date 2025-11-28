@@ -36,14 +36,8 @@ struct common_sampler;
 
 // llama_sampler API overloads
 
-struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params);
-
-// Create a backend sampler chain from common sampling parameters
-// Returns a llama_sampler chain configured with backend samplers based on the parameters
-// This chain can be used per-sequence for backend-based sampling
-// Note: Only samplers that have backend equivalents will be added to the chain
-// The returned sampler should be freed with llama_sampler_free()
-struct llama_sampler * common_sampler_backend_init(const struct llama_model * model, const struct common_params_sampling & params);
+// TODO: params should become const again [LLAMA_SAMPLER_BACKEND]
+struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params);
 
 void common_sampler_free(struct common_sampler * gsmpl);
 
@@ -54,6 +48,8 @@ struct common_sampler * common_sampler_clone (struct common_sampler * gsmpl);
 
 // arguments can be nullptr to skip printing
 void common_perf_print(const struct llama_context * ctx, const struct common_sampler * gsmpl);
+
+struct llama_sampler * common_sampler_chain_backend(const struct common_sampler * gsmpl);
 
 // extended sampling implementation:
 //
@@ -114,3 +110,9 @@ std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std:
 
 llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab,
                 const char * grammar_kind, const char * grammar_data);
+
+struct common_sampler_deleter {
+    void operator()(common_sampler * s) { common_sampler_free(s); }
+};
+
+typedef std::unique_ptr<common_sampler, common_sampler_deleter> common_sampler_ptr;

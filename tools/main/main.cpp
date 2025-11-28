@@ -138,9 +138,11 @@ int main(int argc, char ** argv) {
     // load the model and apply lora adapter, if any
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
 
-    common_init_result llama_init = common_init_from_params(params);
-    ctx = llama_init.context.get();
-    model = llama_init.model.get(); // Update pointer (now managed by llama_init)
+    auto llama_init = common_init_from_params(params);
+
+    ctx   = llama_init->context();
+    model = llama_init->model();
+    smpl  = llama_init->sampler(0);
 
     if (ctx == NULL) {
         LOG_ERR("%s: error: unable to create context\n", __func__);
@@ -468,12 +470,6 @@ int main(int argc, char ** argv) {
                 }
             }
         }
-    }
-
-    smpl = common_sampler_init(model, sparams);
-    if (!smpl) {
-        LOG_ERR("%s: failed to initialize sampling subsystem\n", __func__);
-        return 1;
     }
 
     LOG_INF("sampler seed: %u\n",     common_sampler_get_seed(smpl));
@@ -988,8 +984,6 @@ int main(int argc, char ** argv) {
 
     LOG("\n\n");
     common_perf_print(ctx, smpl);
-
-    common_sampler_free(smpl);
 
     llama_backend_free();
 

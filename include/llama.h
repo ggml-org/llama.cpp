@@ -376,7 +376,7 @@ extern "C" {
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
 
-        // backend sampler chain configuration
+        // backend sampler chain configuration (does not keep a reference, so make sure the caller keeps the samplers alive)
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
     };
@@ -1209,10 +1209,6 @@ extern "C" {
 
         void                   (*init_ggml)(struct llama_sampler      * smpl,
                                             ggml_backend_buffer_type_t  buft);
-
-
-        // TODO: API for internal libllama usage for appending the sampling to an existing ggml_cgraph
-        //void (*apply_ggml) (struct llama_sampler * smpl, ...);
     };
 
     struct llama_sampler {
@@ -1231,18 +1227,17 @@ extern "C" {
     LLAMA_API struct llama_sampler * llama_sampler_clone (const struct llama_sampler * smpl);
     // important: do not free if the sampler has been added to a llama_sampler_chain (via llama_sampler_chain_add)
     LLAMA_API void                   llama_sampler_free  (      struct llama_sampler * smpl);
-    LLAMA_API void                   llama_sampler_init_ggml(struct llama_sampler      * smpl,
-                                                             ggml_backend_buffer_type_t  buft);
-    LLAMA_API void                   llama_sampler_set_input_ggml(struct llama_sampler * smpl);
-    LLAMA_API void                   llama_sampler_apply_ggml(  struct llama_sampler           * smpl,
-                                                                struct ggml_context            * ctx,
-                                                                struct ggml_cgraph             * gf,
-                                                                struct llama_sampler_ggml_data * ggml_data);
 
-    LLAMA_API void                   llama_sampler_accept_ggml( struct llama_sampler * smpl,
-                                                                struct ggml_context  * ctx,
-                                                                struct  ggml_cgraph  * gf,
-                                                                struct ggml_tensor   * selected_token);
+    LLAMA_API void llama_sampler_init_ggml     (struct llama_sampler * smpl, ggml_backend_buffer_type_t buft);
+    LLAMA_API void llama_sampler_set_input_ggml(struct llama_sampler * smpl);
+    LLAMA_API void llama_sampler_apply_ggml    (struct llama_sampler * smpl,
+                                                struct ggml_context  * ctx,
+                                                struct ggml_cgraph   * gf,
+                                                struct llama_sampler_ggml_data * ggml_data);
+    LLAMA_API void llama_sampler_accept_ggml   (struct llama_sampler * smpl,
+                                                struct ggml_context  * ctx,
+                                                struct ggml_cgraph   * gf,
+                                                struct ggml_tensor   * selected_token);
 
     // llama_sampler_chain
     // a type of llama_sampler that can chain multiple samplers one after another
