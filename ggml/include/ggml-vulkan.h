@@ -1,13 +1,13 @@
 #pragma once
 
-#include "ggml-backend.h"
 #include "ggml.h"
+#include "ggml-backend.h"
 
-#ifdef __cplusplus
+#ifdef  __cplusplus
 extern "C" {
 #endif
 
-#define GGML_VK_NAME        "Vulkan"
+#define GGML_VK_NAME "Vulkan"
 #define GGML_VK_MAX_DEVICES 16
 
 // backend API
@@ -38,6 +38,6 @@ typedef struct {
 GGML_BACKEND_API ggml_vk_device_info ggml_backend_vk_get_device_info(int device);
 GGML_BACKEND_API int                 ggml_backend_vk_get_default_gpu_layers(int device, int default_layers);
 
-#ifdef __cplusplus
+#ifdef  __cplusplus
 }
 #endif
