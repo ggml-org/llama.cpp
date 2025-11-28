@@ -130,6 +130,85 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 #endif
 }
 
+void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    block_ifairy_q16 * GGML_RESTRICT y = vy;
+
+#if defined(__ARM_NEON)
+    const float32x4_t vmin_init = vdupq_n_f32(1e-5f);
+    const int32x4_t vmax_q = vdupq_n_s32(127);
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_K);
+
+        float32x4_t max_real = vmin_init;
+        float32x4_t max_imag = vmin_init;
+
+        for (int j = 0; j < QK_K * 2; j += 8) {
+            const uint16x8_t hv = vld1q_u16(src + j);
+
+            const uint32x4_t hvl = vshlq_n_u32(vmovl_u16(vget_low_u16(hv)), 16);
+            const uint32x4_t hvh = vshlq_n_u32(vmovl_u16(vget_high_u16(hv)), 16);
+
+            const float32x4_t fvl = vreinterpretq_f32_u32(hvl);
+            const float32x4_t fvh = vreinterpretq_f32_u32(hvh);
+
+            const float32x4x2_t unzip = vuzpq_f32(fvl, fvh);
+
+            max_real = vmaxq_f32(max_real, vabsq_f32(unzip.val[0]));
+            max_imag = vmaxq_f32(max_imag, vabsq_f32(unzip.val[1]));
+        }
+
+        const float max_r = vmaxvq_f32(max_real);
+        const float max_i = vmaxvq_f32(max_imag);
+
+        const float iscale_r = 127.f / max_r;
+        const float iscale_i = 127.f / max_i;
+
+        y[ib].d_real = 1.f / iscale_r;
+        y[ib].d_imag = 1.f / iscale_i;
+
+        const float32x4_t vs_r = vdupq_n_f32(iscale_r);
+        const float32x4_t vs_i = vdupq_n_f32(iscale_i);
+
+        int8_t * GGML_RESTRICT yr = (int8_t *) y[ib].x_real;
+        int8_t * GGML_RESTRICT yi = (int8_t *) y[ib].x_imag;
+
+        for (int j = 0; j < QK_K; j += 4) {
+            const uint16x8_t hv = vld1q_u16(src + 2 * j);
+
+            const uint32x4_t hvl = vshlq_n_u32(vmovl_u16(vget_low_u16(hv)), 16);
+            const uint32x4_t hvh = vshlq_n_u32(vmovl_u16(vget_high_u16(hv)), 16);
+
+            const float32x4_t fvl = vreinterpretq_f32_u32(hvl);
+            const float32x4_t fvh = vreinterpretq_f32_u32(hvh);
+
+            const float32x4x2_t unzip = vuzpq_f32(fvl, fvh);
+
+            int32x4_t qr = vcvtnq_s32_f32(vmulq_f32(unzip.val[0], vs_r));
+            int32x4_t qi = vcvtnq_s32_f32(vmulq_f32(unzip.val[1], vs_i));
+
+            qr = vminq_s32(qr, vmax_q);
+            qi = vminq_s32(qi, vmax_q);
+
+            const int16x4_t qr16 = vqmovn_s32(qr);
+            const int16x4_t qi16 = vqmovn_s32(qi);
+
+            const int8x8_t qr8 = vqmovn_s16(vcombine_s16(qr16, qr16));
+            const int8x8_t qi8 = vqmovn_s16(vcombine_s16(qi16, qi16));
+
+            vst1_lane_s32((int32_t *) (yr + j), vreinterpret_s32_s8(qr8), 0);
+            vst1_lane_s32((int32_t *) (yi + j), vreinterpret_s32_s8(qi8), 0);
+        }
+    }
+#else
+    GGML_UNUSED(nb);
+    quantize_row_ifairy_q16_ref(x, y, k);
+#endif
+}
+
 // placeholder implementation for Apple targets
 void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q8_K_ref(x, y, k);
