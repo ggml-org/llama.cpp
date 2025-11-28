@@ -537,6 +537,8 @@ class ELDivStream {
         });
         elDiv.appendChild(elDivData)
         this.divData = elDivData
+        /** @type {string | undefined} */
+        this.styleDisplay = ui.ss_get(0, '.chat-message', 'display')
     }
 
     /**
@@ -545,6 +547,9 @@ class ELDivStream {
     show() {
         this.div.hidden = false
         this.div.style.visibility = "visible"
+        if (this.styleDisplay) {
+            this.div.style.display = this.styleDisplay
+        }
     }
 
     /**
@@ -556,6 +561,7 @@ class ELDivStream {
         this.divData.replaceChildren()
         this.div.hidden = true
         this.div.style.visibility = "collapse"
+        this.div.style.display = "none"
     }
 
 }
@@ -1621,6 +1627,7 @@ class MultiChatUI {
             this.elDivChat.replaceChildren();
             this.ui_userinput_reset()
             this.elDivStreams[chatId]?.clear()
+            this.elDivStreams[AI_TC_SESSIONNAME].clear()
         }
         if (bShowOwnDivStream) {
             this.elDivStreams[chatId]?.show()
@@ -1862,6 +1869,9 @@ class MultiChatUI {
         this.elPopoverChatMsg.addEventListener('beforetoggle', (tev)=>{
             let chatSession = this.simpleChats[this.curChatId]
             let index = chatSession.get_chatmessage_index(this.uniqIdChatMsgPO)
+            if (index == -1) {
+                return
+            }
             let chat = chatSession.xchat[index]
             if (chat.ns.has_content()) {
                 this.elPopoverChatMsgFormatSelect.value = chat.textFormat
@@ -2021,6 +2031,7 @@ class MultiChatUI {
             this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, toolResult)))
         } else {
             this.timers.toolcallResponseTimeout = setTimeout(() => {
+                this.elDivStreams[AI_TC_SESSIONNAME].clear()
                 this.me.toolsMgr.toolcallpending_found_cleared(chat.chatId, toolCallId, 'MCUI:HandleToolRun:TimeOut')
                 this.chatmsg_addsmart_uishow(chat.chatId, new ChatMessageEx(NSChatMessage.new_tool_response(Roles.ToolTemp, toolCallId, toolname, `Tool/Function call ${toolname} taking too much time, aborting...`)))
             }, chat.cfg.tools.toolCallResponseTimeoutMS)

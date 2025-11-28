@@ -374,3 +374,24 @@ export function remove_els(sSelectorsTemplate) {
         el?.remove()
     }
 }
+
+
+/**
+ * Get value of specified property belonging to specified css rule and stylesheet.
+ * @param {number} ssIndex
+ * @param {string} selectorText
+ * @param {string} property
+ */
+export function ss_get(ssIndex, selectorText, property) {
+    for (const rule of document.styleSheets[ssIndex].cssRules) {
+        if (rule.constructor.name == "CSSStyleRule") {
+            let sr = /** @type {CSSStyleRule} */(rule)
+            if (sr.selectorText.trim() != selectorText) {
+                continue
+            }
+            // @ts-ignore
+            return sr.style[property]
+        }
+    }
+    return undefined
+}

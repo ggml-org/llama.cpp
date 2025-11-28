@@ -307,6 +307,11 @@ Chat Session specific settings
   * tables, fenced code blocks, blockquotes
   * User given control to enable markdown implicitly at a session level, or explicitly set wrt individual msgs.
 * Rename fetch_web_url_raw to fetch_url_raw, avoids confusion and matchs semantic of access to local and web.
+* Now external_ai specific special chat session's and inturn external ai tool call's ai live response stream
+  is visible in the chat session which triggered external ai, only till one gets respose or the tool call times
+  out. In turn if the tool call times out, one can send the timeout message as the response to the tool call
+  or what ever they see fit. Parallely, they can always look into the external ai specific special chat session
+  tab to see the ai response live stream and the progress wrt the tool call that timed out.
 
 
 ## ToDo
