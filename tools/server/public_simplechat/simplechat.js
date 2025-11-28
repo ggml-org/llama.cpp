@@ -1232,6 +1232,7 @@ class MultiChatUI {
         this.elPopoverChatMsg = /** @type{HTMLElement} */(document.getElementById("popover-chatmsg"));
         this.elPopoverChatMsgCopyBtn = /** @type{HTMLElement} */(document.getElementById("popover-chatmsg-copy"));
         this.elPopoverChatMsgDelBtn = /** @type{HTMLElement} */(document.getElementById("popover-chatmsg-del"));
+        this.elPopoverChatMsgFormatSelect = /** @type{HTMLSelectElement} */(document.getElementById("popover-chatmsg-format"));
         this.uniqIdChatMsgPO = -1;
 
         // image popover menu
@@ -1439,13 +1440,24 @@ class MultiChatUI {
      * * Assistant which contains a tool req, shows tool call ui if needed. ie
      *   * if it is the last message OR
      *   * if it is the last but one message and there is a ToolTemp message next
+     *
+     * If secMainRefresh is
+     * * undefined : create and append a new message related ui element
+     * * provided : refresh its contents as needed
+     *
+     * To refresh a existing message related ui element without bothering about
+     * or messing with tool call edit/trigger or response related handling,
+     * remember to pass a large number wrt iFromLast and undefined wrt nextMsg
+     * * rather wrt current logic any number greater than 1 will do.
+     *
      * @param {HTMLElement | undefined} elParent
      * @param {string} chatId
      * @param {ChatMessageEx} msg
      * @param {number} iFromLast
      * @param {ChatMessageEx | undefined} nextMsg
+     * @param {HTMLElement | undefined} secMainRefresh - allow one to update a existing instance of the message ui element.
      */
-    show_message(elParent, chatId, msg, iFromLast, nextMsg) {
+    show_message(elParent, chatId, msg, iFromLast, nextMsg, secMainRefresh=undefined) {
         // Handle ToolTemp
         if (iFromLast == 0) {
             if (msg.ns.role === Roles.ToolTemp) {
@@ -1456,7 +1468,12 @@ class MultiChatUI {
             this.elInUser.dataset.role = (msg.ns.role == Roles.ToolTemp) ? Roles.ToolTemp : Roles.User
         }
         // Create main section
-        let secMain = document.createElement('section')
+        let secMain = secMainRefresh
+        if (!secMain) {
+            secMain = document.createElement('section')
+        } else {
+            secMain.replaceChildren()
+        }
         secMain.id = `cmuid${msg.uniqId}`
         secMain.dataset.cmuid = String(msg.uniqId)
         secMain.classList.add(`role-${msg.ns.role}`)
@@ -1482,7 +1499,9 @@ class MultiChatUI {
         secMain.addEventListener('mouseleave', (ev)=>{
             console.debug(`DBUG:MCUI:ChatMessageMLeave:${msg.uniqId}`)
         })
-        elParent?.append(secMain)
+        if (!secMainRefresh) {
+            elParent?.append(secMain)
+        }
         secMain.setAttribute("CMUniqId", String(msg.uniqId))
         this.elLastChatMessage = secMain;
         // Create role para
@@ -1558,7 +1577,7 @@ class MultiChatUI {
                 this.ui_toolcallvalidated_as_needed(msg, chatId, bAuto);
             }
         }
-        // Handle tool call message show
+        // Handle showing of tool calls in the message
         if (msg.ns.tool_calls) {
             for (const tc of msg.ns.tool_calls) {
                 this.show_message_toolcall(secContents, tc)
@@ -1844,6 +1863,22 @@ class MultiChatUI {
             }
             let item = new ClipboardItem({ 'text/plain': new Blob([chat.ns.getContent()], { type: 'text/plain'}) });
             navigator.clipboard.write([item])
+        })
+
+        this.elPopoverChatMsgFormatSelect.addEventListener('change', (ev) =>{
+            console.log(`DBUG:SimpleChat:MCUI:ChatMsgPO:Format:${this.curChatId}:${this.uniqIdChatMsgPO}:${this.elPopoverChatMsgFormatSelect.value}`)
+            let chatSession = this.simpleChats[this.curChatId]
+            let index = chatSession.get_chatmessage_index(this.uniqIdChatMsgPO)
+            let chat = chatSession.xchat[index]
+            if (!chat.ns.has_content()) {
+                return
+            }
+            chat.textFormat = this.elPopoverChatMsgFormatSelect.value
+            /** @type {HTMLElement | null} */
+            let elMsg = this.elDivChat.querySelector(`[id="cmuid${this.uniqIdChatMsgPO}"]`)
+            if (elMsg) {
+                this.show_message(this.elDivChat, chatSession.chatId, chat, 123, undefined, elMsg)
+            }
         })
 
     }
