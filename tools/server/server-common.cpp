@@ -1178,6 +1178,15 @@ std::string safe_json_to_str(const json & data) {
     return data.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
+// Truncate large request bodies for logging to prevent log bloat
+std::string log_sanitize_request_body(const std::string & body) {
+    const size_t max_len = 4096;
+    if (body.size() > max_len) {
+        return body.substr(0, max_len) + "...[truncated " + std::to_string(body.size() - max_len) + " bytes]";
+    }
+    return body;
+}
+
 // TODO: reuse llama_detokenize
 template <class Iter>
 static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
