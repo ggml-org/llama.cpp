@@ -7,6 +7,7 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
  * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions and embeddings routes
+ * [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) compatible chat completions
  * Reranking endpoint (https://github.com/ggml-org/llama.cpp/pull/9510)
  * Parallel decoding with multi-user support
  * Continuous batching
@@ -1351,6 +1352,77 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
           "encoding_format": "float"
   }'
   ```
+
+### POST `/v1/messages`: Anthropic-compatible Messages API
+
+Given a list of `messages`, returns the assistant's response. Streaming is supported via Server-Sent Events. While no strong claims of compatibility with the Anthropic API spec are made, in our experience it suffices to support many apps.
+
+*Options:*
+
+See [Anthropic Messages API documentation](https://docs.anthropic.com/en/api/messages). Tool use requires `--jinja` flag.
+
+`model`: Model identifier (required)
+
+`messages`: Array of message objects with `role` and `content` (required)
+
+`max_tokens`: Maximum tokens to generate (default: 4096)
+
+`system`: System prompt as string or array of content blocks
+
+`temperature`: Sampling temperature 0-1 (default: 1.0)
+
+`top_p`: Nucleus sampling (default: 1.0)
+
+`top_k`: Top-k sampling
+
+`stop_sequences`: Array of stop sequences
+
+`stream`: Enable streaming (default: false)
+
+`tools`: Array of tool definitions (requires `--jinja`)
+
+`tool_choice`: Tool selection mode (`{"type": "auto"}`, `{"type": "any"}`, or `{"type": "tool", "name": "..."}`)
+
+*Examples:*
+
+```shell
+curl http://localhost:8080/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-api-key" \
+  -d '{
+    "model": "gpt-4",
+    "max_tokens": 1024,
+    "system": "You are a helpful assistant.",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'
+```
+
+### POST `/v1/messages/count_tokens`: Token Counting
+
+Counts the number of tokens in a request without generating a response.
+
+Accepts the same parameters as `/v1/messages`. The `max_tokens` parameter is not required.
+
+*Example:*
+
+```shell
+curl http://localhost:8080/v1/messages/count_tokens \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'
+```
+
+*Response:*
+
+```json
+{"input_tokens": 10}
+```
 
 ## More examples
 
