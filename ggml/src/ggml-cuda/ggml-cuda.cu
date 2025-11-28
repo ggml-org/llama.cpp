@@ -3048,7 +3048,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
 
     const auto is_equal = [](const std::initializer_list<enum ggml_op> & list1,
                              const std::initializer_list<enum ggml_op> & list2) {
-        return list1.size() == list2.size() && std::equal(list1.begin(), list1.end(), list2.begin(), list2.end());
+        return std::equal(list1.begin(), list1.end(), list2.begin(), list2.end());
     };
 
     if (is_equal(topk_moe_ops_with_norm, ops) &&
