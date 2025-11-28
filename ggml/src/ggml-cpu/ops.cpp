@@ -7425,10 +7425,10 @@ static void ggml_compute_forward_upscale_f32(
                         const float x = ((float) i0 + pixel_offset) / sf0;
 
                         // the range of source pixels that contribute
-                        const int64_t x_min = std::max(int64_t(0), (int64_t) (x - support0 + pixel_offset));
-                        const int64_t x_max = std::min(ne00, (int64_t) (x + support0 + pixel_offset));
-                        const int64_t y_min = std::max(int64_t(0), (int64_t) (y - support1 + pixel_offset));
-                        const int64_t y_max = std::min(ne01, (int64_t) (y + support1 + pixel_offset));
+                        const int64_t x_min = std::max<int64_t>(x - support0 + pixel_offset, 0);
+                        const int64_t x_max = std::min<int64_t>(x + support0 + pixel_offset, ne00);
+                        const int64_t y_min = std::max<int64_t>(y - support1 + pixel_offset, 0);
+                        const int64_t y_max = std::min<int64_t>(y + support1 + pixel_offset, ne01);
 
                         // bilinear filter with antialiasing
                         float val = 0.0f;
