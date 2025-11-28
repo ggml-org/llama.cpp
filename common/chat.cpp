@@ -1921,8 +1921,8 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
         auto content = p.rule("content", p.content(p.until_one_of({"<tool_call>", "<function="})));
 
         auto until_end_of_param = p.rule("string-arg-value", p.until_one_of({
-            "</parameter>\n<parameter=", "\n</parameter>\n<parameter=",
-            "</parameter>\n</function>", "\n</parameter>\n</function>"
+            "\n</parameter>\n<parameter=",
+            "\n</parameter>\n</function>"
         }));
 
         auto tools = p.choice();
@@ -1932,34 +1932,42 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
 
             auto args = p.sequence();
             foreach_parameter(function, [&](const std::string & name, const json & schema, bool is_required) {
-                auto arg_value = p.eps();
                 if (schema.contains("type") && schema.at("type").is_string() && schema.at("type") == "string") {
-                    arg_value = p.tool_arg_string_value(p.schema(
-                        until_end_of_param,
-                        /* name   = */ "tool-" + fn_name + "-arg-" + name + "-schema",
-                        /* schema = */ schema,
-                        /* raw    = */ true
-                    ));
+                    auto arg = p.tool_arg(p.sequence({
+                        p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">\n"),
+                        p.tool_arg_string_value(p.schema(
+                            until_end_of_param,
+                            /* name   = */ "tool-" + fn_name + "-arg-" + name + "-schema",
+                            /* schema = */ schema,
+                            /* raw    = */ true
+                        )),
+                        // Every arguments ends with "\n</parameter>\n". This isn't usually a
+                        // problem with JSON, but with string arguments we need to ensure we don't
+                        // include the leading `\n` in the argument value. We also peek to avoid
+                        // prematurely matching a closing tag that may be part of the value.
+                        p.tool_arg_close(
+                            "\n</parameter>\n" +
+                            p.peek(p.literal("<parameter=") | p.literal("</function>"))
+                        ),
+                    }));
+
+                    auto arg_rule = p.rule("tool-" + fn_name + "-arg-" + name, arg);
+                    args += p.repeat(arg_rule, (is_required ? 1 : 0), 1);
                 } else {
-                    arg_value = p.tool_arg_json_value(p.schema(
-                        p.json(),
-                        /* name   = */ "tool-" + fn_name + "-arg-" + name + "-schema",
-                        /* schema = */ schema
-                    ));
+                    auto arg = p.tool_arg(p.sequence({
+                        p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">\n"),
+                        p.tool_arg_json_value(p.schema(
+                            p.json(),
+                            /* name   = */ "tool-" + fn_name + "-arg-" + name + "-schema",
+                            /* schema = */ schema
+                        )),
+                        p.space(),
+                        p.tool_arg_close(p.literal("</parameter>\n"))
+                    }));
+
+                    auto arg_rule = p.rule("tool-" + fn_name + "-arg-" + name, arg);
+                    args += p.repeat(arg_rule, (is_required ? 1 : 0), 1);
                 }
-
-                auto arg = p.tool_arg(p.sequence({
-                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(name)) + ">\n"),
-                    arg_value,
-                    p.space(),
-                    p.tool_arg_close(
-                        "</parameter>\n" +
-                        p.peek(p.literal("<parameter=") | p.literal("</function>"))
-                    ),
-                }));
-
-                auto arg_rule = p.rule("tool-" + fn_name + "-arg-" + name, arg);
-                args += p.repeat(arg_rule, (is_required ? 1 : 0), 1);
             });
 
             tools |= p.rule("tool-" + fn_name, p.sequence({

@@ -1361,6 +1361,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                             if (pattern.find(".*") != std::string::npos) {
                                 return to_gbnf(p.child);
                             }
+                            return builder.add_string_schema(p.name, *p.schema);
                         } else if (p.schema->contains("enum") ||
                                    p.schema->contains("const") ||
                                    p.schema->contains("minLength") ||
