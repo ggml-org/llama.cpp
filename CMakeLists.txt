@@ -33,13 +33,17 @@ endif()
 
 option(LLAMA_USE_SYSTEM_GGML "Use system libggml" OFF)
 
+option(LLAMA_WASM_MEM64 "llama: use 64-bit memory in WASM builds" ON)
+
 if (EMSCRIPTEN)
     set(BUILD_SHARED_LIBS_DEFAULT OFF)
 
     # Use 64-bit memory to support backend_get_memory queries
     # TODO: analyze performance impact, see https://spidermonkey.dev/blog/2025/01/15/is-memory64-actually-worth-using
-    add_compile_options("-sMEMORY64=1")
-    add_link_options("-sMEMORY64=1")
+    if (LLAMA_WASM_MEM64)
+      add_compile_options("-sMEMORY64=1")
+      add_link_options("-sMEMORY64=1")
+    endif()
     add_link_options("-sALLOW_MEMORY_GROWTH=1")
 
     option(LLAMA_WASM_SINGLE_FILE "llama: embed WASM inside the generated llama.js" OFF)
