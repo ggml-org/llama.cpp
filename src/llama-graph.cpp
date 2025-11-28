@@ -6,6 +6,7 @@
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
+#include "llama-kv-cache-paged.h"
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
 
@@ -417,6 +418,40 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 
     res &= self_kq_mask_swa->ne[0] == mctx->get_swa()->get_n_kv();
     res &= self_kq_mask_swa->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
+
+    return res;
+}
+
+void llm_graph_input_attn_paged::set_input(const llama_ubatch * ubatch) {
+    mctx->set_input_k_idxs(self_k_idxs, ubatch);
+    mctx->set_input_v_idxs(self_v_idxs, ubatch);
+
+    mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+
+    // Populate block tables and sequence lengths for PagedAttention
+    const auto * paged_cache = mctx->get_kv_paged();
+    if (paged_cache) {
+        if (block_tables) {
+            paged_cache->populate_block_tables_tensor(block_tables);
+        }
+        if (seq_lens) {
+            paged_cache->populate_seq_lens_tensor(seq_lens);
+        }
+    }
+}
+
+bool llm_graph_input_attn_paged::can_reuse(const llm_graph_params & params) {
+    const auto * mctx = static_cast<const llama_kv_cache_paged_context *>(params.mctx);
+
+    this->mctx = mctx;
+
+    bool res = true;
+
+    res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+  //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
+
+    res &= self_kq_mask->ne[0] == mctx->get_n_kv();
+    res &= self_kq_mask->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
 
     return res;
 }
@@ -1347,18 +1382,63 @@ ggml_tensor * llm_graph_context::build_attn_mha(
                  int   il) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
-    // split the batch into streams if needed
-    const auto n_stream = k->ne[3];
-
-    q = ggml_view_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream, q->nb[1], q->nb[2], q->nb[3]/n_stream, 0);
-
-    q = ggml_permute(ctx0, q, 0, 2, 1, 3);
-    k = ggml_permute(ctx0, k, 0, 2, 1, 3);
-    v = ggml_permute(ctx0, v, 0, 2, 1, 3);
-
     ggml_tensor * cur;
 
-    if (cparams.flash_attn && kq_b == nullptr) {
+    // PagedAttention path (highest priority)
+    // PagedAttention uses unpermuted tensors: [head_size, n_heads, n_tokens, n_seqs]
+    if (cparams.use_paged_attention) {
+        // Get paged cache from context
+        const auto * paged_ctx = dynamic_cast<const llama_kv_cache_paged_context *>(mctx);
+        GGML_ASSERT(paged_ctx != nullptr && "use_paged_attention is true but context is not paged");
+        const auto * paged_cache = paged_ctx->get_kv_paged();
+        GGML_ASSERT(paged_cache != nullptr && "paged context has no cache");
+
+        // Get K and V cache blocks for this layer
+        ggml_tensor * k_blocks = paged_cache->get_k_blocks(il);
+        ggml_tensor * v_blocks = paged_cache->get_v_blocks(il);
+        GGML_ASSERT(k_blocks != nullptr && v_blocks != nullptr);
+
+        // Get block tables and seq_lens from graph input (built during graph construction)
+        // These will be populated with actual data in set_input() before execution
+        ggml_tensor * block_tables_tensor = nullptr;
+        ggml_tensor * seq_lens_tensor = nullptr;
+
+        // Try to get from input if available (when called from build_attn with paged input)
+        // Otherwise build them here (fallback for direct calls)
+        if (false) { // TODO: need to pass inp_paged to build_attn_mha
+            // Would get from inp_paged->block_tables and inp_paged->seq_lens
+        } else {
+            block_tables_tensor = paged_cache->build_block_tables_tensor(ctx0);
+            seq_lens_tensor = paged_cache->build_seq_lens_tensor(ctx0);
+        }
+        GGML_ASSERT(block_tables_tensor != nullptr && seq_lens_tensor != nullptr);
+
+        // Call paged attention operation
+        // Note: q is already permuted to [head_size, n_tokens, n_heads, n_seqs]
+        cur = ggml_paged_attention(
+            ctx0,
+            q,
+            k_blocks,
+            v_blocks,
+            block_tables_tensor,
+            seq_lens_tensor,
+            paged_cache->get_block_size(),
+            kq_scale
+        );
+        cb(cur, LLAMA_TENSOR_NAME_PAGED_ATTN, il);
+
+        // Reshape to match expected output format: [head_size * n_heads, n_tokens * n_seqs]
+        cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
+    } else {
+        // For non-paged paths, split batch into streams and apply permutation
+        const auto n_stream = k->ne[3];
+        q = ggml_view_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream, q->nb[1], q->nb[2], q->nb[3]/n_stream, 0);
+
+        q = ggml_permute(ctx0, q, 0, 2, 1, 3);
+        k = ggml_permute(ctx0, k, 0, 2, 1, 3);
+        v = ggml_permute(ctx0, v, 0, 2, 1, 3);
+
+        if (cparams.flash_attn && kq_b == nullptr) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 
         if (v_trans) {
@@ -1461,6 +1541,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         if (!cparams.offload_kqv) {
             // all nodes between the KV store and the attention output are run on the CPU
             ggml_backend_sched_set_tensor_backend(sched, cur, backend_cpu);
+        }
         }
     }
 
@@ -1578,6 +1659,18 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
 
+llm_graph_input_i * llm_graph_context::build_attn_inp() const {
+    // Check if we're using paged attention
+    const auto * mctx_paged = dynamic_cast<const llama_kv_cache_paged_context *>(mctx);
+    if (mctx_paged) {
+        // Return paged input
+        return build_attn_inp_paged();
+    }
+
+    // Fall back to regular KV cache
+    return build_attn_inp_kv();
+}
+
 ggml_tensor * llm_graph_context::build_attn(
         llm_graph_input_attn_kv * inp,
         ggml_tensor * wo,
@@ -1615,6 +1708,82 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    cb(cur, "kqv_out", il);
+
+    if (wo) {
+        cur = build_lora_mm(wo, cur);
+        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
+            // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+            ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+        }
+    }
+
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
+
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_attn(
+        llm_graph_input_attn_paged * inp,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * sinks,
+        ggml_tensor * v_mla,
+            float     kq_scale,
+            int       il) const {
+    GGML_UNUSED(kq_b);
+    GGML_UNUSED(sinks);
+    GGML_UNUSED(v_mla);
+
+    // these nodes are added to the graph together so that they are not reordered
+    // by doing so, the number of splits in the graph is reduced
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, v_cur);
+    ggml_build_forward_expand(gf, k_cur);
+
+    const auto * mctx_cur = inp->mctx;
+    const auto * paged_cache = mctx_cur->get_kv_paged();
+    GGML_ASSERT(paged_cache != nullptr);
+
+    // store to KV cache
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+        const auto & v_idxs = inp->get_v_idxs();
+
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+    }
+
+    // Get K and V cache blocks for this layer
+    ggml_tensor * k_blocks = paged_cache->get_k_blocks(il);
+    ggml_tensor * v_blocks = paged_cache->get_v_blocks(il);
+    GGML_ASSERT(k_blocks != nullptr && v_blocks != nullptr);
+
+    // Use block_tables and seq_lens from input (populated in set_input())
+    GGML_ASSERT(inp->block_tables != nullptr && inp->seq_lens != nullptr);
+
+    // Call PagedAttention operation
+    // q_cur is unpermuted: [head_size, n_heads, n_tokens, n_seqs]
+    ggml_tensor * cur = ggml_paged_attention(
+        ctx0,
+        q_cur,
+        k_blocks,
+        v_blocks,
+        inp->block_tables,
+        inp->seq_lens,
+        paged_cache->get_block_size(),
+        kq_scale
+    );
+    cb(cur, "kqv_paged_attn", il);
+
+    // Reshape to match expected output format: [head_size * n_heads, n_tokens * n_seqs]
+    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -1791,6 +1960,33 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
     }
 
     return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
+}
+
+llm_graph_input_attn_paged * llm_graph_context::build_attn_inp_paged() const {
+    const auto * mctx_cur = static_cast<const llama_kv_cache_paged_context *>(mctx);
+
+    auto inp = std::make_unique<llm_graph_input_attn_paged>(hparams, cparams, mctx_cur);
+
+    const auto n_kv     = mctx_cur->get_n_kv();
+    const auto n_tokens = ubatch.n_tokens;
+    const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+
+    inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
+    inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
+
+    inp->self_kq_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens/n_stream, GGML_KQ_MASK_PAD), 1, n_stream);
+    ggml_set_input(inp->self_kq_mask);
+
+    inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+    // Build block tables and seq lens tensors for PagedAttention
+    const auto * paged_cache = mctx_cur->get_kv_paged();
+    if (paged_cache) {
+        inp->block_tables = paged_cache->build_block_tables_tensor(ctx0);
+        inp->seq_lens = paged_cache->build_seq_lens_tensor(ctx0);
+    }
+
+    return (llm_graph_input_attn_paged *) res->add_input(std::move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_rs(

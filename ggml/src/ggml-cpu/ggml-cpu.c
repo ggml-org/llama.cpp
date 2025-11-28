@@ -2062,6 +2062,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 // nop
             } break;
+        case GGML_OP_PAGED_ATTENTION:
+            {
+                // nop (CUDA-only operation)
+            } break;
         case GGML_OP_COUNT:
             {
                 GGML_ABORT("fatal error");

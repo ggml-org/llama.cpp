@@ -89,6 +89,18 @@ llama_context::llama_context(
     }
 
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    fprintf(stderr, "DEBUG llama_context line 91: before assignment, cparams.use_paged_attention = %s\n",
+            cparams.use_paged_attention ? "true" : "false");
+    fprintf(stderr, "DEBUG llama_context line 91: params.use_paged_attention = %s\n",
+            params.use_paged_attention ? "true" : "false");
+    cparams.use_paged_attention = params.use_paged_attention;
+    fprintf(stderr, "DEBUG llama_context line 92: after assignment, cparams.use_paged_attention = %s\n",
+            cparams.use_paged_attention ? "true" : "false");
+
+    if (params.use_paged_attention) {
+        LLAMA_LOG_INFO("%s: params.use_paged_attention = true, cparams.use_paged_attention = %s\n",
+                       __func__, cparams.use_paged_attention ? "true" : "false");
+    }
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
@@ -309,7 +321,13 @@ llama_context::llama_context(
         LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
 
         // resolve automatic Flash Attention use
-        if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
+        fprintf(stderr, "DEBUG llama_context line 318: checking cparams.use_paged_attention = %s\n",
+                cparams.use_paged_attention ? "true" : "false");
+        if (cparams.use_paged_attention) {
+            // PagedAttention is enabled, disable Flash Attention
+            cparams.flash_attn = false;
+            LLAMA_LOG_INFO("%s: PagedAttention is enabled, Flash Attention disabled\n", __func__);
+        } else if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
             auto * gf = graph_reserve(1, n_seqs, n_outputs, mctx.get(), true);
             if (!gf) {
                 throw std::runtime_error("failed to split graph for Flash Attention check");
@@ -344,6 +362,10 @@ llama_context::llama_context(
                 if (ggml_is_quantized(params.type_v)) {
                     throw std::runtime_error("quantized V cache was requested, but this requires Flash Attention");
                 }
+            } else if (cparams.use_paged_attention) {
+                // PagedAttention and Flash Attention are incompatible
+                cparams.flash_attn = false;
+                LLAMA_LOG_INFO("%s: Flash Attention was auto, set to disabled (PagedAttention is enabled)\n", __func__);
             } else {
                 cparams.flash_attn = true;
                 LLAMA_LOG_INFO("%s: Flash Attention was auto, set to enabled\n", __func__);
@@ -2323,6 +2345,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.use_paged_attention         =*/ false,
     };
 
     return result;

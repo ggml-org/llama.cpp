@@ -7,6 +7,7 @@
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
+#include "llama-kv-cache-paged.h"
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
 
@@ -7069,6 +7070,21 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 1,
                                 nullptr,
                                 reuse);
+                    } else if (cparams.use_paged_attention) {
+                        // Use PagedAttention cache
+                        LLAMA_LOG_INFO("%s: creating paged KV cache\n", __func__);
+                        GGML_ASSERT(!hparams.is_swa_any() && "PagedAttention does not support SWA yet");
+
+                        res = new llama_kv_cache_paged(
+                                *this,
+                                params.type_k,
+                                params.type_v,
+                                cparams.n_ctx_seq,
+                                cparams.n_seq_max,
+                                16,  // block_size (16 tokens per block)
+                                nullptr,
+                                reuse);
+                        LLAMA_LOG_INFO("%s: paged KV cache created successfully\n", __func__);
                     } else {
                         GGML_ASSERT(!hparams.is_swa_any());
 
