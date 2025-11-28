@@ -10,8 +10,6 @@
 #include <vector>
 #include <map>
 
-class common_peg_arena;
-
 struct common_chat_templates;
 
 struct common_chat_tool_call {
