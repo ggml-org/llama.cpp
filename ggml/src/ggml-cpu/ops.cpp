@@ -7402,100 +7402,66 @@ static void ggml_compute_forward_upscale_f32(
         sf1 = ne1 > 1 && ne01 > 1 ? (float)(ne1 - 1) / (ne01 - 1) : sf1;
     }
 
-    // Antialiasing preprocessing step
-    // Apply antialiasing filter if flag is set and write directly to dst
-    bool antialiasing_applied = false;
+    // Similar to F.interpolate(..., mode="bilinear", align_corners=False, antialias=True)
+    // https://github.com/pytorch/pytorch/blob/8871ff29b743948d1225389d5b7068f37b22750b/aten/src/ATen/native/cpu/UpSampleKernel.cpp
+    if (mode == GGML_SCALE_MODE_BILINEAR && (mode_flags & GGML_SCALE_FLAG_ANTIALIAS)) {
+        auto triangle_filter = [](float x) -> float {
+            return std::max(1.0f - fabsf(x), 0.f);
+        };
 
-    if (mode_flags & GGML_SCALE_FLAG_ANTIALIAS) {
-        // Only apply antialiasing when downsampling (scale < 1.0)
-        const float scale0 = (float)ne00 / (float)ne0;
-        const float scale1 = (float)ne01 / (float)ne1;
+        // support and invscale, maximum 1 pixel for bilinear
+        const float support1  = std::max(1.f, 1.f / sf1);
+        const float invscale1 = 1.0 / support1;
+        const float support0  = std::max(1.f, 1.f / sf0);
+        const float invscale0 = 1.f / support0;
 
-        if (scale0 > 1.0f || scale1 > 1.0f) {
-            // Apply antialiasing filter to src0 and write directly to dst
-            // PyTorch's bilinear filter function: f(x) = max(0, 1 - |x|)
-            auto bilinear_filter = [](float x) -> float {
-                x = fabsf(x);
-                if (x < 1.0f) {
-                    return 1.0f - x;
-                }
-                return 0.0f;
-            };
+        for (int64_t i3 = 0; i3 < ne3; i3++) {
+            const int64_t i03 = i3 / sf3;
+            for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
+                const int64_t i02 = i2 / sf2;
+                for (int64_t i1 = 0; i1 < ne1; i1++) {
+                    const float y = ((float) i1 + pixel_offset) / sf1;
+                    for (int64_t i0 = 0; i0 < ne0; i0++) {
+                        const float x = ((float) i0 + pixel_offset) / sf0;
 
-            const int interp_size = 2;  // bilinear
+                        // the range of source pixels that contribute
+                        const int64_t x_min = std::max(int64_t(0), (int64_t) (x - support0 + pixel_offset));
+                        const int64_t x_max = std::min(ne00, (int64_t) (x + support0 + pixel_offset));
+                        const int64_t y_min = std::max(int64_t(0), (int64_t) (y - support1 + pixel_offset));
+                        const int64_t y_max = std::min(ne01, (int64_t) (y + support1 + pixel_offset));
 
-            for (int64_t i3 = 0; i3 < ne3; i3++) {
-                const int64_t i03 = i3 / sf3;
-                for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
-                    const int64_t i02 = i2 / sf2;
-                    for (int64_t i1 = 0; i1 < ne1; i1++) {
-                        // Compute center position in source coordinates
-                        const float center_y = scale1 * ((float)i1 + 0.5f);
+                        // bilinear filter with antialiasing
+                        float val = 0.0f;
+                        float total_weight = 0.0f;
 
-                        // Compute support and invscale for y direction
-                        const float support_y = (scale1 > 1.0f) ? (interp_size * 0.5f) * scale1 : interp_size * 0.5f;
-                        const float invscale_y = (scale1 > 1.0f) ? (1.0f / scale1) : 1.0f;
+                        for (int64_t sy = y_min; sy < y_max; sy++) {
+                            const float weight_y = triangle_filter((sy - y + pixel_offset) * invscale1);
 
-                        for (int64_t i0 = 0; i0 < ne0; i0++) {
-                            const float center_x = scale0 * ((float)i0 + 0.5f);
+                            for (int64_t sx = x_min; sx < x_max; sx++) {
+                                const float weight_x = triangle_filter((sx - x + pixel_offset) * invscale0);
+                                const float weight = weight_x * weight_y;
 
-                            // Compute support and invscale for x direction
-                            const float support_x = (scale0 > 1.0f) ? (interp_size * 0.5f) * scale0 : interp_size * 0.5f;
-                            const float invscale_x = (scale0 > 1.0f) ? (1.0f / scale0) : 1.0f;
-
-                            // Calculate the range of source pixels that contribute
-                            const int64_t x_min = std::max(int64_t(0), (int64_t)(center_x - support_x + 0.5f));
-                            const int64_t x_max = std::min(ne00, (int64_t)(center_x + support_x + 0.5f));
-                            const int64_t y_min = std::max(int64_t(0), (int64_t)(center_y - support_y + 0.5f));
-                            const int64_t y_max = std::min(ne01, (int64_t)(center_y + support_y + 0.5f));
-
-                            float val = 0.0f;
-                            float total_weight = 0.0f;
-
-                            // Apply bilinear filter with antialiasing
-                            for (int64_t sy = y_min; sy < y_max; sy++) {
-                                const float weight_y = bilinear_filter((sy - center_y + 0.5f) * invscale_y);
-
-                                for (int64_t sx = x_min; sx < x_max; sx++) {
-                                    const float weight_x = bilinear_filter((sx - center_x + 0.5f) * invscale_x);
-                                    const float weight = weight_x * weight_y;
-
-                                    if (weight > 0.0f) {
-                                        const float pixel = *(const float *)((const char *)src0->data +
-                                                                             sx*nb00 +
-                                                                             sy*nb01 +
-                                                                             i02*nb02 +
-                                                                             i03*nb03);
-                                        val += pixel * weight;
-                                        total_weight += weight;
-                                    }
+                                if (weight <= 0.0f) {
+                                    continue;
                                 }
-                            }
 
-                            // Normalize by total weight
-                            if (total_weight > 0.0f) {
-                                val /= total_weight;
+                                const float pixel = *(const float *)((const char *)src0->data + sx*nb00 + sy*nb01 + i02*nb02 + i03*nb03);
+                                val += pixel * weight;
+                                total_weight += weight;
                             }
-
-                            // Write directly to dst
-                            float * dst_ptr = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
-                            *dst_ptr = val;
                         }
+
+                        if (total_weight > 0.0f) {
+                            val /= total_weight;
+                        }
+
+                        float * dst_ptr = (float *)((char *)dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+                        *dst_ptr = val;
                     }
                 }
             }
-
-            antialiasing_applied = true;
         }
-    }
-
-    // If antialiasing was not applied, proceed with regular interpolation
-    if (antialiasing_applied) {
-        // Antialiasing result is already in dst, we're done
-        return;
-    }
-
-    if (mode == GGML_SCALE_MODE_NEAREST) {
+    } else if (mode == GGML_SCALE_MODE_NEAREST) {
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             const int64_t i03 = i3 / sf3;
             for (int64_t i2 = ith; i2 < ne2; i2 += nth) {
