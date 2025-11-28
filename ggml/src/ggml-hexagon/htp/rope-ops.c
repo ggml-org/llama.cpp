@@ -282,8 +282,8 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
         freq_factors = (const float *) src2->data;
     }
 
-    int ir = 0;
-
+    int           ir        = 0;
+    const int32_t half_dims = rope_ctx->n_dims / 2;
     for (uint32_t i3 = 0; i3 < ne3; i3++) {      // batch
         for (uint32_t i2 = 0; i2 < ne2; i2++) {  // seq-len
             const int32_t p = pos[i2];
@@ -311,6 +311,9 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
                     } else {
                         hvx_calc_rope_f32(src_loc, dst_data_loc, rope_ctx->n_dims, wp0);
                     }
+
+                    src_loc += rope_ctx->n_dims;
+                    dst_data_loc += rope_ctx->n_dims;
                 } else {
                     for (uint32_t i0 = 0; i0 < rope_ctx->n_dims; i0 += 2) {
                         const float cos_theta = wp0[i0 + 0];
@@ -318,10 +321,10 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
 
                         if (is_neox) {
                             const float x0 = src_loc[0];
-                            const float x1 = src_loc[rope_ctx->n_dims / 2];
+                            const float x1 = src_loc[half_dims];
 
-                            dst_data_loc[0]                    = x0 * cos_theta - x1 * sin_theta;
-                            dst_data_loc[rope_ctx->n_dims / 2] = x0 * sin_theta + x1 * cos_theta;
+                            dst_data_loc[0]         = x0 * cos_theta - x1 * sin_theta;
+                            dst_data_loc[half_dims] = x0 * sin_theta + x1 * cos_theta;
 
                             src_loc += 1;
                             dst_data_loc += 1;
@@ -336,10 +339,11 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
                             dst_data_loc += 2;
                         }
                     }
+
+                    src_loc += (is_neox ? half_dims : 0);
+                    dst_data_loc += (is_neox ? half_dims : 0);
                 }
 
-                src_loc += (is_neox ? (rope_ctx->n_dims / 2) : 0);
-                dst_data_loc += (is_neox ? (rope_ctx->n_dims / 2) : 0);
                 for (uint32_t i0 = rope_ctx->n_dims; i0 < ne0; i0 += 2) {
                     dst_data_loc[0] = src_loc[0];
                     dst_data_loc[1] = src_loc[1];
