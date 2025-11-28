@@ -344,13 +344,8 @@ static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
                     dst_data_loc += (is_neox ? half_dims : 0);
                 }
 
-                for (uint32_t i0 = rope_ctx->n_dims; i0 < ne0; i0 += 2) {
-                    dst_data_loc[0] = src_loc[0];
-                    dst_data_loc[1] = src_loc[1];
-
-                    src_loc += 2;
-                    dst_data_loc += 2;
-                }
+                // TODO: use simd to speed up the remaining elements copy
+                memcpy(dst_data_loc, src_loc, (ne0 - rope_ctx->n_dims) * sizeof(float));
             }
         }
     }
