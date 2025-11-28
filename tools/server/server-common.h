@@ -313,6 +313,9 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
 
 std::string safe_json_to_str(const json & data);
 
+// Sanitize request body for logging (truncates base64 image data)
+std::string log_sanitize_request_body(const std::string & body);
+
 std::string tokens_to_str(llama_context * ctx, const llama_tokens & tokens);
 
 // format incomplete utf-8 multibyte character for output

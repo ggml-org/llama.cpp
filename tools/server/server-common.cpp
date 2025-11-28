@@ -1178,6 +1178,56 @@ std::string safe_json_to_str(const json & data) {
     return data.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
+// Helper function to truncate base64 image data in JSON for logging purposes
+// This prevents massive log files when sending images via the API
+static json sanitize_image_data_for_log(const json & data) {
+    if (data.is_string()) {
+        const std::string & str = data.get_ref<const std::string &>();
+        // Check for base64 image data URL pattern: data:image/...;base64,...
+        const std::string prefix = "data:image/";
+        const std::string marker = ";base64,";
+        if (str.size() > 256 && str.compare(0, prefix.size(), prefix) == 0) {
+            size_t marker_pos = str.find(marker);
+            if (marker_pos != std::string::npos) {
+                size_t base64_start = marker_pos + marker.size();
+                size_t base64_len = str.size() - base64_start;
+                // Keep only the mime type, replace base64 content with size info
+                std::string truncated = str.substr(0, marker_pos);
+                truncated += ";base64,[" + std::to_string(base64_len) + " bytes]";
+                return json(truncated);
+            }
+        }
+        return data;
+    } else if (data.is_array()) {
+        json result = json::array();
+        for (const auto & item : data) {
+            result.push_back(sanitize_image_data_for_log(item));
+        }
+        return result;
+    } else if (data.is_object()) {
+        json result = json::object();
+        for (auto it = data.begin(); it != data.end(); ++it) {
+            result[it.key()] = sanitize_image_data_for_log(it.value());
+        }
+        return result;
+    }
+    return data;
+}
+
+std::string log_sanitize_request_body(const std::string & body) {
+    try {
+        json parsed = json::parse(body);
+        json sanitized = sanitize_image_data_for_log(parsed);
+        return safe_json_to_str(sanitized);
+    } catch (...) {
+        // If parsing fails, return original (truncated if very large)
+        if (body.size() > 1024) {
+            return body.substr(0, 1024) + "...[truncated]";
+        }
+        return body;
+    }
+}
+
 // TODO: reuse llama_detokenize
 template <class Iter>
 static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
