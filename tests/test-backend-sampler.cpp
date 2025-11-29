@@ -290,17 +290,17 @@ static void test_backend_greedy_sampling(const char * model_path) {
 
     int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
 
-    llama_token token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+    llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
     printf("greedy sampled id:%d, string:'%s'\n", token, test_ctx.token_to_piece(token, false).c_str());
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
 
-    token = llama_get_backend_sampled_token_ith(test_ctx.ctx, -1);
+    token = llama_get_sampled_token_ith(test_ctx.ctx, -1);
     printf("greedy sampled id:%d, string:'%s'\n", token, test_ctx.token_to_piece(token, false).c_str());
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
 
     for (int i = 0; i < 10; i++) {
         int32_t loop_idx = test_ctx.idx_for_seq(seq_id);
-        llama_token token = llama_get_backend_sampled_token_ith(test_ctx.ctx, loop_idx);
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, loop_idx);
         printf("Generation step %d: token id:%d, string: %s\n", i, token, test_ctx.token_to_piece(token, false).c_str());
         if (!test_ctx.decode_token(token, 0)) {
             GGML_ASSERT(false && "Failed to decode token");
@@ -328,14 +328,14 @@ static void test_backend_top_k_sampling(const char * model_path) {
 
     int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
 
-    float * logits = llama_get_backend_sampled_logits_ith(test_ctx.ctx, batch_idx);
-    uint32_t n_logits = llama_get_backend_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+    float * logits = llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx);
+    uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
     for (size_t i = 0; i < n_logits; ++i) {
         printf("top_k logit[%zu] = %.6f\n", i, logits[i]);
     }
 
-    llama_token * candidates = llama_get_backend_sampled_candidates_ith(test_ctx.ctx, batch_idx);
-    uint32_t n_candidates = llama_get_backend_sampled_candidates_count_ith(test_ctx.ctx, batch_idx);
+    llama_token * candidates = llama_get_sampled_candidates_ith(test_ctx.ctx, batch_idx);
+    uint32_t n_candidates = llama_get_sampled_candidates_count_ith(test_ctx.ctx, batch_idx);
     for (size_t i = 0; i < n_candidates; ++i) {
         printf("top_k candidate[%zu] = %d : %s\n", i, candidates[i],
                test_ctx.token_to_piece(candidates[i], false).c_str());
@@ -386,7 +386,7 @@ static void test_backend_temp_sampling(const char * model_path) {
     // Verfify sequence 0
     {
         int32_t batch_idx = test_ctx.idx_for_seq(0);
-        int n_logits = llama_get_backend_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+        int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
         GGML_ASSERT(n_logits == test_ctx.n_vocab);
 
         // Sample from sequence 0 using CPU sampler
@@ -443,8 +443,8 @@ static void test_backend_min_p_sampling(const char * model_path) {
 
     int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
 
-    float * logits = llama_get_backend_sampled_logits_ith(test_ctx.ctx, batch_idx);
-    uint32_t n_logits = llama_get_backend_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+    float * logits = llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx);
+    uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
 
     // Print the logits that are above the min-p threshold
     std::vector<float> filtered_logits;
@@ -501,8 +501,8 @@ static void test_backend_top_p_sampling(const char * model_path) {
 
     int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
 
-    float * logits = llama_get_backend_sampled_logits_ith(test_ctx.ctx, batch_idx);
-    uint32_t n_logits = llama_get_backend_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+    float * logits = llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx);
+    uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
 
     // Print the logits that are above the min-p threshold
     std::vector<float> filtered_logits;
@@ -569,7 +569,7 @@ static void test_backend_multi_sequence_sampling(const char * model_path) {
     // Verfiy sequence 0
     {
         int32_t batch_idx = test_ctx.idx_for_seq(0);
-        llama_token token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
         const std::string token_str = test_ctx.token_to_piece(token, false);
         printf("Seq 0 sampled token id=%d, string='%s'\n", token, token_str.c_str());
         GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
@@ -578,7 +578,7 @@ static void test_backend_multi_sequence_sampling(const char * model_path) {
     // Verify sequence 1
     {
         int32_t batch_idx= test_ctx.idx_for_seq(1);
-        llama_token token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
         const std::string token_str = test_ctx.token_to_piece(token, false);
         printf("Seq 1 sampled token id=%d, string='%s'\n", token, token_str.c_str());
         GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
@@ -591,7 +591,7 @@ static void test_backend_multi_sequence_sampling(const char * model_path) {
 
         for (llama_seq_id seq_id : {0, 1}) {
             int32_t idx = test_ctx.idx_for_seq(seq_id);
-            llama_token token = llama_get_backend_sampled_token_ith(test_ctx.ctx, idx);
+            llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, idx);
             const std::string token_str = test_ctx.token_to_piece(token, false);
             printf("  Seq %d, step %d: token id=%d, string='%s'\n", seq_id, step, token, token_str.c_str());
             tokens[seq_id] = token;
@@ -625,12 +625,12 @@ static void test_backend_dist_sampling(const char * model_path) {
     }
 
     int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
-    llama_token token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+    llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
     printf("dist sampled id:%d, string:'%s'\n", token, test_ctx.token_to_piece(token, false).c_str());
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
-    GGML_ASSERT(llama_get_backend_sampled_logits_ith(test_ctx.ctx, batch_idx) == nullptr);
+    GGML_ASSERT(llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx) == nullptr);
 
-    token = llama_get_backend_sampled_token_ith(test_ctx.ctx, -1);
+    token = llama_get_sampled_token_ith(test_ctx.ctx, -1);
     printf("dist sampled id:%d, string:'%s'\n", token, test_ctx.token_to_piece(token, false).c_str());
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
 }
@@ -660,7 +660,7 @@ static void test_backend_dist_sampling_and_cpu(const char * model_path) {
     struct llama_sampler * chain = llama_sampler_chain_init(chain_params);
     llama_sampler_chain_add(chain, llama_sampler_init_dist(18));
 
-    llama_token backend_token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+    llama_token backend_token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
     llama_token cpu_token = llama_sampler_sample(chain, test_ctx.ctx, batch_idx);
     printf("dist & cpu sampled id:%d, string:'%s'\n", cpu_token, test_ctx.token_to_piece(cpu_token, false).c_str());
     GGML_ASSERT(backend_token == cpu_token);
@@ -707,7 +707,7 @@ static void test_backend_logit_bias_sampling(const char * model_path) {
         GGML_ASSERT(false && "Failed to decode token");
     }
 
-    llama_token backend_token = llama_get_backend_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(seq_id));
+    llama_token backend_token = llama_get_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(seq_id));
     const std::string backend_token_str = test_ctx.token_to_piece(backend_token, false);
     printf("logit bias sampled token = %d, string='%s'\n", backend_token, backend_token_str.c_str());
     GGML_ASSERT(backend_token == bias_token);
@@ -748,22 +748,22 @@ static void test_backend_mixed_sampling(const char * model_path) {
     // Verfiy sequence 0 that used the dist backend sampler.
     {
         int32_t batch_idx = test_ctx.idx_for_seq(0);
-        llama_token token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
         const std::string token_str = test_ctx.token_to_piece(token, false);
         printf("sampled token id=%d, string='%s'\n", token, token_str.c_str());
         GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
-        GGML_ASSERT(llama_get_backend_sampled_logits_ith(test_ctx.ctx, batch_idx) == nullptr);
-        GGML_ASSERT(llama_get_backend_sampled_logits_count_ith(test_ctx.ctx, batch_idx) == 0);
+        GGML_ASSERT(llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx) == nullptr);
+        GGML_ASSERT(llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx) == 0);
     }
 
     // Verfiy sequence 1 that used the top-k backend sampler.
     {
         int32_t batch_idx = test_ctx.idx_for_seq(1);
-        float * logits = llama_get_backend_sampled_logits_ith(test_ctx.ctx, batch_idx);
+        float * logits = llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx);
         GGML_ASSERT(logits != nullptr);
-        size_t n_logits = llama_get_backend_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+        size_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
         GGML_ASSERT(n_logits == (size_t) k);
-        GGML_ASSERT(llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx) == LLAMA_TOKEN_NULL);
+        GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx, batch_idx) == LLAMA_TOKEN_NULL);
     }
 
     printf("backend mixed sampling test PASSED\n");
@@ -790,12 +790,12 @@ static void test_backend_set_sampler(const char * model_path) {
     int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
 
     // Sample using backend sampler configured above
-    llama_token backend_token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+    llama_token backend_token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
     const std::string backend_token_str = test_ctx.token_to_piece(backend_token, false);
     printf("dist sampled token = %d, string='%s'\n", backend_token, backend_token_str.c_str());
 
     // Now clear the backend sampler for this sequence.
-    llama_set_backend_sampler(test_ctx.ctx, seq_id, nullptr);
+    llama_set_sampler(test_ctx.ctx, seq_id, nullptr);
     printf("Cleared backend sampler for seq_id %d\n", seq_id);
 
     // Sample using CPU sampler
@@ -810,8 +810,8 @@ static void test_backend_set_sampler(const char * model_path) {
 
     // Should not have any sampled token or probs after clearing the backend sampler.
     const int32_t idx = test_ctx.idx_for_seq(seq_id);
-    GGML_ASSERT(llama_get_backend_sampled_token_ith(test_ctx.ctx, idx) == LLAMA_TOKEN_NULL);
-    GGML_ASSERT(llama_get_backend_sampled_probs_ith(test_ctx.ctx, idx) == nullptr);
+    GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx, idx) == LLAMA_TOKEN_NULL);
+    GGML_ASSERT(llama_get_sampled_probs_ith(test_ctx.ctx, idx) == nullptr);
 
     // Sample the token using the CPU sampler chain.
     llama_token token2 = llama_sampler_sample(chain, test_ctx.ctx, seq_id);
@@ -824,13 +824,13 @@ static void test_backend_set_sampler(const char * model_path) {
     struct llama_sampler * new_backend_sampler_chain = llama_sampler_chain_init(new_backend_chain_params);
     llama_sampler_chain_add(new_backend_sampler_chain, llama_sampler_init_top_k(20));
     llama_sampler_chain_add(new_backend_sampler_chain, llama_sampler_init_dist(seed));
-    llama_set_backend_sampler(test_ctx.ctx, seq_id, new_backend_sampler_chain);
+    llama_set_sampler(test_ctx.ctx, seq_id, new_backend_sampler_chain);
 
     if (!test_ctx.decode_tokens(tokens2)) {
         GGML_ASSERT(false && "Failed to decode token");
     }
 
-    llama_token new_backend_token = llama_get_backend_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(seq_id));
+    llama_token new_backend_token = llama_get_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(seq_id));
     const std::string new_backend_token_str = test_ctx.token_to_piece(new_backend_token, false);
     printf("dist sampled token = %d, string='%s'\n", new_backend_token, new_backend_token_str.c_str());
 }
@@ -864,7 +864,7 @@ static void test_backend_cpu_mixed_batch(const char * model_path) {
     // Verify sequence 0 (backend sampled)
     {
         int32_t batch_idx = test_ctx.idx_for_seq(0);
-        llama_token token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
         const std::string token_str = test_ctx.token_to_piece(token, false);
         printf("Seq 0 (backend) sampled token id=%d, string='%s'\n", token, token_str.c_str());
         GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
@@ -874,7 +874,7 @@ static void test_backend_cpu_mixed_batch(const char * model_path) {
     {
         int32_t batch_idx = test_ctx.idx_for_seq(1);
 
-        llama_token backend_token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+        llama_token backend_token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
         GGML_ASSERT(backend_token == LLAMA_TOKEN_NULL);
 
         struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
@@ -892,7 +892,7 @@ static void test_backend_cpu_mixed_batch(const char * model_path) {
     {
         // clear the backend sampler for seq 0 so that there are no backend
         // samplers.
-        llama_set_backend_sampler(test_ctx.ctx, 0, nullptr);
+        llama_set_sampler(test_ctx.ctx, 0, nullptr);
 
         // Create a CPU sampler and verify we can sampler from it.
         struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
@@ -914,14 +914,14 @@ static void test_backend_cpu_mixed_batch(const char * model_path) {
         struct llama_sampler * sampler_chain= llama_sampler_chain_init(chain_params);
         llama_sampler_chain_add(sampler_chain, llama_sampler_init_dist(88));
 
-        llama_set_backend_sampler(test_ctx.ctx, 0, sampler_chain);
+        llama_set_sampler(test_ctx.ctx, 0, sampler_chain);
 
         if (!test_ctx.decode_token(3834, 0)) {
             GGML_ASSERT(false && "Failed to decode token");
         }
 
         int32_t batch_idx = test_ctx.idx_for_seq(0);
-        llama_token token = llama_get_backend_sampled_token_ith(test_ctx.ctx, batch_idx);
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
         const std::string token_str = test_ctx.token_to_piece(token, false);
         printf("re-added backend sampled token id=%d, string='%s'\n", token, token_str.c_str());
         GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);

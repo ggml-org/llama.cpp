@@ -410,10 +410,10 @@ void llama_sampler_free(struct llama_sampler * smpl) {
 }
 
 llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
-    const llama_token   sampled_token  = llama_get_backend_sampled_token_ith     (ctx, idx);
-    const float *       sampled_probs  = llama_get_backend_sampled_probs_ith     (ctx, idx);
-    const float *       sampled_logits = llama_get_backend_sampled_logits_ith    (ctx, idx);
-    const llama_token * sampled_ids    = llama_get_backend_sampled_candidates_ith(ctx, idx);
+    const llama_token   sampled_token  = llama_get_sampled_token_ith     (ctx, idx);
+    const float *       sampled_probs  = llama_get_sampled_probs_ith     (ctx, idx);
+    const float *       sampled_logits = llama_get_sampled_logits_ith    (ctx, idx);
+    const llama_token * sampled_ids    = llama_get_sampled_candidates_ith(ctx, idx);
 
     // If a backend sampler has already sampled a token, return it.
     if (sampled_token != LLAMA_TOKEN_NULL) {
@@ -430,13 +430,13 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
     std::vector<llama_token_data> cur;
 
     if (sampled_probs) {
-        const uint32_t sampled_probs_count = llama_get_backend_sampled_probs_count_ith(ctx, idx);
+        const uint32_t sampled_probs_count = llama_get_sampled_probs_count_ith(ctx, idx);
         cur.resize(sampled_probs_count);
         for (uint32_t i = 0; i < sampled_probs_count; ++i) {
             cur[i] = llama_token_data{sampled_ids[i], sampled_logits[i], sampled_probs[i]};
         }
     } else if (sampled_logits) {
-        const uint32_t sampled_logits_count = llama_get_backend_sampled_logits_count_ith(ctx, idx);
+        const uint32_t sampled_logits_count = llama_get_sampled_logits_count_ith(ctx, idx);
         cur.resize(sampled_logits_count);
         for (llama_token i = 0; i < (int)sampled_logits_count; i++) {
             cur[i] = llama_token_data{sampled_ids[i], sampled_logits[i], 0.0f};
@@ -557,10 +557,10 @@ static void llama_sampler_chain_backend_accept(
 }
 
 static void llama_sampler_chain_backend_apply(
-          struct llama_sampler * smpl,
-          struct ggml_context * ctx,
-          struct ggml_cgraph * gf,
-          struct llama_sampler_backend_data * data) {
+          struct llama_sampler      * smpl,
+          struct ggml_context       * ctx,
+          struct ggml_cgraph        * gf,
+          struct llama_sampler_data * data) {
     auto * chain = (llama_sampler_chain *) smpl->ctx;
 
     for (auto * smpl : chain->samplers) {
@@ -659,10 +659,10 @@ static void llama_sampler_greedy_apply(struct llama_sampler * /*smpl*/, llama_to
 }
 
 static void llama_sampler_greedy_backend_apply(
-        struct llama_sampler           * smpl,
-        struct ggml_context            * ctx,
-        struct ggml_cgraph             * gf,
-        struct llama_sampler_backend_data * data) {
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
     GGML_UNUSED(gf);
     GGML_UNUSED(smpl);
     struct ggml_tensor * argmax_result = ggml_argmax(ctx, data->logits);
@@ -817,10 +817,10 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
 }
 
 static void llama_sampler_dist_backend_apply(
-        struct llama_sampler              * smpl,
-        struct ggml_context               * ctx,
-        struct ggml_cgraph                * gf,
-        struct llama_sampler_backend_data * data) {
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
     GGML_UNUSED(gf);
     auto * sctx = (llama_sampler_dist *) smpl->ctx;
 
@@ -875,8 +875,8 @@ static void llama_sampler_dist_backend_apply(
 }
 
 static void llama_sampler_dist_backend_init(
-        struct llama_sampler      * smpl,
-        ggml_backend_buffer_type_t  buft) {
+        struct llama_sampler       * smpl,
+        ggml_backend_buffer_type_t   buft) {
     auto * sctx = (llama_sampler_dist *) smpl->ctx;
 
     sctx->device = ggml_backend_buft_get_device(buft);
@@ -963,10 +963,10 @@ static void llama_sampler_top_k_backend_init(
 }
 
 static void llama_sampler_top_k_backend_apply(
-        struct llama_sampler              * smpl,
-        struct ggml_context               * ctx,
-        struct ggml_cgraph                * gf,
-        struct llama_sampler_backend_data * data) {
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
 
     auto * ctx_data = (llama_sampler_top_k *) smpl->ctx;
 
@@ -1101,10 +1101,10 @@ static void llama_sampler_top_p_backend_init(
 }
 
 static void llama_sampler_top_p_backend_apply(
-        struct llama_sampler              * smpl,
-        struct ggml_context               * ctx,
-        struct ggml_cgraph                * gf,
-        struct llama_sampler_backend_data * data) {
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
     auto * sctx = (llama_sampler_top_p *) smpl->ctx;
 
     struct ggml_tensor * softmax = ggml_soft_max(ctx, data->logits);
@@ -1273,10 +1273,10 @@ static void llama_sampler_min_p_backend_init(
 }
 
 static void llama_sampler_min_p_backend_apply(
-        struct llama_sampler              * smpl,
-        struct ggml_context               * ctx,
-        struct ggml_cgraph                * gf,
-        struct llama_sampler_backend_data * data) {
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
     auto * sctx = (llama_sampler_min_p *) smpl->ctx;
 
     struct ggml_tensor * max_idx = ggml_argmax(ctx, data->logits);
@@ -1468,10 +1468,10 @@ static void llama_sampler_temp_free(struct llama_sampler * smpl) {
 }
 
 static void llama_sampler_temp_backend_apply(
-        struct llama_sampler           * smpl,
-        struct ggml_context            * ctx,
-        struct ggml_cgraph             * gf,
-        struct llama_sampler_backend_data * data) {
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
     auto * ctx_data = (llama_sampler_temp *) smpl->ctx;
 
     if (ctx_data->temp <= 0.0f) {
@@ -2827,10 +2827,10 @@ static void llama_sampler_logit_bias_free(struct llama_sampler * smpl) {
 }
 
 static void llama_sampler_logit_bias_backend_apply(
-        struct llama_sampler           * smpl,
-        struct ggml_context            * ctx,
-        struct ggml_cgraph             * gf,
-        struct llama_sampler_backend_data * data) {
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
     GGML_UNUSED(gf);
     GGML_UNUSED(ctx);
 

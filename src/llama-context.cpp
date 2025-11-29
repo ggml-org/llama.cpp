@@ -68,7 +68,7 @@ llama_context::llama_context(
         for (size_t i = 0; i < params.n_samplers; ++i) {
             const auto & config = params.samplers[i];
 
-            if (set_backend_sampler(config.seq_id, config.sampler)) {
+            if (set_sampler(config.seq_id, config.sampler)) {
                 const int n_samplers = llama_sampler_chain_n(config.sampler);
 
                 LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
@@ -670,7 +670,7 @@ float * llama_context::get_embeddings() {
     return embd;
 }
 
-llama_token * llama_context::get_backend_sampled_tokens() {
+llama_token * llama_context::get_sampled_tokens() {
     return sampling.sampled;
 }
 
@@ -723,7 +723,7 @@ float * llama_context::get_embeddings_seq(llama_seq_id seq_id) {
     return it->second.data();
 }
 
-llama_token llama_context::get_backend_sampled_token_ith(int32_t idx) {
+llama_token llama_context::get_sampled_token_ith(int32_t idx) {
     output_reorder();
 
     if (sampling.sampled == nullptr) {
@@ -740,7 +740,7 @@ llama_token llama_context::get_backend_sampled_token_ith(int32_t idx) {
     }
 }
 
-float * llama_context::get_backend_sampled_probs_ith(int32_t idx) {
+float * llama_context::get_sampled_probs_ith(int32_t idx) {
     output_reorder();
 
     if (sampling.probs == nullptr) {
@@ -759,7 +759,7 @@ float * llama_context::get_backend_sampled_probs_ith(int32_t idx) {
     }
 }
 
-float * llama_context::get_backend_sampled_logits_ith(int32_t idx) {
+float * llama_context::get_sampled_logits_ith(int32_t idx) {
     output_reorder();
 
     if (sampling.logits == nullptr) {
@@ -778,7 +778,7 @@ float * llama_context::get_backend_sampled_logits_ith(int32_t idx) {
     }
 }
 
-const llama_token * llama_context::get_backend_sampled_candidates_ith(int32_t idx) {
+const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
     output_reorder();
 
     try {
@@ -795,7 +795,7 @@ const llama_token * llama_context::get_backend_sampled_candidates_ith(int32_t id
     return sampling.token_ids_full_vocab.data();
 }
 
-size_t llama_context::get_backend_sampled_candidates_count(int32_t idx) {
+size_t llama_context::get_sampled_candidates_count(int32_t idx) {
     output_reorder();
 
     if (sampling.candidates == nullptr) {
@@ -814,7 +814,7 @@ size_t llama_context::get_backend_sampled_candidates_count(int32_t idx) {
     }
 }
 
-size_t llama_context::get_backend_sampled_logits_count(int32_t idx) {
+size_t llama_context::get_sampled_logits_count(int32_t idx) {
     output_reorder();
 
     if (sampling.logits == nullptr) {
@@ -833,7 +833,7 @@ size_t llama_context::get_backend_sampled_logits_count(int32_t idx) {
     }
 }
 
-size_t llama_context::get_backend_sampled_probs_count(int32_t idx) {
+size_t llama_context::get_sampled_probs_count(int32_t idx) {
     output_reorder();
 
     if (sampling.probs == nullptr) {
@@ -909,7 +909,7 @@ void llama_context::set_warmup(bool value) {
     cparams.warmup = value;
 }
 
-bool llama_context::set_backend_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
 
     const bool can_offload =
@@ -2978,10 +2978,10 @@ float * llama_get_logits(llama_context * ctx) {
 float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
-    if (ctx->get_backend_sampled_token_ith(i) != LLAMA_TOKEN_NULL) {
+    if (ctx->get_sampled_token_ith(i) != LLAMA_TOKEN_NULL) {
         return nullptr;
     }
-    if (ctx->get_backend_sampled_probs_ith(i) != nullptr) {
+    if (ctx->get_sampled_probs_ith(i) != nullptr) {
         return nullptr;
     }
 
@@ -3006,50 +3006,50 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
     return ctx->get_embeddings_seq(seq_id);
 }
 
-bool llama_set_backend_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
-    return ctx->set_backend_sampler(seq_id, smpl);
+bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
+    return ctx->set_sampler(seq_id, smpl);
 }
 
-llama_token llama_get_backend_sampled_token_ith(llama_context * ctx, int32_t i) {
+llama_token llama_get_sampled_token_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
-    return ctx->get_backend_sampled_token_ith(i);
+    return ctx->get_sampled_token_ith(i);
 }
 
-float * llama_get_backend_sampled_probs_ith(llama_context * ctx, int32_t i) {
+float * llama_get_sampled_probs_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
-    return ctx->get_backend_sampled_probs_ith(i);
+    return ctx->get_sampled_probs_ith(i);
 }
 
-float * llama_get_backend_sampled_logits_ith(llama_context * ctx, int32_t i) {
+float * llama_get_sampled_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
-    return ctx->get_backend_sampled_logits_ith(i);
+    return ctx->get_sampled_logits_ith(i);
 }
 
-llama_token * llama_get_backend_sampled_candidates_ith(llama_context * ctx, int32_t i) {
+llama_token * llama_get_sampled_candidates_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
-    return const_cast<llama_token *>(ctx->get_backend_sampled_candidates_ith(i));
+    return const_cast<llama_token *>(ctx->get_sampled_candidates_ith(i));
 }
 
-uint32_t llama_get_backend_sampled_candidates_count_ith(llama_context * ctx, int32_t i) {
+uint32_t llama_get_sampled_candidates_count_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
-    return static_cast<uint32_t>(ctx->get_backend_sampled_candidates_count(i));
+    return static_cast<uint32_t>(ctx->get_sampled_candidates_count(i));
 }
 
-uint32_t llama_get_backend_sampled_logits_count_ith(llama_context * ctx, int32_t i) {
+uint32_t llama_get_sampled_logits_count_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
-    return static_cast<uint32_t>(ctx->get_backend_sampled_logits_count(i));
+    return static_cast<uint32_t>(ctx->get_sampled_logits_count(i));
 }
 
-uint32_t llama_get_backend_sampled_probs_count_ith(llama_context * ctx, int32_t i) {
+uint32_t llama_get_sampled_probs_count_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
-    return static_cast<uint32_t>(ctx->get_backend_sampled_probs_count(i));
+    return static_cast<uint32_t>(ctx->get_sampled_probs_count(i));
 }
 
 // llama adapter API

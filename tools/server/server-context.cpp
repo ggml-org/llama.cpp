@@ -1014,7 +1014,7 @@ struct server_context_impl {
             SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
 
             llama_sampler * backend_chain = common_sampler_chain_backend(slot.smpl.get());
-            llama_set_backend_sampler(ctx, slot.id, backend_chain);
+            llama_set_sampler(ctx, slot.id, backend_chain);
         }
 
         // initialize draft batch

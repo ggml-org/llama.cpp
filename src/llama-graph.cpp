@@ -2090,7 +2090,7 @@ void llm_graph_context::build_sampling() const {
         ggml_tensor * logits_seq = ggml_view_1d(ctx0, logits_t, n_vocab, row_idx * logits_t->nb[1]);
         ggml_format_name(logits_seq, "logits_seq_%d", seq_id);
 
-        struct llama_sampler_backend_data data = {
+        struct llama_sampler_data data = {
             /*.logits      =*/ logits_seq,
             /*.probs       =*/ nullptr,
             /*.sampled     =*/ nullptr,
