@@ -465,8 +465,8 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
 void llm_graph_input_sampling::set_input(const llama_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
     for (const auto & [seq_id, sampler] : samplers) {
-        if (sampler->iface->set_input_ggml) {
-            sampler->iface->set_input_ggml(sampler);
+        if (sampler->iface->backend_set_input) {
+            sampler->iface->backend_set_input(sampler);
         }
     }
 }
@@ -2088,8 +2088,9 @@ void llm_graph_context::build_sampling() const {
         const int32_t row_idx = it->second;
 
         // Allow GPU sampler to create input tensors by implementing init_ggml.
-        if (sampler->iface->init_ggml != nullptr) {
-            sampler->iface->init_ggml(sampler, buft);
+        // TODO: this should not be done here
+        if (sampler->iface->backend_init != nullptr) {
+            sampler->iface->backend_init(sampler, buft);
         }
 
         active_samplers[seq_id] = sampler;
@@ -2097,33 +2098,34 @@ void llm_graph_context::build_sampling() const {
         ggml_tensor * logits_seq = ggml_view_1d(ctx0, logits_t, n_vocab, row_idx * logits_t->nb[1]);
         ggml_format_name(logits_seq, "logits_seq_%d", seq_id);
 
-        struct llama_sampler_ggml_data ggml_data = {
+        struct llama_sampler_backend_data data = {
             /*.logits      =*/ logits_seq,
             /*.probs       =*/ nullptr,
             /*.sampled     =*/ nullptr,
             /*.candidates  =*/ nullptr,
         };
 
-        llama_sampler_apply_ggml(sampler, ctx0, gf, &ggml_data);
+        assert(sampler->iface->backend_apply);
+        sampler->iface->backend_apply(sampler, ctx0, gf, &data);
 
-        if (ggml_data.sampled != nullptr) {
-            res->t_sampled[seq_id] = ggml_data.sampled;
-            ggml_build_forward_expand(gf, ggml_data.sampled);
+        if (data.sampled != nullptr) {
+            res->t_sampled[seq_id] = data.sampled;
+            ggml_build_forward_expand(gf, data.sampled);
         }
 
-        if  (ggml_data.probs != nullptr) {
-            res->t_sampled_probs[seq_id] = ggml_data.probs;
-            ggml_build_forward_expand(gf, ggml_data.probs);
+        if  (data.probs != nullptr) {
+            res->t_sampled_probs[seq_id] = data.probs;
+            ggml_build_forward_expand(gf, data.probs);
         }
 
-        if (ggml_data.logits != logits_seq) {
-            res->t_sampled_logits[seq_id] = ggml_data.logits;
+        if (data.logits != logits_seq) {
+            res->t_sampled_logits[seq_id] = data.logits;
             ggml_build_forward_expand(gf, res->t_sampled_logits[seq_id]);
         }
 
-        if (ggml_data.candidates != nullptr) {
-            res->t_candidates[seq_id] = ggml_data.candidates;
-            ggml_build_forward_expand(gf, ggml_data.candidates);
+        if (data.candidates != nullptr) {
+            res->t_candidates[seq_id] = data.candidates;
+            ggml_build_forward_expand(gf, data.candidates);
         }
     }
 

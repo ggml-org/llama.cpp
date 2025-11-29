@@ -345,7 +345,7 @@ static void test_backend_top_k_sampling(const char * model_path) {
     // sampling, first top_k on the backend and then dist on the CPU.
     struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * chain = llama_sampler_chain_init(chain_params);
-    GGML_ASSERT(chain->iface->apply_ggml != nullptr);
+    GGML_ASSERT(chain->iface->backend_apply != nullptr);
 
     llama_sampler_chain_add(chain, llama_sampler_init_dist(18));
     llama_token token = llama_sampler_sample(chain, test_ctx.ctx, batch_idx);
