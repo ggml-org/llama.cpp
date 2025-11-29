@@ -330,6 +330,8 @@ struct cmd_params {
     std::vector<int>                 main_gpu;
     std::vector<bool>                no_kv_offload;
     std::vector<bool>                flash_attn;
+    std::vector<bool>                paged_attn;
+    std::vector<bool>                prefix_cache;
     std::vector<std::vector<ggml_backend_dev_t>> devices;
     std::vector<std::vector<float>>  tensor_split;
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
@@ -368,6 +370,8 @@ static const cmd_params cmd_params_defaults = {
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { false },
+    /* paged_attn           */ { false },
+    /* prefix_cache         */ { false },
     /* devices              */ { {} },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
@@ -446,6 +450,10 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>                   (default: %s)\n",
            join(cmd_params_defaults.flash_attn, ",").c_str());
+    printf("  -pa, --paged-attn <0|1>                   (default: %s)\n",
+           join(cmd_params_defaults.paged_attn, ",").c_str());
+    printf("  -pc, --prefix-cache <0|1>                 (default: %s)\n",
+           join(cmd_params_defaults.prefix_cache, ",").c_str());
     printf("  -dev, --device <dev0/dev1/...>            (default: auto)\n");
     printf("  -mmp, --mmap <0|1>                        (default: %s)\n",
            join(cmd_params_defaults.use_mmap, ",").c_str());
@@ -765,6 +773,20 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.flash_attn.insert(params.flash_attn.end(), p.begin(), p.end());
+            } else if (arg == "-pa" || arg == "--paged-attn") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.paged_attn.insert(params.paged_attn.end(), p.begin(), p.end());
+            } else if (arg == "-pc" || arg == "--prefix-cache") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.prefix_cache.insert(params.prefix_cache.end(), p.begin(), p.end());
             } else if (arg == "-mmp" || arg == "--mmap") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -996,6 +1018,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.flash_attn.empty()) {
         params.flash_attn = cmd_params_defaults.flash_attn;
     }
+    if (params.paged_attn.empty()) {
+        params.paged_attn = cmd_params_defaults.paged_attn;
+    }
+    if (params.prefix_cache.empty()) {
+        params.prefix_cache = cmd_params_defaults.prefix_cache;
+    }
     if (params.devices.empty()) {
         params.devices = cmd_params_defaults.devices;
     }
@@ -1052,6 +1080,8 @@ struct cmd_params_instance {
     int                main_gpu;
     bool               no_kv_offload;
     bool               flash_attn;
+    bool               paged_attn;
+    bool               prefix_cache;
     std::vector<ggml_backend_dev_t> devices;
     std::vector<float> tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
@@ -1131,6 +1161,8 @@ struct cmd_params_instance {
         cparams.type_v          = type_v;
         cparams.offload_kqv     = !no_kv_offload;
         cparams.flash_attn_type = flash_attn ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        cparams.paged_attn      = paged_attn;
+        cparams.prefix_cache    = prefix_cache;
         cparams.embeddings      = embeddings;
         cparams.op_offload      = !no_op_offload;
         cparams.swa_full        = false;
@@ -1162,6 +1194,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & tv : params.type_v)
     for (const auto & nkvo : params.no_kv_offload)
     for (const auto & fa : params.flash_attn)
+    for (const auto & pa : params.paged_attn)
+    for (const auto & pc : params.prefix_cache)
     for (const auto & nt : params.n_threads)
     for (const auto & cm : params.cpu_mask)
     for (const auto & cs : params.cpu_strict)
@@ -1190,6 +1224,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .paged_attn   = */ pa,
+                /* .prefix_cache = */ pc,
                 /* .devices      = */ devs,
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
@@ -1224,6 +1260,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .paged_attn   = */ pa,
+                /* .prefix_cache = */ pc,
                 /* .devices      = */ devs,
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
@@ -1258,6 +1296,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .paged_attn   = */ pa,
+                /* .prefix_cache = */ pc,
                 /* .devices      = */ devs,
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
@@ -1297,6 +1337,8 @@ struct test {
     int                      main_gpu;
     bool                     no_kv_offload;
     bool                     flash_attn;
+    bool                     paged_attn;
+    bool                     prefix_cache;
     std::vector<ggml_backend_dev_t> devices;
     std::vector<float>       tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
@@ -1334,6 +1376,8 @@ struct test {
         main_gpu       = inst.main_gpu;
         no_kv_offload  = inst.no_kv_offload;
         flash_attn     = inst.flash_attn;
+        paged_attn     = inst.paged_attn;
+        prefix_cache   = inst.prefix_cache;
         devices        = inst.devices;
         tensor_split   = inst.tensor_split;
         tensor_buft_overrides = inst.tensor_buft_overrides;
