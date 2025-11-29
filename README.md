@@ -49,7 +49,7 @@ LLM inference in C/C++
 ## Hot topics
 
 - Starting from version 1.4, this project no longer provides pre-compiled binaries.
-- The llama.cpp project for aarch64 has Vulkan support now.Please check "Build on arm64"
+- The llama.cpp project for aarch64 has Vulkan and Blis support now.Please check "Build on arm64"
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)
 - [[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
