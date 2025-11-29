@@ -150,17 +150,28 @@ namespace ggml_cuda_mma {
             }
         }
 #elif defined(AMD_WMMA_AVAILABLE)
+#if defined(RDNA4)
         static constexpr int ne = I * J / 32;
+#else
+        // RDNA3: Accumulator uses same ne, but input tiles need more VGPRs
+        static constexpr int ne = (I == 16 && J == 16) ? (I * J / 32) : (I * J / 16);
+#endif
         T x[ne] = {0};
 
         static constexpr __device__ bool supported() {
             // Integer and FP16 WMMA are supported on RDNA3/RDNA4
+            if (I == 16 && J ==  4) return true;
+            if (I == 16 && J ==  8) return true;
             if (I == 16 && J == 16) return true;
             return false;
         }
 
         static __device__ __forceinline__ int get_i(const int l) {
-            if constexpr (I == 16 && J == 16) {
+            if constexpr (I == 16 && J == 4) {
+                return threadIdx.x % 16;
+            } else if constexpr (I == 16 && J == 8) {
+                return threadIdx.x % 16;
+            } else if constexpr (I == 16 && J == 16) {
                 return 8 * (threadIdx.x / 16) + l;
             } else {
                 NO_DEVICE_CODE;
@@ -169,7 +180,19 @@ namespace ggml_cuda_mma {
         }
 
         static __device__ __forceinline__ int get_j(const int l) {
-            if constexpr (I == 16 && J == 16) {
+            if constexpr (I == 16 && J == 4) {
+#if defined(RDNA4)
+                return 2 * (threadIdx.x / 16) + l;
+#else
+                return l;  // RDNA3: ne=4, l ranges 0-3, all threads load full J dimension
+#endif
+            } else if constexpr (I == 16 && J == 8) {
+#if defined(RDNA4)
+                return 4 * (threadIdx.x / 16) + l;
+#else
+                return l;  // RDNA3: ne=8, l ranges 0-7, all threads load full J dimension
+#endif
+            } else if constexpr (I == 16 && J == 16) {
                 return threadIdx.x % 16;
             } else {
                 NO_DEVICE_CODE;
@@ -287,7 +310,12 @@ namespace ggml_cuda_mma {
 
         static __device__ __forceinline__ int get_j(const int l) {
             if constexpr (I == 16 && J == 8) {
+#if defined(RDNA4)
                 return 4 * (threadIdx.x / 16) + l;
+#else
+                // RDNA3 has duplicate layout, iterate through full J dimension
+                return l % J;
+#endif
             } else {
                 NO_DEVICE_CODE;
                 return -1;
@@ -367,7 +395,12 @@ namespace ggml_cuda_mma {
 
         static __device__ __forceinline__ int get_j(const int l) {
             if constexpr (I == 16 && J == 8) {
+#if defined(RDNA4)
                 return 4 * (threadIdx.x / 16) + l;
+#else
+                // RDNA3 has duplicate layout, iterate through full J dimension
+                return l % J;
+#endif
             } else {
                 NO_DEVICE_CODE;
                 return -1;
@@ -444,28 +477,10 @@ namespace ggml_cuda_mma {
             xi[0] = xs[0];
         }
 #elif defined(AMD_WMMA_AVAILABLE)
-        if constexpr (I == 16 && J == 4) {
-            int64_t * xi = (int64_t *) t.x;
-            const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
-            xi[0] = xs[0];
-#if !defined(RDNA4)
-            // RDNA3 has double the tile size, load 2 more int64_t
-            xi[1] = xs[1];
-#endif // !defined(RDNA4)
-        }else if constexpr (I == 16 && J == 8) {
-            int64_t * xi = (int64_t *) t.x;
-            const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I));
-            xi[0] = xs[0];
-
-            const int64_t * xs1 = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 4 * (threadIdx.x / t.I) + 2);
-            xi[1] = xs1[0];
-#if !defined(RDNA4)
-            // RDNA3 has double the tile size, load 2 more int64_t
-            xi[2] = xs[1];
-            xi[3] = xs1[1];
-#endif // !defined(RDNA4)
-        }else{
-            NO_DEVICE_CODE;
+        // Use generic load path for all AMD WMMA to ensure correct register mapping
+#pragma unroll
+        for (int l = 0; l < t.ne; ++l) {
+            t.x[l] = xs0[t.get_i(l)*stride + t.get_j(l)];
         }
 #else 
 #pragma unroll
