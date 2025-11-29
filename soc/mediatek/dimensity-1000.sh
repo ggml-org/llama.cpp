@@ -8,6 +8,7 @@ pkg upgrade
 echo "Checking environment..."
 pkg install ninja clang git make
 
+git clone https://github.com/flame/blis.git
 chmod +x -R blis/
 cd blis/
 ./configure --enable-cblas --enable-threading=pthreads --prefix=$PREFIX arm64
