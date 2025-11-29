@@ -54,9 +54,9 @@ void main() {
         data_d[get_doffset() + dst_idx] = D_TYPE(data_a[get_aoffset() + circular_src_idx]);
     } else {
         const bool is_src0 = i0 >= p.lp0 && i0 < p.ne10 - p.rp0 &&
-                            i1 >= p.lp1 && i1 < p.ne11 - p.rp1 &&
-                            i2 >= p.lp2 && i2 < p.ne12 - p.rp2 &&
-                            i3 >= p.lp3 && i3 < p.ne13 - p.rp3;
+                             i1 >= p.lp1 && i1 < p.ne11 - p.rp1 &&
+                             i2 >= p.lp2 && i2 < p.ne12 - p.rp2 &&
+                             i3 >= p.lp3 && i3 < p.ne13 - p.rp3;
         data_d[get_doffset() + dst_idx] = D_TYPE(is_src0 ? data_a[get_aoffset() + src0_idx] : 0.0f);
     }
 
