@@ -694,6 +694,12 @@ static bool is_autoy(const std::string & value) {
 }
 
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
+    // default values specific to example
+    // note: we place it here instead of inside server.cpp to allow llama-gen-docs to pick it up
+    if (ex == LLAMA_EXAMPLE_SERVER) {
+        params.use_jinja = true;
+    }
+
     // load dynamic backends
     ggml_backend_load_all();
 
@@ -2488,11 +2494,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--jinja"},
-        "use jinja template for chat (default: disabled)",
+        string_format("use jinja template for chat (default: %s)\n", params.use_jinja ? "enabled" : "disabled"),
         [](common_params & params) {
             params.use_jinja = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
+    add_opt(common_arg(
+        {"--no-jinja"},
+        string_format("disable jinja template for chat (default: %s)\n", params.use_jinja ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.use_jinja = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_NO_JINJA"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
