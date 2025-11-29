@@ -306,6 +306,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         while (gqa_ratio % (2*gqa_ratio_eff) == 0 && gqa_ratio_eff < ncols2_max) {
             gqa_ratio_eff *= 2;
         }
+        if (Q->ne[1] * gqa_ratio_eff <= 2) {
+            return BEST_FATTN_KERNEL_VEC;
+        }
         if (Q->ne[1] * gqa_ratio_eff <= 16) {
             return BEST_FATTN_KERNEL_TILE; // On Volta tensor cores are only faster for sufficiently large matrices.
         }
