@@ -1,5 +1,7 @@
 #include "router-proxy.h"
 
+#include "log.h"
+
 #include <cpp-httplib/httplib.h>
 
 bool proxy_request(const httplib::Request & req, httplib::Response & res, const std::string & upstream_base) {
@@ -9,6 +11,7 @@ bool proxy_request(const httplib::Request & req, httplib::Response & res, const 
         return false;
     }
 
+    LOG_INF("Proxying %s %s to upstream %s\n", req.method.c_str(), req.path.c_str(), upstream_base.c_str());
     httplib::Client client(upstream_base.c_str());
     client.set_connection_timeout(5, 0);
     client.set_read_timeout(600, 0);
@@ -28,6 +31,7 @@ bool proxy_request(const httplib::Request & req, httplib::Response & res, const 
     }
 
     if (!result) {
+        LOG_ERR("Upstream %s unavailable for %s %s\n", upstream_base.c_str(), req.method.c_str(), path.c_str());
         res.status = 502;
         res.set_content("{\"error\":\"upstream unavailable\"}", "application/json");
         return false;
@@ -41,5 +45,6 @@ bool proxy_request(const httplib::Request & req, httplib::Response & res, const 
 
     const auto ct = result->get_header_value("Content-Type", "application/octet-stream");
     res.set_content(result->body, ct.c_str());
+    LOG_INF("Upstream response %d (%s) relayed for %s\n", res.status, res.reason.c_str(), path.c_str());
     return true;
 }

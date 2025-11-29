@@ -106,6 +106,7 @@ RouterConfig generate_default_config(const std::string & path) {
     cfg.router        = get_default_router_options();
     cfg.models        = scan_default_models();
 
+    LOG_INF("Discovered %zu default models while generating config\n", cfg.models.size());
     write_config_file(cfg, path);
     LOG_INF("generated default config at %s\n", path.c_str());
     return cfg;
@@ -117,6 +118,7 @@ RouterConfig load_config(const std::string & path) {
     cfg.default_spawn = get_default_spawn();
     std::error_code ec;
     if (!std::filesystem::exists(path, ec) || ec) {
+        LOG_WRN("Config file %s missing or inaccessible (ec=%d). Generating default.\n", path.c_str(), ec ? ec.value() : 0);
         return generate_default_config(path);
     }
 
@@ -126,6 +128,7 @@ RouterConfig load_config(const std::string & path) {
     }
 
     json data = json::parse(fin);
+    LOG_INF("Loaded config file %s\n", path.c_str());
     if (data.contains("version")) {
         cfg.version = data["version"].get<std::string>();
     }
@@ -151,6 +154,7 @@ RouterConfig load_config(const std::string & path) {
             cfg.models.push_back(std::move(mc));
         }
     }
+    LOG_INF("Config parsed: %zu models, router port %d, base port %d\n", cfg.models.size(), cfg.router.port, cfg.router.base_port);
     return cfg;
 }
 

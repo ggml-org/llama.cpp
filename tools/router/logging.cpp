@@ -1,7 +1,7 @@
 #include "logging.h"
 
 void router_log_init() {
-    common_log_set_verbosity_thold(LOG_DEFAULT_LLAMA);
+    common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
 
     // Always reset to console-only logging for the router tool. This mirrors
     // the llama-server defaults (stdout for info, stderr otherwise) and keeps

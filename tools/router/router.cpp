@@ -97,6 +97,8 @@ static bool handle_download(const CliOptions & opts) {
 
 int main(int argc, char ** argv) {
     CliOptions cli;
+    LOG_INF("Parsing %d CLI arguments for llama-router\n", argc);
+
     if (!parse_cli(argc, argv, cli)) {
         return 1;
     }
@@ -107,10 +109,12 @@ int main(int argc, char ** argv) {
     }
 
     if (handle_download(cli)) {
+        LOG_INF("Download-only mode completed, exiting\n");
         return 0;
     }
 
     std::string config_path = !cli.config_path.empty() ? expand_user_path(cli.config_path) : get_default_config_path();
+    LOG_INF("Loading router configuration from %s\n", config_path.c_str());
 
     RouterConfig cfg;
     try {
@@ -120,8 +124,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    LOG_INF("Router configuration loaded: %zu models, base port %d, listen %s:%d\n",
+            cfg.models.size(), cfg.router.base_port, cfg.router.host.c_str(), cfg.router.port);
+
     RouterApp app(cfg);
+    LOG_INF("Initialized RouterApp with default spawn command size=%zu\n", cfg.default_spawn.size());
     app.start_auto_models();
+    LOG_INF("Auto-start requested, last spawned model: %s\n", app.get_last_spawned_model().c_str());
 
     httplib::Server server;
     register_routes(server, app);
@@ -131,6 +140,8 @@ int main(int argc, char ** argv) {
 
     LOG_INF("llama-router listening on %s:%d\n", host.c_str(), port);
     server.listen(host.c_str(), port);
+
+    LOG_INF("llama-router shutting down, stopping all managed models\n");
 
     app.stop_all();
     return 0;

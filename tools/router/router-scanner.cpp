@@ -1,5 +1,6 @@
 #include "router-scanner.h"
 
+#include "log.h"
 #include "router-config.h"
 
 #include "common.h"
@@ -148,5 +149,6 @@ std::vector<ModelConfig> scan_default_models() {
         models.push_back(std::move(mc));
     }
 
+    LOG_INF("Model scanner found %zu candidates in %s\n", models.size(), cache_dir.c_str());
     return models;
 }

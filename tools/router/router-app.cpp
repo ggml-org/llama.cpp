@@ -22,6 +22,8 @@ void RouterApp::start_auto_models() {
             std::string err;
             if (!ensure_running(model.name, err)) {
                 LOG_WRN("auto-start for %s failed: %s\n", model.name.c_str(), err.c_str());
+            } else {
+                LOG_INF("auto-started %s\n", model.name.c_str());
             }
         }
     }
@@ -61,6 +63,7 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
 
     auto it = processes.find(model_name);
     if (it != processes.end() && process_running(it->second)) {
+        LOG_DBG("Model %s already running on port %d\n", model_name.c_str(), model_ports[model_name]);
         return true;
     }
 
@@ -85,12 +88,14 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
     ProcessHandle handle = spawn_process(command);
     if (!process_running(handle)) {
         error = "failed to start process";
+        LOG_ERR("Failed to start %s on port %d: %s\n", model_name.c_str(), port, error.c_str());
         terminate_process(handle);
         return false;
     }
 
     processes.emplace(model_name, handle);
     last_spawned_model = model_name;
+    LOG_INF("Spawned %s (group '%s') with %zu args\n", model_name.c_str(), target_group.c_str(), command.size());
     return true;
 }
 
@@ -113,6 +118,7 @@ std::string RouterApp::get_last_spawned_model() {
 void RouterApp::stop_all() {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto & kv : processes) {
+        LOG_INF("Stopping managed model %s\n", kv.first.c_str());
         terminate_process(kv.second);
     }
     processes.clear();

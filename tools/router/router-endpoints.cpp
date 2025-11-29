@@ -1,5 +1,6 @@
 #include "router-endpoints.h"
 
+#include "log.h"
 #include "router-app.h"
 #include "router-config.h"
 #include "router-proxy.h"
@@ -18,6 +19,7 @@ static void handle_models(const RouterApp & app, httplib::Response & res) {
     for (const auto & model : app.get_config().models) {
         out["data"].push_back({{"id", model.name}, {"object", "model"}, {"owned_by", "router"}, {"created", now}});
     }
+    LOG_INF("Listing %zu models\n", out["data"].size());
     res.set_content(out.dump(), "application/json");
 }
 
@@ -39,6 +41,7 @@ void register_routes(httplib::Server & server, RouterApp & app) {
     auto proxy_last_spawned = [&app](const httplib::Request & req, httplib::Response & res) {
         const std::string model = app.get_last_spawned_model();
         if (model.empty()) {
+            LOG_WRN("No last spawned model available for %s\n", req.path.c_str());
             res.status = 503;
             res.set_content("no models running", "text/plain");
             return;
@@ -46,11 +49,12 @@ void register_routes(httplib::Server & server, RouterApp & app) {
 
         std::string error;
         if (!app.ensure_running(model, error)) {
+            LOG_WRN("Failed to ensure last spawned model %s: %s\n", model.c_str(), error.c_str());
             res.status = 503;
             res.set_content("no models running", "text/plain");
             return;
         }
-
+        LOG_INF("Proxying %s to last spawned model %s\n", req.path.c_str(), model.c_str());
         proxy_request(req, res, app.upstream_for(model));
     };
 
@@ -64,16 +68,19 @@ void register_routes(httplib::Server & server, RouterApp & app) {
         std::string model_name = model_it != req.matches.end() ? model_it->str() : std::string();
         std::string error;
         if (!app.ensure_running(model_name, error)) {
+            LOG_WRN("Model %s unavailable: %s\n", model_name.c_str(), error.c_str());
             res.status = 404;
             res.set_content("{\"error\":\"model unavailable\"}", "application/json");
             return;
         }
+        LOG_INF("Proxying %s for model %s\n", req.path.c_str(), model_name.c_str());
         proxy_request(req, res, app.upstream_for(model_name));
     });
 
     server.Post("/v1/chat/completions", [&app](const httplib::Request & req, httplib::Response & res) {
         std::string model;
         if (!parse_model_from_chat(req, model)) {
+            LOG_WRN("Chat completion request missing model field\n");
             res.status = 400;
             res.set_content("{\"error\":\"invalid json or model missing\"}", "application/json");
             return;
@@ -81,15 +88,18 @@ void register_routes(httplib::Server & server, RouterApp & app) {
 
         std::string error;
         if (!app.ensure_running(model, error)) {
+            LOG_WRN("Model %s not available: %s\n", model.c_str(), error.c_str());
             res.status = 404;
             res.set_content("{\"error\":\"" + error + "\"}", "application/json");
             return;
         }
 
+        LOG_INF("Proxying chat completion for model %s\n", model.c_str());
         proxy_request(req, res, app.upstream_for(model));
     });
 
     server.Post("/admin/reload", [&app](const httplib::Request &, httplib::Response & res) {
+        LOG_INF("Reloading router application: stopping and auto-starting models\n");
         app.stop_all();
         app.start_auto_models();
         res.set_content("{\"status\":\"reloaded\"}", "application/json");
