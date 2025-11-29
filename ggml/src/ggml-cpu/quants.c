@@ -455,8 +455,8 @@ void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs
 
     const int nb = n / QK_K;
 
-    const float coeff_w_real = w[0].d_real;
-    const float coeff_w_imag = w[0].d_imag;
+    const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
+    const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
 
     float sum_real_total = 0.0f;
     float sum_imag_total = 0.0f;
@@ -515,8 +515,8 @@ void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs
             sum_bd += xi * wi;
         }
 
-        const float x_real = x[i].d_real;
-        const float x_imag = x[i].d_imag;
+        const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+        const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
 
         acc_ac_xr += x_real * (float) sum_ac;
         acc_bd_xi += x_imag * (float) sum_bd;

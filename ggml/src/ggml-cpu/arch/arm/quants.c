@@ -176,8 +176,8 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
         const float iscale_r = 127.f / max_r;
         const float iscale_i = 127.f / max_i;
 
-        y[ib].d_real = 1.f / iscale_r;
-        y[ib].d_imag = 1.f / iscale_i;
+        y[ib].d_real = GGML_CPU_FP32_TO_FP16(1.f / iscale_r);
+        y[ib].d_imag = GGML_CPU_FP32_TO_FP16(1.f / iscale_i);
 
         // pass 2: quantize
         {
@@ -1534,8 +1534,8 @@ void ggml_vec_dot_ifairy_q16_K(
     float acc_bc_xr = 0.0f;
     float acc_ad_xi = 0.0f;
 
-    const float coeff_w_real = w[0].d_real;
-    const float coeff_w_imag = w[0].d_imag;
+    const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
+    const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
 
     // 权重按 |0 16 32 48|1 17 33 49|...|15 31 47 63| 排列，直接用立即数右移解码 4 个 16-lane 组
     const uint8x16_t v_mask_3 = vdupq_n_u8(0x3);
@@ -1690,8 +1690,8 @@ void ggml_vec_dot_ifairy_q16_K(
         const int32_t sum_bc = vaddvq_s32(acc_bc0);
         const int32_t sum_bd = vaddvq_s32(acc_bd0);
 
-        const float x_real = x[i].d_real;
-        const float x_imag = x[i].d_imag;
+        const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+        const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
 
         acc_ac_xr += x_real * (float) sum_ac;
         acc_bd_xi += x_imag * (float) sum_bd;

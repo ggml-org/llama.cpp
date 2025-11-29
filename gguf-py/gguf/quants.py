@@ -678,8 +678,8 @@ class IFAIRY(__Quant, qtype=GGMLQuantizationType.F16_I2):
         
         # 准备scale数据
         scales = np.concatenate([
-            real_scale.astype(np.float32).view(np.uint8),
-            imag_scale.astype(np.float32).view(np.uint8)
+            real_scale.astype(np.float16).view(np.uint8),
+            imag_scale.astype(np.float16).view(np.uint8)
         ], axis=-1)
         
         # 合并量化数据和scale
