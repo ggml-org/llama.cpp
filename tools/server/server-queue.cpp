@@ -199,7 +199,7 @@ server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_
         std::unique_lock<std::mutex> lock(mutex_results);
         condition_results.wait(lock, [&]{
             if (!running) {
-                RES_DBG("%s : queue result stop\n", __func__);
+                RES_DBG("%s : queue result stop\n", "recv");
                 std::terminate(); // we cannot return here since the caller is HTTP code
             }
             return !queue_results.empty();

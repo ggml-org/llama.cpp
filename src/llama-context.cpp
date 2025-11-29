@@ -1,5 +1,6 @@
 #include "llama-context.h"
 
+#include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
@@ -322,7 +323,7 @@ llama_context::llama_context(
 
         cross.v_embd.clear();
 
-        const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
+        const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         // avoid reserving graphs with zero outputs - assume one output per sequence
@@ -575,7 +576,7 @@ bool llama_context::memory_update(bool optimize) {
             throw std::runtime_error("failed to initialize memory context");
         }
 
-        const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
+        const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
@@ -1849,6 +1850,9 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes() const {
+    if (model.arch == LLM_ARCH_QWEN3NEXT) {
+        return std::max<uint32_t>(8192u, 32u*model.n_tensors());
+    }
     return std::max<uint32_t>(1024u, 8u*model.n_tensors());
 }
 
