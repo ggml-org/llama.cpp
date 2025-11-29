@@ -1,3 +1,4 @@
+#include "router-constants.h"
 #include "router-process.h"
 
 #include "log.h"
@@ -8,6 +9,7 @@
 
 #if !defined(_WIN32)
 #    include <csignal>
+#    include <fcntl.h>
 #    include <sys/wait.h>
 #    include <unistd.h>
 #    include <vector>
@@ -25,6 +27,33 @@ bool process_running(const ProcessHandle & handle) {
         return false;
     }
     return kill(handle.pid, 0) == 0;
+#endif
+}
+
+bool wait_for_process_exit(const ProcessHandle & handle, int timeout_ms) {
+#if defined(_WIN32)
+    if (!handle.valid) {
+        return true;
+    }
+    return WaitForSingleObject(handle.proc_info.hProcess, timeout_ms) == WAIT_OBJECT_0;
+#else
+    if (handle.pid <= 0) {
+        return true;
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    while (true) {
+        int  status = 0;
+        auto r      = waitpid(handle.pid, &status, WNOHANG);
+        if (r == handle.pid) {
+            return true;
+        }
+        auto elapsed = std::chrono::steady_clock::now() - start;
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > timeout_ms) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(ROUTER_POLL_INTERVAL_MS));
+    }
 #endif
 }
 
@@ -47,24 +76,6 @@ void close_process(ProcessHandle & handle) {
 #endif
 }
 
-#if !defined(_WIN32)
-static bool wait_process(pid_t pid, int timeout_ms) {
-    const auto start = std::chrono::steady_clock::now();
-    while (true) {
-        int  status = 0;
-        auto r      = waitpid(pid, &status, WNOHANG);
-        if (r == pid) {
-            return true;
-        }
-        auto elapsed = std::chrono::steady_clock::now() - start;
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > timeout_ms) {
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-}
-#endif
-
 void terminate_process(ProcessHandle & handle) {
 #if defined(_WIN32)
     if (!handle.valid) {
@@ -78,15 +89,16 @@ void terminate_process(ProcessHandle & handle) {
     }
     LOG_WRN("Sending SIGTERM to pid=%d\n", static_cast<int>(handle.pid));
     kill(handle.pid, SIGTERM);
-    if (!wait_process(handle.pid, 1000)) {
+    if (!wait_for_process_exit(handle, ROUTER_PROCESS_SHUTDOWN_TIMEOUT_MS)) {
         LOG_ERR("Process pid=%d did not terminate, sending SIGKILL\n", static_cast<int>(handle.pid));
         kill(handle.pid, SIGKILL);
+        wait_for_process_exit(handle, 1000);
     }
     close_process(handle);
 #endif
 }
 
-ProcessHandle spawn_process(const std::vector<std::string> & args) {
+ProcessHandle spawn_process(const std::vector<std::string> & args, const std::string & log_path) {
     ProcessHandle handle;
     if (args.empty()) {
         LOG_ERR("spawn_process called with empty args\n");
@@ -137,6 +149,15 @@ ProcessHandle spawn_process(const std::vector<std::string> & args) {
 
     pid_t pid = fork();
     if (pid == 0) {
+        if (!log_path.empty()) {
+            int fd = open(log_path.c_str(), O_CREAT | O_WRONLY | O_APPEND, 0644);
+            if (fd >= 0) {
+                dup2(fd, STDOUT_FILENO);
+                dup2(fd, STDERR_FILENO);
+                close(fd);
+            }
+        }
+
         std::vector<char *> cargs;
         cargs.reserve(args.size() + 1);
         for (const auto & arg : args) {

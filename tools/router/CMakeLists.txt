@@ -5,6 +5,7 @@ add_executable(${TARGET}
     router-app.cpp
     router-config.cpp
     router-endpoints.cpp
+    logging.cpp
     router-process.cpp
     router-proxy.cpp
     router-scanner.cpp

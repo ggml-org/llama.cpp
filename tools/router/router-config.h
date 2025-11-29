@@ -15,6 +15,10 @@ struct RouterOptions {
     std::string host;
     int         port = 0;
     int         base_port = 0;
+    int         connection_timeout_s = 5;
+    int         read_timeout_s       = 600;
+    std::string admin_token;
+    std::string log_dir;
 };
 
 struct RouterConfig {

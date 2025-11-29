@@ -35,6 +35,25 @@ static bool parse_model_from_chat(const httplib::Request & req, std::string & mo
     return !model.empty();
 }
 
+static bool authorize_admin(const RouterConfig & cfg, const httplib::Request & req, httplib::Response & res) {
+    if (cfg.router.admin_token.empty()) {
+        return true;
+    }
+
+    const std::string bearer = "Bearer " + cfg.router.admin_token;
+    const auto        auth   = req.get_header_value("Authorization");
+    const auto        token  = req.get_header_value("X-Admin-Token");
+
+    if (auth == bearer || token == cfg.router.admin_token) {
+        return true;
+    }
+
+    res.status = 403;
+    res.set_content("{\"error\":\"forbidden\"}", "application/json");
+    LOG_WRN("Admin endpoint rejected unauthorized request from %s:%d\n", req.remote_addr.c_str(), req.remote_port);
+    return false;
+}
+
 void register_routes(httplib::Server & server, RouterApp & app) {
     server.Get("/v1/models", [&app](const httplib::Request &, httplib::Response & res) { handle_models(app, res); });
 
@@ -55,7 +74,7 @@ void register_routes(httplib::Server & server, RouterApp & app) {
             return;
         }
         LOG_INF("Proxying %s to last spawned model %s\n", req.path.c_str(), model.c_str());
-        proxy_request(req, res, app.upstream_for(model));
+        proxy_request(req, res, app.upstream_for(model), app.get_config().router);
     };
 
     server.Get("/props", proxy_last_spawned);
@@ -74,7 +93,7 @@ void register_routes(httplib::Server & server, RouterApp & app) {
             return;
         }
         LOG_INF("Proxying %s for model %s\n", req.path.c_str(), model_name.c_str());
-        proxy_request(req, res, app.upstream_for(model_name));
+        proxy_request(req, res, app.upstream_for(model_name), app.get_config().router);
     });
 
     server.Post("/v1/chat/completions", [&app](const httplib::Request & req, httplib::Response & res) {
@@ -95,10 +114,13 @@ void register_routes(httplib::Server & server, RouterApp & app) {
         }
 
         LOG_INF("Proxying chat completion for model %s\n", model.c_str());
-        proxy_request(req, res, app.upstream_for(model));
+        proxy_request(req, res, app.upstream_for(model), app.get_config().router);
     });
 
-    server.Post("/admin/reload", [&app](const httplib::Request &, httplib::Response & res) {
+    server.Post("/admin/reload", [&app](const httplib::Request & req, httplib::Response & res) {
+        if (!authorize_admin(app.get_config(), req, res)) {
+            return;
+        }
         LOG_INF("Reloading router application: stopping and auto-starting models\n");
         app.stop_all();
         app.start_auto_models();

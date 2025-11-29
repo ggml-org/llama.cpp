@@ -26,6 +26,10 @@ const RouterOptions & get_default_router_options() {
         /*host      =*/ "127.0.0.1",
         /*port      =*/ 8082,
         /*base_port =*/ 50000,
+        /*connection_timeout_s =*/ 5,
+        /*read_timeout_s       =*/ 600,
+        /*admin_token          =*/ "",
+        /*log_dir              =*/ "/tmp/llama-router",
     };
 
     return opts;
@@ -73,7 +77,19 @@ void write_config_file(const RouterConfig & cfg, const std::string & path) {
     json out;
     out["version"]       = cfg.version;
     out["default_spawn"] = cfg.default_spawn;
-    out["router"]        = {{"host", cfg.router.host}, {"port", cfg.router.port}, {"base_port", cfg.router.base_port}};
+    out["router"] = {{"host", cfg.router.host},
+                     {"port", cfg.router.port},
+                     {"base_port", cfg.router.base_port},
+                     {"connection_timeout_s", cfg.router.connection_timeout_s},
+                     {"read_timeout_s", cfg.router.read_timeout_s}};
+
+    if (!cfg.router.admin_token.empty()) {
+        out["router"]["admin_token"] = cfg.router.admin_token;
+    }
+
+    if (!cfg.router.log_dir.empty()) {
+        out["router"]["log_dir"] = cfg.router.log_dir;
+    }
 
     out["models"] = json::array();
     for (const auto & m : cfg.models) {
@@ -140,6 +156,10 @@ RouterConfig load_config(const std::string & path) {
         if (r.contains("host")) cfg.router.host = r["host"].get<std::string>();
         if (r.contains("port")) cfg.router.port = r["port"].get<int>();
         if (r.contains("base_port")) cfg.router.base_port = r["base_port"].get<int>();
+        if (r.contains("connection_timeout_s")) cfg.router.connection_timeout_s = r["connection_timeout_s"].get<int>();
+        if (r.contains("read_timeout_s")) cfg.router.read_timeout_s = r["read_timeout_s"].get<int>();
+        if (r.contains("admin_token")) cfg.router.admin_token = r["admin_token"].get<std::string>();
+        if (r.contains("log_dir")) cfg.router.log_dir = r["log_dir"].get<std::string>();
     }
     if (data.contains("models")) {
         for (const auto & m : data["models"]) {
@@ -155,6 +175,47 @@ RouterConfig load_config(const std::string & path) {
         }
     }
     LOG_INF("Config parsed: %zu models, router port %d, base port %d\n", cfg.models.size(), cfg.router.port, cfg.router.base_port);
+
+    const auto validate_port = [&](int port, const std::string & name) {
+        if (port <= 0 || port > 65535) {
+            throw std::runtime_error("invalid " + name + " port in config: " + std::to_string(port));
+        }
+    };
+
+    validate_port(cfg.router.port, "router");
+    validate_port(cfg.router.base_port, "base");
+
+    if (!cfg.router.log_dir.empty()) {
+        std::error_code  log_ec;
+        std::string      expanded = expand_user_path(cfg.router.log_dir);
+        std::filesystem::path log_path(expanded);
+        if (!std::filesystem::exists(log_path, log_ec)) {
+            std::filesystem::create_directories(log_path, log_ec);
+        }
+        if (log_ec) {
+            throw std::runtime_error("failed to prepare log_dir: " + expanded);
+        }
+        cfg.router.log_dir = log_path.string();
+    }
+
+    for (const auto & model : cfg.models) {
+        if (model.name.empty()) {
+            throw std::runtime_error("model entry missing name");
+        }
+
+        const std::string path_to_check = expand_user_path(model.path);
+        if (!std::filesystem::exists(path_to_check, ec)) {
+            throw std::runtime_error("model path does not exist: " + path_to_check);
+        }
+
+        if (!model.spawn.empty()) {
+            const std::string & cmd = model.spawn.front();
+            if (!cmd.empty() && cmd.find('/') != std::string::npos && !std::filesystem::exists(cmd, ec)) {
+                throw std::runtime_error("spawn command not executable: " + cmd);
+            }
+        }
+    }
+
     return cfg;
 }
 

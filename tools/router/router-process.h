@@ -25,4 +25,5 @@ struct ProcessHandle {
 bool         process_running(const ProcessHandle & handle);
 void         close_process(ProcessHandle & handle);
 void         terminate_process(ProcessHandle & handle);
-ProcessHandle spawn_process(const std::vector<std::string> & args);
+bool         wait_for_process_exit(const ProcessHandle & handle, int timeout_ms);
+ProcessHandle spawn_process(const std::vector<std::string> & args, const std::string & log_path = std::string());

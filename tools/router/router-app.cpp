@@ -4,6 +4,7 @@
 #include "router-config.h"
 #include "router-process.h"
 
+#include <filesystem>
 #include <sstream>
 #include <vector>
 
@@ -57,6 +58,7 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
                 target_group.c_str());
 
         terminate_process(it_proc->second);
+        wait_for_process_exit(it_proc->second, 2000);
         model_ports.erase(it_proc->first);
         it_proc = processes.erase(it_proc);
     }
@@ -85,7 +87,21 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
     command.push_back("127.0.0.1");
 
     LOG_INF("Starting %s on port %d\n", model_name.c_str(), port);
-    ProcessHandle handle = spawn_process(command);
+
+    std::string log_path;
+    if (!config.router.log_dir.empty()) {
+        std::filesystem::path log_dir(expand_user_path(config.router.log_dir));
+        std::error_code      ec;
+        std::filesystem::create_directories(log_dir, ec);
+        if (ec) {
+            LOG_WRN("Could not create log directory %s: ec=%d\n", log_dir.string().c_str(), ec.value());
+        } else {
+            log_path = (log_dir / (model_name + ".log")).string();
+            LOG_INF("Capturing stdout/stderr for %s in %s\n", model_name.c_str(), log_path.c_str());
+        }
+    }
+
+    ProcessHandle handle = spawn_process(command, log_path);
     if (!process_running(handle)) {
         error = "failed to start process";
         LOG_ERR("Failed to start %s on port %d: %s\n", model_name.c_str(), port, error.c_str());

@@ -1,15 +1,35 @@
 #include "common.h"
 #include "download.h"
 #include "log.h"
+#include "logging.h"
 #include "router-app.h"
 #include "router-config.h"
+#include "router-constants.h"
 #include "router-endpoints.h"
 
 #include <cpp-httplib/httplib.h>
 
+#include <atomic>
+#include <csignal>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
+
+static std::atomic<bool> g_shutdown{false};
+static RouterApp *        g_app    = nullptr;
+static httplib::Server *  g_server = nullptr;
+
+static void signal_handler(int) {
+    g_shutdown = true;
+    if (g_server) {
+        g_server->stop();
+    }
+    if (g_app) {
+        g_app->stop_all();
+    }
+}
 
 struct CliOptions {
     bool        show_help = false;
@@ -99,6 +119,8 @@ int main(int argc, char ** argv) {
     CliOptions cli;
     LOG_INF("Parsing %d CLI arguments for llama-router\n", argc);
 
+    router_log_init();
+
     if (!parse_cli(argc, argv, cli)) {
         return 1;
     }
@@ -128,21 +150,41 @@ int main(int argc, char ** argv) {
             cfg.models.size(), cfg.router.base_port, cfg.router.host.c_str(), cfg.router.port);
 
     RouterApp app(cfg);
+    g_app = &app;
     LOG_INF("Initialized RouterApp with default spawn command size=%zu\n", cfg.default_spawn.size());
     app.start_auto_models();
     LOG_INF("Auto-start requested, last spawned model: %s\n", app.get_last_spawned_model().c_str());
 
     httplib::Server server;
+    g_server = &server;
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
     register_routes(server, app);
 
     std::string host = cfg.router.host;
     int         port = cfg.router.port;
 
     LOG_INF("llama-router listening on %s:%d\n", host.c_str(), port);
-    server.listen(host.c_str(), port);
+    std::atomic<bool> listen_ok{true};
+    std::thread       server_thread([&]() {
+        if (!server.listen(host.c_str(), port)) {
+            listen_ok = false;
+            g_shutdown = true;
+        }
+    });
+
+    while (!g_shutdown.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(ROUTER_POLL_INTERVAL_MS));
+    }
+
+    server.stop();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
 
     LOG_INF("llama-router shutting down, stopping all managed models\n");
-
     app.stop_all();
-    return 0;
+    g_app    = nullptr;
+    g_server = nullptr;
+    return listen_ok ? 0 : 1;
 }
