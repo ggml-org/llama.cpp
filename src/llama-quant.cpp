@@ -635,7 +635,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     int nthread
 ) {
     bpw_stop.store(false, std::memory_order_relaxed);
-    // Signal handlers
+    // SIGINT/SIGTERM signal handlers
     struct signal_scope_guard {
         using handler_t = void (*)(int);
         handler_t prev_int = SIG_DFL;
@@ -1361,14 +1361,14 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         for (size_t i = 0; i < compatible_candidates.size(); ++i) {
             if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
 
-            const ggml_type tensor_types = compatible_candidates[i];
-            const auto bpw = (float)tensor_bpw(tensor, tensor_types);
-            const size_t bytes = tensor_bytes(tensor, tensor_types);
+            const ggml_type tensor_type = compatible_candidates[i];
+            const auto bpw = (float)tensor_bpw(tensor, tensor_type);
+            const size_t bytes = tensor_bytes(tensor, tensor_type);
             double mse = 0.0;
             double proj = 0.0;
-            const auto err = estimate_error(tensor, tensor_types, f32_sample, rows_sample, values, activations,
+            const auto err = estimate_error(tensor, tensor_type, f32_sample, rows_sample, values, activations,
                 quantized_buffer, dequantized_buffer, tensor_lambda, slice_lambda, &mse, &proj);
-            eval_candidates[i] = candidate_types{ tensor_types, bpw, bytes, err, mse, proj };
+            eval_candidates[i] = candidate_types{ tensor_type, bpw, bytes, err, mse, proj };
         }
 
         if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
