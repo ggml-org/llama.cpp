@@ -108,3 +108,39 @@ public:
     // terminate the waiting loop
     void terminate();
 };
+
+// utility class to make working with server_queue and server_response easier
+// it provides a generator-like API for server responses
+// support pooling connection state and aggregating multiple results
+struct server_response_reader {
+    std::unordered_set<int> id_tasks;
+    server_queue & queue_tasks;
+    server_response & queue_results;
+    size_t received_count = 0;
+    bool cancelled = false;
+    int polling_interval_seconds;
+
+    // should_stop function will be called each polling_interval_seconds
+    server_response_reader(std::pair<server_queue &, server_response &> server_queues, int polling_interval_seconds)
+        : queue_tasks(server_queues.first), queue_results(server_queues.second), polling_interval_seconds(polling_interval_seconds) {}
+    ~server_response_reader() {
+        stop();
+    }
+
+    void post_tasks(std::vector<server_task> && tasks);
+    bool has_next() const;
+
+    // return nullptr if should_stop() is true before receiving a result
+    // note: if one error is received, it will stop further processing and return error result
+    server_task_result_ptr next(const std::function<bool()> & should_stop);
+
+    struct batch_response {
+        bool is_terminated = false; // if true, indicates that processing was stopped before all results were received
+        std::vector<server_task_result_ptr> results;
+        server_task_result_ptr error; // nullptr if no error
+    };
+    // aggregate multiple results
+    batch_response wait_for_all(const std::function<bool()> & should_stop);
+
+    void stop();
+};
