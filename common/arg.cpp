@@ -751,7 +751,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--version"},
         "show version and build info",
         [](common_params &) {
-            fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
+            fprintf(stderr, "version: %d (%s) [itiu fork]\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
             fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
             exit(0);
         }

@@ -371,7 +371,7 @@ void common_init() {
     const char * build_type = " (debug)";
 #endif
 
-    LOG_INF("build: %d (%s) with %s for %s%s\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT, LLAMA_COMPILER, LLAMA_BUILD_TARGET, build_type);
+    LOG_INF("build: %d (%s) [itiu fork] with %s for %s%s\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT, LLAMA_COMPILER, LLAMA_BUILD_TARGET, build_type);
 }
 
 std::string common_params_get_system_info(const common_params & params) {
