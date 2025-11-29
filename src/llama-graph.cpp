@@ -2063,18 +2063,18 @@ void llm_graph_context::build_sampling() const {
             logit_row_idx++;
         }
     }
+
     if (seq_to_logit_row.empty()) {
         return;
     }
 
-    // res->t_logits will contain logits for all tokens that specied that want
-    // logits calculated (logits=1 or output=1)
+    // res->t_logits will contain logits for all tokens that want the logits calculated (logits=1 or output=1)
     ggml_tensor * logits_t = res->t_logits;
     GGML_ASSERT(res->t_logits != nullptr && "missing t_logits tensor");
 
     const int64_t n_vocab = logits_t->ne[0];
 
-    std::unordered_map<llama_seq_id, llama_sampler*> active_samplers;
+    std::unordered_map<llama_seq_id, llama_sampler *> active_samplers;
 
     for (const auto & [seq_id, sampler] : samplers) {
         // Only process samplers for sequences that are in the current batch
