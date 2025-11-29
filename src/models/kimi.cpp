@@ -1,6 +1,6 @@
 #include "models.h"
 
-llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params & params) : llm_graph_context_mamba(params) {
+llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params & params) : llm_graph_context_mamba(params), model(model) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -56,8 +56,8 @@ llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params
         cb(cur, "attn_norm", il);
 
         // Check layer type by checking which tensors exist
-        // KDA layers have kda_a_log tensor, MLA layers have wkv_a_mqa tensor
-        bool is_kda = (layer.kda_a_log != nullptr);
+        // KDA layers have ssm_a_log tensor, MLA layers have wkv_a_mqa tensor
+        bool is_kda = (layer.ssm_a_log != nullptr);
         bool is_mla = (layer.wkv_a_mqa != nullptr);
         
         if (is_kda) {
@@ -125,14 +125,14 @@ llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params
             // ggml_ssm_conv computes: c[conv_step + channel * d_conv]
             // GGUF layout: [d_conv, 1, d_inner] or [d_conv, 1, d_inner, 1] -> reshape to [d_conv, d_inner]
             ggml_tensor * conv_weight = nullptr;
-            if (layer.kda_q_conv) {
-                // Reshape to 2D [d_conv, d_inner] for ggml_ssm_conv
-                ggml_tensor * squeezed = ggml_reshape_2d(ctx0, layer.kda_q_conv, d_conv, d_inner);
-                // Cast to f32 if needed
-                if (squeezed->type != GGML_TYPE_F32) {
-                    squeezed = ggml_cast(ctx0, squeezed, GGML_TYPE_F32);
+            if (layer.ssm_q_conv) {
+                // Reshape conv weight from [d_conv, 1, d_inner, 1] to [d_conv, d_inner] for ggml_ssm_conv
+                // Cast to F32 if quantized (ggml_ssm_conv requires float weights)
+                ggml_tensor * q_conv_f32 = layer.ssm_q_conv;
+                if (q_conv_f32->type != GGML_TYPE_F32) {
+                    q_conv_f32 = ggml_cast(ctx0, q_conv_f32, GGML_TYPE_F32);
                 }
-                conv_weight = ggml_cont(ctx0, squeezed);
+                conv_weight = ggml_reshape_2d(ctx0, q_conv_f32, d_conv, d_inner);
             }
             
             // Apply conv1d
@@ -145,18 +145,17 @@ llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params
                 Qcur = ggml_ssm_conv(ctx0, conv_q, conv_weight);
                 // Reshape to 2D for bias add: {d_inner, n_tokens}
                 Qcur = ggml_reshape_2d(ctx0, Qcur, d_inner, n_tokens);
-                if (layer.kda_q_conv_b) {
-                    Qcur = ggml_add(ctx0, Qcur, layer.kda_q_conv_b);
+                if (layer.ssm_q_conv_b) {
+                    Qcur = ggml_add(ctx0, Qcur, layer.ssm_q_conv_b);
                 }
                 Qcur = ggml_silu(ctx0, Qcur);
             } else {
-                // Fallback: just use SiLU
-                Qcur = ggml_silu(ctx0, q_proj);
+                GGML_ABORT("KDA layer missing Q conv weight");
             }
             
             // K conv1d (with separate K conv state)
             ggml_tensor * Kcur;
-            if (layer.kda_k_conv) {
+            if (layer.ssm_k_conv) {
                 ggml_tensor * k_3d = ggml_reshape_3d(ctx0, k_proj, d_inner, n_seq_tokens, n_seqs);
                 ggml_tensor * conv_k = ggml_cont(ctx0, ggml_concat(ctx0, conv_state_k, ggml_transpose(ctx0, k_3d), 0));
                 
@@ -168,23 +167,24 @@ llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params
                         ggml_view_1d(ctx0, conv_states_all, conv_state_size * n_seqs,
                             (kv_head * n_embd_r_total + conv_state_size) * ggml_element_size(conv_states_all))));
                 
-                ggml_tensor * k_conv_weight = ggml_cont(ctx0, ggml_reshape_2d(ctx0, layer.kda_k_conv, d_conv, d_inner));
-                if (k_conv_weight->type != GGML_TYPE_F32) {
-                    k_conv_weight = ggml_cont(ctx0, ggml_cast(ctx0, k_conv_weight, GGML_TYPE_F32));
+                ggml_tensor * k_conv_f32 = layer.ssm_k_conv;
+                if (k_conv_f32->type != GGML_TYPE_F32) {
+                    k_conv_f32 = ggml_cast(ctx0, k_conv_f32, GGML_TYPE_F32);
                 }
+                ggml_tensor * k_conv_weight = ggml_reshape_2d(ctx0, k_conv_f32, d_conv, d_inner);
                 Kcur = ggml_ssm_conv(ctx0, conv_k, k_conv_weight);
                 Kcur = ggml_reshape_2d(ctx0, Kcur, d_inner, n_tokens);
-                if (layer.kda_k_conv_b) {
-                    Kcur = ggml_add(ctx0, Kcur, layer.kda_k_conv_b);
+                if (layer.ssm_k_conv_b) {
+                    Kcur = ggml_add(ctx0, Kcur, layer.ssm_k_conv_b);
                 }
                 Kcur = ggml_silu(ctx0, Kcur);
             } else {
-                Kcur = ggml_silu(ctx0, k_proj);
+                GGML_ABORT("KDA layer missing K conv weight");
             }
             
             // V conv1d (with separate V conv state)
             ggml_tensor * Vcur;
-            if (layer.kda_v_conv) {
+            if (layer.ssm_v_conv) {
                 ggml_tensor * v_3d = ggml_reshape_3d(ctx0, v_proj, d_inner, n_seq_tokens, n_seqs);
                 ggml_tensor * conv_v = ggml_cont(ctx0, ggml_concat(ctx0, conv_state_v, ggml_transpose(ctx0, v_3d), 0));
                 
@@ -196,42 +196,43 @@ llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params
                         ggml_view_1d(ctx0, conv_states_all, conv_state_size * n_seqs,
                             (kv_head * n_embd_r_total + 2 * conv_state_size) * ggml_element_size(conv_states_all))));
                 
-                ggml_tensor * v_conv_weight = ggml_cont(ctx0, ggml_reshape_2d(ctx0, layer.kda_v_conv, d_conv, d_inner));
-                if (v_conv_weight->type != GGML_TYPE_F32) {
-                    v_conv_weight = ggml_cont(ctx0, ggml_cast(ctx0, v_conv_weight, GGML_TYPE_F32));
+                ggml_tensor * v_conv_f32 = layer.ssm_v_conv;
+                if (v_conv_f32->type != GGML_TYPE_F32) {
+                    v_conv_f32 = ggml_cast(ctx0, v_conv_f32, GGML_TYPE_F32);
                 }
+                ggml_tensor * v_conv_weight = ggml_reshape_2d(ctx0, v_conv_f32, d_conv, d_inner);
                 Vcur = ggml_ssm_conv(ctx0, conv_v, v_conv_weight);
                 Vcur = ggml_reshape_2d(ctx0, Vcur, d_inner, n_tokens);
-                if (layer.kda_v_conv_b) {
-                    Vcur = ggml_add(ctx0, Vcur, layer.kda_v_conv_b);
+                if (layer.ssm_v_conv_b) {
+                    Vcur = ggml_add(ctx0, Vcur, layer.ssm_v_conv_b);
                 }
                 Vcur = ggml_silu(ctx0, Vcur);
             } else {
-                Vcur = ggml_silu(ctx0, v_proj);
+                GGML_ABORT("KDA layer missing V conv weight");
             }
             
             // Step 3: Compute g1 (forget gate)
             // g1 = -exp(A_log) * softplus(f_b(f_a(x)) + dt_bias)
-            ggml_tensor * f_a = ggml_mul_mat(ctx0, layer.kda_f_a, cur);
-            ggml_tensor * g1 = ggml_mul_mat(ctx0, layer.kda_f_b, f_a);
-            g1 = ggml_add(ctx0, g1, layer.kda_dt_bias);
+            ggml_tensor * f_a = ggml_mul_mat(ctx0, layer.ssm_f_a, cur);
+            ggml_tensor * g1 = ggml_mul_mat(ctx0, layer.ssm_f_b, f_a);
+            g1 = ggml_add(ctx0, g1, layer.ssm_dt_b);
             g1 = ggml_softplus(ctx0, g1);
             g1 = ggml_reshape_3d(ctx0, g1, head_dim, n_head, n_tokens);
             
             // A_log shape is [1, n_head] or [1, n_head, 1, 1], need to broadcast to [head_dim, n_head, n_tokens]
             // First compute -exp(A_log), then reshape for broadcasting
-            ggml_tensor * A_neg_exp = ggml_neg(ctx0, ggml_exp(ctx0, layer.kda_a_log));
+            ggml_tensor * A_neg_exp = ggml_neg(ctx0, ggml_exp(ctx0, layer.ssm_a_log));
             // Reshape to [1, n_head, 1] for broadcasting with g1 [head_dim, n_head, n_tokens]
             A_neg_exp = ggml_reshape_3d(ctx0, A_neg_exp, 1, n_head, 1);
             g1 = ggml_mul(ctx0, g1, A_neg_exp);
             cb(g1, "kda_g1", il);
             
             // Step 4: Compute beta (mixing coefficient)
-            ggml_tensor * beta = ggml_mul_mat(ctx0, layer.kda_b, cur);
+            ggml_tensor * beta = ggml_mul_mat(ctx0, layer.ssm_beta, cur);
             beta = ggml_sigmoid(ctx0, beta);
             cb(beta, "kda_beta", il);
             
-            // Step 5: Reshape for ggml_kda_scan
+            // Step 5: Reshape for KDA recurrence
             // {n_embd, n_tokens} -> {n_embd, n_seq_tokens, n_seqs}
             cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
             
@@ -245,18 +246,21 @@ llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params
             cb(Kcur, "kda_K", il);
             cb(Vcur, "kda_V", il);
             
-            // Step 6: Get SSM state and call ggml_kda_scan
+            // Step 6: Get SSM state and compute KDA recurrence using ggml_kda_scan
             ggml_tensor * ssm_states_all = mctx_cur->get_s_l(il);
             
+            // Use build_rs with lambda pattern (like Mamba SSM scan)
             auto get_kda_rows = [&](ggml_context * ctx, ggml_tensor * states, ggml_tensor * ids) {
                 ggml_tensor * h_state = ggml_reshape_4d(ctx, states, head_dim, head_dim, n_head, mctx_cur->get_size());
+                // Call ggml_kda_scan which implements the correct KDA recurrence
                 return ggml_kda_scan(ctx, h_state, Qcur, Kcur, Vcur, g1, beta, ids);
             };
             
-            ggml_tensor * y_kda = build_rs(inp_rs, ssm_states_all, (int32_t)hparams.n_embd_s(), (int32_t)n_seqs, get_kda_rows);
+            ggml_tensor * y_kda = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs, get_kda_rows);
             cb(y_kda, "kda_scan_out", il);
             
             // Store updated state back
+            // y_kda contains: [attention_output (head_dim * n_head * n_seq_tokens * n_seqs), new_state (head_dim * head_dim * n_head * n_seqs)]
             const int64_t attn_out_size = head_dim * n_head * n_seq_tokens * n_seqs;
             const int64_t state_size = head_dim * head_dim * n_head;
             ggml_build_forward_expand(gf, 
@@ -271,12 +275,14 @@ llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params
             
             // Step 7: Output gating g2 = g_b(g_a(x))
             ggml_tensor * cur_2d = ggml_reshape_2d(ctx0, cur, cur->ne[0], n_seq_tokens * n_seqs);
-            ggml_tensor * g_a = ggml_mul_mat(ctx0, layer.kda_g_a, cur_2d);
-            ggml_tensor * g2 = ggml_mul_mat(ctx0, layer.kda_g_b, g_a);
+            ggml_tensor * g_a = ggml_mul_mat(ctx0, layer.ssm_g_a, cur_2d);
+            ggml_tensor * g2 = ggml_mul_mat(ctx0, layer.ssm_g_b, g_a);
             g2 = ggml_reshape_3d(ctx0, g2, head_dim, n_head, n_seq_tokens * n_seqs);
             
             // Step 8: Apply o_norm with sigmoid gating
-            ggml_tensor * normed = build_norm(attn_out, layer.kda_o_norm, layer.kda_o_norm_b, LLM_NORM_RMS, il);
+            // Note: Kimi model uses sigmoid gating, not SiLU (despite FusedRMSNormGated default being swish)
+            // Formula: output = RMSNorm(x) * sigmoid(g)
+            ggml_tensor * normed = build_norm(attn_out, layer.ssm_o_norm, layer.ssm_o_norm_b, LLM_NORM_RMS, il);
             ggml_tensor * gate = ggml_sigmoid(ctx0, g2);
             ggml_tensor * gated = ggml_mul(ctx0, normed, gate);
             
@@ -351,9 +357,8 @@ llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params
             cb(cur, "mla_out", il);
             
         } else {
-            // Unknown layer type - passthrough
-            cur = ggml_scale(ctx0, cur, 0.0f);
-            cb(cur, "unknown_out", il);
+            // Unknown layer type - this should not happen
+            GGML_ABORT("Kimi layer is neither KDA nor MLA - missing required tensors");
         }
         
         // On last layer, select only the output tokens
@@ -400,9 +405,8 @@ llm_build_kimi::llm_build_kimi(const llama_model & model, const llm_graph_params
                            layer.ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
-            // No FFN (shouldn't happen, but fallback)
-            cur = ggml_scale(ctx0, cur, 0.1f);
-            cb(cur, "ffn_skip", il);
+            // No FFN - this should not happen in Kimi
+            GGML_ABORT("Kimi layer missing FFN tensors");
         }
 
         // Residual

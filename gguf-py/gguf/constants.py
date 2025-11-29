@@ -703,18 +703,17 @@ class MODEL_TENSOR(IntEnum):
     A_MMPROJ_FC          = auto()
     A_MM_NORM_PRE        = auto()
     A_MM_NORM_MID        = auto()
-    # Kimi Linear
-    KDA_Q_CONV           = auto()
-    KDA_K_CONV           = auto()
-    KDA_V_CONV           = auto()
-    KDA_F_A              = auto()
-    KDA_F_B              = auto()
-    KDA_B                = auto()
-    KDA_A_LOG            = auto()
-    KDA_G_A              = auto()
-    KDA_G_B              = auto()
-    KDA_O_NORM           = auto()
-    KDA_DT_BIAS          = auto()
+    # Kimi Linear KDA (using SSM_ prefix for consistency)
+    SSM_CONV1D_Q         = auto()
+    SSM_CONV1D_K         = auto()
+    SSM_CONV1D_V         = auto()
+    SSM_F_A              = auto()
+    SSM_F_B              = auto()
+    SSM_BETA             = auto()
+    SSM_A_LOG            = auto()
+    SSM_G_A              = auto()
+    SSM_G_B              = auto()
+    SSM_DT_B             = auto()
     # nextn/mtp
     NEXTN_EH_PROJ        = auto()
     NEXTN_EMBED_TOKENS   = auto()
@@ -1087,18 +1086,17 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_MMPROJ_FC:               "mm.a.fc",
     MODEL_TENSOR.A_MM_NORM_PRE:             "mm.a.norm_pre",
     MODEL_TENSOR.A_MM_NORM_MID:             "mm.a.norm_mid",
-    # Kimi Linear
-    MODEL_TENSOR.KDA_Q_CONV:                "blk.{bid}.kda_q_conv",
-    MODEL_TENSOR.KDA_K_CONV:                "blk.{bid}.kda_k_conv",
-    MODEL_TENSOR.KDA_V_CONV:                "blk.{bid}.kda_v_conv",
-    MODEL_TENSOR.KDA_F_A:                   "blk.{bid}.kda_f_a",
-    MODEL_TENSOR.KDA_F_B:                   "blk.{bid}.kda_f_b",
-    MODEL_TENSOR.KDA_B:                     "blk.{bid}.kda_b",
-    MODEL_TENSOR.KDA_A_LOG:                 "blk.{bid}.kda_a_log",
-    MODEL_TENSOR.KDA_G_A:                   "blk.{bid}.kda_g_a",
-    MODEL_TENSOR.KDA_G_B:                   "blk.{bid}.kda_g_b",
-    MODEL_TENSOR.KDA_O_NORM:                "blk.{bid}.kda_o_norm",
-    MODEL_TENSOR.KDA_DT_BIAS:               "blk.{bid}.kda_dt_bias",
+    # Kimi Linear KDA (using SSM_ prefix for consistency)
+    MODEL_TENSOR.SSM_CONV1D_Q:              "blk.{bid}.ssm_conv1d_q",
+    MODEL_TENSOR.SSM_CONV1D_K:              "blk.{bid}.ssm_conv1d_k",
+    MODEL_TENSOR.SSM_CONV1D_V:              "blk.{bid}.ssm_conv1d_v",
+    MODEL_TENSOR.SSM_F_A:                   "blk.{bid}.ssm_f_a",
+    MODEL_TENSOR.SSM_F_B:                   "blk.{bid}.ssm_f_b",
+    MODEL_TENSOR.SSM_BETA:                  "blk.{bid}.ssm_beta",
+    MODEL_TENSOR.SSM_A_LOG:                 "blk.{bid}.ssm_a",
+    MODEL_TENSOR.SSM_G_A:                   "blk.{bid}.ssm_g_a",
+    MODEL_TENSOR.SSM_G_B:                   "blk.{bid}.ssm_g_b",
+    MODEL_TENSOR.SSM_DT_B:                  "blk.{bid}.ssm_dt",
     # NextN/MTP
     MODEL_TENSOR.NEXTN_EH_PROJ:             "blk.{bid}.nextn.eh_proj",
     MODEL_TENSOR.NEXTN_EMBED_TOKENS:        "blk.{bid}.nextn.embed_tokens",
@@ -3121,17 +3119,17 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
-        MODEL_TENSOR.KDA_Q_CONV,
-        MODEL_TENSOR.KDA_K_CONV,
-        MODEL_TENSOR.KDA_V_CONV,
-        MODEL_TENSOR.KDA_F_A,
-        MODEL_TENSOR.KDA_F_B,
-        MODEL_TENSOR.KDA_B,
-        MODEL_TENSOR.KDA_A_LOG,
-        MODEL_TENSOR.KDA_G_A,
-        MODEL_TENSOR.KDA_G_B,
-        MODEL_TENSOR.KDA_O_NORM,
-        MODEL_TENSOR.KDA_DT_BIAS,
+        MODEL_TENSOR.SSM_CONV1D_Q,
+        MODEL_TENSOR.SSM_CONV1D_K,
+        MODEL_TENSOR.SSM_CONV1D_V,
+        MODEL_TENSOR.SSM_F_A,
+        MODEL_TENSOR.SSM_F_B,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_A_LOG,
+        MODEL_TENSOR.SSM_G_A,
+        MODEL_TENSOR.SSM_G_B,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_DT_B,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,

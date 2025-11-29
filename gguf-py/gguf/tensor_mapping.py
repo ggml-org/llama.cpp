@@ -737,6 +737,7 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.norm",        # falcon-h1 granite-hybrid
             "model.layers.{bid}.linear_attn.norm",  # qwen3next
             "backbone.layers.{bid}.mixer.norm",     # mamba2
+            "model.layers.{bid}.self_attn.o_norm",  # kimi
         ),
 
         MODEL_TENSOR.SSM_OUT: (
@@ -1568,18 +1569,17 @@ class TensorNameMap:
             "audio.multi_modal_projector.ln_mid", # ultravox
         ),
 
-        # Kimi Linear
-        MODEL_TENSOR.KDA_Q_CONV: ("model.layers.{bid}.self_attn.q_conv1d",),
-        MODEL_TENSOR.KDA_K_CONV: ("model.layers.{bid}.self_attn.k_conv1d",),
-        MODEL_TENSOR.KDA_V_CONV: ("model.layers.{bid}.self_attn.v_conv1d",),
-        MODEL_TENSOR.KDA_F_A:    ("model.layers.{bid}.self_attn.f_a_proj",),
-        MODEL_TENSOR.KDA_F_B:    ("model.layers.{bid}.self_attn.f_b_proj",),
-        MODEL_TENSOR.KDA_B:      ("model.layers.{bid}.self_attn.b_proj",),
-        MODEL_TENSOR.KDA_A_LOG:  ("model.layers.{bid}.self_attn.A_log",),
-        MODEL_TENSOR.KDA_G_A:    ("model.layers.{bid}.self_attn.g_a_proj",),
-        MODEL_TENSOR.KDA_G_B:    ("model.layers.{bid}.self_attn.g_b_proj",),
-        MODEL_TENSOR.KDA_O_NORM: ("model.layers.{bid}.self_attn.o_norm",),
-        MODEL_TENSOR.KDA_DT_BIAS: (
+        # Kimi Linear KDA (using SSM_ prefix for consistency)
+        MODEL_TENSOR.SSM_CONV1D_Q: ("model.layers.{bid}.self_attn.q_conv1d",),
+        MODEL_TENSOR.SSM_CONV1D_K: ("model.layers.{bid}.self_attn.k_conv1d",),
+        MODEL_TENSOR.SSM_CONV1D_V: ("model.layers.{bid}.self_attn.v_conv1d",),
+        MODEL_TENSOR.SSM_F_A:      ("model.layers.{bid}.self_attn.f_a_proj",),
+        MODEL_TENSOR.SSM_F_B:      ("model.layers.{bid}.self_attn.f_b_proj",),
+        MODEL_TENSOR.SSM_BETA:     ("model.layers.{bid}.self_attn.b_proj",),
+        MODEL_TENSOR.SSM_A_LOG:    ("model.layers.{bid}.self_attn.A_log",),
+        MODEL_TENSOR.SSM_G_A:      ("model.layers.{bid}.self_attn.g_a_proj",),
+        MODEL_TENSOR.SSM_G_B:      ("model.layers.{bid}.self_attn.g_b_proj",),
+        MODEL_TENSOR.SSM_DT_B: (
             "model.layers.{bid}.self_attn.dt_bias",
         ),
 

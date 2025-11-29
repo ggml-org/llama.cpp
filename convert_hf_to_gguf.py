@@ -563,10 +563,10 @@ class ModelBase:
                             gguf.MODEL_TENSOR.A_ENC_EMBD_POS,
                             gguf.MODEL_TENSOR.ALTUP_CORRECT_COEF,
                             gguf.MODEL_TENSOR.ALTUP_PREDICT_COEF,
-                            # KDA conv weights should be F32
-                            gguf.MODEL_TENSOR.KDA_Q_CONV,
-                            gguf.MODEL_TENSOR.KDA_K_CONV,
-                            gguf.MODEL_TENSOR.KDA_V_CONV,
+                            # Kimi KDA conv weights should be F32
+                            gguf.MODEL_TENSOR.SSM_CONV1D_Q,
+                            gguf.MODEL_TENSOR.SSM_CONV1D_K,
+                            gguf.MODEL_TENSOR.SSM_CONV1D_V,
                         )
                     )
                     or new_name[-7:] not in (".weight", ".lora_a", ".lora_b")

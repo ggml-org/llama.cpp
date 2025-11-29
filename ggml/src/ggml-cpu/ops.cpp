@@ -8953,7 +8953,7 @@ static void ggml_compute_forward_kda_scan_f32(
     float * hk_buf = (float *) malloc(head_dim * sizeof(float));
 
     static int debug_count = 0;
-    bool do_debug = false; // (ith == 0 && debug_count++ < 3);
+    bool do_debug = false; // (ith == 0 && debug_count++ < 20);
     
     for (int i3 = 0; i3 < n_seqs; ++i3) {
         // Get initial hidden state for this sequence
@@ -9021,6 +9021,9 @@ static void ggml_compute_forward_kda_scan_f32(
                     k[i] = k_raw[i] / k_norm;
                 }
 
+                // KDA recurrence: h[t] = exp(g[t]) * h[t-1] + k[t]^T * (beta[t] * (v[t] - h[t-1] @ k[t]))
+                // Note: Apply decay first, then compute retrieval and update
+                
                 // Step 1: Apply decay to h first: h = h * exp(g)
                 for (int i = 0; i < head_dim; ++i) {
                     const float exp_gi = expf(g[i]);
@@ -9060,8 +9063,13 @@ static void ggml_compute_forward_kda_scan_f32(
                 
                 // Debug output
                 if (do_debug && ih == 0 && it == 0 && i3 == 0) {
-                    fprintf(stderr, "DEBUG KDA output: y[0]=%f, y[1]=%f, h[0]=%f, h[1]=%f\n",
-                            y[0], y[1], h[0], h[1]);
+                    // Find max abs value in h for stability check
+                    float h_max = 0.0f;
+                    for (int i = 0; i < head_dim * head_dim; i++) {
+                        if (fabsf(h[i]) > h_max) h_max = fabsf(h[i]);
+                    }
+                    fprintf(stderr, "DEBUG KDA: y[0]=%.6f, h_max=%.6f, exp(g[0])=%.6f\n",
+                            y[0], h_max, expf(g[0]));
                 }
             }
         }

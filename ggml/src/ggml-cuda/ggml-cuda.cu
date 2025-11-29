@@ -41,6 +41,7 @@
 #include "ggml-cuda/softmax.cuh"
 #include "ggml-cuda/ssm-conv.cuh"
 #include "ggml-cuda/ssm-scan.cuh"
+#include "ggml-cuda/kda-scan.cuh"
 #include "ggml-cuda/sum.cuh"
 #include "ggml-cuda/sumrows.cuh"
 #include "ggml-cuda/mean.cuh"
@@ -2691,6 +2692,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SSM_SCAN:
             ggml_cuda_op_ssm_scan(ctx, dst);
             break;
+        case GGML_OP_KDA_SCAN:
+            ggml_cuda_op_kda_scan(ctx, dst);
+            break;
         case GGML_OP_ARGSORT:
             ggml_cuda_op_argsort(ctx, dst);
             break;
@@ -4201,6 +4205,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 // (kernel only supports d_state == 16, d_head == 1, n_head % 128 == 0, n_group == 1)
                 return op->src[0]->ne[0] == 16 && op->src[0]->ne[1] == 1 && op->src[0]->ne[2] % 128 == 0 && op->src[4]->ne[1] == 1;
             }
+        }
+        case GGML_OP_KDA_SCAN: {
+            // KDA scan kernel supports head_dim 64 or 128
+            const int64_t head_dim = op->src[0]->ne[0];
+            return head_dim == 64 || head_dim == 128;
         }
         case GGML_OP_SSM_CONV: {
             // assumes d_inner % threads == 0

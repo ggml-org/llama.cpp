@@ -2520,19 +2520,18 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             { LLM_TENSOR_FFN_GATE_SHEXP,     "blk.%d.ffn_gate_shexp" },
             { LLM_TENSOR_FFN_DOWN_SHEXP,     "blk.%d.ffn_down_shexp" },
             { LLM_TENSOR_FFN_UP_SHEXP,       "blk.%d.ffn_up_shexp" },
-            // KDA
-            { LLM_TENSOR_KDA_Q_CONV,         "blk.%d.kda_q_conv" },
-            { LLM_TENSOR_KDA_K_CONV,         "blk.%d.kda_k_conv" },
-            { LLM_TENSOR_KDA_V_CONV,         "blk.%d.kda_v_conv" },
-            { LLM_TENSOR_KDA_F_A,            "blk.%d.kda_f_a" },
-            { LLM_TENSOR_KDA_F_B,            "blk.%d.kda_f_b" },
-            { LLM_TENSOR_KDA_B,              "blk.%d.kda_b" },
-            { LLM_TENSOR_KDA_A_LOG,          "blk.%d.kda_a_log" },
-            { LLM_TENSOR_KDA_DT_BIAS,        "blk.%d.kda_dt_bias" },
-            { LLM_TENSOR_KDA_G_A,            "blk.%d.kda_g_a" },
-            { LLM_TENSOR_KDA_G_B,            "blk.%d.kda_g_b" },
-            { LLM_TENSOR_KDA_O_NORM,         "blk.%d.kda_o_norm" },
-            { LLM_TENSOR_KDA_STATE,          "blk.%d.kda_state" },
+            // KDA (using SSM_ enum prefix, keeping GGUF names for backward compat)
+            { LLM_TENSOR_SSM_CONV1D_Q,       "blk.%d.ssm_conv1d_q" },
+            { LLM_TENSOR_SSM_CONV1D_K,       "blk.%d.ssm_conv1d_k" },
+            { LLM_TENSOR_SSM_CONV1D_V,       "blk.%d.ssm_conv1d_v" },
+            { LLM_TENSOR_SSM_F_A,            "blk.%d.ssm_f_a" },
+            { LLM_TENSOR_SSM_F_B,            "blk.%d.ssm_f_b" },
+            { LLM_TENSOR_SSM_BETA,           "blk.%d.ssm_beta" },
+            { LLM_TENSOR_SSM_A_LOG,          "blk.%d.ssm_a" },
+            { LLM_TENSOR_SSM_DT_B,           "blk.%d.ssm_dt" },
+            { LLM_TENSOR_SSM_G_A,            "blk.%d.ssm_g_a" },
+            { LLM_TENSOR_SSM_G_B,            "blk.%d.ssm_g_b" },
+            { LLM_TENSOR_SSM_NORM,           "blk.%d.ssm_norm" },
             // MLA
             { LLM_TENSOR_ATTN_Q_A,           "blk.%d.attn_q_a" },
             { LLM_TENSOR_ATTN_Q_B,           "blk.%d.attn_q_b" },
@@ -2763,19 +2762,17 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_NEXTN_HNORM,                {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,     {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,     {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
-    // Kimi - Conv tensors use MUL_MAT for now (SSM_CONV requires specific shape)
-    {LLM_TENSOR_KDA_Q_CONV,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_KDA_K_CONV,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_KDA_V_CONV,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_KDA_F_A,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_KDA_F_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_KDA_B,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}}, // Bias or similar
-    {LLM_TENSOR_KDA_A_LOG,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SCALE}}, // Parameter
-    {LLM_TENSOR_KDA_DT_BIAS,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},   // Bias
-    {LLM_TENSOR_KDA_G_A,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_KDA_G_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_KDA_O_NORM,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-    {LLM_TENSOR_KDA_STATE,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_NONE}},
+    // Kimi KDA - Conv tensors are 4D [d_conv, 1, d_inner, 1], reshaped to 2D at runtime
+    {LLM_TENSOR_SSM_CONV1D_Q,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_SSM_CONV1D_K,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_SSM_CONV1D_V,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_SSM_F_A,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_SSM_F_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_SSM_BETA,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_SSM_A_LOG,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_SSM_DT_B,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
+    {LLM_TENSOR_SSM_G_A,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_SSM_G_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}

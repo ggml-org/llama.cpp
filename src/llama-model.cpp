@@ -6427,29 +6427,29 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         const int64_t n_embd_head_v_kda = 128;
                         const int64_t ssm_d_conv = hparams.ssm_d_conv > 0 ? hparams.ssm_d_conv : 4;
                         
-                        // Try loading KDA specific tensors
+                        // Try loading KDA specific tensors (using SSM_ prefix)
                         // Conv1d weights: try 4D first, then 3D (quantization may remove trailing 1)
                         // 4D: [d_conv, 1, d_inner, 1], 3D: [d_conv, 1, d_inner]
-                        layer.kda_q_conv = create_tensor(tn(LLM_TENSOR_KDA_Q_CONV, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
-                        if (!layer.kda_q_conv) {
-                            layer.kda_q_conv = create_tensor(tn(LLM_TENSOR_KDA_Q_CONV, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head}, TENSOR_NOT_REQUIRED);
+                        layer.ssm_q_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_Q, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
+                        if (!layer.ssm_q_conv) {
+                            layer.ssm_q_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_Q, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head}, TENSOR_NOT_REQUIRED);
                         }
                         
-                        if (layer.kda_q_conv) {
+                        if (layer.ssm_q_conv) {
                              // KDA Layer - Conv1d weights may be 3D or 4D
-                             layer.kda_k_conv = create_tensor(tn(LLM_TENSOR_KDA_K_CONV, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
-                             if (!layer.kda_k_conv) {
-                                 layer.kda_k_conv = create_tensor(tn(LLM_TENSOR_KDA_K_CONV, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head}, 0);
+                             layer.ssm_k_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_K, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
+                             if (!layer.ssm_k_conv) {
+                                 layer.ssm_k_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_K, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head}, 0);
                              }
-                             layer.kda_v_conv = create_tensor(tn(LLM_TENSOR_KDA_V_CONV, "weight", i), {ssm_d_conv, 1, n_embd_head_v_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
-                             if (!layer.kda_v_conv) {
-                                 layer.kda_v_conv = create_tensor(tn(LLM_TENSOR_KDA_V_CONV, "weight", i), {ssm_d_conv, 1, n_embd_head_v_kda * n_head}, 0);
+                             layer.ssm_v_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_V, "weight", i), {ssm_d_conv, 1, n_embd_head_v_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
+                             if (!layer.ssm_v_conv) {
+                                 layer.ssm_v_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_V, "weight", i), {ssm_d_conv, 1, n_embd_head_v_kda * n_head}, 0);
                              }
                              
                              // Conv bias may not exist in all models - make optional
-                             layer.kda_q_conv_b = create_tensor(tn(LLM_TENSOR_KDA_Q_CONV, "bias", i), {n_embd_head_k_kda * n_head}, TENSOR_NOT_REQUIRED);
-                             layer.kda_k_conv_b = create_tensor(tn(LLM_TENSOR_KDA_K_CONV, "bias", i), {n_embd_head_k_kda * n_head}, TENSOR_NOT_REQUIRED);
-                             layer.kda_v_conv_b = create_tensor(tn(LLM_TENSOR_KDA_V_CONV, "bias", i), {n_embd_head_v_kda * n_head}, TENSOR_NOT_REQUIRED);
+                             layer.ssm_q_conv_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_Q, "bias", i), {n_embd_head_k_kda * n_head}, TENSOR_NOT_REQUIRED);
+                             layer.ssm_k_conv_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_K, "bias", i), {n_embd_head_k_kda * n_head}, TENSOR_NOT_REQUIRED);
+                             layer.ssm_v_conv_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_V, "bias", i), {n_embd_head_v_kda * n_head}, TENSOR_NOT_REQUIRED);
 
                              // q, k, v projections
                              // Python: q_proj, k_proj, v_proj
@@ -6459,39 +6459,31 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                              
                              // KDA specific projections
                              // f_a_proj, f_b_proj
-                             layer.kda_f_a = create_tensor(tn(LLM_TENSOR_KDA_F_A, "weight", i), {n_embd, n_embd_head_k_kda}, 0); // head_dim
-                             layer.kda_f_b = create_tensor(tn(LLM_TENSOR_KDA_F_B, "weight", i), {n_embd_head_k_kda, n_embd_head_k_kda * n_head}, 0); // projection_size
+                             layer.ssm_f_a = create_tensor(tn(LLM_TENSOR_SSM_F_A, "weight", i), {n_embd, n_embd_head_k_kda}, 0); // head_dim
+                             layer.ssm_f_b = create_tensor(tn(LLM_TENSOR_SSM_F_B, "weight", i), {n_embd_head_k_kda, n_embd_head_k_kda * n_head}, 0); // projection_size
                              
-                             // dt_bias (parameter)
-                             // b_proj (beta)
-                             layer.kda_b = create_tensor(tn(LLM_TENSOR_KDA_B, "weight", i), {n_embd, n_head}, 0);
+                             // b_proj (beta mixing coefficient)
+                             layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd, n_head}, 0);
                              
-                             // A_log - no suffix (parameter, not weight)
-                             // Shape in GGUF: [1, num_heads, 1, 1] (4D) or [1, num_heads] (2D after quantization)
-                             layer.kda_a_log = create_tensor(tn(LLM_TENSOR_KDA_A_LOG, i), {1, n_head, 1, 1}, TENSOR_NOT_REQUIRED);
-                             if (!layer.kda_a_log) {
-                                 layer.kda_a_log = create_tensor(tn(LLM_TENSOR_KDA_A_LOG, i), {1, n_head}, 0);
+                             // A_log - Shape in GGUF: [1, num_heads, 1, 1] (4D) or [1, num_heads] (2D after quantization)
+                             layer.ssm_a_log = create_tensor(tn(LLM_TENSOR_SSM_A_LOG, i), {1, n_head, 1, 1}, TENSOR_NOT_REQUIRED);
+                             if (!layer.ssm_a_log) {
+                                 layer.ssm_a_log = create_tensor(tn(LLM_TENSOR_SSM_A_LOG, i), {1, n_head}, 0);
                              }
                              
-                             // dt_bias - no suffix (parameter), shape [n_embd_head_k_kda * n_head] = [4096]
-                             layer.kda_dt_bias = create_tensor(tn(LLM_TENSOR_KDA_DT_BIAS, i), {n_embd_head_k_kda * n_head}, 0);
+                             // dt_bias - shape [n_embd_head_k_kda * n_head] = [4096]
+                             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT_B, i), {n_embd_head_k_kda * n_head}, 0);
                              
-                             // g_a_proj, g_b_proj
-                             layer.kda_g_a = create_tensor(tn(LLM_TENSOR_KDA_G_A, "weight", i), {n_embd, n_embd_head_k_kda}, 0);
-                             layer.kda_g_b = create_tensor(tn(LLM_TENSOR_KDA_G_B, "weight", i), {n_embd_head_k_kda, n_embd_head_k_kda * n_head}, 0);
+                             // g_a_proj, g_b_proj (output gate)
+                             layer.ssm_g_a = create_tensor(tn(LLM_TENSOR_SSM_G_A, "weight", i), {n_embd, n_embd_head_k_kda}, 0);
+                             layer.ssm_g_b = create_tensor(tn(LLM_TENSOR_SSM_G_B, "weight", i), {n_embd_head_k_kda, n_embd_head_k_kda * n_head}, 0);
                              
-                             // o_norm
-                             layer.kda_o_norm = create_tensor(tn(LLM_TENSOR_KDA_O_NORM, "weight", i), {n_embd_head_k_kda}, 0); // FusedRMSNormGated
-                             layer.kda_o_norm_b = create_tensor(tn(LLM_TENSOR_KDA_O_NORM, "bias", i), {n_embd_head_k_kda}, TENSOR_NOT_REQUIRED);
+                             // o_norm (reusing SSM_NORM)
+                             layer.ssm_o_norm = create_tensor(tn(LLM_TENSOR_SSM_NORM, "weight", i), {n_embd_head_k_kda}, 0); // FusedRMSNormGated
+                             layer.ssm_o_norm_b = create_tensor(tn(LLM_TENSOR_SSM_NORM, "bias", i), {n_embd_head_k_kda}, TENSOR_NOT_REQUIRED);
                              
                              // o_proj
                              layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v_kda * n_head, n_embd}, 0);
-                             
-                             // KDA hidden state for delta attention recurrence
-                             // Shape: [head_dim, head_dim, n_head] - this is NOT loaded from GGUF
-                             // It will be initialized to zeros and used during inference
-                             // The tensor is created but not allocated from file
-                             layer.kda_state = create_tensor(tn(LLM_TENSOR_KDA_STATE, i), {n_embd_head_k_kda, n_embd_head_k_kda, n_head}, TENSOR_NOT_REQUIRED);
 
                         } else {
                              // MLA Layer - use MLA-specific head dimensions
