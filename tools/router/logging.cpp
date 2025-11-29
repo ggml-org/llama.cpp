@@ -18,14 +18,3 @@ void router_log_init() {
     // messages without a second logging pipeline.
     llama_log_set(common_log_default_callback, nullptr);
 }
-
-namespace {
-struct router_log_initializer {
-    router_log_initializer() {
-        router_log_init();
-    }
-};
-
-const router_log_initializer router_log_initializer_instance;
-} // namespace
-
