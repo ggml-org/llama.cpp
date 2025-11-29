@@ -1388,30 +1388,8 @@ extern "C" {
     // Backend samplers
     //
 
-    /// @details Greedy sampling on backend - always selects the token with the highest probability
-    LLAMA_API struct llama_sampler * llama_sampler_backend_init_greedy(void);
-
-    /// @details Temperature scaling on backend - scales logits by 1/temperature
-    LLAMA_API struct llama_sampler * llama_sampler_backend_init_temp(float temp);
-
-    /// @details Top-K filtering on backend - keeps only the k tokens with highest probabilities
-    LLAMA_API struct llama_sampler * llama_sampler_backend_init_top_k(int32_t k);
-
-    /// @details Distribution sampling on backend - final sampling step that selects a token
-    LLAMA_API struct llama_sampler * llama_sampler_backend_init_dist(uint32_t seed);
-
-    /// @details Min-P filtering on backend - filter tokens with a probability less than p times the maximum probability.
-    LLAMA_API struct llama_sampler * llama_sampler_backend_init_min_p(float p);
-
-    /// @details Top-p filtering on backend - filter all tokens with cumulative pseudo-probability less than p.
-    LLAMA_API struct llama_sampler * llama_sampler_backend_init_top_p(float p);
-
     // Returns the seed used by the sampler if applicable, LLAMA_DEFAULT_SEED otherwise
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);
-
-    LLAMA_API struct llama_sampler * llama_sampler_backend_init_logit_bias(int32_t   n_vocab,
-                                                                 int32_t   n_logit_bias,
-                                                  const llama_logit_bias * logit_bias);
 
     /// @details Sample and accept a token from the idx-th output of the last evaluation
     //

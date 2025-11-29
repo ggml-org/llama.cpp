@@ -277,7 +277,7 @@ static void test_backend_greedy_sampling(const char * model_path) {
     struct llama_sampler_chain_params backend_sampler_params = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_sampler_params);
 
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_greedy());
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_greedy());
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
 
     if (!test_ctx.setup(model_path, backend_sampler_configs)) {
@@ -315,7 +315,7 @@ static void test_backend_top_k_sampling(const char * model_path) {
     const int32_t k = 8;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_top_k(k));
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_top_k(k));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
 
     if (!test_ctx.setup(model_path, backend_sampler_configs)) {
@@ -363,12 +363,12 @@ static void test_backend_temp_sampling(const char * model_path) {
     const float temp_0 = 0.8f;
     struct llama_sampler_chain_params backend_chain_params_0 = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain_0 = llama_sampler_chain_init(backend_chain_params_0);
-    llama_sampler_chain_add(backend_sampler_chain_0, llama_sampler_backend_init_temp(temp_0));
+    llama_sampler_chain_add(backend_sampler_chain_0, llama_sampler_init_temp(temp_0));
 
     const float temp_1 = 0.1f;
     struct llama_sampler_chain_params backend_chain_params_1 = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain_1 = llama_sampler_chain_init(backend_chain_params_1);
-    llama_sampler_chain_add(backend_sampler_chain_1, llama_sampler_backend_init_temp(temp_1));
+    llama_sampler_chain_add(backend_sampler_chain_1, llama_sampler_init_temp(temp_1));
 
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {
         { 0, backend_sampler_chain_0 },
@@ -430,7 +430,7 @@ static void test_backend_min_p_sampling(const char * model_path) {
     const float p = 0.1;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_min_p(p));
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_min_p(p, 0));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
 
     if (!test_ctx.setup(model_path, backend_sampler_configs)) {
@@ -488,7 +488,7 @@ static void test_backend_top_p_sampling(const char * model_path) {
     const float p = 0.9;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_top_p(p));
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_top_p(p, 0));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
 
     if (!test_ctx.setup(model_path, backend_sampler_configs)) {
@@ -541,12 +541,12 @@ static void test_backend_multi_sequence_sampling(const char * model_path) {
 
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
     struct llama_sampler * sampler_chain_0 = llama_sampler_chain_init(chain_params_0);
-    llama_sampler_chain_add(sampler_chain_0, llama_sampler_backend_init_greedy());
+    llama_sampler_chain_add(sampler_chain_0, llama_sampler_init_greedy());
 
     struct llama_sampler_chain_params chain_params_1 = llama_sampler_chain_default_params();
     struct llama_sampler * sampler_chain_1 = llama_sampler_chain_init(chain_params_1);
-    llama_sampler_chain_add(sampler_chain_1, llama_sampler_backend_init_temp(0.8f));
-    llama_sampler_chain_add(sampler_chain_1, llama_sampler_backend_init_greedy());
+    llama_sampler_chain_add(sampler_chain_1, llama_sampler_init_temp(0.8f));
+    llama_sampler_chain_add(sampler_chain_1, llama_sampler_init_greedy());
 
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {
         { 0, sampler_chain_0 },
@@ -613,7 +613,7 @@ static void test_backend_dist_sampling(const char * model_path) {
     const int32_t seed = 88;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_dist(seed));
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
 
     if (!test_ctx.setup(model_path, backend_sampler_configs)) {
@@ -642,7 +642,7 @@ static void test_backend_dist_sampling_and_cpu(const char * model_path) {
     const int32_t seed = 88;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_dist(seed));
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
 
     if (!test_ctx.setup(model_path, backend_sampler_configs)) {
@@ -689,11 +689,11 @@ static void test_backend_logit_bias_sampling(const char * model_path) {
 
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_logit_bias(
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_logit_bias(
                 llama_vocab_n_tokens(test_ctx.vocab),
                 logit_bias.size(),
                 logit_bias.data()));
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_dist(88));
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_dist(88));
 
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {
         { seq_id, backend_sampler_chain },
@@ -720,12 +720,12 @@ static void test_backend_mixed_sampling(const char * model_path) {
 
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
     struct llama_sampler * sampler_chain_0 = llama_sampler_chain_init(chain_params_0);
-    llama_sampler_chain_add(sampler_chain_0, llama_sampler_backend_init_dist(88));
+    llama_sampler_chain_add(sampler_chain_0, llama_sampler_init_dist(88));
 
     int k = 40;
     struct llama_sampler_chain_params chain_params_1 = llama_sampler_chain_default_params();
     struct llama_sampler * sampler_chain_1 = llama_sampler_chain_init(chain_params_1);
-    llama_sampler_chain_add(sampler_chain_1, llama_sampler_backend_init_top_k(k));
+    llama_sampler_chain_add(sampler_chain_1, llama_sampler_init_top_k(k));
 
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {
         { 0, sampler_chain_0 },
@@ -776,7 +776,7 @@ static void test_backend_set_sampler(const char * model_path) {
     const int seq_id = 0;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_dist(seed));
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
 
     if (!test_ctx.setup(model_path, backend_sampler_configs)) {
@@ -822,8 +822,8 @@ static void test_backend_set_sampler(const char * model_path) {
     // Set a new backend sampler for the sequence.
     struct llama_sampler_chain_params new_backend_chain_params = llama_sampler_chain_default_params();
     struct llama_sampler * new_backend_sampler_chain = llama_sampler_chain_init(new_backend_chain_params);
-    llama_sampler_chain_add(new_backend_sampler_chain, llama_sampler_backend_init_top_k(20));
-    llama_sampler_chain_add(new_backend_sampler_chain, llama_sampler_backend_init_dist(seed));
+    llama_sampler_chain_add(new_backend_sampler_chain, llama_sampler_init_top_k(20));
+    llama_sampler_chain_add(new_backend_sampler_chain, llama_sampler_init_dist(seed));
     llama_set_backend_sampler(test_ctx.ctx, seq_id, new_backend_sampler_chain);
 
     if (!test_ctx.decode_tokens(tokens2)) {
@@ -841,7 +841,7 @@ static void test_backend_cpu_mixed_batch(const char * model_path) {
     // Sequence 0 uses backend sampling
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
     struct llama_sampler * sampler_chain_0 = llama_sampler_chain_init(chain_params_0);
-    llama_sampler_chain_add(sampler_chain_0, llama_sampler_backend_init_dist(88));
+    llama_sampler_chain_add(sampler_chain_0, llama_sampler_init_dist(88));
 
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {
         { 0, sampler_chain_0 },
@@ -912,7 +912,7 @@ static void test_backend_cpu_mixed_batch(const char * model_path) {
     {
         struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
         struct llama_sampler * sampler_chain= llama_sampler_chain_init(chain_params);
-        llama_sampler_chain_add(sampler_chain, llama_sampler_backend_init_dist(88));
+        llama_sampler_chain_add(sampler_chain, llama_sampler_init_dist(88));
 
         llama_set_backend_sampler(test_ctx.ctx, 0, sampler_chain);
 
@@ -937,7 +937,7 @@ static void test_backend_max_outputs(const char * model_path) {
     const int32_t seed = 88;
     llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
     llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
-    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_backend_init_dist(seed));
+    llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain }};
 
     if (!test_ctx.setup(model_path, backend_sampler_configs)) {
