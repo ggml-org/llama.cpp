@@ -1014,8 +1014,8 @@ struct ggml_cuda_concurrent_event {
         std::vector<std::vector<std::pair<int64_t, int64_t>>> write_ranges;
         write_ranges.resize(n_streams);
 
-        // Get join_node's memory range to exclude from overlap checking.
-        // Multiple nodes can use join_node's buffer; we synchronize on the join node.
+        // get join_node's memory range to exclude from overlap checking.
+        // multiple nodes can use join_node's buffer; we synchronize on the join node.
         const ggml_tensor * join_t     = join_node->view_src ? join_node->view_src : join_node;
         const int64_t       join_start = (int64_t) join_t->data;
         const int64_t       join_end   = join_start + ggml_nbytes(join_t);
@@ -1025,8 +1025,8 @@ struct ggml_cuda_concurrent_event {
             const int64_t       t_start = (int64_t) t->data;
             const int64_t       t_end   = t_start + ggml_nbytes(t);
 
-            // Skip tensors that overlap with join_node's buffer.
-            if (t_start < join_end && join_start < t_end) {
+            // skip tensors that overlap with join_node's buffer.
+            if ((t_start <= join_start && join_start < t_end) || (join_start <= t_start && t_start < join_end)) {
                 continue;
             }
 
@@ -1046,8 +1046,8 @@ struct ggml_cuda_concurrent_event {
             const int64_t       t_start = (int64_t) t->data;
             const int64_t       t_end   = t_start + ggml_nbytes(t);
 
-            // Skip tensors that overlap with join_node's buffer (already excluded from write_ranges).
-            if (t_start < join_end && join_start < t_end) {
+            // skip tensors that overlap with join_node's buffer
+            if ((t_start <= join_start && join_start < t_end) || (join_start <= t_start && t_start < join_end)) {
                 continue;
             }
 

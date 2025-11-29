@@ -3224,9 +3224,9 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
             [[maybe_unused]] int prev_i = 0;
 
             if (stream_ctx.concurrent_events.size() > 0) {
-                bool should_launch_concurrent_events = true;
+                should_launch_concurrent_events = true;
                 for (const auto & [tensor, event] : stream_ctx.concurrent_events) {
-                    should_launch_concurrent_events &= event.is_valid();
+                    should_launch_concurrent_events = should_launch_concurrent_events && event.is_valid();
                 }
             }
             if (should_launch_concurrent_events) {
