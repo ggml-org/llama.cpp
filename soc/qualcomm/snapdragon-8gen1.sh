@@ -2,6 +2,8 @@
 
 # Snapdragon 8+ Gen 1 Llama.cpp 编译优化脚本
 
+# By https://github.com/Insecta258 Email:2701262643@qq.com
+
 pkg update
 pkg upgrade
 

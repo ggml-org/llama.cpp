@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# By https://github.com/Insecta258 Email:2701262643@qq.com
+
 pkg update
 pkg upgrade
 
