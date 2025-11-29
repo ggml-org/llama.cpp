@@ -1,0 +1,146 @@
+/*
+
+   BLIS
+   An object-based framework for developing high-performance BLAS-like
+   libraries.
+
+   Copyright (C) 2023, Southern Methodist University
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+    - Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    - Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    - Neither the name(s) of the copyright holder(s) nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+   HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
+
+#include "blis.h"
+
+//
+// Parameters passed to the plugin registration and initialization
+// functions.
+//
+
+#define plugin_@plugin_name@_params \
+\
+       kerid_t* bszids, /* <----- Example arguments       */ \
+       kerid_t* kerids, /* <----- for plugin registration */ \
+       kerid_t* prefids /* <----- and initialization.     */
+
+#define plugin_@plugin_name@_params_only \
+\
+       bszids, /* <----- We also sometimes need   */ \
+       kerids, /* <----- the names of the         */ \
+       prefids /* <----- arguments without types. */
+
+// ---------------------------------------------------------------------------->
+// -- Example blocksize, micro-kernel, and preference enumerations. ----------->
+// ---------------------------------------------------------------------------->
+
+enum
+{
+	MY_BLKSZ_1,
+	MY_BLKSZ_2,
+
+	MY_NUM_BLOCK_SIZES
+};
+
+enum
+{
+	MY_KERNEL_1,
+	MY_KERNEL_2,
+
+	MY_NUM_KERNELS
+};
+
+enum
+{
+	MY_PREF_1,
+	MY_PREF_2,
+
+	MY_NUM_KERNEL_PREFS
+};
+
+// <----------------------------------------------------------------------------
+// <----------------------------------------------------------------------------
+// <----------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------->
+// -- Example prototypes for kernel functions. -------------------------------->
+// ---------------------------------------------------------------------------->
+
+// Reference kernels for all data types
+#undef GENTPROT
+#define GENTPROT( ctype, ch, config_infix ) \
+\
+void PASTEMAC(ch,my_kernel_1,config_infix,BLIS_REF_SUFFIX) \
+     ( \
+             int    n, \
+       const ctype* a, \
+             ctype* x  \
+     );
+
+// Reference kernels for only complex data types
+#undef GENTPROTCO
+#define GENTPROTCO( ctype, ctyper, ch, chr, config_infix ) \
+\
+void PASTEMAC(ch,my_kernel_2,config_infix,BLIS_REF_SUFFIX) \
+     ( \
+       int    m, \
+       int    n, \
+       ctype* a  \
+     );
+
+// Optimized kernels
+void bli_dmy_kernel_1_zen3
+     (
+             int    n,
+       const double* a,
+             double* x
+     );
+
+// Generate reference kernel prototypes for each configuration AND data type
+#undef GENTCONF
+#define GENTCONF( CONFIG, config ) \
+\
+INSERT_GENTPROT_BASIC( PASTECH(_,config) ) \
+INSERT_GENTPROTCO_BASIC( PASTECH(_,config) )
+
+INSERT_GENTCONF
+
+// <----------------------------------------------------------------------------
+// <----------------------------------------------------------------------------
+// <----------------------------------------------------------------------------
+
+//
+// Registration and intialization function prototypes.
+//
+
+#undef GENTCONF
+#define GENTCONF( CONFIG, config ) \
+\
+void PASTEMAC(plugin_init_@plugin_name@_,config)( plugin_@plugin_name@_params ); \
+void PASTEMAC(plugin_init_@plugin_name@_,config,BLIS_REF_SUFFIX)( plugin_@plugin_name@_params );
+
+INSERT_GENTCONF
+
+BLIS_EXPORT_BLIS err_t bli_plugin_register_@plugin_name@( plugin_@plugin_name@_params );
+

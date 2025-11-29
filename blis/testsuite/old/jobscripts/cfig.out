@@ -1,0 +1,106 @@
+configure: detected Linux kernel version 4.14.0-115.6.1.el7a.ppc64le.
+configure: python interpeter search list is: python python3 python2.
+configure: using 'python' python interpreter.
+configure: found python version 2.7.5 (maj: 2, min: 7, rev: 5).
+configure: python 2.7.5 appears to be supported.
+configure: C compiler search list is: gcc clang cc.
+configure: using 'gcc' C compiler.
+configure: C++ compiler search list is: g++ clang++ c++.
+configure: using 'g++' C++ compiler (for sandbox only).
+configure: found gcc version 8.2.0 (maj: 8, min: 2, rev: 0).
+configure: checking for blacklisted configurations due to gcc 8.2.0.
+configure: found assembler ('as') version 2.27 (maj: 2, min: 27, rev: ).
+configure: checking for blacklisted configurations due to as 2.27.
+configure: warning: assembler ('as' 2.27) does not support 'bulldozer'; adding to blacklist.
+configure: warning: assembler ('as' 2.27) does not support 'sandybridge'; adding to blacklist.
+configure: warning: assembler ('as' 2.27) does not support 'haswell'; adding to blacklist.
+configure: warning: assembler ('as' 2.27) does not support 'piledriver'; adding to blacklist.
+configure: warning: assembler ('as' 2.27) does not support 'steamroller'; adding to blacklist.
+configure: warning: assembler ('as' 2.27) does not support 'excavator'; adding to blacklist.
+configure: warning: assembler ('as' 2.27) does not support 'skx'; adding to blacklist.
+configure: warning: assembler ('as' 2.27) does not support 'knl'; adding to blacklist.
+configure: configuration blacklist:
+configure:   bulldozer sandybridge haswell piledriver steamroller excavator skx knl
+configure: reading configuration registry...done.
+configure: determining default version string.
+configure: found '.git' directory; assuming git clone.
+configure: executing: git describe --tags.
+configure: git returned an error: 'Unknown option: -C
+usage: git [--version] [--help] [-c name=value]
+           [--exec-path[=<path>]] [--html-path] [--man-path] [--info-path]
+           [-p|--paginate|--no-pager] [--no-replace-objects] [--bare]
+           [--git-dir=<path>] [--work-tree=<path>] [--namespace=<name>]
+           <command> [<args>]'.
+configure: using string from unmodified version file.
+configure: starting configuration of BLIS 0.6.0.
+configure: configuring with official version string.
+configure: found shared library .so version '2.0.0'.
+configure:   .so major version: 2
+configure:   .so minor.build version: 0.0
+configure: manual configuration requested; configuring with 'power9'.
+configure: checking configuration against contents of 'config_registry'.
+configure: configuration 'power9' is registered.
+configure: 'power9' is defined as having the following sub-configurations:
+configure:    power9
+configure: which collectively require the following kernels:
+configure:    power9
+configure: checking sub-configurations:
+configure:   'power9' is registered...and exists.
+configure: checking sub-configurations' requisite kernels:
+configure:   'power9' kernels...exist.
+configure: no install prefix option given; defaulting to '/usr/local'.
+configure: no install exec_prefix option given; defaulting to PREFIX.
+configure: no install libdir option given; defaulting to EXECPREFIX/lib.
+configure: no install includedir option given; defaulting to PREFIX/include.
+configure: no install sharedir option given; defaulting to PREFIX/share.
+configure: final installation directories:
+configure:   prefix:      /usr/local
+configure:   exec_prefix: ${prefix}
+configure:   libdir:      ${exec_prefix}/lib
+configure:   includedir:  ${prefix}/include
+configure:   sharedir:    ${prefix}/share
+configure: NOTE: the variables above can be overridden when running make.
+configure: no preset CFLAGS detected.
+configure: no preset LDFLAGS detected.
+configure: debug symbols disabled.
+configure: disabling verbose make output. (enable with 'make V=1'.)
+configure: disabling ARG_MAX hack.
+configure: building BLIS as both static and shared libraries.
+configure: exporting only public symbols within shared library.
+configure: threading is disabled.
+configure: requesting slab threading in jr and ir loops.
+configure: internal memory pools for packing blocks are enabled.
+configure: internal memory pools for small blocks are enabled.
+configure: memory tracing output is disabled.
+configure: libmemkind not found; disabling.
+configure: compiler appears to not support #pragma omp simd.
+configure: the BLAS compatibility layer is enabled.
+configure: the CBLAS compatibility layer is disabled.
+configure: mixed datatype support is enabled.
+configure: mixed datatype optimizations requiring extra memory are enabled.
+configure: small matrix handling is enabled.
+configure: the BLIS API integer size is automatically determined.
+configure: the BLAS/CBLAS API integer size is 32-bit.
+configure: configuring for conventional gemm implementation.
+configure: creating ./config.mk from ./build/config.mk.in
+configure: creating ./bli_config.h from ./build/bli_config.h.in
+configure: creating ./obj/power9
+configure: creating ./obj/power9/config/power9
+configure: creating ./obj/power9/kernels/power9
+configure: creating ./obj/power9/ref_kernels/power9
+configure: creating ./obj/power9/frame
+configure: creating ./obj/power9/blastest
+configure: creating ./obj/power9/testsuite
+configure: creating ./lib/power9
+configure: creating ./include/power9
+configure: mirroring ./config/power9 to ./obj/power9/config/power9
+configure: mirroring ./kernels/power9 to ./obj/power9/kernels/power9
+configure: mirroring ./ref_kernels to ./obj/power9/ref_kernels
+configure: mirroring ./ref_kernels to ./obj/power9/ref_kernels/power9
+configure: mirroring ./frame to ./obj/power9/frame
+configure: creating makefile fragments in ./obj/power9/config/power9
+configure: creating makefile fragments in ./obj/power9/kernels/power9
+configure: creating makefile fragments in ./obj/power9/ref_kernels
+configure: creating makefile fragments in ./obj/power9/frame
+configure: configured to build within top-level directory of source distribution.
+CONFIGURE DONE

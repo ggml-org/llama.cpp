@@ -1,0 +1,202 @@
+Welcome to the Altra Platform!  We've made some scripts to help you build and use blis,
+but feel free to look at them for your own inspiration.
+Note that all the provided scripts must be SOURCED, NOT executed!  This is because they
+set up environment variables needed for the steps below.
+ 
+Using BLIS requires a few steps:
+
+1) Configuring the library
+2) Building the library & validating it
+3) Linking your program with BLIS
+4) Setting the environment parameters for an optimized blis to run your program
+
+Let's briefly touch on these points, and how the scripts provided can help
+But first, let's make sure your configuration is correct...
+
+Open blis_setenv.sh
+In the Platform Specific: section, around line 50 or so, you will see:
+firmware=107
+or
+firmware=108
+
+If your firmware is version 1.08 or greater, make sure this is set to 108, else make sure
+it's set to 107.  Ampere entirely changed the CoreID mappings between these versions.
+
+The Altra Platform updated their firmware to 1.08 in May 2021, so if your firmware was
+updated later than that, odds are good that you have 2.04 or later.
+
+Note: the scripts referenced here modify environment variables, so they must be sourced.
+E.g., with
+    source <script_name>
+or
+    . <script_name>
+
+===================================================
+1) Configuring the library
+2) Building the library & validating it
+===================================================
+
+There are custom configuration options for Altra, but, as a user, your main decision is
+whether you want BLIS to use OpenMP or pthreads for parallelism?  OpenMP is the default
+option, since OpenMP allows thread pinning and thus results in better performance.
+To build with OpenMP use:
+
+. ./blis_build_altra.sh
+
+However, some platforms (like MacOS) cannot use OpenMP at all.  In this case, you want
+to build the pThreads version of BLIS:
+
+. ./blis_build_altra_pthreads.sh
+
+In both cases, it will create libblis.a in $BLIS_HOME/lib/$BLIS_ARCH
+
+Try doing that in the root blis directory, depending on your OS.
+
+LINUX:
+. ./blis_build_altra.sh
+
+MacOS Apple Silicon:
+. ./blis_build_altra_pthreads.sh
+
+----------------------------------------------------------------------------
+HOWEVER, there is a tricky case: If you link BLIS with a program that uses pThreads, you
+MUST use the pthreads version of BLIS, even though it will be slower.  This is because
+there is a bug in which attempting to use both pthreads AND OpenMP will pin all threads to
+a single core and essentially freeze your program.
+
+If this is a possibility, you may want to have both libraries available and switch between
+them for each application.  The script:
+
+. ./blis_build_both_libraries.sh
+
+will build both versions, with the pThreads version being called libblisP.a, and a second
+header blisP.h
+This is a little inconvenient, and we're working on improving the situation in the near
+future.
+----------------------------------------------------------------------------
+
+The build will additionally check the library, but if you would like to check a la carte, do
+
+. ./blis_test.sh
+
+You should see near the bottom:
+check-blastest.sh: All BLAS tests passed!
+check-blistest.sh: All BLIS tests passed!
+
+--------------------------------
+Finally, here's a script that will be important when you are doing testing.
+This performs the important step of unsetting any parameters effecting blis parallelism.
+
+. ./blis_unset_par.sh
+
+===================================================
+3) Building and Linking your program with BLIS
+===================================================
+
+This depends whether you are using the pThreads version of BLIS or the OpenMP version...
+Note this uses the BLIS locations automatically defined when sourcing blis_setenv.sh
+
+. ./blis_setenv.sh
+
+(This will display you environment variable settings, your blis libraries and headers (if
+built), and also unset blis parallelism parameters for safety.)
+
+// BUILDING your app with the OpenMP version of BLIS:
+// Note: Don't need -lomp on Linux
+
+gcc -fopenmp -O2 -g -I$BLIS_HOME/include/$BLIS_ARCH MyFiles.c $BLIS_HOME/lib/$BLIS_ARCH/libblis.a -lpthread -lm -o MyExe
+
+// To build with pThreads
+gcc -O2 -g -I$BLIS_HOME/include/$BLIS_ARCH MyFiles.c $BLIS_HOME/lib/$BLIS_ARCH/libblis.a -lpthread -lm -o MyExe
+
+// NOTE: If you used the scripts to build BOTH versions of blis, then use the renamed blis lib:
+gcc -O2 -g -I$BLIS_HOME/include/$BLIS_ARCH MyFiles.c $BLIS_HOME/lib/$BLIS_ARCH/libblisP.a -lpthread -lm -o MyExe
+
+Let's try building a sample program that we've included to test BLIS:
+TimeDGEMM.c
+
+If this is a new terminal session, make sure to:
+. ./blis_setenv.sh
+(there's no harm in running it again.)
+
+Linux:
+gcc -fopenmp -O2 -g -I$BLIS_HOME/include/$BLIS_ARCH TimeDGEMM.c $BLIS_HOME/lib/$BLIS_ARCH/libblis.a -lpthread -lm -o time_gemm.x
+
+Apple Silicon:
+gcc -O2 -g -I$BLIS_HOME/include/$BLIS_ARCH TimeDGEMM.c $BLIS_HOME/lib/$BLIS_ARCH/libblis.a -lpthread -lm -o time_gemm.x
+
+But don't try a timed run, yet - there's some runtime setup that needs to be done...
+
+===================================================
+4) Setting the environment parameters for an optimized blis to run your program
+===================================================
+
+The performance of some BLAS libraries are very sensitive to the compiler or the page size. 
+BLIS is not sensitive to either of these things, but it IS extremely dependent on pinning
+the right threads to the right cores.  We have scripts to help...
+
+. ./blis_setenv.sh
+
+This not only tells you where blis is, but it also creates shell functions to set
+affinity, threading, and NUMA control for each run.  There is a shell function created
+that you can call to set up how your threads will be pinned and used:
+
+blis_set_cores_and_sockets <ncores> <nsockets>
+
+Specifying the number of sockets is important because BLIS is configured very differently
+for one vs two sockets.
+
+Example:
+# Set up for a run with 128 total cores, half on each of 2 sockets.
+blis_set_cores_and_sockets 128 2
+
+You can also use the following aliases:
+blis_set_cores_1S 80  # Run 80 cores on 1 socket
+blis_set_cores_2S 160 # Run 160 cores across 2 sockets, 80 on each
+
+NOTE that at the moment, for multi-threaded BLIS, we only support active number of threads
+that are a multiple of 8.
+If you want to test single threaded performance, you can set
+
+export BLIS_NUM_THREADS=1
+
+Launching your executable:
+
+If your application is MyExe, your commands to perform an optimized BLIS run might look
+like this:
+
+blis_set_cores_2S 160
+$BLIS_NUMA MyExe
+
+This will set cpu affinity correctly, set BLIS parallelism correctly, set the NUMA
+mode correctly, and launch your EXE.
+
+---------------------------------------------------
+
+Let's try an example using the executable that you created in section 3, remembering that
+if you're on an Apple Silicon Mac, make sure that you don't use more cores than you have.
+(For example, 8 on an M1 Max.)
+
+Apple Silicon: (No NUMA is needed for Apple Mac)
+
+blis_set_cores_1S 8; ./time_gemm.x 8000
+(in tests, we obtained about 95% of peak with Neon64 - about 366 Gigaflops)
+
+Altra Dual Socket:
+blis_set_cores_2S 160; $BLIS_NUMA ./time_gemm.x 12000
+(in tests, we obtained about 3.2 TF, or 82% of peak
+
+CONGRATULATIONS!  You're ready to use BLIS!
+
+===================================================
+Performance Note:
+===================================================
+We continue to enhance BLIS performance on the Altra.
+One current issue is that not all variants of triangular operations obtain full
+performance.
+
+For TRSM, best performance is with left triangular operations.
+For TRMM, DUAL SOCKET, best performance is with left triangular operations.
+For TRMM, SINGLE SOCKET, best performance is with right triangular operations.
+
+

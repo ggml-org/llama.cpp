@@ -1,0 +1,143 @@
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <float.h>
+#include <limits.h>
+#include "blis.h"
+
+/*###################################################
+// To build with openmp:
+// Note: Don't need the -lomp on Linux
+gcc -fopenmp -O2 -g -I$BLIS_HOME/include/$BLIS_ARCH TimeDGEMM.c $BLIS_HOME/lib/$BLIS_ARCH/libblis.a -lpthread -lm -o time_gemm.x
+
+// To build with pThreads
+source ./enable_blis.sh
+gcc -O2 -g -I$BLIS_HOME/include/$BLIS_ARCH TimeDGEMM.c $BLIS_HOME/lib/$BLIS_ARCH/libblis.a -lpthread -lm -o time_gemm.x
+
+// To run with QuickStart Macros...
+for N_CORES, S_SOCKETS
+
+blis_set_cores_and_sockets N S; $BLIS_NUMA time_gemm.x
+
+###################################################*/
+
+#include <stdarg.h>  // for Linux stdarg
+
+//###################################################
+// Handy blis functions
+//###################################################
+
+// Returns 0.0 if out ofmatrix
+double GetReal(obj_t *m, int row, int col)
+  {
+  double im = 0, re = 0; // Imaginary component
+  if (!m) return 0.0;
+    
+  bli_getijm(row, col, m, &re, &im);
+  return re;
+  }
+  
+bool SetReal(obj_t *m, int row, int col, double dVal)
+  {
+  if (!m) return 0.0;
+  bli_setijm(dVal, 0.0, row, col, m);
+    
+  return true;
+  }
+
+//###################################################
+// The basic meat - a one shot
+//###################################################
+
+bool TimeBlis(long size)
+  {
+  int repeat = 3; // Best Of!
+  double dAlpha = 1.0, dBeta = 0.0; // simplest case!
+
+  //============== Allocate matrices =============
+  obj_t*  alpha = (obj_t*) calloc(1, sizeof(obj_t));
+  obj_t*  beta = (obj_t*) calloc(1, sizeof(obj_t));
+
+  bli_obj_create(BLIS_DOUBLE, 1, 1, 0, 0, alpha);
+  bli_obj_create(BLIS_DOUBLE, 1, 1, 0, 0, beta);
+
+  // Full gemm is alpha * A * B + beta * C
+  bli_setsc(dAlpha, 0.0, alpha); // alpha is one
+  bli_setsc(dBeta, 0.0, beta); // beta is zero
+  //==============================================
+  printf("Initializing %g GB of Matrices...\n", 8.0 * size * size * 3.0 / 1024.0 / 1024.0 / 1024.0);
+    
+  obj_t*  a = (obj_t*) calloc(1, sizeof(obj_t));
+  obj_t*  b = (obj_t*) calloc(1, sizeof(obj_t));
+  obj_t*  c = (obj_t*) calloc(1, sizeof(obj_t));
+
+  bli_obj_create(BLIS_DOUBLE, size, size, size, 1, c);
+  bli_obj_create(BLIS_DOUBLE, size, size, size, 1, a);
+  bli_obj_create(BLIS_DOUBLE, size, size, size, 1, b);
+  
+  // Create Random matrices
+  // that are well conditioned and invertible
+  // (Note: this can be slow)
+  //
+  bli_randm(c);
+  bli_randm(a);
+  bli_randm(b);
+  
+  //==============================================
+  // DO the timing, blis style...
+  //==============================================
+   
+  double dBestTime = DBL_MAX;
+  
+  for (int i = 0; i < repeat; i++)
+    {
+    printf("Performing DGEMM %d of %d\n", i + 1, repeat); fflush(stdout);
+    double dStartTime = bli_clock();
+    
+    bli_gemm(alpha, a, b, beta, c);
+    
+    // Always look at best of N for timing!
+    dBestTime = bli_clock_min_diff( dBestTime, dStartTime );
+    }
+    
+  double gflops = ( 2.0 * size * size * size ) / ( dBestTime * 1.0e9 );
+
+  printf("Best DGEMM run completed in %g seconds @ size= \t %ld \t %g \t gigaflops\n",
+         dBestTime, size, gflops); fflush(stdout);
+
+  return true;
+  }
+
+
+int main( int argc, char** argv )
+  {
+  long size = 0;
+  int cores = 1, sweep_inc = 0;
+    
+  printf("Details of parallelism are set by environment variables.\n");
+  printf("Arg1 = size=M=N=K for DGEMM\n"
+  			"optional arg2 = size step for sweep.\n");
+  
+  if (argc < 2) return 0;
+  
+  if (argc > 1) {
+    size = atol(argv[1]);
+    printf("User set size to %ld\n", size);
+    }
+
+  if (argc > 2) {
+      sweep_inc = atoi(argv[3]);
+      printf("User set sweep size inc to %d\n", sweep_inc);
+      }
+
+  if (sweep_inc == 0) TimeBlis(size);
+  else
+    {
+    for (int i = size; i >= sweep_inc; i -= sweep_inc)
+      TimeBlis(i);
+    }
+    
+  return 0;
+  }

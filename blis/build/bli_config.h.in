@@ -1,0 +1,205 @@
+/*
+
+   BLIS
+   An object-based framework for developing high-performance BLAS-like
+   libraries.
+
+   Copyright (C) 2014, The University of Texas at Austin
+   Copyright (C) 2018 - 2019, Advanced Micro Devices, Inc.
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions are
+   met:
+    - Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    - Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    - Neither the name(s) of the copyright holder(s) nor the names of its
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+   HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
+
+#ifndef BLIS_CONFIG_H
+#define BLIS_CONFIG_H
+
+// Enabled configuration "family" (config_name)
+@config_name_define@
+
+// Enabled sub-configurations (config_list)
+@config_list_defines@
+
+// Enabled kernel sets (kernel_list)
+@kernel_list_defines@
+
+// Disabled symbols (symbol_omit_list)
+@omit_symbol_list_defines@
+
+#define BLIS_VERSION_STRING "@version@"
+
+#define BLIS_VERSION_MAJOR @version_major@
+#define BLIS_VERSION_MINOR @version_minor@
+#define BLIS_VERSION_REVISION @version_revision@
+
+#if @enable_system@
+#define BLIS_ENABLE_SYSTEM
+#else
+#define BLIS_DISABLE_SYSTEM
+#endif
+
+#if @enable_tls@
+#define BLIS_ENABLE_TLS
+#else
+#define BLIS_DISABLE_TLS
+#endif
+
+#if @enable_openmp@
+#define BLIS_ENABLE_OPENMP
+#if @enable_openmp_as_def@
+#define BLIS_ENABLE_OPENMP_AS_DEFAULT
+#endif
+#endif
+
+#if @enable_pthreads@
+#define BLIS_ENABLE_PTHREADS
+#if @enable_pthreads_as_def@
+#define BLIS_ENABLE_PTHREADS_AS_DEFAULT
+#endif
+#endif
+
+#if @enable_hpx@
+#define BLIS_ENABLE_HPX
+#if @enable_hpx_as_def@
+#define BLIS_ENABLE_HPX_AS_DEFAULT
+#endif
+#endif
+
+#if @enable_jrir_slab@
+#define BLIS_ENABLE_JRIR_SLAB
+#endif
+
+#if @enable_jrir_rr@
+#define BLIS_ENABLE_JRIR_RR
+#endif
+
+#if @enable_jrir_tlb@
+#define BLIS_ENABLE_JRIR_TLB
+#endif
+
+#if @enable_pba_pools@
+#define BLIS_ENABLE_PBA_POOLS
+#else
+#define BLIS_DISABLE_PBA_POOLS
+#endif
+
+#if @enable_sba_pools@
+#define BLIS_ENABLE_SBA_POOLS
+#else
+#define BLIS_DISABLE_SBA_POOLS
+#endif
+
+#if @enable_mem_tracing@
+#define BLIS_ENABLE_MEM_TRACING
+#else
+#define BLIS_DISABLE_MEM_TRACING
+#endif
+
+#if @enable_scalapack_compat@
+#define BLIS_ENABLE_SCALAPACK_COMPAT
+#else
+#define BLIS_DISABLE_SCALAPACK_COMPAT
+#endif
+
+#if @int_type_size@ == 64
+#define BLIS_INT_TYPE_SIZE 64
+#elif @int_type_size@ == 32
+#define BLIS_INT_TYPE_SIZE 32
+#else
+// determine automatically
+#endif
+
+#if @blas_int_type_size@ == 64
+#define BLIS_BLAS_INT_TYPE_SIZE 64
+#elif @blas_int_type_size@ == 32
+#define BLIS_BLAS_INT_TYPE_SIZE 32
+#else
+// determine automatically
+#endif
+
+#ifndef BLIS_ENABLE_BLAS
+#ifndef BLIS_DISABLE_BLAS
+#if @enable_blas@
+#define BLIS_ENABLE_BLAS
+#else
+#define BLIS_DISABLE_BLAS
+#endif
+#endif
+#endif
+
+#ifndef BLIS_ENABLE_CBLAS
+#ifndef BLIS_DISABLE_CBLAS
+#if @enable_cblas@
+#define BLIS_ENABLE_CBLAS
+#else
+#define BLIS_DISABLE_CBLAS
+#endif
+#endif
+#endif
+
+#if @enable_sup_handling@
+#define BLIS_ENABLE_SUP_HANDLING
+#else
+#define BLIS_DISABLE_SUP_HANDLING
+#endif
+
+#if @enable_memkind@
+#define BLIS_ENABLE_MEMKIND
+#else
+#define BLIS_DISABLE_MEMKIND
+#endif
+
+#if @enable_trsm_preinversion@
+#define BLIS_ENABLE_TRSM_PREINVERSION
+#else
+#define BLIS_DISABLE_TRSM_PREINVERSION
+#endif
+
+#if @enable_pragma_omp_simd@
+#define BLIS_ENABLE_PRAGMA_OMP_SIMD
+#else
+#define BLIS_DISABLE_PRAGMA_OMP_SIMD
+#endif
+
+#if @enable_sandbox@
+#define BLIS_ENABLE_SANDBOX
+#else
+#define BLIS_DISABLE_SANDBOX
+#endif
+
+#if @enable_shared@
+#define BLIS_ENABLE_SHARED
+#else
+#define BLIS_DISABLE_SHARED
+#endif
+
+#if @complex_return_intel@
+#define BLIS_ENABLE_COMPLEX_RETURN_INTEL
+#else
+#define BLIS_DISABLE_COMPLEX_RETURN_INTEL
+#endif
+
+
+#endif

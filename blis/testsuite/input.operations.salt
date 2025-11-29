@@ -1,0 +1,330 @@
+# --------------------------------------------------------------------------
+#
+#  input.operations
+#  BLIS test suite
+#
+#  This file contains input values that control which BLIS operations are
+#  tested as well as how those test runs are parameterized. We will now
+#  describe how each section or line type may be edited.
+#
+#  ENABLING/DISABLING ENTIRE SECTIONS
+#    The values in the "Section overrides" section allow you to disable
+#    all operations in a given "level". Enabling a level here by itself
+#    does not enable every operation in that level; it simply means that
+#    the individual switches for each operation (in that level) determine
+#    whether or not the tests are executed. Use 1 to enable a section, or
+#    0 to disable.
+#
+#  ENABLING/DISABLING INDIVIDUAL OPERATION TESTS
+#    Given that an operation's section override switch is set to 1
+#    (enabled), whether or not that operation will get tested is
+#    determined by its local switch. For example, if the level-1v section
+#    override is set to 1, and there is a 1 on the line marked "addv",
+#    then the addv operation will be tested. Similarly, a 0 would cause
+#    addv to not be tested.
+#
+#  ENABLING ONLY SELECT OPERATIONS
+#    If you would like to enable just a few (or even just one) operation
+#    without adjusting any section overrides (or individual operation
+#    switches), change the desired operation switch(es) to 2. This will
+#    cause any operation that is not set to 2 to be disabled, regardless
+#    of section override values. For example, setting the axpyv and gemv
+#    operation switches to 2 will cause the test suite to test ONLY axpyv
+#    and gemv, even if all other sections and operations are set to 1.
+#    NOTE: As long as there is at least on operation switch set to 2, no
+#    other operations will be tested. When you are done testing your
+#    select operations, you should revert the operation switch(es) back
+#    to 1.
+#
+#  CHANGING PROBLEM SIZE/SHAPES TESTED
+#    The problem sizes tested by an operation are determined by the
+#    dimension specifiers on the line marked "dimensions: <spec_labels>".
+#    If, for example, <spec_labels> contains two dimension labels (e.g.
+#    "m n"), then the line should begin with two dimension specifiers.
+#    Dimension specifiers of -1 cause the corresponding dimension to be
+#    bound to the problem size, which is determined by values set in
+#    input.general. Positive values cause the corresponding dimension to
+#    be fixed to that value and held constant.
+#
+#    Examples of dimension specifiers (where the dimensions are m and n):
+#
+#       -1 -1     Dimensions m and n grow with problem size (resulting in
+#                 square matrices).
+#       -1 150    Dimension m grows with problem size and n is fixed at
+#                 150.
+#       -1 -2     Dimension m grows with problem size and n grows
+#                 proportional to half the problem size.
+#
+#  CHANGING PARAMTER COMBINATIONS TESTED
+#    The parameter combinations tested by an operation are determined by
+#    the parameter specifier characters on the line marked "parameters:
+#    <param_labels>". If, for example, <param_labels> contains two
+#    parameter labels (e.g. "transa conjx"), then the line should contain
+#    two parameter specifier characters. The '?' specifier character
+#    serves as a wildcard--it causes all possible values of that parameter
+#    to be tested. A character such as 'n' or 't' causes only that value
+#    to be tested.
+#
+#    Examples of parameter specifiers (where the parameters are transa
+#    and conjx):
+#
+#       ??        All combinations of the transa and conjx parameters are
+#                 tested: nn, nc, tn, tc, cn, cc, hn, hc.
+#       ?n        conjx is fixed to "no conjugate" but transa is allowed
+#                 to vary: nn, tn, cn, hn.
+#       hc        Only the case where transa is "Hermitian-transpose" and
+#                 conjx is "conjugate" is tested.
+#
+#    Here is a full list of the parameter types used by the various BLIS
+#    operations along with their possible character encodings:
+#
+#       side:   l,r      left, right
+#       uplo:   l,u      lower, upper
+#       trans:  n,t,c,h  no transpose, transpose, conjugate, Hermitian-
+#                        transpose (i.e. conjugate-transpose)
+#       conj:   n,c      no conjugate, conjugate
+#       diag:   n,u      non-unit diagonal, unit diagonal
+#
+
+# --- Section overrides ----------------------------------------------------
+
+1        # Utility
+1        # Level-1v kernels
+1        # Level-1m
+1        # Level-1f kernels
+1        # Level-2
+1        # Level-3 micro-kernels
+1        # Level-3
+
+
+# --- Utility --------------------------------------------------------------
+
+1        # randv
+-1       #   dimensions: m
+
+1        # randm
+-1 -1    #   dimensions: m n
+
+
+# --- Level-1v -------------------------------------------------------------
+
+1        # addv
+-1       #   dimensions: m
+?        #   parameters: conjx
+
+1        # amaxv
+-1       #   dimensions: m
+
+1        # axpbyv
+-1       #   dimensions: m
+?        #   parameters: conjx
+
+1        # axpyv
+-1       #   dimensions: m
+?        #   parameters: conjx
+
+1        # copyv
+-1       #   dimensions: m
+?        #   parameters: conjx
+
+1        # dotv
+-1       #   dimensions: m
+??       #   parameters: conjx conjy
+
+1        # dotxv
+-1       #   dimensions: m
+??       #   parameters: conjx conjy
+
+1        # normfv
+-1       #   dimensions: m
+
+1        # invscalv
+-1       #   dimensions: m
+?        #   parameters: conjalpha
+
+1        # scalv
+-1       #   dimensions: m
+?        #   parameters: conjalpha
+
+1        # scal2v
+-1       #   dimensions: m
+?        #   parameters: conjx
+
+1        # setv
+-1       #   dimensions: m
+
+1        # subv
+-1       #   dimensions: m
+?        #   parameters: conjx
+
+1        # xpbyv
+-1       #   dimensions: m
+?        #   parameters: conjx
+
+
+# --- Level-1m -------------------------------------------------------------
+
+1        # addm
+-1 -2    #   dimensions: m n
+?        #   parameters: transa
+
+1        # axpym
+-1 -1    #   dimensions: m n
+?        #   parameters: transa
+
+1        # copym
+-1 -2    #   dimensions: m n
+?        #   parameters: transa
+
+1        # normfm
+-1 -2    #   dimensions: m n
+
+1        # invscalm
+-1 -2    #   dimensions: m n
+?        #   parameters: conjalpha
+
+1        # scalm
+-1 -2    #   dimensions: m n
+?        #   parameters: conjalpha
+
+1        # scal2m
+-1 -2    #   dimensions: m n
+?        #   parameters: transa
+
+1        # setm
+-1 -2    #   dimensions: m n
+
+1        # subm
+-1 -2    #   dimensions: m n
+?        #   parameters: transa
+
+1        # xpbym
+-1 -1    #   dimensions: m n
+?        #   parameters: transa
+
+
+# --- Level-1f kernels -----------------------------------------------------
+
+1        # axpy2v
+-1       #   dimensions: m
+??       #   parameters: conjx conjy
+
+1        # dotaxpyv
+-1       #   dimensions: m
+???      #   parameters: conjxt conjx conjy
+
+1        # axpyf
+-1       #   dimensions: m
+??       #   parameters: conja conjx
+
+1        # dotxf
+-1       #   dimensions: m
+??       #   parameters: conjat conjx
+
+1        # dotxaxpyf
+-1       #   dimensions: m
+????     #   parameters: conjat conja conjw conjx
+
+
+# --- Level-2 --------------------------------------------------------------
+
+1        # gemv
+-1 -2    #   dimensions: m n
+??       #   parameters: transa conjx
+
+1        # ger
+-1 -2    #   dimensions: m n
+??       #   parameters: conjx conjy
+
+1        # hemv
+-1       #   dimensions: m
+???      #   parameters: uploa conja conjx
+
+1        # her
+-1       #   dimensions: m
+??       #   parameters: uploc conjx
+
+1        # her2
+-1       #   dimensions: m
+???      #   parameters: uploc conjx conjy
+
+1        # symv
+-1       #   dimensions: m
+???      #   parameters: uploa conja conjx
+
+1        # syr
+-1       #   dimensions: m
+??       #   parameters: uploc conjx
+
+1        # syr2
+-1       #   dimensions: m
+???      #   parameters: uploc conjx conjy
+
+1        # trmv
+-1       #   dimensions: m
+???      #   parameters: uploa transa diaga
+
+1        # trsv
+-1       #   dimensions: m
+???      #   parameters: uploa transa diaga
+
+
+# --- Level-3 micro-kernels ------------------------------------------------
+
+1        # gemm
+-1       #   dimensions: k
+
+1        # trsm
+?        #   parameters: uploa
+
+1        # gemmtrsm
+-1       #   dimensions: k
+?        #   parameters: uploa
+
+
+# --- Level-3 --------------------------------------------------------------
+
+1        # gemm
+-1 -1 -1 #   dimensions: m n k
+nn       #   parameters: transa transb
+
+1        # gemmt
+-1 -1    #   dimensions: m k
+?nn      #   parameters: uploc transa transb
+
+1        # hemm
+-1 -1    #   dimensions: m n
+??nn     #   parameters: side uploa conja transb
+
+1        # herk
+-1 -1    #   dimensions: m k
+?n       #   parameters: uploc transa
+
+1        # her2k
+-1 -1    #   dimensions: m k
+?nn      #   parameters: uploc transa transb
+
+1        # symm
+-1 -1    #   dimensions: m n
+??nn     #   parameters: side uploa conja transb
+
+1        # syrk
+-1 -1    #   dimensions: m k
+?n       #   parameters: uploc transa
+
+1        # syr2k
+-1 -1    #   dimensions: m k
+?nn      #   parameters: uploc transa transb
+
+1        # trmm
+-1 -1    #   dimensions: m n
+??n?     #   parameters: side uploa transa diaga
+
+0        # trmm3
+-1 -1    #   dimensions: m n
+??n?n    #   parameters: side uploa transa diaga transb
+
+1        # trsm
+-1 -1    #   dimensions: m n
+??n?     #   parameters: side uploa transa diaga
+

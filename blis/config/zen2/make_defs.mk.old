@@ -1,0 +1,94 @@
+#
+#
+#  BLIS
+#  An object-based framework for developing high-performance BLAS-like
+#  libraries.
+#
+#  Copyright (C) 2014, The University of Texas at Austin
+#  Copyright (C) 2019, Advanced Micro Devices, Inc.
+#
+#  Redistribution and use in source and binary forms, with or without
+#  modification, are permitted provided that the following conditions are
+#  met:
+#   - Redistributions of source code must retain the above copyright
+#     notice, this list of conditions and the following disclaimer.
+#   - Redistributions in binary form must reproduce the above copyright
+#     notice, this list of conditions and the following disclaimer in the
+#     documentation and/or other materials provided with the distribution.
+#   - Neither the name(s) of the copyright holder(s) nor the names of its
+#     contributors may be used to endorse or promote products derived
+#     from this software without specific prior written permission.
+#
+#  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+#  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+#  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+#  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+#  HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+#  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+#  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+#  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+#  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+#  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+#  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+#
+
+# FLAGS that are specific to the 'zen2' architecture are added here.
+# FLAGS that are common for all the AMD architectures are present in
+# config/zen/amd_config.mk.
+
+# Declare the name of the current configuration and add it to the
+# running list of configurations included by common.mk.
+THIS_CONFIG    := zen2
+#CONFIGS_INCL   += $(THIS_CONFIG)
+
+#
+# --- Determine the C compiler and related flags ---
+#
+
+# Include file containing common flags for all AMD architectures.
+AMD_CONFIG_FILE := amd_config.mk
+AMD_CONFIG_PATH := $(BASE_SHARE_PATH)/config/zen
+-include $(AMD_CONFIG_PATH)/$(AMD_CONFIG_FILE)
+
+ifeq ($(CC_VENDOR),gcc)
+  ifeq ($(GCC_OT_9_1_0),yes)
+    ifeq ($(GCC_OT_6_1_0),yes)
+    # If gcc is older than 6.1.0, we must use -march=bdver4 and then remove the
+    # Bulldozer instruction sets that were omitted from Zen.
+    CRVECFLAGS += -march=bdver4 -mno-fma4 -mno-tbm -mno-xop -mno-lwp
+    CKVECFLAGS += -march=bdver4 -mno-fma4 -mno-tbm -mno-xop -mno-lwp
+    else
+    # If gcc is older than 9.1.0 but at least 6.1.0, then we can use -march=znver1
+    # as the fallback option.
+    CRVECFLAGS += -march=znver1 -mno-avx256-split-unaligned-store
+    CKVECFLAGS += -march=znver1 -mno-avx256-split-unaligned-store
+    endif
+  else
+  # If gcc is at least 9.1.0, then we can specify the microarchitecture using
+  # the preferred option.
+  CRVECFLAGS += -march=znver2
+  CKVECFLAGS += -march=znver2
+  endif
+  else
+  ifeq ($(CC_VENDOR),clang)
+    ifeq ($(strip $(shell $(CC) -v |&head -1 |grep -c 'AOCC.LLVM.2\|AOCC_2')),1)
+    CKVECFLAGS += -march=znver2
+    else
+    #if compiling with clang
+    VENDOR_STRING := $(strip $(shell ${CC_VENDOR} --version | egrep -o '[0-9]+\.[0-9]+\.?[0-9]*'))
+    CC_MAJOR := $(shell (echo ${VENDOR_STRING} | cut -d. -f1))
+    #clang 9.0 or later:
+    ifeq ($(shell test $(CC_MAJOR) -ge 9; echo $$?),0)
+    CKVECFLAGS += -march=znver2
+    else
+    CKVECFLAGS += -march=znver1
+    endif # ge 9
+    endif # AOCC 2
+  endif # Clang
+endif # gcc
+
+# Store all of the variables here to new variables containing the
+# configuration name.
+$(eval $(call store-make-defs,$(THIS_CONFIG)))
+

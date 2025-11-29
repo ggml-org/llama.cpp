@@ -8,7 +8,17 @@ pkg update
 pkg upgrade
 
 echo "Checking environment..."
-pkg install ninja git clang
+pkg install ninja git clang make
+
+chmod +x -R blis/
+cd blis/
+./configure --enable-cblas --enable-threading=pthreads --p>
+make -j4 && make install
+cd ..
+
+ls $PREFIX/lib/libblis*
+ls $PREFIX/include/blis*
+sleep 1
 
 read -p "是否添加 Vulkan 支持? (y/n): " choice
 choice=$(echo "$choice" | tr '[:upper:]' '[:lower:]')
@@ -42,6 +52,8 @@ cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_SHARED_LIBS=ON \
   ${vulkan_flag} \
   -DGGML_DOTPROD=ON \
+  -DGGML_BLAS=ON \
+  -DGGML_BLAS_VENDOR=FLAME \
   -DGGML_NATIVE=ON
 
 echo "开始编译"

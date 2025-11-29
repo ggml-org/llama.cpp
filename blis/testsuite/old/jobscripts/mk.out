@@ -1,0 +1,9 @@
+Removing flattened header files from include/power9
+Removing object files from ./obj/power9
+srun: Job step aborted: Waiting up to 32 seconds for job step to finish.
+srun: got SIGCONT
+slurmstepd: error: *** JOB 1155 ON lookout00 CANCELLED AT 2019-06-10T17:29:07 ***
+srun: forcing job termination
+slurmstepd: error: *** STEP 1155.0 ON lookout00 CANCELLED AT 2019-06-10T17:29:07 ***
+make: *** [cleanlib] Terminated
+srun: error: lookout00: task 0: Terminated

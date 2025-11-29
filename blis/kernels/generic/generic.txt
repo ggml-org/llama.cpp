@@ -1,0 +1,19 @@
+
+generic.txt
+-----------
+
+This file in 'kernels/generic' exists only to force 'git' to track what
+would otherwise be an empty directory. Having this empty directory is
+necessary because the 'generic' singleton family is defined in the
+configuration registry as:
+
+  generic: generic
+
+which implies that the 'generic' sub-configuration depends on the
+'generic' kernel set (because there were no complementary kernel sets
+specified via '/'). Thus, we need there to be a kernel set named
+'generic', but we don't actually refer to any such kernels in BLIS.
+In other words, this file is simply a workaround to a quirk in the
+syntax and semantics of the config_registry file.
+
+-FGVZ

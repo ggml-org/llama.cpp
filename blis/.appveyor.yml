@@ -1,0 +1,64 @@
+skip_branch_with_pr: true
+
+environment:
+  matrix:
+    - LIB_TYPE: shared
+      CONFIG: auto
+      CC: gcc
+      THREADING: pthreads
+      CBLAS: no
+
+    - LIB_TYPE: static
+      CONFIG: auto
+      CC: clang
+      THREADING: no
+
+    - LIB_TYPE: shared
+      CONFIG: x86_64
+      CC: clang
+      THREADING: pthreads
+
+    - LIB_TYPE: static
+      CONFIG: auto
+      CC: clang
+      THREADING: openmp
+
+    - LIB_TYPE: static
+      CONFIG: auto
+      CC: clang
+      THREADING: openmp
+      SANDBOX: yes
+
+install:
+- set "PATH=C:\msys64\mingw64\bin;C:\msys64\bin;%PATH%"
+- if [%CC%]==[clang] set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+- if [%CC%]==[clang] set "AR=llvm-ar"
+- if [%CC%]==[clang] set "AS=llvm-as"
+- if [%CC%]==[clang] call "C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\vcvarsall.bat" amd64
+
+build_script:
+- if [%LIB_TYPE%]==[shared] set "CONFIGURE_OPTS=%CONFIGURE_OPTS% --enable-shared --disable-static"
+- if [%LIB_TYPE%]==[static] set "CONFIGURE_OPTS=%CONFIGURE_OPTS% --disable-shared --enable-static"
+- if not [%CBLAS%]==[no] set "CONFIGURE_OPTS=%CONFIGURE_OPTS% --enable-cblas"
+- if [%SANDBOX%]==[yes] set "CONFIGURE_OPTS=%CONFIGURE_OPTS% -s gemmlike"
+- set RANLIB=echo
+- set LIBPTHREAD=
+- set "PATH=%PATH%;C:\blis\lib"
+- set "CFLAGS=-Wno-macro-redefined"
+- bash -lc "cd /c/projects/blis && ./configure %CONFIGURE_OPTS% --enable-threading=%THREADING% --enable-arg-max-hack --prefix=/c/blis %CONFIG%"
+- bash -lc "cd /c/projects/blis && mingw32-make -j4 V=1"
+- bash -lc "cd /c/projects/blis && mingw32-make install"
+- 7z a C:\blis.zip C:\blis
+- ps: Push-AppveyorArtifact C:\blis.zip
+
+test_script:
+# "make checkblas" does not work with shared linking Windows due to inability to override xerbla_
+- if [%LIB_TYPE%]==[shared] set "TEST_TARGET=checkblis-fast"
+- if [%LIB_TYPE%]==[static] set "TEST_TARGET=check"
+- bash -lc "cd /c/projects/blis && mingw32-make %TEST_TARGET% -j4 V=1"
+
+# Enable this to be able to login to the build worker. You can use the
+# `remmina` program in Ubuntu, use the login information that the line below
+# prints into the log.
+#on_finish:
+#- ps: $blockRdp = $true; iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))

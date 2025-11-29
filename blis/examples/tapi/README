@@ -1,0 +1,38 @@
+
+BLIS typed API examples
+-----------------------
+
+This directory contains several files, each containing various pieces of
+example code that demonstrate core functionality of the typed API in BLIS.
+These example files should be thought of collectively like a tutorial, and
+therefore it is recommended to start from the beginning (the file that
+starts in '00').
+
+You can build all of the examples by simply running 'make' from this
+directory. (You can also run 'make clean'.) The makefile assumes that
+you've already configured and built (but not necessarily installed) BLIS
+two directories up, in "../..". If you have already installed BLIS to
+some permanent directory, you may refer to that installation by setting
+the environment variable BLIS_INSTALL_PATH prior to running make:
+
+  export BLIS_INSTALL_PATH=/usr/local; make
+
+or by setting the same variable as part of the make command:
+
+  make BLIS_INSTALL_PATH=/usr/local
+
+Once the executable files have been built, we recommend reading the code in
+one terminal window alongside the executable output in another terminal.
+This will help you see the effects of each section of code.
+
+This tutorial is not exhaustive or complete; many typed API functions
+were omitted (mostly for brevity's sake) and thus more examples could be
+written. If you've found typed functionality in BLIS and are unsure how to
+use it, or if you are unsure of what additional functionality is present in
+BLIS, please feel free to join and then start a discussion on the blis-devel
+mailing list [1].
+
+Thanks for your interest in BLIS!
+
+[1] https://groups.google.com/d/forum/blis-devel
+

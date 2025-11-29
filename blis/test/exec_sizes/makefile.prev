@@ -1,0 +1,145 @@
+#
+# test directory makefile
+#
+
+MAKE_BLIS      := yes
+MAKE_OPEN      := yes
+MAKE_ATLAS     := yes
+MAKE_MKL       := yes
+
+BLIS_LIB       := $(HOME)/blis/lib/libblis.a
+INC_PATH       := $(HOME)/blis/include
+
+LIB_PATH       := $(HOME)/flame/lib
+MKL_PATH       := /opt/intel/mkl/10.2.2.025
+
+OBLAS_LIB      := $(LIB_PATH)/libopenblas.a
+ABLAS_LIB      := $(LIB_PATH)/libf77blas.a \
+                  $(LIB_PATH)/libatlas.a
+#BLAS_LIB       := -L/opt/intel/mkl/10.2.2.025/lib/em64t/ \
+#                  -lmkl_sequential -lmkl_core -lmkl_intel_lp64
+MBLAS_LIB      := $(MKL_PATH)/lib/em64t/libmkl_solver_lp64_sequential.a \
+                  -Wl,--start-group \
+                  $(MKL_PATH)/lib/em64t/libmkl_intel_lp64.a \
+                  $(MKL_PATH)/lib/em64t/libmkl_sequential.a \
+                  $(MKL_PATH)/lib/em64t/libmkl_core.a \
+                  -Wl,--end-group \
+                  -lpthread -lm
+
+CC             := gcc
+CFLAGS         := -I$(INC_PATH) \
+                  -O2 -fomit-frame-pointer \
+                  -std=c99 \
+                  -Wall -Wno-comment #-pg #-g
+
+LINKER         := $(CC)
+LDFLAGS        := -L/usr/lib/gcc/x86_64-redhat-linux/4.1.2 -L/usr/lib/gcc/x86_64-redhat-linux/4.1.2/../../../../lib64 -L/lib/../lib64 -L/usr/lib/../lib64 -lgfortranbegin -lgfortran -lm
+LDFLAGS        += -lpthread
+
+TEST_SIZES_SRC := test_size.c
+
+TEST_BINS      := 
+
+
+
+ifeq ($(MAKE_BLIS),yes)
+TEST_BINS += test_blis1 \
+             test_blis2 \
+             test_blis3 \
+             test_blis4 \
+             test_blis5 \
+             test_blis6
+endif
+ifeq ($(MAKE_OPEN),yes)
+TEST_BINS += test_oblas1 \
+             test_oblas2 \
+             test_oblas3 \
+             test_oblas4 \
+             test_oblas5 \
+             test_oblas6
+endif
+ifeq ($(MAKE_ATLAS),yes)
+TEST_BINS += test_ablas1 \
+             test_ablas2 \
+             test_ablas3 \
+             test_ablas4 \
+             test_ablas5 \
+             test_ablas6
+endif
+ifeq ($(MAKE_MKL),yes)
+TEST_BINS += test_mblas1 \
+             test_mblas2 \
+             test_mblas3 \
+             test_mblas4 \
+             test_mblas5 \
+             test_mblas6
+endif
+
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+all: $(TEST_BINS)
+#	@echo "$(TEST_BINS)"
+
+
+# BLIS rules
+test_blis1: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLIS=1 $(TEST_SIZES_SRC) $(BLIS_LIB)              $(LDFLAGS) -o $@.x
+test_blis2: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLIS=2 $(TEST_SIZES_SRC) $(BLIS_LIB)              $(LDFLAGS) -o $@.x
+test_blis3: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLIS=3 $(TEST_SIZES_SRC) $(BLIS_LIB)              $(LDFLAGS) -o $@.x
+test_blis4: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLIS=4 $(TEST_SIZES_SRC) $(BLIS_LIB)              $(LDFLAGS) -o $@.x
+test_blis5: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLIS=5 $(TEST_SIZES_SRC) $(BLIS_LIB)              $(LDFLAGS) -o $@.x
+test_blis6: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLIS=6 $(TEST_SIZES_SRC) $(BLIS_LIB)              $(LDFLAGS) -o $@.x
+
+# OpenBLAS rules
+test_oblas1: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=1 $(TEST_SIZES_SRC) $(BLIS_LIB) $(OBLAS_LIB) $(LDFLAGS) -o $@.x
+test_oblas2: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=2 $(TEST_SIZES_SRC) $(BLIS_LIB) $(OBLAS_LIB) $(LDFLAGS) -o $@.x
+test_oblas3: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=3 $(TEST_SIZES_SRC) $(BLIS_LIB) $(OBLAS_LIB) $(LDFLAGS) -o $@.x
+test_oblas4: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=4 $(TEST_SIZES_SRC) $(BLIS_LIB) $(OBLAS_LIB) $(LDFLAGS) -o $@.x
+test_oblas5: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=5 $(TEST_SIZES_SRC) $(BLIS_LIB) $(OBLAS_LIB) $(LDFLAGS) -o $@.x
+test_oblas6: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=6 $(TEST_SIZES_SRC) $(BLIS_LIB) $(OBLAS_LIB) $(LDFLAGS) -o $@.x
+
+# ATLAS BLAS rules
+test_ablas1: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=1 $(TEST_SIZES_SRC) $(BLIS_LIB) $(ABLAS_LIB) $(LDFLAGS) -o $@.x
+test_ablas2: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=2 $(TEST_SIZES_SRC) $(BLIS_LIB) $(ABLAS_LIB) $(LDFLAGS) -o $@.x
+test_ablas3: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=3 $(TEST_SIZES_SRC) $(BLIS_LIB) $(ABLAS_LIB) $(LDFLAGS) -o $@.x
+test_ablas4: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=4 $(TEST_SIZES_SRC) $(BLIS_LIB) $(ABLAS_LIB) $(LDFLAGS) -o $@.x
+test_ablas5: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=5 $(TEST_SIZES_SRC) $(BLIS_LIB) $(ABLAS_LIB) $(LDFLAGS) -o $@.x
+test_ablas6: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=6 $(TEST_SIZES_SRC) $(BLIS_LIB) $(ABLAS_LIB) $(LDFLAGS) -o $@.x
+
+# MKL BLAS rules
+test_mblas1: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=1 $(TEST_SIZES_SRC) $(BLIS_LIB) $(MBLAS_LIB) $(LDFLAGS) -o $@.x
+test_mblas2: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=2 $(TEST_SIZES_SRC) $(BLIS_LIB) $(MBLAS_LIB) $(LDFLAGS) -o $@.x
+test_mblas3: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=3 $(TEST_SIZES_SRC) $(BLIS_LIB) $(MBLAS_LIB) $(LDFLAGS) -o $@.x
+test_mblas4: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=4 $(TEST_SIZES_SRC) $(BLIS_LIB) $(MBLAS_LIB) $(LDFLAGS) -o $@.x
+test_mblas5: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=5 $(TEST_SIZES_SRC) $(BLIS_LIB) $(MBLAS_LIB) $(LDFLAGS) -o $@.x
+test_mblas6: $(BLIS_LIB)
+	$(CC) $(CFLAGS) -DNBLAS=6 $(TEST_SIZES_SRC) $(BLIS_LIB) $(MBLAS_LIB) $(LDFLAGS) -o $@.x
+
+
+clean:
+	rm -f *.x
+

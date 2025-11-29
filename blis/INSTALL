@@ -1,0 +1,30 @@
+
+BLIS framework
+INSTALL
+---
+
+For a detailed description of how to configure, compile, install, and link
+to a BLIS library on your local system, please read the build system
+documentation located in:
+
+  docs/BuildSystem.md
+
+Note that the document's markdown content can be conveniently rendered by
+viewing the file over GitHub via a web browser:
+
+  https://github.com/flame/blis/blob/master/docs/BuildSystem.md
+
+This document will always contain the most up-to-date information related
+to instantiating a BLIS library from the framework source code. If you have
+any further questions or wish to provide feedback, please contact the BLIS
+community by either by joining our Discord community! Instructions for
+joining may be found in:
+
+  docs/Discord.md
+
+or in rendered form at:
+
+  https://github.com/flame/blis/blob/master/docs/Discord.md
+
+Thanks for your interest in the BLIS framework!
+
