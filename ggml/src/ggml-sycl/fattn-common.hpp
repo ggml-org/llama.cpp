@@ -91,6 +91,30 @@ struct fattn_params {
     int32_t ne30, ne31, ne32, ne33;
     int32_t nb31, nb32;
     int64_t nb33;
+
+    // Multi-sequence batching support (for continuous batching)
+    // When n_seqs > 1 and seq_kv_offsets != nullptr, the kernel will only process
+    // KV positions belonging to each query's sequence, skipping cross-sequence computation.
+    int32_t n_seqs;                   // Number of sequences in this batch (0 or 1 = disabled)
+    const int32_t * seq_q_offsets;    // [n_seqs + 1] Query token boundaries: seq i has queries [seq_q_offsets[i], seq_q_offsets[i+1])
+    const int32_t * seq_kv_offsets;   // [n_seqs + 1] KV position boundaries: seq i has KV [seq_kv_offsets[i], seq_kv_offsets[i+1])
+
+    // Alternative sequence ID approach (used when KV positions are not contiguous per sequence)
+    // When q_seq_ids and kv_seq_ids are set, the kernel compares IDs to skip cross-sequence attention
+    // q_seq_ids[q_idx] gives the sequence ID for query token q_idx
+    // kv_seq_ids[kv_idx] gives the sequence ID for KV position kv_idx (-1 = empty or multi-seq)
+    const int32_t * q_seq_ids;        // [n_queries] Sequence ID for each query token
+    const int32_t * kv_seq_ids;       // [n_kv] Sequence ID for each KV position (-1 = use mask)
+
+    // PagedAttention support (vLLM-style block-based KV cache)
+    // When use_paged_attn is true, K and V are stored in blocks and accessed via block_table.
+    // Block layout: K/V stored as [n_embd, block_size, n_blocks] instead of [n_embd, n_kv]
+    // Block table: [batch_size, max_blocks_per_seq] maps logical blocks to physical blocks
+    bool use_paged_attn;              // Enable paged attention mode
+    int32_t block_size;               // Number of tokens per block (typically 16, matches XMX tile size)
+    int32_t max_blocks_per_seq;       // Maximum number of blocks per sequence
+    const int32_t * block_table;      // [batch_size, max_blocks_per_seq] - maps logical->physical blocks
+    const int32_t * seq_lens;         // [batch_size] - number of valid KV tokens per sequence
 };
 
 #endif // GGML_SYCL_FATTN_COMMON_HPP

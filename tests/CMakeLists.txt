@@ -242,3 +242,19 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+
+# test-kv-block: tests for PagedAttention block management (links against llama for internal access)
+add_executable(test-kv-block test-kv-block.cpp ${PROJECT_SOURCE_DIR}/src/llama-kv-block.cpp)
+target_include_directories(test-kv-block PRIVATE ${PROJECT_SOURCE_DIR}/src)
+install(TARGETS test-kv-block RUNTIME)
+add_test(NAME test-kv-block COMMAND $<TARGET_FILE:test-kv-block>)
+
+# test-fattn-mask: unit tests for Flash Attention mask slope calculation (SYCL unified KV fix)
+llama_build_and_test(test-fattn-mask.cpp)
+
+# test-ggml-flash-attn-ext: unit tests for ggml_flash_attn_ext_set_seq_ids() and ggml_flash_attn_ext_set_paged()
+add_executable(test-ggml-flash-attn-ext test-ggml-flash-attn-ext.cpp)
+target_link_libraries(test-ggml-flash-attn-ext PRIVATE ggml)
+target_include_directories(test-ggml-flash-attn-ext PRIVATE ${PROJECT_SOURCE_DIR}/ggml/include)
+install(TARGETS test-ggml-flash-attn-ext RUNTIME)
+add_test(NAME test-ggml-flash-attn-ext COMMAND $<TARGET_FILE:test-ggml-flash-attn-ext>)

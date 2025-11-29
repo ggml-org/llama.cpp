@@ -41,6 +41,10 @@
 void* ggml_sycl_host_malloc(size_t size);
 void ggml_sycl_host_free(void* ptr);
 
+// Internal getters for seq_ids host pointers (set by llama layer, used by fattn)
+const int32_t * ggml_sycl_get_seq_ids_host_q(size_t * count);
+const int32_t * ggml_sycl_get_seq_ids_host_kv(size_t * count);
+
 
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
@@ -80,6 +84,7 @@ extern int g_ggml_sycl_prioritize_dmmv;
 #define VER_GEN9 700 // todo for hardward optimize.
 #define VER_GEN12 1000000 // todo for hardward optimize.
 #define VER_GEN13 (VER_GEN12 + 1030) // todo for hardward optimize.
+#define VER_XE2 2000
 
 #define GGML_SYCL_MAX_NODES 8192 // TODO: adapt to hardwares
 
