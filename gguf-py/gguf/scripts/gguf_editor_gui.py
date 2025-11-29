@@ -1552,7 +1552,7 @@ class GGUFEditorWindow(QMainWindow):
 
             # Add tensors (including data)
             for tensor in self.reader.tensors:
-                writer.add_tensor(tensor.name, tensor.data, raw_shape=tensor.data.shape, raw_dtype=tensor.tensor_type)
+                writer.add_tensor(tensor.name, tensor.data, raw_shape=tensor.data.shape, raw_dtype=tensor.tensor_type, tensor_endianess=self.reader.endianess)
 
             # Write header and metadata
             writer.open_output_file(Path(file_path))
