@@ -3,7 +3,6 @@
 #include "pad.cuh"
 
 
-
 __device__ __forceinline__ int64_t wrap_coord(int64_t coord, int64_t size) {
     return (coord % size + size) % size;
 }
