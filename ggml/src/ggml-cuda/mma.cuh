@@ -77,7 +77,7 @@ namespace ggml_cuda_mma {
         // For the B matrix this means I major == column major, J major == row major.
         // MIRRORED == Each data value is held exactly once per thread subgroup.
         DATA_LAYOUT_I_MAJOR           =  0, // Always used for Turing, Ampere, Ada Lovelace, consumer Blackwell.
-        DATA_LAYOUT_I_MAJOR_MIRRORED  = 10, 
+        DATA_LAYOUT_I_MAJOR_MIRRORED  = 10,
         DATA_LAYOUT_J_MAJOR_MIRRORED  = 20,
     };
     // Implemented mma combinations are:
