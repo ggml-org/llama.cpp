@@ -10,13 +10,73 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <vector>
+
+#if defined(_WIN32)
+#    define WIN32_LEAN_AND_MEAN
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#else
+#    include <unistd.h>
+#endif
 
 using json = nlohmann::json;
 
+static std::string detect_llama_server_binary() {
+#if defined(_WIN32)
+    std::vector<char> buffer(MAX_PATH);
+    DWORD             len = 0;
+    while (true) {
+        len = GetModuleFileNameA(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (len == 0) {
+            return std::string();
+        }
+        if (len < buffer.size()) {
+            break;
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+
+    std::filesystem::path path(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(len));
+    return (path.parent_path() / "llama-server.exe").string();
+#else
+    std::vector<char> buffer(1024);
+    while (true) {
+        ssize_t len = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+        if (len < 0) {
+            return std::string();
+        }
+        if (static_cast<size_t>(len) < buffer.size() - 1) {
+            buffer[len] = '\0';
+            break;
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+
+    std::filesystem::path path(buffer.data());
+    return (path.parent_path() / "llama-server").string();
+#endif
+}
+
 const std::vector<std::string> & get_default_spawn() {
-    static const std::vector<std::string> spawn = {
-        "llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99",
-    };
+    static const std::vector<std::string> spawn = [] {
+        std::vector<std::string> default_spawn = {
+            "llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99",
+        };
+
+        std::error_code ec;
+        const std::string detected_path = detect_llama_server_binary();
+        if (!detected_path.empty() && std::filesystem::exists(detected_path, ec) && !ec) {
+            LOG_INF("Detected llama-server at %s\n", detected_path.c_str());
+            default_spawn[0] = detected_path;
+        } else {
+            LOG_INF("Falling back to llama-server resolved via PATH\n");
+        }
+
+        return default_spawn;
+    }();
 
     return spawn;
 }

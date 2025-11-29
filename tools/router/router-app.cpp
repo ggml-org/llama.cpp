@@ -1,6 +1,7 @@
 #include "router-app.h"
 
 #include "log.h"
+#include "router-constants.h"
 #include "router-config.h"
 #include "router-process.h"
 
@@ -58,7 +59,7 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
                 target_group.c_str());
 
         terminate_process(it_proc->second);
-        wait_for_process_exit(it_proc->second, 2000);
+        wait_for_process_exit(it_proc->second, ROUTER_PROCESS_SHUTDOWN_TIMEOUT_MS);
         model_ports.erase(it_proc->first);
         it_proc = processes.erase(it_proc);
     }
@@ -109,9 +110,23 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
         return false;
     }
 
-    processes.emplace(model_name, handle);
+    auto [proc_it, _] = processes.emplace(model_name, handle);
     last_spawned_model = model_name;
     LOG_INF("Spawned %s (group '%s') with %zu args\n", model_name.c_str(), target_group.c_str(), command.size());
+
+    if (!wait_for_backend_ready(port, ROUTER_BACKEND_READY_TIMEOUT_MS)) {
+        error = "backend not ready";
+        LOG_ERR("Backend for %s did not become ready on port %d within %d ms\n",
+                model_name.c_str(),
+                port,
+                ROUTER_BACKEND_READY_TIMEOUT_MS);
+        terminate_process(proc_it->second);
+        processes.erase(proc_it);
+        model_ports.erase(model_name);
+        return false;
+    }
+
+    LOG_INF("Backend ready on port %d\n", port);
     return true;
 }
 

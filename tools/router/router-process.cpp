@@ -3,6 +3,8 @@
 
 #include "log.h"
 
+#include <cpp-httplib/httplib.h>
+#include <exception>
 #include <chrono>
 #include <sstream>
 #include <thread>
@@ -125,10 +127,32 @@ ProcessHandle spawn_process(const std::vector<std::string> & args, const std::st
     PROCESS_INFORMATION pi{};
     si.cb = sizeof(si);
 
+    HANDLE              log_handle    = INVALID_HANDLE_VALUE;
+    SECURITY_ATTRIBUTES sec_attrs{};
+    sec_attrs.nLength              = sizeof(sec_attrs);
+    sec_attrs.bInheritHandle       = TRUE;
+    sec_attrs.lpSecurityDescriptor = nullptr;
+
+    if (!log_path.empty()) {
+        log_handle = CreateFileA(
+            log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &sec_attrs, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+
+        if (log_handle != INVALID_HANDLE_VALUE) {
+            si.dwFlags |= STARTF_USESTDHANDLES;
+            si.hStdOutput = log_handle;
+            si.hStdError  = log_handle;
+        }
+    }
+
     std::string cmd = cmdline.str();
-    if (CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+    if (CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) {
         handle.proc_info = pi;
         handle.valid     = true;
+    }
+
+    if (log_handle != INVALID_HANDLE_VALUE) {
+        CloseHandle(log_handle);
     }
 
 #else
@@ -176,4 +200,30 @@ ProcessHandle spawn_process(const std::vector<std::string> & args, const std::st
 #endif
 
     return handle;
+}
+
+bool wait_for_backend_ready(int port, int timeout_ms) {
+    httplib::Client client("127.0.0.1:" + std::to_string(port));
+    const auto      start = std::chrono::steady_clock::now();
+
+    while (true) {
+        try {
+            auto res = client.Get("/health");
+            if (res && res->status == 200) {
+                return true;
+            }
+        } catch (const std::exception & e) {
+            LOG_DBG("Health check for port %d failed: %s\n", port, e.what());
+        }
+
+        auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed_ms >= timeout_ms) {
+            break;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(ROUTER_BACKEND_HEALTH_POLL_MS));
+    }
+
+    return false;
 }
