@@ -3667,6 +3667,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
 #endif // GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT
     }
 
+#if !defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+    GGML_UNUSED(rm_stdq_int);
+    GGML_UNUSED(rm_kq_int);
+#endif
+
     // dequant shaders
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_F32 ], "f32_to_f16",   dequant_f32_len,  dequant_f32_data,  "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_Q4_0], "dequant_q4_0", dequant_q4_0_len, dequant_q4_0_data, "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
@@ -6876,7 +6881,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         return false;
     }
 
-    // General issue with q3_k and q6_k
+    // General performance issue with q3_k and q6_k due to 2-byte alignment
     if (src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q6_K) {
         return false;
     }
