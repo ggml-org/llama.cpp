@@ -2339,6 +2339,25 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // Add per-token/per-position sequence ID information for multi-sequence batching
+    // q_seq_ids:  [n_tokens] int32 - sequence ID for each query token
+    // kv_seq_ids: [n_kv] int32 - sequence ID for each KV position (-1 if empty)
+    // This enables the kernel to skip cross-sequence attention computation
+    GGML_API void ggml_flash_attn_ext_set_seq_ids(
+            struct ggml_tensor * a,
+            struct ggml_tensor * q_seq_ids,
+            struct ggml_tensor * kv_seq_ids);
+
+    // Enable PagedAttention (vLLM-style block-based KV cache) for flash attention
+    // block_table: [batch_size, max_blocks_per_seq] int32 - maps logical blocks to physical blocks
+    // seq_lens:    [batch_size] int32 - number of valid KV tokens per sequence
+    // When set, K/V tensors are interpreted as block storage: [n_blocks, block_size, head_dim]
+    // block_size is stored in block_table->ne[2] (use ggml_new_tensor_3d with ne2 = block_size)
+    GGML_API void ggml_flash_attn_ext_set_paged(
+            struct ggml_tensor * a,
+            struct ggml_tensor * block_table,
+            struct ggml_tensor * seq_lens);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,

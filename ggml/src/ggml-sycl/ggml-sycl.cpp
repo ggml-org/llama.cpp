@@ -53,6 +53,7 @@
 #include "ggml-sycl/quantize.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
 #include "ggml-sycl/fattn.hpp"
+#include "ggml-sycl/mmq_xmx.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded = false;
@@ -4685,6 +4686,29 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 if(src0_type == GGML_TYPE_Q4_1 && src1_type == GGML_TYPE_Q4_1) {
                     return true;
                 }
+                // F32 <-> I32 conversions
+                if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_I32) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_I32 && src1_type == GGML_TYPE_F32) {
+                    return true;
+                }
+                // BF16 conversions
+                if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_BF16) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_BF16) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_BF16 && src1_type == GGML_TYPE_BF16) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_BF16 && src1_type == GGML_TYPE_F16) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_BF16 && src1_type == GGML_TYPE_F32) {
+                    return true;
+                }
                 return false;
             }
         case GGML_OP_REPEAT_BACK:
@@ -4992,6 +5016,48 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
     };
 
     return sycl_backend;
+}
+
+// ============================================================================
+// Flash Attention seq_ids host pointer support
+// ============================================================================
+// Thread-local storage for seq_ids host pointers
+// These are set by llama layer before graph execution and used by fattn kernel
+// The pointers must be valid SYCL_Host buffer memory (USM accessible from GPU)
+struct ggml_sycl_seq_ids_cache {
+    const int32_t * q_seq_ids = nullptr;
+    size_t q_count = 0;
+    const int32_t * kv_seq_ids = nullptr;
+    size_t kv_count = 0;
+};
+
+static thread_local ggml_sycl_seq_ids_cache g_sycl_seq_ids_cache;
+
+void ggml_backend_sycl_set_seq_ids_host(
+    const int32_t * q_seq_ids, size_t q_count,
+    const int32_t * kv_seq_ids, size_t kv_count) {
+    g_sycl_seq_ids_cache.q_seq_ids = q_seq_ids;
+    g_sycl_seq_ids_cache.q_count = q_count;
+    g_sycl_seq_ids_cache.kv_seq_ids = kv_seq_ids;
+    g_sycl_seq_ids_cache.kv_count = kv_count;
+}
+
+void ggml_backend_sycl_clear_seq_ids_host(void) {
+    g_sycl_seq_ids_cache.q_seq_ids = nullptr;
+    g_sycl_seq_ids_cache.q_count = 0;
+    g_sycl_seq_ids_cache.kv_seq_ids = nullptr;
+    g_sycl_seq_ids_cache.kv_count = 0;
+}
+
+// Internal getter for fattn.cpp to access the cached host pointers
+const int32_t * ggml_sycl_get_seq_ids_host_q(size_t * count) {
+    if (count) *count = g_sycl_seq_ids_cache.q_count;
+    return g_sycl_seq_ids_cache.q_seq_ids;
+}
+
+const int32_t * ggml_sycl_get_seq_ids_host_kv(size_t * count) {
+    if (count) *count = g_sycl_seq_ids_cache.kv_count;
+    return g_sycl_seq_ids_cache.kv_seq_ids;
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_sycl_reg)

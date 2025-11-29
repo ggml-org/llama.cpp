@@ -24,7 +24,17 @@ ggml_add_backend_library(ggml-sycl
                         )
 
 file(GLOB   GGML_HEADERS_SYCL "*.hpp")
+option(GGML_SYCL_MMQ_XMX "Enable experimental XMX MMQ kernels for SYCL backend" OFF)
+
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
+list(FILTER GGML_SOURCES_SYCL EXCLUDE REGEX "test_joint_matrix.*\\.cpp$")
+
+if (GGML_SYCL_MMQ_XMX)
+    message(STATUS "Compiling with experimental GGML_SYCL_MMQ_XMX kernels.")
+    list(APPEND GGML_SOURCES_SYCL mmq_xmx.cpp)
+    list(APPEND GGML_HEADERS_SYCL mmq_xmx.hpp)
+endif()
+
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
 if (WIN32)

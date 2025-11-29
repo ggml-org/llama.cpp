@@ -44,6 +44,17 @@ GGML_BACKEND_API void ggml_backend_sycl_get_device_memory(int device, size_t *fr
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_sycl_reg(void);
 
+// Flash attention sequence IDs for multi-sequence batching
+// Set host pointers for seq_ids arrays (called from llama layer before graph execution)
+// These are stored in thread-local storage and used by fattn kernel
+// The pointers must be valid USM host memory (allocated by SYCL_Host buffer)
+GGML_BACKEND_API void ggml_backend_sycl_set_seq_ids_host(
+    const int32_t * q_seq_ids, size_t q_count,
+    const int32_t * kv_seq_ids, size_t kv_count);
+
+// Clear the seq_ids host pointers (called after graph execution)
+GGML_BACKEND_API void ggml_backend_sycl_clear_seq_ids_host(void);
+
 #ifdef  __cplusplus
 }
 #endif

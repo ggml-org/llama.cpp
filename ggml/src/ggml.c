@@ -5302,6 +5302,88 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+void ggml_flash_attn_ext_set_seq_ids(
+        struct ggml_tensor * a,
+        struct ggml_tensor * q_seq_ids,
+        struct ggml_tensor * kv_seq_ids) {
+    if (!q_seq_ids || !kv_seq_ids) {
+        return;
+    }
+
+    // Traverse through view/reshape operations to find the actual flash attention tensor
+    // This is necessary because build_attn_mha may reshape the flash attention result
+    struct ggml_tensor * fattn = a;
+    while (fattn && fattn->op != GGML_OP_FLASH_ATTN_EXT) {
+        // VIEW, RESHAPE, PERMUTE, CONT, TRANSPOSE all have src[0] as the source tensor
+        if (fattn->op == GGML_OP_VIEW ||
+            fattn->op == GGML_OP_RESHAPE ||
+            fattn->op == GGML_OP_PERMUTE ||
+            fattn->op == GGML_OP_CONT ||
+            fattn->op == GGML_OP_TRANSPOSE) {
+            fattn = fattn->src[0];
+        } else {
+            // Not a view-like op, can't traverse further
+            fattn = NULL;
+            break;
+        }
+    }
+
+    // If no flash attention tensor found, silently return (may not use flash attention)
+    if (!fattn) {
+        return;
+    }
+
+    GGML_ASSERT(fattn->src[5] == NULL && "q_seq_ids already set");
+    GGML_ASSERT(fattn->src[6] == NULL && "kv_seq_ids already set");
+
+    // q_seq_ids: [n_tokens] int32 - sequence ID for each query token
+    // kv_seq_ids: [n_kv] int32 - sequence ID for each KV position (-1 if empty)
+    GGML_ASSERT(q_seq_ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(kv_seq_ids->type == GGML_TYPE_I32);
+
+    fattn->src[5] = q_seq_ids;
+    fattn->src[6] = kv_seq_ids;
+}
+
+void ggml_flash_attn_ext_set_paged(
+        struct ggml_tensor * a,
+        struct ggml_tensor * block_table,
+        struct ggml_tensor * seq_lens) {
+    if (!block_table || !seq_lens) {
+        return;
+    }
+
+    // Traverse through view/reshape operations to find the actual flash attention tensor
+    struct ggml_tensor * fattn = a;
+    while (fattn && fattn->op != GGML_OP_FLASH_ATTN_EXT) {
+        if (fattn->op == GGML_OP_VIEW ||
+            fattn->op == GGML_OP_RESHAPE ||
+            fattn->op == GGML_OP_PERMUTE ||
+            fattn->op == GGML_OP_CONT ||
+            fattn->op == GGML_OP_TRANSPOSE) {
+            fattn = fattn->src[0];
+        } else {
+            fattn = NULL;
+            break;
+        }
+    }
+
+    if (!fattn) {
+        return;
+    }
+
+    GGML_ASSERT(fattn->src[7] == NULL && "block_table already set");
+    GGML_ASSERT(fattn->src[8] == NULL && "seq_lens already set");
+
+    // block_table: [batch_size, max_blocks_per_seq] int32 - maps logical blocks to physical blocks
+    // seq_lens: [batch_size] int32 - number of valid KV tokens per sequence
+    GGML_ASSERT(block_table->type == GGML_TYPE_I32);
+    GGML_ASSERT(seq_lens->type == GGML_TYPE_I32);
+
+    fattn->src[7] = block_table;
+    fattn->src[8] = seq_lens;
+}
+
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(
