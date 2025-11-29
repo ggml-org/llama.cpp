@@ -19,7 +19,7 @@ if [[ "$choice" == "y" || "$choice" == "yes" ]]; then
     # 确保已安装正确的驱动
     pkg remove mesa-vulkan-icd-swrast
     pkg install mesa-vulkan-icd-freedreno vulkan-loader-generic vulkan-tools
-    vulkan-info | grep -i devicename
+    vulkaninfo | grep -i devicename
     sleep 1
     vulkan_flag="-DGGML_VULKAN=ON"
 else
