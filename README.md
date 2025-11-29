@@ -9,7 +9,7 @@ This repository supports Vulkan banked on some SoCs.Please read the "Build on ar
 # Build on arm64
 Navigate to the soc directory and find the script for your device’s SoC. Then, execute the corresponding script.
 
-For example, if your SoC is a Dimensity 1000+, you should run soc/Dimensity1000.sh. (Note: Scripts are typically named after the standard version of the SoC, omitting special edition suffixes like “+” or “Pro”.)
+For example, if your SoC is a Dimensity 1000+, you should run soc/mediatek/dimensity-1000.sh. (Note: Scripts are typically named after the standard version of the SoC, omitting special edition suffixes like “+” or “Pro”.)
 
 Currently Supported SoCs
 
