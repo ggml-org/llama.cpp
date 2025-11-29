@@ -36,6 +36,28 @@ static bool parse_model_from_chat(const httplib::Request & req, std::string & mo
 void register_routes(httplib::Server & server, RouterApp & app) {
     server.Get("/v1/models", [&app](const httplib::Request &, httplib::Response & res) { handle_models(app, res); });
 
+    auto proxy_last_spawned = [&app](const httplib::Request & req, httplib::Response & res) {
+        const std::string model = app.get_last_spawned_model();
+        if (model.empty()) {
+            res.status = 503;
+            res.set_content("no models running", "text/plain");
+            return;
+        }
+
+        std::string error;
+        if (!app.ensure_running(model, error)) {
+            res.status = 503;
+            res.set_content("no models running", "text/plain");
+            return;
+        }
+
+        proxy_request(req, res, app.upstream_for(model));
+    };
+
+    server.Get("/props", proxy_last_spawned);
+    server.Get("/slots", proxy_last_spawned);
+    server.Get("/health", proxy_last_spawned);
+
     server.Get(R"(^/(.+)/(health|props|slots)$)", [&app](const httplib::Request & req, httplib::Response & res) {
         auto model_it = req.matches.begin();
         ++model_it;

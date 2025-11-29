@@ -16,6 +16,7 @@ public:
     void start_auto_models();
     bool ensure_running(const std::string & model_name, std::string & error);
     std::string upstream_for(const std::string & model_name);
+    std::string get_last_spawned_model();
     void stop_all();
 
     const RouterConfig & get_config() const { return config; }
@@ -27,4 +28,5 @@ private:
     std::unordered_map<std::string, ModelConfig> model_lookup;
     std::unordered_map<std::string, ProcessHandle> processes;
     std::unordered_map<std::string, int> model_ports;
+    std::string last_spawned_model;
 };

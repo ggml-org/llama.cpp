@@ -90,6 +90,7 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
     }
 
     processes.emplace(model_name, handle);
+    last_spawned_model = model_name;
     return true;
 }
 
@@ -102,6 +103,11 @@ std::string RouterApp::upstream_for(const std::string & model_name) {
     std::ostringstream os;
     os << "http://127.0.0.1:" << it->second;
     return os.str();
+}
+
+std::string RouterApp::get_last_spawned_model() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return last_spawned_model;
 }
 
 void RouterApp::stop_all() {
