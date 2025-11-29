@@ -16,7 +16,7 @@ Currently Supported SoCs
 | SoC | CPU Optimization | GPU Support | GPU Optimization |
 | ---- | ---- | ---- | ---- |
 | Dimensity1000(+) | √ | × | × |
-| Snapdragon8(+) Gen1 | ✓ | √ | × |
+| Snapdragon8(+) Gen1 | √ | √ | × |
 
 # Usage
 ```bash
