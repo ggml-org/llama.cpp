@@ -140,8 +140,10 @@ models = [
     {"name": "exaone4",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B", },
     {"name": "mellum",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/JetBrains/Mellum-4b-base", },
     {"name": "modern-bert",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/answerdotai/ModernBERT-base", },
+    {"name": "afmoe",            "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/arcee-ai/Trinity-Tokenizer", },
     {"name": "bailingmoe2",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/inclusionAI/Ling-mini-base-2.0", },
     {"name": "granite-docling",  "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ibm-granite/granite-docling-258M", },
+    {"name": "minimax-m2",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/MiniMaxAI/MiniMax-M2", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
@@ -436,7 +438,7 @@ for model in models:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
         else:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
-    except OSError as e:
+    except (OSError, TypeError) as e:
         logger.error(f"Failed to load tokenizer for model {name}. Error: {e}")
         continue  # Skip this model and continue with the next one in the loop
 

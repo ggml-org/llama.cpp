@@ -79,6 +79,7 @@ enum llm_type {
     LLM_TYPE_15B,
     LLM_TYPE_16B,
     LLM_TYPE_20B,
+    LLM_TYPE_26B,
     LLM_TYPE_27B,
     LLM_TYPE_30B,
     LLM_TYPE_32B,
@@ -115,8 +116,10 @@ enum llm_type {
     LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_30B_A3B,
+    LLM_TYPE_80B_A3B, // Qwen3 Next
     LLM_TYPE_100B_A6B,
     LLM_TYPE_106B_A12B, // GLM-4.5-Air
+    LLM_TYPE_230B_A10B, // Minimax M2
     LLM_TYPE_235B_A22B,
     LLM_TYPE_300B_A47B, // Ernie MoE big
     LLM_TYPE_355B_A32B, // GLM-4.5
@@ -236,6 +239,7 @@ struct llama_layer {
     struct ggml_tensor * wk_enc    = nullptr;
     struct ggml_tensor * wv_enc    = nullptr;
     struct ggml_tensor * wo_enc    = nullptr;
+    struct ggml_tensor * wqkv_gate = nullptr;
 
     // attention bias
     struct ggml_tensor * bq   = nullptr;
@@ -308,6 +312,9 @@ struct llama_layer {
     // mamba bias
     struct ggml_tensor * ssm_conv1d_b = nullptr;
     struct ggml_tensor * ssm_dt_b     = nullptr;
+
+    // qwen3next
+    struct ggml_tensor * ssm_beta_alpha = nullptr;
 
     // rwkv
     struct ggml_tensor * time_mix_w1         = nullptr;
@@ -386,6 +393,13 @@ struct llama_layer {
 
     // openai-moe
     struct ggml_tensor * attn_sinks = nullptr;
+
+    // cogvlm
+    struct ggml_tensor * visexp_attn_wqkv = nullptr;
+    struct ggml_tensor * visexp_attn_wo   = nullptr;
+    struct ggml_tensor * visexp_ffn_gate  = nullptr;
+    struct ggml_tensor * visexp_ffn_down  = nullptr;
+    struct ggml_tensor * visexp_ffn_up    = nullptr;
 
     // xIELU activation parameters for Apertus
     struct ggml_tensor * ffn_act_alpha_n = nullptr;

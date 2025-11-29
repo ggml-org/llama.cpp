@@ -7,6 +7,7 @@ export interface SettingsFieldConfig {
 	key: string;
 	label: string;
 	type: 'input' | 'textarea' | 'checkbox' | 'select';
+	isExperimental?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof import('@lucide/svelte').Icon }>;
 }
@@ -38,11 +39,19 @@ export interface SettingsChatServiceOptions {
 	samplers?: string | string[];
 	// Custom parameters
 	custom?: string;
+	timings_per_token?: boolean;
 	// Callbacks
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
+	onToolCallChunk?: (chunk: string) => void;
 	onModel?: (model: string) => void;
-	onComplete?: (response: string, reasoningContent?: string, timings?: ChatMessageTimings) => void;
+	onFirstValidChunk?: () => void;
+	onComplete?: (
+		response: string,
+		reasoningContent?: string,
+		timings?: ChatMessageTimings,
+		toolCalls?: string
+	) => void;
 	onError?: (error: Error) => void;
 }
 

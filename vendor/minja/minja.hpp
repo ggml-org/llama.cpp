@@ -2205,7 +2205,7 @@ private:
 
       auto value = parseValue();
 
-      while (it != end && consumeSpaces() && peekSymbols({ "[", "." })) {
+      while (it != end && consumeSpaces() && peekSymbols({ "[", ".", "(" })) {
         if (!consumeToken("[").empty()) {
           std::shared_ptr<Expression> index;
           auto slice_loc = get_location();
@@ -2250,15 +2250,13 @@ private:
               auto key = std::make_shared<LiteralExpr>(identifier->location, Value(identifier->get_name()));
               value = std::make_shared<SubscriptExpr>(identifier->location, std::move(value), std::move(key));
             }
+        } else if (peekSymbols({ "(" })) {
+          auto callParams = parseCallArgs();
+          value = std::make_shared<CallExpr>(get_location(), std::move(value), std::move(callParams));
         }
         consumeSpaces();
       }
 
-      if (peekSymbols({ "(" })) {
-        auto location = get_location();
-        auto callParams = parseCallArgs();
-        value = std::make_shared<CallExpr>(location, std::move(value), std::move(callParams));
-      }
       return value;
     }
 
@@ -2738,7 +2736,7 @@ inline std::shared_ptr<Context> Context::builtins() {
   globals.set("raise_exception", simple_function("raise_exception", { "message" }, [](const std::shared_ptr<Context> &, Value & args) -> Value {
     throw std::runtime_error(args.at("message").get<std::string>());
   }));
-  globals.set("tojson", simple_function("tojson", { "value", "indent" }, [](const std::shared_ptr<Context> &, Value & args) {
+  globals.set("tojson", simple_function("tojson", { "value", "indent", "ensure_ascii" }, [](const std::shared_ptr<Context> &, Value & args) {
     return Value(args.at("value").dump(args.get<int64_t>("indent", -1), /* to_json= */ true));
   }));
   globals.set("items", simple_function("items", { "object" }, [](const std::shared_ptr<Context> &, Value & args) {

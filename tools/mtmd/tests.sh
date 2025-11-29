@@ -84,6 +84,7 @@ if [ "$RUN_BIG_TESTS" = true ]; then
     add_test_vision "ggml-org/Qwen2-VL-7B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/Qwen3-VL-2B-Instruct-GGUF:Q8_0"
     add_test_vision "ggml-org/InternVL3-8B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/InternVL3-14B-Instruct-GGUF:Q4_K_M"
     add_test_vision "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"

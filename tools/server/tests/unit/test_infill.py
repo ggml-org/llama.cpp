@@ -18,7 +18,7 @@ def test_infill_without_input_extra():
         "input_suffix": "}\n",
     })
     assert res.status_code == 200
-    assert match_regex("(Ann|small|shiny|Daddy)+", res.body["content"])
+    assert match_regex("(Ann|small|shiny|Daddy|Jimmy)+", res.body["content"])
 
 
 def test_infill_with_input_extra():
@@ -34,7 +34,7 @@ def test_infill_with_input_extra():
         "input_suffix": "}\n",
     })
     assert res.status_code == 200
-    assert match_regex("(Dad|excited|park)+", res.body["content"])
+    assert match_regex("(Dad|excited|park|Jimmy)+", res.body["content"])
 
 
 @pytest.mark.parametrize("input_extra", [

@@ -5,13 +5,13 @@
 		ChatScreenHeader,
 		ChatScreenWarning,
 		ChatMessages,
-		ChatProcessingInfo,
-		EmptyFileAlertDialog,
-		ChatErrorDialog,
+		ChatScreenProcessingInfo,
+		DialogEmptyFileAlert,
+		DialogChatError,
 		ServerErrorSplash,
 		ServerInfo,
 		ServerLoadingSplash,
-		ConfirmationDialog
+		DialogConfirmation
 	} from '$lib/components/app';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import {
@@ -29,6 +29,7 @@
 		sendMessage,
 		stopGeneration
 	} from '$lib/stores/chat.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import {
 		supportsVision,
 		supportsAudio,
@@ -47,6 +48,7 @@
 
 	let { showCenteredEmpty = false } = $props();
 
+	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
 	let autoScrollEnabled = $state(true);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);
@@ -149,7 +151,7 @@
 	}
 
 	function handleScroll() {
-		if (!chatScrollContainer) return;
+		if (disableAutoScroll || !chatScrollContainer) return;
 
 		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
 		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
@@ -194,8 +196,10 @@
 		const extras = result?.extras;
 
 		// Enable autoscroll for user-initiated message sending
-		userScrolledUp = false;
-		autoScrollEnabled = true;
+		if (!disableAutoScroll) {
+			userScrolledUp = false;
+			autoScrollEnabled = true;
+		}
 		await sendMessage(message, extras);
 		scrollChatToBottom();
 
@@ -241,6 +245,8 @@
 	}
 
 	function scrollChatToBottom(behavior: ScrollBehavior = 'smooth') {
+		if (disableAutoScroll) return;
+
 		chatScrollContainer?.scrollTo({
 			top: chatScrollContainer?.scrollHeight,
 			behavior
@@ -248,14 +254,27 @@
 	}
 
 	afterNavigate(() => {
-		setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+		if (!disableAutoScroll) {
+			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+		}
 	});
 
 	onMount(() => {
-		setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+		if (!disableAutoScroll) {
+			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+		}
 	});
 
 	$effect(() => {
+		if (disableAutoScroll) {
+			autoScrollEnabled = false;
+			if (scrollInterval) {
+				clearInterval(scrollInterval);
+				scrollInterval = undefined;
+			}
+			return;
+		}
+
 		if (isCurrentConversationLoading && autoScrollEnabled) {
 			scrollInterval = setInterval(scrollChatToBottom, AUTO_SCROLL_INTERVAL);
 		} else if (scrollInterval) {
@@ -289,9 +308,11 @@
 			class="mb-16 md:mb-24"
 			messages={activeMessages()}
 			onUserAction={() => {
-				userScrolledUp = false;
-				autoScrollEnabled = true;
-				scrollChatToBottom();
+				if (!disableAutoScroll) {
+					userScrolledUp = false;
+					autoScrollEnabled = true;
+					scrollChatToBottom();
+				}
 			}}
 		/>
 
@@ -299,7 +320,7 @@
 			class="pointer-events-none sticky right-0 bottom-0 left-0 mt-auto"
 			in:slide={{ duration: 150, axis: 'y' }}
 		>
-			<ChatProcessingInfo />
+			<ChatScreenProcessingInfo />
 
 			{#if serverWarning()}
 				<ChatScreenWarning class="pointer-events-auto mx-auto max-w-[48rem] px-4" />
@@ -333,7 +354,7 @@
 		ondrop={handleDrop}
 		role="main"
 	>
-		<div class="w-full max-w-2xl px-4">
+		<div class="w-full max-w-[48rem] px-4">
 			<div class="mb-8 text-center" in:fade={{ duration: 300 }}>
 				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
 
@@ -368,7 +389,7 @@
 	<AlertDialog.Portal>
 		<AlertDialog.Overlay />
 
-		<AlertDialog.Content class="max-w-md">
+		<AlertDialog.Content class="flex max-w-md flex-col">
 			<AlertDialog.Header>
 				<AlertDialog.Title>File Upload Error</AlertDialog.Title>
 
@@ -377,7 +398,7 @@
 				</AlertDialog.Description>
 			</AlertDialog.Header>
 
-			<div class="space-y-4">
+			<div class="!max-h-[50vh] min-h-0 flex-1 space-y-4 overflow-y-auto">
 				{#if fileErrorData.generallyUnsupported.length > 0}
 					<div class="space-y-2">
 						<h4 class="text-sm font-medium text-destructive">Unsupported File Types</h4>
@@ -398,8 +419,6 @@
 
 				{#if fileErrorData.modalityUnsupported.length > 0}
 					<div class="space-y-2">
-						<h4 class="text-sm font-medium text-destructive">Model Compatibility Issues</h4>
-
 						<div class="space-y-1">
 							{#each fileErrorData.modalityUnsupported as file (file.name)}
 								<div class="rounded-md bg-destructive/10 px-3 py-2">
@@ -415,14 +434,14 @@
 						</div>
 					</div>
 				{/if}
+			</div>
 
-				<div class="rounded-md bg-muted/50 p-3">
-					<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
+			<div class="rounded-md bg-muted/50 p-3">
+				<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
 
-					<p class="text-sm text-muted-foreground">
-						{fileErrorData.supportedTypes.join(', ')}
-					</p>
-				</div>
+				<p class="text-sm text-muted-foreground">
+					{fileErrorData.supportedTypes.join(', ')}
+				</p>
 			</div>
 
 			<AlertDialog.Footer>
@@ -434,7 +453,7 @@
 	</AlertDialog.Portal>
 </AlertDialog.Root>
 
-<ConfirmationDialog
+<DialogConfirmation
 	bind:open={showDeleteDialog}
 	title="Delete Conversation"
 	description="Are you sure you want to delete this conversation? This action cannot be undone and will permanently remove all messages in this conversation."
@@ -446,7 +465,7 @@
 	onCancel={() => (showDeleteDialog = false)}
 />
 
-<EmptyFileAlertDialog
+<DialogEmptyFileAlert
 	bind:open={showEmptyFileDialog}
 	emptyFiles={emptyFileNames}
 	onOpenChange={(open) => {
@@ -456,7 +475,7 @@
 	}}
 />
 
-<ChatErrorDialog
+<DialogChatError
 	message={activeErrorDialog?.message ?? ''}
 	onOpenChange={handleErrorDialogOpenChange}
 	open={Boolean(activeErrorDialog)}
