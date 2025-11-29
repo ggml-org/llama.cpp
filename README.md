@@ -1,6 +1,8 @@
 # llama.cpp for aarch64
 
-In short, this repository is designed to make llama.cpp easily accessible for Android users, particularly those on Termux. It provides pre-compiled binaries, Deepseek-R1 1.5b Model, along with the source code and build files, saving you the hassle of navigating complex dependency hell and the expense of your valuable time.This repository supports Vulkan banked on some SoCs.Please read the "Build on arm64" to check.
+In short, this repository is designed to make llama.cpp easily accessible for Android users, particularly those on Termux. It provides **optimized build scripts**, a sample Deepseek-R1 1.5b Model, along with source code and build files, saving you the hassle of navigating complex dependency hell and the expense of your valuable time.
+
+This repository supports Vulkan banked on some SoCs.Please read the "Build on arm64" to check.
 
 ![llamacppforaarch64](logo.png)
 
@@ -11,18 +13,16 @@ For example, if your SoC is a Dimensity 1000+, you should run soc/Dimensity1000.
 
 Currently Supported SoCs
 
-| SoC | CPU Optimization | GPU Optimization |
-| ---- | ---- | ---- |
-| Dimensity1000(+) | √ | × |
+| SoC | CPU Optimization | GPU Support | GPU Optimization |
+| ---- | ---- | ---- | ---- |
+| Dimensity1000(+) | √ | × | × |
+| Snapdragon8(+) Gen1 | ✓ | √ | × |
 
 # Usage
-
-Prepare adb shell or Termux,then unpack llama.cpp.tar.gz
-
 ```bash
-cd llama.cpp
-chmod +x ds.sh && ./ds.sh
-# -t Performance Cores
+cd llama.cpp/
+chmod +x ds.sh
+./ds.sh
 ```
 
 # Performance
@@ -48,6 +48,7 @@ LLM inference in C/C++
 
 ## Hot topics
 
+- Starting from version 1.4, this project no longer provides pre-compiled binaries.
 - The llama.cpp project for aarch64 has Vulkan support now.Please check "Build on arm64"
 - **[guide : using the new WebUI of llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/16938)**
 - [guide : running gpt-oss with llama.cpp](https://github.com/ggml-org/llama.cpp/discussions/15396)

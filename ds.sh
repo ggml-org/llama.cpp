@@ -6,4 +6,4 @@ wget https://www.modelscope.cn/models/unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF
 
 cd ../..
 
-./build/bin/llama-cli -m build/bin/ds1.5b.gguf --color -t 4
+./build/bin/llama-cli -m build/bin/ds1.5b.gguf --color -t 4 -ngl 99
