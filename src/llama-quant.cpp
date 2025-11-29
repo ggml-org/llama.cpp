@@ -1714,7 +1714,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 if (err_gain < epsilon) { continue; } // no error improvement
 
                 double ratio = err_gain / (double)delta_bytes; // error reduction per byte
-                if (is_important(tensor_name)) { ratio *= 2.0; } // important tensors get 2x boost
+                if (is_important(tensor_name)) { ratio *= 5.0; } // important tensors get 5x boost
 
                 // For tie-breaking, prioritize the largest absolute error improvement.
                 if (ratio > best_ratio + epsilon || (std::abs(ratio - best_ratio) <= epsilon && err_gain > best_gain)) {
