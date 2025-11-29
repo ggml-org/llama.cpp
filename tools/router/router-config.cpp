@@ -81,6 +81,9 @@ void write_config_file(const RouterConfig & cfg, const std::string & path) {
         obj["name"]  = m.name;
         obj["path"]  = m.path;
         obj["state"] = m.state.empty() ? "manual" : m.state;
+        if (!m.group.empty()) {
+            obj["group"] = m.group;
+        }
         if (!m.spawn.empty()) {
             obj["spawn"] = m.spawn;
         }
@@ -141,6 +144,7 @@ RouterConfig load_config(const std::string & path) {
             mc.name  = m.value("name", "");
             mc.path  = m.value("path", "");
             mc.state = m.value("state", "manual");
+            mc.group = m.value("group", "");
             if (m.contains("spawn")) {
                 mc.spawn = m["spawn"].get<std::vector<std::string>>();
             }
@@ -148,4 +152,8 @@ RouterConfig load_config(const std::string & path) {
         }
     }
     return cfg;
+}
+
+std::string get_model_group(const ModelConfig & cfg) {
+    return cfg.group.empty() ? cfg.name : cfg.group;
 }

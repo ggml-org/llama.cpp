@@ -35,8 +35,31 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
         return false;
     }
 
-    const ModelConfig & cfg = it_cfg->second;
-    auto               it   = processes.find(model_name);
+    const ModelConfig & cfg          = it_cfg->second;
+    const std::string   target_group = get_model_group(cfg);
+
+    for (auto it_proc = processes.begin(); it_proc != processes.end();) {
+        const auto it_model = model_lookup.find(it_proc->first);
+        const bool unknown  = it_model == model_lookup.end();
+        const std::string running_group = unknown ? std::string() : get_model_group(it_model->second);
+
+        if (!unknown && running_group == target_group) {
+            ++it_proc;
+            continue;
+        }
+
+        LOG_INF("Stopping %s (group '%s') to spawn %s (group '%s')\n",
+                it_proc->first.c_str(),
+                running_group.c_str(),
+                model_name.c_str(),
+                target_group.c_str());
+
+        terminate_process(it_proc->second);
+        model_ports.erase(it_proc->first);
+        it_proc = processes.erase(it_proc);
+    }
+
+    auto it = processes.find(model_name);
     if (it != processes.end() && process_running(it->second)) {
         return true;
     }
@@ -44,6 +67,7 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
     if (it != processes.end()) {
         close_process(it->second);
         processes.erase(it);
+        model_ports.erase(model_name);
     }
 
     int port = next_port.fetch_add(1);

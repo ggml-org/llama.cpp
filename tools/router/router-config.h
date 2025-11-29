@@ -7,6 +7,7 @@ struct ModelConfig {
     std::string              name;
     std::string              path;
     std::string              state;
+    std::string              group;
     std::vector<std::string> spawn;
 };
 
@@ -31,3 +32,5 @@ const RouterOptions &             get_default_router_options();
 RouterConfig load_config(const std::string & path);
 RouterConfig generate_default_config(const std::string & path);
 void         write_config_file(const RouterConfig & cfg, const std::string & path);
+
+std::string get_model_group(const ModelConfig & cfg);
