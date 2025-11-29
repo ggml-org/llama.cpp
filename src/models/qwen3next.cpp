@@ -3,6 +3,241 @@
 
 #define CHUNK_SIZE 64
 
+#include <iostream>
+#include <iomanip>
+#include <unordered_map>
+#include <chrono>
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <fstream>
+struct PerformanceMetrics {
+private:
+    std::chrono::high_resolution_clock::time_point start_time;
+    std::unordered_map<std::string, double> op_times;   // Total time spent on each operation
+    std::unordered_map<std::string, size_t> op_counts;  // Number of times each operation was called
+    std::vector<std::string> operation_history;         // Keeps track of recent operations
+
+public:
+    // Start timing an operation
+    void start_op(const std::string& op_name) {
+        start_time = std::chrono::high_resolution_clock::now();
+        operation_history.push_back(op_name);
+    }
+    
+    // Stop timing an operation
+    void end_op(const std::string& op_name) {
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        double duration_ms = duration.count() / 1000.0;
+        
+        op_times[op_name] += duration_ms;
+        op_counts[op_name] += 1;
+    }
+    
+    // Get the average time of a specific operation
+    double get_avg_time(const std::string& op_name) const {
+        auto it = op_counts.find(op_name);
+        if (it != op_counts.end() && it->second > 0) {
+            return op_times.at(op_name) / it->second;
+        }
+        return 0.0;
+    }
+    
+    // Get the total time of all operations
+    double get_total_time() const {
+        double total = 0.0;
+        for (const auto& pair : op_times) {
+            total += pair.second;
+        }
+        return total;
+    }
+    
+    // Print performance report to console
+    void print_report() const {
+        print_report(std::cout);
+    }
+    
+    // Print performance report to specified output stream
+    void print_report(std::ostream& out) const {
+        double total_time = get_total_time();
+        
+        out << "\n" << std::string(60, '=') << "\n";
+        out << "                    Performance Report                    \n";
+        out << std::string(60, '=') << "\n";
+        out << std::left;
+        out << std::setw(25) << "Operation Name" 
+            << std::setw(12) << "Total(ms)" 
+            << std::setw(10) << "Calls" 
+            << std::setw(15) << "Avg(ms)" 
+            << std::setw(8) << "Pct(%)" << "\n";
+        out << std::string(60, '-') << "\n";
+        
+        // Create a list of operations and sort them by total time
+        std::vector<std::pair<std::string, std::pair<double, size_t>>> ops;
+        for (const auto& pair : op_times) {
+            ops.emplace_back(pair.first, 
+                           std::make_pair(pair.second, op_counts.at(pair.first)));
+        }
+        
+        std::sort(ops.begin(), ops.end(), 
+                 [](const auto& a, const auto& b) {
+                     return a.second.first > b.second.first;
+                 });
+        
+        for (const auto& op : ops) {
+            const std::string& name = op.first;
+            double total = op.second.first;
+            size_t count = op.second.second;
+            double avg = total / count;
+            double percentage = total_time > 0 ? (total / total_time) * 100.0 : 0.0;
+            
+            out << std::setw(25) << name 
+                << std::setw(12) << std::fixed << std::setprecision(3) << total
+                << std::setw(10) << count
+                << std::setw(15) << std::setprecision(3) << avg
+                << std::setw(8) << std::setprecision(2) << percentage << "\n";
+        }
+        
+        out << std::string(60, '-') << "\n";
+        out << std::setw(25) << "Total" 
+            << std::setw(12) << std::fixed << std::setprecision(3) << total_time
+            << std::setw(33) << "100.00" << "\n";
+        out << std::string(60, '=') << "\n";
+        
+        // Identify the heaviest operations
+        if (!ops.empty()) {
+            out << "\nPerformance Bottleneck Analysis:\n";
+            out << "- Most time-consuming operation: " << ops[0].first 
+                << " (" << std::fixed << std::setprecision(3) << ops[0].second.first << " ms)\n";
+            out << "- Longest average time: ";
+            
+            double max_avg = 0.0;
+            std::string max_avg_op;
+            for (const auto& op : ops) {
+                double avg = op.second.first / op.second.second;
+                if (avg > max_avg) {
+                    max_avg = avg;
+                    max_avg_op = op.first;
+                }
+            }
+            out << max_avg_op << " (" << std::fixed << std::setprecision(3) << max_avg << " ms)\n";
+        }
+        
+        out << std::right << std::endl;
+    }
+    
+    // Export performance data to CSV
+    void export_csv(const std::string& filename) const {
+        std::ofstream file(filename);
+        if (!file.is_open()) {
+            std::cerr << "Unable to create file: " << filename << std::endl;
+            return;
+        }
+        
+        file << "Operation,Total(ms),Calls,Avg(ms),Pct(%)\n";
+        double total_time = get_total_time();
+        
+        std::vector<std::pair<std::string, std::pair<double, size_t>>> ops;
+        for (const auto& pair : op_times) {
+            ops.emplace_back(pair.first, 
+                           std::make_pair(pair.second, op_counts.at(pair.first)));
+        }
+        
+        std::sort(ops.begin(), ops.end(), 
+                 [](const auto& a, const auto& b) {
+                     return a.second.first > b.second.first;
+                 });
+        
+        for (const auto& op : ops) {
+            const std::string& name = op.first;
+            double total = op.second.first;
+            size_t count = op.second.second;
+            double avg = total / count;
+            double percentage = total_time > 0 ? (total / total_time) * 100.0 : 0.0;
+            
+            file << name << "," 
+                 << std::fixed << std::setprecision(3) << total << ","
+                 << count << ","
+                 << std::setprecision(3) << avg << ","
+                 << std::setprecision(2) << percentage << "\n";
+        }
+        
+        file.close();
+        std::cout << "Performance data exported to: " << filename << std::endl;
+    }
+    
+    // Print a realtime summary every 5 seconds
+    void print_realtime_summary() const {
+        static auto last_print = std::chrono::high_resolution_clock::now();
+        static std::unordered_map<std::string, double> last_times;
+        
+        auto now = std::chrono::high_resolution_clock::now();
+        auto time_diff = std::chrono::duration_cast<std::chrono::seconds>(now - last_print);
+        
+        if (time_diff.count() >= 5) { // Print every 5 seconds
+            std::cout << "\n[Performance Monitor] Realtime Summary (updated every 5s):\n";
+            std::cout << "Total Time: " << std::fixed << std::setprecision(2) 
+                      << get_total_time() << " ms\n";
+            std::cout << "Number of operations: " << op_times.size() << "\n";
+            
+            std::cout << "Recent operations: ";
+            size_t recent_count = std::min(operation_history.size(), size_t(5));
+            for (size_t i = operation_history.size() - recent_count; i < operation_history.size(); ++i) {
+                std::cout << operation_history[i];
+                if (i < operation_history.size() - 1) std::cout << " -> ";
+            }
+            std::cout << "\n" << std::string(50, '-') << "\n";
+            
+            last_print = now;
+        }
+    }
+    
+    // Reset all performance data
+    void reset() {
+        op_times.clear();
+        op_counts.clear();
+        operation_history.clear();
+    }
+    
+    // Get raw performance data for further analysis
+    std::unordered_map<std::string, double> get_performance_data() const {
+        return op_times;
+    }
+    
+    std::unordered_map<std::string, size_t> get_operation_counts() const {
+        return op_counts;
+    }
+};
+
+// Global performance monitor
+static PerformanceMetrics perf_metrics;
+
+// Macros for convenience
+#define PERF_START(op_name) perf_metrics.start_op(op_name)
+#define PERF_END(op_name)   perf_metrics.end_op(op_name)
+
+/*
+Usage Example:
+
+    PERF_START("model_init");
+    // Model initialization code
+    PERF_END("model_init");
+    
+    PERF_START("delta_net_chunking");
+    ggml_tensor * result = build_delta_net_chunking(q, k, v, g, beta, state, causal_mask, identity, il);
+    PERF_END("delta_net_chunking");
+    
+    PERF_START("attention_computation");
+    // Attention computation
+    PERF_END("attention_computation");
+    
+    // Print report
+    perf_metrics.print_report();
+    perf_metrics.export_csv("performance_report.csv");
+*/
+
+
 llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context_mamba(params), model(model) {
     ggml_tensor * cur;
@@ -16,14 +251,19 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+
     ggml_tensor * causal_mask =
         ggml_tri(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens, ubatch.n_seq_tokens), 1.0f),
                     GGML_TRI_TYPE_LOWER);
 
-    ggml_tensor * identity = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens), 1.0f));
 
+	
+    ggml_tensor * identity = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens), 1.0f));
+    
     ggml_build_forward_expand(gf, causal_mask);
+
     ggml_build_forward_expand(gf, identity);
+
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
@@ -31,15 +271,21 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
+
         // Determine layer type and build appropriate attention mechanism
         if (hparams.is_recurrent(il)) {
             // Linear attention layer (gated delta net)
+PERF_START("attn_calc_linear");			
             cur = build_layer_attn_linear(inp->get_recr(), cur, causal_mask, identity, il);
+PERF_END("attn_calc_linear");		
         } else {
             // Full attention layer
+			PERF_START("attn_calc_full");	
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il);
+			PERF_END("attn_calc_full");
         }
-
+		PERF_END("attn_calc");
+		
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
@@ -56,8 +302,10 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
         ggml_tensor * attn_post_norm = build_norm(cur, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, il);
         cb(attn_post_norm, "attn_post_norm", il);
 
+PERF_START("ffn_calc");
         // FFN layer (MoE or dense) - without residual connection
         cur = build_layer_ffn(attn_post_norm, il);
+PERF_END("ffn_calc");
         cb(cur, "ffn_out", il);
 
         // Residual connection for FFN - add to the tensor from before post_attention_layernorm
@@ -67,6 +315,8 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
         // Input for next layer
         inpL = cur;
     }
+
+	
     cur = inpL;
 
     // Final norm
@@ -81,7 +331,10 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
+PERF_START("fwd_expand");
     ggml_build_forward_expand(gf, cur);
+PERF_END("fwd_expand");	
+	perf_metrics.print_report();
 }
 
 ggml_tensor * llm_build_qwen3next::build_delta_net_chunking(
@@ -94,6 +347,7 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_chunking(
         ggml_tensor * causal_mask,
         ggml_tensor * identity,
         int           il) {
+			PERF_START("build_dn_chunking");
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
     GGML_ASSERT(ggml_is_contiguous(v));
@@ -358,6 +612,7 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_chunking(
 
     ggml_tensor * flat_state = ggml_cont_1d(ctx0, new_state, S_v * S_v * H_v * n_seqs);
 
+PERF_END("build_dn_chunking");
     return ggml_concat(ctx0, flat_output, flat_state, 0);
 }
 
@@ -371,6 +626,7 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_recurrent(
         ggml_tensor * causal_mask,
         ggml_tensor * identity,
         int           il) {
+			PERF_START("build_dn_recur");
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
     GGML_ASSERT(ggml_is_contiguous(v));
@@ -444,8 +700,9 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_recurrent(
     ggml_tensor * v_beta = ggml_mul(ctx0, v, beta);
     ggml_tensor * k_beta = ggml_mul(ctx0, k, beta);
 
+	PERF_START("cumsum_dn");
     ggml_tensor * g_cumsum = ggml_cumsum(ctx0, g);
-
+	PERF_END("cumsum_dn");
     cb(k_beta, "k_beta", il);
     cb(v_beta, "v_beta", il);
     cb(g_cumsum, "g_cumsum", il);
@@ -458,9 +715,12 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_recurrent(
     //     ggml_repeat_4d(ctx0, gcs_i, GGML_DELTA_NET_CHUNK, GGML_DELTA_NET_CHUNK, num_chunks * H_v,
     //                     n_seqs);  // [chunk_size, 1, H_v, n_seqs] -> [chunk_size, chunk_size, H_v, n_seqs]
     // Don't need this, this one will get auto-broadcast
+	PERF_START("broadcast");
     ggml_tensor * gcs_j_broadcast =
         ggml_repeat_4d(ctx0, gcs_j, n_tokens, n_tokens, H_v, n_seqs);  // [1, chunk_size, H_v, n_seqs] -> [chunk_size, chunk_size, H_v, n_seqs]
-
+	PERF_END("broadcast");
+	
+	PERF_START("decay_mask");
     ggml_tensor * decay_mask = ggml_sub(ctx0, gcs_j_broadcast, gcs_i);
 
     // Apply lower triangular mask to ensure attention is causal (only past tokens influence current)
@@ -469,7 +729,7 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_recurrent(
     decay_mask = ggml_exp(ctx0, decay_mask);
     // Apply lower triangular mask again to ensure only lower triangular values remain
     decay_mask = ggml_mul(ctx0, decay_mask, causal_diag_mask);
-
+	PERF_END("decay_mask");
     cb(decay_mask, "decay_mask", il);
 
     // attn = -((k_beta @ key.transpose(-1, -2)) * decay_mask).masked_fill(mask, 0)
@@ -492,18 +752,24 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_recurrent(
     ggml_tensor * attn_lower = ggml_mul(ctx0, attn, causal_mask);
     ggml_tensor * lhs        = ggml_sub(ctx0, ggml_repeat(ctx0, identity, attn_lower), attn_lower);
 
+	PERF_START("solve_tri_recur");
     ggml_tensor * lin_solve  = ggml_solve_tri(ctx0, lhs, attn, true, true, false);
+		PERF_END("solve_tri_recur");
     attn                     = ggml_mul(ctx0, lin_solve, causal_mask);
     attn                     = ggml_add(ctx0, attn, identity);
 
     // value = attn @ v_beta
+	PERF_START("value_mul_mat");
     v = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v_beta)), attn);
-
+	PERF_END("value_mul_mat");
+	
     cb(v, "value_beta", il);
 
     // k_cumdecay = attn @ (k_beta * g.exp().unsqueeze(-1))
     ggml_tensor * g_cumsum_t = ggml_cont(ctx0, ggml_transpose(ctx0, g_cumsum));
+	PERF_START("ggml_exp");
     ggml_tensor * gexp       = ggml_exp(ctx0, g_cumsum_t);
+	PERF_END("ggml_exp");
 
     cb(gexp, "g_cum_exp", il);
 
@@ -607,6 +873,7 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_recurrent(
 
     ggml_tensor * flat_state = ggml_cont_1d(ctx0, state, S_v * S_v * H_v * n_seqs);
 
+PERF_END("build_dn_recur");
     return ggml_concat(ctx0, flat_output, flat_state, 0);
 }
 
@@ -862,7 +1129,9 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     cb(conv_states_all, "conv_states_updated", il);
 
     // Apply SSM convolution
+	PERF_START("ssm_conv");
     ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
+		PERF_END("ssm_conv");
     cb(conv_output_proper, "conv_output_raw", il);
 
     conv_output_proper = ggml_cont(ctx0, ggml_transpose(ctx0, conv_output_proper));
@@ -926,9 +1195,11 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     cb(v_conv, "v_conv_predelta", il);
 
     // Choose between build_delta_net_chunking and build_delta_net_recurrent based on n_tokens
+	PERF_START("build_delta_net");
     ggml_tensor * attn_out = n_seq_tokens > CHUNK_SIZE ?
         build_delta_net_chunking (q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, il) :
         build_delta_net_recurrent(q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, il);
+	PERF_END("build_delta_net");
     cb(attn_out, "attn_out", il);
 
     // The tensors were concatenated 1d, so we need to extract them 1d as well
@@ -948,11 +1219,19 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     cb(state_1d, "state_1d", il);
 
     // Update the recurrent states
-    ggml_build_forward_expand(gf,
-                              ggml_cpy(ctx0, state_1d,
-                                       ggml_view_1d(ctx0, ssm_states_all, hparams.n_embd_s() * n_seqs,
-                                                    kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
-
+	PERF_START("fwd_exp_upd_recur_sts");
+//    ggml_build_forward_expand(gf,
+//                              ggml_cpy(ctx0, state_1d,
+//                                       ggml_view_1d(ctx0, ssm_states_all, hparams.n_embd_s() * n_seqs,
+ //                                                   kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
+ggml_tensor * state_view = ggml_view_1d(
+    ctx0,
+    ssm_states_all,
+    hparams.n_embd_s() * n_seqs,
+    kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all)
+);
+ggml_build_forward_expand(gf, state_view);
+	PERF_END("fwd_exp_upd_recur_sts");
     GGML_ASSERT(ggml_nelements(attn_out_1d) + ggml_nelements(state_1d) == ggml_nelements(attn_out));
 
     // Reshape both attn_out_final and z to 2D tensors for normalization
