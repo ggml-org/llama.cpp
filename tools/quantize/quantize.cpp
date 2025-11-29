@@ -512,7 +512,12 @@ static const char * get_ftype(const float bpw) {
         {4.5000, "Q4_K"},
         {5.5000, "Q5_K"},
         {6.5625, "Q6_K"},
-        {8.5000, "Q8_0"}
+        {8.5000, "Q8_0"},
+#ifdef GGML_USE_METAL
+        {16.0000, "F16"}
+#else
+        {16.0000, "BF16"}
+#endif
     };
 
     return quant_bpw.lower_bound(bpw)->second;
