@@ -80,7 +80,7 @@ public:
             uint32_t n_embd,
             uint32_t n_seq_max,
             bool output_all,
-            bool backend_sampling = false);
+            bool sampling = false);
 
     const llama_batch & get_batch() const;
 

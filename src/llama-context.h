@@ -66,17 +66,17 @@ struct llama_context {
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
 
-    llama_token       * get_sampled_tokens();
-    llama_token         get_sampled_token_ith(int32_t idx);
+    llama_token * get_sampled_tokens();
+    llama_token   get_sampled_token_ith(int32_t idx);
 
-    float             * get_sampled_logits_ith(int32_t idx);
-    size_t              get_sampled_logits_count(int32_t idx);
+    float * get_sampled_logits_ith(int32_t idx);
+    size_t  get_sampled_logits_count(int32_t idx);
 
-    float             * get_sampled_probs_ith(int32_t idx);
-    size_t              get_sampled_probs_count(int32_t idx);
+    float * get_sampled_probs_ith(int32_t idx);
+    size_t  get_sampled_probs_count(int32_t idx);
 
     const llama_token * get_sampled_candidates_ith(int32_t idx);
-    size_t              get_sampled_candidates_count(int32_t idx);
+    size_t get_sampled_candidates_count(int32_t idx);
 
     void attach_threadpool(
             ggml_threadpool_t threadpool,

@@ -1322,12 +1322,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // when computing embeddings, all tokens are output
     const bool output_all = cparams.embeddings;
-    const bool has_backend_samplers = !sampling.samplers.empty();
+    const bool has_samplers = !sampling.samplers.empty();
 
     if (!balloc->init(batch_inp, vocab, memory.get(), n_embd,
                       cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max,
                       output_all,
-                      has_backend_samplers)) {
+                      has_samplers)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
@@ -1415,10 +1415,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     int64_t n_outputs_prev = 0;
 
-    // This flag indicates whether a backend sampler has actually sampled a specific
-    // token, or if it has produced probabilites. If true, we can skip the normal copying of logits and embeddings.
-    bool backend_has_sampled = false;
-
     do {
         const auto & ubatch = mctx->get_ubatch();
 
@@ -1477,9 +1473,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
-        backend_has_sampled = !res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
+        // This flag indicates whether a backend sampler has actually sampled a specific
+        // token, or if it has produced probabilites. If true, we can skip the normal copying of logits and embeddings.
+        const bool has_sampled = !res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
 
-        if (has_backend_samplers && backend_has_sampled) {
+        if (has_samplers && has_sampled) {
             const auto seq_to_output_row = build_seq_to_output_row(ubatch, n_outputs_prev);
             const auto stride = n_vocab;
 
@@ -1495,7 +1493,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
             // async copy the candidate token ids from the backend to the host.
             // These are needed by CPU samplers to map probability/logit indices to vocab token ids.
             copy_tensor_async_candidates(res->t_candidates, sampling.candidates, stride, sampling.candidates_count, seq_to_output_row, sched.get());
-
         }
 
         auto * t_logits = res->get_logits();
@@ -1661,8 +1658,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
     }
 
     // Check which sampling modes are needed by sequences in the current batch.
-    bool batch_has_backend_sampling = false;
-    bool batch_needs_cpu_logits     = false;
+    bool batch_has_sampling     = false;
+    bool batch_needs_cpu_logits = false;
 
     if (batch.logits) {
         for (int32_t i = 0; i < batch.n_tokens; i++) {
@@ -1672,7 +1669,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
             for (int32_t j = 0; j < batch.n_seq_id[i]; j++) {
                 llama_seq_id seq_id = batch.seq_id[i][j];
                 if (sampling.samplers.find(seq_id) != sampling.samplers.end()) {
-                    batch_has_backend_sampling = true;
+                    batch_has_sampling = true;
                 } else {
                     batch_needs_cpu_logits = true;
                 }
@@ -1691,7 +1688,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
     logits_size = (has_logits && batch_needs_cpu_logits) ? n_vocab*n_outputs_max : 0;
     embd_size   = has_embd ? n_embd*n_outputs_max : 0;
 
-    if (!batch_has_backend_sampling) {
+    if (!batch_has_sampling) {
         sampling.logits_size       = 0;
         sampling.probs_size        = 0;
         sampling.sampled_size      = 0;
@@ -1762,7 +1759,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
     embd = has_embd ? (float *) (base + offset) : nullptr;
     offset += embd_size * sizeof(float);
 
-    if (batch_has_backend_sampling) {
+    if (batch_has_sampling) {
         sampling.logits = (float *) (base + offset);
         offset += sampling.logits_size * sizeof(float);
 
