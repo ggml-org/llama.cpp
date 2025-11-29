@@ -2437,6 +2437,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
             }
 
+            if (arch == LLM_ARCH_QWEN3NEXT && tn_tensor == LLM_TENSOR_SSM_A) {
+                info.op = GGML_OP_MUL; // override SSM_SCAN default
+            }
+
             // skip unused tensors
             if (info.op == GGML_OP_NONE || flags & TENSOR_SKIP) {
                 const size_t nbytes = ggml_nbytes(t_meta);
