@@ -24,20 +24,6 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type(voi
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_vk_reg(void);
 
-typedef struct {
-    char     device_name[256];
-    uint32_t vendor_id;
-    uint32_t device_id;
-    uint64_t total_device_local_memory;
-    bool     has_memory_budget_ext;
-    bool     supports_float16;
-    bool     supports_16bit_storage;
-    uint32_t api_version;
-} ggml_vk_device_info;
-
-GGML_BACKEND_API ggml_vk_device_info ggml_backend_vk_get_device_info(int device);
-GGML_BACKEND_API int                 ggml_backend_vk_get_default_gpu_layers(int device, int default_layers);
-
 #ifdef  __cplusplus
 }
 #endif
