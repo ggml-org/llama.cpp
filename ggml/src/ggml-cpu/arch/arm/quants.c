@@ -1551,6 +1551,9 @@ void ggml_vec_dot_ifairy_q16_K(
     };
     const int8x16_t v_lut_real = vld1q_s8(lut_real_data);
     const int8x16_t v_lut_imag = vld1q_s8(lut_imag_data);
+    register uint8x16_t v_mask_3_reg asm("v28") = v_mask_3;
+    register int8x16_t  v_lut_imag_reg asm("v29") = v_lut_imag;
+    register int8x16_t  v_lut_real_reg asm("v30") = v_lut_real;
 
     for (int i = 0; i < nb; ++i) {
         __builtin_prefetch(w + i + 1, 0, 1);
@@ -1558,113 +1561,128 @@ void ggml_vec_dot_ifairy_q16_K(
 
         // 累加器初始化
         int32x4_t acc_ac0 = vzero, acc_ac1 = vzero;
-        int32x4_t acc_ac2 = vzero, acc_ac3 = vzero;
         int32x4_t acc_ad0 = vzero, acc_ad1 = vzero;
-        int32x4_t acc_ad2 = vzero, acc_ad3 = vzero;
         int32x4_t acc_bc0 = vzero, acc_bc1 = vzero;
-        int32x4_t acc_bc2 = vzero, acc_bc3 = vzero;
         int32x4_t acc_bd0 = vzero, acc_bd1 = vzero;
-        int32x4_t acc_bd2 = vzero, acc_bd3 = vzero;
 
         const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
         const int8_t  * GGML_RESTRICT x_r_ptr = x[i].x_real;
         const int8_t  * GGML_RESTRICT x_i_ptr = x[i].x_imag;
 
-        // QK_K = 256, 每次循环处理 64 个元素 (16 bytes of weights)
-        for (int j = 0; j < QK_K; j += 64) {
-            // 1. 加载原始 2-bit 权重 (16 bytes)
-            const uint8x16_t w_all_64 = vld1q_u8(w_ptr + (j >> 2));
-            const uint8x16_t w_idx0   = vandq_u8(w_all_64, v_mask_3);
-            const uint8x16_t w_idx1   = vandq_u8(vshrq_n_u8(w_all_64, 2), v_mask_3);
-            const uint8x16_t w_idx2   = vandq_u8(vshrq_n_u8(w_all_64, 4), v_mask_3);
-            const uint8x16_t w_idx3   = vandq_u8(vshrq_n_u8(w_all_64, 6), v_mask_3);
+        // QK_K = 256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
+        for (int j = 0; j < QK_K; j += 128) {
+            const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
+            const int8_t  * GGML_RESTRICT xr = x_r_ptr + j;
+            const int8_t  * GGML_RESTRICT xi = x_i_ptr + j;
 
-            // 2. 准备输入数据指针
-            const int8_t * GGML_RESTRICT xr = x_r_ptr + j;
-            const int8_t * GGML_RESTRICT xi = x_i_ptr + j;
+            asm volatile(
+                // ---- block 0: weights 0..63 ----
+                "ldr            q0, [%[w]]                  \n" // w_all_0
+                "and            v1.16b, v0.16b, %[m3].16b   \n" // idx0
+                "ushr           v2.16b, v0.16b, #2          \n"
+                "ushr           v3.16b, v0.16b, #4          \n"
+                "ushr           v4.16b, v0.16b, #6          \n"
+                "and            v2.16b, v2.16b, %[m3].16b   \n"
+                "and            v3.16b, v3.16b, %[m3].16b   \n"
+                "and            v4.16b, v4.16b, %[m3].16b   \n"
 
-            // --- 处理 第 1 组 (Indices 0-15) ---
-            {
-                // 解码权重
-                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx0);
-                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx0);
+                "ldr            q8,  [%[xr]]                \n" // xr0
+                "ldr            q9,  [%[xi]]                \n" // xi0
+                "ldr            q10, [%[xr], #16]           \n" // xr1
+                "ldr            q11, [%[xi], #16]           \n" // xi1
+                "ldr            q12, [%[xr], #32]           \n" // xr2
+                "ldr            q13, [%[xi], #32]           \n" // xi2
+                "ldr            q14, [%[xr], #48]           \n" // xr3
+                "ldr            q15, [%[xi], #48]           \n" // xi3
 
-                // 加载输入
-                const int8x16_t xr_vec = vld1q_s8(xr);
-                const int8x16_t xi_vec = vld1q_s8(xi);
+                "tbl            v5.16b, {%[lr].16b}, v1.16b \n" // wr0
+                "tbl            v6.16b, {%[li].16b}, v1.16b \n" // wi0
+                "tbl            v16.16b,{%[lr].16b}, v2.16b \n" // wr1
+                "tbl            v17.16b,{%[li].16b}, v2.16b \n" // wi1
+                "tbl            v18.16b,{%[lr].16b}, v3.16b \n" // wr2
+                "tbl            v19.16b,{%[li].16b}, v3.16b \n" // wi2
+                "tbl            v1.16b, {%[lr].16b}, v4.16b \n" // wr3 reuse v1
+                "tbl            v2.16b, {%[li].16b}, v4.16b \n" // wi3 reuse v2
 
-                // 计算 (Bank 0)
-                acc_ac0 = vdotq_s32(acc_ac0, xr_vec, wr);
-                acc_ad0 = vdotq_s32(acc_ad0, xi_vec, wr);
-                acc_bc0 = vdotq_s32(acc_bc0, xr_vec, wi);
-                acc_bd0 = vdotq_s32(acc_bd0, xi_vec, wi);
-            }
+                "sdot           %[ac0].4s, v8.16b,  v5.16b  \n"
+                "sdot           %[ad0].4s, v9.16b,  v5.16b  \n"
+                "sdot           %[bc0].4s, v8.16b,  v6.16b  \n"
+                "sdot           %[bd0].4s, v9.16b,  v6.16b  \n"
 
-            // --- 处理 第 2 组 (Indices 16-31) ---
-            {
-                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx1);
-                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx1);
+                "sdot           %[ac0].4s, v10.16b, v16.16b \n"
+                "sdot           %[ad0].4s, v11.16b, v16.16b \n"
+                "sdot           %[bc0].4s, v10.16b, v17.16b \n"
+                "sdot           %[bd0].4s, v11.16b, v17.16b \n"
 
-                const int8x16_t xr_vec = vld1q_s8(xr + 16);
-                const int8x16_t xi_vec = vld1q_s8(xi + 16);
+                "sdot           %[ac1].4s, v12.16b, v18.16b \n"
+                "sdot           %[ad1].4s, v13.16b, v18.16b \n"
+                "sdot           %[bc1].4s, v12.16b, v19.16b \n"
+                "sdot           %[bd1].4s, v13.16b, v19.16b \n"
 
-                // (Bank 0 - 继续累加，因为没有 Bank 0 的 RAW 依赖冲突，或者可以切到 Bank 1)
-                // 为了更好地掩盖延迟，这里依然用 Bank 0，但因为中间隔了 instructions，流水线应该能跟上
-                // 也可以选择这里用 acc_ac0, 下一组用 acc_ac1
-                acc_ac1 = vdotq_s32(acc_ac1, xr_vec, wr);
-                acc_ad1 = vdotq_s32(acc_ad1, xi_vec, wr);
-                acc_bc1 = vdotq_s32(acc_bc1, xr_vec, wi);
-                acc_bd1 = vdotq_s32(acc_bd1, xi_vec, wi);
-            }
+                "sdot           %[ac1].4s, v14.16b, v1.16b  \n"
+                "sdot           %[ad1].4s, v15.16b, v1.16b  \n"
+                "sdot           %[bc1].4s, v14.16b, v2.16b  \n"
+                "sdot           %[bd1].4s, v15.16b, v2.16b  \n"
 
-            // --- 处理 第 3 组 (Indices 32-47) ---
-            // 切换到 Bank 1 以打破长依赖链，并最大化利用执行端口
-            {
-                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx2);
-                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx2);
+                // ---- block 1: weights 64..127 ----
+                "ldr            q0, [%[w],  #16]            \n"
+                "and            v1.16b, v0.16b, %[m3].16b   \n"
+                "ushr           v2.16b, v0.16b, #2          \n"
+                "ushr           v3.16b, v0.16b, #4          \n"
+                "ushr           v4.16b, v0.16b, #6          \n"
+                "and            v2.16b, v2.16b, %[m3].16b   \n"
+                "and            v3.16b, v3.16b, %[m3].16b   \n"
+                "and            v4.16b, v4.16b, %[m3].16b   \n"
 
-                const int8x16_t xr_vec = vld1q_s8(xr + 32);
-                const int8x16_t xi_vec = vld1q_s8(xi + 32);
+                "ldr            q8,  [%[xr], #64]           \n"
+                "ldr            q9,  [%[xi], #64]           \n"
+                "ldr            q10, [%[xr], #80]           \n"
+                "ldr            q11, [%[xi], #80]           \n"
+                "ldr            q12, [%[xr], #96]           \n"
+                "ldr            q13, [%[xi], #96]           \n"
+                "ldr            q14, [%[xr], #112]          \n"
+                "ldr            q15, [%[xi], #112]          \n"
 
-                // 切换 Bank 1
-                acc_ac2 = vdotq_s32(acc_ac2, xr_vec, wr);
-                acc_ad2 = vdotq_s32(acc_ad2, xi_vec, wr);
-                acc_bc2 = vdotq_s32(acc_bc2, xr_vec, wi);
-                acc_bd2 = vdotq_s32(acc_bd2, xi_vec, wi);
-            }
+                "tbl            v5.16b, {%[lr].16b}, v1.16b \n"
+                "tbl            v6.16b, {%[li].16b}, v1.16b \n"
+                "tbl            v16.16b,{%[lr].16b}, v2.16b \n"
+                "tbl            v17.16b,{%[li].16b}, v2.16b \n"
+                "tbl            v18.16b,{%[lr].16b}, v3.16b \n"
+                "tbl            v19.16b,{%[li].16b}, v3.16b \n"
+                "tbl            v1.16b, {%[lr].16b}, v4.16b \n"
+                "tbl            v2.16b, {%[li].16b}, v4.16b \n"
 
-            // --- 处理 第 4 组 (Indices 48-63) ---
-            {
-                const int8x16_t wr = vqtbl1q_s8(v_lut_real, w_idx3);
-                const int8x16_t wi = vqtbl1q_s8(v_lut_imag, w_idx3);
+                "sdot           %[ac0].4s, v8.16b,  v5.16b  \n"
+                "sdot           %[ad0].4s, v9.16b,  v5.16b  \n"
+                "sdot           %[bc0].4s, v8.16b,  v6.16b  \n"
+                "sdot           %[bd0].4s, v9.16b,  v6.16b  \n"
 
-                const int8x16_t xr_vec = vld1q_s8(xr + 48);
-                const int8x16_t xi_vec = vld1q_s8(xi + 48);
+                "sdot           %[ac0].4s, v10.16b, v16.16b \n"
+                "sdot           %[ad0].4s, v11.16b, v16.16b \n"
+                "sdot           %[bc0].4s, v10.16b, v17.16b \n"
+                "sdot           %[bd0].4s, v11.16b, v17.16b \n"
 
-                // Bank 1
-                acc_ac3 = vdotq_s32(acc_ac3, xr_vec, wr);
-                acc_ad3 = vdotq_s32(acc_ad3, xi_vec, wr);
-                acc_bc3 = vdotq_s32(acc_bc3, xr_vec, wi);
-                acc_bd3 = vdotq_s32(acc_bd3, xi_vec, wi);
-            }
+                "sdot           %[ac1].4s, v12.16b, v18.16b \n"
+                "sdot           %[ad1].4s, v13.16b, v18.16b \n"
+                "sdot           %[bc1].4s, v12.16b, v19.16b \n"
+                "sdot           %[bd1].4s, v13.16b, v19.16b \n"
+
+                "sdot           %[ac1].4s, v14.16b, v1.16b  \n"
+                "sdot           %[ad1].4s, v15.16b, v1.16b  \n"
+                "sdot           %[bc1].4s, v14.16b, v2.16b  \n"
+                "sdot           %[bd1].4s, v15.16b, v2.16b  \n"
+                : [ac0] "+w"(acc_ac0), [ad0] "+w"(acc_ad0), [bc0] "+w"(acc_bc0), [bd0] "+w"(acc_bd0),
+                  [ac1] "+w"(acc_ac1), [ad1] "+w"(acc_ad1), [bc1] "+w"(acc_bc1), [bd1] "+w"(acc_bd1)
+                : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi),
+                  [m3] "w"(v_mask_3_reg), [lr] "w"(v_lut_real_reg), [li] "w"(v_lut_imag_reg)
+                : "v0","v1","v2","v3","v4","v5","v6","v8","v9","v10","v11","v12","v13","v14","v15","v16","v17","v18","v19","memory");
         } // j loop
 
         // 合并四个累加 Bank
         acc_ac0 = vaddq_s32(acc_ac0, acc_ac1);
-        acc_ac2 = vaddq_s32(acc_ac2, acc_ac3);
-        acc_ac0 = vaddq_s32(acc_ac0, acc_ac2);
-
         acc_ad0 = vaddq_s32(acc_ad0, acc_ad1);
-        acc_ad2 = vaddq_s32(acc_ad2, acc_ad3);
-        acc_ad0 = vaddq_s32(acc_ad0, acc_ad2);
-
         acc_bc0 = vaddq_s32(acc_bc0, acc_bc1);
-        acc_bc2 = vaddq_s32(acc_bc2, acc_bc3);
-        acc_bc0 = vaddq_s32(acc_bc0, acc_bc2);
-
         acc_bd0 = vaddq_s32(acc_bd0, acc_bd1);
-        acc_bd2 = vaddq_s32(acc_bd2, acc_bd3);
-        acc_bd0 = vaddq_s32(acc_bd0, acc_bd2);
 
         // 水平求和
         const int32_t sum_ac = vaddvq_s32(acc_ac0);
