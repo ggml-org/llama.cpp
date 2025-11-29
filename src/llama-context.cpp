@@ -68,14 +68,11 @@ llama_context::llama_context(
         for (size_t i = 0; i < params.n_samplers; ++i) {
             const auto & config = params.samplers[i];
 
-            const int n_samplers = llama_sampler_chain_n(config.sampler);
-            if (n_samplers <= 0) {
-                continue;
+            if (set_backend_sampler(config.seq_id, config.sampler)) {
+                const int n_samplers = llama_sampler_chain_n(config.sampler);
+
+                LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
             }
-
-            sampling.samplers[config.seq_id] = config.sampler;
-
-            LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
         }
     }
 
@@ -912,14 +909,35 @@ void llama_context::set_warmup(bool value) {
     cparams.warmup = value;
 }
 
-void llama_context::set_backend_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
+bool llama_context::set_backend_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
 
-    if (sampler != nullptr && llama_sampler_chain_n(sampler) > 0) {
+    const bool can_offload =
+        sampler &&
+        sampler->iface->backend_init &&
+        sampler->iface->backend_apply &&
+        llama_sampler_chain_n(sampler) > 0;
+
+    if (sampler && can_offload) {
+        ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(model.dev_output());
+        sampler->iface->backend_init(sampler, buft);
+
         sampling.samplers[seq_id] = sampler;
-    } else {
-        sampling.samplers.erase(seq_id);
+
+        return true;
     }
+
+    if (sampler && !can_offload) {
+        LLAMA_LOG_WARN("%s: sampler '%s' cannot be offloaded to the backend\n", __func__, llama_sampler_name(sampler));
+
+        sampling.samplers.erase(seq_id);
+
+        return false;
+    }
+
+    sampling.samplers.erase(seq_id);
+
+    return true;
 }
 
 void llama_context::set_adapter_lora(
@@ -1910,7 +1928,7 @@ llm_graph_params llama_context::graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-            llm_graph_type   gtype) const {
+                          llm_graph_type   gtype) const {
     return {
         /*.arch        =*/ model.arch,
         /*.hparams     =*/ model.hparams,
@@ -1919,7 +1937,6 @@ llm_graph_params llama_context::graph_params(
         /*.gtype       =*/ gtype,
         /*.sched       =*/ sched.get(),
         /*.backend_cpu =*/ backend_cpu,
-        /*.dev_out     =*/ model.dev_output(),
         /*.cvec        =*/ &cvec,
         /*.loras       =*/ &loras,
         /*.mctx        =*/ mctx,
@@ -2980,8 +2997,8 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
     return ctx->get_embeddings_seq(seq_id);
 }
 
-void llama_set_backend_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
-    ctx->set_backend_sampler(seq_id, smpl);
+bool llama_set_backend_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
+    return ctx->set_backend_sampler(seq_id, smpl);
 }
 
 llama_token llama_get_backend_sampled_token_ith(llama_context * ctx, int32_t i) {

@@ -609,7 +609,6 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     rope_type        (hparams.rope_type),
     sched            (params.sched),
     backend_cpu      (params.backend_cpu),
-    dev_out          (params.dev_out),
     cvec             (params.cvec),
     loras            (params.loras),
     mctx             (params.mctx),
@@ -2075,8 +2074,6 @@ void llm_graph_context::build_sampling() const {
 
     const int64_t n_vocab = logits_t->ne[0];
 
-    ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(dev_out);
-
     std::unordered_map<llama_seq_id, llama_sampler*> active_samplers;
 
     for (const auto & [seq_id, sampler] : samplers) {
@@ -2085,13 +2082,8 @@ void llm_graph_context::build_sampling() const {
         if (it == seq_to_logit_row.end()) {
             continue;
         }
-        const int32_t row_idx = it->second;
 
-        // Allow GPU sampler to create input tensors by implementing init_ggml.
-        // TODO: this should not be done here
-        if (sampler->iface->backend_init != nullptr) {
-            sampler->iface->backend_init(sampler, buft);
-        }
+        const int32_t row_idx = it->second;
 
         active_samplers[seq_id] = sampler;
 
