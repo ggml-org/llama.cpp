@@ -11,10 +11,9 @@ struct ModelConfig {
 };
 
 struct RouterOptions {
-    std::string host      = "0.0.0.0";
-    int         port      = 8082;
-    int         base_port = 28081;
-    std::string log_level = "info";
+    std::string host;
+    int         port = 0;
+    int         base_port = 0;
 };
 
 struct RouterConfig {
@@ -26,6 +25,8 @@ struct RouterConfig {
 
 std::string get_default_config_path();
 std::string expand_user_path(const std::string & path);
+const std::vector<std::string> & get_default_spawn();
+const RouterOptions &             get_default_router_options();
 
 RouterConfig load_config(const std::string & path);
 RouterConfig generate_default_config(const std::string & path);

@@ -9,8 +9,27 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 using json = nlohmann::json;
+
+const std::vector<std::string> & get_default_spawn() {
+    static const std::vector<std::string> spawn = {
+        "llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99",
+    };
+
+    return spawn;
+}
+
+const RouterOptions & get_default_router_options() {
+    static const RouterOptions opts = {
+        /*host      =*/ "127.0.0.1",
+        /*port      =*/ 8082,
+        /*base_port =*/ 50000,
+    };
+
+    return opts;
+}
 
 std::string get_default_config_path() {
     const char * home = std::getenv("HOME");
@@ -54,7 +73,7 @@ void write_config_file(const RouterConfig & cfg, const std::string & path) {
     json out;
     out["version"]       = cfg.version;
     out["default_spawn"] = cfg.default_spawn;
-    out["router"]        = {{"host", cfg.router.host}, {"port", cfg.router.port}, {"base_port", cfg.router.base_port}, {"log_level", cfg.router.log_level}};
+    out["router"]        = {{"host", cfg.router.host}, {"port", cfg.router.port}, {"base_port", cfg.router.base_port}};
 
     out["models"] = json::array();
     for (const auto & m : cfg.models) {
@@ -80,8 +99,8 @@ void write_config_file(const RouterConfig & cfg, const std::string & path) {
 RouterConfig generate_default_config(const std::string & path) {
     RouterConfig cfg;
     cfg.version       = "1.0";
-    cfg.default_spawn = {"llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99"};
-    cfg.router        = RouterOptions{};
+    cfg.default_spawn = get_default_spawn();
+    cfg.router        = get_default_router_options();
     cfg.models        = scan_default_models();
 
     write_config_file(cfg, path);
@@ -91,6 +110,8 @@ RouterConfig generate_default_config(const std::string & path) {
 
 RouterConfig load_config(const std::string & path) {
     RouterConfig cfg;
+    cfg.router        = get_default_router_options();
+    cfg.default_spawn = get_default_spawn();
     std::error_code ec;
     if (!std::filesystem::exists(path, ec) || ec) {
         return generate_default_config(path);
@@ -113,7 +134,6 @@ RouterConfig load_config(const std::string & path) {
         if (r.contains("host")) cfg.router.host = r["host"].get<std::string>();
         if (r.contains("port")) cfg.router.port = r["port"].get<int>();
         if (r.contains("base_port")) cfg.router.base_port = r["base_port"].get<int>();
-        if (r.contains("log_level")) cfg.router.log_level = r["log_level"].get<std::string>();
     }
     if (data.contains("models")) {
         for (const auto & m : data["models"]) {
