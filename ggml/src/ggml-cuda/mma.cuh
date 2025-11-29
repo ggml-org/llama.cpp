@@ -71,22 +71,28 @@ namespace ggml_cuda_mma {
     // Some architectures like Volta or CDNA3 perform multiple matrix multiplications per warp in parallel,
     //     effectively the warp is being split into subgroups of threads that each perform a single mma instruction.
     // In those cases the data can be split in different ways across the warp.
-    enum data_split {
-        DATA_SPLIT_NONE     =  0, // Each data value is held exactly once per warp (always applies to Turing, Ampere, Ada Lovelace, consumer Blackwell).
-        DATA_SPLIT_MIRRORED = 10, // Each data value is held exactly once per subgroup.
+    enum data_layout {
+        // By default the data uses the I direction as its major dimension and the J direction as its minor dimension.
+        // For the A/C matrices this means I major == row major, J major == column major.
+        // For the B matrix this means I major == column major, J major == row major.
+        // MIRRORED == Each data value is held exactly once per thread subgroup.
+        DATA_LAYOUT_I_MAJOR           =  0, // Always used for Turing, Ampere, Ada Lovelace, consumer Blackwell.
+        DATA_LAYOUT_I_MAJOR_MIRRORED  = 10, 
+        DATA_LAYOUT_J_MAJOR_MIRRORED  = 20,
     };
     // Implemented mma combinations are:
-    //   - (NONE,     NONE)     -> NONE
-    //   - (NONE,     MIRRORED) -> NONE
+    //   - (I_MAJOR, I_MAJOR)          -> I_MAJOR
+    //   - (I_MAJOR, I_MAJOR_MIRRORED) -> I_MAJOR
+    //   - (I_MAJOR, J_MAJOR_MIRRORED) -> I_MAJOR
 
-    template <int I_, int J_, typename T, data_split ds_=DATA_SPLIT_NONE, bool transposed=false>
+    template <int I_, int J_, typename T, data_layout ds_=DATA_LAYOUT_I_MAJOR>
     struct tile {};
 
     template <int I_, int J_, typename T>
-    struct tile<I_, J_, T, DATA_SPLIT_NONE, false> {
-        static constexpr int        I  = I_;
-        static constexpr int        J  = J_;
-        static constexpr data_split ds = DATA_SPLIT_NONE;
+    struct tile<I_, J_, T, DATA_LAYOUT_I_MAJOR> {
+        static constexpr int         I  = I_;
+        static constexpr int         J  = J_;
+        static constexpr data_layout dl = DATA_LAYOUT_I_MAJOR;
 
 #if defined(AMD_MFMA_AVAILABLE)
         static constexpr int ne = I * J / 64;
@@ -242,10 +248,10 @@ namespace ggml_cuda_mma {
     };
 
     template <int I_, int J_>
-    struct tile<I_, J_, half2, DATA_SPLIT_NONE, false> {
-        static constexpr int        I  = I_;
-        static constexpr int        J  = J_;
-        static constexpr data_split ds = DATA_SPLIT_NONE;
+    struct tile<I_, J_, half2, DATA_LAYOUT_I_MAJOR> {
+        static constexpr int         I  = I_;
+        static constexpr int         J  = J_;
+        static constexpr data_layout dl = DATA_LAYOUT_I_MAJOR;
 
 #if __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
         static constexpr int ne = I * J / WARP_SIZE;
@@ -349,11 +355,11 @@ namespace ggml_cuda_mma {
     };
 
     template <int I_, int J_>
-    struct tile<I_, J_, nv_bfloat162, DATA_SPLIT_NONE, false> {
-        static constexpr int        I  = I_;
-        static constexpr int        J  = J_;
-        static constexpr data_split ds = DATA_SPLIT_NONE;
-        static constexpr int        ne = I * J / WARP_SIZE;
+    struct tile<I_, J_, nv_bfloat162, DATA_LAYOUT_I_MAJOR> {
+        static constexpr int         I  = I_;
+        static constexpr int         J  = J_;
+        static constexpr data_layout dl = DATA_LAYOUT_I_MAJOR;
+        static constexpr int         ne = I * J / WARP_SIZE;
 
         nv_bfloat162 x[ne] = {{0.0f, 0.0f}};
 
@@ -417,11 +423,11 @@ namespace ggml_cuda_mma {
     };
 
     template <int I_, int J_>
-    struct tile<I_, J_, half2, DATA_SPLIT_MIRRORED, false> {
-        static constexpr int        I  = I_;
-        static constexpr int        J  = J_;
-        static constexpr data_split ds = DATA_SPLIT_MIRRORED;
-        static constexpr int        ne = I * J / (WARP_SIZE/4);
+    struct tile<I_, J_, half2, DATA_LAYOUT_I_MAJOR_MIRRORED> {
+        static constexpr int         I  = I_;
+        static constexpr int         J  = J_;
+        static constexpr data_layout dl = DATA_LAYOUT_I_MAJOR_MIRRORED;
+        static constexpr int         ne = I * J / (WARP_SIZE/4);
 
         half2 x[ne] = {{0.0f, 0.0f}};
 
@@ -450,11 +456,11 @@ namespace ggml_cuda_mma {
     };
 
     template <int I_, int J_>
-    struct tile<I_, J_, half2, DATA_SPLIT_MIRRORED, true> {
-        static constexpr int        I  = I_;
-        static constexpr int        J  = J_;
-        static constexpr data_split ds = DATA_SPLIT_MIRRORED;
-        static constexpr int        ne = I * J / (WARP_SIZE/4);
+    struct tile<I_, J_, half2, DATA_LAYOUT_J_MAJOR_MIRRORED> {
+        static constexpr int         I  = I_;
+        static constexpr int         J  = J_;
+        static constexpr data_layout dl = DATA_LAYOUT_J_MAJOR_MIRRORED;
+        static constexpr int         ne = I * J / (WARP_SIZE/4);
 
         half2 x[ne] = {{0.0f, 0.0f}};
 
@@ -518,8 +524,8 @@ namespace ggml_cuda_mma {
     }
 #endif // defined(TURING_MMA_AVAILABLE)
 
-    template <int I, int J, typename T, data_split ds, bool transposed>
-    static __device__ __forceinline__ void load_generic(tile<I, J, T, ds, transposed> & t, const T * __restrict__ xs0, const int stride) {
+    template <int I, int J, typename T, data_layout dl>
+    static __device__ __forceinline__ void load_generic(tile<I, J, T, dl> & t, const T * __restrict__ xs0, const int stride) {
 #if defined(AMD_MFMA_AVAILABLE)
         if constexpr (I == 64 && J == 2) { // Special tile size to load <16, 4> as <16, 8>
 #pragma unroll
@@ -622,12 +628,12 @@ namespace ggml_cuda_mma {
     }
 
     static __device__ __forceinline__ void load_ldmatrix(
-            tile<8, 4, half2, DATA_SPLIT_MIRRORED, false> & t, const half2 * __restrict__ xs0, const int stride) {
+            tile<8, 4, half2, DATA_LAYOUT_I_MAJOR_MIRRORED> & t, const half2 * __restrict__ xs0, const int stride) {
         ggml_cuda_memcpy_1<4*sizeof(half2)>(t.x, xs0 + t.get_i(0)*stride);
     }
 
     static __device__ __forceinline__ void load_ldmatrix(
-            tile<8, 4, half2, DATA_SPLIT_MIRRORED, true> & t, const half2 * __restrict__ xs0, const int stride) {
+            tile<8, 4, half2, DATA_LAYOUT_J_MAJOR_MIRRORED> & t, const half2 * __restrict__ xs0, const int stride) {
 #pragma unroll
         for (int l0 = 0; l0 < t.ne; l0 += 2) {
             ggml_cuda_memcpy_1<2*sizeof(half2)>(t.x + l0, xs0 + t.get_i(l0)*stride + t.get_j(l0));
@@ -972,7 +978,7 @@ namespace ggml_cuda_mma {
     }
 
     static __device__ __forceinline__ void mma(
-            tile<32, 8, float> & D, const tile<32, 4, half2> & A, const tile<8, 4, half2, DATA_SPLIT_MIRRORED, false> & B) {
+            tile<32, 8, float> & D, const tile<32, 4, half2> & A, const tile<8, 4, half2, DATA_LAYOUT_I_MAJOR_MIRRORED> & B) {
 #if __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
         const int * Axi = (const int *) A.x;
         const int * Bxi = (const int *) B.x;
@@ -992,7 +998,7 @@ namespace ggml_cuda_mma {
     }
 
     static __device__ __forceinline__ void mma(
-            tile<32, 4, half2> & D, const tile<32, 4, half2> & A, const tile<8, 4, half2, DATA_SPLIT_MIRRORED, true> & B) {
+            tile<32, 4, half2> & D, const tile<32, 4, half2> & A, const tile<8, 4, half2, DATA_LAYOUT_J_MAJOR_MIRRORED> & B) {
 #if __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
         const int * Axi = (const int *) A.x;
         const int * Bxi = (const int *) B.x;

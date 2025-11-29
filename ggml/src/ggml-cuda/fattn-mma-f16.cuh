@@ -798,12 +798,12 @@ template<> struct mma_tile_sizes<8> {
 };
 #else // Volta
 template<int ncols> struct mma_tile_sizes {
-    using T_A_KQ  = tile< 8,  4, half2, DATA_SPLIT_MIRRORED, false>; // row-major
-    using T_B_KQ  = tile<32,  4, half2, DATA_SPLIT_NONE,     false>; // column-major
-    using T_C_KQ  = tile<32,  8, float, DATA_SPLIT_NONE,     false>; // column-major
-    using T_A_VKQ = tile< 8,  4, half2, DATA_SPLIT_MIRRORED, true>;  // column-major
-    using T_B_VKQ = tile<32,  4, half2, DATA_SPLIT_NONE,     false>; // column-major
-    using T_C_VKQ = tile<32,  4, half2, DATA_SPLIT_NONE,     false>; // column-major
+    using T_A_KQ  = tile< 8,  4, half2, DATA_LAYOUT_I_MAJOR_MIRRORED>; // row-major
+    using T_B_KQ  = tile<32,  4, half2, DATA_LAYOUT_I_MAJOR>;          // column-major
+    using T_C_KQ  = tile<32,  8, float, DATA_LAYOUT_I_MAJOR>;          // column-major
+    using T_A_VKQ = tile< 8,  4, half2, DATA_LAYOUT_J_MAJOR_MIRRORED>; // column-major
+    using T_B_VKQ = tile<32,  4, half2, DATA_LAYOUT_I_MAJOR>;          // column-major
+    using T_C_VKQ = tile<32,  4, half2, DATA_LAYOUT_I_MAJOR>;          // column-major
 };
 #endif // defined(TURING_MMA_AVAILABLE)
 
