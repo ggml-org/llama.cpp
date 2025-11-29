@@ -52,8 +52,7 @@ void main() {
         const uint ci3 = wrap_coord(int(i3) - int(p.lp3), p.ne03);
         const uint circular_src_idx = ci3*p.nb03 + ci2*p.nb02 + ci1*p.nb01 + ci0*p.nb00;
         data_d[get_doffset() + dst_idx] = D_TYPE(data_a[get_aoffset() + circular_src_idx]);
-    }
-    else {
+    } else {
         const bool is_src0 = i0 >= p.lp0 && i0 < p.ne10 - p.rp0 &&
                             i1 >= p.lp1 && i1 < p.ne11 - p.rp1 &&
                             i2 >= p.lp2 && i2 < p.ne12 - p.rp2 &&
