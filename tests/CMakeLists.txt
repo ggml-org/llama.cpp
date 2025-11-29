@@ -184,19 +184,19 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 endif()
 
 llama_build_and_test(test-chat-parser.cpp)
-llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple_tokenizer.cpp)
+llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(
     test-peg-parser.cpp
-    peg-parser/simple_tokenizer.cpp
+    peg-parser/simple-tokenize.cpp
     peg-parser/test-basic.cpp
     peg-parser/test-gbnf-generation.cpp
     peg-parser/test-json-parser.cpp
     peg-parser/test-json-serialization.cpp
     peg-parser/test-unicode.cpp
-    peg-parser/test_harness.h
+    peg-parser/testing.h
     peg-parser/tests.h
 )
 llama_build_and_test(test-regex-partial.cpp)

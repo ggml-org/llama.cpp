@@ -8,8 +8,8 @@
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "peg-parser.h"
-#include "peg-parser/test_harness.h"
-#include "peg-parser/simple_tokenizer.h"
+#include "peg-parser/testing.h"
+#include "peg-parser/simple-tokenize.h"
 #include "nlohmann/json.hpp"
 
 using json = nlohmann::ordered_json;

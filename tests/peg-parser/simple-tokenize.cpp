@@ -1,4 +1,4 @@
-#include "simple_tokenizer.h"
+#include "simple-tokenize.h"
 
 std::vector<std::string> simple_tokenize(const std::string & input) {
     std::vector<std::string> result;

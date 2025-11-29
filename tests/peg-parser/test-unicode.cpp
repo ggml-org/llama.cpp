@@ -1,5 +1,4 @@
 #include "tests.h"
-#include "test_harness.h"
 
 #include "peg-parser.h"
 

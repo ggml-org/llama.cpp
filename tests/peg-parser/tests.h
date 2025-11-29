@@ -5,10 +5,10 @@
 #include <string>
 #include <vector>
 
-#include "test_harness.h"
+#include "testing.h"
 #include "peg-parser.h"
 #include "chat-peg-parser.h"
-#include "simple_tokenizer.h"
+#include "simple-tokenize.h"
 
 struct bench_tool_call {
     std::string            id;
