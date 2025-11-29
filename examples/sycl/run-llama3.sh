@@ -6,7 +6,7 @@
 
 # If you want more control, DPC++ Allows selecting a specific device through the
 # following environment variable
-#export ONEAPI_DEVICE_SELECTOR="level_zero:0"
+export ONEAPI_DEVICE_SELECTOR="level_zero:0"
 source /opt/intel/oneapi/setvars.sh
 
 #export GGML_SYCL_DEBUG=1
@@ -18,11 +18,14 @@ MODEL_FILE=models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
 NGL=99 # Layers offloaded to the GPU. If the device runs out of memory, reduce this value according to the model you are using.
 CONTEXT=4096
 
+#support malloc device memory more than 4GB.
+export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
+
 if [ $# -gt 0 ]; then
     GGML_SYCL_DEVICE=$1
     echo "Using $GGML_SYCL_DEVICE as the main GPU"
-    ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m ${MODEL_FILE} -p "${INPUT_PROMPT}" -n 400 -e -ngl ${NGL} -c ${CONTEXT} -mg $GGML_SYCL_DEVICE -sm none
+    ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m ${MODEL_FILE} -p "${INPUT_PROMPT}" -n 400 -e -ngl ${NGL} -s 0 -c ${CONTEXT} -mg $GGML_SYCL_DEVICE -sm none
 else
     #use multiple GPUs with same max compute units
-    ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m ${MODEL_FILE} -p "${INPUT_PROMPT}" -n 400 -e -ngl ${NGL} -c ${CONTEXT}
+    ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m ${MODEL_FILE} -p "${INPUT_PROMPT}" -n 400 -e -ngl ${NGL} -s 0 -c ${CONTEXT}
 fi
