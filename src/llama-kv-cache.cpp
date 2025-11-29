@@ -5,6 +5,10 @@
 #include "llama-model.h"
 #include "llama-context.h"
 
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"
+#endif
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -211,10 +215,18 @@ void llama_kv_cache::clear(bool data) {
             ggml_backend_buffer_clear(buf.get(), 0);
         }
     }
+
+    // Reset paged attention block allocations
+    if (use_paged_attn && paged_cache) {
+        paged_cache->reset();
+    }
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
+
+    // Track if this is a full removal (needed for paged attention block freeing)
+    const bool is_full_removal = (p0 < 0 || p0 == 0) && p1 < 0;
 
     if (p0 < 0) {
         p0 = 0;
@@ -270,6 +282,19 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
             if (new_head != cells.size() && new_head < head) {
                 head = new_head;
             }
+        }
+    }
+
+    // If paged attention is enabled and this was a full removal, free the blocks
+    if (use_paged_attn && paged_cache && is_full_removal) {
+        if (seq_id >= 0) {
+            // Free blocks for a specific sequence
+            if (paged_cache->has_sequence(seq_id)) {
+                paged_cache->free_sequence(seq_id);
+            }
+        } else {
+            // Free blocks for all sequences
+            paged_cache->reset();
         }
     }
 
@@ -357,6 +382,14 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
     }
 
     v_heads[s1] = v_heads[s0];
+
+    // If paged attention is enabled, copy blocks from src to dst sequence
+    if (use_paged_attn && paged_cache) {
+        if (paged_cache->has_sequence(seq_id_src)) {
+            // Copy blocks with copy-on-write (reference counting)
+            paged_cache->copy_sequence(seq_id_src, seq_id_dst);
+        }
+    }
 
     //for (uint32_t s = 0; s < n_stream; ++s) {
     //    LLAMA_LOG_WARN("%s: seq %d: min = %d, max = %d\n", __func__, s, v_cells[s].seq_pos_min(s), v_cells[s].seq_pos_max(s));
@@ -763,6 +796,86 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
     res.resize(n_seqs);
 
+    // Block-aligned allocation for paged attention
+    // When enabled, allocate positions aligned to BLOCK_SIZE (16) boundaries
+    // This ensures the XMX flash attention kernel can load blocks efficiently
+    if (use_paged_attn && paged_cache) {
+        const uint32_t block_size = LLAMA_KV_BLOCK_SIZE;
+
+        for (uint32_t s = 0; s < n_seqs; ++s) {
+            const auto seq_id = ubatch.seq_id_unq[s];
+
+            if (n_stream > 1) {
+                GGML_ASSERT(ubatch.n_seq_id[s*n_tokens]    == 1);
+                GGML_ASSERT(ubatch.seq_id  [s*n_tokens][0] == seq_id);
+            }
+
+            res.s0 = std::min<uint32_t>(res.s0, seq_to_stream[seq_id]);
+            res.s1 = std::max<uint32_t>(res.s1, seq_to_stream[seq_id]);
+            res.strm[s] = seq_to_stream[seq_id];
+            res.idxs[s].reserve(n_tokens);
+
+            // Get current sequence length (0 if new sequence)
+            uint32_t seq_len = 0;
+            if (paged_cache->has_sequence(seq_id)) {
+                seq_len = paged_cache->get_sequence_length(seq_id);
+            }
+
+            // Allocate or extend blocks for this sequence
+            bool alloc_ok = false;
+            if (!paged_cache->has_sequence(seq_id)) {
+                // For new sequences, use prefix caching if enabled
+                if (paged_cache->is_prefix_caching_enabled() && ubatch.token != nullptr) {
+                    // Compute block hashes from tokens for this sequence
+                    // Token layout: ubatch.token contains n_tokens per sequence, laid out sequentially
+                    const int32_t * seq_tokens = ubatch.token + s * n_tokens;
+                    std::vector<uint64_t> hashes = paged_cache->compute_block_hashes(seq_tokens, n_tokens);
+                    alloc_ok = paged_cache->allocate_with_prefix(seq_id, n_tokens, hashes);
+                } else {
+                    alloc_ok = paged_cache->allocate_for_sequence(seq_id, n_tokens);
+                }
+            } else {
+                alloc_ok = paged_cache->extend_sequence(seq_id, n_tokens);
+            }
+
+            if (!alloc_ok) {
+                LLAMA_LOG_WARN("%s: paged attention block allocation failed for seq %d\n", __func__, seq_id);
+                return { };
+            }
+
+            // Get the block table for this sequence
+            const auto* block_table = paged_cache->get_block_table(seq_id);
+            if (!block_table) {
+                LLAMA_LOG_ERROR("%s: no block table for seq %d\n", __func__, seq_id);
+                return { };
+            }
+
+            // Compute physical positions from block allocations
+            // Physical position = physical_block_id * block_size + offset_within_block
+            for (uint32_t i = 0; i < n_tokens; ++i) {
+                const uint32_t logical_pos = seq_len + i;
+                const int32_t physical_block = block_table->get_physical_block(logical_pos, block_size);
+
+                if (physical_block < 0) {
+                    LLAMA_LOG_ERROR("%s: invalid physical block for seq %d, pos %u\n", __func__, seq_id, logical_pos);
+                    return { };
+                }
+
+                const uint32_t offset = logical_pos % block_size;
+                const uint32_t physical_pos = physical_block * block_size + offset;
+
+                res.idxs[s].push_back(physical_pos);
+            }
+
+            // Update sequence token count
+            paged_cache->get_block_table(seq_id)->set_num_tokens(seq_len + n_tokens);
+        }
+
+        assert(res.s1 >= res.s0);
+        return res;
+    }
+
+    // Fall through to cell-based allocation when paged attention is not enabled
     for (uint32_t s = 0; s < n_seqs; ++s) {
         const auto seq_id = ubatch.seq_id_unq[s];
 
@@ -970,6 +1083,120 @@ bool llama_kv_cache::get_has_shift() const {
     }
 
     return result;
+}
+
+void llama_kv_cache::enable_paged_attn() {
+    if (paged_cache) {
+        return;  // Already enabled
+    }
+
+    const uint32_t kv_size = get_size();
+    const uint32_t block_size = LLAMA_KV_BLOCK_SIZE;
+    const uint32_t n_blocks = kv_size / block_size;
+
+    LLAMA_LOG_INFO("%s: enabling PagedAttention with block_size=%u, n_blocks=%u, n_seq_max=%u\n",
+                   __func__, block_size, n_blocks, n_seq_max);
+
+    paged_cache = std::make_unique<llama_kv_cache_paged>(kv_size, n_seq_max, block_size);
+    use_paged_attn = true;
+}
+
+void llama_kv_cache::enable_prefix_cache() {
+    if (!use_paged_attn || !paged_cache) {
+        LLAMA_LOG_WARN("%s: prefix caching requires paged attention to be enabled first\n", __func__);
+        return;
+    }
+
+    LLAMA_LOG_INFO("%s: enabling prefix caching for paged attention\n", __func__);
+    paged_cache->set_prefix_caching(true);
+}
+
+bool llama_kv_cache::get_use_prefix_cache() const {
+    return paged_cache && paged_cache->is_prefix_caching_enabled();
+}
+
+uint32_t llama_kv_cache::get_prefix_cache_hits() const {
+    return paged_cache ? paged_cache->get_prefix_cache_hits() : 0;
+}
+
+uint32_t llama_kv_cache::get_prefix_cache_misses() const {
+    return paged_cache ? paged_cache->get_prefix_cache_misses() : 0;
+}
+
+uint32_t llama_kv_cache::defragment(float threshold) {
+    // Only works with paged attention enabled
+    if (!use_paged_attn || !paged_cache) {
+        LLAMA_LOG_DEBUG("%s: paged attention not enabled, skipping defragmentation\n", __func__);
+        return 0;
+    }
+
+    // Check if defragmentation is needed
+    if (!paged_cache->needs_defrag(threshold)) {
+        LLAMA_LOG_DEBUG("%s: fragmentation ratio %.2f below threshold %.2f, skipping\n",
+                        __func__, paged_cache->get_fragmentation_ratio(), threshold);
+        return 0;
+    }
+
+    // Compute the defragmentation plan
+    auto moves = paged_cache->compute_defrag_plan();
+    if (moves.empty()) {
+        LLAMA_LOG_DEBUG("%s: no moves needed\n", __func__);
+        return 0;
+    }
+
+    LLAMA_LOG_INFO("%s: defragmenting KV cache: %zu block moves, fragmentation %.2f -> ",
+                   __func__, moves.size(), paged_cache->get_fragmentation_ratio());
+
+    const uint32_t block_size = paged_cache->get_block_size();
+
+    // For each layer, copy KV data for all block moves
+    // K tensor layout: [n_embd_k_gqa, kv_size, n_stream]
+    // V tensor layout: [n_embd_v_gqa, kv_size, n_stream]
+    // Block i covers positions [i*block_size, (i+1)*block_size) in the kv_size dimension
+
+    for (const auto & layer : layers) {
+        ggml_tensor * k = layer.k;
+        ggml_tensor * v = layer.v;
+
+        // Calculate block size in bytes
+        // K: block covers block_size positions, each with n_embd_k_gqa elements
+        // K stride along kv_size dimension is k->nb[1]
+        const size_t k_block_bytes = block_size * k->nb[1];
+        const size_t v_block_bytes = block_size * v->nb[1];
+
+        // Allocate temporary buffer for copying (max of k and v block sizes)
+        std::vector<uint8_t> temp_buffer(std::max(k_block_bytes, v_block_bytes));
+
+        // Process each move
+        for (const auto & move : moves) {
+            const uint32_t src_block = move.src_block;
+            const uint32_t dst_block = move.dst_block;
+
+            // Calculate offsets for K tensor
+            // Offset = block_id * block_size * stride_along_kv_dim
+            const size_t k_src_offset = src_block * block_size * k->nb[1];
+            const size_t k_dst_offset = dst_block * block_size * k->nb[1];
+
+            // Copy K block: read from src, write to dst
+            ggml_backend_tensor_get(k, temp_buffer.data(), k_src_offset, k_block_bytes);
+            ggml_backend_tensor_set(k, temp_buffer.data(), k_dst_offset, k_block_bytes);
+
+            // Calculate offsets for V tensor
+            const size_t v_src_offset = src_block * block_size * v->nb[1];
+            const size_t v_dst_offset = dst_block * block_size * v->nb[1];
+
+            // Copy V block: read from src, write to dst
+            ggml_backend_tensor_get(v, temp_buffer.data(), v_src_offset, v_block_bytes);
+            ggml_backend_tensor_set(v, temp_buffer.data(), v_dst_offset, v_block_bytes);
+        }
+    }
+
+    // Update the paged cache metadata (block tables, etc.)
+    paged_cache->apply_defrag(moves);
+
+    LLAMA_LOG_CONT("%.2f\n", paged_cache->get_fragmentation_ratio());
+
+    return static_cast<uint32_t>(moves.size());
 }
 
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
@@ -1227,12 +1454,12 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     float * data = (float *) dst->data;
 
     const int64_t n_kv     = dst->ne[0];
-    const int64_t n_stream = dst->ne[3]; // num streams in the current ubatch
+    const int64_t n_stream_local = dst->ne[3]; // num streams in the current ubatch
 
-    GGML_ASSERT(n_tokens%n_stream == 0);
+    GGML_ASSERT(n_tokens%n_stream_local == 0);
 
     // n_tps == n_tokens_per_stream
-    const int64_t n_tps     = n_tokens/n_stream;
+    const int64_t n_tps     = n_tokens/n_stream_local;
     const int64_t n_tps_pad = GGML_PAD(n_tps, GGML_KQ_MASK_PAD);
 
     std::fill(data, data + ggml_nelements(dst), -INFINITY);
@@ -1251,7 +1478,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     // To visualize the mask, see https://github.com/ggml-org/llama.cpp/pull/12615
     // TODO: optimize this section
     for (uint32_t h = 0; h < 1; ++h) {
-        for (uint32_t s = 0; s < n_stream; ++s) {
+        for (uint32_t s = 0; s < n_stream_local; ++s) {
             for (uint32_t ii = 0; ii < n_tps; ++ii) {
                 const uint32_t i = s*n_tps + ii;
 
@@ -1266,7 +1493,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
                 const llama_pos p1_x = is_2d ? ubatch->pos[i + ubatch->n_tokens*2] : 0;
                 const llama_pos p1_y = is_2d ? ubatch->pos[i + ubatch->n_tokens]   : 0;
 
-                const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
+                const uint64_t idst = n_kv*(h*n_stream_local*n_tps_pad + s*n_tps_pad + ii);
 
                 for (uint32_t j = 0; j < n_kv; ++j) {
                     if (cells.is_empty(j)) {
@@ -1326,6 +1553,204 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
 
                 data[h*(n_kv*n_tokens) + i*n_kv + j] = llama_relative_position_bucket(p0, ubatch->pos[i], hparams.n_rel_attn_bkts, false);
             }
+        }
+    }
+}
+
+void llama_kv_cache::set_input_seq_ids(ggml_tensor * q_seq_ids, ggml_tensor * kv_seq_ids, const llama_ubatch * ubatch) const {
+    // Note: This is only useful for unified KV mode (n_stream == 1) to enable
+    // flash attention optimization that skips cross-sequence computation.
+
+    if (!q_seq_ids || !kv_seq_ids) {
+        return;
+    }
+
+    // Check if buffers are allocated and on host
+    // If not on host, skip the optimization (kernel will use mask-based detection)
+    if (!q_seq_ids->buffer || !kv_seq_ids->buffer) {
+        static bool warned = false;
+        if (!warned) {
+            fprintf(stderr, "[SEQ_IDS] Buffer not allocated: q=%p kv=%p\n",
+                    (void*)q_seq_ids->buffer, (void*)kv_seq_ids->buffer);
+            warned = true;
+        }
+        return;
+    }
+    if (!ggml_backend_buffer_is_host(q_seq_ids->buffer) ||
+        !ggml_backend_buffer_is_host(kv_seq_ids->buffer)) {
+        // Tensors not on host - skip optimization
+        static bool warned = false;
+        if (!warned) {
+            fprintf(stderr, "[SEQ_IDS] Buffer not on host: q_host=%d kv_host=%d q_buf=%s kv_buf=%s\n",
+                    ggml_backend_buffer_is_host(q_seq_ids->buffer),
+                    ggml_backend_buffer_is_host(kv_seq_ids->buffer),
+                    ggml_backend_buffer_name(q_seq_ids->buffer),
+                    ggml_backend_buffer_name(kv_seq_ids->buffer));
+            warned = true;
+        }
+        return;
+    }
+
+    // Input tensors are I32 directly (no F32->I32 cast needed)
+    int32_t * q_data  = (int32_t *) q_seq_ids->data;
+    int32_t * kv_data = (int32_t *) kv_seq_ids->data;
+
+    const uint32_t n_tokens = ubatch->n_tokens;
+    const uint32_t n_kv = kv_seq_ids->ne[0];
+
+    // Fill query sequence IDs from ubatch
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        q_data[i] = ubatch->seq_id[i][0];
+    }
+
+    // Fill KV sequence IDs from cells
+    // For unified KV mode, use stream 0
+    if (n_stream == 1) {
+        const auto & cells = v_cells[0];
+        for (uint32_t j = 0; j < n_kv; ++j) {
+            if (cells.is_empty(j)) {
+                kv_data[j] = -1;
+            } else {
+                // Find the sequence ID(s) that own this cell
+                // If cell has multiple sequences (shared prefix), use -1 to signal "use mask"
+                int32_t found_seq = -1;
+                int seq_count = 0;
+                for (int s = 0; s < LLAMA_MAX_SEQ && seq_count < 2; ++s) {
+                    if (cells.seq_has(j, s)) {
+                        if (seq_count == 0) {
+                            found_seq = s;
+                        }
+                        seq_count++;
+                    }
+                }
+                // Only use the sequence ID if exactly one sequence owns this cell
+                kv_data[j] = (seq_count == 1) ? found_seq : -1;
+            }
+        }
+    } else {
+        // Multiple streams - not applicable for this optimization
+        // Fill with -1 to disable optimization
+        for (uint32_t j = 0; j < n_kv; ++j) {
+            kv_data[j] = -1;
+        }
+    }
+
+    // Pass the USM host pointers to SYCL backend via thread-local cache
+    // This allows fattn.cpp to access the data even when scheduler creates device tensors
+#ifdef GGML_USE_SYCL
+    ggml_backend_sycl_set_seq_ids_host(q_data, n_tokens, kv_data, n_kv);
+#endif
+}
+
+void llama_kv_cache::set_input_block_table(ggml_tensor * block_table, ggml_tensor * seq_lens, const llama_ubatch * ubatch, uint32_t n_kv) const {
+    // PagedAttention block table and sequence lengths for vLLM-style block addressing
+
+    if (!block_table || !seq_lens) {
+        return;
+    }
+
+    // Check if buffers are allocated and on host
+    if (!block_table->buffer || !seq_lens->buffer) {
+        return;
+    }
+    if (!ggml_backend_buffer_is_host(block_table->buffer) ||
+        !ggml_backend_buffer_is_host(seq_lens->buffer)) {
+        return;
+    }
+
+    const uint32_t block_size = LLAMA_KV_BLOCK_SIZE;
+    const int n_seqs = seq_lens->ne[0];
+    const int max_blocks = block_table->ne[0];
+
+    // F32 tensors (will be cast to I32 for the kernel)
+    float * block_data = (float *) block_table->data;
+    float * seq_data   = (float *) seq_lens->data;
+
+    // Check if we're using dynamic paged attention
+    if (use_paged_attn && paged_cache) {
+        // Dynamic block allocation mode
+        // Get unique sequence IDs from the ubatch
+        const uint32_t n_seqs_unq = ubatch ? ubatch->n_seqs_unq : 1;
+
+        for (int s = 0; s < n_seqs; ++s) {
+            // Get the sequence ID for this slot
+            llama_seq_id seq_id = 0;
+            if (ubatch && ubatch->seq_id_unq && s < (int)n_seqs_unq) {
+                seq_id = ubatch->seq_id_unq[s];
+            }
+
+            // Ensure sequence has blocks allocated
+            // For now, allocate based on n_kv (max context length for this sequence)
+            if (!paged_cache->has_sequence(seq_id)) {
+                // Allocate blocks for the sequence
+                const uint32_t n_blocks_needed = (n_kv + block_size - 1) / block_size;
+                if (!paged_cache->allocate_for_sequence(seq_id, n_blocks_needed * block_size)) {
+                    // Fallback to identity mapping if allocation fails
+                    LLAMA_LOG_WARN("%s: failed to allocate blocks for seq %d, using identity mapping\n",
+                                   __func__, seq_id);
+                    for (int b = 0; b < max_blocks; ++b) {
+                        block_data[s * max_blocks + b] = (float)b;
+                    }
+                    seq_data[s] = (float)n_kv;
+                    continue;
+                }
+            }
+
+            // Get the block table for this sequence
+            const llama_kv_block_table * seq_table = paged_cache->get_block_table(seq_id);
+            if (seq_table) {
+                const auto & block_ids = seq_table->get_block_ids();
+                const uint32_t seq_len = paged_cache->get_sequence_length(seq_id);
+
+                // Fill in block table with actual physical block IDs
+                for (int b = 0; b < max_blocks; ++b) {
+                    if (b < (int)block_ids.size()) {
+                        block_data[s * max_blocks + b] = (float)block_ids[b];
+                    } else {
+                        // Pad with -1 for unused blocks
+                        block_data[s * max_blocks + b] = -1.0f;
+                    }
+                }
+
+                // Use actual sequence length
+                seq_data[s] = (float)std::min(seq_len, n_kv);
+            } else {
+                // Fallback to identity mapping
+                for (int b = 0; b < max_blocks; ++b) {
+                    block_data[s * max_blocks + b] = (float)b;
+                }
+                seq_data[s] = (float)n_kv;
+            }
+        }
+
+        static bool logged = false;
+        if (!logged) {
+            LLAMA_LOG_INFO("[PAGED_ATTN] Block table set with dynamic allocation: n_seqs=%d, max_blocks=%d, n_kv=%u\n",
+                           n_seqs, max_blocks, n_kv);
+            logged = true;
+        }
+    } else {
+        // Identity mapping: block_table[seq][i] = i (block index, not offset!)
+        // The kernel computes: physical_block * block_size + offset_in_block
+        // So for contiguous storage, block 0 → tokens 0-15, block 1 → tokens 16-31, etc.
+        for (int s = 0; s < n_seqs; ++s) {
+            for (int b = 0; b < max_blocks; ++b) {
+                // Physical block index = b (identity: logical block b maps to physical block b)
+                block_data[s * max_blocks + b] = (float)b;
+            }
+        }
+
+        // Sequence lengths: all sequences use full n_kv for now
+        // (proper per-sequence lengths would come from the scheduler)
+        for (int s = 0; s < n_seqs; ++s) {
+            seq_data[s] = (float)n_kv;
+        }
+
+        static bool logged = false;
+        if (!logged) {
+            LLAMA_LOG_INFO("[PAGED_ATTN] Block table set with identity mapping: n_seqs=%d, max_blocks=%d, n_kv=%u\n",
+                           n_seqs, max_blocks, n_kv);
+            logged = true;
         }
     }
 }
@@ -2049,4 +2474,12 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
+}
+
+void llama_kv_cache_context::set_input_seq_ids(ggml_tensor * q_seq_ids, ggml_tensor * kv_seq_ids, const llama_ubatch * ubatch) const {
+    kv->set_input_seq_ids(q_seq_ids, kv_seq_ids, ubatch);
+}
+
+void llama_kv_cache_context::set_input_block_table(ggml_tensor * block_table, ggml_tensor * seq_lens, const llama_ubatch * ubatch, uint32_t n_kv_arg) const {
+    kv->set_input_block_table(block_table, seq_lens, ubatch, n_kv_arg);
 }

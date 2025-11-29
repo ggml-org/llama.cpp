@@ -4,6 +4,7 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
@@ -105,6 +106,8 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+    cparams.paged_attn = params.paged_attn;
+    cparams.prefix_cache = params.prefix_cache;
 
     {
         const char * LLAMA_GRAPH_REUSE_DISABLE = getenv("LLAMA_GRAPH_REUSE_DISABLE");
@@ -142,6 +145,8 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: causal_attn   = %d\n",   __func__, cparams.causal_attn);
     LLAMA_LOG_INFO("%s: flash_attn    = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
     LLAMA_LOG_INFO("%s: kv_unified    = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
+    LLAMA_LOG_INFO("%s: paged_attn    = %s\n",   __func__, cparams.paged_attn ? "true" : "false");
+    LLAMA_LOG_INFO("%s: prefix_cache  = %s\n",   __func__, cparams.prefix_cache ? "true" : "false");
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
 
@@ -220,6 +225,21 @@ llama_context::llama_context(
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
+
+        // enable paged attention if requested
+        if (cparams.paged_attn) {
+            auto * kv_cache = dynamic_cast<llama_kv_cache *>(memory.get());
+            if (kv_cache) {
+                kv_cache->enable_paged_attn();
+
+                // enable prefix caching if requested (requires paged attention)
+                if (cparams.prefix_cache) {
+                    kv_cache->enable_prefix_cache();
+                }
+            } else {
+                LLAMA_LOG_WARN("%s: paged_attn requested but memory is not a KV cache, ignoring\n", __func__);
+            }
+        }
     }
 
     // init backends
@@ -2323,6 +2343,8 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.paged_attn                  =*/ false,
+        /*.prefix_cache                =*/ false,
     };
 
     return result;

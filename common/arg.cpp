@@ -1002,6 +1002,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_UNIFIED"));
     add_opt(common_arg(
+        {"--paged-attn", "-pa"},
+        string_format("[EXPERIMENTAL] enable PagedAttention with block-based KV addressing (default: %s)\n"
+            "requires flash attention to be enabled", params.paged_attn ? "true" : "false"),
+        [](common_params & params) {
+            params.paged_attn = true;
+        }
+    ).set_env("LLAMA_ARG_PAGED_ATTN"));
+    add_opt(common_arg(
+        {"--prefix-cache", "-pc"},
+        string_format("[EXPERIMENTAL] enable prefix caching for paged attention (default: %s)\n"
+            "enables sharing of KV blocks with identical content across sequences\n"
+            "requires --paged-attn to be enabled", params.prefix_cache ? "true" : "false"),
+        [](common_params & params) {
+            params.prefix_cache = true;
+        }
+    ).set_env("LLAMA_ARG_PREFIX_CACHE"));
+    add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
         [](common_params & params) {

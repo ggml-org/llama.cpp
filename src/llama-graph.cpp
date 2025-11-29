@@ -372,6 +372,16 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_v_idxs(self_v_idxs, ubatch);
 
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+
+    // Set sequence ID tensors for flash attention optimization (if they were created)
+    if (self_q_seq_ids && self_kv_seq_ids) {
+        mctx->set_input_seq_ids(self_q_seq_ids, self_kv_seq_ids, ubatch);
+    }
+
+    // Set PagedAttention block table tensors (if they were created)
+    if (self_block_table && self_seq_lens) {
+        mctx->set_input_block_table(self_block_table, self_seq_lens, ubatch, mctx->get_n_kv());
+    }
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -1348,7 +1358,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * sinks,
          ggml_tensor * v_mla,
                float   kq_scale,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * q_seq_ids,
+         ggml_tensor * kv_seq_ids,
+         ggml_tensor * block_table,
+         ggml_tensor * seq_lens) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
@@ -1384,6 +1398,16 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
+
+        // Set sequence IDs for cross-sequence masking optimization (must be before graph expand)
+        if (q_seq_ids && kv_seq_ids) {
+            ggml_flash_attn_ext_set_seq_ids(cur, q_seq_ids, kv_seq_ids);
+        }
+
+        // Set PagedAttention block table for indirect K/V addressing (vLLM-style)
+        if (block_table && seq_lens) {
+            ggml_flash_attn_ext_set_paged(cur, block_table, seq_lens);
+        }
 
         if (v_mla) {
 #if 0
@@ -1569,6 +1593,39 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         ggml_set_input(inp->self_kq_mask);
 
         inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+        // Create sequence ID tensors for flash attention optimization in unified KV mode
+        // This allows the kernel to skip cross-sequence attention computation
+        //
+        // Create tensors directly as I32 (SYCL backend doesn't support ggml_cast for F32->I32)
+        // The scheduler will allocate these as input tensors, allowing CPU writing via set_input_seq_ids
+        if (cparams.flash_attn && cparams.kv_unified) {
+            inp->self_q_seq_ids  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+            inp->self_kv_seq_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_kv);
+            ggml_set_input(inp->self_q_seq_ids);
+            ggml_set_input(inp->self_kv_seq_ids);
+
+            // No separate device copy needed - the I32 tensors will be allocated on device
+            // and the scheduler will handle copying input data
+            inp->self_q_seq_ids_dev  = inp->self_q_seq_ids;
+            inp->self_kv_seq_ids_dev = inp->self_kv_seq_ids;
+        }
+
+        // PagedAttention block_table and seq_lens tensors for vLLM-style block-based KV addressing
+        // - block_table: [max_blocks, n_seqs] maps logical blocks to physical blocks
+        // - seq_lens: [n_seqs] number of valid KV tokens per sequence
+        // - Block size is fixed at 16 tokens (matches XMX tile size and vLLM default)
+        if (cparams.flash_attn && cparams.paged_attn) {
+            const int block_size = 16;
+            const int n_seqs = ubatch.n_seqs_unq;
+            const int max_blocks = (n_kv + block_size - 1) / block_size;
+
+            // Create tensors directly as I32 (SYCL backend doesn't support ggml_cast)
+            inp->self_block_table = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, max_blocks, n_seqs);
+            inp->self_seq_lens    = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_seqs);
+            ggml_set_input(inp->self_block_table);
+            ggml_set_input(inp->self_seq_lens);
+        }
     }
 
     return inp;
@@ -1618,7 +1675,16 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    // Pass sequence IDs to flash attention for cross-sequence masking optimization (unified KV mode)
+    ggml_tensor * q_seq_ids  = cparams.flash_attn ? inp->get_q_seq_ids()  : nullptr;
+    ggml_tensor * kv_seq_ids = cparams.flash_attn ? inp->get_kv_seq_ids() : nullptr;
+
+    // PagedAttention block table and sequence lengths (nullptr disables paged attention)
+    ggml_tensor * block_table = cparams.flash_attn ? inp->get_block_table() : nullptr;
+    ggml_tensor * seq_lens    = cparams.flash_attn ? inp->get_seq_lens()    : nullptr;
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, q_seq_ids, kv_seq_ids, block_table, seq_lens);
+
     cb(cur, "kqv_out", il);
 
     if (wo) {

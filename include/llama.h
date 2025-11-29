@@ -363,6 +363,10 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        bool paged_attn;    // [EXPERIMENTAL] use PagedAttention with block-based KV addressing (vLLM-style)
+                            // requires flash_attn to be enabled
+        bool prefix_cache;  // [EXPERIMENTAL] enable prefix caching for paged attention
+                            // requires paged_attn to be enabled
     };
 
     // model quantization parameters

@@ -3,10 +3,12 @@
 #include "llama-batch.h"
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
+#include "llama-kv-block.h"
 #include "llama-memory.h"
 
 #include <unordered_map>
 #include <vector>
+#include <memory>
 
 struct llama_cparams;
 struct llama_hparams;
@@ -135,6 +137,30 @@ public:
 
     bool get_has_shift() const;
 
+    // PagedAttention: enable block-based allocation tracking
+    // Should be called after construction if paged attention is desired
+    void enable_paged_attn();
+    bool get_use_paged_attn() const { return use_paged_attn; }
+
+    // Prefix caching: enable content-addressable block sharing
+    // Should be called after enable_paged_attn() if prefix caching is desired
+    void enable_prefix_cache();
+    bool get_use_prefix_cache() const;
+
+    // Prefix cache statistics (returns 0 if prefix caching is not enabled)
+    uint32_t get_prefix_cache_hits() const;
+    uint32_t get_prefix_cache_misses() const;
+
+    // Get the paged cache manager (may be nullptr if not enabled)
+    llama_kv_cache_paged * get_paged_cache() { return paged_cache.get(); }
+    const llama_kv_cache_paged * get_paged_cache() const { return paged_cache.get(); }
+
+    // Defragmentation: compact used blocks to low indices to reduce fragmentation
+    // This copies KV data in GPU memory and updates block tables
+    // Returns the number of blocks moved, or 0 if no defragmentation needed
+    // threshold: only defrag if fragmentation_ratio > threshold (default 0.2 = 20% waste)
+    uint32_t defragment(float threshold = 0.2f);
+
     //
     // graph_build API
     //
@@ -181,6 +207,17 @@ public:
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    // Set sequence IDs for flash attention optimization
+    // q_seq_ids: [n_tokens] - sequence ID for each query token
+    // kv_seq_ids: [n_kv] - sequence ID for each KV position (-1 if empty/multi-seq)
+    void set_input_seq_ids(ggml_tensor * q_seq_ids, ggml_tensor * kv_seq_ids, const llama_ubatch * ubatch) const;
+
+    // Set PagedAttention block table and sequence lengths for vLLM-style block addressing
+    // block_table: [n_seqs, max_blocks] - maps logical block indices to physical block indices
+    // seq_lens: [n_seqs] - number of valid KV tokens per sequence
+    // For now, uses identity mapping (block[i] = i * block_size) since KV is still contiguous
+    void set_input_block_table(ggml_tensor * block_table, ggml_tensor * seq_lens, const llama_ubatch * ubatch, uint32_t n_kv) const;
 
 private:
     const llama_model & model;
@@ -231,6 +268,12 @@ private:
     stream_copy_info sc_info;
 
     std::vector<kv_layer> layers;
+
+    // PagedAttention: block-based allocation manager (optional, enabled via paged_attn flag)
+    // When enabled, tracks block allocation per sequence for vLLM-style memory management
+    // mutable because block allocation can happen lazily during const operations
+    mutable std::unique_ptr<llama_kv_cache_paged> paged_cache;
+    bool use_paged_attn = false;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
@@ -337,6 +380,8 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_seq_ids   (ggml_tensor * q_seq_ids, ggml_tensor * kv_seq_ids, const llama_ubatch * ubatch) const;
+    void set_input_block_table(ggml_tensor * block_table, ggml_tensor * seq_lens, const llama_ubatch * ubatch, uint32_t n_kv) const;
 
 private:
     llama_memory_status status;

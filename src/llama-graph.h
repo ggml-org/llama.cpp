@@ -291,11 +291,35 @@ public:
 
     ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
 
+    // Return the device-side copies for flash attention (nullptr if not available)
+    ggml_tensor * get_q_seq_ids()  const { return self_q_seq_ids_dev; }
+    ggml_tensor * get_kv_seq_ids() const { return self_kv_seq_ids_dev; }
+
+    // PagedAttention block table and sequence lengths (nullptr if not using paged attention)
+    ggml_tensor * get_block_table() const { return self_block_table_dev; }
+    ggml_tensor * get_seq_lens()    const { return self_seq_lens_dev; }
+
     ggml_tensor * self_k_idxs = nullptr; // I64 [n_batch]
     ggml_tensor * self_v_idxs = nullptr; // I64 [n_batch] or [n_batch*n_embd_v_gqa]
 
     ggml_tensor * self_kq_mask     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
+
+    // Sequence ID tensors for flash attention optimization (I32 directly, no F32->I32 cast)
+    // Input tensors (marked as input for CPU writing, scheduler handles copy to device):
+    ggml_tensor * self_q_seq_ids  = nullptr; // I32 [n_batch] - sequence ID for each query token
+    ggml_tensor * self_kv_seq_ids = nullptr; // I32 [n_kv] - sequence ID for each KV position (-1 if empty/multi-seq)
+    // Device pointers (same as input tensors, no separate copies needed):
+    ggml_tensor * self_q_seq_ids_dev  = nullptr;
+    ggml_tensor * self_kv_seq_ids_dev = nullptr;
+
+    // PagedAttention tensors for vLLM-style block-based KV cache
+    // Host tensors (for writing):
+    ggml_tensor * self_block_table = nullptr; // I32 [n_seqs, max_blocks_per_seq] - logical to physical block mapping
+    ggml_tensor * self_seq_lens    = nullptr; // I32 [n_seqs] - number of valid KV tokens per sequence
+    // Device tensors (copies passed to flash attention kernel):
+    ggml_tensor * self_block_table_dev = nullptr;
+    ggml_tensor * self_seq_lens_dev    = nullptr;
 
     // note: these have to be copies because in order to be able to reuse a graph, its inputs
     //       need to carry these parameters with them. otherwise, they can point to freed
@@ -701,7 +725,11 @@ struct llm_graph_context {
             ggml_tensor * sinks,   // [n_head_q]
             ggml_tensor * v_mla,   // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
-                    int   il) const;
+                    int   il,
+            ggml_tensor * q_seq_ids   = nullptr,  // optional: per-token sequence IDs for cross-sequence masking
+            ggml_tensor * kv_seq_ids  = nullptr,
+            ggml_tensor * block_table = nullptr,  // optional: PagedAttention block table [batch_size, max_blocks]
+            ggml_tensor * seq_lens    = nullptr) const;  // optional: PagedAttention seq lens [batch_size]
 
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 
