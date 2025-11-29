@@ -980,7 +980,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.kv_unified = true;
         }
-    ).set_env("LLAMA_ARG_KV_SPLIT"));
+    ).set_env("LLAMA_ARG_KV_UNIFIED"));
     add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
