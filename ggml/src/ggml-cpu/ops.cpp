@@ -7537,6 +7537,7 @@ void ggml_compute_forward_upscale(
 
 // ggml_compute_forward_pad
 
+template<bool CIRCULAR>
 static void ggml_compute_forward_pad_f32(
     const ggml_compute_params * params,
           ggml_tensor * dst) {
@@ -7560,8 +7561,6 @@ static void ggml_compute_forward_pad_f32(
     const int32_t rp2 = ggml_get_op_params_i32(dst, 5);
     const int32_t lp3 = ggml_get_op_params_i32(dst, 6);
     const int32_t rp3 = ggml_get_op_params_i32(dst, 7);
-    const bool circular = (bool)ggml_get_op_params_i32(dst, 8);
-
 
     // TODO: optimize
 
@@ -7570,7 +7569,7 @@ static void ggml_compute_forward_pad_f32(
             for (int64_t i0 = 0; i0 < ne0; ++i0) {
                 for (int64_t i3 = 0; i3 < ne3; ++i3) {
                     // circular means wrap around on a torus, so x and y loop around
-                    if (circular)  {
+                    if constexpr (CIRCULAR) {
                         const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
                         const int64_t src_i0 = ggml_wrap_around(i0 - lp0, ne00);
                         const int64_t src_i1 = ggml_wrap_around(i1 - lp1, ne01);
@@ -7585,8 +7584,7 @@ static void ggml_compute_forward_pad_f32(
 
                         const float * src_ptr = (const float *)((char *) src0->data + src_idx);
                         dst_ptr[dst_idx] = *src_ptr;
-                    }
-                    else {
+                    } else {
                         const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
                         if ((i0 >= lp0 && i0 < ne0 - rp0) \
                             && (i1 >= lp1 && i1 < ne1 - rp1) \
@@ -7609,13 +7607,16 @@ static void ggml_compute_forward_pad_f32(
 void ggml_compute_forward_pad(
     const ggml_compute_params * params,
     ggml_tensor * dst) {
-
     const ggml_tensor * src0 = dst->src[0];
-
+    const bool circular = (bool) ggml_get_op_params_i32(dst, 8);
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_pad_f32(params, dst);
+                if (circular) {
+                    ggml_compute_forward_pad_f32<true>(params, dst);
+                } else {
+                    ggml_compute_forward_pad_f32<false>(params, dst);
+                }
             } break;
         default:
             {
