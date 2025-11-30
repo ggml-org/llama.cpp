@@ -2247,7 +2247,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
-        case LLM_ARCH_KIMI:
+        case LLM_ARCH_KIMI_LINEAR:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,    hparams.n_embd_head_k_mla, false);
@@ -6406,7 +6406,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
                     }
                 } break;
-            case LLM_ARCH_KIMI:
+            case LLM_ARCH_KIMI_LINEAR:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -7712,9 +7712,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_qwen3next>(*this, params);
             } break;
-        case LLM_ARCH_KIMI:
+        case LLM_ARCH_KIMI_LINEAR:
             {
-                llm = std::make_unique<llm_build_kimi>(*this, params);
+                llm = std::make_unique<llm_build_kimi_linear>(*this, params);
             } break;
         default:
             GGML_ABORT("fatal error");
@@ -7871,7 +7871,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ARCTIC:
         case LLM_ARCH_DEEPSEEK:
         case LLM_ARCH_DEEPSEEK2:
-        case LLM_ARCH_KIMI:
+        case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_PLM:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GLM4:

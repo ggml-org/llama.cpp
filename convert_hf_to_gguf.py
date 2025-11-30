@@ -5121,7 +5121,7 @@ class InternLM2Model(TextModel):
 @ModelBase.register("KimiLinearModel", "KimiLinearForCausalLM")
 class KimiLinearModel(TextModel):
     """Kimi-Linear model with hybrid MLA+KDA architecture"""
-    model_arch = gguf.MODEL_ARCH.KIMI
+    model_arch = gguf.MODEL_ARCH.KIMI_LINEAR
     
     _experts: list[dict[str, Tensor]] | None = None
 

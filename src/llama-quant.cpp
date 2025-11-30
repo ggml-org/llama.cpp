@@ -726,7 +726,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // sanity checks for models that have attention layers
     // Skip this check for Kimi models which have hybrid KDA+MLA architecture
     // (only MLA layers have attn_kv_b weights, KDA layers don't)
-    if (qs.n_attention_wv != 0 && !is_clip_model && model.arch != LLM_ARCH_KIMI)
+    if (qs.n_attention_wv != 0 && !is_clip_model && model.arch != LLM_ARCH_KIMI_LINEAR)
     {
         const auto & n_head_kv_iter = model.hparams.n_head_kv_arr.begin();
         // attention layers have a non-zero number of kv heads

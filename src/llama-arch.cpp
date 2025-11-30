@@ -111,7 +111,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_COGVLM,           "cogvlm"           },
     { LLM_ARCH_RND1,             "rnd1"             },
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
-    { LLM_ARCH_KIMI,             "kimi"             },
+    { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -2494,7 +2494,7 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
-        LLM_ARCH_KIMI,
+        LLM_ARCH_KIMI_LINEAR,
         {
             { LLM_TENSOR_TOKEN_EMBD,         "token_embd" },
             { LLM_TENSOR_OUTPUT_NORM,        "output_norm" },
@@ -2833,7 +2833,7 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
         case LLM_ARCH_RWKV6QWEN2:
         case LLM_ARCH_RWKV7:
         case LLM_ARCH_ARWKV7:
-        case LLM_ARCH_KIMI:  // KDA layers use delta attention with recurrent state
+        case LLM_ARCH_KIMI_LINEAR:  // KDA layers use delta attention with recurrent state
             return true;
         default:
             return false;
@@ -2852,7 +2852,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_QWEN3NEXT:
         // Kimi: Currently using recurrent-only mode since MLA doesn't use KV cache
         // TODO: Enable hybrid when MLA KV caching is implemented
-        // case LLM_ARCH_KIMI:
+        // case LLM_ARCH_KIMI_LINEAR:
             return true;
         default:
             return false;

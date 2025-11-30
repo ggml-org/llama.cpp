@@ -1570,15 +1570,33 @@ class TensorNameMap:
         ),
 
         # Kimi Linear KDA (using SSM_ prefix for consistency)
-        MODEL_TENSOR.SSM_CONV1D_Q: ("model.layers.{bid}.self_attn.q_conv1d",),
-        MODEL_TENSOR.SSM_CONV1D_K: ("model.layers.{bid}.self_attn.k_conv1d",),
-        MODEL_TENSOR.SSM_CONV1D_V: ("model.layers.{bid}.self_attn.v_conv1d",),
-        MODEL_TENSOR.SSM_F_A:      ("model.layers.{bid}.self_attn.f_a_proj",),
-        MODEL_TENSOR.SSM_F_B:      ("model.layers.{bid}.self_attn.f_b_proj",),
-        MODEL_TENSOR.SSM_BETA:     ("model.layers.{bid}.self_attn.b_proj",),
-        MODEL_TENSOR.SSM_A_LOG:    ("model.layers.{bid}.self_attn.A_log",),
-        MODEL_TENSOR.SSM_G_A:      ("model.layers.{bid}.self_attn.g_a_proj",),
-        MODEL_TENSOR.SSM_G_B:      ("model.layers.{bid}.self_attn.g_b_proj",),
+        MODEL_TENSOR.SSM_CONV1D_Q: (
+            "model.layers.{bid}.self_attn.q_conv1d",
+        ),
+        MODEL_TENSOR.SSM_CONV1D_K: (
+            "model.layers.{bid}.self_attn.k_conv1d",
+        ),
+        MODEL_TENSOR.SSM_CONV1D_V: (
+            "model.layers.{bid}.self_attn.v_conv1d",
+        ),
+        MODEL_TENSOR.SSM_F_A: (
+            "model.layers.{bid}.self_attn.f_a_proj",
+        ),
+        MODEL_TENSOR.SSM_F_B: (
+            "model.layers.{bid}.self_attn.f_b_proj",
+        ),
+        MODEL_TENSOR.SSM_BETA: (
+            "model.layers.{bid}.self_attn.b_proj",
+        ),
+        MODEL_TENSOR.SSM_A_LOG: (
+            "model.layers.{bid}.self_attn.A_log",
+        ),
+        MODEL_TENSOR.SSM_G_A: (
+            "model.layers.{bid}.self_attn.g_a_proj",
+        ),
+        MODEL_TENSOR.SSM_G_B: (
+            "model.layers.{bid}.self_attn.g_b_proj",
+        ),
         MODEL_TENSOR.SSM_DT_B: (
             "model.layers.{bid}.self_attn.dt_bias",
         ),
