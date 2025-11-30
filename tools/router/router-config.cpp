@@ -6,7 +6,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <climits>
 #include <cstdlib>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -20,6 +22,8 @@
 #        define NOMINMAX
 #    endif
 #    include <windows.h>
+#elif defined(__APPLE__)
+#    include <mach-o/dyld.h>
 #else
 #    include <unistd.h>
 #endif
@@ -43,7 +47,7 @@ static std::string detect_llama_server_binary() {
 
     std::filesystem::path path(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(len));
     return (path.parent_path() / "llama-server.exe").string();
-#else
+#elif defined(__linux__)
     std::vector<char> buffer(1024);
     while (true) {
         ssize_t len = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
@@ -59,6 +63,21 @@ static std::string detect_llama_server_binary() {
 
     std::filesystem::path path(buffer.data());
     return (path.parent_path() / "llama-server").string();
+#elif defined(__APPLE__)
+    std::vector<char> buffer(PATH_MAX);
+    uint32_t          size = static_cast<uint32_t>(buffer.size());
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+        buffer.resize(size);
+        size = static_cast<uint32_t>(buffer.size());
+        if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+            return std::string();
+        }
+    }
+
+    std::filesystem::path path(buffer.data());
+    return (path.parent_path() / "llama-server").string();
+#else
+    return std::string();
 #endif
 }
 
@@ -338,11 +357,6 @@ RouterConfig load_config(const std::string & path) {
         const SpawnConfig & spawn = is_spawn_empty(model.spawn) ? cfg.default_spawn : model.spawn;
         if (spawn.command.empty()) {
             throw std::runtime_error("spawn command missing for model: " + model.name);
-        }
-
-        const std::string & cmd = spawn.command.front();
-        if (!cmd.empty() && cmd.find('/') != std::string::npos && !std::filesystem::exists(cmd, ec)) {
-            throw std::runtime_error("spawn command not executable: " + cmd);
         }
     }
 
