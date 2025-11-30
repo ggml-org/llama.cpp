@@ -28,6 +28,49 @@ llama-router builds and runs on both Linux and Windows:
 
 The router automatically detects the llama-server binary location relative to its own executable, falling back to PATH resolution if not found.
 
+## Design Philosophy
+
+llama-router follows KISS (Keep It Simple, Stupid) principles:
+
+- **Minimal configuration**: Works out-of-box with HF cache scanning
+- **Explicit persistence**: Config changes are written explicitly via admin endpoints, never hidden in business logic
+- **Separation of concerns**: Core routing logic (`RouterApp`) has zero I/O, persistence handled by admin layer
+- **Simple endpoint matching**: Prefix-based matching, no complex regex
+- **Transparent proxy**: Headers and streaming forwarded as-is
+- **On-demand only**: No models start at boot, everything spawns when first requested
+
+### The auto + default_spawn Workflow
+
+Models discovered from the HuggingFace cache are marked as `auto` and inherit the `default_spawn` configuration. This creates a powerful optimization pattern:
+
+1. **Tune `default_spawn` once** with your preferred parameters (GPU layers, KV cache quantization, context size, etc.)
+2. **All `auto` models automatically use these settings** - no per-model configuration needed
+3. **Change `default_spawn` and reload** - all `auto` models instantly updated
+4. **Customize individual models** by switching to `manual` state first to prevent rescan overwrites
+
+This ensures consistent, optimized behavior across your entire model collection while allowing per-model overrides when needed. **Always set models to `manual` before customizing their spawn parameters** - otherwise your changes will be lost on the next rescan.
+
+## Multi-Engine Support
+
+llama-router is engine-agnostic. Any OpenAI-compatible inference backend can be orchestrated by configuring the appropriate spawn command and endpoints. The router simply:
+
+1. Spawns the command specified in `spawn.command`
+2. Polls `health_endpoint` until it returns HTTP 200 (customizable per backend)
+3. Proxies requests matching `proxy_endpoints` to the running instance
+
+This design allows you to mix llama.cpp, vLLM, Ollama, Text Generation Inference, or any custom backend in a single router configuration. Set models to `manual` state when using non-llama.cpp backends to prevent automatic cache rescans from removing them.
+
+### Future: WebUI Administration (TODO)
+
+The admin API endpoints (`/admin/reload`, `/admin/rescan`) are designed to support hot configuration and model management. A future WebUI will enable:
+
+- **Live model downloads** from HuggingFace directly through the interface
+- **Hot reconfiguration** of `default_spawn` and per-model settings without restart
+- **Real-time monitoring** of running instances and resource usage
+- **Interactive model management** (add, remove, customize spawn parameters)
+
+This aligns with the project philosophy: **everything configurable at runtime, zero downtime required**. The current CLI and JSON-based workflow is production-ready; the WebUI will provide a more accessible interface to the same underlying admin API.
+
 ---
 
 ## Quick Start
@@ -53,8 +96,14 @@ Simply launch the router:
 
 On first run, it will:
 1. Create a default configuration at `~/.config/llama.cpp/router-config.json`
-2. Scan the Hugging Face cache (`~/.cache/huggingface/hub/`) for existing models
-3. Start listening on `127.0.0.1:8082`
+2. Scan the Hugging Face cache (`~/.cache/llama.cpp/`) for GGUF models
+3. Add discovered models as `auto` state, inheriting `default_spawn` configuration
+4. Start listening on `127.0.0.1:8082`
+
+On every subsequent startup:
+- Automatic rescan updates the model list (adds new, removes deleted cache files)
+- All `auto` models inherit the current `default_spawn` settings
+- `manual` models preserve their custom configurations
 
 ---
 
@@ -126,6 +175,13 @@ The import process:
 
 The router tracks each model's origin through a `state` field, which controls behavior during rescans:
 
+### Important: On-Demand Spawning
+
+**All models spawn only when first requested via the API.** The router never starts backends at boot. The `auto`/`manual` state controls only rescan behavior:
+
+- `auto`: Managed by cache scanner, inherits `default_spawn`
+- `manual`: Protected from rescans, can have custom `spawn` configuration
+
 ### `auto` State
 
 Models discovered automatically from the Hugging Face cache are marked as `"state": "auto"`. These models:
@@ -133,6 +189,7 @@ Models discovered automatically from the Hugging Face cache are marked as `"stat
 - Are added when first discovered in the cache
 - Are **removed automatically** if the cached file disappears (e.g., cache cleanup)
 - Are re-added if the file reappears
+- **Inherit `default_spawn` configuration** - change `default_spawn` to optimize all `auto` models at once
 
 This enables seamless synchronization with `huggingface-cli` downloads and cache management.
 
@@ -143,25 +200,12 @@ Models added via `--import-dir` or edited by hand in the config are marked as `"
 - Are **never automatically removed**, even if the file path becomes invalid
 - Must be manually deleted from the configuration
 - Survive rescans and configuration reloads
+- **Can have custom `spawn` configurations** that override `default_spawn`
 
 **Use cases for manual state:**
 - Models on network storage that may be temporarily unavailable
 - Fine-tuned models in development directories
 - Models you want to persist regardless of file system changes
-
-### Changing State
-
-Edit the configuration file directly to change a model's state:
-
-```json
-{
-  "name": "my-model.gguf",
-  "path": "/path/to/my-model.gguf",
-  "state": "manual"
-}
-```
-
-Or set to `"auto"` if you want the router to manage its lifecycle.
 
 ---
 
@@ -198,7 +242,7 @@ Override with `--config`:
   "models": [
     {
       "name": "Qwen3-8B-Q4_K_M.gguf",
-      "path": "/home/user/.cache/huggingface/hub/models--bartowski--Qwen3-8B-GGUF/...",
+      "path": "/home/user/.cache/llama.cpp/bartowski_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf",
       "state": "auto",
       "group": ""
     }
@@ -234,6 +278,43 @@ The router automatically appends these arguments:
 - `--port <port>` - Dynamically assigned port
 - `--host 127.0.0.1` - Localhost binding for security
 
+### Optimizing for Your Hardware
+
+The `default_spawn` is where you tune performance for your specific hardware. **All `auto` models inherit these settings**, so you can optimize once for your entire collection:
+
+```json
+{
+  "default_spawn": {
+    "command": [
+      "llama-server",
+      "-ngl", "999",
+      "-ctk", "q8_0",
+      "-ctv", "q8_0",
+      "-fa", "on",
+      "--mlock",
+      "-np", "4",
+      "-kvu",
+      "--jinja"
+    ],
+    "proxy_endpoints": ["/v1/", "/health", "/slots", "/props"],
+    "health_endpoint": "/health"
+  }
+}
+```
+
+**Common optimizations:**
+- `-ngl 999`: Offload all layers to GPU
+- `-ctk q8_0 -ctv q8_0`: Quantize KV cache to Q8 for lower VRAM usage
+- `-fa on`: Enable Flash Attention
+- `--mlock`: Lock model in RAM to prevent swapping
+- `-np 4`: Process 4 prompts in parallel
+- `-kvu`: Use single unified KV buffer for all sequences (also `--kv-unified`)
+- `--jinja`: Enable Jinja template support
+
+**Note:** The router automatically appends `--model`, `--port`, and `--host` - do not include these in your command.
+
+Change `default_spawn`, reload the router, and all `auto` models instantly use the new configuration.
+
 ### Per-Model Spawn Override
 
 Individual models can override the default spawn configuration:
@@ -258,7 +339,11 @@ Individual models can override the default spawn configuration:
 
 ### Model Groups
 
-Groups ensure mutual exclusivity - when a model from a group is requested, any running model from a **different** group is stopped first:
+**Default Behavior: Single Model at a Time**
+
+llama-router is designed for resource-constrained environments (small GPUs, consumer hardware). By default, **only ONE model runs at a time** - when you request a different model, the current one is stopped first. This ensures reliable operation on systems with limited VRAM.
+
+To allow multiple models to run simultaneously, assign the **same group** to models that can coexist:
 
 ```json
 {
@@ -266,17 +351,17 @@ Groups ensure mutual exclusivity - when a model from a group is requested, any r
     {
       "name": "qwen3-8b-q4",
       "path": "/path/to/qwen3-8b-q4.gguf",
-      "group": "8b-models"
+      "group": "small-models"
     },
     {
       "name": "qwen3-8b-q8",
       "path": "/path/to/qwen3-8b-q8.gguf",
-      "group": "8b-models"
+      "group": "small-models"
     },
     {
       "name": "llama-70b-q4",
       "path": "/path/to/llama-70b-q4.gguf",
-      "group": "70b-models"
+      "group": "large-model"
     }
   ]
 }
@@ -286,7 +371,7 @@ Behavior:
 - Requesting `qwen3-8b-q4` while `qwen3-8b-q8` is running: **no restart** (same group)
 - Requesting `llama-70b-q4` while `qwen3-8b-q4` is running: **stops qwen3, starts llama** (different group)
 
-If no group is specified, the model name is used as a singleton group.
+**Omitting the `group` field creates an exclusive singleton per model** - each model stops all others before starting.
 
 ---
 
@@ -393,6 +478,30 @@ curl http://localhost:8082/admin/rescan
 
 ## Architecture
 
+### File Structure & Separation of Concerns
+
+| Component | Files | Responsibility |
+|-----------|-------|----------------|
+| **Core** | `router-app.cpp/h` | Model lifecycle, spawn orchestration, group logic (zero I/O) |
+| **HTTP Endpoints** | `router-endpoints.cpp/h` | Public API routes (`/v1/models`, `/v1/chat/completions`) |
+| **Admin** | `router-admin.cpp/h` | Admin routes with explicit config persistence |
+| **Proxy** | `router-proxy.cpp/h` | HTTP forwarding, SSE streaming, header management |
+| **Process** | `router-process.cpp/h` | Cross-platform subprocess spawning, I/O capture |
+| **Config** | `router-config.cpp/h` | JSON load/write, rescan logic, `RescanResult` |
+| **Scanner** | `router-scanner.cpp/h` | HF cache discovery, `--import-dir`, mmproj detection |
+| **Main** | `router.cpp` | CLI parsing, server setup, signal handlers |
+| **Utils** | `logging.cpp/h`, `router-constants.h` | Shared logging and constants |
+
+**Design principles enforced:**
+- `router-app`: Pure business logic, no filesystem I/O
+- `router-admin`: Owns config persistence, explicit writes only
+- `router-proxy`: Streaming & forwarding, value-captured lambdas to avoid use-after-free
+- `router-process`: Platform abstraction, child processes never call parent logging functions
+
+---
+
+### System Architecture
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                       llama-router                          │
@@ -435,6 +544,92 @@ curl http://localhost:8082/admin/rescan
 - **Health polling**: 200ms intervals, 10s timeout
 - **Graceful shutdown**: SIGTERM → 1s wait → SIGKILL
 - **Cleanup**: File descriptors closed, waitpid() called
+
+---
+
+## Technical Notes
+
+### Cross-Platform Process Management
+
+The router handles subprocess spawning differently per platform:
+
+**Linux/macOS:** Uses `fork()` + `execvp()` with careful attention to post-fork behavior. Child processes **must not** call logging functions that access parent singletons - they write directly to `STDERR_FILENO` instead to avoid use-after-fork crashes.
+
+**Windows:** Uses `CreateProcess()` with separate process information structures and handle management.
+
+### SSE Streaming Implementation
+
+Server-Sent Events streaming required careful lifetime management to avoid use-after-free bugs:
+
+1. **Capture by value**: Lambda captures must copy request data (headers, path, body), not reference stack variables that become invalid after the handler returns
+2. **Explicit termination**: Call `sink.done()` followed by `return false` to signal httplib to close the connection properly - without this, streams deliver tokens correctly but never terminate
+
+### PATH Binary Resolution
+
+Spawn commands support both absolute/relative paths and PATH-based binaries:
+
+- **Paths with separators**: `/usr/bin/llama-server`, `./llama-server`, `C:\llama\server.exe` - existence validated before spawn
+- **PATH binaries**: `python`, `vllm`, `ollama`, `llama-server` - no validation, relies on shell PATH resolution
+
+The router only validates file existence for commands containing `/` or `\\` path separators, allowing seamless use of system-installed binaries.
+
+### Model-Scoped Route Stripping
+
+Routes like `/<model>/health` are router-side aliases for convenience. Before proxying to the backend, the router strips the model prefix:
+
+- User request: `GET /Qwen3-8B-Q4_K_M.gguf/health`
+- Forwarded to backend: `GET /health`
+
+Backends remain unaware of model-scoped routing - they expose standard endpoints like `/health`, `/v1/chat/completions`, etc.
+
+### HTTP Header Management
+
+The router strips `Content-Length` and `Transfer-Encoding` headers before forwarding requests. This is standard reverse-proxy behavior to handle chunked requests/responses properly and avoid conflicts when the proxy re-chunks data.
+
+All other headers are forwarded transparently to preserve client context (authentication, user-agent, etc.).
+
+### Health Endpoint Purpose
+
+The `health_endpoint` configuration field serves **spawn readiness polling only** - the router uses it to detect when a backend has finished loading and is ready to serve requests.
+
+This is separate from user-facing health routes. Clients can still call `/<model>/health` or `/health` for their own monitoring needs. The backend must expose standard endpoints regardless of what `health_endpoint` is configured for polling.
+
+### Multimodal Projector Priority
+
+When importing collections with `--import-dir`, mmproj files are automatically detected with this search priority:
+
+1. `*-bf16.gguf` (selected first)
+2. `*-f16.gguf` (selected if BF16 not found)
+3. `*-f32.gguf` (selected if neither BF16 nor F16 found)
+
+All quantization variants of a model (Q4_K_M, Q5_K_M, Q6_K, etc.) found in the same directory share the same mmproj file.
+
+**For manual models:** mmproj auto-detection applies only during initial import. You can edit `spawn.command` to remove `--mmproj` if unwanted - your changes persist across restarts. Only `auto` models get their spawn configuration regenerated on rescan.
+
+### Manifest Robustness
+
+The HF cache scanner gracefully handles missing or corrupted manifest files:
+
+- If `~/.cache/llama.cpp/` doesn't exist, scanner returns empty mapping
+- If individual manifest files are missing, they're silently skipped
+- Models without manifest entries load successfully, just without mmproj auto-detection
+
+**Cache structure example:**
+```
+~/.cache/llama.cpp/
+├── bartowski_Qwen2.5-1.5B-Instruct-GGUF_Qwen2.5-1.5B-Instruct-Q4_K_M.gguf
+├── bartowski_Qwen2.5-1.5B-Instruct-GGUF_Qwen2.5-1.5B-Instruct-Q4_K_M.gguf.etag
+├── manifest=bartowski=Qwen2.5-1.5B-Instruct-GGUF=latest.json
+├── unsloth_Qwen3-VL-4B-Instruct-GGUF_Qwen3-VL-4B-Instruct-Q6_K.gguf
+├── unsloth_Qwen3-VL-4B-Instruct-GGUF_Qwen3-VL-4B-Instruct-Q6_K.gguf.etag
+├── unsloth_Qwen3-VL-4B-Instruct-GGUF_mmproj-F16.gguf
+├── unsloth_Qwen3-VL-4B-Instruct-GGUF_mmproj-F16.gguf.etag
+└── manifest=unsloth=Qwen3-VL-4B-Instruct-GGUF=Q6_K.json
+```
+
+Manifest files (`manifest=vendor=repo=quant.json`) contain metadata for mmproj auto-detection. The scanner uses underscore separators: `vendor_repo_filename.gguf`.
+
+This ensures the router remains operational even with incomplete cache metadata.
 
 ---
 
