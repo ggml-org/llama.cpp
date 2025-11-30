@@ -265,6 +265,15 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     return 0;
 }
 
+static std::string insert_default_marker(mtmd_context * ctx, const std::string & msg) {
+    switch (mtmd_get_default_marker_placement(ctx)) {
+        case MTMD_DEFAULT_MARKER_PLACEMENT_BEGIN: return mtmd_default_marker() + msg;
+        case MTMD_DEFAULT_MARKER_PLACEMENT_NONE:
+        case MTMD_DEFAULT_MARKER_PLACEMENT_END:
+        default:                                  return msg + mtmd_default_marker();
+    }
+}
+
 int main(int argc, char ** argv) {
     ggml_time_init();
 
@@ -313,7 +322,7 @@ int main(int argc, char ** argv) {
         g_is_generating = true;
         if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
             for (size_t i = 0; i < params.image.size(); i++) {
-                params.prompt += mtmd_default_marker();
+                params.prompt = insert_default_marker(ctx.ctx_vision.get(), params.prompt);
             }
         }
         common_chat_msg msg;
