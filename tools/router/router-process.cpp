@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cerrno>
+#include <filesystem>
 #include <cstring>
 #include <exception>
 #include <sstream>
@@ -144,6 +145,13 @@ ProcessHandle spawn_process(const std::vector<std::string> & args) {
         return handle;
     }
 
+    const std::string binary = args[0];
+    std::error_code   ec;
+    if (!std::filesystem::exists(binary, ec)) {
+        LOG_ERR("Binary not found: %s\n", binary.c_str());
+        return handle;
+    }
+
 #if defined(_WIN32)
     std::ostringstream cmdline;
     for (size_t i = 0; i < args.size(); ++i) {
@@ -273,29 +281,7 @@ ProcessHandle spawn_process(const std::vector<std::string> & args) {
             cargs.push_back(const_cast<char *>(arg.c_str()));
         }
         cargs.push_back(nullptr);
-        {
-            char msg[256];
-            int  n = snprintf(msg, sizeof(msg), "[child %d] preparing to exec: %s\n", static_cast<int>(getpid()), cargs[0]);
-            if (n > 0) {
-                write(STDERR_FILENO, msg, static_cast<size_t>(n));
-            }
-        }
         execvp(cargs[0], cargs.data());
-        const int err = errno;
-        {
-            char err_buf[128];
-            strerror_r(err, err_buf, sizeof(err_buf));
-            char msg[256];
-            int  n = snprintf(msg,
-                             sizeof(msg),
-                             "[child %d] execvp failed for %s: %s\n",
-                             static_cast<int>(getpid()),
-                             cargs[0],
-                             err_buf);
-            if (n > 0) {
-                write(STDERR_FILENO, msg, static_cast<size_t>(n));
-            }
-        }
         _exit(1);
     } else if (pid > 0) {
         close(stdout_pipe[1]);
