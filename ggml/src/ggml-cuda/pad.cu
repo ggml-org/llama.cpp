@@ -72,7 +72,9 @@ static void pad_f32_cuda(const float * src, float * dst,
     const bool circular, cudaStream_t stream) {
     int  num_blocks = (ne0 + CUDA_PAD_BLOCK_SIZE - 1) / CUDA_PAD_BLOCK_SIZE;
     dim3 gridDim(num_blocks, ne1, ne2 * ne3);
-    pad_f32<<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, dst, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, ne0, ne1, ne2, ne3, circular);
+    pad_f32<<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, dst,
+                                                         lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3,
+                                                         ne0, ne1, ne2, ne3, circular);
 }
 
 void ggml_cuda_op_pad(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -95,5 +97,8 @@ void ggml_cuda_op_pad(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int32_t rp3      = ((const int32_t *) (dst->op_params))[7];
     const int32_t circular = ((const int32_t *) (dst->op_params))[8];
 
-    pad_f32_cuda(src0_d, dst_d, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], (bool) circular, stream);
+    pad_f32_cuda(src0_d, dst_d,
+                 lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3,
+                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+                 (bool) circular, stream);
 }
