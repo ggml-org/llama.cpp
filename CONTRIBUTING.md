@@ -19,6 +19,7 @@ The project differentiates between 3 levels of contributors:
 - If your PR becomes stale, don't hesitate to ping the maintainers in the comments
 - Maintainers will rely on your insights and approval when making a final decision to approve and merge a PR
 - Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related PRs
+- Using AI to generate PRs is permitted. However, you must (1) explicitly disclose how AI was used and (2) conduct a thorough manual review before publishing the PR. Note that trivial tab autocompletions do not require disclosure.
 
 # Pull requests (for maintainers)
 
