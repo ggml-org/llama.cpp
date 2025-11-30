@@ -2000,6 +2000,7 @@ static std::unique_ptr<printer> create_printer(output_formats format) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
     // try to set locale for unicode characters in markdown
     setlocale(LC_CTYPE, ".UTF-8");
 

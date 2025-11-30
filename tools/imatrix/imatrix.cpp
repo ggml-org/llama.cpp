@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -1189,6 +1190,8 @@ static bool show_statistics(const common_params & params) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.out_file = "imatrix.gguf";

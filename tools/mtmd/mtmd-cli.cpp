@@ -267,6 +267,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     ggml_time_init();
 
     common_params params;
