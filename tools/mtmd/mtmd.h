@@ -94,7 +94,7 @@ struct mtmd_context_params {
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
 };
 
-MTMD_API const char * mtmd_default_marker(void);
+MTMD_API const char *                  mtmd_default_marker(void);
 MTMD_API mtmd_default_marker_placement mtmd_get_default_marker_placement(mtmd_context * ctx);
 
 MTMD_API struct mtmd_context_params mtmd_context_params_default(void);
