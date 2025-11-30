@@ -2379,13 +2379,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // @ngxson : quick hack for gpt-oss, always render these tokens
-        for (const auto & t : token_to_id) {
-            if (t.first == "<|channel|>" || t.first == "<|message|>" || t.first == "<|start|>" || t.first == "<|constrain|>") {
-                id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
-            }
-        }
-
         // sanity checks
         if (special_eos_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eos_id) == 0) {
             special_eog_ids.insert(special_eos_id);
@@ -3000,7 +2993,13 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
     // ref: https://github.com/ggerganov/llama.cpp/pull/7587#discussion_r1620983843
     static const int attr_special = LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_CONTROL;
     const llama_token_attr attr = token_get_attr(token);
-    if (!special && (attr & attr_special)) {
+    const std::string & token_text = id_to_token[token].text;
+    if (!special &&
+        (attr & attr_special)
+        // hack: Exception for gpt-oss. We need these 'special characters' in the output to make it more readable.
+        && (tokenizer_model != "gpt2" || (token_text != "<|channel|>" && token_text != "<|message|>" &&
+                                          token_text != "<|start|>" && token_text != "<|constrain|>"))) {
+        
         return 0;
     }
 
@@ -3033,7 +3032,6 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
     }
 
     if (0 <= token && token < (int32_t) id_to_token.size()) {
-        const std::string & token_text = id_to_token[token].text;
         switch (get_type()) {
             case LLAMA_VOCAB_TYPE_WPM:
             case LLAMA_VOCAB_TYPE_SPM:
