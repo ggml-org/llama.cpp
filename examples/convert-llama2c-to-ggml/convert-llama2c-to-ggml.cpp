@@ -5,14 +5,16 @@
 #include "common.h"
 #include "log.h"
 
+#include <algorithm>
+#include <cassert>
+#include <cinttypes>
+#include <climits>
+#include <clocale>
+#include <cstdarg>
+#include <cstring>
+#include <ctime>
 #include <unordered_map>
 #include <vector>
-#include <cassert>
-#include <climits>
-#include <cstring>
-#include <cstdarg>
-#include <cinttypes>
-#include <ctime>
 #include <random>
 #include <stdexcept>
 #include <sstream>
@@ -874,6 +876,8 @@ static std::string basename(const std::string &path) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_init();
 
     struct train_params params = get_default_train_params();

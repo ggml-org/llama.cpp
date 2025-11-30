@@ -1,6 +1,7 @@
 #include "arg.h"
 #include "common.h"
 
+#include <clocale>
 #include <fstream>
 #include <string>
 
@@ -76,6 +77,8 @@ static void export_md(std::string fname, llama_example ex) {
 }
 
 int main(int, char **) {
+    std::setlocale(LC_NUMERIC, "C");
+
     export_md("autogen-main.md", LLAMA_EXAMPLE_MAIN);
     export_md("autogen-server.md", LLAMA_EXAMPLE_SERVER);
 

@@ -3,10 +3,13 @@
 #include "ngram-cache.h"
 #include "llama.h"
 
+#include <clocale>
 #include <string>
 #include <vector>
 
 int main(int argc, char ** argv){
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_LOOKUP)) {
