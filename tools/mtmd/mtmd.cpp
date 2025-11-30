@@ -1103,12 +1103,3 @@ void mtmd_log_set(ggml_log_callback log_callback, void * user_data) {
     g_logger_state.log_callback = log_callback ? log_callback : clip_log_callback_default;
     g_logger_state.log_callback_user_data = user_data;
 }
-
-std::string mtmd::mtmd_add_default_marker(mtmd_context *ctx, const std::string &str) {
-    // for LFM2 image embeddings positioned before the text
-    if (ctx && ctx->ctx_v && clip_get_projector_type(ctx->ctx_v) == PROJECTOR_TYPE_LFM2) {
-        return mtmd_default_marker() + str;
-    }
-
-    return str + mtmd_default_marker();
-}

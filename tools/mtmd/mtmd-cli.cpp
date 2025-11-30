@@ -313,7 +313,7 @@ int main(int argc, char ** argv) {
         g_is_generating = true;
         if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
             for (size_t i = 0; i < params.image.size(); i++) {
-                params.prompt = mtmd::mtmd_add_default_marker(ctx.ctx_vision.get(), params.prompt);
+                params.prompt += mtmd_default_marker();
             }
         }
         common_chat_msg msg;
@@ -378,7 +378,7 @@ int main(int argc, char ** argv) {
                 std::string media_path = line.substr(7);
                 if (ctx.load_media(media_path)) {
                     LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
-                    content = mtmd::mtmd_add_default_marker(ctx.ctx_vision.get(), content);
+                    content += mtmd_default_marker();
                 }
                 // else, error is already printed by libmtmd
                 continue;
