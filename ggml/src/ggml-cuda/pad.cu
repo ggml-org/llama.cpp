@@ -71,7 +71,7 @@ static void pad_f32_cuda(const float * src, float * dst,
     const int lp0, const int rp0, const int lp1, const int rp1,
     const int lp2, const int rp2, const int lp3, const int rp3,
     const int ne0, const int ne1, const int ne2, const int ne3,
-    const int circular, cudaStream_t stream) {
+    const bool circular, cudaStream_t stream) {
     int num_blocks = (ne0 + CUDA_PAD_BLOCK_SIZE - 1) / CUDA_PAD_BLOCK_SIZE;
     dim3 gridDim(num_blocks, ne1, ne2*ne3);
     pad_f32<<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, dst, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, ne0, ne1, ne2, ne3, circular);
