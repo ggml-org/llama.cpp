@@ -1124,6 +1124,12 @@ class GGUFWriter:
     def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
 
+    def add_vision_image_max_pixels(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.IMAGE_MAX_PIXELS, value)
+
+    def add_vision_image_min_pixels(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.IMAGE_MIN_PIXELS, value)
+
     # audio models
 
     def add_audio_projection_dim(self, value: int) -> None:

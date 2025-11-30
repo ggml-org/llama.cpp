@@ -1189,6 +1189,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_MMPROJ: (
             "multi_modal_projector.linear_{bid}",
             "visual.merger.mlp.{bid}", # qwen2vl
+            "vision_tower.merger.mlp.{bid}", # dots.ocr
         ),
 
         MODEL_TENSOR.V_MMPROJ_FC: (
@@ -1225,6 +1226,7 @@ class TensorNameMap:
             "visual.patch_embed.proj", # qwen2vl
             "vision_tower.patch_embed.proj", # kimi-vl
             "model.vision.patch_embedding.proj", # cogvlm
+            "vision_tower.patch_embed.patchifier.proj", # dots.ocr
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
@@ -1240,6 +1242,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
+            "vision_tower.blocks.{bid}.attn.qkv", # dots.ocr
             "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
         ),
 
@@ -1301,6 +1304,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.norm1", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm0", # kimi-vl (norm0/norm1)
             "model.vision.transformer.layers.{bid}.input_layernorm", # cogvlm
+            "vision_tower.blocks.{bid}.norm1", # dots.ocr
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
@@ -1316,6 +1320,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.proj", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.wo", # kimi-vl
             "model.vision.transformer.layers.{bid}.attention.dense", # cogvlm
+            "vision_tower.blocks.{bid}.attn.proj", # dots.ocr
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
@@ -1330,6 +1335,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.norm2", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm1", # kimi-vl (norm0/norm1)
             "model.vision.transformer.layers.{bid}.post_attention_layernorm", # cogvlm
+            "vision_tower.blocks.{bid}.norm2", # dots.ocr
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
@@ -1345,12 +1351,14 @@ class TensorNameMap:
             "visual.blocks.{bid}.mlp.linear_fc1", # qwen3vl
             "vision_tower.encoder.blocks.{bid}.mlp.fc0", # kimi-vl (fc0/fc1)
             "model.vision.transformer.layers.{bid}.mlp.fc1", # cogvlm
+            "vision_tower.blocks.{bid}.mlp.fc3", # dots.ocr
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
             "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.feed_forward.w1", # pixtral
             "visual.blocks.{bid}.mlp.gate_proj", # qwen2.5vl
+            "vision_tower.blocks.{bid}.mlp.fc1", # dots.ocr
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
@@ -1366,6 +1374,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.mlp.linear_fc2", # qwen3vl
             "vision_tower.encoder.blocks.{bid}.mlp.fc1", # kimi-vl (fc0/fc1)
             "model.vision.transformer.layers.{bid}.mlp.fc2", # cogvlm
+            "vision_tower.blocks.{bid}.mlp.fc2", # dots.ocr
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_1: (
@@ -1383,6 +1392,7 @@ class TensorNameMap:
             "vision_tower.ln_pre", # pixtral-hf
             "vision_encoder.ln_pre", # pixtral
             "vision_model.layernorm_pre", # llama4
+            "vision_tower.patch_embed.patchifier.norm", # dots.ocr
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
@@ -1391,6 +1401,7 @@ class TensorNameMap:
             "vision_model.layernorm_post", # llama4
             "visual.merger.ln_q", # qwen2vl
             "vision_tower.encoder.final_layernorm", # kimi-vl
+            "vision_tower.post_trunk_norm", # dots.ocr
         ),
 
         MODEL_TENSOR.V_MM_INP_PROJ: (
@@ -1403,6 +1414,7 @@ class TensorNameMap:
             "multi_modal_projector.pre_norm",
             "pre_mm_projector_norm",
             "model.vision.linear_proj.norm1", # cogvlm
+            "vision_tower.merger.ln_q", # dots.ocr
         ),
 
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (

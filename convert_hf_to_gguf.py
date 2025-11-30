@@ -3348,7 +3348,7 @@ class QwenModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
 
-@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration")
+@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration", "DotsOCRForCausalLM")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -3374,7 +3374,8 @@ class Qwen2Model(TextModel):
             name = name.replace("language_model.", "") # for InternVL
         if name.startswith("mlp") or name.startswith("multi_modal_projector") \
                 or name.startswith("vision_model") or name.startswith("audio_tower") \
-                or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector"):
+                or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector") \
+                or name.startswith("vision_tower."):
             # skip vision and audio tensors
             return []
         yield from super().modify_tensors(data_torch, name, bid)
@@ -10072,6 +10073,31 @@ class JanusProVisionModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
 
         return []
+
+
+@ModelBase.register("DotsOCRForCausalLM")
+class DotsOCRVisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.hparams_vision["image_size"] = 0 # dynamic resolution
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.DOTSOCR)
+        self.gguf_writer.add_vision_image_min_pixels(self.preprocessor_config["min_pixels"])
+        self.gguf_writer.add_vision_image_max_pixels(self.preprocessor_config["max_pixels"])
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.find_vparam(["rms_norm_eps"]))
+        self.gguf_writer.add_vision_projector_scale_factor(self.find_vparam(["spatial_merge_size"]))
+        self.gguf_writer.add_vision_use_silu(True)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        if name.startswith("vision_tower."):
+            return [(self.map_tensor_name(name), data_torch)]
+
+        return [] # skip other tensors
 
 
 ###### CONVERSION LOGIC ######

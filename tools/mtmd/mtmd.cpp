@@ -304,6 +304,11 @@ struct mtmd_context {
             img_beg = "<|im_start|>";
             img_end = "<|im_end|>";
 
+        } else if (proj == PROJECTOR_TYPE_DOTS_OCR) {
+            // <|img|> ... (image embeddings) ... <|endofimg|>
+            img_beg = "<|img|>";
+            img_end = "<|endofimg|>";
+
         }
     }
 

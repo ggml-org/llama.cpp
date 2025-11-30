@@ -280,6 +280,8 @@ class Keys:
 
     class ClipVision:
         IMAGE_SIZE          = "clip.vision.image_size"
+        IMAGE_MIN_PIXELS    = "clip.vision.image_min_pixels"
+        IMAGE_MAX_PIXELS    = "clip.vision.image_max_pixels"
         PREPROC_IMAGE_SIZE  = "clip.vision.preproc_image_size"
         PATCH_SIZE          = "clip.vision.patch_size"
         EMBEDDING_LENGTH    = "clip.vision.embedding_length"
@@ -3304,6 +3306,7 @@ class VisionProjectorType:
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"
+    DOTSOCR = "dots_ocr"
 
 
 # Items here are (block size, type size)
