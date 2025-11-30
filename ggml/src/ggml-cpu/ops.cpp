@@ -7427,7 +7427,7 @@ static void ggml_compute_forward_upscale_f32(
             return std::max(1.0f - fabsf(x), 0.0f);
         };
 
-        // support and invscale, maximum 1 pixel for bilinear
+        // support and invscale, minimum 1 pixel for bilinear
         const float support1  = std::max(1.0f, 1.0f / sf1);
         const float invscale1 = 1.0f / support1;
         const float support0  = std::max(1.0f, 1.0f / sf0);

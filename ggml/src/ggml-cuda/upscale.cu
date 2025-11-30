@@ -107,7 +107,7 @@ static __global__ void upscale_f32_bilinear_antialias(const float * src0, float 
     const float y = ((float)i11_dst + pixel_offset) / sf1;
     const float x = ((float)i10_dst + pixel_offset) / sf0;
 
-    // support and invscale, maximum 1 pixel for bilinear
+    // support and invscale, minimum 1 pixel for bilinear
     const float support1  = max(1.0f / sf1, 1.0f);
     const float invscale1 = 1.0f / support1;
     const float support0  = max(1.0f / sf0, 1.0f);
@@ -281,7 +281,7 @@ void ggml_cuda_op_upscale(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     if (mode == GGML_SCALE_MODE_NEAREST) {
         upscale_f32_cuda(src0_d, dst_d, src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], sf0, sf1, sf2, sf3, stream);
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
-        bool antialias = (mode_flags & GGML_SCALE_FLAG_ANTIALIAS);
+        const bool antialias = (mode_flags & GGML_SCALE_FLAG_ANTIALIAS);
         upscale_f32_bilinear_cuda(src0_d, dst_d, src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
                                  src0->ne[0], src0->ne[1], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
                                  sf0, sf1, sf2, sf3, pixel_offset, antialias, stream);
