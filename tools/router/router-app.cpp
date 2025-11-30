@@ -5,7 +5,6 @@
 #include "router-config.h"
 #include "router-process.h"
 
-#include <filesystem>
 #include <sstream>
 #include <vector>
 
@@ -89,20 +88,7 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
 
     LOG_INF("Starting %s on port %d\n", model_name.c_str(), port);
 
-    std::string log_path;
-    if (!config.router.log_dir.empty()) {
-        std::filesystem::path log_dir(expand_user_path(config.router.log_dir));
-        std::error_code      ec;
-        std::filesystem::create_directories(log_dir, ec);
-        if (ec) {
-            LOG_WRN("Could not create log directory %s: ec=%d\n", log_dir.string().c_str(), ec.value());
-        } else {
-            log_path = (log_dir / (model_name + ".log")).string();
-            LOG_INF("Capturing stdout/stderr for %s in %s\n", model_name.c_str(), log_path.c_str());
-        }
-    }
-
-    ProcessHandle handle = spawn_process(command, log_path);
+    ProcessHandle handle = spawn_process(command);
     if (!process_running(handle)) {
         error = "failed to start process";
         LOG_ERR("Failed to start %s on port %d: %s\n", model_name.c_str(), port, error.c_str());
@@ -110,11 +96,11 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
         return false;
     }
 
-    auto [proc_it, _] = processes.emplace(model_name, handle);
+    auto [proc_it, _] = processes.emplace(model_name, std::move(handle));
     last_spawned_model = model_name;
     LOG_INF("Spawned %s (group '%s') with %zu args\n", model_name.c_str(), target_group.c_str(), command.size());
 
-    if (!wait_for_backend_ready(port, ROUTER_BACKEND_READY_TIMEOUT_MS)) {
+    if (!wait_for_backend_ready(port, ROUTER_BACKEND_READY_TIMEOUT_MS, &proc_it->second)) {
         error = "backend not ready";
         LOG_ERR("Backend for %s did not become ready on port %d within %d ms\n",
                 model_name.c_str(),

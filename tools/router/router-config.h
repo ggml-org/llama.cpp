@@ -18,7 +18,6 @@ struct RouterOptions {
     int         connection_timeout_s = 5;
     int         read_timeout_s       = 600;
     std::string admin_token;
-    std::string log_dir;
 };
 
 struct RouterConfig {

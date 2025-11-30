@@ -89,7 +89,6 @@ const RouterOptions & get_default_router_options() {
         /*connection_timeout_s =*/ 5,
         /*read_timeout_s       =*/ 600,
         /*admin_token          =*/ "",
-        /*log_dir              =*/ "/tmp/llama-router",
     };
 
     return opts;
@@ -145,10 +144,6 @@ void write_config_file(const RouterConfig & cfg, const std::string & path) {
 
     if (!cfg.router.admin_token.empty()) {
         out["router"]["admin_token"] = cfg.router.admin_token;
-    }
-
-    if (!cfg.router.log_dir.empty()) {
-        out["router"]["log_dir"] = cfg.router.log_dir;
     }
 
     out["models"] = json::array();
@@ -219,7 +214,6 @@ RouterConfig load_config(const std::string & path) {
         if (r.contains("connection_timeout_s")) cfg.router.connection_timeout_s = r["connection_timeout_s"].get<int>();
         if (r.contains("read_timeout_s")) cfg.router.read_timeout_s = r["read_timeout_s"].get<int>();
         if (r.contains("admin_token")) cfg.router.admin_token = r["admin_token"].get<std::string>();
-        if (r.contains("log_dir")) cfg.router.log_dir = r["log_dir"].get<std::string>();
     }
     if (data.contains("models")) {
         for (const auto & m : data["models"]) {
@@ -244,20 +238,6 @@ RouterConfig load_config(const std::string & path) {
 
     validate_port(cfg.router.port, "router");
     validate_port(cfg.router.base_port, "base");
-
-    if (!cfg.router.log_dir.empty()) {
-        std::error_code  log_ec;
-        std::string      expanded = expand_user_path(cfg.router.log_dir);
-        std::filesystem::path log_path(expanded);
-        if (!std::filesystem::exists(log_path, log_ec)) {
-            std::filesystem::create_directories(log_path, log_ec);
-        }
-        if (log_ec) {
-            throw std::runtime_error("failed to prepare log_dir: " + expanded);
-        }
-        cfg.router.log_dir = log_path.string();
-    }
-
     for (const auto & model : cfg.models) {
         if (model.name.empty()) {
             throw std::runtime_error("model entry missing name");
