@@ -142,8 +142,8 @@ std::vector<ModelConfig> scan_default_models() {
         mc.state = "auto";
         if (auto it_mmproj = mmproj_map.find(full_path); it_mmproj != mmproj_map.end()) {
             mc.spawn = get_default_spawn();
-            mc.spawn.push_back("--mmproj");
-            mc.spawn.push_back(it_mmproj->second);
+            mc.spawn.command.push_back("--mmproj");
+            mc.spawn.command.push_back(it_mmproj->second);
         }
 
         models.push_back(std::move(mc));

@@ -17,6 +17,19 @@ RouterApp::RouterApp(RouterConfig cfg)
 
 RouterApp::~RouterApp() { stop_all(); }
 
+SpawnConfig RouterApp::resolve_spawn_config(const ModelConfig & cfg) const {
+    return is_spawn_empty(cfg.spawn) ? config.default_spawn : cfg.spawn;
+}
+
+SpawnConfig RouterApp::get_spawn_config(const std::string & model_name) {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = model_lookup.find(model_name);
+    if (it == model_lookup.end()) {
+        return config.default_spawn;
+    }
+    return resolve_spawn_config(it->second);
+}
+
 void RouterApp::start_auto_models() {
     for (const auto & model : config.models) {
         if (model.state == "auto") {
@@ -78,7 +91,9 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
     int port = next_port.fetch_add(1);
     model_ports[model_name] = port;
 
-    std::vector<std::string> command = cfg.spawn.empty() ? config.default_spawn : cfg.spawn;
+    const SpawnConfig spawn_cfg = resolve_spawn_config(cfg);
+
+    std::vector<std::string> command = spawn_cfg.command;
     command.push_back("--model");
     command.push_back(expand_user_path(cfg.path));
     command.push_back("--port");
@@ -100,7 +115,8 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
     last_spawned_model = model_name;
     LOG_INF("Spawned %s (group '%s') with %zu args\n", model_name.c_str(), target_group.c_str(), command.size());
 
-    if (!wait_for_backend_ready(port, ROUTER_BACKEND_READY_TIMEOUT_MS, &proc_it->second)) {
+    const std::string health_endpoint = spawn_cfg.health_endpoint.empty() ? "/health" : spawn_cfg.health_endpoint;
+    if (!wait_for_backend_ready(port, health_endpoint, ROUTER_BACKEND_READY_TIMEOUT_MS, &proc_it->second)) {
         error = "backend not ready";
         LOG_ERR("Backend for %s did not become ready on port %d within %d ms\n",
                 model_name.c_str(),

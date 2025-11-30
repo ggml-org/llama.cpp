@@ -60,17 +60,42 @@ static std::string detect_llama_server_binary() {
 #endif
 }
 
-const std::vector<std::string> & get_default_spawn() {
-    static const std::vector<std::string> spawn = [] {
-        std::vector<std::string> default_spawn = {
-            "llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99",
+static SpawnConfig parse_spawn_config(const json & data) {
+    SpawnConfig spawn;
+    if (data.contains("command")) {
+        spawn.command = data["command"].get<std::vector<std::string>>();
+    }
+    if (data.contains("proxy_endpoints")) {
+        spawn.proxy_endpoints = data["proxy_endpoints"].get<std::vector<std::string>>();
+    }
+    if (data.contains("health_endpoint")) {
+        spawn.health_endpoint = data["health_endpoint"].get<std::string>();
+    }
+
+    return spawn;
+}
+
+static json serialize_spawn_config(const SpawnConfig & spawn) {
+    json obj;
+    obj["command"] = spawn.command;
+    obj["proxy_endpoints"] = spawn.proxy_endpoints;
+    obj["health_endpoint"] = spawn.health_endpoint;
+    return obj;
+}
+
+const SpawnConfig & get_default_spawn() {
+    static const SpawnConfig spawn = [] {
+        SpawnConfig default_spawn = {
+            /*command          =*/ {"llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99"},
+            /*proxy_endpoints =*/ {"/v1/", "/health", "/slots", "/props"},
+            /*health_endpoint =*/ "/health",
         };
 
         std::error_code ec;
         const std::string detected_path = detect_llama_server_binary();
         if (!detected_path.empty() && std::filesystem::exists(detected_path, ec) && !ec) {
             LOG_INF("Detected llama-server at %s\n", detected_path.c_str());
-            default_spawn[0] = detected_path;
+            default_spawn.command[0] = detected_path;
         } else {
             LOG_INF("Falling back to llama-server resolved via PATH\n");
         }
@@ -135,7 +160,7 @@ static void ensure_parent_directory(const std::string & path) {
 void write_config_file(const RouterConfig & cfg, const std::string & path) {
     json out;
     out["version"]       = cfg.version;
-    out["default_spawn"] = cfg.default_spawn;
+    out["default_spawn"] = serialize_spawn_config(cfg.default_spawn);
     out["router"] = {{"host", cfg.router.host},
                      {"port", cfg.router.port},
                      {"base_port", cfg.router.base_port},
@@ -155,8 +180,8 @@ void write_config_file(const RouterConfig & cfg, const std::string & path) {
         if (!m.group.empty()) {
             obj["group"] = m.group;
         }
-        if (!m.spawn.empty()) {
-            obj["spawn"] = m.spawn;
+        if (!is_spawn_empty(m.spawn)) {
+            obj["spawn"] = serialize_spawn_config(m.spawn);
         }
         out["models"].push_back(std::move(obj));
     }
@@ -204,7 +229,7 @@ RouterConfig load_config(const std::string & path) {
         cfg.version = data["version"].get<std::string>();
     }
     if (data.contains("default_spawn")) {
-        cfg.default_spawn = data["default_spawn"].get<std::vector<std::string>>();
+        cfg.default_spawn = parse_spawn_config(data["default_spawn"]);
     }
     if (data.contains("router")) {
         auto r = data["router"];
@@ -223,7 +248,7 @@ RouterConfig load_config(const std::string & path) {
             mc.state = m.value("state", "manual");
             mc.group = m.value("group", "");
             if (m.contains("spawn")) {
-                mc.spawn = m["spawn"].get<std::vector<std::string>>();
+                mc.spawn = parse_spawn_config(m["spawn"]);
             }
             cfg.models.push_back(std::move(mc));
         }
@@ -248,11 +273,14 @@ RouterConfig load_config(const std::string & path) {
             throw std::runtime_error("model path does not exist: " + path_to_check);
         }
 
-        if (!model.spawn.empty()) {
-            const std::string & cmd = model.spawn.front();
-            if (!cmd.empty() && cmd.find('/') != std::string::npos && !std::filesystem::exists(cmd, ec)) {
-                throw std::runtime_error("spawn command not executable: " + cmd);
-            }
+        const SpawnConfig & spawn = is_spawn_empty(model.spawn) ? cfg.default_spawn : model.spawn;
+        if (spawn.command.empty()) {
+            throw std::runtime_error("spawn command missing for model: " + model.name);
+        }
+
+        const std::string & cmd = spawn.command.front();
+        if (!cmd.empty() && cmd.find('/') != std::string::npos && !std::filesystem::exists(cmd, ec)) {
+            throw std::runtime_error("spawn command not executable: " + cmd);
         }
     }
 

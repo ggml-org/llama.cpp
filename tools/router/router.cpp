@@ -151,7 +151,7 @@ int main(int argc, char ** argv) {
 
     RouterApp app(cfg);
     g_app = &app;
-    LOG_INF("Initialized RouterApp with default spawn command size=%zu\n", cfg.default_spawn.size());
+    LOG_INF("Initialized RouterApp with default spawn command size=%zu\n", cfg.default_spawn.command.size());
     app.start_auto_models();
     LOG_INF("Auto-start requested, last spawned model: %s\n", app.get_last_spawned_model().c_str());
 

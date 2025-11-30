@@ -3,12 +3,22 @@
 #include <string>
 #include <vector>
 
+struct SpawnConfig {
+    std::vector<std::string> command;
+    std::vector<std::string> proxy_endpoints;
+    std::string              health_endpoint;
+};
+
+inline bool is_spawn_empty(const SpawnConfig & spawn) {
+    return spawn.command.empty() && spawn.proxy_endpoints.empty() && spawn.health_endpoint.empty();
+}
+
 struct ModelConfig {
     std::string              name;
     std::string              path;
     std::string              state;
     std::string              group;
-    std::vector<std::string> spawn;
+    SpawnConfig              spawn;
 };
 
 struct RouterOptions {
@@ -22,14 +32,14 @@ struct RouterOptions {
 
 struct RouterConfig {
     std::string              version;
-    std::vector<std::string> default_spawn;
+    SpawnConfig              default_spawn;
     RouterOptions            router;
     std::vector<ModelConfig> models;
 };
 
 std::string get_default_config_path();
 std::string expand_user_path(const std::string & path);
-const std::vector<std::string> & get_default_spawn();
+const SpawnConfig & get_default_spawn();
 const RouterOptions &             get_default_router_options();
 
 RouterConfig load_config(const std::string & path);

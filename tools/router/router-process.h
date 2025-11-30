@@ -42,4 +42,7 @@ void         close_process(ProcessHandle & handle);
 void         terminate_process(ProcessHandle & handle);
 bool         wait_for_process_exit(const ProcessHandle & handle, int timeout_ms);
 ProcessHandle spawn_process(const std::vector<std::string> & args);
-bool         wait_for_backend_ready(int port, int timeout_ms, const ProcessHandle * process = nullptr);
+bool         wait_for_backend_ready(int port,
+                                    const std::string & health_endpoint,
+                                    int timeout_ms,
+                                    const ProcessHandle * process = nullptr);

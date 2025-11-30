@@ -19,12 +19,27 @@ void copy_response_headers(const httplib::Headers & from, httplib::Response & to
         to.set_header(h.first, h.second);
     }
 }
+
+bool matches_any_endpoint(const std::string & path, const std::vector<std::string> & patterns) {
+    if (patterns.empty()) {
+        return true;
+    }
+
+    for (const auto & pattern : patterns) {
+        if (path.compare(0, pattern.size(), pattern) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
 } // namespace
 
 bool proxy_request(const httplib::Request & req,
                    httplib::Response &       res,
                    const std::string &       upstream_base,
-                   const RouterOptions &     opts) {
+                   const RouterOptions &     opts,
+                   const std::vector<std::string> & proxy_endpoints) {
     if (upstream_base.empty()) {
         res.status = 502;
         res.set_content("{\"error\":\"missing upstream\"}", "application/json");
@@ -40,6 +55,13 @@ bool proxy_request(const httplib::Request & req,
     headers.erase("Host");
 
     const std::string path = !req.target.empty() ? req.target : req.path;
+
+    if (!matches_any_endpoint(path, proxy_endpoints)) {
+        LOG_WRN("Request %s not proxied because it does not match configured endpoints\n", path.c_str());
+        res.status = 404;
+        res.set_content("{\"error\":\"endpoint not proxied\"}", "application/json");
+        return false;
+    }
 
     std::string content_type = req.get_header_value("Content-Type", "application/json");
 

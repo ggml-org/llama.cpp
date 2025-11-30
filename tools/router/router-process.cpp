@@ -320,16 +320,21 @@ ProcessHandle spawn_process(const std::vector<std::string> & args) {
     return handle;
 }
 
-bool wait_for_backend_ready(int port, int timeout_ms, const ProcessHandle * process) {
+bool wait_for_backend_ready(int port, const std::string & health_endpoint, int timeout_ms, const ProcessHandle * process) {
     httplib::Client client("127.0.0.1:" + std::to_string(port));
     const auto      start = std::chrono::steady_clock::now();
     auto            next_log_ms = 0;
 
-    LOG_INF("Waiting up to %d ms for backend readiness on port %d\n", timeout_ms, port);
+    const std::string endpoint = health_endpoint.empty() ? "/health" : health_endpoint;
+
+    LOG_INF("Waiting up to %d ms for backend readiness on port %d (endpoint %s)\n",
+            timeout_ms,
+            port,
+            endpoint.c_str());
 
     while (true) {
         try {
-            auto res = client.Get("/health");
+            auto res = client.Get(endpoint.c_str());
             if (res && res->status == 200) {
                 LOG_INF("Backend on port %d reports ready\n", port);
                 return true;

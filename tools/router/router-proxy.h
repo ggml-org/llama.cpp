@@ -9,4 +9,5 @@
 bool proxy_request(const httplib::Request & req,
                    httplib::Response &       res,
                    const std::string &       upstream_base,
-                   const RouterOptions &     opts);
+                   const RouterOptions &     opts,
+                   const std::vector<std::string> & proxy_endpoints);

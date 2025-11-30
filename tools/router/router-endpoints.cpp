@@ -74,7 +74,8 @@ void register_routes(httplib::Server & server, RouterApp & app) {
             return;
         }
         LOG_INF("Proxying %s to last spawned model %s\n", req.path.c_str(), model.c_str());
-        proxy_request(req, res, app.upstream_for(model), app.get_config().router);
+        const auto spawn_cfg = app.get_spawn_config(model);
+        proxy_request(req, res, app.upstream_for(model), app.get_config().router, spawn_cfg.proxy_endpoints);
     };
 
     server.Get("/props", proxy_last_spawned);
@@ -93,7 +94,8 @@ void register_routes(httplib::Server & server, RouterApp & app) {
             return;
         }
         LOG_INF("Proxying %s for model %s\n", req.path.c_str(), model_name.c_str());
-        proxy_request(req, res, app.upstream_for(model_name), app.get_config().router);
+        const auto spawn_cfg = app.get_spawn_config(model_name);
+        proxy_request(req, res, app.upstream_for(model_name), app.get_config().router, spawn_cfg.proxy_endpoints);
     });
 
     server.Post("/v1/chat/completions", [&app](const httplib::Request & req, httplib::Response & res) {
@@ -114,7 +116,8 @@ void register_routes(httplib::Server & server, RouterApp & app) {
         }
 
         LOG_INF("Proxying chat completion for model %s\n", model.c_str());
-        proxy_request(req, res, app.upstream_for(model), app.get_config().router);
+        const auto spawn_cfg = app.get_spawn_config(model);
+        proxy_request(req, res, app.upstream_for(model), app.get_config().router, spawn_cfg.proxy_endpoints);
     });
 
     server.Post("/admin/reload", [&app](const httplib::Request & req, httplib::Response & res) {
