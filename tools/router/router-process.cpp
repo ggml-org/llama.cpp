@@ -63,7 +63,7 @@ bool wait_for_process_exit(const ProcessHandle & handle, int timeout_ms) {
         if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() > timeout_ms) {
             return false;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(ROUTER_POLL_INTERVAL_MS));
+        std::this_thread::sleep_for(std::chrono::milliseconds(ROUTER_PROCESS_POLL_INTERVAL_MS));
     }
 #endif
 }
@@ -133,7 +133,7 @@ void terminate_process(ProcessHandle & handle) {
         LOG_ERR("Process pid=%d did not terminate, sending SIGKILL\n", static_cast<int>(handle.pid));
         kill(handle.pid, SIGKILL);
         while (process_running(handle)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(ROUTER_POLL_INTERVAL_MS));
+            std::this_thread::sleep_for(std::chrono::milliseconds(ROUTER_PROCESS_POLL_INTERVAL_MS));
         }
     }
     close_process(handle);

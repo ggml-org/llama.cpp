@@ -93,7 +93,7 @@ This aligns with the project philosophy: **everything configurable at runtime, z
 
 - **Spawn**: `fork()`/`CreateProcess()` with stdout/stderr capture
 - **Health polling**: `ROUTER_BACKEND_HEALTH_POLL_MS` intervals, `ROUTER_BACKEND_READY_TIMEOUT_MS` timeout
-- **Graceful shutdown**: SIGTERM → wait `ROUTER_PROCESS_SHUTDOWN_TIMEOUT_MS` → SIGKILL → poll every `ROUTER_POLL_INTERVAL_MS` until exit
+- **Graceful shutdown**: SIGTERM → wait `ROUTER_PROCESS_SHUTDOWN_TIMEOUT_MS` → SIGKILL → poll every `ROUTER_PROCESS_POLL_INTERVAL_MS` until exit
 - **Cleanup**: File descriptors closed, waitpid() called
 
 ---
