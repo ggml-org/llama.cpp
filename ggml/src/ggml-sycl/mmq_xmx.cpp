@@ -56,6 +56,13 @@ constexpr int SLM_SCALES_A_SIZE = WG_M;        // 8 floats
 constexpr int SLM_SCALES_B_SIZE = WG_N;        // 16 floats
 constexpr int SLM_SUMS_B_SIZE = WG_N;          // 16 floats (for Q8_1 sum field)
 
+// Double-buffer SLM sizes (2× for A, B, scales, and sums)
+constexpr int SLM_A_SIZE_DB = SLM_A_SIZE * 2;           // 512 int8
+constexpr int SLM_B_SIZE_DB = SLM_B_SIZE * 2;           // 1024 int8
+constexpr int SLM_SCALES_A_SIZE_DB = SLM_SCALES_A_SIZE * 2;  // 16 floats
+constexpr int SLM_SCALES_B_SIZE_DB = SLM_SCALES_B_SIZE * 2;  // 32 floats
+constexpr int SLM_SUMS_B_SIZE_DB = SLM_SUMS_B_SIZE * 2;      // 32 floats
+
 // =============================================================================
 // Single-Tile XMX GEMM Kernel with Vectorized Loads
 // Each work-group = one sub-group processes one 8×16 output tile
@@ -207,6 +214,224 @@ void mul_mat_q4_0_q8_1_xmx_kernel(
         int col = col_base + j;
         if (row < nrows_x && col < ncols_y) {
             // Output is column-major (matches MMQ: dst[col*nrows_dst + row])
+            dst[col * nrows_dst + row] = acc[acc_idx];
+        }
+    }
+}
+
+// =============================================================================
+// Q4_0 x Q8_1 XMX GEMM Kernel - Double-Buffered Version
+// Overlaps memory loads with computation for better performance
+// Uses ping-pong buffers: while computing on buffer 0, load into buffer 1
+// =============================================================================
+void mul_mat_q4_0_q8_1_xmx_doublebuf_kernel(
+    const void* __restrict__ vx,      // Q4_0 weights [nrows_x, ncols_x/32 blocks]
+    const void* __restrict__ vy,      // Q8_1 activations [ncols_y, ncols_x/32 blocks]
+    float* __restrict__ dst,          // Output [nrows_x, ncols_y]
+    const int ncols_x,                // K dimension (must be multiple of 32)
+    const int nrows_x,                // M dimension (rows of weights to process)
+    const int ncols_y,                // N dimension (batch size / columns of output)
+    const int nrows_dst,              // Output row stride
+    int8_t* __restrict__ slm_A,       // SLM for A tiles [2 × 8 × 32]
+    int8_t* __restrict__ slm_B,       // SLM for B tiles [2 × 32 × 16]
+    int32_t* __restrict__ slm_C,      // SLM for C tile [8 × 16]
+    float* __restrict__ slm_scales_A, // SLM for A scales [2 × 8]
+    float* __restrict__ slm_scales_B, // SLM for B scales [2 × 16]
+    float* __restrict__ slm_sums_B,   // SLM for B sums [2 × 16]
+    sycl::nd_item<2> item
+) {
+    const auto sg = item.get_sub_group();
+    const int lane_id = sg.get_local_id()[0];
+
+    // Work-group position (one XMX tile per work-group)
+    const int row_base = item.get_group(0) * XMX_M;  // 8 rows
+    const int col_base = item.get_group(1) * XMX_N;  // 16 cols
+
+    if (row_base >= nrows_x || col_base >= ncols_y) return;
+
+    const int num_k_blocks = ncols_x / XMX_K;
+
+    // Block pointers
+    const char* src0 = (const char*)vx;
+    const char* src1 = (const char*)vy;
+    constexpr int Q4_0_BLOCK_SIZE = 18;  // sizeof(block_q4_0) = 2 + 16
+    constexpr int Q8_1_BLOCK_SIZE = 36;  // sizeof(block_q8_1) = 2 + 2 + 32
+
+    // Private accumulator - 8 elements per lane (128 total / 16 lanes)
+    float acc[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    // Buffer indices for double buffering
+    int buf_load = 0;  // Buffer to load into
+    int buf_comp = 0;  // Buffer to compute from
+
+    // ============== Pre-load first K block into buffer 0 ==============
+    if (num_k_blocks > 0) {
+        // Load A: 8 rows × 32 values (vectorized Q4_0 nibble load)
+        if (lane_id < XMX_M) {
+            int row = row_base + lane_id;
+            if (row < nrows_x) {
+                const char* block_ptr = src0 + (row * num_k_blocks + 0) * Q4_0_BLOCK_SIZE;
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                slm_scales_A[buf_load * SLM_SCALES_A_SIZE + lane_id] = float(d);
+
+                // Load and unpack Q4_0 nibbles (simple scalar - memory bound anyway)
+                const uint8_t* nibbles = reinterpret_cast<const uint8_t*>(block_ptr + 2);
+                int base_idx = buf_load * SLM_A_SIZE + lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < 16; j++) {
+                    uint8_t packed = nibbles[j];
+                    slm_A[base_idx + j]      = (int8_t)(packed & 0x0F);
+                    slm_A[base_idx + j + 16] = (int8_t)(packed >> 4);
+                }
+            } else {
+                slm_scales_A[buf_load * SLM_SCALES_A_SIZE + lane_id] = 0.0f;
+                int base_idx = buf_load * SLM_A_SIZE + lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < XMX_K; j++) {
+                    slm_A[base_idx + j] = 0;
+                }
+            }
+        }
+
+        // Load B: 16 columns × 32 values (vectorized Q8_1 load)
+        {
+            int col = col_base + lane_id;
+            if (col < ncols_y) {
+                const char* block_ptr = src1 + (col * num_k_blocks + 0) * Q8_1_BLOCK_SIZE;
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                sycl::half s = *reinterpret_cast<const sycl::half*>(block_ptr + 2);
+
+                slm_scales_B[buf_load * SLM_SCALES_B_SIZE + lane_id] = float(d);
+                slm_sums_B[buf_load * SLM_SUMS_B_SIZE + lane_id] = float(s);
+
+                // Load Q8_1 values (simple scalar - memory bound anyway)
+                const int8_t* qs = reinterpret_cast<const int8_t*>(block_ptr + 4);
+                int base_idx = buf_load * SLM_B_SIZE + lane_id * XMX_K;
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    slm_B[base_idx + k] = qs[k];
+                }
+            } else {
+                slm_scales_B[buf_load * SLM_SCALES_B_SIZE + lane_id] = 0.0f;
+                slm_sums_B[buf_load * SLM_SUMS_B_SIZE + lane_id] = 0.0f;
+                int base_idx = buf_load * SLM_B_SIZE + lane_id * XMX_K;
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    slm_B[base_idx + k] = 0;
+                }
+            }
+        }
+
+        item.barrier(sycl::access::fence_space::local_space);
+    }
+
+    // Process K blocks with double buffering
+    for (int k_block = 0; k_block < num_k_blocks; k_block++) {
+        buf_comp = k_block & 1;       // Current buffer for compute
+        buf_load = (k_block + 1) & 1; // Next buffer for loading
+
+        // ============== Load NEXT K block (if not last) ==============
+        if (k_block + 1 < num_k_blocks) {
+            int next_k = k_block + 1;
+
+            // Load A for next K block (vectorized)
+            if (lane_id < XMX_M) {
+                int row = row_base + lane_id;
+                if (row < nrows_x) {
+                    const char* block_ptr = src0 + (row * num_k_blocks + next_k) * Q4_0_BLOCK_SIZE;
+                    sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                    slm_scales_A[buf_load * SLM_SCALES_A_SIZE + lane_id] = float(d);
+
+                    // Load and unpack Q4_0 nibbles
+                    const uint8_t* nibbles = reinterpret_cast<const uint8_t*>(block_ptr + 2);
+                    int base_idx = buf_load * SLM_A_SIZE + lane_id * XMX_K;
+                    #pragma unroll
+                    for (int j = 0; j < 16; j++) {
+                        uint8_t packed = nibbles[j];
+                        slm_A[base_idx + j]      = (int8_t)(packed & 0x0F);
+                        slm_A[base_idx + j + 16] = (int8_t)(packed >> 4);
+                    }
+                } else {
+                    slm_scales_A[buf_load * SLM_SCALES_A_SIZE + lane_id] = 0.0f;
+                    int base_idx = buf_load * SLM_A_SIZE + lane_id * XMX_K;
+                    #pragma unroll
+                    for (int j = 0; j < XMX_K; j++) {
+                        slm_A[base_idx + j] = 0;
+                    }
+                }
+            }
+
+            // Load B for next K block (vectorized)
+            {
+                int col = col_base + lane_id;
+                if (col < ncols_y) {
+                    const char* block_ptr = src1 + (col * num_k_blocks + next_k) * Q8_1_BLOCK_SIZE;
+                    sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                    sycl::half s = *reinterpret_cast<const sycl::half*>(block_ptr + 2);
+
+                    slm_scales_B[buf_load * SLM_SCALES_B_SIZE + lane_id] = float(d);
+                    slm_sums_B[buf_load * SLM_SUMS_B_SIZE + lane_id] = float(s);
+
+                    // Load Q8_1 values
+                    const int8_t* qs = reinterpret_cast<const int8_t*>(block_ptr + 4);
+                    int base_idx = buf_load * SLM_B_SIZE + lane_id * XMX_K;
+                    #pragma unroll
+                    for (int k = 0; k < XMX_K; k++) {
+                        slm_B[base_idx + k] = qs[k];
+                    }
+                } else {
+                    slm_scales_B[buf_load * SLM_SCALES_B_SIZE + lane_id] = 0.0f;
+                    slm_sums_B[buf_load * SLM_SUMS_B_SIZE + lane_id] = 0.0f;
+                    int base_idx = buf_load * SLM_B_SIZE + lane_id * XMX_K;
+                    #pragma unroll
+                    for (int k = 0; k < XMX_K; k++) {
+                        slm_B[base_idx + k] = 0;
+                    }
+                }
+            }
+        }
+
+        // ============== XMX Multiply using CURRENT buffer ==============
+        sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::a, XMX_M, XMX_K, sycl_xmx::layout::row_major> matA;
+        sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::b, XMX_K, XMX_N, sycl_xmx::layout::col_major> matB;
+        sycl_xmx::joint_matrix<sycl::sub_group, int32_t, sycl_xmx::use::accumulator, XMX_M, XMX_N> matC;
+
+        auto A_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+            slm_A + buf_comp * SLM_A_SIZE);
+        auto B_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+            slm_B + buf_comp * SLM_B_SIZE);
+        auto C_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(slm_C);
+
+        sycl_xmx::joint_matrix_load(sg, matA, A_ptr, XMX_K);
+        sycl_xmx::joint_matrix_load(sg, matB, B_ptr, XMX_K);
+        sycl_xmx::joint_matrix_fill(sg, matC, 0);
+        sycl_xmx::joint_matrix_mad(sg, matC, matA, matB, matC);
+        sycl_xmx::joint_matrix_store(sg, matC, C_ptr, XMX_N, sycl_xmx::layout::row_major);
+
+        // ============== Apply scales with sum correction ==============
+        #pragma unroll
+        for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+            int i = idx / XMX_N;
+            int j = idx % XMX_N;
+            float d_A = slm_scales_A[buf_comp * SLM_SCALES_A_SIZE + i];
+            float d_B = slm_scales_B[buf_comp * SLM_SCALES_B_SIZE + j];
+            float s_B = slm_sums_B[buf_comp * SLM_SUMS_B_SIZE + j];
+            float C_ij = float(slm_C[idx]);
+            acc[acc_idx] += d_A * (C_ij * d_B - 8.0f * s_B);
+        }
+
+        // Barrier to sync load and compute phases
+        item.barrier(sycl::access::fence_space::local_space);
+    }
+
+    // ============== Write output ==============
+    #pragma unroll
+    for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+        int i = idx / XMX_N;
+        int j = idx % XMX_N;
+        int row = row_base + i;
+        int col = col_base + j;
+        if (row < nrows_x && col < ncols_y) {
             dst[col * nrows_dst + row] = acc[acc_idx];
         }
     }
@@ -2101,7 +2326,8 @@ static void ggml_mul_mat_q8_0_q8_1_xmx_sycl(
 }
 
 // =============================================================================
-// Launcher for Q4_0 x Q8_1 XMX GEMM (Single-Tile Version)
+// Launcher for Q4_0 x Q8_1 XMX GEMM (Double-Buffered Version)
+// Uses ping-pong buffers to overlap memory loads with computation
 // =============================================================================
 static void ggml_mul_mat_q4_0_q8_1_xmx_sycl(
     const void* vx, const void* vy, float* dst,
@@ -2117,30 +2343,31 @@ static void ggml_mul_mat_q4_0_q8_1_xmx_sycl(
     sycl::range<2> grid(num_row_tiles, num_col_tiles);
     sycl::range<2> block(1, XMX_SG_SIZE);
 
-    GGML_SYCL_DEBUG("[XMX] Launching single-tile kernel: grid=(%d,%d), block=(1,%d), M=%d, N=%d, K=%d (padded=%d)\n",
+    GGML_SYCL_DEBUG("[XMX] Launching double-buffered kernel: grid=(%d,%d), block=(1,%d), M=%d, N=%d, K=%d (padded=%d)\n",
                     num_row_tiles, num_col_tiles, XMX_SG_SIZE, nrows_x, ncols_y, ncols_x, ncols_x_padded);
 
-    // XMX kernel with SLM (including sums for Q8_1)
-    constexpr int TOTAL_SLM_SIZE = SLM_A_SIZE + SLM_B_SIZE + SLM_C_SIZE * 4 +
-                                   SLM_SCALES_A_SIZE * 4 + SLM_SCALES_B_SIZE * 4 +
-                                   SLM_SUMS_B_SIZE * 4;
+    // Double-buffered XMX kernel with 2× SLM for A, B, scales, and sums
+    constexpr int TOTAL_SLM_SIZE_DB = SLM_A_SIZE_DB + SLM_B_SIZE_DB + SLM_C_SIZE * 4 +
+                                       SLM_SCALES_A_SIZE_DB * 4 + SLM_SCALES_B_SIZE_DB * 4 +
+                                       SLM_SUMS_B_SIZE_DB * 4;
 
     stream->submit([&](sycl::handler& h) {
-        sycl::local_accessor<char, 1> shared_acc(sycl::range<1>(TOTAL_SLM_SIZE), h);
+        sycl::local_accessor<char, 1> shared_acc(sycl::range<1>(TOTAL_SLM_SIZE_DB), h);
 
         h.parallel_for(
             sycl::nd_range<2>(grid * block, block),
             [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(XMX_SG_SIZE)]] {
                 char * shared = shared_acc.get_multi_ptr<sycl::access::decorated::no>().get();
 
-                int8_t* A_int8 = reinterpret_cast<int8_t*>(shared);
-                int8_t* B_int8 = reinterpret_cast<int8_t*>(shared + SLM_A_SIZE);
-                int32_t* C_int32 = reinterpret_cast<int32_t*>(shared + SLM_A_SIZE + SLM_B_SIZE);
-                float* A_scales = reinterpret_cast<float*>(shared + SLM_A_SIZE + SLM_B_SIZE + SLM_C_SIZE * 4);
-                float* B_scales = reinterpret_cast<float*>(shared + SLM_A_SIZE + SLM_B_SIZE + SLM_C_SIZE * 4 + SLM_SCALES_A_SIZE * 4);
-                float* B_sums = reinterpret_cast<float*>(shared + SLM_A_SIZE + SLM_B_SIZE + SLM_C_SIZE * 4 + SLM_SCALES_A_SIZE * 4 + SLM_SCALES_B_SIZE * 4);
+                int offset = 0;
+                int8_t* A_int8 = reinterpret_cast<int8_t*>(shared + offset); offset += SLM_A_SIZE_DB;
+                int8_t* B_int8 = reinterpret_cast<int8_t*>(shared + offset); offset += SLM_B_SIZE_DB;
+                int32_t* C_int32 = reinterpret_cast<int32_t*>(shared + offset); offset += SLM_C_SIZE * 4;
+                float* A_scales = reinterpret_cast<float*>(shared + offset); offset += SLM_SCALES_A_SIZE_DB * 4;
+                float* B_scales = reinterpret_cast<float*>(shared + offset); offset += SLM_SCALES_B_SIZE_DB * 4;
+                float* B_sums = reinterpret_cast<float*>(shared + offset);
 
-                mul_mat_q4_0_q8_1_xmx_kernel(
+                mul_mat_q4_0_q8_1_xmx_doublebuf_kernel(
                     vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_dst,
                     A_int8, B_int8, C_int32, A_scales, B_scales, B_sums, item);
             });

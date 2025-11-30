@@ -67,12 +67,13 @@ constexpr int XMX_TK = 16;   // Reduction dimension
 constexpr int XMX_SG = 16;   // Sub-group size
 
 // Work-group configuration
-constexpr int XMX_NTHREADS = 256;  // Optimal for Arc B50 with BATCH_KV=16 (256 > 128 > 512)
-constexpr int XMX_N_SG = XMX_NTHREADS / XMX_SG;  // 8 sub-groups
+// 512 threads provides optimal balance of occupancy vs SLM pressure
+constexpr int XMX_NTHREADS = 512;
+constexpr int XMX_N_SG = XMX_NTHREADS / XMX_SG;  // 32 sub-groups
 
 // Number of KV positions to process per main loop iteration
-// Phase 6.1 result: BATCH_KV=16 optimal for Arc B50 (16 > 32 > 64 > 128)
-constexpr int XMX_BATCH_KV = 16;  // Optimal for Arc B50 (smaller = better cache)
+// Optimal: 32 balances loop overhead vs XMX efficiency
+constexpr int XMX_BATCH_KV = 32;
 
 // Shared memory padding to reduce bank conflicts (32 banks on Intel)
 // IMPORTANT: joint_matrix_load requires stride to be divisible by 8!

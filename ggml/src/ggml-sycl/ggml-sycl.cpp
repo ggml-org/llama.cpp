@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <regex>
+#include <unordered_set>
 
 #include <sycl/sycl.hpp>
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
@@ -53,7 +54,9 @@
 #include "ggml-sycl/quantize.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
 #include "ggml-sycl/fattn.hpp"
+#include "ggml-sycl/mmq.hpp"
 #include "ggml-sycl/mmq_xmx.hpp"
+#include "ggml-sycl/fused-norm-gemm.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded = false;
@@ -4378,11 +4381,313 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+// =============================================================================
+// Helper functions for RMS_NORM + MUL + MUL_MAT fusion
+// =============================================================================
+
+// Helper to get MUL weight (gamma) from a MUL node
+// MUL has two sources; return the one that isn't the RMSNorm output
+static ggml_tensor * get_mul_weight(const ggml_tensor * mul, const ggml_tensor * rms_norm_out) {
+    if (mul->src[0] == rms_norm_out) {
+        return mul->src[1];
+    }
+    return mul->src[0];
+}
+
+// Check if RMS_NORM + MUL + MUL_MAT can be fused
+static bool ggml_sycl_can_fuse_rmsnorm_mulmat(
+    const ggml_tensor * rms_norm,
+    const ggml_tensor * mul,
+    const ggml_tensor * mulmat
+) {
+    // Skip fusion for small batch sizes (token generation) where overhead hurts performance
+    const int64_t nrows = rms_norm->src[0]->ne[1];
+    if (nrows < 8) return false;
+
+    // Check input types - input to RMS_NORM must be F32
+    if (rms_norm->src[0]->type != GGML_TYPE_F32) return false;
+    // Check intermediate types
+    if (rms_norm->type != GGML_TYPE_F32) return false;
+    if (mul->type != GGML_TYPE_F32) return false;
+    // MUL_MAT output must be F32
+    if (mulmat->type != GGML_TYPE_F32) return false;
+
+    // Check GEMM weight type (support common quantized types)
+    ggml_type w_type = mulmat->src[0]->type;
+    if (w_type != GGML_TYPE_Q4_0 && w_type != GGML_TYPE_Q4_1 &&
+        w_type != GGML_TYPE_Q8_0 && w_type != GGML_TYPE_Q4_K &&
+        w_type != GGML_TYPE_Q5_K && w_type != GGML_TYPE_Q6_K) {
+        return false;
+    }
+
+    // Check single GPU (no split buffers) for simplicity
+    if (ggml_backend_buffer_is_sycl_split(mulmat->src[0]->buffer)) {
+        return false;
+    }
+
+    // Check dimensions are aligned for Q8_1 quantization
+    int64_t ncols = rms_norm->src[0]->ne[0];
+    if (ncols % QK8_1 != 0) return false;
+
+    // Gamma dimensions must match
+    const ggml_tensor * gamma = get_mul_weight(mul, rms_norm);
+    if (gamma->ne[0] != ncols) return false;
+
+    return true;
+}
+
+// Fused dispatch function: RMS_NORM + MUL + MUL_MAT
+// Eliminates intermediate normalized tensor by fusing into quantization
+static void ggml_sycl_mul_mat_with_rmsnorm(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor * x,           // Original input (pre-RMSNorm)
+    const ggml_tensor * gamma,       // RMSNorm weight (gamma)
+    const ggml_tensor * W,           // GEMM weight (quantized)
+    ggml_tensor * dst,               // Output
+    float eps                        // RMSNorm epsilon
+) {
+    const int64_t nrows = x->ne[1];          // Batch size (M)
+    const int64_t ncols = x->ne[0];          // Hidden dim (K)
+    // Must use MATRIX_ROW_PADDING (512) to match MMQ expectations, not QK8_1 (32)
+    const int64_t ncols_padded = GGML_PAD(ncols, MATRIX_ROW_PADDING);
+
+    dpct::queue_ptr stream = ctx.stream();
+
+    // Allocate temporary buffers
+    ggml_sycl_pool_alloc<float> scales_buf(ctx.pool(), nrows);
+    ggml_sycl_pool_alloc<char> q8_buf(ctx.pool(),
+        nrows * (ncols_padded / QK8_1) * sizeof(block_q8_1));
+
+    // Get data pointers
+    const float * x_dd = (const float *)x->data;
+    const float * gamma_dd = (const float *)gamma->data;
+
+    // Fused RMSNorm + quantization
+    // This eliminates the intermediate normalized tensor (~2MB for Mistral 7B at batch 128)
+    fused_rmsnorm_quantize_q8_1_sycl(
+        x_dd,                    // Input (unnormalized)
+        gamma_dd,                // Gamma (RMSNorm weight)
+        q8_buf.get(),            // Q8_1 output
+        scales_buf.get(),        // Temporary scales buffer
+        nrows,
+        ncols,
+        ncols_padded,
+        eps,
+        stream,
+        ctx.device
+    );
+
+    // Get the destination pointer
+    float * dst_dd = (float *)dst->data;
+
+    // Get weight pointer
+    const char * W_dd = (const char *)W->data;
+
+    // Call the MMQ kernel through the existing dispatch function
+    // We pass:
+    // - src0 = W (weights tensor for metadata: type, ne[0])
+    // - src1 = x (input tensor for metadata: ne[0] for assertion)
+    // - dst = dst (output tensor for metadata: ne[0] for stride)
+    // - src1_ddq_i = q8_buf.get() (our fused quantized activations)
+
+    // W->ne[0] = K (in_features), W->ne[1] = N (out_features for 2D)
+    // But for higher-dim weights, use ggml_nrows(W) to get total output rows
+    const int64_t nrows_W = ggml_nrows(W);   // out_features (N)
+
+    // Call the MMQ dispatch function
+    // Parameters: row range = [0, nrows_W), src1_ncols = nrows (batch size)
+    ggml_sycl_op_mul_mat_q(
+        ctx,
+        W,                    // src0: weights (for metadata)
+        x,                    // src1: original input (for ne[0] assertion - matches hidden dim)
+        dst,                  // dst: output (for ne[0] stride)
+        W_dd,                 // src0_dd_i: weights data
+        nullptr,              // src1_ddf_i: unused since we provide quantized data
+        q8_buf.get(),         // src1_ddq_i: our fused quantized activations
+        dst_dd,               // dst_dd_i: output data
+        0, nrows_W,           // row_low, row_high: full output range
+        nrows,                // src1_ncols: batch size
+        ncols_padded,         // src1_padded_row_size
+        stream
+    );
+}
+
+// Helper function to check if fusion is valid based on types
+static bool ggml_sycl_check_fusion_types(const ggml_cgraph * cgraph, int node_idx, int count) {
+    // All tensors in the fusion chain must be F32
+    for (int i = 0; i < count; i++) {
+        if (node_idx + i >= cgraph->n_nodes) {
+            return false;
+        }
+        const ggml_tensor * node = cgraph->nodes[node_idx + i];
+        if (node->type != GGML_TYPE_F32) {
+            return false;
+        }
+        // Input to RMS_NORM must also be F32
+        if (i == 0 && node->src[0]->type != GGML_TYPE_F32) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// =============================================================================
+// Per-projection fusion helper functions
+// Find all MUL_MAT nodes that consume the given tensor
+// =============================================================================
+static std::vector<std::pair<int, ggml_tensor*>> find_mulmat_consumers(
+    const ggml_cgraph * cgraph,
+    const ggml_tensor * tensor,
+    int start_idx
+) {
+    std::vector<std::pair<int, ggml_tensor*>> consumers;
+    for (int j = start_idx; j < cgraph->n_nodes; j++) {
+        ggml_tensor * node = cgraph->nodes[j];
+        if (node->op == GGML_OP_MUL_MAT) {
+            // MUL_MAT src[1] is the activation input
+            if (node->src[1] == tensor) {
+                consumers.push_back({j, node});
+            }
+        }
+    }
+    return consumers;
+}
+
+// Check if all MUL_MAT consumers can be fused with RMS_NORM
+static bool can_fuse_all_projections(
+    const ggml_tensor * rms_norm,
+    const ggml_tensor * mul,
+    const std::vector<std::pair<int, ggml_tensor*>> & mulmat_consumers
+) {
+    if (mulmat_consumers.empty()) return false;
+
+    // DISABLED: Per-projection fusion causes numerical differences
+    // TODO: Investigate root cause
+    return false;
+
+    // Skip fusion for small batches (token generation)
+    // The fusion overhead only amortizes with larger batches during prompt processing
+    const int64_t nrows = rms_norm->src[0]->ne[1];
+    if (nrows < 8) return false;
+
+    // Check input types
+    if (rms_norm->src[0]->type != GGML_TYPE_F32) return false;
+    if (rms_norm->type != GGML_TYPE_F32) return false;
+    if (mul->type != GGML_TYPE_F32) return false;
+
+    // Check dimensions are aligned for Q8_1 quantization
+    int64_t ncols = rms_norm->src[0]->ne[0];
+    if (ncols % QK8_1 != 0) return false;
+
+    // Gamma dimensions must match
+    const ggml_tensor * gamma = get_mul_weight(mul, rms_norm);
+    if (gamma->ne[0] != ncols) return false;
+
+    // Check all MUL_MAT consumers
+    for (const auto & [idx, mulmat] : mulmat_consumers) {
+        // MUL_MAT output must be F32
+        if (mulmat->type != GGML_TYPE_F32) return false;
+
+        // Check GEMM weight type
+        ggml_type w_type = mulmat->src[0]->type;
+        if (w_type != GGML_TYPE_Q4_0 && w_type != GGML_TYPE_Q4_1 &&
+            w_type != GGML_TYPE_Q8_0 && w_type != GGML_TYPE_Q4_K &&
+            w_type != GGML_TYPE_Q5_K && w_type != GGML_TYPE_Q6_K) {
+            return false;
+        }
+
+        // No split buffers
+        if (ggml_backend_buffer_is_sycl_split(mulmat->src[0]->buffer)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Execute per-projection fusion: fuse RMS_NORM into each MUL_MAT independently
+static void execute_per_projection_fusion(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor * x,           // Original input (pre-RMSNorm)
+    const ggml_tensor * gamma,       // RMSNorm weight (gamma)
+    float eps,                       // RMSNorm epsilon
+    const std::vector<std::pair<int, ggml_tensor*>> & mulmat_consumers
+) {
+    const int64_t nrows = x->ne[1];          // Batch size (M)
+    const int64_t ncols = x->ne[0];          // Hidden dim (K)
+    // Must use MATRIX_ROW_PADDING (512) to match MMQ expectations, not QK8_1 (32)
+    const int64_t ncols_padded = GGML_PAD(ncols, MATRIX_ROW_PADDING);
+
+    dpct::queue_ptr stream = ctx.stream();
+
+    // Allocate temporary buffers for fused quantization
+    // These are reused for each projection
+    ggml_sycl_pool_alloc<float> scales_buf(ctx.pool(), nrows);
+    ggml_sycl_pool_alloc<char> q8_buf(ctx.pool(),
+        nrows * (ncols_padded / QK8_1) * sizeof(block_q8_1));
+
+    // Get data pointers
+    const float * x_dd = (const float *)x->data;
+    const float * gamma_dd = (const float *)gamma->data;
+
+    // Fused RMSNorm + quantization (done once, reused for all projections)
+    fused_rmsnorm_quantize_q8_1_sycl(
+        x_dd,
+        gamma_dd,
+        q8_buf.get(),
+        scales_buf.get(),
+        nrows,
+        ncols,
+        ncols_padded,
+        eps,
+        stream,
+        ctx.device
+    );
+
+    // Execute each MUL_MAT with the pre-quantized activations
+    for (const auto & [idx, mulmat] : mulmat_consumers) {
+        const ggml_tensor * W = mulmat->src[0];  // GEMM weights
+        float * dst_dd = (float *)mulmat->data;
+        const char * W_dd = (const char *)W->data;
+
+        // row_low/row_high refers to output rows (weight matrix rows)
+        // W->ne[0] is K (input features), ggml_nrows(W) is N (output features)
+        const int64_t nrows_W = ggml_nrows(W);   // out_features (N)
+
+        // Call the MMQ dispatch function with our fused quantized activations
+        ggml_sycl_op_mul_mat_q(
+            ctx,
+            W,                    // src0: weights (for metadata)
+            x,                    // src1: original input (for ne[0] assertion)
+            mulmat,               // dst: output (for ne[0] stride)
+            W_dd,                 // src0_dd_i: weights data
+            nullptr,              // src1_ddf_i: unused
+            q8_buf.get(),         // src1_ddq_i: our fused quantized activations
+            dst_dd,               // dst_dd_i: output data
+            0, nrows_W,           // row_low, row_high: full output range
+            nrows,                // src1_ncols: batch size
+            ncols_padded,         // src1_padded_row_size
+            stream
+        );
+    }
+}
+
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     ggml_sycl_set_main_device(sycl_ctx->device);
 
+    static bool disable_fusion = (getenv("GGML_SYCL_DISABLE_FUSION") != nullptr);
+
+    // Track nodes that have been executed via fusion (to skip later)
+    std::unordered_set<const ggml_tensor*> fused_nodes;
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
+
+        // Skip nodes already executed via fusion
+        if (fused_nodes.count(node)) {
+            continue;
+        }
+
         if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
             continue;
         }
@@ -4394,6 +4699,116 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
 #endif
+
+        if (!disable_fusion && node->op == GGML_OP_RMS_NORM) {
+            // Try 3-way kernel fusion: RMS_NORM + MUL + ADD
+            // Skip for small batch sizes (token generation) where fusion overhead hurts performance
+            const int64_t rms_nrows_3way = node->src[0]->ne[1];
+            if (rms_nrows_3way >= 8 &&
+                ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, { i + 2 }) &&
+                ggml_sycl_check_fusion_types(cgraph, i, 3) &&
+                ggml_is_contiguous(cgraph->nodes[i + 2])) {
+                ggml_tensor * mul_node = cgraph->nodes[i + 1];
+                ggml_tensor * add_node = cgraph->nodes[i + 2];
+                ggml_sycl_op_rms_norm_fused_add(*sycl_ctx, node, mul_node, add_node);
+                i += 2; // Skip the MUL and ADD nodes
+                continue;
+            }
+
+            // Try per-projection fusion: RMS_NORM + MUL -> multiple MUL_MATs
+            // Unlike the standard 3-way fusion, this approach:
+            // 1. Finds ALL MUL_MAT nodes that consume the normalized tensor
+            // 2. Does the fused RMSNorm+quantization ONCE
+            // 3. Reuses the quantized result for all projections (Q, K, V or gate, up)
+            // This bypasses the ggml_can_fuse_subgraph limitation where shared intermediates fail.
+            // Note: Only triggers for batch size >= 8 to avoid overhead during token generation
+            if (i + 1 < cgraph->n_nodes && cgraph->nodes[i + 1]->op == GGML_OP_MUL) {
+                ggml_tensor * mul_node = cgraph->nodes[i + 1];
+                // Check if MUL uses RMS_NORM output
+                if (mul_node->src[0] == node || mul_node->src[1] == node) {
+                    // Find all MUL_MAT consumers of the MUL output
+                    auto consumers = find_mulmat_consumers(cgraph, mul_node, i + 2);
+                    if (can_fuse_all_projections(node, mul_node, consumers)) {
+                        // Execute fusion: RMSNorm+quantize once, then all MUL_MATs
+                        ggml_tensor * x = node->src[0];
+                        ggml_tensor * gamma = get_mul_weight(mul_node, node);
+                        float eps;
+                        memcpy(&eps, node->op_params, sizeof(float));
+
+                        execute_per_projection_fusion(*sycl_ctx, x, gamma, eps, consumers);
+
+                        // Mark MUL and all MUL_MAT consumers as fused (to skip later)
+                        fused_nodes.insert(mul_node);
+                        for (const auto & [idx, mulmat] : consumers) {
+                            fused_nodes.insert(mulmat);
+                        }
+                        continue; // Skip RMS_NORM execution (already done in fusion)
+                    }
+                }
+            }
+
+            // Try 3-way kernel fusion: RMS_NORM + MUL + MUL_MAT (single consumer)
+            // This must be checked BEFORE RMS_NORM + MUL, otherwise the simpler fusion matches first
+            // Fuses normalization into quantization step, eliminating intermediate tensor
+            // NOTE: This often fails because in transformers, the MUL output (normalized tensor)
+            // is shared by multiple projections (Q, K, V), so the use-count check fails.
+            // The per-projection fusion above handles those cases.
+            if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_MUL_MAT }, { i + 2 })) {
+                ggml_tensor * mul_node = cgraph->nodes[i + 1];
+                ggml_tensor * mulmat_node = cgraph->nodes[i + 2];
+
+                if (ggml_sycl_can_fuse_rmsnorm_mulmat(node, mul_node, mulmat_node)) {
+                    // Get original input, gamma, and GEMM weights
+                    ggml_tensor * x = node->src[0];              // Pre-RMSNorm input
+                    ggml_tensor * gamma = get_mul_weight(mul_node, node);  // Gamma (norm weight)
+                    ggml_tensor * W = mulmat_node->src[0];        // GEMM weights
+
+                    // Get epsilon from RMS_NORM op_params
+                    float eps;
+                    memcpy(&eps, node->op_params, sizeof(float));
+
+                    // Call fused dispatch
+                    ggml_sycl_mul_mat_with_rmsnorm(*sycl_ctx, x, gamma, W, mulmat_node, eps);
+
+                    i += 2;  // Skip MUL and MUL_MAT nodes
+                    continue;
+                }
+            }
+
+            // Try 2-way kernel fusion: RMS_NORM + MUL
+            // Skip for small batch sizes (token generation) where fusion overhead hurts performance
+            const int64_t rms_nrows = node->src[0]->ne[1];
+            if (rms_nrows >= 8 &&
+                ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, { i + 1 }) &&
+                ggml_sycl_check_fusion_types(cgraph, i, 2)) {
+                ggml_tensor * mul_node = cgraph->nodes[i + 1];
+                ggml_sycl_op_rms_norm_fused(*sycl_ctx, node, mul_node);
+                i++; // Skip the MUL node
+                continue;
+            }
+        }
+
+        // Try 2-way kernel fusion: ADD + RMS_NORM
+        // Pattern: residual + hidden_states -> RMS_NORM (common in transformer decoder blocks)
+        // The kernel writes BOTH outputs: the ADD result (for other consumers like next residual)
+        // AND the RMS_NORM result. This allows fusion even when ADD has multiple consumers.
+        // Skip for small batch sizes (token generation) where fusion overhead hurts performance.
+        if (!disable_fusion && node->op == GGML_OP_ADD) {
+            const int64_t add_nrows = node->src[0] ? node->src[0]->ne[1] : 1;
+            if (add_nrows >= 8 && i + 1 < cgraph->n_nodes) {
+                ggml_tensor * next = cgraph->nodes[i + 1];
+                // Check: next op is RMS_NORM and it uses this ADD's output as input
+                if (next->op == GGML_OP_RMS_NORM &&
+                    next->src[0] == node &&
+                    ggml_sycl_check_fusion_types(cgraph, i, 2) &&
+                    ggml_is_contiguous(next)) {
+                    ggml_sycl_op_add_rms_norm_fused(*sycl_ctx, node, next);
+                    i++; // Skip the RMS_NORM node
+                    continue;
+                }
+            }
+        }
+
         bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
         if (!ok) {
             GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));

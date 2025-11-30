@@ -324,9 +324,12 @@ static void ggml_sycl_flash_attn_ext_dispatch_ncols(
             LAUNCHER<D, NCOLS, true, Q_type>(params, stream); \
         }
 
-    // Dispatch to XMX kernel if available, otherwise MMA F16
+    // Dispatch to appropriate kernel based on GPU capabilities
     if (use_xmx) {
         // XMX kernel - uses Intel joint_matrix for Q@K^T and S@V acceleration
+        // Note: Even for single query, XMX kernel is faster than vector kernel
+        // because XMX hardware throughput exceeds scalar operations despite
+        // 7/8 of tiles being "wasted" in the 8x8 joint_matrix operations
         if (ne01 <= 1) {
             DISPATCH_NCOLS(1, launch_fattn_xmx_f16);
         } else if (ne01 <= 2) {
@@ -337,7 +340,7 @@ static void ggml_sycl_flash_attn_ext_dispatch_ncols(
             DISPATCH_NCOLS(8, launch_fattn_xmx_f16);
         }
     } else {
-        // MMA F16 kernel - scalar fallback for non-Intel or older Intel GPUs
+        // MMA F16 kernel - scalar fallback for non-XMX GPUs
         if (ne01 <= 1) {
             DISPATCH_NCOLS(1, launch_fattn_mma_f16);
         } else if (ne01 <= 2) {
