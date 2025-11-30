@@ -63,6 +63,8 @@ int g_ggml_sycl_disable_graph = 0;
 int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
+int g_ggml_sycl_use_xmx_gemm = 0;  // Enable XMX-accelerated GEMM (experimental)
+int g_ggml_sycl_xmx_threshold = 64; // Max batch size for XMX (XMX faster for N < threshold)
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -212,6 +214,8 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
+        g_ggml_sycl_use_xmx_gemm = get_sycl_env("GGML_SYCL_USE_XMX_GEMM", 0);
+        g_ggml_sycl_xmx_threshold = get_sycl_env("GGML_SYCL_XMX_THRESHOLD", 64);
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
@@ -227,6 +231,10 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag\n");
 #endif
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
+        GGML_LOG_INFO("  GGML_SYCL_USE_XMX_GEMM: %d (experimental)\n", g_ggml_sycl_use_xmx_gemm);
+        if (g_ggml_sycl_use_xmx_gemm) {
+            GGML_LOG_INFO("  GGML_SYCL_XMX_THRESHOLD: %d (XMX for batch < %d)\n", g_ggml_sycl_xmx_threshold, g_ggml_sycl_xmx_threshold);
+        }
         GGML_LOG_INFO("Build with Macros:\n");
 #if defined(GGML_SYCL_FORCE_MMQ)
         GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: yes\n");
@@ -3007,9 +3015,22 @@ enum class mul_mat_algo {
 };
 
 inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
-    // TODO: accuracy issues in MMQ
-    GGML_UNUSED(type);
-    return false;
+    // Temporarily enabled for debugging XMX vs MMQ comparison
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+            return true;
+        default:
+            return false;
+    }
 }
 
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
@@ -3315,6 +3336,23 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     bool use_mul_mat_q =  ggml_sycl_supports_mmq(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
+    // XMX GEMM path - RE-ENABLED FOR DEBUGGING
+    // Set GGML_SYCL_DEBUG_XMX_GEMM=1 to enable debug output
+    static int debug_xmx = -1;
+    if (debug_xmx < 0) {
+        debug_xmx = getenv("GGML_SYCL_DEBUG_XMX_GEMM") ? 1 : 0;
+    }
+
+    bool use_xmx_gemm = g_ggml_sycl_use_xmx_gemm ? true : false;
+    if (use_xmx_gemm) {
+        use_xmx_gemm = ggml_sycl_xmx_available() && ggml_sycl_xmx_supports_type(src0->type);
+    }
+    if (use_xmx_gemm) {
+        int64_t batch = src1->ne[1];
+        use_xmx_gemm = batch >= 8 && batch < g_ggml_sycl_xmx_threshold;
+    }
+
+
     // mmvq and mmq need the __dp4a instruction which is available for gen12+
     // Workaround in https://github.com/ggerganov/llama.cpp/commit/95f84d5ce8b449a9b16009434aca800df504a02e
     use_mul_mat_q = use_mul_mat_q && (src0->type != GGML_TYPE_IQ2_XXS);
@@ -3359,10 +3397,108 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         } else {
             ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q);
         }
+    } else if (use_xmx_gemm) {
+        // XMX-accelerated quantized GEMM (experimental) - FOR DEBUGGING
+        if (debug_xmx) {
+            static int xmx_call_count = 0;
+            fprintf(stderr, "[XMX GEMM CALLED %d] type=%d src0[%ldx%ld] src1[%ldx%ld] batch=%ld\n",
+                    xmx_call_count, src0->type,
+                    (long)src0->ne[0], (long)src0->ne[1],
+                    (long)src1->ne[0], (long)src1->ne[1],
+                    (long)src1->ne[1]);
+            xmx_call_count++;
+        }
+        ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q_xmx);
+        // Debug: capture output after XMX
+        if (debug_xmx) {
+            static int xmx_output_count = 0;
+            if (xmx_output_count == 0) {
+                FILE* f = fopen("/Apps/llama.cpp/debug_output/xmx_output.txt", "w");
+                if (f) {
+                    fprintf(f, "XMX GEMM Output (first call)\n");
+                    fprintf(f, "dst shape: [%ld, %ld, %ld, %ld]\n",
+                            (long)dst->ne[0], (long)dst->ne[1], (long)dst->ne[2], (long)dst->ne[3]);
+                    // Copy device data to host for inspection
+                    ctx.stream()->wait();
+                    int n_copy = 64;
+                    if (n_copy > dst->ne[0]*dst->ne[1]) n_copy = dst->ne[0]*dst->ne[1];
+                    std::vector<float> host_data(n_copy);
+                    ctx.stream()->memcpy(host_data.data(), dst->data, n_copy * sizeof(float)).wait();
+                    fprintf(f, "First %d output values:\n", n_copy);
+                    for (int i = 0; i < n_copy; i++) {
+                        fprintf(f, "[%d] = %f\n", i, host_data[i]);
+                    }
+                    fclose(f);
+                    fprintf(stderr, "[XMX DEBUG] Wrote output to /Apps/llama.cpp/debug_output/xmx_output.txt\n");
+                }
+            }
+            xmx_output_count++;
+        }
     } else if (use_mul_mat_q) {
+        // Standard MMQ path
+        if (debug_xmx) {
+            static int mmq_call_count = 0;
+            if (mmq_call_count < 5) {
+                fprintf(stderr, "[MMQ DEBUG %d] type=%d src0[%ldx%ld] src1[%ldx%ld] batch=%ld\n",
+                        mmq_call_count, src0->type,
+                        (long)src0->ne[0], (long)src0->ne[1],
+                        (long)src1->ne[0], (long)src1->ne[1],
+                        (long)src1->ne[1]);
+            }
+            mmq_call_count++;
+        }
         ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
+        // Debug: capture output after MMQ
+        if (debug_xmx) {
+            static int mmq_output_count = 0;
+            if (mmq_output_count == 0) {
+                FILE* f = fopen("/Apps/llama.cpp/debug_output/mmq_output.txt", "w");
+                if (f) {
+                    fprintf(f, "MMQ GEMM Output (first call)\n");
+                    fprintf(f, "dst shape: [%ld, %ld, %ld, %ld]\n",
+                            (long)dst->ne[0], (long)dst->ne[1], (long)dst->ne[2], (long)dst->ne[3]);
+                    // Copy device data to host for inspection
+                    ctx.stream()->wait();
+                    int n_copy = 64;
+                    if (n_copy > dst->ne[0]*dst->ne[1]) n_copy = dst->ne[0]*dst->ne[1];
+                    std::vector<float> host_data(n_copy);
+                    ctx.stream()->memcpy(host_data.data(), dst->data, n_copy * sizeof(float)).wait();
+                    fprintf(f, "First %d output values:\n", n_copy);
+                    for (int i = 0; i < n_copy; i++) {
+                        fprintf(f, "[%d] = %f\n", i, host_data[i]);
+                    }
+                    fclose(f);
+                    fprintf(stderr, "[MMQ DEBUG] Wrote output to /Apps/llama.cpp/debug_output/mmq_output.txt\n");
+                }
+            }
+            mmq_output_count++;
+        }
     } else {
         ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl);
+        // Debug: capture SYCL path output for comparison
+        if (debug_xmx) {
+            static int sycl_output_count = 0;
+            if (sycl_output_count == 0) {
+                FILE* f = fopen("/Apps/llama.cpp/debug_output/sycl_output.txt", "w");
+                if (f) {
+                    fprintf(f, "SYCL Path Output (first call)\n");
+                    fprintf(f, "dst shape: [%ld, %ld, %ld, %ld]\n",
+                            (long)dst->ne[0], (long)dst->ne[1], (long)dst->ne[2], (long)dst->ne[3]);
+                    ctx.stream()->wait();
+                    int n_copy = 64;
+                    if (n_copy > dst->ne[0]*dst->ne[1]) n_copy = dst->ne[0]*dst->ne[1];
+                    std::vector<float> host_data(n_copy);
+                    ctx.stream()->memcpy(host_data.data(), dst->data, n_copy * sizeof(float)).wait();
+                    fprintf(f, "First %d output values:\n", n_copy);
+                    for (int i = 0; i < n_copy; i++) {
+                        fprintf(f, "[%d] = %f\n", i, host_data[i]);
+                    }
+                    fclose(f);
+                    fprintf(stderr, "[SYCL DEBUG] Wrote output to /Apps/llama.cpp/debug_output/sycl_output.txt\n");
+                }
+            }
+            sycl_output_count++;
+        }
     }
 }
 
