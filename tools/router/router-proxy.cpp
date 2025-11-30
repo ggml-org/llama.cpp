@@ -6,6 +6,7 @@
 #include <cpp-httplib/httplib.h>
 
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -47,14 +48,16 @@ bool proxy_request(const httplib::Request & req,
     }
 
     LOG_INF("Proxying %s %s to upstream %s\n", req.method.c_str(), req.path.c_str(), upstream_base.c_str());
-    httplib::Client client(upstream_base.c_str());
-    client.set_connection_timeout(opts.connection_timeout_s, 0);
-    client.set_read_timeout(opts.read_timeout_s, 0);
+    auto client = std::make_shared<httplib::Client>(upstream_base.c_str());
+    client->set_connection_timeout(opts.connection_timeout_s, 0);
+    client->set_read_timeout(opts.read_timeout_s, 0);
 
     httplib::Headers headers = req.headers;
     headers.erase("Host");
 
-    const std::string path = !req.target.empty() ? req.target : req.path;
+    const std::string path         = !req.target.empty() ? req.target : req.path;
+    const std::string method       = req.method;
+    const std::string request_body = req.body;
 
     if (!matches_any_endpoint(path, proxy_endpoints)) {
         LOG_WRN("Request %s not proxied because it does not match configured endpoints\n", path.c_str());
@@ -63,7 +66,7 @@ bool proxy_request(const httplib::Request & req,
         return false;
     }
 
-    std::string content_type = req.get_header_value("Content-Type", "application/json");
+    const std::string content_type = req.get_header_value("Content-Type", "application/json");
 
     const auto accept_header = req.get_header_value("Accept");
     const bool wants_stream  = accept_header.find("text/event-stream") != std::string::npos ||
@@ -93,9 +96,17 @@ bool proxy_request(const httplib::Request & req,
             return true;
         };
 
-        auto upstream_thread = std::make_shared<std::thread>([&, state_ptr]() {
-            if (req.method == "POST") {
-                result = client.Post(path.c_str(), headers, req.body, content_type.c_str(), content_receiver);
+        auto upstream_thread = std::make_shared<std::thread>([state_ptr,
+                                                              client,
+                                                              path,
+                                                              headers,
+                                                              content_type,
+                                                              method,
+                                                              request_body,
+                                                              content_receiver]() {
+            httplib::Result result;
+            if (method == "POST") {
+                result = client->Post(path.c_str(), headers, request_body, content_type.c_str(), content_receiver);
                 if (result) {
                     std::lock_guard<std::mutex> lock(state_ptr->mutex);
                     state_ptr->status           = result->status;
@@ -112,7 +123,7 @@ bool proxy_request(const httplib::Request & req,
                     state_ptr->content_type     = upstream.get_header_value("Content-Type", "text/event-stream");
                     return true;
                 };
-                result = client.Get(path.c_str(), headers, response_handler, content_receiver);
+                result = client->Get(path.c_str(), headers, response_handler, content_receiver);
             }
 
             std::lock_guard<std::mutex> lock(state_ptr->mutex);
@@ -134,9 +145,13 @@ bool proxy_request(const httplib::Request & req,
                 state_ptr->cv.wait(lock, [&] { return !state_ptr->chunks.empty() || state_ptr->done; });
 
                 if (!state_ptr->chunks.empty()) {
+
+                    // Chunks available: send next chunk to client
                     auto chunk = std::move(state_ptr->chunks.front());
                     state_ptr->chunks.pop();
                     if (!state_ptr->upstream_headers.empty()) {
+
+                        // Apply response headers on first chunk
                         res.status = state_ptr->status;
                         res.reason = state_ptr->reason;
                         copy_response_headers(state_ptr->upstream_headers, res);
@@ -144,10 +159,22 @@ bool proxy_request(const httplib::Request & req,
                         res.set_header("Content-Type", state_ptr->content_type);
                     }
                     lock.unlock();
+
+                    // sink.write() returns true -> provider continues immediately
                     return sink.write(chunk.data(), chunk.size());
                 }
 
-                return state_ptr->done;
+                // No chunks available: determine if stream should continue or terminate
+                if (state_ptr->done) {
+                    // Upstream finished and all chunks have been sent
+                    lock.unlock();
+                    sink.done();  // Explicitly signal stream completion to httplib
+                    return false; // Stop provider -> httplib closes connection gracefully
+                }
+
+                // Spurious wakeup or transient empty queue: upstream still processing
+                lock.unlock();
+                return false;     // Pause provider -> httplib retries after timeout/new data
             },
             [state_ptr, upstream_thread](bool) {
                 (void) state_ptr;
@@ -159,14 +186,14 @@ bool proxy_request(const httplib::Request & req,
         return true;
     }
 
-    if (req.method == "POST") {
-        result = client.Post(path.c_str(), headers, req.body, content_type.c_str());
+    if (method == "POST") {
+        result = client->Post(path.c_str(), headers, request_body, content_type.c_str());
     } else {
-        result = client.Get(path.c_str(), headers);
+        result = client->Get(path.c_str(), headers);
     }
 
     if (!result) {
-        LOG_ERR("Upstream %s unavailable for %s %s\n", upstream_base.c_str(), req.method.c_str(), path.c_str());
+        LOG_ERR("Upstream %s unavailable for %s %s\n", upstream_base.c_str(), method.c_str(), path.c_str());
         res.status = 502;
         res.set_content("{\"error\":\"upstream unavailable\"}", "application/json");
         return false;
