@@ -132,7 +132,9 @@ void terminate_process(ProcessHandle & handle) {
     if (!wait_for_process_exit(handle, ROUTER_PROCESS_SHUTDOWN_TIMEOUT_MS)) {
         LOG_ERR("Process pid=%d did not terminate, sending SIGKILL\n", static_cast<int>(handle.pid));
         kill(handle.pid, SIGKILL);
-        wait_for_process_exit(handle, 1000);
+        while (process_running(handle)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(ROUTER_POLL_INTERVAL_MS));
+        }
     }
     close_process(handle);
 #endif

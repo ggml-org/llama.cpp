@@ -85,15 +85,15 @@ This aligns with the project philosophy: **everything configurable at runtime, z
 3. If not running, or if a conflicting group is active:
    - Terminate conflicting backends
    - Spawn new llama-server with assigned port
-   - Poll `/health` until ready (10s timeout)
+   - Poll `/health` until ready (`ROUTER_BACKEND_READY_TIMEOUT_MS` timeout)
 4. Forward request to backend, streaming response back to client
 5. Backend remains running for subsequent requests
 
 ### Process Lifecycle
 
 - **Spawn**: `fork()`/`CreateProcess()` with stdout/stderr capture
-- **Health polling**: 200ms intervals, 10s timeout
-- **Graceful shutdown**: SIGTERM → 1s wait → SIGKILL
+- **Health polling**: `ROUTER_BACKEND_HEALTH_POLL_MS` intervals, `ROUTER_BACKEND_READY_TIMEOUT_MS` timeout
+- **Graceful shutdown**: SIGTERM → wait `ROUTER_PROCESS_SHUTDOWN_TIMEOUT_MS` → SIGKILL → poll every `ROUTER_POLL_INTERVAL_MS` until exit
 - **Cleanup**: File descriptors closed, waitpid() called
 
 ---
