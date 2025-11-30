@@ -19,7 +19,7 @@ layout (push_constant) uniform parameter
 uint get_aoffset() { return p.misalign_offsets >> 16; }
 uint get_doffset() { return p.misalign_offsets & 0xFFFF; }
 
-uint wrap_coord(int coord, uint size) {
+uint wrap_around(int coord, uint size) {
     return (uint(coord + int(size))) % size; // add size to avoid issues with negative
 }
 
@@ -46,10 +46,10 @@ void main() {
     const uint dst_idx = i3*p.nb13 + i2*p.nb12 + i1*p.nb11 + i0*p.nb10;
 
     if (p.circular != 0u) {
-        const uint ci0 = wrap_coord(int(i0) - int(p.lp0), p.ne00);
-        const uint ci1 = wrap_coord(int(i1) - int(p.lp1), p.ne01);
-        const uint ci2 = wrap_coord(int(i2) - int(p.lp2), p.ne02);
-        const uint ci3 = wrap_coord(int(i3) - int(p.lp3), p.ne03);
+        const uint ci0 = wrap_around(int(i0) - int(p.lp0), p.ne00);
+        const uint ci1 = wrap_around(int(i1) - int(p.lp1), p.ne01);
+        const uint ci2 = wrap_around(int(i2) - int(p.lp2), p.ne02);
+        const uint ci3 = wrap_around(int(i3) - int(p.lp3), p.ne03);
         const uint circular_src_idx = ci3*p.nb03 + ci2*p.nb02 + ci1*p.nb01 + ci0*p.nb00;
         data_d[get_doffset() + dst_idx] = D_TYPE(data_a[get_aoffset() + circular_src_idx]);
     } else {
