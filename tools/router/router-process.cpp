@@ -146,8 +146,9 @@ ProcessHandle spawn_process(const std::vector<std::string> & args) {
     }
 
     const std::string binary = args[0];
+    const bool        has_path_separator = binary.find('/') != std::string::npos || binary.find('\\') != std::string::npos;
     std::error_code   ec;
-    if (!std::filesystem::exists(binary, ec)) {
+    if (has_path_separator && !std::filesystem::exists(binary, ec)) {
         LOG_ERR("Binary not found: %s\n", binary.c_str());
         return handle;
     }

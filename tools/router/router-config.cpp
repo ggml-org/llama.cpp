@@ -11,6 +11,8 @@
 #include <fstream>
 #include <stdexcept>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
@@ -208,6 +210,62 @@ RouterConfig generate_default_config(const std::string & path) {
     return cfg;
 }
 
+RescanResult rescan_auto_models(const RouterConfig & existing) {
+    RescanResult result;
+    result.config = existing;
+
+    RouterConfig & merged = result.config;
+
+    std::unordered_map<std::string, size_t> existing_paths;
+    for (size_t i = 0; i < existing.models.size(); ++i) {
+        existing_paths.emplace(expand_user_path(existing.models[i].path), i);
+    }
+
+    auto scanned = scan_default_models();
+    std::unordered_set<std::string> scanned_paths;
+    for (auto & scanned_model : scanned) {
+        const auto expanded = expand_user_path(scanned_model.path);
+        scanned_paths.insert(expanded);
+        auto it = existing_paths.find(expanded);
+        if (it != existing_paths.end()) {
+            const auto & existing_model = existing.models[it->second];
+            if (existing_model.state == "manual") {
+                continue;
+            }
+
+            continue;
+        }
+
+        if (scanned_model.state.empty()) {
+            scanned_model.state = "auto";
+        }
+        merged.models.push_back(std::move(scanned_model));
+        existing_paths.emplace(expanded, merged.models.size() - 1);
+        ++result.added;
+    }
+
+    std::vector<ModelConfig> filtered;
+    filtered.reserve(merged.models.size());
+    for (const auto & model : merged.models) {
+        if (model.state == "manual") {
+            filtered.push_back(model);
+            continue;
+        }
+
+        const auto expanded = expand_user_path(model.path);
+        const auto found    = scanned_paths.count(expanded) > 0;
+        if (found) {
+            filtered.push_back(model);
+        } else {
+            ++result.removed;
+            LOG_INF("Removing auto model (no longer in cache): %s\n", model.name.c_str());
+        }
+    }
+    merged.models = std::move(filtered);
+
+    return result;
+}
+
 RouterConfig load_config(const std::string & path) {
     RouterConfig cfg;
     cfg.router        = get_default_router_options();
@@ -255,6 +313,10 @@ RouterConfig load_config(const std::string & path) {
     }
     LOG_INF("Config parsed: %zu models, router port %d, base port %d\n", cfg.models.size(), cfg.router.port, cfg.router.base_port);
 
+    const auto rescan_result = rescan_auto_models(cfg);
+    cfg                      = rescan_result.config;
+    LOG_INF("Rescanned models, found %zu new auto models (removed %zu)\n", rescan_result.added, rescan_result.removed);
+
     const auto validate_port = [&](int port, const std::string & name) {
         if (port <= 0 || port > 65535) {
             throw std::runtime_error("invalid " + name + " port in config: " + std::to_string(port));
@@ -282,6 +344,11 @@ RouterConfig load_config(const std::string & path) {
         if (!cmd.empty() && cmd.find('/') != std::string::npos && !std::filesystem::exists(cmd, ec)) {
             throw std::runtime_error("spawn command not executable: " + cmd);
         }
+    }
+
+    if (rescan_result.added > 0 || rescan_result.removed > 0) {
+        LOG_INF("Persisting updated configuration after rescan (added %zu, removed %zu)\n", rescan_result.added, rescan_result.removed);
+        write_config_file(cfg, path);
     }
 
     return cfg;

@@ -2,7 +2,6 @@
 
 #include "log.h"
 #include "router-app.h"
-#include "router-config.h"
 #include "router-proxy.h"
 
 #include <nlohmann/json.hpp>
@@ -33,25 +32,6 @@ static bool parse_model_from_chat(const httplib::Request & req, std::string & mo
 
     model = body.value("model", std::string());
     return !model.empty();
-}
-
-static bool authorize_admin(const RouterConfig & cfg, const httplib::Request & req, httplib::Response & res) {
-    if (cfg.router.admin_token.empty()) {
-        return true;
-    }
-
-    const std::string bearer = "Bearer " + cfg.router.admin_token;
-    const auto        auth   = req.get_header_value("Authorization");
-    const auto        token  = req.get_header_value("X-Admin-Token");
-
-    if (auth == bearer || token == cfg.router.admin_token) {
-        return true;
-    }
-
-    res.status = 403;
-    res.set_content("{\"error\":\"forbidden\"}", "application/json");
-    LOG_WRN("Admin endpoint rejected unauthorized request from %s:%d\n", req.remote_addr.c_str(), req.remote_port);
-    return false;
 }
 
 void register_routes(httplib::Server & server, RouterApp & app) {
@@ -86,6 +66,8 @@ void register_routes(httplib::Server & server, RouterApp & app) {
         auto model_it = req.matches.begin();
         ++model_it;
         std::string model_name = model_it != req.matches.end() ? model_it->str() : std::string();
+        ++model_it;
+        const std::string endpoint_suffix = model_it != req.matches.end() ? model_it->str() : std::string();
         std::string error;
         if (!app.ensure_running(model_name, error)) {
             LOG_WRN("Model %s unavailable: %s\n", model_name.c_str(), error.c_str());
@@ -95,7 +77,8 @@ void register_routes(httplib::Server & server, RouterApp & app) {
         }
         LOG_INF("Proxying %s for model %s\n", req.path.c_str(), model_name.c_str());
         const auto spawn_cfg = app.get_spawn_config(model_name);
-        proxy_request(req, res, app.upstream_for(model_name), app.get_config().router, spawn_cfg.proxy_endpoints);
+        const std::string corrected_path = "/" + endpoint_suffix;
+        proxy_request(req, res, app.upstream_for(model_name), app.get_config().router, spawn_cfg.proxy_endpoints, corrected_path);
     });
 
     server.Post("/v1/chat/completions", [&app](const httplib::Request & req, httplib::Response & res) {
@@ -118,16 +101,6 @@ void register_routes(httplib::Server & server, RouterApp & app) {
         LOG_INF("Proxying chat completion for model %s\n", model.c_str());
         const auto spawn_cfg = app.get_spawn_config(model);
         proxy_request(req, res, app.upstream_for(model), app.get_config().router, spawn_cfg.proxy_endpoints);
-    });
-
-    server.Post("/admin/reload", [&app](const httplib::Request & req, httplib::Response & res) {
-        if (!authorize_admin(app.get_config(), req, res)) {
-            return;
-        }
-        LOG_INF("Reloading router application: stopping and auto-starting models\n");
-        app.stop_all();
-        app.start_auto_models();
-        res.set_content("{\"status\":\"reloaded\"}", "application/json");
     });
 
     server.set_error_handler([](const httplib::Request &, httplib::Response & res) {

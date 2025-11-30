@@ -19,6 +19,7 @@ public:
     std::string get_last_spawned_model();
     SpawnConfig get_spawn_config(const std::string & model_name);
     void stop_all();
+    void update_config(RouterConfig cfg);
 
     const RouterConfig & get_config() const { return config; }
 

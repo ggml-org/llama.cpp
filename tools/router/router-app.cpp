@@ -148,6 +148,25 @@ std::string RouterApp::get_last_spawned_model() {
     return last_spawned_model;
 }
 
+void RouterApp::update_config(RouterConfig cfg) {
+    std::lock_guard<std::mutex> lock(mutex);
+    config = std::move(cfg);
+
+    model_lookup.clear();
+    for (const auto & model : config.models) {
+        model_lookup.emplace(model.name, model);
+    }
+
+    if (!model_lookup.count(last_spawned_model)) {
+        last_spawned_model.clear();
+    }
+
+    const int desired_base = config.router.base_port;
+    if (desired_base > next_port.load()) {
+        next_port.store(desired_base);
+    }
+}
+
 void RouterApp::stop_all() {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto & kv : processes) {

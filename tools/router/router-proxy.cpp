@@ -10,6 +10,7 @@
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <nlohmann/json.hpp>
 
 namespace {
 void copy_response_headers(const httplib::Headers & from, httplib::Response & to) {
@@ -40,14 +41,17 @@ bool proxy_request(const httplib::Request & req,
                    httplib::Response &       res,
                    const std::string &       upstream_base,
                    const RouterOptions &     opts,
-                   const std::vector<std::string> & proxy_endpoints) {
+                   const std::vector<std::string> & proxy_endpoints,
+                   const std::string &              override_path) {
     if (upstream_base.empty()) {
         res.status = 502;
         res.set_content("{\"error\":\"missing upstream\"}", "application/json");
         return false;
     }
 
-    LOG_INF("Proxying %s %s to upstream %s\n", req.method.c_str(), req.path.c_str(), upstream_base.c_str());
+    const std::string forwarded_path = !override_path.empty() ? override_path : (!req.target.empty() ? req.target : req.path);
+
+    LOG_INF("Proxying %s %s to upstream %s\n", req.method.c_str(), forwarded_path.c_str(), upstream_base.c_str());
     auto client = std::make_shared<httplib::Client>(upstream_base.c_str());
     client->set_connection_timeout(opts.connection_timeout_s, 0);
     client->set_read_timeout(opts.read_timeout_s, 0);
@@ -55,7 +59,7 @@ bool proxy_request(const httplib::Request & req,
     httplib::Headers headers = req.headers;
     headers.erase("Host");
 
-    const std::string path         = !req.target.empty() ? req.target : req.path;
+    const std::string path         = forwarded_path;
     const std::string method       = req.method;
     const std::string request_body = req.body;
 
@@ -69,8 +73,18 @@ bool proxy_request(const httplib::Request & req,
     const std::string content_type = req.get_header_value("Content-Type", "application/json");
 
     const auto accept_header = req.get_header_value("Accept");
-    const bool wants_stream  = accept_header.find("text/event-stream") != std::string::npos ||
-                              req.body.find("\"stream\":true") != std::string::npos;
+    bool       wants_stream  = accept_header.find("text/event-stream") != std::string::npos;
+
+    try {
+        auto body_json = nlohmann::json::parse(req.body);
+        if (body_json.value("stream", false)) {
+            wants_stream = true;
+        }
+    } catch (const std::exception &) {
+        if (req.body.find("\"stream\":true") != std::string::npos) {
+            wants_stream = true;
+        }
+    }
 
     httplib::Result result;
     if (wants_stream) {
@@ -83,9 +97,25 @@ bool proxy_request(const httplib::Request & req,
             int                     status       = 200;
             std::string             reason       = "OK";
             httplib::Headers        upstream_headers;
+            std::string             upstream_base;
+            std::string             path;
+            std::string             method;
+            std::string             body;
+            httplib::Headers        headers;
+            std::string             request_content_type;
+            int                     connection_timeout;
+            int                     read_timeout;
         };
 
-        auto state_ptr = std::make_shared<StreamState>();
+        auto state_ptr                = std::make_shared<StreamState>();
+        state_ptr->upstream_base      = upstream_base;
+        state_ptr->path               = path;
+        state_ptr->method             = method;
+        state_ptr->body               = request_body;
+        state_ptr->headers            = headers;
+        state_ptr->request_content_type = content_type;
+        state_ptr->connection_timeout = opts.connection_timeout_s;
+        state_ptr->read_timeout       = opts.read_timeout_s;
 
         auto content_receiver = [state_ptr](const char * data, size_t len) {
             {
@@ -96,17 +126,20 @@ bool proxy_request(const httplib::Request & req,
             return true;
         };
 
-        auto upstream_thread = std::make_shared<std::thread>([state_ptr,
-                                                              client,
-                                                              path,
-                                                              headers,
-                                                              content_type,
-                                                              method,
-                                                              request_body,
-                                                              content_receiver]() {
+        auto upstream_thread = std::make_shared<std::thread>([state_ptr, content_receiver]() {
+            auto local_client = std::make_shared<httplib::Client>(state_ptr->upstream_base.c_str());
+            local_client->set_connection_timeout(state_ptr->connection_timeout, 0);
+            local_client->set_read_timeout(state_ptr->read_timeout, 0);
+
+            const auto & headers     = state_ptr->headers;
+            const auto & method      = state_ptr->method;
+            const auto & request_body = state_ptr->body;
+            const auto & path        = state_ptr->path;
+            const auto & content_type = state_ptr->request_content_type;
+
             httplib::Result result;
             if (method == "POST") {
-                result = client->Post(path.c_str(), headers, request_body, content_type.c_str(), content_receiver);
+                result = local_client->Post(path.c_str(), headers, request_body, content_type.c_str(), content_receiver);
                 if (result) {
                     std::lock_guard<std::mutex> lock(state_ptr->mutex);
                     state_ptr->status           = result->status;
@@ -123,7 +156,7 @@ bool proxy_request(const httplib::Request & req,
                     state_ptr->content_type     = upstream.get_header_value("Content-Type", "text/event-stream");
                     return true;
                 };
-                result = client->Get(path.c_str(), headers, response_handler, content_receiver);
+                result = local_client->Get(path.c_str(), headers, response_handler, content_receiver);
             }
 
             std::lock_guard<std::mutex> lock(state_ptr->mutex);

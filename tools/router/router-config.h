@@ -37,6 +37,12 @@ struct RouterConfig {
     std::vector<ModelConfig> models;
 };
 
+struct RescanResult {
+    RouterConfig config;
+    size_t       added   = 0;
+    size_t       removed = 0;
+};
+
 std::string get_default_config_path();
 std::string expand_user_path(const std::string & path);
 const SpawnConfig & get_default_spawn();
@@ -45,5 +51,6 @@ const RouterOptions &             get_default_router_options();
 RouterConfig load_config(const std::string & path);
 RouterConfig generate_default_config(const std::string & path);
 void         write_config_file(const RouterConfig & cfg, const std::string & path);
+RescanResult rescan_auto_models(const RouterConfig & existing);
 
 std::string get_model_group(const ModelConfig & cfg);

@@ -5,6 +5,7 @@
 #include "router-app.h"
 #include "router-config.h"
 #include "router-constants.h"
+#include "router-admin.h"
 #include "router-endpoints.h"
 
 #include <cpp-httplib/httplib.h>
@@ -18,16 +19,12 @@
 #include <thread>
 
 static std::atomic<bool> g_shutdown{false};
-static RouterApp *        g_app    = nullptr;
 static httplib::Server *  g_server = nullptr;
 
 static void signal_handler(int) {
     g_shutdown = true;
     if (g_server) {
         g_server->stop();
-    }
-    if (g_app) {
-        g_app->stop_all();
     }
 }
 
@@ -117,9 +114,9 @@ static bool handle_download(const CliOptions & opts) {
 
 int main(int argc, char ** argv) {
     CliOptions cli;
-    LOG_INF("Parsing %d CLI arguments for llama-router\n", argc);
-
     router_log_init();
+
+    LOG_INF("Parsing %d CLI arguments for llama-router\n", argc);
 
     if (!parse_cli(argc, argv, cli)) {
         return 1;
@@ -150,7 +147,6 @@ int main(int argc, char ** argv) {
             cfg.models.size(), cfg.router.base_port, cfg.router.host.c_str(), cfg.router.port);
 
     RouterApp app(cfg);
-    g_app = &app;
     LOG_INF("Initialized RouterApp with default spawn command size=%zu\n", cfg.default_spawn.command.size());
     app.start_auto_models();
     LOG_INF("Auto-start requested, last spawned model: %s\n", app.get_last_spawned_model().c_str());
@@ -160,6 +156,7 @@ int main(int argc, char ** argv) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     register_routes(server, app);
+    register_admin_routes(server, app, config_path);
 
     std::string host = cfg.router.host;
     int         port = cfg.router.port;
@@ -174,7 +171,7 @@ int main(int argc, char ** argv) {
     });
 
     while (!g_shutdown.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(ROUTER_POLL_INTERVAL_MS));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     server.stop();
@@ -184,7 +181,6 @@ int main(int argc, char ** argv) {
 
     LOG_INF("llama-router shutting down, stopping all managed models\n");
     app.stop_all();
-    g_app    = nullptr;
     g_server = nullptr;
     return listen_ok ? 0 : 1;
 }
