@@ -152,3 +152,80 @@ std::vector<ModelConfig> scan_default_models() {
     LOG_INF("Model scanner found %zu candidates in %s\n", models.size(), cache_dir.c_str());
     return models;
 }
+
+static std::string find_mmproj_in_dir(const std::filesystem::path & dir) {
+    static const std::vector<std::string> priorities = {"bf16.gguf", "f16.gguf", "f32.gguf"};
+
+    std::error_code ec;
+    for (const auto & priority : priorities) {
+        for (std::filesystem::directory_iterator it(dir, ec), end; it != end && !ec; ++it) {
+            if (!it->is_regular_file()) {
+                continue;
+            }
+
+            std::string filename = it->path().filename().string();
+            std::transform(filename.begin(), filename.end(), filename.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+            if (filename.find("mmproj") == std::string::npos) {
+                continue;
+            }
+
+            if (filename.size() < priority.size() || filename.rfind(priority) != filename.size() - priority.size()) {
+                continue;
+            }
+
+            return it->path().string();
+        }
+    }
+
+    return {};
+}
+
+std::vector<ModelConfig> scan_custom_dir(const std::string & path, const std::string & state) {
+    std::vector<ModelConfig> models;
+
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || !std::filesystem::is_directory(path, ec) || ec) {
+        return models;
+    }
+
+    std::unordered_set<std::string> seen;
+
+    for (std::filesystem::recursive_directory_iterator it(path, ec), end; it != end && !ec; ++it) {
+        if (!it->is_regular_file()) {
+            continue;
+        }
+        std::string ext = it->path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (ext != ".gguf") {
+            continue;
+        }
+
+        std::string full_path = it->path().string();
+        if (seen.count(full_path)) {
+            continue;
+        }
+        seen.insert(full_path);
+
+        std::string filename = it->path().filename().string();
+        std::transform(filename.begin(), filename.end(), filename.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (filename.find("mmproj") != std::string::npos) {
+            continue;
+        }
+
+        ModelConfig mc;
+        mc.name  = it->path().filename().string();
+        mc.path  = full_path;
+        mc.state = state;
+        if (auto mmproj_path = find_mmproj_in_dir(it->path().parent_path()); !mmproj_path.empty()) {
+            mc.spawn = get_default_spawn();
+            mc.spawn.command.push_back("--mmproj");
+            mc.spawn.command.push_back(mmproj_path);
+        }
+
+        models.push_back(std::move(mc));
+    }
+
+    return models;
+}

@@ -13,7 +13,6 @@ public:
     explicit RouterApp(RouterConfig cfg);
     ~RouterApp();
 
-    void start_auto_models();
     bool ensure_running(const std::string & model_name, std::string & error);
     std::string upstream_for(const std::string & model_name);
     std::string get_last_spawned_model();

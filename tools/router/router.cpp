@@ -5,6 +5,7 @@
 #include "router-app.h"
 #include "router-config.h"
 #include "router-constants.h"
+#include "router-scanner.h"
 #include "router-admin.h"
 #include "router-endpoints.h"
 
@@ -17,6 +18,7 @@
 #include <cstdlib>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
 static std::atomic<bool> g_shutdown{false};
 static httplib::Server *  g_server = nullptr;
@@ -33,6 +35,7 @@ struct CliOptions {
     std::string hf_repo;
     std::string hf_file;
     std::string config_path;
+    std::string import_dir;
 };
 
 static bool parse_cli(int argc, char ** argv, CliOptions & out) {
@@ -58,6 +61,12 @@ static bool parse_cli(int argc, char ** argv, CliOptions & out) {
                 return false;
             }
             out.config_path = argv[++i];
+        } else if (arg == "--import-dir") {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "error: missing value for --import-dir\n");
+                return false;
+            }
+            out.import_dir = argv[++i];
         } else {
             fprintf(stderr, "warning: unknown argument %s\n", arg.c_str());
         }
@@ -72,6 +81,7 @@ static void print_help() {
     printf("  --config <path>         Override config path (default: ~/.config/llama.cpp/router-config.json)\n");
     printf("  -hf, -hfr, --hf-repo    Hugging Face repository to download (format <user>/<repo>[:quant])\n");
     printf("  -hff, --hf-file         Specific GGUF filename to fetch from repository\n");
+    printf("  --import-dir <path>     Recursively import GGUF models from directory\n");
 }
 
 static bool handle_download(const CliOptions & opts) {
@@ -112,6 +122,47 @@ static bool handle_download(const CliOptions & opts) {
     return true;
 }
 
+static bool handle_import(const CliOptions & opts, const std::string & config_path, int & exit_code) {
+    if (opts.import_dir.empty()) {
+        return false;
+    }
+
+    exit_code = 0;
+
+    const std::string import_dir = expand_user_path(opts.import_dir);
+    auto               scanned   = scan_custom_dir(import_dir, "manual");
+
+    RouterConfig cfg;
+    try {
+        cfg = load_config(config_path);
+    } catch (const std::exception & e) {
+        fprintf(stderr, "%s\n", e.what());
+        exit_code = 1;
+        return true;
+    }
+
+    std::unordered_set<std::string> existing_paths;
+    for (const auto & model : cfg.models) {
+        existing_paths.insert(expand_user_path(model.path));
+    }
+
+    size_t added = 0;
+    for (auto & model : scanned) {
+        const auto expanded = expand_user_path(model.path);
+        if (existing_paths.insert(expanded).second) {
+            cfg.models.push_back(std::move(model));
+            ++added;
+        }
+    }
+
+    if (added > 0) {
+        write_config_file(cfg, config_path);
+    }
+
+    LOG_INF("Imported %zu models from %s\n", added, import_dir.c_str());
+    return true;
+}
+
 int main(int argc, char ** argv) {
     CliOptions cli;
     router_log_init();
@@ -127,12 +178,17 @@ int main(int argc, char ** argv) {
         return 0;
     }
 
+    std::string config_path = !cli.config_path.empty() ? expand_user_path(cli.config_path) : get_default_config_path();
+
     if (handle_download(cli)) {
         LOG_INF("Download-only mode completed, exiting\n");
         return 0;
     }
 
-    std::string config_path = !cli.config_path.empty() ? expand_user_path(cli.config_path) : get_default_config_path();
+    int import_exit_code = 0;
+    if (handle_import(cli, config_path, import_exit_code)) {
+        return import_exit_code;
+    }
     LOG_INF("Loading router configuration from %s\n", config_path.c_str());
 
     RouterConfig cfg;
@@ -148,8 +204,6 @@ int main(int argc, char ** argv) {
 
     RouterApp app(cfg);
     LOG_INF("Initialized RouterApp with default spawn command size=%zu\n", cfg.default_spawn.command.size());
-    app.start_auto_models();
-    LOG_INF("Auto-start requested, last spawned model: %s\n", app.get_last_spawned_model().c_str());
 
     httplib::Server server;
     g_server = &server;

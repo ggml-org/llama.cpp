@@ -31,9 +31,8 @@ void register_admin_routes(httplib::Server & server, RouterApp & app, const std:
         if (!authorize_admin(app.get_config(), req, res)) {
             return;
         }
-        LOG_INF("Reloading router application: stopping and auto-starting models\n");
+        LOG_INF("Reloading router application: stopping managed models\n");
         app.stop_all();
-        app.start_auto_models();
         res.set_content("{\"status\":\"reloaded\"}", "application/json");
     });
 

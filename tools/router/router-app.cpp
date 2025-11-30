@@ -30,19 +30,6 @@ SpawnConfig RouterApp::get_spawn_config(const std::string & model_name) {
     return resolve_spawn_config(it->second);
 }
 
-void RouterApp::start_auto_models() {
-    for (const auto & model : config.models) {
-        if (model.state == "auto") {
-            std::string err;
-            if (!ensure_running(model.name, err)) {
-                LOG_WRN("auto-start for %s failed: %s\n", model.name.c_str(), err.c_str());
-            } else {
-                LOG_INF("auto-started %s\n", model.name.c_str());
-            }
-        }
-    }
-}
-
 bool RouterApp::ensure_running(const std::string & model_name, std::string & error) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it_cfg = model_lookup.find(model_name);
