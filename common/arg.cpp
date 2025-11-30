@@ -980,7 +980,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.kv_unified = true;
         }
-    ).set_env("LLAMA_ARG_KV_SPLIT"));
+    ).set_env("LLAMA_ARG_KV_UNIFIED"));
     add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
@@ -2639,7 +2639,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &, const std::string & value) {
             common_log_set_file(common_log_main(), value.c_str());
         }
-    ));
+    ).set_env("LLAMA_LOG_FILE"));
     add_opt(common_arg(
         {"--log-colors"}, "[on|off|auto]",
         "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
