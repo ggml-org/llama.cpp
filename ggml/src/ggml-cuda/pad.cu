@@ -28,7 +28,6 @@ static __global__ void pad_f32(const float * src, float * dst,
     const int64_t dst_idx = i3 * (ne0 * ne1 * ne2) + i2 * (ne0 * ne1) + i1 * ne0 + i0;
 
     if (!circular) {
-        // operation
         if ((i0 >= lp0 && i0 < ne0 - rp0) && (i1 >= lp1 && i1 < ne1 - rp1) && (i2 >= lp2 && i2 < ne2 - rp2) &&
             (i3 >= lp3 && i3 < ne3 - rp3)) {
             const int64_t i00  = i0 - lp0;

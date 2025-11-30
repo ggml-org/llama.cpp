@@ -7537,7 +7537,7 @@ void ggml_compute_forward_upscale(
 
 // ggml_compute_forward_pad
 
-template<bool CIRCULAR>
+template<bool circular_t>
 static void ggml_compute_forward_pad_f32(
     const ggml_compute_params * params,
           ggml_tensor * dst) {
@@ -7569,7 +7569,7 @@ static void ggml_compute_forward_pad_f32(
             for (int64_t i0 = 0; i0 < ne0; ++i0) {
                 for (int64_t i3 = 0; i3 < ne3; ++i3) {
                     // circular means wrap around on a torus, so x and y loop around
-                    if constexpr (CIRCULAR) {
+                    if constexpr (circular_t) {
                         const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
                         const int64_t src_i0 = ggml_wrap_around(i0 - lp0, ne00);
                         const int64_t src_i1 = ggml_wrap_around(i1 - lp1, ne01);
