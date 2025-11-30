@@ -1,6 +1,7 @@
 #include "models.h"
 
-llm_build_qwen3::llm_build_qwen3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+template <bool iswa>
+llm_build_qwen3<iswa>::llm_build_qwen3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -14,7 +15,14 @@ llm_build_qwen3::llm_build_qwen3(const llama_model & model, const llm_graph_para
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn = build_attn_inp_kv();
+    using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
+    inp_attn_type * inp_attn = nullptr;
+
+    if constexpr (iswa) {
+        inp_attn = build_attn_inp_kv_iswa();
+    } else {
+        inp_attn = build_attn_inp_kv();
+    }
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -115,3 +123,7 @@ llm_build_qwen3::llm_build_qwen3(const llama_model & model, const llm_graph_para
 
     ggml_build_forward_expand(gf, cur);
 }
+
+// Explicit template instantiations
+template struct llm_build_qwen3<false>;
+template struct llm_build_qwen3<true>;
