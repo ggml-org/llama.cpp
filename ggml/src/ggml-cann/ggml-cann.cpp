@@ -2500,6 +2500,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 if (op->op_params[0] != GGML_SCALE_MODE_NEAREST) {
                     return false;
                 }
+                if (op->op_params[0] & GGML_SCALE_FLAG_ANTIALIAS) {
+                    return false;
+                }
                 return true;
             }
         case GGML_OP_POOL_2D:
