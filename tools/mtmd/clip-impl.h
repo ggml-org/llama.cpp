@@ -39,11 +39,10 @@
 #define KEY_FEATURE_LAYER       "clip.vision.feature_layer"
 #define KEY_PROJ_SCALE_FACTOR   "clip.vision.projector.scale_factor"
 #define KEY_SPATIAL_MERGE_SIZE  "clip.vision.spatial_merge_size"
-// [NEW] Phi-3-Vision Specific Keys
-#define KEY_PHI3_HD_ORDER         "clip.vision.hd_transform_order"      // Stores "sub_glb"
-#define KEY_PHI3_NUM_IMG_TOKENS   "clip.vision.num_img_tokens"          // Stores 144
-#define KEY_PHI3_USE_HD           "clip.vision.use_hd_transform"        // Stores true
-#define KEY_PHI3_WITH_SEP         "clip.vision.with_learnable_separator" // Stores true
+#define KEY_PHI3_HD_ORDER         "clip.vision.hd_transform_order"
+#define KEY_PHI3_NUM_IMG_TOKENS   "clip.vision.num_img_tokens"
+#define KEY_PHI3_USE_HD           "clip.vision.use_hd_transform"
+#define KEY_PHI3_WITH_SEP         "clip.vision.with_learnable_separator"
 #define KEY_IS_DEEPSTACK_LAYERS "clip.vision.is_deepstack_layers"
 
 #define KEY_MM_PATCH_MERGE_TYPE   "clip.vision.mm_patch_merge_type"
@@ -91,21 +90,9 @@
 #define TN_MVLM_PROJ_BLOCK "mm.model.mb_block.%d.block.%d.%s"
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"
 #define TN_IMAGE_NEWLINE   "model.image_newline"
-
-// [NEW] Phi-3-Vision Specific Tensors
-// Mapping for: model.vision_embed_tokens.glb_GN
-#define TN_PHI3_GLB_GN      "v.glb_GN"
-// Mapping for: model.vision_embed_tokens.sub_GN
-#define TN_PHI3_SUB_GN      "v.sub_GN"
-
-// [NEW] Projector Mapping
-// Your tensor map shows "model.vision_embed_tokens.img_projection.0.weight"
-// and "model.vision_embed_tokens.img_projection.2.weight".
-// This confirms it is a 2-layer MLP (Layer 0 = Linear, Layer 1 = GELU (implicit), Layer 2 = Linear).
-// We can reuse TN_LLAVA_PROJ ("mm.%d.%s") or define a specific one if the conversion script names them uniquely.
-// To be safe and specific:
-#define TN_PHI3_PROJ_MLP    "mm.phi3_mlp.%d.%s"
-
+#define TN_PHI3_GLB_GN      "v.glb_GN" // phi3v
+#define TN_PHI3_SUB_GN      "v.sub_GN" // phi3v
+#define TN_PHI3_PROJ_MLP    "mm.phi3_mlp.%d.%s" // phi3v
 #define TN_MM_INP_NORM     "mm.input_norm.weight"
 #define TN_MM_INP_NORM_B   "mm.input_norm.bias"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3

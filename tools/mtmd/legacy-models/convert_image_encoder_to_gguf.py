@@ -18,19 +18,17 @@ def k(raw_key: str, arch: str) -> str:
 
 def should_skip_tensor(name: str, has_text: bool, has_vision: bool, has_llava: bool, projector_type: str) -> bool:
     if name in (
-            "logit_scale",
-            "text_model.embeddings.position_ids",
-            "vision_model.embeddings.position_ids",
+        "logit_scale",
+        "text_model.embeddings.position_ids",
+        "vision_model.embeddings.position_ids",
     ):
         return True
 
-    # For Phi-3-Vision, we need to keep specific vision tokens even if they look like special params
     if projector_type == "phi3_v":
         if "glb_GN" in name or "sub_GN" in name:
             return False
         if "img_projection" in name:
             return False
-        # Phi-3 uses 'model.vision_embed_tokens' prefix for everything
         if not name.startswith("model.vision_embed_tokens"):
             return True # Skip text model weights
         return False
@@ -123,9 +121,9 @@ def bytes_to_unicode():
     And avoids mapping to whitespace/control characters the bpe code barfs on.
     """
     bs = (
-            list(range(ord("!"), ord("~") + 1))
-            + list(range(ord("¡"), ord("¬") + 1))
-            + list(range(ord("®"), ord("ÿ") + 1))
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("¡"), ord("¬") + 1))
+        + list(range(ord("®"), ord("ÿ") + 1))
     )
     cs = bs[:]
     n = 0
@@ -152,9 +150,9 @@ ap.add_argument("--clip-model-is-vision", action="store_true", required=False,
 # Selectable visual encoders that are compatible with this script
 encoder_group = ap.add_mutually_exclusive_group()
 encoder_group.add_argument("--clip-model-is-openclip", action="store_true", required=False,
-                           help="The clip model is from openclip (for ViT-SO400M type))")
+                help="The clip model is from openclip (for ViT-SO400M type))")
 encoder_group.add_argument("--clip-model-is-siglip", action="store_true", required=False,
-                           help="the visual encoder is Siglip.")
+                help="the visual encoder is Siglip.")
 
 ap.add_argument("--llava-projector", help="Path to llava.projector file. If specified, save an image encoder for LLaVA models.")
 ap.add_argument("--projector-type", help="Type of projector. Possible values: mlp, ldp, ldpv2, phi3_v", choices=["mlp", "ldp", "ldpv2", "phi3_v"], default="mlp")
@@ -181,10 +179,10 @@ if args.use_f32:
 dir_model = args.model_dir
 
 if (
-        args.clip_model_is_vision or
-        not os.path.exists(dir_model + "/vocab.json") or
-        args.clip_model_is_openclip or
-        args.clip_model_is_siglip
+    args.clip_model_is_vision or
+    not os.path.exists(dir_model + "/vocab.json") or
+    args.clip_model_is_openclip or
+    args.clip_model_is_siglip
 ):
     vocab = None
     tokens = None
@@ -221,7 +219,13 @@ with open(dir_model + "/config.json", "r", encoding="utf-8") as f:
             v_hparams = config # Fallback
             t_hparams = config
 
+# possible data types
+#   ftype == 0 -> float32
+#   ftype == 1 -> float16
+#
+# map from ftype to string
 ftype_str = ["f32", "f16"]
+
 ftype = 1
 if args.use_f32:
     ftype = 0
@@ -279,15 +283,21 @@ if args.text_only:
 elif args.vision_only and not has_llava_projector:
     fout.add_description("vision-only CLIP model")
 elif has_llava_projector:
+    # add projector type
     fout.add_description("image encoder for LLaVA / Phi-3")
     fout.add_string("clip.projector_type", args.projector_type)
 else:
     fout.add_description("two-tower CLIP model")
 
 if has_text_encoder:
-    # ... (Text encoder logic remains same) ...
     assert t_hparams is not None
     assert tokens is not None
+    if args.clip_model_is_siglip:
+        text_projection_dim = 0
+    else:
+        text_projection_dim = t_hparams.get("projection_dim", config["projection_dim"])
+    # text_model hparams
+    fout.add_uint32(k(KEY_CONTEXT_LENGTH, TEXT), t_hparams["max_position_embeddings"])
     text_projection_dim = t_hparams.get("projection_dim", config.get("projection_dim", 0))
     fout.add_uint32(k(KEY_CONTEXT_LENGTH, TEXT), t_hparams.get("max_position_embeddings", 2048))
     fout.add_uint32(k(KEY_EMBEDDING_LENGTH, TEXT), t_hparams["hidden_size"])
@@ -335,7 +345,7 @@ if has_vision_encoder:
     if args.clip_model_is_siglip:
         visual_projection_dim = 0
     else:
-        visual_projection_dim = v_hparams.get("projection_dim", config.get("projection_dim", 0))
+        visual_projection_dim = v_hparams.get("projection_dim", config["projection_dim"])
 
     # set vision_model hparams
     fout.add_uint32("clip.vision.image_size", v_hparams["image_size"])
@@ -345,12 +355,63 @@ if has_vision_encoder:
     fout.add_uint32("clip.vision.projection_dim", visual_projection_dim)
     fout.add_uint32(k(KEY_ATTENTION_HEAD_COUNT, VISION), v_hparams["num_attention_heads"])
     fout.add_float32(k(KEY_ATTENTION_LAYERNORM_EPS, VISION), v_hparams["layer_norm_eps"])
-
     if feature_layers:
         block_count = max(feature_layers)
     else:
         block_count = v_hparams["num_hidden_layers"] - 1 if has_llava_projector else v_hparams["num_hidden_layers"]
     fout.add_uint32(k(KEY_BLOCK_COUNT, VISION), block_count)
+                            #     /**
+                            #      "image_grid_pinpoints": [
+                            #         [
+                            #         336,
+                            #         672
+                            #         ],
+                            #         [
+                            #         672,
+                            #         336
+                            #         ],
+                            #         [
+                            #         672,
+                            #         672
+                            #         ],
+                            #         [
+                            #         1008,
+                            #         336
+                            #         ],
+                            #         [
+                            #         336,
+                            #         1008
+                            #         ]
+                            #     ],
+                            #     Flattened:
+                            #     [
+                            #         336, 672,
+                            #         672, 336,
+                            #         672, 672,
+                            #         1008, 336,
+                            #         336, 1008
+                            #     ]
+                            #  *
+                            #  */
+    if "image_grid_pinpoints" in v_hparams:
+        # flatten it
+        image_grid_pinpoints = []
+        for pinpoint in v_hparams["image_grid_pinpoints"]:
+            for p in pinpoint:
+                image_grid_pinpoints.append(p)
+        fout.add_array("clip.vision.image_grid_pinpoints", image_grid_pinpoints)
+    if "image_crop_resolution" in v_hparams:
+        fout.add_uint32("clip.vision.image_crop_resolution", v_hparams["image_crop_resolution"])
+    if "image_aspect_ratio" in v_hparams:
+        fout.add_string("clip.vision.image_aspect_ratio", v_hparams["image_aspect_ratio"])
+    if "image_split_resolution" in v_hparams:
+        fout.add_uint32("clip.vision.image_split_resolution", v_hparams["image_split_resolution"])
+    if "mm_patch_merge_type" in v_hparams:
+        fout.add_string("clip.vision.mm_patch_merge_type", v_hparams["mm_patch_merge_type"])
+    if "mm_projector_type" in v_hparams:
+        fout.add_string("clip.vision.mm_projector_type", v_hparams["mm_projector_type"])
+    if feature_layers:
+        fout.add_array("clip.vision.feature_layer", feature_layers)
 
     # Phi-3 Specific Keys
     if args.projector_type == "phi3_v":
@@ -362,70 +423,76 @@ if has_vision_encoder:
 
     # Image mean/std logic
     if processor is not None:
-        image_mean = processor.image_processor.image_mean if args.image_mean is None or args.image_mean == default_image_mean else args.image_mean
-        image_std = processor.image_processor.image_std if args.image_std is None or args.image_std == default_image_std else args.image_std
+        image_mean = processor.image_processor.image_mean if args.image_mean is None or args.image_mean == default_image_mean else args.image_mean  # pyright: ignore[reportAttributeAccessIssue]
+        image_std = processor.image_processor.image_std if args.image_std is None or args.image_std == default_image_std else args.image_std  # pyright: ignore[reportAttributeAccessIssue]
     else:
         image_mean = args.image_mean if args.image_mean is not None else default_image_mean
         image_std = args.image_std if args.image_std is not None else default_image_std
     fout.add_array("clip.vision.image_mean", image_mean)
     fout.add_array("clip.vision.image_std", image_std)
 
-use_gelu = v_hparams.get("hidden_act", "gelu") == "gelu"
+use_gelu = v_hparams["hidden_act"] == "gelu"
 fout.add_bool("clip.use_gelu", use_gelu)
 
 
 if has_llava_projector:
-    # Handle separate projector file if provided (legacy LLaVA)
-    if args.llava_projector:
-        projector = torch.load(args.llava_projector)
-        for name, data in projector.items():
-            name = get_tensor_name(name)
-            if data.ndim == 2 or data.ndim == 4:
-                data = data.squeeze().numpy().astype(np.float16)
-            else:
-                data = data.squeeze().numpy().astype(np.float32)
-            fout.add_tensor(name, data)
-        print("Projector tensors added\n")
+    # By default, we drop the last layer for llava projector
+    # models unless we have explicitly set vision feature layers
+    if feature_layers is None:
+        model.vision_model.encoder.layers.pop(-1)
+    else:
+        model.vision_model.encoder.layers = model.vision_model.encoder.layers[:max(feature_layers)]
+
+    projector = torch.load(args.llava_projector)
+    for name, data in projector.items():
+        name = get_tensor_name(name)
+        # pw and dw conv ndim==4
+        if data.ndim == 2 or data.ndim == 4:
+            data = data.squeeze().numpy().astype(np.float16)
+        else:
+            data = data.squeeze().numpy().astype(np.float32)
+
+        fout.add_tensor(name, data)
+
+    print("Projector tensors added\n")
 
 print("Processing model tensors...")
 state_dict = model.state_dict()
 for name, data in state_dict.items():
     if should_skip_tensor(name, has_text_encoder, has_vision_encoder, has_llava_projector, args.projector_type):
-        # print(f"skipping parameter: {name}")
+        # we don't need this
+        print(f"skipping parameter: {name}")
         continue
 
     name = get_tensor_name(name)
     data = data.squeeze().numpy()
 
-    # --- FORCE F32 LOGIC START ---
-    # We ignore args.use_f32 or dims checking. We just force everything to F32.
-    # This ensures maximum compatibility for the 'add' operations in C++.
-
-    if data.dtype != np.float32:
-        print(f"Converting {name} to float32...")
-        data = data.astype(np.float32)
-
-
     n_dims = len(data.shape)
+
+    # ftype == 0 -> float32, ftype == 1 -> float16
     ftype_cur = 0
-    # if n_dims == 4:
-    #     # print(f"tensor {name} is always saved in f16")
-    #     data = data.astype(np.float16)
-    #     ftype_cur = 1
-    # elif ftype == 1:
-    #     if name.endswith(".weight") and n_dims == 2:
-    #         data = data.astype(np.float16)
-    #         ftype_cur = 1
-    #     else:
-    #         data = data.astype(np.float32)
-    #         ftype_cur = 0
-    # else:
-    #     if data.dtype != np.float32:
-    #         data = data.astype(np.float32)
-    #         ftype_cur = 0
+    if n_dims == 4:
+        print(f"tensor {name} is always saved in f16")
+        data = data.astype(np.float16)
+        ftype_cur = 1
+    elif ftype == 1:
+        if name[-7:] == ".weight" and n_dims == 2:
+            print("  Converting to float16")
+            data = data.astype(np.float16)
+            ftype_cur = 1
+        else:
+            print("  Converting to float32")
+            data = data.astype(np.float32)
+            ftype_cur = 0
+    else:
+        if data.dtype != np.float32:
+            print("  Converting to float32")
+            data = data.astype(np.float32)
+            ftype_cur = 0
 
     print(f"{name} - {ftype_str[ftype_cur]} - shape = {data.shape}")
     fout.add_tensor(name, data)
+
 
 fout.write_header_to_file()
 fout.write_kv_data_to_file()

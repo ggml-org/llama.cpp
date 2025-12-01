@@ -85,7 +85,6 @@ enum mtmd_slice_tmpl {
     MTMD_SLICE_TMPL_MINICPMV_2_6,
     MTMD_SLICE_TMPL_LLAMA4,
     MTMD_SLICE_TMPL_IDEFICS3,
-    MTMD_SLICE_TMPL_PHI3_V,
 };
 
 const char * mtmd_default_marker() {
@@ -308,22 +307,8 @@ struct mtmd_context {
             img_end = "<|im_end|>";
 
         } else if (proj == PROJECTOR_TYPE_PHI3_V) {
-            // [NEW] Phi-3-Vision Configuration
-            // Ref: https://huggingface.co/microsoft/Phi-3-vision-128k-instruct
-
-            // Phi-3 uses numbered image tokens in the text (e.g., <|image_1|>).
-            // The vision encoder output is inserted *at* that position.
-            // We set empty start/end strings because the special tokens are usually
-            // part of the user prompt or handled by the specific tokenizer logic.
-
             img_beg = "";
             img_end = "";
-
-            // We flag the slice template just in case we need specific logic later,
-            // though currently the clip.cpp graph handles the HD transform stitching internally.
-            slice_tmpl = MTMD_SLICE_TMPL_PHI3_V;
-
-            // Ensure we don't accidentally trigger row-end logic meant for LLaVA-UHD/MiniCPM
             tok_row_end_trail = false;
             ov_img_first = false;
         }
@@ -553,57 +538,6 @@ struct mtmd_tokenizer {
                 LOG_ERR("Unable to preprocess image\n");
                 return 2;
             }
-            // [NEW] Phi-3-Vision Token Calculation Logic
-            // if (clip_is_phi3v(ctx->ctx_v)) {
-            //     // const int n_col = batch_f32.grid_x;
-            //     // const int n_row = batch_f32.grid_y;
-            //     // auto chunks = split_batch_to_chunk(std::move(batch_f32), bitmap->id);
-            //     // GGML_ASSERT(chunks.size() > 0);
-            //     // // GGML_ASSERT((int)chunks.size() == n_row * n_col);
-            //     // for (int y = 0; y < n_row; y++) {
-            //     //     for (int x = 0; x < n_col; x++) {
-            //     //         cur.entries.emplace_back(std::move(chunks[y * n_col + x]));
-            //     //     }
-            //     // }
-            //
-            //     size_t n_tokens = 0;
-            //     // int n_crops = batch_f32.entries.size();
-            //     const int n_col = batch_f32.grid_x;
-            //     const int n_row = batch_f32.grid_y;
-            //
-            //     // 1. Sum tokens for all crops (Locals + Global)
-            //     int tokens_per_crop = 0;
-            //     // if (n_crops > 0) {
-            //     tokens_per_crop = clip_n_output_tokens(ctx->ctx_v, batch_f32.entries[0].get());
-            //     n_tokens = (n_col * n_row + 1) * tokens_per_crop;
-            //     // }
-            //
-            //     // 2. Add space for the Separator (1 vector)
-            //     // We insert 1 separator vector between local crops and the global crop.
-            //     // This increases the sequence length by 1 position.
-            //     // if (n_crops > 1) {
-            //     n_tokens += 1;
-            //     // }
-            //
-            //     //global_tokens
-            //     n_tokens = n_tokens + (n_row + 1) * 12;
-            //
-            //     mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-            //
-            //     image_tokens->nx = n_tokens;
-            //     image_tokens->ny = 1;
-            //     image_tokens->batch_f32 = std::move(batch_f32);
-            //     image_tokens->id = bitmap->id; // optional
-            //
-            //     mtmd_input_chunk chunk{
-            //         MTMD_INPUT_CHUNK_TYPE_IMAGE,
-            //         {}, // text tokens
-            //         std::move(image_tokens),
-            //         nullptr, // audio tokens
-            //     };
-            //     cur.entries.emplace_back(std::move(chunk));
-            // }
-            // handle llava-uhd style preprocessing
             // [NEW] Phi-3-Vision Token Calculation Logic
             if (clip_is_phi3v(ctx->ctx_v)) {
 

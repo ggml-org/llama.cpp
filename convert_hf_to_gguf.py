@@ -643,7 +643,6 @@ class ModelBase:
     @classmethod
     def from_model_architecture(cls, arch: str, model_type = ModelType.TEXT) -> type[ModelBase]:
         try:
-            print(cls._model_classes)
             return cls._model_classes[model_type][arch]
         except KeyError:
             raise NotImplementedError(f'Architecture {arch!r} not supported!') from None
@@ -7979,7 +7978,7 @@ class ChatGLMModel(TextModel):
         self.gguf_writer.add_context_length(self.hparams.get("seq_length", n_embed))
         self.gguf_writer.add_embedding_length(n_embed)
         self.gguf_writer.add_feed_forward_length(self.hparams.get("ffn_hidden_size", self.hparams.get("intermediate_size", 4 * n_embed)))
-        self.gguf_writer.add_block_count(self.hparams.get("num_layers", self.hparams.get("num_hidden_layers", 0)))
+        self.gguf_writer.add_block_count(self.hparams.get("num_layers", self.hparams["num_hidden_layers"]))
         self.gguf_writer.add_head_count(n_head)
         self.gguf_writer.add_head_count_kv(n_head_kv)
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("layernorm_epsilon",1e-5))
@@ -10186,7 +10185,6 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # maybe we should fallback to text model's arch in that case, since not many models have both
     text_config = hparams.get("text_config", {})
     vision_config = hparams.get("vision_config", {})
-    print(hparams.get("architectures"))
     arch = None
     if (arches := hparams.get("architectures")) is not None and len(arches) > 0:
         arch = arches[0]

@@ -193,11 +193,6 @@ typedef pthread_t ggml_thread_t;
 #include <TargetConditionals.h>
 #endif
 
-#include <stdatomic.h>
-
-static _Atomic uint64_t ggml_op_us[GGML_OP_COUNT];
-static _Atomic uint64_t ggml_op_calls[GGML_OP_COUNT];
-
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp32,
@@ -2869,44 +2864,6 @@ struct ggml_cplan ggml_graph_plan(
     return cplan;
 }
 
-// static thread_ret_t ggml_graph_compute_thread(void * data) {
-//     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
-//     struct ggml_threadpool    * tp    = state->threadpool;
-//
-//     const struct ggml_cgraph * cgraph = tp->cgraph;
-//     const struct ggml_cplan  * cplan  = tp->cplan;
-//
-//     set_numa_thread_affinity(state->ith);
-//
-//     struct ggml_compute_params params = {
-//         /*.ith       =*/ state->ith,
-//         /*.nth       =*/ atomic_load_explicit(&tp->n_threads_cur, memory_order_relaxed),
-//         /*.wsize     =*/ cplan->work_size,
-//         /*.wdata     =*/ cplan->work_data,
-//         /*.threadpool=*/ tp,
-//     };
-//
-//     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
-//         struct ggml_tensor * node = cgraph->nodes[node_n];
-//
-//         ggml_compute_forward(&params, node);
-//
-//         if (state->ith == 0 && cplan->abort_callback &&
-//                 cplan->abort_callback(cplan->abort_callback_data)) {
-//             atomic_store_explicit(&tp->abort, node_n + 1, memory_order_relaxed);
-//             tp->ec    = GGML_STATUS_ABORTED;
-//         }
-//
-//         if (node_n + 1 < cgraph->n_nodes) {
-//             ggml_barrier(state->threadpool);
-//         }
-//     }
-//
-//     ggml_barrier(state->threadpool);
-//
-//     return 0;
-// }
-
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -2927,18 +2884,13 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
-        uint64_t t0 = ggml_time_us();
         ggml_compute_forward(&params, node);
-        uint64_t dt = ggml_time_us() - t0;
-
-        atomic_fetch_add_explicit(&ggml_op_us[node->op], dt, memory_order_relaxed);
-        atomic_fetch_add_explicit(&ggml_op_calls[node->op], 1, memory_order_relaxed);
 
         if (state->ith == 0 && cplan->abort_callback &&
                 cplan->abort_callback(cplan->abort_callback_data)) {
             atomic_store_explicit(&tp->abort, node_n + 1, memory_order_relaxed);
             tp->ec    = GGML_STATUS_ABORTED;
-                }
+        }
 
         if (node_n + 1 < cgraph->n_nodes) {
             ggml_barrier(state->threadpool);
@@ -2946,6 +2898,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     }
 
     ggml_barrier(state->threadpool);
+
     return 0;
 }
 
@@ -3247,33 +3200,6 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     if (disposable_threadpool) {
         ggml_threadpool_free(threadpool);
     }
-
-    // printf("\n========= GGML OP PERF =========\n");
-    // for (int i = 0; i < GGML_OP_COUNT; i++) {
-    //     uint64_t us    = atomic_load(&ggml_op_us[i]);
-    //     uint64_t calls = atomic_load(&ggml_op_calls[i]);
-    //     if (calls == 0) continue;
-    //
-    //     printf("%-16s : %8llu us   %6llu calls   avg %6llu us\n",
-    //            ggml_op_name(i),
-    //            (unsigned long long)us,
-    //            (unsigned long long)calls,
-    //            (unsigned long long)(us / calls));
-    // }
-    // printf("================================\n\n");
-
-    // printf("\n");
-    // for (int i = 0; i < GGML_OP_COUNT; i++) {
-    //     uint64_t us    = atomic_load(&ggml_op_us[i]);
-    //     uint64_t calls = atomic_load(&ggml_op_calls[i]);
-    //     if (calls == 0) continue;
-    //
-    //     printf("%-16s,%8llu us,%6llu,%6llu us,",
-    //            ggml_op_name(i),
-    //            (unsigned long long)us,
-    //            (unsigned long long)calls,
-    //            (unsigned long long)(us / calls));
-    // }
 
     return ret;
 }
