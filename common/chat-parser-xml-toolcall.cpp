@@ -873,7 +873,6 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
 
 /**
  * Parse content uses reasoning and XML-Style tool call
- * TODO: Note that form.allow_toolcall_in_think is not tested yet. If anyone confirms it works, this comment can be removed.
  */
 void common_chat_msg_parser::consume_reasoning_with_xml_tool_calls(const struct xml_tool_call_format & form, const std::string & start_think, const std::string & end_think) {
     parse_msg_with_xml_tool_calls(*this, form, start_think, end_think);
