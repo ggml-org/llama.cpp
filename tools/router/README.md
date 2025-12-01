@@ -14,6 +14,7 @@ llama-router acts as an intelligent proxy that sits in front of your model colle
 - **Collection import**: Recursively import local GGUF directories
 - **Multimodal support**: Automatically detects and configures mmproj files for vision models
 - **Model grouping**: Define groups to ensure only one model from a group runs at a time
+- **Optional warm start**: Preload a chosen model on startup via `startup_model`
 - **OpenAI-compatible API**: Exposes `/v1/models` and `/v1/chat/completions` endpoints
 - **Hot reload**: Admin endpoints for runtime configuration updates
 
@@ -56,6 +57,7 @@ On first run, it will:
 2. Scan the Hugging Face cache (`~/.cache/llama.cpp/`) for GGUF models
 3. Add discovered models as `auto` state, inheriting `default_spawn` configuration
 4. Start listening on `127.0.0.1:8082`
+5. Optionally preload the configured `startup_model` if set
 
 On every subsequent startup:
 - Automatic rescan updates the model list (adds new, removes deleted cache files)
@@ -134,7 +136,7 @@ The router tracks each model's origin through a `state` field, which controls be
 
 ### Important: On-Demand Spawning
 
-**All models spawn only when first requested via the API.** The router never starts backends at boot. The `auto`/`manual` state controls only rescan behavior:
+Models spawn on demand when first requested via the API. Set `startup_model` to eagerly load a specific model at boot; all other models remain on-demand. The `auto`/`manual` state controls only rescan behavior:
 
 - `auto`: Managed by cache scanner, inherits `default_spawn`
 - `manual`: Protected from rescans, can have custom `spawn` configuration
@@ -183,6 +185,7 @@ Override with `--config`:
 ```json
 {
   "version": "1.0",
+  "startup_model": "",
   "router": {
     "host": "127.0.0.1",
     "port": 8082,
@@ -219,6 +222,10 @@ Override with `--config`:
 | `read_timeout_s` | `600` | Upstream read timeout (long for streaming) |
 | `admin_token` | `""` | Bearer token for admin endpoints (empty = no auth) |
 | `notify_model_swap` | `false` | Enable real-time SSE notifications during model swaps (shows unload/load/ready progress) |
+
+### Startup Model
+
+Use `startup_model` to eagerly launch a specific model when the router boots. The value must match a `name` entry under `models`; otherwise configuration loading fails. All other models remain on-demand and will start when first requested.
 
 ### Default Spawn Configuration
 

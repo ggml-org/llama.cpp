@@ -13,7 +13,7 @@ llama-router follows KISS (Keep It Simple, Stupid) principles:
 - **Separation of concerns**: Core routing logic (`RouterApp`) has zero I/O, persistence handled by admin layer
 - **Simple endpoint matching**: Prefix-based matching, no complex regex
 - **Transparent proxy**: Headers and streaming forwarded as-is
-- **On-demand only**: No models start at boot, everything spawns when first requested
+- **On-demand by default**: Models start on first request; `startup_model` can preload a chosen backend at boot
 - **Transparent operations**: Optional real-time notifications for swap feedback via SSE
 
 ### The auto + default_spawn Workflow
