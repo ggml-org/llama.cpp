@@ -1138,13 +1138,25 @@ static void llama_sampler_top_p_backend_apply(
     struct ggml_tensor * cdf = ggml_cumsum(ctx, softmax);
     ggml_set_name(cdf, "top_p_cdf");
 
-    // TODO: Make it inclusive of probability p
     // Invert CDF and add top-p value so that ggml_step yields 1 for values we want to keep
     struct ggml_tensor * cdf_scaled = ggml_scale_bias(ctx, cdf, -1.0f, sctx->p);
     ggml_set_name(cdf_scaled, "top_p_cdf_scaled");
 
     struct ggml_tensor * mask = ggml_step(ctx, cdf_scaled);
     ggml_set_name(mask, "top_p_mask");
+
+    // Taking the sum of the mask gives us the sum of elements after the threshold
+    // we are interested in.
+    struct ggml_tensor * idxf = ggml_sum(ctx, mask);
+    ggml_set_name(idxf, "dist_index_f32");
+
+    // Make top-p inclusive (i.e. return all values such that cum_sum/cdf >= p)
+    struct ggml_tensor * mask_reshaped = ggml_reshape_2d(ctx, mask, 1, mask->ne[0]);
+    // construct ones tensor to set the value in the mask
+    struct ggml_tensor * ones = ggml_dup_tensor(ctx, mask_reshaped);
+    ones = ggml_clamp(ctx, ones, 1.0f, 1.0f);
+    mask_reshaped = ggml_set_rows(ctx, mask_reshaped, ones, ggml_cast(ctx, ggml_repeat(ctx, idxf, mask), GGML_TYPE_I32));
+    mask = ggml_reshape_1d(ctx, mask_reshaped, mask->ne[0]);
 
     // Use ggml_scale_bias (output = (a * s) + b) which in this case becomes:
     // top_p_bias = (mask * 1e9f) - 1e9f.

@@ -512,6 +512,7 @@ static void test_backend_top_p_sampling(const char * model_path) {
         }
     }
     GGML_ASSERT(filtered_logits.size() < (size_t) test_ctx.n_vocab);
+    GGML_ASSERT(filtered_logits.size() > 0);
 
     // Sample using CPU sampler for verification to inspect they are reasonable
     struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
