@@ -1,7 +1,15 @@
 #pragma once
 
+#include <functional>
+#include <optional>
 #include <string>
 #include <vector>
+
+struct ProgressNotification {
+    std::string message;
+};
+
+using NotificationSink = std::function<void(const ProgressNotification &)>;
 
 struct SpawnConfig {
     std::vector<std::string> command;
@@ -28,6 +36,7 @@ struct RouterOptions {
     int         connection_timeout_s = 5;
     int         read_timeout_s       = 600;
     std::string admin_token;
+    bool        notify_model_swap = false;
 };
 
 struct RouterConfig {

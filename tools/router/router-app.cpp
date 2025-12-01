@@ -58,6 +58,7 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
                 target_group.c_str());
 
         terminate_process(it_proc->second);
+        notify_progress("[llama-router] Unloading " + it_proc->first + " (" + running_group + ")\n");
         wait_for_process_exit(it_proc->second, ROUTER_PROCESS_SHUTDOWN_TIMEOUT_MS);
         model_ports.erase(it_proc->first);
         it_proc = processes.erase(it_proc);
@@ -102,6 +103,8 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
     last_spawned_model = model_name;
     LOG_INF("Spawned %s (group '%s') with %zu args\n", model_name.c_str(), target_group.c_str(), command.size());
 
+    notify_progress("[llama-router] Loading " + model_name + " (" + target_group + ")\n");
+
     const std::string health_endpoint = spawn_cfg.health_endpoint.empty() ? "/health" : spawn_cfg.health_endpoint;
     if (!wait_for_backend_ready(port, health_endpoint, ROUTER_BACKEND_READY_TIMEOUT_MS, &proc_it->second)) {
         error = "backend not ready";
@@ -116,6 +119,7 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
     }
 
     LOG_INF("Backend ready on port %d\n", port);
+    notify_progress("[llama-router] Backend ready, generating response...\n");
     return true;
 }
 
@@ -161,4 +165,21 @@ void RouterApp::stop_all() {
         terminate_process(kv.second);
     }
     processes.clear();
+}
+
+void RouterApp::set_notification_sink(NotificationSink sink) {
+    std::lock_guard<std::mutex> lock(notification_mutex);
+    notification_sink = std::move(sink);
+}
+
+void RouterApp::clear_notification_sink() {
+    std::lock_guard<std::mutex> lock(notification_mutex);
+    notification_sink.reset();
+}
+
+void RouterApp::notify_progress(const std::string & message) {
+    std::lock_guard<std::mutex> lock(notification_mutex);
+    if (notification_sink) {
+        (*notification_sink)(ProgressNotification{message});
+    }
 }

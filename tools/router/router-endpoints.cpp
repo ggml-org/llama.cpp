@@ -45,17 +45,9 @@ void register_routes(httplib::Server & server, RouterApp & app) {
             res.set_content("no models running", "text/plain");
             return;
         }
-
-        std::string error;
-        if (!app.ensure_running(model, error)) {
-            LOG_WRN("Failed to ensure last spawned model %s: %s\n", model.c_str(), error.c_str());
-            res.status = 503;
-            res.set_content("no models running", "text/plain");
-            return;
-        }
         LOG_INF("Proxying %s to last spawned model %s\n", req.path.c_str(), model.c_str());
         const auto spawn_cfg = app.get_spawn_config(model);
-        proxy_request(req, res, app.upstream_for(model), app.get_config().router, spawn_cfg.proxy_endpoints);
+        proxy_request(req, res, app, model, spawn_cfg.proxy_endpoints);
     };
 
     server.Get("/props", proxy_last_spawned);
@@ -68,17 +60,10 @@ void register_routes(httplib::Server & server, RouterApp & app) {
         std::string model_name = model_it != req.matches.end() ? model_it->str() : std::string();
         ++model_it;
         const std::string endpoint_suffix = model_it != req.matches.end() ? model_it->str() : std::string();
-        std::string error;
-        if (!app.ensure_running(model_name, error)) {
-            LOG_WRN("Model %s unavailable: %s\n", model_name.c_str(), error.c_str());
-            res.status = 404;
-            res.set_content("{\"error\":\"model unavailable\"}", "application/json");
-            return;
-        }
         LOG_INF("Proxying %s for model %s\n", req.path.c_str(), model_name.c_str());
         const auto spawn_cfg = app.get_spawn_config(model_name);
         const std::string corrected_path = "/" + endpoint_suffix;
-        proxy_request(req, res, app.upstream_for(model_name), app.get_config().router, spawn_cfg.proxy_endpoints, corrected_path);
+        proxy_request(req, res, app, model_name, spawn_cfg.proxy_endpoints, corrected_path);
     });
 
     server.Post("/v1/chat/completions", [&app](const httplib::Request & req, httplib::Response & res) {
@@ -90,17 +75,9 @@ void register_routes(httplib::Server & server, RouterApp & app) {
             return;
         }
 
-        std::string error;
-        if (!app.ensure_running(model, error)) {
-            LOG_WRN("Model %s not available: %s\n", model.c_str(), error.c_str());
-            res.status = 404;
-            res.set_content("{\"error\":\"" + error + "\"}", "application/json");
-            return;
-        }
-
         LOG_INF("Proxying chat completion for model %s\n", model.c_str());
         const auto spawn_cfg = app.get_spawn_config(model);
-        proxy_request(req, res, app.upstream_for(model), app.get_config().router, spawn_cfg.proxy_endpoints);
+        proxy_request(req, res, app, model, spawn_cfg.proxy_endpoints);
     });
 
     server.set_error_handler([](const httplib::Request &, httplib::Response & res) {

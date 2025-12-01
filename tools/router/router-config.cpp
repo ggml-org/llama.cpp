@@ -135,6 +135,7 @@ const RouterOptions & get_default_router_options() {
         /*connection_timeout_s =*/ 5,
         /*read_timeout_s       =*/ 600,
         /*admin_token          =*/ "",
+        /*notify_model_swap    =*/ false,
     };
 
     return opts;
@@ -190,6 +191,10 @@ void write_config_file(const RouterConfig & cfg, const std::string & path) {
 
     if (!cfg.router.admin_token.empty()) {
         out["router"]["admin_token"] = cfg.router.admin_token;
+    }
+
+    if (cfg.router.notify_model_swap) {
+        out["router"]["notify_model_swap"] = true;
     }
 
     out["models"] = json::array();
@@ -316,6 +321,7 @@ RouterConfig load_config(const std::string & path) {
         if (r.contains("connection_timeout_s")) cfg.router.connection_timeout_s = r["connection_timeout_s"].get<int>();
         if (r.contains("read_timeout_s")) cfg.router.read_timeout_s = r["read_timeout_s"].get<int>();
         if (r.contains("admin_token")) cfg.router.admin_token = r["admin_token"].get<std::string>();
+        if (r.contains("notify_model_swap")) cfg.router.notify_model_swap = r["notify_model_swap"].get<bool>();
     }
     if (data.contains("models")) {
         for (const auto & m : data["models"]) {
