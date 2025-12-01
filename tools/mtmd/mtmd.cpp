@@ -110,6 +110,7 @@ mtmd_context_params mtmd_context_params_default() {
         /* flash_attn_type   */ LLAMA_FLASH_ATTN_TYPE_AUTO,
         /* image_min_tokens  */ -1,
         /* image_max_tokens  */ -1,
+        /* image_warmup_tokens */ -1,
     };
     return params;
 }
@@ -177,6 +178,7 @@ struct mtmd_context {
             /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
+            /* image_warmup_tokens */ ctx_params.image_warmup_tokens,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);

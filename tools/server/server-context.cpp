@@ -623,6 +623,8 @@ struct server_context_impl {
             mparams.flash_attn_type  = params_base.flash_attn_type;
             mparams.image_min_tokens = params_base.image_min_tokens;
             mparams.image_max_tokens = params_base.image_max_tokens;
+            mparams.image_warmup_tokens = params_base.image_warmup_tokens;
+
             mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
             if (mctx == nullptr) {
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());

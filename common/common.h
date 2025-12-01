@@ -433,6 +433,7 @@ struct common_params {
     std::vector<std::string> image; // path to image file(s)
     int image_min_tokens = -1;
     int image_max_tokens = -1;
+    int image_warmup_tokens = -1;
 
     // finetune
     struct lr_opt lr;
