@@ -196,7 +196,7 @@ Override with `--config`:
     "notify_model_swap": false
   },
   "default_spawn": {
-    "command": ["llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99"],
+    "command": ["llama-server", "--jinja", "--ctx-size", "4096", "--n-gpu-layers", "99"],
     "proxy_endpoints": ["/v1/", "/health", "/slots", "/props"],
     "health_endpoint": "/health"
   },
@@ -233,7 +233,7 @@ The `default_spawn` block defines how llama-server instances are launched:
 
 ```json
 {
-  "command": ["llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99"],
+  "command": ["llama-server", "--jinja", "--ctx-size", "4096", "--n-gpu-layers", "99"],
   "proxy_endpoints": ["/v1/", "/health", "/slots", "/props"],
   "health_endpoint": "/health"
 }
@@ -293,6 +293,7 @@ Individual models can override the default spawn configuration:
   "spawn": {
     "command": [
       "llama-server",
+      "--jinja",
       "--ctx-size", "8192",
       "--n-gpu-layers", "99",
       "--mmproj", "/path/to/mmproj-model-f16.gguf"

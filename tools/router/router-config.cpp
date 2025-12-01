@@ -107,7 +107,7 @@ static json serialize_spawn_config(const SpawnConfig & spawn) {
 const SpawnConfig & get_default_spawn() {
     static const SpawnConfig spawn = [] {
         SpawnConfig default_spawn = {
-            /*command          =*/ {"llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99"},
+            /*command          =*/ {"llama-server", "--jinja", "--ctx-size", "4096", "--n-gpu-layers", "99"},
             /*proxy_endpoints =*/ {"/v1/", "/health", "/slots", "/props"},
             /*health_endpoint =*/ "/health",
         };
