@@ -528,8 +528,32 @@ std::string common_sampler_prev_str(common_sampler * gsmpl, llama_context * ctx_
         return "";
     }
 
+    // Compute average token length from vocabulary for better memory allocation
+    const llama_model * model = llama_get_model(ctx_main);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    
+    // Sample a subset of tokens to estimate average length (sampling 1000 tokens or 10% of vocab, whichever is smaller)
+    static int avg_token_length = 0;
+    if (avg_token_length == 0) {
+        const int sample_size = std::min(1000, std::max(100, n_vocab / 10));
+        const int step = std::max(1, n_vocab / sample_size);
+        int64_t total_length = 0;
+        int count = 0;
+        
+        for (int32_t i = 0; i < n_vocab && count < sample_size; i += step) {
+            const char * text = llama_vocab_get_text(vocab, i);
+            if (text != nullptr) {
+                total_length += strlen(text);
+                count++;
+            }
+        }
+        
+        avg_token_length = count > 0 ? std::max(1, (int)(total_length / count)) : 8;
+    }
+
     std::string result;
-    result.reserve(8*n); // 8 is the average length of a token [citation needed], TODO: compute this from the vocab
+    result.reserve(avg_token_length * n);
 
     for (int i = n - 1; i >= 0; i--) {
         const llama_token id = gsmpl->prev.rat(i);
