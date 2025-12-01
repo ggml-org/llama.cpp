@@ -268,10 +268,10 @@ static bool is_reserved_name(const std::string & name) {
 }
 
 std::regex INVALID_RULE_CHARS_RE("[^a-zA-Z0-9-]+");
-std::regex GRAMMAR_LITERAL_ESCAPE_RE("[\r\n\"]");
+std::regex GRAMMAR_LITERAL_ESCAPE_RE("[\r\n\"\\\\]");
 std::regex GRAMMAR_RANGE_LITERAL_ESCAPE_RE("[\r\n\"\\]\\-\\\\]");
 std::unordered_map<char, std::string> GRAMMAR_LITERAL_ESCAPES = {
-    {'\r', "\\r"}, {'\n', "\\n"}, {'"', "\\\""}, {'-', "\\-"}, {']', "\\]"}
+    {'\r', "\\r"}, {'\n', "\\n"}, {'"', "\\\""}, {'-', "\\-"}, {']', "\\]"}, {'\\', "\\\\"}
 };
 
 std::unordered_set<char> NON_LITERAL_SET = {'|', '.', '(', ')', '[', ']', '{', '}', '*', '+', '?'};
@@ -302,6 +302,8 @@ static std::string format_literal(const std::string & literal) {
     });
     return "\"" + escaped + "\"";
 }
+
+std::string gbnf_format_literal(const std::string & literal) { return format_literal(literal); }
 
 class SchemaConverter {
 private:

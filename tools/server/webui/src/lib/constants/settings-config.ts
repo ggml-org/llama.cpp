@@ -6,6 +6,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	theme: 'system',
 	showTokensPerSecond: false,
 	showThoughtInProgress: false,
+	showToolCalls: false,
 	disableReasoningFormat: false,
 	keepStatsVisible: false,
 	showMessageStats: true,
@@ -13,6 +14,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	pasteLongTextToFileLen: 2500,
 	pdfAsImage: false,
 	showModelInfo: false,
+	disableAutoScroll: false,
 	renderUserContentAsMarkdown: false,
 	modelSelectorEnabled: false,
 	// make sure these default values are in sync with `common.h`
@@ -37,7 +39,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	max_tokens: -1,
 	custom: '', // custom json-stringified object
 	// experimental features
-	pyInterpreterEnabled: false
+	pyInterpreterEnabled: false,
+	enableContinueGeneration: false
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -80,6 +83,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showTokensPerSecond: 'Display generation speed in tokens per second during streaming.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
+	showToolCalls:
+		'Display tool call labels and payloads from Harmony-compatible delta.tool_calls data below assistant messages.',
 	disableReasoningFormat:
 		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
@@ -89,9 +94,13 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
 	pdfAsImage: 'Parse PDF as image instead of text (requires vision-capable model).',
 	showModelInfo: 'Display the model name used to generate each message below the message content.',
+	disableAutoScroll:
+		'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
 	renderUserContentAsMarkdown: 'Render user messages using markdown formatting in the chat.',
 	modelSelectorEnabled:
 		'Enable the model selector in the chat input to choose the inference model. Sends the associated model field in API requests.',
 	pyInterpreterEnabled:
-		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.'
+		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
+	enableContinueGeneration:
+		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
 };

@@ -49,6 +49,19 @@ def test_correct_api_key():
     assert "content" in res.body
 
 
+def test_correct_api_key_anthropic_header():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completions", data={
+        "prompt": "I believe the meaning of life is",
+    }, headers={
+        "X-Api-Key": TEST_API_KEY,
+    })
+    assert res.status_code == 200
+    assert "error" not in res.body
+    assert "content" in res.body
+
+
 def test_openai_library_correct_api_key():
     global server
     server.start()
