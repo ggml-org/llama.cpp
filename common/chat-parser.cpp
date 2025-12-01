@@ -915,8 +915,8 @@ static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
         form.tool_start  = "<|tool_call_begin|>";
         form.tool_sep    = "<|tool_call_argument_begin|>{";
         form.key_start   = "\"";
-        form.key_val_sep = "\": ";
-        form.val_end     = ", ";
+        form.key_val_sep = "\":";
+        form.val_end     = ",";
         form.tool_end    = "}<|tool_call_end|>";
         form.scope_end   = "<|tool_calls_section_end|>";
         form.raw_argval  = false;
