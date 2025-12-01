@@ -626,6 +626,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     switch (arch) {
         case LLM_ARCH_LLAMA:
             {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
                 if (hparams.n_expert == 8) {
                     switch (hparams.n_layer) {
                         case 32: type = LLM_TYPE_8x7B; break;
