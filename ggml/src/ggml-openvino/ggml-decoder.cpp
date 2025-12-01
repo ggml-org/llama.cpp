@@ -37,8 +37,12 @@
 
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
                              std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
-                             bool is_static) :
+                             bool is_static,
+                             bool is_prefill,
+                             int prefill_chunk_size) :
     m_is_static(is_static),
+    m_is_prefill(is_prefill),
+    m_prefill_chunk_size(prefill_chunk_size),
     m_cgraph(cgraph),
     m_model_weights(model_weights) {
     if (auto * env = getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS"); env && std::string(env) != "0") {
@@ -341,12 +345,16 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
     auto name = std::string(input->name);
     ov::PartialShape input_shape;
 
-    if (name == "inp_tokens" || name == "inp_pos" || name == "inp_out_ids") {
+    if (name == "inp_tokens" || name == "inp_pos") {
+        int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
+        input_shape = ov::PartialShape{1, 1, 1, len};
+
+    } else if (name == "inp_out_ids") {
         input_shape = ov::PartialShape{1, 1, 1, m_is_static ? 1 : -1};
 
     } else if (name.find("KQ_mask") == 0) {
         if (m_is_static) {
-            input_shape = ov::PartialShape{1, 1, 1, m_ctx};
+            input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_ctx};
         } else {
             input_shape = ov::PartialShape{-1, 1, -1, -1};
         }
@@ -359,7 +367,8 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
         }
 
     } else if (op && op->op == GGML_OP_SET_ROWS && op->src[1] == input) {
-        input_shape = ov::PartialShape{1, 1, 1, m_is_static ? 1 : -1};
+        int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
+        input_shape = ov::PartialShape{1, 1, 1, len};
 
     } else if (input->op == GGML_OP_VIEW) {
         // This case is added to make test-backend-ops work

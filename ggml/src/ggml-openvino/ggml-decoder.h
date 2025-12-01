@@ -26,7 +26,9 @@ public:
     // Graph decoder
     GgmlOvDecoder(ggml_cgraph * cgraph,
                   std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
-                  bool is_static);
+                  bool is_static,
+                  bool is_prefill = false,
+                  int prefill_chunk_size = 256);
 
     // Naive graph decoder
     GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::shared_ptr<ov::Node>> & model_weights);
@@ -159,6 +161,10 @@ public:
 
     void clear_model_weights() { m_model_weights.clear(); }
 
+    bool m_is_static = false;
+    bool m_is_prefill = false;
+    int m_prefill_chunk_size = 0;
+
 private:
     void set_input_output(ggml_tensor * node, bool naive = false);
     void add_extra_inputs();
@@ -170,8 +176,6 @@ private:
 
     void set_llm_params();
     void validate_cgraph() const;
-
-    bool m_is_static = false;
 
     ggml_cgraph * m_cgraph = nullptr;
     std::vector<ggml_tensor *> m_nodes;

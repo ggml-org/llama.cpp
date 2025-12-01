@@ -3,6 +3,7 @@
 #include "ggml-impl.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <openvino/runtime/core.hpp>
 
 enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph);
@@ -14,35 +15,47 @@ void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor
 void print_output_tensor_info(const std::string & name, const ov::Tensor & tensor, void * output_dst);
 
 template <typename T>
-std::vector<T> pad_input(const ggml_tensor * tensor, size_t padded_rows, size_t padded_cols, T pad_value) {
-    std::vector<T> padded_data(padded_rows * padded_cols, pad_value);
-    size_t rows = tensor->ne[1];
-    size_t cols = tensor->ne[0];
-    T * data = static_cast<T *>(tensor->data);
+std::vector<T> pad_input(const T * data,
+                         size_t rows,
+                         size_t cols,
+                         size_t padded_rows,
+                         size_t padded_cols,
+                         T pad_value) {
+    std::vector<T> padded(padded_rows * padded_cols, pad_value);
 
     for (size_t i = 0; i < std::min(rows, padded_rows); ++i) {
         for (size_t j = 0; j < std::min(cols, padded_cols); ++j) {
-            padded_data[i * padded_cols + j] = data[i * cols + j];
+            padded[i * padded_cols + j] = data[i * cols + j];
         }
     }
-    return padded_data;
+
+    return padded;
 }
 
-void set_zero_diagonal(std::vector<float> & matrix, size_t dim);
+template <typename T>
+std::vector<T> pad_input(const ggml_tensor * tensor, size_t padded_rows, size_t padded_cols, T pad_value) {
+    return pad_input<T>(reinterpret_cast<const T *>(tensor->data),
+                        static_cast<size_t>(tensor->ne[1]),  // rows
+                        static_cast<size_t>(tensor->ne[0]),  // cols
+                        padded_rows, padded_cols, pad_value);
+}
+
+void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols);
 
 const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 
-bool get_is_first_token(const ggml_tensor * inp_pos);
+bool get_is_prefill(const ggml_tensor * inp_pos);
 
 ov::AnyMap get_ov_compile_config(const std::string & device);
 
 std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & device);
 
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & param_name);
-ov::Tensor get_ov_input_tensor_static(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
-                                      const std::string & param_name,
-                                      int j,
-                                      int input_len);
+ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
+                                             const std::string & param_name);
+ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
+                                              const std::string & param_name,
+                                              int chunk_index);
 
 ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & result_name);
 
