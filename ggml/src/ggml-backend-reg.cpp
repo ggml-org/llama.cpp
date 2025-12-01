@@ -534,10 +534,19 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
     fs::path best_path;
 
     for (const auto & search_path : search_paths) {
-        if (!fs::exists(search_path)) {
-            GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
+        std::error_code ec;
+        bool is_exist = fs::exists(search_path, ec);
+        if (ec){
+            GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(search_path).c_str(), ec.message().c_str());
             continue;
         }
+        else{
+            if (!is_exist) {
+                GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
+                continue;
+            }
+        }
+
         fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied);
         for (const auto & entry : dir_it) {
             if (entry.is_regular_file()) {
@@ -575,7 +584,8 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
         for (const auto & search_path : search_paths) {
             fs::path filename = backend_filename_prefix().native() + name_path.native() + backend_filename_extension().native();
             fs::path path = search_path / filename;
-            if (fs::exists(path)) {
+            std::error_code ec;
+            if (fs::exists(path, ec)) {
                 return get_reg().load_backend(path, silent);
             }
         }
