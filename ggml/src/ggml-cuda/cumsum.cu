@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "cumsum.cuh"
 
 // Kernel to compute cumulative sum along the innermost dimension (ne[0])
@@ -26,8 +28,8 @@ static __global__ void cumsum_kernel(
         return;
     }
 
-    const T * src_row = (const T *) ((const char *) src + i1*nb01 + i2*nb02 + i3*nb03);
-    T       * dst_row = (T       *) ((      char *) dst + i1*nb1  + i2*nb2  + i3*nb3);
+    const T * src_row = src + i1 * nb01 + i2*nb02 + i3*nb03;
+    T       * dst_row = dst + i1 * nb1  + i2*nb2  + i3*nb3;
 
     const int tid = threadIdx.x;
     const int lane_id = tid % WARP_SIZE;
@@ -78,18 +80,17 @@ static void cumsum_cuda(
     // Shared memory size: one float per warp
     const int num_warps = (ne00 + WARP_SIZE - 1) / WARP_SIZE;
     const size_t shmem_size = num_warps * sizeof(float);
+    const size_t type_size = sizeof(T);
 
     int block_size = num_warps * WARP_SIZE;
-    if (block_size > CUDA_CUMSUM_BLOCK_SIZE) {
-        block_size = CUDA_CUMSUM_BLOCK_SIZE;
-    }
+    block_size = std::min(block_size, CUDA_CUMSUM_BLOCK_SIZE);
     dim3 block_dims(block_size, 1, 1);
 
     cumsum_kernel<<<grid_dims, block_dims, shmem_size, stream>>>(
         src, dst,
         ne00, ne01, ne02, ne03,
-        nb00, nb01, nb02, nb03,
-        nb0, nb1, nb2, nb3
+        nb00 / type_size, nb01 / type_size, nb02 / type_size, nb03 / type_size,
+        nb0 / type_size, nb1 / type_size, nb2 / type_size, nb3 / type_size
     );
 }
 
