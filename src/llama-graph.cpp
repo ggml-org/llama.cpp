@@ -2102,7 +2102,7 @@ void llm_graph_context::build_sampling() const {
             ggml_build_forward_expand(gf, data.sampled);
         }
 
-        if  (data.probs != nullptr) {
+        if (data.probs != nullptr) {
             res->t_sampled_probs[seq_id] = data.probs;
             ggml_build_forward_expand(gf, data.probs);
         }

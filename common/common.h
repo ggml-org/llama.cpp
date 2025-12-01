@@ -212,17 +212,11 @@ struct common_params_sampling {
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
 
-    bool backend_sampling = false; // enable backend sampling
+    bool backend_sampling = false;
 
     bool has_logit_bias() const {
         return !logit_bias.empty();
     }
-
-    bool is_disabled(enum common_sampler_type type) const;
-
-    // remove disabled samplers
-    // TODO: temporary until all samplers have llama_sampler_backend_ API [LLAMA_SAMPLER_BACKEND]
-    void filter_disabled();
 
     // print the parameters into a string
     std::string print() const;
@@ -661,7 +655,7 @@ std::vector<common_file_info> fs_list_files(const std::string & path);
 
 struct common_sampler;
 
-// note: defines object's lifetime
+// note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
     common_init_result(common_params & params);
     ~common_init_result();
