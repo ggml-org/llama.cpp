@@ -461,10 +461,18 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
     return x;
 }
 
+static __device__ __forceinline__ unsigned int get_warp_mask() {
+#ifdef __HIP_PLATFORM_AMD__
+    return __ballot(1); // HIP equivalent
+#else
+    return __activemask(); // CUDA
+#endif
+}
+
 template<typename T, int width = WARP_SIZE>
 static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
     const int lane_id = threadIdx.x % width;
-    const auto mask = __activemask();
+    const auto mask = get_warp_mask();
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
         const T t = __shfl_up_sync(mask, x, offset, width);
@@ -478,7 +486,7 @@ static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float2 warp_prefix_inclusive_sum(float2 a) {
     const int lane_id = threadIdx.x % width;
-    const auto mask = __activemask();
+    const auto mask = get_warp_mask();
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
         const float t_x = __shfl_up_sync(mask, a.x, offset, width);
@@ -495,12 +503,12 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ half2 warp_prefix_inclusive_sum(half2 a) {
 #ifdef FP16_AVAILABLE
     const int lane_id = threadIdx.x % width;
-    const auto mask = __activemask();
+    const auto mask = get_warp_mask();
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const t = __hadd2(__shfl_up_sync(mask, a, offset, width));
+        const half2 t = __shfl_up_sync(mask, a, offset, width);
         if (lane_id >= offset) {
-            a += t;
+            a = __hadd2(a, t);
         }
     }
     return a;
