@@ -1,6 +1,5 @@
 #include "llama-model.h"
 
-#include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
 #include "llama-cparams.h"
