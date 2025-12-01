@@ -209,10 +209,14 @@ add_library(ggml-base
             gguf.cpp
             uint8-buff-stream.cpp)
 
-set_target_properties(ggml-base PROPERTIES
-    VERSION ${GGML_VERSION}
-    SOVERSION ${GGML_VERSION_MAJOR}
-)
+# Set version properties for shared libraries ONLY when building as shared.
+# '-current_version' only allowed with '-dynamiclib'
+if (BUILD_SHARED_LIBS)
+    set_target_properties(ggml-base PROPERTIES
+        VERSION ${GGML_VERSION}
+        SOVERSION ${GGML_VERSION_MAJOR}
+    )
+endif()
 
 target_include_directories(ggml-base PRIVATE .)
 if (GGML_BACKEND_DL)
@@ -223,10 +227,12 @@ add_library(ggml
             ggml-backend-reg.cpp)
 add_library(ggml::ggml ALIAS ggml)
 
-set_target_properties(ggml PROPERTIES
-    VERSION ${GGML_VERSION}
-    SOVERSION ${GGML_VERSION_MAJOR}
-)
+if (BUILD_SHARED_LIBS)
+    set_target_properties(ggml PROPERTIES
+        VERSION ${GGML_VERSION}
+        SOVERSION ${GGML_VERSION_MAJOR}
+    )
+endif()
 
 if (GGML_BACKEND_DIR)
     if (NOT GGML_BACKEND_DL)
@@ -277,11 +283,15 @@ function(ggml_add_backend_library backend)
         target_compile_definitions(${backend} PUBLIC  GGML_BACKEND_SHARED)
     endif()
 
-    # Set versioning properties for all backend libraries
-    set_target_properties(${backend} PROPERTIES
-        VERSION ${GGML_VERSION}
-        SOVERSION ${GGML_VERSION_MAJOR}
-    )
+    # Set versioning properties for shared backend libraries only
+    # Note: MODULE libraries (used with GGML_BACKEND_DL) cannot have version properties
+    # on macOS as they use -bundle instead of -dynamiclib
+    if (${BUILD_SHARED_LIBS} AND NOT GGML_BACKEND_DL)
+        set_target_properties(${backend} PROPERTIES
+            VERSION ${GGML_VERSION}
+            SOVERSION ${GGML_VERSION_MAJOR}
+        )
+    endif()
 
     if(NOT GGML_AVAILABLE_BACKENDS)
         set(GGML_AVAILABLE_BACKENDS "${backend}"
