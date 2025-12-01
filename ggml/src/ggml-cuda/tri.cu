@@ -20,7 +20,7 @@ static __global__ void tri_kernel(
 
     const T * src_row = (const T *) ((const char *) src + i1*nb01 + i2*nb02 + i3*nb03);
     T       * dst_row = (T       *) ((      char *) dst + i1*nb1  + i2*nb2  + i3*nb3);
-    
+
     // Each thread processes elements at stride blockDim.x
     for (int64_t i0 = threadIdx.x; i0 < ne00; i0 += blockDim.x) {
         const bool keep = ((i0 < split_point) == prefix_keep);
