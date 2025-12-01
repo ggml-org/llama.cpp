@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include <mtmd.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -105,6 +106,18 @@ bool clip_is_glm(const struct clip_ctx * ctx);
 bool clip_is_qwen2vl(const struct clip_ctx * ctx);
 bool clip_is_llava(const struct clip_ctx * ctx);
 bool clip_is_gemma3(const struct clip_ctx * ctx);
+
+// [NEW] Added for Phi-3-Vision
+bool clip_is_phi3v(const struct clip_ctx * ctx);
+
+// [NEW] Optimized batch encoding for Phi-3-Vision
+// Handles looping, separator injection, and stitching internally.
+MTMD_API bool clip_image_batch_encode_phi3(
+    struct clip_ctx * ctx,
+    int n_threads,
+    const struct clip_image_f32_batch * imgs,
+    float * vec
+);
 
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec);
 

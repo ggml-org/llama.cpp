@@ -473,7 +473,7 @@ public:
 
     virtual ~llm_graph_result() = default;
 
-    ggml_tensor * get_tokens()      const { return t_tokens; }
+    auto          get_tokens() const -> ggml_tensor * { return t_tokens; }
     ggml_tensor * get_logits()      const { return t_logits; }
     ggml_tensor * get_embd()        const { return t_embd; }
     ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }

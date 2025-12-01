@@ -643,6 +643,7 @@ class ModelBase:
     @classmethod
     def from_model_architecture(cls, arch: str, model_type = ModelType.TEXT) -> type[ModelBase]:
         try:
+            print(cls._model_classes)
             return cls._model_classes[model_type][arch]
         except KeyError:
             raise NotImplementedError(f'Architecture {arch!r} not supported!') from None
@@ -4457,6 +4458,48 @@ class Phi3MiniModel(TextModel):
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_LONG), torch.tensor(long_factors, dtype=torch.float32))
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
 
+@ModelBase.register("Phi3VForCausalLM")
+class Phi3VisionModel(Phi3MiniModel):
+    """
+    GGUF converter for Phi-3 Vision (Text Part Only).
+
+    This strips out the vision encoder weights and metadata, creating a
+    standard Phi-3 GGUF file that can be paired with an external mmproj file.
+    """
+
+    # CRITICAL: Use PHI3, not PHI3_VISION.
+    # This tells llama.cpp to treat this as a standard text model.
+    model_arch = gguf.MODEL_ARCH.PHI3
+
+    def set_vocab(self):
+        return super().set_vocab()
+
+    def set_gguf_parameters(self):
+        # Only write standard text model parameters (context length, embedding size, etc.)
+        super().set_gguf_parameters()
+
+    def generate_extra_tensors(self):
+        # This handles the 'su' RoPE scaling factors (long/short) defined in Phi3MiniModel
+        yield from super().generate_extra_tensors()
+
+    def modify_tensors(
+            self,
+            data_torch: Tensor,
+            name: str,
+            bid: int | None,
+    ) -> Iterable[tuple[str, Tensor]]:
+
+        # The prefix for all vision-related weights in Phi-3-Vision
+        VISION_PREFIX = "model.vision_embed_tokens."
+
+        # 1. If it is a vision tensor, SKIP IT completely.
+        # We do not want these weights in the text model file.
+        if name.startswith(VISION_PREFIX):
+            return
+
+        # 2. If it is a text tensor, delegate to the standard Phi-3 logic.
+        # This handles token_embd, layers, output, norms, etc.
+        yield from super().modify_tensors(data_torch, name, bid)
 
 @ModelBase.register("PhiMoEForCausalLM")
 class PhiMoeModel(Phi3MiniModel):
@@ -7936,7 +7979,7 @@ class ChatGLMModel(TextModel):
         self.gguf_writer.add_context_length(self.hparams.get("seq_length", n_embed))
         self.gguf_writer.add_embedding_length(n_embed)
         self.gguf_writer.add_feed_forward_length(self.hparams.get("ffn_hidden_size", self.hparams.get("intermediate_size", 4 * n_embed)))
-        self.gguf_writer.add_block_count(self.hparams.get("num_layers", self.hparams["num_hidden_layers"]))
+        self.gguf_writer.add_block_count(self.hparams.get("num_layers", self.hparams.get("num_hidden_layers", 0)))
         self.gguf_writer.add_head_count(n_head)
         self.gguf_writer.add_head_count_kv(n_head_kv)
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("layernorm_epsilon",1e-5))
@@ -10143,6 +10186,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # maybe we should fallback to text model's arch in that case, since not many models have both
     text_config = hparams.get("text_config", {})
     vision_config = hparams.get("vision_config", {})
+    print(hparams.get("architectures"))
     arch = None
     if (arches := hparams.get("architectures")) is not None and len(arches) > 0:
         arch = arches[0]
