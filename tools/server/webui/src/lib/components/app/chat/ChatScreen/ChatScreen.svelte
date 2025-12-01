@@ -575,6 +575,7 @@
 
 <DialogChatError
 	message={activeErrorDialog?.message ?? ''}
+	contextInfo={activeErrorDialog?.contextInfo}
 	onOpenChange={handleErrorDialogOpenChange}
 	open={Boolean(activeErrorDialog)}
 	type={activeErrorDialog?.type ?? 'server'}
