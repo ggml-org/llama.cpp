@@ -43,6 +43,7 @@ struct RouterConfig {
     std::string              version;
     SpawnConfig              default_spawn;
     RouterOptions            router;
+    std::string              startup_model;
     std::vector<ModelConfig> models;
 };
 

@@ -189,6 +189,8 @@ void write_config_file(const RouterConfig & cfg, const std::string & path) {
                      {"connection_timeout_s", cfg.router.connection_timeout_s},
                      {"read_timeout_s", cfg.router.read_timeout_s}};
 
+    out["startup_model"] = cfg.startup_model;
+
     if (!cfg.router.admin_token.empty()) {
         out["router"]["admin_token"] = cfg.router.admin_token;
     }
@@ -226,6 +228,7 @@ RouterConfig generate_default_config(const std::string & path) {
     cfg.version       = "1.0";
     cfg.default_spawn = get_default_spawn();
     cfg.router        = get_default_router_options();
+    cfg.startup_model = "";
     cfg.models        = scan_default_models();
 
     LOG_INF("Discovered %zu default models while generating config\n", cfg.models.size());
@@ -323,6 +326,9 @@ RouterConfig load_config(const std::string & path) {
         if (r.contains("admin_token")) cfg.router.admin_token = r["admin_token"].get<std::string>();
         if (r.contains("notify_model_swap")) cfg.router.notify_model_swap = r["notify_model_swap"].get<bool>();
     }
+    if (data.contains("startup_model")) {
+        cfg.startup_model = data["startup_model"].get<std::string>();
+    }
     if (data.contains("models")) {
         for (const auto & m : data["models"]) {
             ModelConfig mc;
@@ -350,6 +356,8 @@ RouterConfig load_config(const std::string & path) {
 
     validate_port(cfg.router.port, "router");
     validate_port(cfg.router.base_port, "base");
+    bool startup_found = cfg.startup_model.empty();
+
     for (const auto & model : cfg.models) {
         if (model.name.empty()) {
             throw std::runtime_error("model entry missing name");
@@ -364,6 +372,14 @@ RouterConfig load_config(const std::string & path) {
         if (spawn.command.empty()) {
             throw std::runtime_error("spawn command missing for model: " + model.name);
         }
+
+        if (!startup_found && model.name == cfg.startup_model) {
+            startup_found = true;
+        }
+    }
+
+    if (!startup_found) {
+        throw std::runtime_error("startup_model not found in configured models: " + cfg.startup_model);
     }
 
     if (rescan_result.added > 0 || rescan_result.removed > 0) {

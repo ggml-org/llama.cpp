@@ -205,6 +205,16 @@ int main(int argc, char ** argv) {
     RouterApp app(cfg);
     LOG_INF("Initialized RouterApp with default spawn command size=%zu\n", cfg.default_spawn.command.size());
 
+    if (!cfg.startup_model.empty()) {
+        std::string error;
+        LOG_INF("Ensuring startup model '%s' is running before accepting requests\n", cfg.startup_model.c_str());
+        if (!app.ensure_running(cfg.startup_model, error)) {
+            LOG_ERR("Failed to start startup_model '%s': %s\n", cfg.startup_model.c_str(), error.c_str());
+            return 1;
+        }
+        LOG_INF("Startup model '%s' is ready\n", cfg.startup_model.c_str());
+    }
+
     httplib::Server server;
     g_server = &server;
     signal(SIGINT, signal_handler);
