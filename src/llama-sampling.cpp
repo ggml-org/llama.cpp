@@ -1287,7 +1287,7 @@ static struct llama_sampler_i llama_sampler_top_p_i = {
 };
 
 struct llama_sampler * llama_sampler_init_top_p(float p, size_t min_keep) {
-    const bool is_empty = (p <= 0.0f);
+    const bool is_empty = p >= 1.0f;
 
     if (is_empty) {
         return llama_sampler_init_empty("top-p?");
