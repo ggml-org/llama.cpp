@@ -21,17 +21,17 @@ static __global__ void tri_kernel(
     T       * dst_row = dst + i1*nb1  + i2*nb2  + i3*nb3;
 
     if constexpr (prefix_keep) {
-        for (int64_t i0 = threadIdx.x; i0 < split_point; i0 += blockDim.x) {            
+        for (int64_t i0 = threadIdx.x; i0 < split_point; i0 += blockDim.x) {
             dst_row[i0] = src_row[i0];
         }
-        for (int64_t i0 = threadIdx.x + split_point; i0 < ne00; i0 += blockDim.x) {            
+        for (int64_t i0 = threadIdx.x + split_point; i0 < ne00; i0 += blockDim.x) {
             dst_row[i0] = T(0);
         }
     } else {
-        for (int64_t i0 = threadIdx.x; i0 < split_point; i0 += blockDim.x) {            
+        for (int64_t i0 = threadIdx.x; i0 < split_point; i0 += blockDim.x) {
             dst_row[i0] = T(0);
         }
-        for (int64_t i0 = threadIdx.x + split_point; i0 < ne00; i0 += blockDim.x) {            
+        for (int64_t i0 = threadIdx.x + split_point; i0 < ne00; i0 += blockDim.x) {
             dst_row[i0] = src_row[i0];
         }
     }
