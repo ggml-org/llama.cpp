@@ -1,5 +1,25 @@
 import { config } from '$lib/stores/settings.svelte';
+import { selectedModelName } from '$lib/stores/models.svelte';
 import { slotsService } from './slots';
+import type {
+	ApiChatCompletionRequest,
+	ApiChatCompletionResponse,
+	ApiChatCompletionStreamChunk,
+	ApiChatCompletionToolCall,
+	ApiChatCompletionToolCallDelta,
+	ApiChatMessageData
+} from '$lib/types/api';
+import type {
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraAudioFile,
+	DatabaseMessageExtraImageFile,
+	DatabaseMessageExtraLegacyContext,
+	DatabaseMessageExtraPdfFile,
+	DatabaseMessageExtraTextFile
+} from '$lib/types/database';
+import type { ChatMessagePromptProgress, ChatMessageTimings } from '$lib/types/chat';
+import type { SettingsChatServiceOptions } from '$lib/types/settings';
 /**
  * ChatService - Low-level API communication layer for llama.cpp server interactions
  *
@@ -51,6 +71,10 @@ export class ChatService {
 			onChunk,
 			onComplete,
 			onError,
+			onReasoningChunk,
+			onToolCallChunk,
+			onModel,
+			onFirstValidChunk,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -117,6 +141,13 @@ export class ChatService {
 			})),
 			stream
 		};
+
+		const modelSelectorEnabled = Boolean(currentConfig.modelSelectorEnabled);
+		const activeModel = modelSelectorEnabled ? selectedModelName() : null;
+
+		if (modelSelectorEnabled && activeModel) {
+			requestBody.model = activeModel;
+		}
 
 		requestBody.reasoning_format = currentConfig.disableReasoningFormat ? 'none' : 'auto';
 
@@ -189,13 +220,22 @@ export class ChatService {
 					onChunk,
 					onComplete,
 					onError,
-					options.onReasoningChunk,
+					onReasoningChunk,
+					onToolCallChunk,
+					onModel,
+					onFirstValidChunk,
 					conversationId,
 					abortController.signal
 				);
 				return;
 			} else {
-				return this.handleNonStreamResponse(response, onComplete, onError);
+				return this.handleNonStreamResponse(
+					response,
+					onComplete,
+					onError,
+					onToolCallChunk,
+					onModel
+				);
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
@@ -251,10 +291,14 @@ export class ChatService {
 		onComplete?: (
 			response: string,
 			reasoningContent?: string,
-			timings?: ChatMessageTimings
+			timings?: ChatMessageTimings,
+			toolCalls?: string
 		) => void,
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void,
+		onToolCallChunk?: (chunk: string) => void,
+		onModel?: (model: string) => void,
+		onFirstValidChunk?: () => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal
 	): Promise<void> {
@@ -267,9 +311,50 @@ export class ChatService {
 		const decoder = new TextDecoder();
 		let aggregatedContent = '';
 		let fullReasoningContent = '';
-		let hasReceivedData = false;
+		let aggregatedToolCalls: ApiChatCompletionToolCall[] = [];
 		let lastTimings: ChatMessageTimings | undefined;
 		let streamFinished = false;
+		let modelEmitted = false;
+		let firstValidChunkEmitted = false;
+		let toolCallIndexOffset = 0;
+		let hasOpenToolCallBatch = false;
+
+		const finalizeOpenToolCallBatch = () => {
+			if (!hasOpenToolCallBatch) {
+				return;
+			}
+
+			toolCallIndexOffset = aggregatedToolCalls.length;
+			hasOpenToolCallBatch = false;
+		};
+
+		const processToolCallDelta = (toolCalls?: ApiChatCompletionToolCallDelta[]) => {
+			if (!toolCalls || toolCalls.length === 0) {
+				return;
+			}
+
+			aggregatedToolCalls = this.mergeToolCallDeltas(
+				aggregatedToolCalls,
+				toolCalls,
+				toolCallIndexOffset
+			);
+
+			if (aggregatedToolCalls.length === 0) {
+				return;
+			}
+
+			hasOpenToolCallBatch = true;
+
+			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
+
+			if (!serializedToolCalls) {
+				return;
+			}
+
+			if (!abortSignal?.aborted) {
+				onToolCallChunk?.(serializedToolCalls);
+			}
+		};
 
 		try {
 			let chunk = '';
@@ -298,10 +383,25 @@ export class ChatService {
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
 
+							if (!firstValidChunkEmitted && parsed.object === 'chat.completion.chunk') {
+								firstValidChunkEmitted = true;
+
+								if (!abortSignal?.aborted) {
+									onFirstValidChunk?.();
+								}
+							}
+
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
+							const toolCalls = parsed.choices[0]?.delta?.tool_calls;
 							const timings = parsed.timings;
 							const promptProgress = parsed.prompt_progress;
+
+							const chunkModel = this.extractModelName(parsed);
+							if (chunkModel && !modelEmitted) {
+								modelEmitted = true;
+								onModel?.(chunkModel);
+							}
 
 							if (timings || promptProgress) {
 								this.updateProcessingState(timings, promptProgress, conversationId);
@@ -311,7 +411,7 @@ export class ChatService {
 							}
 
 							if (content) {
-								hasReceivedData = true;
+								finalizeOpenToolCallBatch();
 								aggregatedContent += content;
 								if (!abortSignal?.aborted) {
 									onChunk?.(content);
@@ -319,12 +419,14 @@ export class ChatService {
 							}
 
 							if (reasoningContent) {
-								hasReceivedData = true;
+								finalizeOpenToolCallBatch();
 								fullReasoningContent += reasoningContent;
 								if (!abortSignal?.aborted) {
 									onReasoningChunk?.(reasoningContent);
 								}
 							}
+
+							processToolCallDelta(toolCalls);
 						} catch (e) {
 							console.error('Error parsing JSON chunk:', e);
 						}
@@ -337,12 +439,17 @@ export class ChatService {
 			if (abortSignal?.aborted) return;
 
 			if (streamFinished) {
-				if (!hasReceivedData && aggregatedContent.length === 0) {
-					const noResponseError = new Error('No response received from server. Please try again.');
-					throw noResponseError;
-				}
+				finalizeOpenToolCallBatch();
 
-				onComplete?.(aggregatedContent, fullReasoningContent || undefined, lastTimings);
+				const finalToolCalls =
+					aggregatedToolCalls.length > 0 ? JSON.stringify(aggregatedToolCalls) : undefined;
+
+				onComplete?.(
+					aggregatedContent,
+					fullReasoningContent || undefined,
+					lastTimings,
+					finalToolCalls
+				);
 			}
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error('Stream error');
@@ -353,6 +460,54 @@ export class ChatService {
 		} finally {
 			reader.releaseLock();
 		}
+	}
+
+	private mergeToolCallDeltas(
+		existing: ApiChatCompletionToolCall[],
+		deltas: ApiChatCompletionToolCallDelta[],
+		indexOffset = 0
+	): ApiChatCompletionToolCall[] {
+		const result = existing.map((call) => ({
+			...call,
+			function: call.function ? { ...call.function } : undefined
+		}));
+
+		for (const delta of deltas) {
+			const index =
+				typeof delta.index === 'number' && delta.index >= 0
+					? delta.index + indexOffset
+					: result.length;
+
+			while (result.length <= index) {
+				result.push({ function: undefined });
+			}
+
+			const target = result[index]!;
+
+			if (delta.id) {
+				target.id = delta.id;
+			}
+
+			if (delta.type) {
+				target.type = delta.type;
+			}
+
+			if (delta.function) {
+				const fn = target.function ? { ...target.function } : {};
+
+				if (delta.function.name) {
+					fn.name = delta.function.name;
+				}
+
+				if (delta.function.arguments) {
+					fn.arguments = (fn.arguments ?? '') + delta.function.arguments;
+				}
+
+				target.function = fn;
+			}
+		}
+
+		return result;
 	}
 
 	/**
@@ -370,9 +525,12 @@ export class ChatService {
 		onComplete?: (
 			response: string,
 			reasoningContent?: string,
-			timings?: ChatMessageTimings
+			timings?: ChatMessageTimings,
+			toolCalls?: string
 		) => void,
-		onError?: (error: Error) => void
+		onError?: (error: Error) => void,
+		onToolCallChunk?: (chunk: string) => void,
+		onModel?: (model: string) => void
 	): Promise<string> {
 		try {
 			const responseText = await response.text();
@@ -383,19 +541,39 @@ export class ChatService {
 			}
 
 			const data: ApiChatCompletionResponse = JSON.parse(responseText);
+
+			const responseModel = this.extractModelName(data);
+			if (responseModel) {
+				onModel?.(responseModel);
+			}
+
 			const content = data.choices[0]?.message?.content || '';
 			const reasoningContent = data.choices[0]?.message?.reasoning_content;
+			const toolCalls = data.choices[0]?.message?.tool_calls;
 
 			if (reasoningContent) {
 				console.log('Full reasoning content:', reasoningContent);
 			}
 
-			if (!content.trim()) {
+			let serializedToolCalls: string | undefined;
+
+			if (toolCalls && toolCalls.length > 0) {
+				const mergedToolCalls = this.mergeToolCallDeltas([], toolCalls);
+
+				if (mergedToolCalls.length > 0) {
+					serializedToolCalls = JSON.stringify(mergedToolCalls);
+					if (serializedToolCalls) {
+						onToolCallChunk?.(serializedToolCalls);
+					}
+				}
+			}
+
+			if (!content.trim() && !serializedToolCalls) {
 				const noResponseError = new Error('No response received from server. Please try again.');
 				throw noResponseError;
 			}
 
-			onComplete?.(content, reasoningContent);
+			onComplete?.(content, reasoningContent, undefined, serializedToolCalls);
 
 			return content;
 		} catch (error) {
@@ -459,6 +637,19 @@ export class ChatService {
 			contentParts.push({
 				type: 'text',
 				text: `\n\n--- File: ${textFile.name} ---\n${textFile.content}`
+			});
+		}
+
+		// Handle legacy 'context' type from old webui (pasted content)
+		const legacyContextFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraLegacyContext =>
+				extra.type === 'context'
+		);
+
+		for (const legacyContextFile of legacyContextFiles) {
+			contentParts.push({
+				type: 'text',
+				text: `\n\n--- File: ${legacyContextFile.name} ---\n${legacyContextFile.content}`
 			});
 		}
 
@@ -610,6 +801,39 @@ export class ChatService {
 			fallback.name = 'HttpError';
 			return fallback;
 		}
+	}
+
+	private extractModelName(data: unknown): string | undefined {
+		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+			return typeof value === 'object' && value !== null
+				? (value as Record<string, unknown>)
+				: undefined;
+		};
+
+		const getTrimmedString = (value: unknown): string | undefined => {
+			return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+		};
+
+		const root = asRecord(data);
+		if (!root) return undefined;
+
+		// 1) root (some implementations provide `model` at the top level)
+		const rootModel = getTrimmedString(root.model);
+		if (rootModel) return rootModel;
+
+		// 2) streaming choice (delta) or final response (message)
+		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
+		if (!firstChoice) return undefined;
+
+		// priority: delta.model (first chunk) else message.model (final response)
+		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
+		if (deltaModel) return deltaModel;
+
+		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
+		if (messageModel) return messageModel;
+
+		// avoid guessing from non-standard locations (metadata, etc.)
+		return undefined;
 	}
 
 	private updateProcessingState(

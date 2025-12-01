@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
-	import { ChatSidebar, ConversationTitleUpdateDialog } from '$lib/components/app';
+	import { ChatSidebar, DialogConversationTitleUpdate } from '$lib/components/app';
 	import {
 		activeMessages,
 		isLoading,
@@ -44,12 +44,12 @@
 			}
 		}
 
-		if (isCtrlOrCmd && event.shiftKey && event.key === 'o') {
+		if (isCtrlOrCmd && event.shiftKey && event.key === 'O') {
 			event.preventDefault();
 			goto('?new_chat=true#/');
 		}
 
-		if (event.shiftKey && isCtrlOrCmd && event.key === 'e') {
+		if (event.shiftKey && isCtrlOrCmd && event.key === 'E') {
 			event.preventDefault();
 
 			if (chatSidebar?.editActiveConversation) {
@@ -150,7 +150,7 @@
 
 <Toaster richColors />
 
-<ConversationTitleUpdateDialog
+<DialogConversationTitleUpdate
 	bind:open={titleUpdateDialogOpen}
 	currentTitle={titleUpdateCurrentTitle}
 	newTitle={titleUpdateNewTitle}
@@ -165,10 +165,10 @@
 		</Sidebar.Root>
 
 		<Sidebar.Trigger
-			class="transition-left absolute h-8 w-8 duration-200 ease-linear {sidebarOpen
+			class="transition-left absolute left-0 z-[900] h-8 w-8 duration-200 ease-linear {sidebarOpen
 				? 'md:left-[var(--sidebar-width)]'
-				: 'left-0'}"
-			style="translate: 1rem 1rem; z-index: 99999;"
+				: ''}"
+			style="translate: 1rem 1rem;"
 		/>
 
 		<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">

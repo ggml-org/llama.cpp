@@ -78,6 +78,7 @@ class ServerProcess:
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
     server_metrics: bool | None = False
+    kv_unified: bool | None = False
     server_slots: bool | None = False
     pooling: str | None = None
     draft: int | None = None
@@ -159,6 +160,8 @@ class ServerProcess:
             server_args.append("--reranking")
         if self.server_metrics:
             server_args.append("--metrics")
+        if self.kv_unified:
+            server_args.append("--kv-unified")
         if self.server_slots:
             server_args.append("--slots")
         else:
@@ -202,6 +205,8 @@ class ServerProcess:
             server_args.append("--no-webui")
         if self.jinja:
             server_args.append("--jinja")
+        else:
+            server_args.append("--no-jinja")
         if self.reasoning_format is not None:
             server_args.extend(("--reasoning-format", self.reasoning_format))
         if self.reasoning_budget is not None:

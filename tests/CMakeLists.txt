@@ -196,7 +196,7 @@ if (NOT WIN32)
     llama_build_and_test(test-arg-parser.cpp)
 endif()
 
-if (NOT LLAMA_SANITIZE_ADDRESS)
+if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
   llama_build_and_test(test-opt.cpp)
 endif()
