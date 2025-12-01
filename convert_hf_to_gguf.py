@@ -565,7 +565,7 @@ class ModelBase:
                             gguf.MODEL_TENSOR.ALTUP_PREDICT_COEF,
                         )
                     )
-                    or not new_name.endswith(".weight")
+                    or new_name[-7:] not in (".weight", ".lora_a", ".lora_b")
                 ):
                     data_qtype = gguf.GGMLQuantizationType.F32
 
@@ -1673,11 +1673,9 @@ class GPTNeoXModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPTNEOX
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["num_hidden_layers"]
-
         self.gguf_writer.add_context_length(self.hparams["max_position_embeddings"])
         self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
         self.gguf_writer.add_rope_dimension_count(
             int(self.hparams["rotary_pct"] * (self.hparams["hidden_size"] // self.hparams["num_attention_heads"])),
@@ -1735,7 +1733,7 @@ class BloomModel(TextModel):
         self.gguf_writer.add_context_length(self.hparams.get("seq_length", n_embed))
         self.gguf_writer.add_embedding_length(n_embed)
         self.gguf_writer.add_feed_forward_length(4 * n_embed)
-        self.gguf_writer.add_block_count(self.hparams["n_layer"])
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(n_head)
         self.gguf_writer.add_head_count_kv(n_head)
         self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_epsilon"])
@@ -1798,10 +1796,9 @@ class MPTModel(TextModel):
             self.gguf_writer.add_unk_token_id(0)
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["n_layers"]
         self.gguf_writer.add_context_length(self.hparams["max_seq_len"])
         self.gguf_writer.add_embedding_length(self.hparams["d_model"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(4 * self.hparams["d_model"])
         self.gguf_writer.add_head_count(self.hparams["n_heads"])
         if kv_n_heads := self.hparams["attn_config"].get("kv_n_heads"):
@@ -1834,7 +1831,6 @@ class OrionModel(TextModel):
         self._set_vocab_sentencepiece()
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["num_hidden_layers"]
         head_count = self.hparams["num_attention_heads"]
         head_count_kv = self.hparams.get("num_key_value_heads", head_count)
 
@@ -1852,7 +1848,7 @@ class OrionModel(TextModel):
         self.gguf_writer.add_tensor_data_layout("Meta AI original pth")
         self.gguf_writer.add_context_length(ctx_length)
         self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
         self.gguf_writer.add_head_count(head_count)
         self.gguf_writer.add_head_count_kv(head_count_kv)
@@ -1869,7 +1865,6 @@ class BaichuanModel(TextModel):
         self._set_vocab_sentencepiece()
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["num_hidden_layers"]
         head_count = self.hparams["num_attention_heads"]
         head_count_kv = self.hparams.get("num_key_value_heads", head_count)
 
@@ -1886,7 +1881,7 @@ class BaichuanModel(TextModel):
         self.gguf_writer.add_tensor_data_layout("Meta AI original pth")
         self.gguf_writer.add_context_length(ctx_length)
         self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
         self.gguf_writer.add_rope_dimension_count(self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
         self.gguf_writer.add_head_count(head_count)
@@ -1993,7 +1988,6 @@ class XverseModel(TextModel):
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["num_hidden_layers"]
         head_count = self.hparams["num_attention_heads"]
         head_count_kv = self.hparams.get("num_key_value_heads", head_count)
 
@@ -2010,7 +2004,7 @@ class XverseModel(TextModel):
         self.gguf_writer.add_tensor_data_layout("Meta AI original pth")
         self.gguf_writer.add_context_length(ctx_length)
         self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
         self.gguf_writer.add_rope_dimension_count(self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
         self.gguf_writer.add_head_count(head_count)
@@ -2053,10 +2047,6 @@ class FalconModel(TextModel):
     model_arch = gguf.MODEL_ARCH.FALCON
 
     def set_gguf_parameters(self):
-        block_count = self.hparams.get("num_hidden_layers")
-        if block_count is None:
-            block_count = self.hparams["n_layer"]  # old name
-
         n_head = self.hparams.get("num_attention_heads")
         if n_head is None:
             n_head = self.hparams["n_head"]  # old name
@@ -2069,7 +2059,7 @@ class FalconModel(TextModel):
         self.gguf_writer.add_tensor_data_layout("jploski")  # qkv tensor transform
         self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
         self.gguf_writer.add_feed_forward_length(4 * self.hparams["hidden_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(n_head)
         self.gguf_writer.add_head_count_kv(n_head_kv)
         self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_epsilon"])
@@ -2107,12 +2097,10 @@ class StarCoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["n_layer"]
-
         self.gguf_writer.add_context_length(self.hparams["n_positions"])
         self.gguf_writer.add_embedding_length(self.hparams["n_embd"])
         self.gguf_writer.add_feed_forward_length(4 * self.hparams["n_embd"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(self.hparams["n_head"])
         self.gguf_writer.add_head_count_kv(1)
         self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_epsilon"])
@@ -2142,14 +2130,12 @@ class RefactModel(TextModel):
         multiple_of = 256
         ff_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
 
-        block_count = self.hparams["n_layer"]
-
         # refact uses Alibi. So this is from config.json which might be used by training.
         self.gguf_writer.add_context_length(self.hparams["n_positions"])
         self.gguf_writer.add_embedding_length(self.hparams["n_embd"])
 
         self.gguf_writer.add_feed_forward_length(ff_dim)
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(self.hparams["n_head"])
         self.gguf_writer.add_head_count_kv(1)
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["layer_norm_epsilon"])
@@ -2196,11 +2182,10 @@ class StableLMModel(TextModel):
 
     def set_gguf_parameters(self):
         hparams = self.hparams
-        block_count = hparams["num_hidden_layers"]
 
         self.gguf_writer.add_context_length(hparams["max_position_embeddings"])
         self.gguf_writer.add_embedding_length(hparams["hidden_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
         rotary_factor = self.find_hparam(["partial_rotary_factor", "rope_pct"])
         self.gguf_writer.add_rope_dimension_count(int(rotary_factor * (hparams["hidden_size"] // hparams["num_attention_heads"])))
@@ -3151,7 +3136,7 @@ class DbrxModel(TextModel):
     def set_gguf_parameters(self):
         ffn_config = self.hparams["ffn_config"]
         attn_config = self.hparams["attn_config"]
-        self.gguf_writer.add_block_count(self.hparams["n_layers"])
+        self.gguf_writer.add_block_count(self.block_count)
 
         self.gguf_writer.add_context_length(self.hparams["max_seq_len"])
         self.gguf_writer.add_embedding_length(self.hparams["d_model"])
@@ -3353,7 +3338,7 @@ class QwenModel(TextModel):
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_context_length(self.hparams["max_position_embeddings"])
-        self.gguf_writer.add_block_count(self.hparams["num_hidden_layers"])
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
         self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
         self.gguf_writer.add_rope_freq_base(self.hparams["rotary_emb_base"])
@@ -4198,6 +4183,51 @@ class Qwen3MoeModel(Qwen2MoeModel):
         super().set_vocab()
 
 
+@ModelBase.register("Qwen3NextForCausalLM")
+class Qwen3NextModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3NEXT
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_ssm_conv_kernel(self.hparams["linear_conv_kernel_dim"])
+        self.gguf_writer.add_ssm_state_size(self.hparams["linear_key_head_dim"])
+        self.gguf_writer.add_ssm_group_count(self.hparams["linear_num_key_heads"])
+        self.gguf_writer.add_ssm_time_step_rank(self.hparams["linear_num_value_heads"])
+        self.gguf_writer.add_ssm_inner_size(self.hparams["linear_value_head_dim"] * self.hparams["linear_num_value_heads"])
+        if (rope_dim := self.hparams.get("head_dim")) is None:
+            rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+        self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.25)))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mtp"):
+            return [] # ignore MTP layers for now
+        if name.endswith(".A_log"):
+            data_torch = -torch.exp(data_torch)
+        elif name.endswith(".dt_bias"):
+            name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+        elif "conv1d" in name:
+            data_torch = data_torch.squeeze()
+        elif name.endswith("norm.weight") and not name.endswith("linear_attn.norm.weight"):
+            data_torch = data_torch + 1
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("RND1")
+class RND1Model(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.RND1
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # RND1 specific parameters
+        # RND1 uses bidirectional attention
+        self.gguf_writer.add_causal_attention(False)
+
+        if (mask_token_id := self.hparams.get("mask_token_id")) is not None:
+            self.gguf_writer.add_mask_token_id(mask_token_id)
+
+
 @ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration")
 class Qwen3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
@@ -4384,7 +4414,7 @@ class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
 
     def set_gguf_parameters(self):
-        self.gguf_writer.add_block_count(self.hparams["n_layer"])
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_context_length(self.hparams["n_ctx"])
         self.gguf_writer.add_embedding_length(self.hparams["n_embd"])
         self.gguf_writer.add_feed_forward_length(4 * self.hparams["n_embd"])
@@ -4416,8 +4446,6 @@ class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2
 
     def set_gguf_parameters(self):
-        block_count = self.find_hparam(["num_hidden_layers", "n_layer"])
-
         rot_pct = self.find_hparam(["partial_rotary_factor"])
         n_embd = self.find_hparam(["hidden_size", "n_embd"])
         n_head = self.find_hparam(["num_attention_heads", "n_head"])
@@ -4426,7 +4454,7 @@ class Phi2Model(TextModel):
 
         self.gguf_writer.add_embedding_length(n_embd)
         self.gguf_writer.add_feed_forward_length(4 * n_embd)
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(n_head)
         self.gguf_writer.add_head_count_kv(n_head)
         self.gguf_writer.add_layer_norm_eps(self.find_hparam(["layer_norm_epsilon", "layer_norm_eps"]))
@@ -4544,8 +4572,6 @@ class Phi3MiniModel(TextModel):
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
-        block_count = self.find_hparam(["num_hidden_layers", "n_layer"])
-
         n_embd = self.find_hparam(["hidden_size", "n_embd"])
         n_head = self.find_hparam(["num_attention_heads", "n_head"])
         n_head_kv = self.find_hparam(["num_key_value_heads", "n_head_kv"])
@@ -4559,7 +4585,7 @@ class Phi3MiniModel(TextModel):
         self.gguf_writer.add_rope_scaling_orig_ctx_len(orig_max_pos_embds)
         self.gguf_writer.add_embedding_length(n_embd)
         self.gguf_writer.add_feed_forward_length(self.find_hparam(["intermediate_size"]))
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(n_head)
         self.gguf_writer.add_head_count_kv(n_head_kv)
         self.gguf_writer.add_layer_norm_rms_eps(rms_eps)
@@ -4679,12 +4705,11 @@ class PlamoModel(TextModel):
 
     def set_gguf_parameters(self):
         hparams = self.hparams
-        block_count = hparams["num_hidden_layers"]
 
         self.gguf_writer.add_context_length(4096)  # not in config.json
         self.gguf_writer.add_embedding_length(hparams["hidden_size"])
         self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(hparams["num_attention_heads"])
         self.gguf_writer.add_head_count_kv(5)  # hparams["num_key_value_heads"]) is wrong
         self.gguf_writer.add_layer_norm_rms_eps(hparams["rms_norm_eps"])
@@ -4807,7 +4832,6 @@ class Plamo2Model(TextModel):
 
     def set_gguf_parameters(self):
         hparams = self.hparams
-        block_count = hparams["num_hidden_layers"]
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
         # Which layers are Mamba layers
@@ -4819,10 +4843,10 @@ class Plamo2Model(TextModel):
         num_attention_heads = []
 
         if mamba_enabled:
-            for i in range(block_count):
-                if block_count <= (mamba_step // 2):
+            for i in range(self.block_count):
+                if self.block_count <= (mamba_step // 2):
                     # use attention in last layer
-                    is_mamba = (i != block_count - 1)
+                    is_mamba = (i != self.block_count - 1)
                 else:
                     is_mamba = (i % mamba_step) != (mamba_step // 2)
                 if is_mamba:
@@ -4840,7 +4864,7 @@ class Plamo2Model(TextModel):
         self.gguf_writer.add_embedding_length(hparams.get("hidden_size", 4096))
         self.gguf_writer.add_key_length(hparams.get("hidden_size_per_head", 128))
         self.gguf_writer.add_value_length(hparams.get("hidden_size_per_head", 128))
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_layer_norm_rms_eps(hparams.get("rms_norm_eps", 1e-06))
         self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 10000))
 
@@ -4897,12 +4921,10 @@ class CodeShellModel(TextModel):
     model_arch = gguf.MODEL_ARCH.CODESHELL
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["n_layer"]
-
         self.gguf_writer.add_context_length(self.hparams["n_positions"])
         self.gguf_writer.add_embedding_length(self.hparams["n_embd"])
         self.gguf_writer.add_feed_forward_length(4 * self.hparams["n_embd"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(self.hparams["n_head"])
         self.gguf_writer.add_head_count_kv(self.hparams["num_query_groups"])
         self.gguf_writer.add_layer_norm_eps(self.hparams["layer_norm_epsilon"])
@@ -5044,7 +5066,7 @@ class InternLM2Model(TextModel):
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_context_length(self.hparams["max_position_embeddings"])
-        self.gguf_writer.add_block_count(self.hparams["num_hidden_layers"])
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
         self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
         self.gguf_writer.add_rope_freq_base(self.hparams["rope_theta"])
@@ -5665,11 +5687,10 @@ class GemmaModel(TextModel):
 
     def set_gguf_parameters(self):
         hparams = self.hparams
-        block_count = hparams["num_hidden_layers"]
 
         self.gguf_writer.add_context_length(hparams["max_position_embeddings"])
         self.gguf_writer.add_embedding_length(hparams["hidden_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
         self.gguf_writer.add_head_count(hparams["num_attention_heads"])
         self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"] if "num_key_value_heads" in hparams else hparams["num_attention_heads"])
@@ -5705,11 +5726,10 @@ class Gemma2Model(TextModel):
 
     def set_gguf_parameters(self):
         hparams = self.hparams
-        block_count = hparams["num_hidden_layers"]
 
         self.gguf_writer.add_context_length(hparams["max_position_embeddings"])
         self.gguf_writer.add_embedding_length(hparams["hidden_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
         self.gguf_writer.add_head_count(hparams["num_attention_heads"])
         self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"] if "num_key_value_heads" in hparams else hparams["num_attention_heads"])
@@ -5753,12 +5773,11 @@ class Gemma3Model(TextModel):
 
     def set_gguf_parameters(self):
         hparams = self.hparams
-        block_count = hparams["num_hidden_layers"]
 
         # some default values are not specified in the hparams
         self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 131072))
         self.gguf_writer.add_embedding_length(hparams["hidden_size"])
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
         self.gguf_writer.add_head_count(hparams.get("num_attention_heads", 8))
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("rms_norm_eps", 1e-6))
@@ -6034,7 +6053,6 @@ class Rwkv6Model(TextModel):
         self._set_vocab_rwkv_world()
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["num_hidden_layers"]
         head_size = self.hparams["head_size"]
         hidden_size = self.hparams["hidden_size"]
         layer_norm_eps = self.hparams["layer_norm_epsilon"]
@@ -6046,7 +6064,7 @@ class Rwkv6Model(TextModel):
         # RWKV isn't context limited
         self.gguf_writer.add_context_length(1048576)
         self.gguf_writer.add_embedding_length(hidden_size)
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_layer_norm_eps(layer_norm_eps)
         self.gguf_writer.add_rescale_every_n_layers(rescale_every_n_layers)
         self.gguf_writer.add_wkv_head_size(head_size)
@@ -6110,7 +6128,6 @@ class RWKV6Qwen2Model(Rwkv6Model):
             self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["num_hidden_layers"]
         num_attention_heads = self.hparams["num_attention_heads"]
         num_key_value_heads = self.hparams["num_key_value_heads"]
         hidden_size = self.hparams["hidden_size"]
@@ -6123,7 +6140,7 @@ class RWKV6Qwen2Model(Rwkv6Model):
         # RWKV isn't context limited
         self.gguf_writer.add_context_length(1048576)
         self.gguf_writer.add_embedding_length(hidden_size)
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_wkv_head_size(head_size)
         self.gguf_writer.add_time_mix_extra_dim(time_mix_extra_dim)
         self.gguf_writer.add_time_decay_extra_dim(time_decay_extra_dim)
@@ -6164,7 +6181,6 @@ class Rwkv7Model(TextModel):
         return max(1, round(hidden_size ** exponent * multiplier / 32)) * 32
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["num_hidden_layers"]
         try:
             head_size = self.hparams["head_size"]
             layer_norm_eps = self.hparams["layer_norm_epsilon"]
@@ -6189,7 +6205,7 @@ class Rwkv7Model(TextModel):
         # RWKV isn't context limited
         self.gguf_writer.add_context_length(1048576)
         self.gguf_writer.add_embedding_length(hidden_size)
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_layer_norm_eps(layer_norm_eps)
         self.gguf_writer.add_wkv_head_size(head_size)
         self.gguf_writer.add_decay_lora_rank(lora_rank_decay)
@@ -6283,7 +6299,6 @@ class ARwkv7Model(Rwkv7Model):
             self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
-        block_count = self.hparams["num_hidden_layers"]
         hidden_size = self.hparams["hidden_size"]
         head_size = self.hparams["head_size"]
         rms_norm_eps = self.hparams["rms_norm_eps"]
@@ -6300,7 +6315,7 @@ class ARwkv7Model(Rwkv7Model):
         # RWKV isn't context limited
         self.gguf_writer.add_context_length(1048576)
         self.gguf_writer.add_embedding_length(hidden_size)
-        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_layer_norm_rms_eps(rms_norm_eps)
         self.gguf_writer.add_wkv_head_size(head_size)
         self.gguf_writer.add_decay_lora_rank(lora_rank_decay)
@@ -7524,7 +7539,7 @@ class T5Model(TextModel):
         self.gguf_writer.add_context_length(n_ctx)
         self.gguf_writer.add_embedding_length(self.hparams["d_model"])
         self.gguf_writer.add_feed_forward_length(self.hparams["d_ff"])
-        self.gguf_writer.add_block_count(self.hparams["num_layers"])
+        self.gguf_writer.add_block_count(self.block_count)
         if (dec_n_layer := self.hparams.get("num_decoder_layers")) is not None:
             self.gguf_writer.add_decoder_block_count(dec_n_layer)
         self.gguf_writer.add_head_count(self.hparams["num_heads"])
@@ -7663,7 +7678,7 @@ class T5EncoderModel(TextModel):
         self.gguf_writer.add_context_length(n_ctx)
         self.gguf_writer.add_embedding_length(self.hparams["d_model"])
         self.gguf_writer.add_feed_forward_length(self.hparams["d_ff"])
-        self.gguf_writer.add_block_count(self.hparams["num_layers"])
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(self.hparams["num_heads"])
         self.gguf_writer.add_key_length(self.hparams["d_kv"])
         self.gguf_writer.add_value_length(self.hparams["d_kv"])
@@ -7726,7 +7741,7 @@ class JaisModel(TextModel):
         self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
-        self.gguf_writer.add_block_count(self.hparams["n_layer"])
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_context_length(self.hparams["n_positions"])
         self.gguf_writer.add_embedding_length(self.hparams["n_embd"])
         self.gguf_writer.add_feed_forward_length(self.hparams["n_inner"])
@@ -8068,7 +8083,7 @@ class ChatGLMModel(TextModel):
         self.gguf_writer.add_context_length(self.hparams.get("seq_length", n_embed))
         self.gguf_writer.add_embedding_length(n_embed)
         self.gguf_writer.add_feed_forward_length(self.hparams.get("ffn_hidden_size", self.hparams.get("intermediate_size", 4 * n_embed)))
-        self.gguf_writer.add_block_count(self.hparams.get("num_layers", self.hparams["num_hidden_layers"]))
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_head_count(n_head)
         self.gguf_writer.add_head_count_kv(n_head_kv)
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("layernorm_epsilon",1e-5))
@@ -8150,7 +8165,6 @@ class ExaoneModel(TextModel):
         num_kv_heads = hparams.get("num_key_value_heads", num_heads)
         layer_norm_eps = hparams["layer_norm_epsilon"]
         intermediate_size = hparams["intermediate_size"] if "intermediate_size" in hparams else 4 * embed_dim
-        num_layers = hparams["num_layers"]
         # ignore for now as EXAONE-3.0-7.8B-Instruct attentino_dropout is 0.0
         # attention_dropout_rate = hparams["attention_dropout"]
         # ignore for now as EXAONE-3.0-7.8B-Instruct embed_dropout is 0.0
@@ -8161,7 +8175,7 @@ class ExaoneModel(TextModel):
         self.gguf_writer.add_context_length(max_position_embeddings)
         self.gguf_writer.add_layer_norm_rms_eps(layer_norm_eps)
         self.gguf_writer.add_feed_forward_length(intermediate_size)
-        self.gguf_writer.add_block_count(num_layers)
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_file_type(self.ftype)
 
         if (rope_theta := self.hparams.get("rope_theta")) is not None:
@@ -10077,6 +10091,25 @@ class LazyTorchTensor(gguf.LazyBase):
         torch.uint8: np.uint8,
     }
 
+    # only used when byteswapping data. Only correct size is needed
+    _dtype_byteswap_map: dict[torch.dtype, type] = {
+        torch.float64: np.float64,
+        torch.float32: np.float32,
+        torch.bfloat16: np.float16,
+        torch.float16: np.float16,
+        torch.int64: np.int64,
+        torch.uint64: np.uint64,
+        torch.int32: np.int32,
+        torch.uint32: np.uint32,
+        torch.int16: np.int16,
+        torch.uint16: np.uint16,
+        torch.int8: np.int8,
+        torch.uint8: np.uint8,
+        torch.bool: np.uint8,
+        torch.float8_e4m3fn: np.uint8,
+        torch.float8_e5m2: np.uint8,
+    }
+
     # used for safetensors slices
     # ref: https://github.com/huggingface/safetensors/blob/079781fd0dc455ba0fe851e2b4507c33d0c0d407/bindings/python/src/lib.rs#L1046
     # TODO: uncomment U64, U32, and U16, ref: https://github.com/pytorch/pytorch/issues/58734
@@ -10120,8 +10153,14 @@ class LazyTorchTensor(gguf.LazyBase):
     @classmethod
     def from_local_tensor(cls, t: gguf.utility.LocalTensor) -> Tensor:
         def load_tensor(tensor: gguf.utility.LocalTensor) -> Tensor:
+            def byteswap_tensor(tensor: np.ndarray, dtype: type) -> np.ndarray:
+                if sys.byteorder == 'big':
+                    # switch data back to big endian
+                    tensor = tensor.view(dtype).byteswap(inplace=False)
+                return tensor
             dtype = cls._dtype_str_map[tensor.dtype]
-            return torch.from_numpy(tensor.mmap_bytes()).view(dtype).reshape(tensor.shape)
+            numpy_dtype = cls._dtype_byteswap_map[dtype]
+            return torch.from_numpy(byteswap_tensor(tensor.mmap_bytes(), numpy_dtype)).view(dtype).reshape(tensor.shape)
         dtype = cls._dtype_str_map[t.dtype]
         shape = t.shape
         lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(t,), func=lambda r: load_tensor(r))
@@ -10129,10 +10168,16 @@ class LazyTorchTensor(gguf.LazyBase):
 
     @classmethod
     def from_remote_tensor(cls, remote_tensor: gguf.utility.RemoteTensor):
+        def byteswap_tensor(tensor: np.ndarray, dtype: type) -> np.ndarray:
+            if sys.byteorder == 'big':
+                # switch data back to big endian
+                tensor = tensor.view(dtype).byteswap(inplace=False)
+            return tensor
         dtype = cls._dtype_str_map[remote_tensor.dtype]
+        numpy_dtype = cls._dtype_byteswap_map[dtype]
         shape = remote_tensor.shape
         meta = cls.meta_with_dtype_and_shape(dtype, shape)
-        lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.frombuffer(r.data(), dtype=dtype).reshape(shape))
+        lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.from_numpy(byteswap_tensor(np.frombuffer(r.data(), dtype=numpy_dtype), numpy_dtype)).view(dtype).reshape(shape))
         return cast(torch.Tensor, lazy)
 
     @classmethod

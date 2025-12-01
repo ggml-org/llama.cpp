@@ -12,6 +12,35 @@
 #define VLEN_FP32   (VLEN / SIZEOF_FP32)
 #define VLEN_FP16   (VLEN / SIZEOF_FP16)
 
+typedef union {
+    HVX_Vector v;
+    uint8_t    b[VLEN];
+    uint16_t   h[VLEN_FP16];
+    uint32_t   w[VLEN_FP32];
+    __fp16     fp16[VLEN_FP16];
+    float      fp32[VLEN_FP32];
+} __attribute__((aligned(VLEN), packed)) HVX_VectorAlias;
+
+/* Q6_Vsf_equals_Vw is only available on v73+.*/
+#if __HVX_ARCH__ < 73
+static inline HVX_Vector int32_to_qfloat(HVX_Vector const in)
+{
+    HVX_Vector const vzero = Q6_V_vzero();
+    HVX_VectorPred is_zero = Q6_Q_vcmp_eq_VwVw(in, vzero);
+    HVX_Vector lshift = Q6_Vw_vnormamt_Vw(in);
+    HVX_Vector normalized = Q6_Vw_vasl_VwVw(in, lshift);
+    HVX_Vector vexp = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7f + 30), lshift);
+    HVX_Vector mant = Q6_V_vand_VV(Q6_V_vsplat_R(0xFFFFFF00), normalized);
+    HVX_Vector ret = Q6_V_vmux_QVV(is_zero, vzero, Q6_Vw_vadd_VwVw(mant, vexp));
+    return ret;
+}
+
+static inline HVX_Vector Q6_Vsf_equals_Vw(HVX_Vector const in)
+{
+    return Q6_Vsf_equals_Vqf32(int32_to_qfloat(in));
+}
+#endif
+
 static inline HVX_Vector hvx_vec_splat_fp32(float i) {
     union {
         float   f;
@@ -243,19 +272,16 @@ static __attribute__((always_inline)) int32_t is_in_one_chunk(void * addr, uint3
 }
 
 static void hvx_vec_dump_fp16_n(char * pref, HVX_Vector v, uint32_t n) {
-    union {
-        HVX_Vector v;
-        __fp16 d[64];
-    } u = { .v = v };
+    HVX_VectorAlias u = { .v = v };
 
     const uint32_t n0 = n / 16;
     const uint32_t n1 = n % 16;
     int            i  = 0;
     for (; i < n0; i++) {
-        htp_dump_fp16_line(pref, u.d + (16 * i), 16);
+        htp_dump_fp16_line(pref, u.fp16 + (16 * i), 16);
     }
     if (n1) {
-        htp_dump_fp16_line(pref, u.d + (16 * i), n1);
+        htp_dump_fp16_line(pref, u.fp16 + (16 * i), n1);
     }
 }
 
@@ -411,8 +437,8 @@ static inline HVX_Vector hvx_vec_fp32_reduce_sum_n(HVX_Vector in, unsigned int n
 
     HVX_Vector sum = in, sum_t;
     while (width < total) {
-        sum_t = Q6_V_vror_VR(sum, width);       // rotate right
-        sum   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(sum, sum_t)); // elementwise sum
+        sum_t = Q6_V_vror_VR(sum, width);                               // rotate right
+        sum   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(sum, sum_t));  // elementwise sum
         width = width << 1;
     }
     return sum;
@@ -491,7 +517,7 @@ static inline HVX_Vector hvx_vec_abs_fp16(HVX_Vector v) {
 static inline HVX_Vector hvx_vec_neg_fp16(HVX_Vector v) {
     // neg by setting the fp16 sign bit
     HVX_Vector mask = Q6_Vh_vsplat_R(0x8000);
-    return Q6_V_vor_VV(v, mask);
+    return Q6_V_vxor_VV(v, mask);
 }
 
 static inline HVX_Vector hvx_vec_abs_fp32(HVX_Vector v) {
@@ -506,7 +532,7 @@ static inline HVX_Vector hvx_vec_neg_fp32(HVX_Vector v) {
 #else
     // neg by setting the fp32 sign bit
     HVX_Vector mask = Q6_V_vsplat_R(0x80000000);
-    return Q6_V_vor_VV(v, mask);
+    return Q6_V_vxor_VV(v, mask);
 #endif  // __HTP_ARCH__ > 75
 }
 
@@ -934,6 +960,18 @@ static inline HVX_Vector hvx_vec_rsqrt_fp32(HVX_Vector in_vec) {
     return Q6_Vsf_equals_Vqf32(temp);
 }
 
+static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard(HVX_Vector v,
+                                                         HVX_Vector one,
+                                                         HVX_Vector max_exp,
+                                                         HVX_Vector min_exp) {
+    const HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
+    const HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(v, min_exp);
+
+    HVX_Vector out = hvx_vec_fast_sigmoid_fp32(v);
+    out            = Q6_V_vmux_QVV(pred_max, out, one);
+    return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
+}
+
 static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems) {
     int step_of_1 = num_elems >> 5;
     int remaining = num_elems - step_of_1 * VLEN_FP32;
@@ -943,9 +981,16 @@ static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * 
     const HVX_Vector * restrict v_src = (HVX_Vector *) src;
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
 
+    static const float kMinExp = -87.f;  // 0
+    static const float kMaxExp = 87.f;   // 1
+
+    const HVX_Vector one     = hvx_vec_splat_fp32(1.f);
+    const HVX_Vector max_exp = hvx_vec_splat_fp32(kMaxExp);
+    const HVX_Vector min_exp = hvx_vec_splat_fp32(kMinExp);
+
     #pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {
-        v_dst[i] = hvx_vec_fast_sigmoid_fp32(v_src[i]);
+        v_dst[i] = hvx_vec_fast_sigmoid_fp32_guard(v_src[i], one, max_exp, min_exp);
     }
 }
 
