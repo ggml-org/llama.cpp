@@ -2,20 +2,6 @@ cmake_minimum_required(VERSION 3.18)  # for CMAKE_CUDA_ARCHITECTURES
 
 find_package(CUDAToolkit)
 
-# Remove once CCCL 3.2 has been released and bundled with CUDA Toolkit
-if (GGML_CUDA_CUB_3DOT2)
-    include(FetchContent)
-
-    FetchContent_Declare(
-        CCCL
-        GIT_REPOSITORY https://github.com/nvidia/cccl.git
-        GIT_TAG        v3.2.0-rc0
-        GIT_SHALLOW    TRUE
-    )
-
-    FetchContent_MakeAvailable(CCCL)
-endif()
-
 if (CUDAToolkit_FOUND)
     message(STATUS "CUDA Toolkit found")
 
@@ -53,6 +39,20 @@ if (CUDAToolkit_FOUND)
     message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
     enable_language(CUDA)
+
+    # Remove once CCCL 3.2 has been released and bundled with CUDA Toolkit
+    if (GGML_CUDA_CUB_3DOT2)
+        include(FetchContent)
+
+        FetchContent_Declare(
+            CCCL
+            GIT_REPOSITORY https://github.com/nvidia/cccl.git
+            GIT_TAG        v3.2.0-rc0
+            GIT_SHALLOW    TRUE
+        )
+
+        FetchContent_MakeAvailable(CCCL)
+    endif()
 
     file(GLOB   GGML_HEADERS_CUDA "*.cuh")
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
