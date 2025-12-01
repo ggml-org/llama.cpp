@@ -14,6 +14,7 @@ llama-router follows KISS (Keep It Simple, Stupid) principles:
 - **Simple endpoint matching**: Prefix-based matching, no complex regex
 - **Transparent proxy**: Headers and streaming forwarded as-is
 - **On-demand only**: No models start at boot, everything spawns when first requested
+- **Transparent operations**: Optional real-time notifications for swap feedback via SSE
 
 ### The auto + default_spawn Workflow
 
@@ -102,7 +103,7 @@ This aligns with the project philosophy: **everything configurable at runtime, z
 
 | Component | Files | Responsibility |
 |-----------|-------|----------------|
-| **Core** | `router-app.cpp/h` | Model lifecycle, spawn orchestration, group logic (zero I/O) |
+| **Core** | `router-app.cpp/h` | Model lifecycle, spawn orchestration, group logic, progress notification emission (zero I/O except notifications) |
 | **HTTP Endpoints** | `router-endpoints.cpp/h` | Public API routes (`/v1/models`, `/v1/chat/completions`) |
 | **Admin** | `router-admin.cpp/h` | Admin routes with explicit config persistence |
 | **Proxy** | `router-proxy.cpp/h` | HTTP forwarding, SSE streaming, header management |
@@ -160,6 +161,32 @@ Backends remain unaware of model-scoped routing - they expose standard endpoints
 The router strips `Content-Length` and `Transfer-Encoding` headers before forwarding requests. This is standard reverse-proxy behavior to handle chunked requests/responses properly and avoid conflicts when the proxy re-chunks data.
 
 All other headers are forwarded transparently to preserve client context (authentication, user-agent, etc.).
+
+### Real-Time Swap Notifications
+
+The router implements an opt-in notification system for streaming swap progress to clients:
+
+**Architecture:**
+- `NotificationSink`: Function-based callback system in `router-config.h`
+- `RouterApp::set/clear_notification_sink()`: Attach/detach sink before/after operations
+- Progress emitted at 3 lifecycle points in `ensure_running()`:
+  * After `terminate_process()` - unload notification
+  * After `spawn_process()` - load notification
+  * After `wait_for_backend_ready()` - ready notification
+
+**Implementation:**
+The proxy layer owns the full request lifecycle. For streaming requests with `notify_model_swap=true`:
+1. Attach sink that enqueues formatted SSE chunks into the stream state
+2. Call `ensure_running()` - notifications flow directly into the SSE queue
+3. Clear sink before forwarding to backend (prevents backend logs in stream)
+
+Messages use OpenAI-compatible `delta.reasoning_content` field, prefixed with `[llama-router]` to distinguish router operations from model reasoning.
+
+**Design rationale:**
+- Sink pattern allows clean separation: RouterApp emits events, proxy consumes them
+- Notifications sent synchronously during operations = accurate timing perception
+- Thread-safe via separate `notification_mutex` to avoid deadlock with main mutex
+- Zero overhead when disabled (sink check + early return)
 
 ### Health Endpoint Purpose
 

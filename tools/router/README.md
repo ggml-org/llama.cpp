@@ -189,7 +189,8 @@ Override with `--config`:
     "base_port": 50000,
     "connection_timeout_s": 5,
     "read_timeout_s": 600,
-    "admin_token": ""
+    "admin_token": "",
+    "notify_model_swap": false
   },
   "default_spawn": {
     "command": ["llama-server", "--ctx-size", "4096", "--n-gpu-layers", "99"],
@@ -217,6 +218,7 @@ Override with `--config`:
 | `connection_timeout_s` | `5` | Upstream connection timeout |
 | `read_timeout_s` | `600` | Upstream read timeout (long for streaming) |
 | `admin_token` | `""` | Bearer token for admin endpoints (empty = no auth) |
+| `notify_model_swap` | `false` | Enable real-time SSE notifications during model swaps (shows unload/load/ready progress) |
 
 ### Default Spawn Configuration
 
@@ -377,6 +379,40 @@ curl -H "Authorization: Bearer <token>" http://localhost:8082/admin/rescan
 # Via X-Admin-Token header
 curl -H "X-Admin-Token: <token>" http://localhost:8082/admin/rescan
 ```
+
+---
+
+## Real-Time Model Swap Notifications
+
+When `notify_model_swap` is enabled and streaming is active, the router sends progress updates via SSE `delta.reasoning_content` (OpenAI-compatible format) during model lifecycle operations:
+
+```json
+{
+  "router": {
+    "notify_model_swap": true
+  }
+}
+```
+
+**Notification flow:**
+1. `[llama-router] Unloading ModelA (groupX)` - sent during process termination
+2. `[llama-router] Loading ModelB (groupY)` - sent during spawn + weight loading
+3. `[llama-router] Backend ready, generating response...` - sent after health check
+
+Each message streams in real-time as the operation executes, providing transparent feedback on swap duration.
+
+**Example SSE output:**
+```
+data: {"choices":[{"delta":{"reasoning_content":"[llama-router] Unloading Qwen3-8B (small-models)\n"},"index":0}]}
+
+data: {"choices":[{"delta":{"reasoning_content":"[llama-router] Loading Llama-70B (large-model)\n"},"index":0}]}
+
+data: {"choices":[{"delta":{"reasoning_content":"[llama-router] Backend ready, generating response...\n"},"index":0}]}
+
+data: {"choices":[{"delta":{"content":"Sure, I'd be happy to help!"},"index":0}]}
+```
+
+Non-streaming requests receive no swap notifications regardless of config.
 
 ---
 
