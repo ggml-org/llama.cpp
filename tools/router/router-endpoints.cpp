@@ -4,9 +4,12 @@
 #include "router-app.h"
 #include "router-proxy.h"
 
+#include "index.html.gz.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <ctime>
+#include <string>
 
 using json = nlohmann::json;
 
@@ -35,6 +38,21 @@ static bool parse_model_from_chat(const httplib::Request & req, std::string & mo
 }
 
 void register_routes(httplib::Server & server, RouterApp & app) {
+    auto serve_index = [](const httplib::Request & req, httplib::Response & res) {
+        if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+            res.set_content("Error: gzip is not supported by this browser", "text/plain");
+            return;
+        }
+
+        res.set_header("Content-Encoding", "gzip");
+        res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+        res.set_header("Cross-Origin-Opener-Policy",   "same-origin");
+        res.set_content(reinterpret_cast<const char *>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
+    };
+
+    server.Get("/", serve_index);
+    server.Get("/index.html", serve_index);
+
     server.Get("/v1/models", [&app](const httplib::Request &, httplib::Response & res) { handle_models(app, res); });
 
     auto proxy_last_spawned = [&app](const httplib::Request & req, httplib::Response & res) {
