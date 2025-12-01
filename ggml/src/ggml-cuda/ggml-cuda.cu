@@ -3274,7 +3274,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
                     }
                 }
-                prev_i = i;
 
 #ifdef GGML_CUDA_DEBUG
                 const int nodes_fused = i - prev_i - 1;
@@ -3282,6 +3281,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     GGML_LOG_INFO("nodes_fused: %d\n", nodes_fused);
                 }
 #endif
+                prev_i = i;
 
                 if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
                     continue;
