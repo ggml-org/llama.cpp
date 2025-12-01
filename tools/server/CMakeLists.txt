@@ -21,6 +21,8 @@ set(TARGET_SRCS
     server-queue.h
     server-common.cpp
     server-common.h
+    server-context.cpp
+    server-context.h
 )
 set(PUBLIC_ASSETS
     index.html.gz

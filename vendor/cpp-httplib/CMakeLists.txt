@@ -22,8 +22,9 @@ target_compile_definitions(${TARGET} PRIVATE
     CPPHTTPLIB_TCP_NODELAY=1
 )
 
+set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code when building BoringSSL or LibreSSL")
+
 if (LLAMA_BUILD_BORINGSSL)
-    set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code (BoringSSL)")
     set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
@@ -55,6 +56,47 @@ if (LLAMA_BUILD_BORINGSSL)
         if(NOT boringssl_POPULATED)
             FetchContent_Populate(boringssl)
             add_subdirectory(${boringssl_SOURCE_DIR} ${boringssl_BINARY_DIR} EXCLUDE_FROM_ALL)
+        endif()
+    endif()
+
+    set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
+    set(BUILD_TESTING ${SAVED_BUILD_TESTING})
+
+    set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
+    target_link_libraries(${TARGET} PUBLIC ssl crypto)
+
+elseif (LLAMA_BUILD_LIBRESSL)
+    set(LIBRESSL_VERSION "4.2.1" CACHE STRING "LibreSSL version")
+
+    message(STATUS "Fetching LibreSSL version ${LIBRESSL_VERSION}")
+
+    set(LIBRESSL_ARGS
+        URL "https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/libressl-${LIBRESSL_VERSION}.tar.gz"
+    )
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        list(APPEND LIBRESSL_ARGS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    endif()
+
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+        list(APPEND LIBRESSL_ARGS EXCLUDE_FROM_ALL)
+    endif()
+
+    include(FetchContent)
+    FetchContent_Declare(libressl ${LIBRESSL_ARGS})
+
+    set(SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+    set(SAVED_BUILD_TESTING ${BUILD_TESTING})
+
+    set(BUILD_SHARED_LIBS OFF)
+    set(BUILD_TESTING OFF)
+
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+        FetchContent_MakeAvailable(libressl)
+    else()
+        FetchContent_GetProperties(libressl)
+        if(NOT libressl_POPULATED)
+            FetchContent_Populate(libressl)
+            add_subdirectory(${libressl_SOURCE_DIR} ${libressl_BINARY_DIR} EXCLUDE_FROM_ALL)
         endif()
     endif()
 
