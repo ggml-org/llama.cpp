@@ -304,6 +304,10 @@ struct mtmd_context {
             img_beg = "<|im_start|>";
             img_end = "<|im_end|>";
 
+        } else if (proj == PROJECTOR_TYPE_LFM2) {
+            img_beg = "<|image_start|>";
+            img_end = "<|image_end|>";
+
         }
     }
 

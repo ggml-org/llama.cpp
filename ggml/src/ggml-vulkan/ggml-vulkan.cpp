@@ -14113,6 +14113,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             return true;
         case GGML_OP_UPSCALE:
+            return op->src[0]->type == GGML_TYPE_F32 && !(op->op_params[0] & GGML_SCALE_FLAG_ANTIALIAS);
         case GGML_OP_ACC:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_CONCAT:
