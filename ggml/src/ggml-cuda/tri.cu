@@ -1,14 +1,13 @@
+#include "ggml-cuda/common.cuh"
 #include "tri.cuh"
 #include "ggml.h"
 
-template<typename T>
+template<typename T, bool prefix_keep, int add_to_split>
 static __global__ void tri_kernel(
     const T * src, T * dst,
     const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
     const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
-    const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3,
-    const int add_to_split, const bool prefix_keep) {
-
+    const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
     const int64_t i3 = blockIdx.z;
     const int64_t i2 = blockIdx.y;
     const int64_t i1 = blockIdx.x;
@@ -21,10 +20,20 @@ static __global__ void tri_kernel(
     const T * src_row = src + i1*nb01 + i2*nb02 + i3*nb03;
     T       * dst_row = dst + i1*nb1  + i2*nb2  + i3*nb3;
 
-    // Each thread processes elements at stride blockDim.x
-    for (int64_t i0 = threadIdx.x; i0 < ne00; i0 += blockDim.x) {
-        const bool keep = ((i0 < split_point) == prefix_keep);
-        dst_row[i0] = keep ? src_row[i0] : T(0);
+    if constexpr (prefix_keep) {
+        for (int64_t i0 = threadIdx.x; i0 < split_point; i0 += blockDim.x) {            
+            dst_row[i0] = src_row[i0];
+        }
+        for (int64_t i0 = threadIdx.x + split_point; i0 < ne00; i0 += blockDim.x) {            
+            dst_row[i0] = T(0);
+        }
+    } else {
+        for (int64_t i0 = threadIdx.x; i0 < split_point; i0 += blockDim.x) {            
+            dst_row[i0] = T(0);
+        }
+        for (int64_t i0 = threadIdx.x + split_point; i0 < ne00; i0 += blockDim.x) {            
+            dst_row[i0] = src_row[i0];
+        }
     }
 }
 
@@ -44,13 +53,39 @@ static void tri_cuda(
     const int add_to_split = (ttype == GGML_TRI_TYPE_LOWER_DIAG || ttype == GGML_TRI_TYPE_UPPER) ? 1 : 0;
     const bool prefix_keep = (ttype == GGML_TRI_TYPE_LOWER || ttype == GGML_TRI_TYPE_LOWER_DIAG);
 
-    tri_kernel<<<grid_dims, block_dims, 0, stream>>>(
-        src, dst,
-        ne00, ne01, ne02, ne03,
-        nb00 / type_size, nb01 / type_size, nb02 / type_size, nb03 / type_size,
-        nb0 / type_size, nb1 / type_size, nb2 / type_size, nb3 / type_size,
-        add_to_split, prefix_keep
-    );
+    if (prefix_keep) {
+        if (add_to_split == 0) {
+            tri_kernel<T, true, 0><<<grid_dims, block_dims, 0, stream>>>(
+                src, dst,
+                ne00, ne01, ne02, ne03,
+                nb00 / type_size, nb01 / type_size, nb02 / type_size, nb03 / type_size,
+                nb0 / type_size, nb1 / type_size, nb2 / type_size, nb3 / type_size
+            );
+        } else { // only 0 and 1 supported
+            tri_kernel<T, true, 1><<<grid_dims, block_dims, 0, stream>>>(
+                src, dst,
+                ne00, ne01, ne02, ne03,
+                nb00 / type_size, nb01 / type_size, nb02 / type_size, nb03 / type_size,
+                nb0 / type_size, nb1 / type_size, nb2 / type_size, nb3 / type_size
+            );
+        }
+    } else {
+        if (add_to_split == 0) {
+            tri_kernel<T, false, 0><<<grid_dims, block_dims, 0, stream>>>(
+                src, dst,
+                ne00, ne01, ne02, ne03,
+                nb00 / type_size, nb01 / type_size, nb02 / type_size, nb03 / type_size,
+                nb0 / type_size, nb1 / type_size, nb2 / type_size, nb3 / type_size
+            );
+        } else {
+            tri_kernel<T, false, 1><<<grid_dims, block_dims, 0, stream>>>(
+                src, dst,
+                ne00, ne01, ne02, ne03,
+                nb00 / type_size, nb01 / type_size, nb02 / type_size, nb03 / type_size,
+                nb0 / type_size, nb1 / type_size, nb2 / type_size, nb3 / type_size
+            );
+        }
+    }
 }
 
 void ggml_cuda_op_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
