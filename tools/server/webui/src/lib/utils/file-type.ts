@@ -4,42 +4,151 @@ import {
 	PDF_FILE_TYPES,
 	TEXT_FILE_TYPES
 } from '$lib/constants/supported-file-types';
-import { FileTypeCategory } from '$lib/enums/files';
+import {
+	FileExtensionAudio,
+	FileExtensionImage,
+	FileExtensionPdf,
+	FileExtensionText,
+	FileTypeCategory,
+	MimeTypeApplication,
+	MimeTypeAudio,
+	MimeTypeImage,
+	MimeTypeText
+} from '$lib/enums';
 
 export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
-	if (
-		Object.values(IMAGE_FILE_TYPES).some((type) =>
-			(type.mimeTypes as readonly string[]).includes(mimeType)
-		)
-	) {
-		return FileTypeCategory.IMAGE;
-	}
+	switch (mimeType) {
+		// Images
+		case MimeTypeImage.JPEG:
+		case MimeTypeImage.PNG:
+		case MimeTypeImage.GIF:
+		case MimeTypeImage.WEBP:
+		case MimeTypeImage.SVG:
+			return FileTypeCategory.IMAGE;
 
-	if (
-		Object.values(AUDIO_FILE_TYPES).some((type) =>
-			(type.mimeTypes as readonly string[]).includes(mimeType)
-		)
-	) {
-		return FileTypeCategory.AUDIO;
-	}
+		// Audio
+		case MimeTypeAudio.MP3_MPEG:
+		case MimeTypeAudio.MP3:
+		case MimeTypeAudio.MP4:
+		case MimeTypeAudio.WAV:
+		case MimeTypeAudio.WEBM:
+		case MimeTypeAudio.WEBM_OPUS:
+			return FileTypeCategory.AUDIO;
 
-	if (
-		Object.values(PDF_FILE_TYPES).some((type) =>
-			(type.mimeTypes as readonly string[]).includes(mimeType)
-		)
-	) {
-		return FileTypeCategory.PDF;
-	}
+		// PDF
+		case MimeTypeApplication.PDF:
+			return FileTypeCategory.PDF;
 
-	if (
-		Object.values(TEXT_FILE_TYPES).some((type) =>
-			(type.mimeTypes as readonly string[]).includes(mimeType)
-		)
-	) {
-		return FileTypeCategory.TEXT;
-	}
+		// Text
+		case MimeTypeText.PLAIN:
+		case MimeTypeText.MARKDOWN:
+		case MimeTypeText.ASCIIDOC:
+		case MimeTypeText.JAVASCRIPT:
+		case MimeTypeText.JAVASCRIPT_APP:
+		case MimeTypeText.TYPESCRIPT:
+		case MimeTypeText.JSX:
+		case MimeTypeText.TSX:
+		case MimeTypeText.CSS:
+		case MimeTypeText.HTML:
+		case MimeTypeText.JSON:
+		case MimeTypeText.XML_TEXT:
+		case MimeTypeText.XML_APP:
+		case MimeTypeText.YAML_TEXT:
+		case MimeTypeText.YAML_APP:
+		case MimeTypeText.CSV:
+		case MimeTypeText.PYTHON:
+		case MimeTypeText.JAVA:
+		case MimeTypeText.CPP_SRC:
+		case MimeTypeText.C_SRC:
+		case MimeTypeText.C_HDR:
+		case MimeTypeText.PHP:
+		case MimeTypeText.RUBY:
+		case MimeTypeText.GO:
+		case MimeTypeText.RUST:
+		case MimeTypeText.SHELL:
+		case MimeTypeText.BAT:
+		case MimeTypeText.SQL:
+		case MimeTypeText.R:
+		case MimeTypeText.SCALA:
+		case MimeTypeText.KOTLIN:
+		case MimeTypeText.SWIFT:
+		case MimeTypeText.DART:
+		case MimeTypeText.VUE:
+		case MimeTypeText.SVELTE:
+		case MimeTypeText.LATEX:
+		case MimeTypeText.BIBTEX:
+			return FileTypeCategory.TEXT;
 
-	return null;
+		default:
+			return null;
+	}
+}
+
+export function getFileTypeCategoryByExtension(filename: string): FileTypeCategory | null {
+	const extension = filename.toLowerCase().substring(filename.lastIndexOf('.'));
+
+	switch (extension) {
+		// Images
+		case FileExtensionImage.JPG:
+		case FileExtensionImage.JPEG:
+		case FileExtensionImage.PNG:
+		case FileExtensionImage.GIF:
+		case FileExtensionImage.WEBP:
+		case FileExtensionImage.SVG:
+			return FileTypeCategory.IMAGE;
+
+		// Audio
+		case FileExtensionAudio.MP3:
+		case FileExtensionAudio.WAV:
+			return FileTypeCategory.AUDIO;
+
+		// PDF
+		case FileExtensionPdf.PDF:
+			return FileTypeCategory.PDF;
+
+		// Text
+		case FileExtensionText.TXT:
+		case FileExtensionText.MD:
+		case FileExtensionText.ADOC:
+		case FileExtensionText.JS:
+		case FileExtensionText.TS:
+		case FileExtensionText.JSX:
+		case FileExtensionText.TSX:
+		case FileExtensionText.CSS:
+		case FileExtensionText.HTML:
+		case FileExtensionText.HTM:
+		case FileExtensionText.JSON:
+		case FileExtensionText.XML:
+		case FileExtensionText.YAML:
+		case FileExtensionText.YML:
+		case FileExtensionText.CSV:
+		case FileExtensionText.LOG:
+		case FileExtensionText.PY:
+		case FileExtensionText.JAVA:
+		case FileExtensionText.CPP:
+		case FileExtensionText.C:
+		case FileExtensionText.H:
+		case FileExtensionText.PHP:
+		case FileExtensionText.RB:
+		case FileExtensionText.GO:
+		case FileExtensionText.RS:
+		case FileExtensionText.SH:
+		case FileExtensionText.BAT:
+		case FileExtensionText.SQL:
+		case FileExtensionText.R:
+		case FileExtensionText.SCALA:
+		case FileExtensionText.KT:
+		case FileExtensionText.SWIFT:
+		case FileExtensionText.DART:
+		case FileExtensionText.VUE:
+		case FileExtensionText.SVELTE:
+		case FileExtensionText.TEX:
+		case FileExtensionText.BIB:
+			return FileTypeCategory.TEXT;
+
+		default:
+			return null;
+	}
 }
 
 export function getFileTypeByExtension(filename: string): string | null {

@@ -1,4 +1,5 @@
-import type { ChatMessageTimings } from './chat';
+import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
+import { AttachmentType } from '$lib/enums';
 
 export interface DatabaseConversation {
 	currNode: string | null;
@@ -8,30 +9,16 @@ export interface DatabaseConversation {
 }
 
 export interface DatabaseMessageExtraAudioFile {
-	type: 'audioFile';
+	type: AttachmentType.AUDIO;
 	name: string;
 	base64Data: string;
 	mimeType: string;
 }
 
 export interface DatabaseMessageExtraImageFile {
-	type: 'imageFile';
+	type: AttachmentType.IMAGE;
 	name: string;
 	base64Url: string;
-}
-
-export interface DatabaseMessageExtraTextFile {
-	type: 'textFile';
-	name: string;
-	content: string;
-}
-
-export interface DatabaseMessageExtraPdfFile {
-	type: 'pdfFile';
-	name: string;
-	content: string; // Text content extracted from PDF
-	images?: string[]; // Optional: PDF pages as base64 images
-	processedAsImages: boolean; // Whether PDF was processed as images
 }
 
 /**
@@ -39,7 +26,22 @@ export interface DatabaseMessageExtraPdfFile {
  * @deprecated Use DatabaseMessageExtraTextFile instead
  */
 export interface DatabaseMessageExtraLegacyContext {
-	type: 'context';
+	type: AttachmentType.LEGACY_CONTEXT;
+	name: string;
+	content: string;
+}
+
+export interface DatabaseMessageExtraPdfFile {
+	type: AttachmentType.PDF;
+	base64Data: string;
+	name: string;
+	content: string; // Text content extracted from PDF
+	images?: string[]; // Optional: PDF pages as base64 images
+	processedAsImages: boolean; // Whether PDF was processed as images
+}
+
+export interface DatabaseMessageExtraTextFile {
+	type: AttachmentType.TEXT;
 	name: string;
 	content: string;
 }

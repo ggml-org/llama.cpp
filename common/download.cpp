@@ -1054,7 +1054,7 @@ std::string common_docker_resolve_model(const std::string &) {
 std::vector<common_cached_model_info> common_list_cached_models() {
     std::vector<common_cached_model_info> models;
     const std::string cache_dir = fs_get_cache_directory();
-    const std::vector<common_file_info> files = fs_list_files(cache_dir);
+    const std::vector<common_file_info> files = fs_list(cache_dir, false);
     for (const auto & file : files) {
         if (string_starts_with(file.name, "manifest=") && string_ends_with(file.name, ".json")) {
             common_cached_model_info model_info;

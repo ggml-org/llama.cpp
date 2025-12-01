@@ -16,7 +16,7 @@ import {
 	MimeTypeImage,
 	MimeTypeApplication,
 	MimeTypeText
-} from '$lib/enums/files';
+} from '$lib/enums';
 
 // File type configuration using enums
 export const AUDIO_FILE_TYPES = {

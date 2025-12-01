@@ -12,8 +12,7 @@
  * - Provide sync utilities for settings store integration
  */
 
-import type { ApiLlamaCppServerProps } from '$lib/types/api';
-import { normalizeFloatingPoint } from '$lib/utils/precision';
+import { normalizeFloatingPoint } from '$lib/utils';
 
 export type ParameterSource = 'default' | 'custom';
 export type ParameterValue = string | number | boolean;
@@ -60,6 +59,10 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 ];
 
 export class ParameterSyncService {
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Extraction
+	// ─────────────────────────────────────────────────────────────────────────────
+
 	/**
 	 * Round floating-point numbers to avoid JavaScript precision issues
 	 */
@@ -95,6 +98,10 @@ export class ParameterSyncService {
 		return extracted;
 	}
 
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Merging
+	// ─────────────────────────────────────────────────────────────────────────────
+
 	/**
 	 * Merge server defaults with current user settings
 	 * Returns updated settings that respect user overrides while using server defaults
@@ -115,6 +122,10 @@ export class ParameterSyncService {
 
 		return merged;
 	}
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Info
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
 	 * Get parameter information including source and values
@@ -171,6 +182,10 @@ export class ParameterSyncService {
 				return false;
 		}
 	}
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Diff
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
 	 * Create a diff between current settings and server defaults

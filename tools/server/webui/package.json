@@ -66,7 +66,7 @@
 		"svelte": "^5.0.0",
 		"svelte-check": "^4.0.0",
 		"tailwind-merge": "^3.3.1",
-		"tailwind-variants": "^1.0.0",
+		"tailwind-variants": "^3.2.2",
 		"tailwindcss": "^4.0.0",
 		"tw-animate-css": "^1.3.5",
 		"typescript": "^5.0.0",

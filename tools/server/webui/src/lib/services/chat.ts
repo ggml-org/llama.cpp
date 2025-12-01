@@ -1,55 +1,42 @@
-import { config } from '$lib/stores/settings.svelte';
-import { selectedModelName } from '$lib/stores/models.svelte';
-import { slotsService } from './slots';
-import type {
-	ApiChatCompletionRequest,
-	ApiChatCompletionResponse,
-	ApiChatCompletionStreamChunk,
-	ApiChatCompletionToolCall,
-	ApiChatCompletionToolCallDelta,
-	ApiChatMessageData
-} from '$lib/types/api';
-import type {
-	DatabaseMessage,
-	DatabaseMessageExtra,
-	DatabaseMessageExtraAudioFile,
-	DatabaseMessageExtraImageFile,
-	DatabaseMessageExtraLegacyContext,
-	DatabaseMessageExtraPdfFile,
-	DatabaseMessageExtraTextFile
-} from '$lib/types/database';
-import type { ChatMessagePromptProgress, ChatMessageTimings } from '$lib/types/chat';
-import type { SettingsChatServiceOptions } from '$lib/types/settings';
+import { getJsonHeaders } from '$lib/utils';
+import { AttachmentType } from '$lib/enums';
+
 /**
- * ChatService - Low-level API communication layer for llama.cpp server interactions
+ * ChatService - Low-level API communication layer for Chat Completions
  *
- * This service handles direct communication with the llama.cpp server's chat completion API.
+ * **Terminology - Chat vs Conversation:**
+ * - **Chat**: The active interaction space with the Chat Completions API. This service
+ *   handles the real-time communication with the AI backend - sending messages, receiving
+ *   streaming responses, and managing request lifecycles. "Chat" is ephemeral and runtime-focused.
+ * - **Conversation**: The persistent database entity storing all messages and metadata.
+ *   Managed by ConversationsService/Store, conversations persist across sessions.
+ *
+ * This service handles direct communication with the llama-server's Chat Completions API.
  * It provides the network layer abstraction for AI model interactions while remaining
  * stateless and focused purely on API communication.
  *
- * **Architecture & Relationship with ChatStore:**
+ * **Architecture & Relationships:**
  * - **ChatService** (this class): Stateless API communication layer
- *   - Handles HTTP requests/responses with llama.cpp server
+ *   - Handles HTTP requests/responses with the llama-server
  *   - Manages streaming and non-streaming response parsing
- *   - Provides request abortion capabilities
+ *   - Provides per-conversation request abortion capabilities
  *   - Converts database messages to API format
  *   - Handles error translation for server responses
  *
- * - **ChatStore**: Stateful orchestration and UI state management
- *   - Uses ChatService for all AI model communication
- *   - Manages conversation state, message history, and UI reactivity
- *   - Coordinates with DatabaseStore for persistence
- *   - Handles complex workflows like branching and regeneration
+ * - **chatStore**: Uses ChatService for all AI model communication
+ * - **conversationsStore**: Provides message context for API requests
  *
  * **Key Responsibilities:**
  * - Message format conversion (DatabaseMessage → API format)
  * - Streaming response handling with real-time callbacks
  * - Reasoning content extraction and processing
  * - File attachment processing (images, PDFs, audio, text)
- * - Request lifecycle management (abort, cleanup)
+ * - Request lifecycle management (abort via AbortSignal)
  */
 export class ChatService {
-	private abortControllers: Map<string, AbortController> = new Map();
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Messaging
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
 	 * Sends a chat completion request to the llama.cpp server.
@@ -61,10 +48,11 @@ export class ChatService {
 	 * @returns {Promise<string | void>} that resolves to the complete response string (non-streaming) or void (streaming)
 	 * @throws {Error} if the request fails or is aborted
 	 */
-	async sendMessage(
+	static async sendMessage(
 		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
 		options: SettingsChatServiceOptions = {},
-		conversationId?: string
+		conversationId?: string,
+		signal?: AbortSignal
 	): Promise<string | void> {
 		const {
 			stream,
@@ -74,7 +62,7 @@ export class ChatService {
 			onReasoningChunk,
 			onToolCallChunk,
 			onModel,
-			onFirstValidChunk,
+			onTimings,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -99,25 +87,17 @@ export class ChatService {
 			// Other parameters
 			samplers,
 			custom,
-			timings_per_token
+			timings_per_token,
+			// Config options
+			systemMessage,
+			disableReasoningFormat
 		} = options;
-
-		const currentConfig = config();
-
-		const requestId = conversationId || 'default';
-
-		if (this.abortControllers.has(requestId)) {
-			this.abortControllers.get(requestId)?.abort();
-		}
-
-		const abortController = new AbortController();
-		this.abortControllers.set(requestId, abortController);
 
 		const normalizedMessages: ApiChatMessageData[] = messages
 			.map((msg) => {
 				if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
 					const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
-					return ChatService.convertMessageToChatServiceData(dbMsg);
+					return ChatService.convertDbMessageToApiChatMessageData(dbMsg);
 				} else {
 					return msg as ApiChatMessageData;
 				}
@@ -132,7 +112,7 @@ export class ChatService {
 				return true;
 			});
 
-		const processedMessages = this.injectSystemMessage(normalizedMessages);
+		const processedMessages = ChatService.injectSystemMessage(normalizedMessages, systemMessage);
 
 		const requestBody: ApiChatCompletionRequest = {
 			messages: processedMessages.map((msg: ApiChatMessageData) => ({
@@ -142,14 +122,12 @@ export class ChatService {
 			stream
 		};
 
-		const modelSelectorEnabled = Boolean(currentConfig.modelSelectorEnabled);
-		const activeModel = modelSelectorEnabled ? selectedModelName() : null;
-
-		if (modelSelectorEnabled && activeModel) {
-			requestBody.model = activeModel;
+		// Include model in request if provided (required in ROUTER mode)
+		if (options.model) {
+			requestBody.model = options.model;
 		}
 
-		requestBody.reasoning_format = currentConfig.disableReasoningFormat ? 'none' : 'auto';
+		requestBody.reasoning_format = disableReasoningFormat ? 'none' : 'auto';
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
@@ -194,20 +172,15 @@ export class ChatService {
 		}
 
 		try {
-			const apiKey = currentConfig.apiKey?.toString().trim();
-
 			const response = await fetch(`./v1/chat/completions`, {
 				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-				},
+				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
-				signal: abortController.signal
+				signal
 			});
 
 			if (!response.ok) {
-				const error = await this.parseErrorResponse(response);
+				const error = await ChatService.parseErrorResponse(response);
 				if (onError) {
 					onError(error);
 				}
@@ -215,7 +188,7 @@ export class ChatService {
 			}
 
 			if (stream) {
-				await this.handleStreamResponse(
+				await ChatService.handleStreamResponse(
 					response,
 					onChunk,
 					onComplete,
@@ -223,13 +196,13 @@ export class ChatService {
 					onReasoningChunk,
 					onToolCallChunk,
 					onModel,
-					onFirstValidChunk,
+					onTimings,
 					conversationId,
-					abortController.signal
+					signal
 				);
 				return;
 			} else {
-				return this.handleNonStreamResponse(
+				return ChatService.handleNonStreamResponse(
 					response,
 					onComplete,
 					onError,
@@ -269,10 +242,12 @@ export class ChatService {
 				onError(userFriendlyError);
 			}
 			throw userFriendlyError;
-		} finally {
-			this.abortControllers.delete(requestId);
 		}
 	}
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Streaming
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
 	 * Handles streaming response from the chat completion API
@@ -285,7 +260,7 @@ export class ChatService {
 	 * @returns {Promise<void>} Promise that resolves when streaming is complete
 	 * @throws {Error} if the stream cannot be read or parsed
 	 */
-	private async handleStreamResponse(
+	private static async handleStreamResponse(
 		response: Response,
 		onChunk?: (chunk: string) => void,
 		onComplete?: (
@@ -298,7 +273,7 @@ export class ChatService {
 		onReasoningChunk?: (chunk: string) => void,
 		onToolCallChunk?: (chunk: string) => void,
 		onModel?: (model: string) => void,
-		onFirstValidChunk?: () => void,
+		onTimings?: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal
 	): Promise<void> {
@@ -315,7 +290,6 @@ export class ChatService {
 		let lastTimings: ChatMessageTimings | undefined;
 		let streamFinished = false;
 		let modelEmitted = false;
-		let firstValidChunkEmitted = false;
 		let toolCallIndexOffset = 0;
 		let hasOpenToolCallBatch = false;
 
@@ -333,7 +307,7 @@ export class ChatService {
 				return;
 			}
 
-			aggregatedToolCalls = this.mergeToolCallDeltas(
+			aggregatedToolCalls = ChatService.mergeToolCallDeltas(
 				aggregatedToolCalls,
 				toolCalls,
 				toolCallIndexOffset
@@ -382,29 +356,20 @@ export class ChatService {
 
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
-
-							if (!firstValidChunkEmitted && parsed.object === 'chat.completion.chunk') {
-								firstValidChunkEmitted = true;
-
-								if (!abortSignal?.aborted) {
-									onFirstValidChunk?.();
-								}
-							}
-
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
 							const toolCalls = parsed.choices[0]?.delta?.tool_calls;
 							const timings = parsed.timings;
 							const promptProgress = parsed.prompt_progress;
 
-							const chunkModel = this.extractModelName(parsed);
+							const chunkModel = ChatService.extractModelName(parsed);
 							if (chunkModel && !modelEmitted) {
 								modelEmitted = true;
 								onModel?.(chunkModel);
 							}
 
 							if (timings || promptProgress) {
-								this.updateProcessingState(timings, promptProgress, conversationId);
+								ChatService.notifyTimings(timings, promptProgress, onTimings);
 								if (timings) {
 									lastTimings = timings;
 								}
@@ -462,7 +427,91 @@ export class ChatService {
 		}
 	}
 
-	private mergeToolCallDeltas(
+	/**
+	 * Handles non-streaming response from the chat completion API.
+	 * Parses the JSON response and extracts the generated content.
+	 *
+	 * @param response - The fetch Response object containing the JSON data
+	 * @param onComplete - Optional callback invoked when response is successfully parsed
+	 * @param onError - Optional callback invoked if an error occurs during parsing
+	 * @returns {Promise<string>} Promise that resolves to the generated content string
+	 * @throws {Error} if the response cannot be parsed or is malformed
+	 */
+	private static async handleNonStreamResponse(
+		response: Response,
+		onComplete?: (
+			response: string,
+			reasoningContent?: string,
+			timings?: ChatMessageTimings,
+			toolCalls?: string
+		) => void,
+		onError?: (error: Error) => void,
+		onToolCallChunk?: (chunk: string) => void,
+		onModel?: (model: string) => void
+	): Promise<string> {
+		try {
+			const responseText = await response.text();
+
+			if (!responseText.trim()) {
+				const noResponseError = new Error('No response received from server. Please try again.');
+				throw noResponseError;
+			}
+
+			const data: ApiChatCompletionResponse = JSON.parse(responseText);
+
+			const responseModel = ChatService.extractModelName(data);
+			if (responseModel) {
+				onModel?.(responseModel);
+			}
+
+			const content = data.choices[0]?.message?.content || '';
+			const reasoningContent = data.choices[0]?.message?.reasoning_content;
+			const toolCalls = data.choices[0]?.message?.tool_calls;
+
+			if (reasoningContent) {
+				console.log('Full reasoning content:', reasoningContent);
+			}
+
+			let serializedToolCalls: string | undefined;
+
+			if (toolCalls && toolCalls.length > 0) {
+				const mergedToolCalls = ChatService.mergeToolCallDeltas([], toolCalls);
+
+				if (mergedToolCalls.length > 0) {
+					serializedToolCalls = JSON.stringify(mergedToolCalls);
+					if (serializedToolCalls) {
+						onToolCallChunk?.(serializedToolCalls);
+					}
+				}
+			}
+
+			if (!content.trim() && !serializedToolCalls) {
+				const noResponseError = new Error('No response received from server. Please try again.');
+				throw noResponseError;
+			}
+
+			onComplete?.(content, reasoningContent, undefined, serializedToolCalls);
+
+			return content;
+		} catch (error) {
+			const err = error instanceof Error ? error : new Error('Parse error');
+
+			onError?.(err);
+
+			throw err;
+		}
+	}
+
+	/**
+	 * Merges tool call deltas into an existing array of tool calls.
+	 * Handles both existing and new tool calls, updating existing ones and adding new ones.
+	 *
+	 * @param existing - The existing array of tool calls to merge into
+	 * @param deltas - The array of tool call deltas to merge
+	 * @param indexOffset - Optional offset to apply to the index of new tool calls
+	 * @returns {ApiChatCompletionToolCall[]} The merged array of tool calls
+	 */
+	private static mergeToolCallDeltas(
 		existing: ApiChatCompletionToolCall[],
 		deltas: ApiChatCompletionToolCallDelta[],
 		indexOffset = 0
@@ -510,80 +559,9 @@ export class ChatService {
 		return result;
 	}
 
-	/**
-	 * Handles non-streaming response from the chat completion API.
-	 * Parses the JSON response and extracts the generated content.
-	 *
-	 * @param response - The fetch Response object containing the JSON data
-	 * @param onComplete - Optional callback invoked when response is successfully parsed
-	 * @param onError - Optional callback invoked if an error occurs during parsing
-	 * @returns {Promise<string>} Promise that resolves to the generated content string
-	 * @throws {Error} if the response cannot be parsed or is malformed
-	 */
-	private async handleNonStreamResponse(
-		response: Response,
-		onComplete?: (
-			response: string,
-			reasoningContent?: string,
-			timings?: ChatMessageTimings,
-			toolCalls?: string
-		) => void,
-		onError?: (error: Error) => void,
-		onToolCallChunk?: (chunk: string) => void,
-		onModel?: (model: string) => void
-	): Promise<string> {
-		try {
-			const responseText = await response.text();
-
-			if (!responseText.trim()) {
-				const noResponseError = new Error('No response received from server. Please try again.');
-				throw noResponseError;
-			}
-
-			const data: ApiChatCompletionResponse = JSON.parse(responseText);
-
-			const responseModel = this.extractModelName(data);
-			if (responseModel) {
-				onModel?.(responseModel);
-			}
-
-			const content = data.choices[0]?.message?.content || '';
-			const reasoningContent = data.choices[0]?.message?.reasoning_content;
-			const toolCalls = data.choices[0]?.message?.tool_calls;
-
-			if (reasoningContent) {
-				console.log('Full reasoning content:', reasoningContent);
-			}
-
-			let serializedToolCalls: string | undefined;
-
-			if (toolCalls && toolCalls.length > 0) {
-				const mergedToolCalls = this.mergeToolCallDeltas([], toolCalls);
-
-				if (mergedToolCalls.length > 0) {
-					serializedToolCalls = JSON.stringify(mergedToolCalls);
-					if (serializedToolCalls) {
-						onToolCallChunk?.(serializedToolCalls);
-					}
-				}
-			}
-
-			if (!content.trim() && !serializedToolCalls) {
-				const noResponseError = new Error('No response received from server. Please try again.');
-				throw noResponseError;
-			}
-
-			onComplete?.(content, reasoningContent, undefined, serializedToolCalls);
-
-			return content;
-		} catch (error) {
-			const err = error instanceof Error ? error : new Error('Parse error');
-
-			onError?.(err);
-
-			throw err;
-		}
-	}
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Conversion
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
 	 * Converts a database message with attachments to API chat message format.
@@ -597,7 +575,7 @@ export class ChatService {
 	 * @returns {ApiChatMessageData} object formatted for the chat completion API
 	 * @static
 	 */
-	static convertMessageToChatServiceData(
+	static convertDbMessageToApiChatMessageData(
 		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 	): ApiChatMessageData {
 		if (!message.extra || message.extra.length === 0) {
@@ -618,7 +596,7 @@ export class ChatService {
 
 		const imageFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
-				extra.type === 'imageFile'
+				extra.type === AttachmentType.IMAGE
 		);
 
 		for (const image of imageFiles) {
@@ -630,7 +608,7 @@ export class ChatService {
 
 		const textFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile =>
-				extra.type === 'textFile'
+				extra.type === AttachmentType.TEXT
 		);
 
 		for (const textFile of textFiles) {
@@ -643,7 +621,7 @@ export class ChatService {
 		// Handle legacy 'context' type from old webui (pasted content)
 		const legacyContextFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraLegacyContext =>
-				extra.type === 'context'
+				extra.type === AttachmentType.LEGACY_CONTEXT
 		);
 
 		for (const legacyContextFile of legacyContextFiles) {
@@ -655,7 +633,7 @@ export class ChatService {
 
 		const audioFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraAudioFile =>
-				extra.type === 'audioFile'
+				extra.type === AttachmentType.AUDIO
 		);
 
 		for (const audio of audioFiles) {
@@ -670,7 +648,7 @@ export class ChatService {
 
 		const pdfFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile =>
-				extra.type === 'pdfFile'
+				extra.type === AttachmentType.PDF
 		);
 
 		for (const pdfFile of pdfFiles) {
@@ -695,19 +673,17 @@ export class ChatService {
 		};
 	}
 
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Utilities
+	// ─────────────────────────────────────────────────────────────────────────────
+
 	/**
-	 * Get server properties - static method for API compatibility
+	 * Get server properties - static method for API compatibility (to be refactored)
 	 */
 	static async getServerProps(): Promise<ApiLlamaCppServerProps> {
 		try {
-			const currentConfig = config();
-			const apiKey = currentConfig.apiKey?.toString().trim();
-
 			const response = await fetch(`./props`, {
-				headers: {
-					'Content-Type': 'application/json',
-					...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-				}
+				headers: getJsonHeaders()
 			});
 
 			if (!response.ok) {
@@ -723,49 +699,51 @@ export class ChatService {
 	}
 
 	/**
-	 * Aborts any ongoing chat completion request.
-	 * Cancels the current request and cleans up the abort controller.
-	 *
-	 * @public
+	 * Get model information from /models endpoint (to be refactored)
 	 */
-	public abort(conversationId?: string): void {
-		if (conversationId) {
-			const abortController = this.abortControllers.get(conversationId);
-			if (abortController) {
-				abortController.abort();
-				this.abortControllers.delete(conversationId);
+	static async getModels(): Promise<ApiModelListResponse> {
+		try {
+			const response = await fetch(`./models`, {
+				headers: getJsonHeaders()
+			});
+
+			if (!response.ok) {
+				throw new Error(`Failed to fetch models: ${response.status} ${response.statusText}`);
 			}
-		} else {
-			for (const controller of this.abortControllers.values()) {
-				controller.abort();
-			}
-			this.abortControllers.clear();
+
+			const data = await response.json();
+			return data;
+		} catch (error) {
+			console.error('Error fetching models:', error);
+			throw error;
 		}
 	}
 
 	/**
-	 * Injects a system message at the beginning of the conversation if configured in settings.
-	 * Checks for existing system messages to avoid duplication and retrieves the system message
-	 * from the current configuration settings.
+	 * Injects a system message at the beginning of the conversation if provided.
+	 * Checks for existing system messages to avoid duplication.
 	 *
 	 * @param messages - Array of chat messages to process
-	 * @returns Array of messages with system message injected at the beginning if configured
+	 * @param systemMessage - Optional system message to inject
+	 * @returns Array of messages with system message injected at the beginning if provided
 	 * @private
 	 */
-	private injectSystemMessage(messages: ApiChatMessageData[]): ApiChatMessageData[] {
-		const currentConfig = config();
-		const systemMessage = currentConfig.systemMessage?.toString().trim();
+	private static injectSystemMessage(
+		messages: ApiChatMessageData[],
+		systemMessage?: string
+	): ApiChatMessageData[] {
+		const trimmedSystemMessage = systemMessage?.trim();
 
-		if (!systemMessage) {
+		if (!trimmedSystemMessage) {
 			return messages;
 		}
 
 		if (messages.length > 0 && messages[0].role === 'system') {
-			if (messages[0].content !== systemMessage) {
+			if (messages[0].content !== trimmedSystemMessage) {
 				const updatedMessages = [...messages];
 				updatedMessages[0] = {
 					role: 'system',
-					content: systemMessage
+					content: trimmedSystemMessage
 				};
 				return updatedMessages;
 			}
@@ -775,7 +753,7 @@ export class ChatService {
 
 		const systemMsg: ApiChatMessageData = {
 			role: 'system',
-			content: systemMessage
+			content: trimmedSystemMessage
 		};
 
 		return [systemMsg, ...messages];
@@ -786,7 +764,7 @@ export class ChatService {
 	 * @param response - HTTP response object
 	 * @returns Promise<Error> - Parsed error with context info if available
 	 */
-	private async parseErrorResponse(response: Response): Promise<Error> {
+	private static async parseErrorResponse(response: Response): Promise<Error> {
 		try {
 			const errorText = await response.text();
 			const errorData: ApiErrorResponse = JSON.parse(errorText);
@@ -803,7 +781,18 @@ export class ChatService {
 		}
 	}
 
-	private extractModelName(data: unknown): string | undefined {
+	/**
+	 * Extracts model name from Chat Completions API response data.
+	 * Handles various response formats including streaming chunks and final responses.
+	 *
+	 * WORKAROUND: In single model mode, llama-server returns a default/incorrect model name
+	 * in the response. We override it with the actual model name from serverStore.
+	 *
+	 * @param data - Raw response data from the Chat Completions API
+	 * @returns Model name string if found, undefined otherwise
+	 * @private
+	 */
+	private static extractModelName(data: unknown): string | undefined {
 		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
 			return typeof value === 'object' && value !== null
 				? (value as Record<string, unknown>)
@@ -836,31 +825,22 @@ export class ChatService {
 		return undefined;
 	}
 
-	private updateProcessingState(
-		timings?: ChatMessageTimings,
-		promptProgress?: ChatMessagePromptProgress,
-		conversationId?: string
+	/**
+	 * Calls the onTimings callback with timing data from streaming response.
+	 *
+	 * @param timings - Timing information from the Chat Completions API response
+	 * @param promptProgress - Prompt processing progress data
+	 * @param onTimingsCallback - Callback function to invoke with timing data
+	 * @private
+	 */
+	private static notifyTimings(
+		timings: ChatMessageTimings | undefined,
+		promptProgress: ChatMessagePromptProgress | undefined,
+		onTimingsCallback:
+			| ((timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void)
+			| undefined
 	): void {
-		const tokensPerSecond =
-			timings?.predicted_ms && timings?.predicted_n
-				? (timings.predicted_n / timings.predicted_ms) * 1000
-				: 0;
-
-		slotsService
-			.updateFromTimingData(
-				{
-					prompt_n: timings?.prompt_n || 0,
-					predicted_n: timings?.predicted_n || 0,
-					predicted_per_second: tokensPerSecond,
-					cache_n: timings?.cache_n || 0,
-					prompt_progress: promptProgress
-				},
-				conversationId
-			)
-			.catch((error) => {
-				console.warn('Failed to update processing state:', error);
-			});
+		if (!timings || !onTimingsCallback) return;
+		onTimingsCallback(timings, promptProgress);
 	}
 }
-
-export const chatService = new ChatService();

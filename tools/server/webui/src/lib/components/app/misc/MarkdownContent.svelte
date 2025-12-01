@@ -7,9 +7,8 @@
 	import remarkRehype from 'remark-rehype';
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
-	import { copyCodeToClipboard } from '$lib/utils/copy';
+	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
 	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
-	import { preprocessLaTeX } from '$lib/utils/latex-protection';
 	import { browser } from '$app/environment';
 	import '$styles/katex-custom.scss';
 

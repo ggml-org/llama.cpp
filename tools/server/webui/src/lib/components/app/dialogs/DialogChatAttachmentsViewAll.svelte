@@ -11,6 +11,7 @@
 		imageHeight?: string;
 		imageWidth?: string;
 		imageClass?: string;
+		activeModelId?: string;
 	}
 
 	let {
@@ -21,7 +22,8 @@
 		onFileRemove,
 		imageHeight = 'h-24',
 		imageWidth = 'w-auto',
-		imageClass = ''
+		imageClass = '',
+		activeModelId
 	}: Props = $props();
 
 	let totalCount = $derived(uploadedFiles.length + attachments.length);
@@ -45,6 +47,7 @@
 				{imageHeight}
 				{imageWidth}
 				{imageClass}
+				{activeModelId}
 			/>
 		</Dialog.Content>
 	</Dialog.Portal>

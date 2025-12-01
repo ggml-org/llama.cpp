@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { RemoveButton } from '$lib/components/app';
-	import { formatFileSize, getFileTypeLabel, getPreviewText } from '$lib/utils/file-preview';
-	import { FileTypeCategory, MimeTypeText } from '$lib/enums/files';
+	import { getFileTypeLabel, getPreviewText, formatFileSize, isTextFile } from '$lib/utils';
+	import { AttachmentType } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -12,7 +12,9 @@
 		readonly?: boolean;
 		size?: number;
 		textContent?: string;
-		type: string;
+		// Either uploaded file or stored attachment
+		uploadedFile?: ChatUploadedFile;
+		attachment?: DatabaseMessageExtra;
 	}
 
 	let {
@@ -24,11 +26,41 @@
 		readonly = false,
 		size,
 		textContent,
-		type
+		uploadedFile,
+		attachment
 	}: Props = $props();
+
+	let isText = $derived(isTextFile(attachment, uploadedFile));
+
+	let fileTypeLabel = $derived.by(() => {
+		if (uploadedFile?.type) {
+			return getFileTypeLabel(uploadedFile.type);
+		}
+
+		if (attachment) {
+			if ('mimeType' in attachment && attachment.mimeType) {
+				return getFileTypeLabel(attachment.mimeType);
+			}
+
+			if (attachment.type) {
+				return getFileTypeLabel(attachment.type);
+			}
+		}
+
+		return getFileTypeLabel(name);
+	});
+
+	let pdfProcessingMode = $derived.by(() => {
+		if (attachment?.type === AttachmentType.PDF) {
+			const pdfAttachment = attachment as DatabaseMessageExtraPdfFile;
+
+			return pdfAttachment.processedAsImages ? 'Sent as Image' : 'Sent as Text';
+		}
+		return null;
+	});
 </script>
 
-{#if type === MimeTypeText.PLAIN || type === FileTypeCategory.TEXT}
+{#if isText}
 	{#if readonly}
 		<!-- Readonly mode (ChatMessage) -->
 		<button
@@ -45,7 +77,7 @@
 						<span class="text-xs text-muted-foreground">{formatFileSize(size)}</span>
 					{/if}
 
-					{#if textContent && type === 'text'}
+					{#if textContent}
 						<div class="relative mt-2 w-full">
 							<div
 								class="overflow-hidden font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
@@ -105,17 +137,21 @@
 		<div
 			class="flex h-8 w-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"
 		>
-			{getFileTypeLabel(type)}
+			{fileTypeLabel}
 		</div>
 
-		<div class="flex flex-col gap-1">
+		<div class="flex flex-col gap-0.5">
 			<span
-				class="max-w-24 truncate text-sm font-medium text-foreground group-hover:pr-6 md:max-w-32"
+				class="max-w-24 truncate text-sm font-medium text-foreground {readonly
+					? ''
+					: 'group-hover:pr-6'} md:max-w-32"
 			>
 				{name}
 			</span>
 
-			{#if size}
+			{#if pdfProcessingMode}
+				<span class="text-left text-xs text-muted-foreground">{pdfProcessingMode}</span>
+			{:else if size}
 				<span class="text-left text-xs text-muted-foreground">{formatFileSize(size)}</span>
 			{/if}
 		</div>

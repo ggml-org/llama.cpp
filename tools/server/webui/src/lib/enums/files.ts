@@ -32,10 +32,10 @@ export enum FileTypePdf {
 
 export enum FileTypeText {
 	PLAIN_TEXT = 'plainText',
-	MARKDOWN = 'markdown',
+	MARKDOWN = 'md',
 	ASCIIDOC = 'asciidoc',
-	JAVASCRIPT = 'javascript',
-	TYPESCRIPT = 'typescript',
+	JAVASCRIPT = 'js',
+	TYPESCRIPT = 'ts',
 	JSX = 'jsx',
 	TSX = 'tsx',
 	CSS = 'css',

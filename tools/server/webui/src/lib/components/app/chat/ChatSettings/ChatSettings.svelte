@@ -17,7 +17,7 @@
 		ChatSettingsFields
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import { config, updateMultipleConfig } from '$lib/stores/settings.svelte';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
 
@@ -80,18 +80,13 @@
 			icon: Monitor,
 			fields: [
 				{
-					key: 'showThoughtInProgress',
-					label: 'Show thought in progress',
-					type: 'checkbox'
-				},
-				{
 					key: 'showMessageStats',
 					label: 'Show message generation statistics',
 					type: 'checkbox'
 				},
 				{
-					key: 'showTokensPerSecond',
-					label: 'Show tokens per second',
+					key: 'showThoughtInProgress',
+					label: 'Show thought in progress',
 					type: 'checkbox'
 				},
 				{
@@ -100,18 +95,19 @@
 					type: 'checkbox'
 				},
 				{
-					key: 'showModelInfo',
-					label: 'Show model information',
+					key: 'autoMicOnEmpty',
+					label: 'Show microphone on empty input',
+					type: 'checkbox',
+					isExperimental: true
+				},
+				{
+					key: 'renderUserContentAsMarkdown',
+					label: 'Render user content as Markdown',
 					type: 'checkbox'
 				},
 				{
 					key: 'disableAutoScroll',
 					label: 'Disable automatic scroll',
-					type: 'checkbox'
-				},
-				{
-					key: 'renderUserContentAsMarkdown',
-					label: 'Render user content as Markdown',
 					type: 'checkbox'
 				}
 			]
@@ -233,11 +229,6 @@
 			icon: Code,
 			fields: [
 				{
-					key: 'modelSelectorEnabled',
-					label: 'Enable model selector',
-					type: 'checkbox'
-				},
-				{
 					key: 'showToolCalls',
 					label: 'Show tool call labels',
 					type: 'checkbox'
@@ -342,7 +333,7 @@
 			}
 		}
 
-		updateMultipleConfig(processedConfig);
+		settingsStore.updateMultipleConfig(processedConfig);
 		onSave?.();
 	}
 
