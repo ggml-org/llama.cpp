@@ -430,7 +430,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 0L);
     typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
     auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
         auto data_vec = static_cast<std::vector<char> *>(data);
