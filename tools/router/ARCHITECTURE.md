@@ -14,6 +14,7 @@ llama-router follows KISS (Keep It Simple, Stupid) principles:
 - **Simple endpoint matching**: Prefix-based matching, no complex regex
 - **Transparent proxy**: Headers and streaming forwarded as-is
 - **On-demand by default**: Models start on first request; `startup_model` can preload a chosen backend at boot
+- **Plug-and-play defaults**: Hugging Face downloads set `startup_model` automatically when it is unset
 - **Transparent operations**: Optional real-time notifications for swap feedback via SSE
 
 ### The auto + default_spawn Workflow

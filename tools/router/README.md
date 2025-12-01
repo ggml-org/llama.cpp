@@ -10,7 +10,7 @@ llama-router acts as an intelligent proxy that sits in front of your model colle
 
 - **On-demand model loading**: Models are spawned only when requested, conserving GPU memory
 - **Automatic discovery**: Scans the Hugging Face cache directory for available models
-- **Hugging Face integration**: Download models directly via CLI with `-hf` flag
+- **Hugging Face integration**: Download models directly via CLI with `-hf` flag and automatically set the `startup_model` when it is not configured
 - **Collection import**: Recursively import local GGUF directories
 - **Multimodal support**: Automatically detects and configures mmproj files for vision models
 - **Model grouping**: Define groups to ensure only one model from a group runs at a time
@@ -97,7 +97,7 @@ export HF_TOKEN="hf_xxxxxxxxxxxxx"
 ./llama-router -hf meta-llama/Llama-3.1-8B-Instruct-GGUF
 ```
 
-After download completes, the model is cached and will be automatically discovered on the next router startup.
+After download completes, the model is cached and will be automatically discovered on the next router startup. If your configuration does not yet specify a `startup_model`, the downloaded model is set as the startup model so it preloads automatically for plug-and-play use.
 
 ### Import a Local Collection
 

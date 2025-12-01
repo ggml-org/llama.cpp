@@ -84,7 +84,7 @@ static void print_help() {
     printf("  --import-dir <path>     Recursively import GGUF models from directory\n");
 }
 
-static bool handle_download(const CliOptions & opts) {
+static bool handle_download(const CliOptions & opts, const std::string & config_path) {
     if (opts.hf_repo.empty()) {
         return false;
     }
@@ -115,6 +115,24 @@ static bool handle_download(const CliOptions & opts) {
         LOG_INF("Downloading %s to %s\n", url.c_str(), local_path.c_str());
         if (!common_download_model(model, token, false)) {
             fprintf(stderr, "download failed\n");
+            return true;
+        }
+
+        try {
+            auto cfg = load_config(config_path);
+
+            auto rescan_result = rescan_auto_models(cfg);
+            cfg = rescan_result.config;
+
+            if (cfg.startup_model.empty()) {
+                cfg.startup_model = filename;
+                write_config_file(cfg, config_path);
+                LOG_INF("Configured startup_model to '%s' after download\n", filename.c_str());
+            } else {
+                LOG_INF("startup_model already set to '%s', leaving unchanged\n", cfg.startup_model.c_str());
+            }
+        } catch (const std::exception & e) {
+            LOG_WRN("Failed to set startup_model after download: %s\n", e.what());
         }
     } catch (const std::exception & e) {
         fprintf(stderr, "hf download error: %s\n", e.what());
@@ -180,7 +198,7 @@ int main(int argc, char ** argv) {
 
     std::string config_path = !cli.config_path.empty() ? expand_user_path(cli.config_path) : get_default_config_path();
 
-    if (handle_download(cli)) {
+    if (handle_download(cli, config_path)) {
         LOG_INF("Download-only mode completed, exiting\n");
         return 0;
     }
