@@ -82,12 +82,18 @@ bool RouterApp::ensure_running(const std::string & model_name, std::string & err
     const SpawnConfig spawn_cfg = resolve_spawn_config(cfg);
 
     std::vector<std::string> command = spawn_cfg.command;
-    command.push_back("--model");
-    command.push_back(expand_user_path(cfg.path));
-    command.push_back("--port");
-    command.push_back(std::to_string(port));
-    command.push_back("--host");
-    command.push_back("127.0.0.1");
+    const std::string model_path = expand_user_path(cfg.path);
+
+    // Replace all placeholders
+    for (auto & arg : command) {
+        if (arg == "$path") {
+            arg = model_path;
+        } else if (arg == "$port") {
+            arg = std::to_string(port);
+        } else if (arg == "$host") {
+            arg = "127.0.0.1";
+        }
+    }
 
     LOG_INF("Starting %s on port %d\n", model_name.c_str(), port);
 

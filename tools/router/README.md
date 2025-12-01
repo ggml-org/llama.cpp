@@ -196,7 +196,15 @@ Override with `--config`:
     "notify_model_swap": false
   },
   "default_spawn": {
-    "command": ["llama-server", "--jinja", "--ctx-size", "4096", "--n-gpu-layers", "99"],
+    "command": [
+      "llama-server",
+      "-m", "$path",
+      "--port", "$port",
+      "--host", "$host",
+      "--jinja",
+      "--ctx-size", "4096",
+      "--n-gpu-layers", "99"
+    ],
     "proxy_endpoints": ["/v1/", "/health", "/slots", "/props"],
     "health_endpoint": "/health"
   },
@@ -233,16 +241,31 @@ The `default_spawn` block defines how llama-server instances are launched:
 
 ```json
 {
-  "command": ["llama-server", "--jinja", "--ctx-size", "4096", "--n-gpu-layers", "99"],
+  "command": [
+    "llama-server",
+    "-m", "$path",
+    "--port", "$port",
+    "--host", "$host",
+    "--jinja",
+    "--ctx-size", "4096",
+    "--n-gpu-layers", "99"
+  ],
   "proxy_endpoints": ["/v1/", "/health", "/slots", "/props"],
   "health_endpoint": "/health"
 }
 ```
 
-The router automatically appends these arguments:
-- `--model <path>` - The model file path
-- `--port <port>` - Dynamically assigned port
-- `--host 127.0.0.1` - Localhost binding for security
+### Spawn Command Placeholders
+
+The router supports placeholders in spawn commands for dynamic value injection:
+
+| Placeholder | Description | Example expansion |
+|-------------|-------------|-------------------|
+| `$path` | Model file path from configuration | `/home/user/.cache/llama.cpp/model.gguf` |
+| `$port` | Dynamically assigned port | `50000`, `50001`, etc. |
+| `$host` | Bind address (always `127.0.0.1`) | `127.0.0.1` |
+
+This makes all spawn parameters explicit and visible in the configuration.
 
 ### Optimizing for Your Hardware
 
@@ -253,6 +276,9 @@ The `default_spawn` is where you tune performance for your specific hardware. **
   "default_spawn": {
     "command": [
       "llama-server",
+      "-m", "$path",
+      "--port", "$port",
+      "--host", "$host",
       "-ngl", "999",
       "-ctk", "q8_0",
       "-ctv", "q8_0",
@@ -277,8 +303,6 @@ The `default_spawn` is where you tune performance for your specific hardware. **
 - `-kvu`: Use single unified KV buffer for all sequences (also `--kv-unified`)
 - `--jinja`: Enable Jinja template support
 
-**Note:** The router automatically appends `--model`, `--port`, and `--host` - do not include these in your command.
-
 Change `default_spawn`, reload the router, and all `auto` models instantly use the new configuration.
 
 ### Per-Model Spawn Override
@@ -293,6 +317,9 @@ Individual models can override the default spawn configuration:
   "spawn": {
     "command": [
       "llama-server",
+      "-m", "$path",
+      "--port", "$port",
+      "--host", "$host",
       "--jinja",
       "--ctx-size", "8192",
       "--n-gpu-layers", "99",

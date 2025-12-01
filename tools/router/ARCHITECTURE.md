@@ -148,6 +148,13 @@ Spawn commands support both absolute/relative paths and PATH-based binaries:
 
 The router only validates file existence for commands containing `/` or `\\` path separators, allowing seamless use of system-installed binaries.
 
+### Spawn Command Placeholders
+
+The router expands placeholders in spawn commands:
+- `$path` → The model file path from `path` field
+- `$port` → Dynamically assigned port (increments from `base_port`)
+- `$host` → Always expands to `127.0.0.1` for security
+
 ### Model-Scoped Route Stripping
 
 Routes like `/<model>/health` are router-side aliases for convenience. Before proxying to the backend, the router strips the model prefix:
