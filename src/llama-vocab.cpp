@@ -2677,7 +2677,7 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
 
                         if (left_reminder_length > 0) {
                             buffer.emplace_after(it, raw_text, left_reminder_offset, left_reminder_length);
-                            it++;
+                            ++it;
                         }
 
 #ifdef PRETOKENIZERDEBUG
@@ -2687,7 +2687,7 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
 
                     // special token
                     buffer.emplace_after(it, special_id);
-                    it++;
+                    ++it;
 
                     // right
                     if (match + text.length() < raw_text_base_offset + raw_text_base_length) {
@@ -2703,7 +2703,7 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
 
                         if (right_reminder_length > 0) {
                             buffer.emplace_after(it, raw_text, right_reminder_offset, right_reminder_length);
-                            it++;
+                            ++it;
                         }
 
 #ifdef PRETOKENIZERDEBUG
@@ -2733,7 +2733,7 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
                     }
                 }
             }
-            it++;
+            ++it;
         }
     }
 }
