@@ -921,6 +921,7 @@ static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
         form.scope_end   = "<|tool_calls_section_end|>";
         form.raw_argval  = false;
         form.last_val_end = "";
+        form.allow_toolcall_in_think = true;
         return form;
     })();
     builder.consume_reasoning_with_xml_tool_calls(form, "<think>", "</think>");
