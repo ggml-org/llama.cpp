@@ -98,6 +98,12 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         target_link_libraries(${GGML_CPU_NAME} PUBLIC memkind)
     endif()
 
+    if (GGML_CPU_OP_PROFILING)
+        message(STATUS "Enablinig operator-level CPU profiling for ggml-cpu target")
+
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_CPU_OP_PROFILING)
+    endif()
+
     if (GGML_SYSTEM_ARCH STREQUAL "ARM")
         message(STATUS "ARM detected")
         list(APPEND GGML_CPU_SOURCES

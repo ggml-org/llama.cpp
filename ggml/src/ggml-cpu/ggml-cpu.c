@@ -701,6 +701,61 @@ static void ggml_init_arm_arch_features(void) {
 
 #endif // __ARM_ARCH
 
+//
+// Profiling
+//
+#ifdef GGML_CPU_OP_PROFILING
+static atomic_uint_fast64_t start_clock_us;
+static FILE * g_performance_log_csv = NULL;
+
+static void write_time(const char * op_name) {
+    const uint64_t end_time_us = ggml_time_us();
+    const uint64_t start_time_us = atomic_load(&start_clock_us);
+    const uint64_t duration_us = end_time_us - start_time_us;
+
+    if (g_performance_log_csv) {
+        fprintf(g_performance_log_csv, "%s,%.4f\n", op_name, duration_us / 1000.0);
+        fflush(g_performance_log_csv);
+    }
+    atomic_store(&start_clock_us, ggml_time_us());
+}
+
+static void write_barrier(struct ggml_threadpool * tp) {
+    int n_threads = atomic_load_explicit(&tp->n_threads_cur, memory_order_relaxed);
+    if (n_threads == 1) {
+        return;
+    }
+
+#ifdef GGML_USE_OPENMP
+    #pragma omp barrier
+#else
+    int n_passed = atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed);
+
+    // enter barrier (full seq-cst fence)
+    int n_barrier = atomic_fetch_add_explicit(&tp->n_barrier, 1, memory_order_seq_cst);
+
+    if (n_barrier == (n_threads - 1)) {
+        atomic_store_explicit(&tp->n_barrier, 0, memory_order_relaxed);
+        atomic_fetch_add_explicit(&tp->n_barrier_passed, 1, memory_order_seq_cst);
+        return;
+    }
+
+    // wait for other threads
+    while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) == n_passed) {
+        ggml_thread_cpu_relax();
+    }
+
+    // exit barrier (full seq-cst fence)
+    // TSAN doesn't support standalone fence yet, we use a dummy read-modify-write instead
+    #ifdef GGML_TSAN_ENABLED
+    atomic_fetch_add_explicit(&tp->n_barrier_passed, 0, memory_order_seq_cst);
+    #else
+    atomic_thread_fence(memory_order_seq_cst);
+    #endif
+#endif
+}
+#endif
+
 struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value) {
     GGML_ASSERT(!ggml_get_no_alloc(ctx));
 
@@ -2912,6 +2967,12 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         /*.threadpool=*/ tp,
     };
 
+#ifdef GGML_CPU_OP_PROFILING
+    if (state->ith == 0) {
+        atomic_store(&start_clock_us, ggml_time_us());
+    }
+#endif
+
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
@@ -2931,6 +2992,12 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         if (node_n + 1 < cgraph->n_nodes) {
             ggml_barrier(state->threadpool);
         }
+#ifdef GGML_CPU_OP_PROFILING
+        if (state->ith == 0) {
+            write_time(ggml_op_name(node->op));
+        }
+        write_barrier(state->threadpool);
+#endif
     }
 
     ggml_barrier(state->threadpool);
@@ -3170,6 +3237,12 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     GGML_ASSERT(cplan->n_threads > 0);
     GGML_ASSERT(cplan->work_size == 0 || cplan->work_data != NULL);
 
+#ifdef GGML_CPU_OP_PROFILING
+    if (g_performance_log_csv == NULL) {
+        g_performance_log_csv = fopen("op_profiling.csv", "a");
+    }
+#endif
+
     int n_threads                               = cplan->n_threads;
     struct ggml_threadpool * threadpool = cplan->threadpool;
 
@@ -3236,6 +3309,13 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     if (disposable_threadpool) {
         ggml_threadpool_free(threadpool);
     }
+
+#ifdef GGML_CPU_OP_PROFILING
+    if (g_performance_log_csv != NULL) {
+        fclose(g_performance_log_csv);
+        g_performance_log_csv = NULL;
+    }
+#endif
 
     return ret;
 }
