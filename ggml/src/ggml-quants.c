@@ -5119,8 +5119,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                     __m256i v = _mm256_loadu_si256((const __m256i *)(f + i));
                     __m256i vexp = _mm256_and_si256(v, _mm256_set1_epi16(0x7c00));
                     __m256i cmp = _mm256_cmpeq_epi16(vexp, _mm256_set1_epi16(0x7c00));
-                    int mask = _mm256_movemask_epi8(cmp);
-                    if (mask) {
+                    if (!_mm256_testz_si256(cmp, cmp)) {
                         for (size_t j = 0; j < 16; ++j) {
                             if (!validate_fp16(f[i + j], i + j)) {
                                 return false;
@@ -5160,8 +5159,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                     __m256i v = _mm256_loadu_si256((const __m256i *)(f + i));
                     __m256i vexp = _mm256_and_si256(v, _mm256_set1_epi32(0x7f800000));
                     __m256i cmp = _mm256_cmpeq_epi32(vexp, _mm256_set1_epi32(0x7f800000));
-                    int mask = _mm256_movemask_epi8(cmp);
-                    if (mask) {
+                    if (!_mm256_testz_si256(cmp, cmp)) {
                         for (size_t j = 0; j < 8; ++j) {
                             if (!validate_float(f[i + j], i + j)) {
                                 return false;
