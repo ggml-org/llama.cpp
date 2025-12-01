@@ -3526,14 +3526,18 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             ctx_vision = new clip_ctx(ctx_params);
             loader.load_hparams(ctx_vision->model, CLIP_MODALITY_VISION);
             loader.load_tensors(*ctx_vision);
-            loader.warmup(*ctx_vision);
+            if (ctx_params.warmup) {
+                loader.warmup(*ctx_vision);
+            }
         }
 
         if (loader.has_audio) {
             ctx_audio = new clip_ctx(ctx_params);
             loader.load_hparams(ctx_audio->model, CLIP_MODALITY_AUDIO);
             loader.load_tensors(*ctx_audio);
-            loader.warmup(*ctx_audio);
+            if (ctx_params.warmup) {
+                loader.warmup(*ctx_audio);
+            }
         }
 
     } catch (const std::exception & e) {
