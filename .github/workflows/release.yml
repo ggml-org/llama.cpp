@@ -66,13 +66,20 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
+          zip -y -r llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz -C ./build/bin .
 
-      - name: Upload artifacts
+      - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip
           name: llama-bin-macos-arm64.zip
+
+      - name: Upload artifacts (tar)
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz
+          name: llama-bin-macos-arm64.tar.gz
 
   macOS-x64:
     runs-on: macos-15-intel
@@ -120,13 +127,20 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip ./build/bin/*
+          zip -y -r llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip ./build/bin/*
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz -C ./build/bin .
 
-      - name: Upload artifacts
+      - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip
           name: llama-bin-macos-x64.zip
+
+      - name: Upload artifacts (tar)
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz
+          name: llama-bin-macos-x64.tar.gz
 
   ubuntu-22-cpu:
     strategy:
@@ -182,13 +196,20 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
+          zip -y -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz -C ./build/bin .
 
-      - name: Upload artifacts
+      - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip
           name: llama-bin-ubuntu-${{ matrix.build }}.zip
+
+      - name: Upload artifacts (tar)
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
+          name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   ubuntu-22-vulkan:
     runs-on: ubuntu-22.04
@@ -235,13 +256,20 @@ jobs:
         id: pack_artifacts
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./build/bin/*
+          zip -y -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./build/bin/*
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz -C ./build/bin .
 
-      - name: Upload artifacts
+      - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip
           name: llama-bin-ubuntu-vulkan-x64.zip
+
+      - name: Upload artifacts (tar)
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz
+          name: llama-bin-ubuntu-vulkan-x64.tar.gz
 
   windows-cpu:
     runs-on: windows-2025
@@ -298,7 +326,7 @@ jobs:
         run: |
           Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll .\build\bin\Release\
           Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
-          7z a llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
+          7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -380,7 +408,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          7z a llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
+          7z a -snl llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -434,7 +462,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          7z a llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip .\build\bin\Release\ggml-cuda.dll
+          7z a -snl llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip .\build\bin\Release\ggml-cuda.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -526,7 +554,7 @@ jobs:
           cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
 
           echo "cp oneAPI running time dll files to ./build/bin done"
-          7z a llama-bin-win-sycl-x64.zip ./build/bin/*
+          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
 
       - name: Upload the release package
         uses: actions/upload-artifact@v4
@@ -632,7 +660,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          7z a llama-bin-win-hip-${{ matrix.name }}-x64.zip .\build\bin\*
+          7z a -snl llama-bin-win-hip-${{ matrix.name }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -685,13 +713,20 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          zip --symlinks -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
+          zip -y -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
+          tar -czvf llama-${{ steps.tag.outputs.name }}-xcframework.tar.gz -C build-apple llama.xcframework
 
-      - name: Upload artifacts
+      - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
-          name: llama-${{ steps.tag.outputs.name }}-xcframework
+          name: llama-${{ steps.tag.outputs.name }}-xcframework.zip
+
+      - name: Upload artifacts (tar)
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-xcframework.tar.gz
+          name: llama-${{ steps.tag.outputs.name }}-xcframework.tar.gz
 
   openEuler-cann:
     strategy:
@@ -730,13 +765,20 @@ jobs:
       - name: Pack artifacts
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.zip ./build/bin/*
+          zip -y -r llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.zip ./build/bin/*
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.tar.gz -C ./build/bin .
 
-      - name: Upload artifacts
+      - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.zip
           name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.zip
+
+      - name: Upload artifacts (tar)
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.tar.gz
+          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.tar.gz
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -814,6 +856,7 @@ jobs:
 
           echo "Moving other artifacts..."
           mv -v artifact/*.zip release
+          mv -v artifact/*.tar.gz release
 
       - name: Create release
         id: create_release
@@ -822,6 +865,39 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.name }}
+          body: |
+            > [!WARNING]
+            > **Release Format Update**: Linux releases will soon use .tar.gz archives instead of .zip. Please make the necessary changes to your deployment scripts.
+
+            **macOS/iOS:**
+            - [macOS Apple Silicon (arm64)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz)
+            - [macOS Intel (x64)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz)
+            - [iOS XCFramework](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-xcframework.tar.gz)
+
+            **Linux:**
+            - [Ubuntu x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.tar.gz)
+            - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
+            - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
+
+            **Windows:**
+            - [Windows x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip)
+            - [Windows arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-arm64.zip)
+            - [Windows x64 (CUDA)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-12.4-x64.zip)
+            - [Windows x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-vulkan-x64.zip)
+            - [Windows x64 (SYCL)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip)
+            - [Windows x64 (HIP)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-hip-radeon-x64.zip)
+
+            **openEuler:**
+            - [openEuler x86 (310p)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-310p-openEuler-x86.tar.gz)
+            - [openEuler x86 (910b)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-x86.tar.gz)
+            - [openEuler aarch64 (310p)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-310p-openEuler-aarch64.tar.gz)
+            - [openEuler aarch64 (910b)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-aarch64.tar.gz)
+
+            <details>
+
+            ${{ github.event.head_commit.message }}
+
+            </details>
 
       - name: Upload release
         id: upload_release
@@ -833,7 +909,7 @@ jobs:
             const fs = require('fs');
             const release_id = '${{ steps.create_release.outputs.id }}';
             for (let file of await fs.readdirSync('./release')) {
-              if (path.extname(file) === '.zip') {
+              if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
                 console.log('uploadReleaseAsset', file);
                 await github.repos.uploadReleaseAsset({
                   owner: context.repo.owner,
