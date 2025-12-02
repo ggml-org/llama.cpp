@@ -1662,6 +1662,7 @@ jobs:
           # Install Rust stable version
           rustup install stable
           rustup default stable
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
@@ -1674,6 +1675,7 @@ jobs:
           ldd --version
           cmake --version
           rustc --version
+
       - name: Setup ccache
         run: |
           # Set unique cache directory for this job
@@ -1761,6 +1763,7 @@ jobs:
         run: |
           gcc --version
           g++ --version
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
@@ -1852,6 +1855,7 @@ jobs:
         run: |
           gcc --version
           g++ --version
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
@@ -1923,6 +1927,7 @@ jobs:
         run: |
           gcc --version
           g++ --version
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
@@ -1965,6 +1970,7 @@ jobs:
         run: |
           cd build
           ctest -L main --verbose
+
   ggml-ci-arm64-graviton4-kleidiai:
      runs-on: ah-ubuntu_22_04-c8g_8x
 
