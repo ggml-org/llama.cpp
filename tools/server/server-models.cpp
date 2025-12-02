@@ -24,7 +24,54 @@
 #include <unistd.h>
 #endif
 
+#if defined(__APPLE__) && defined(__MACH__)
+// macOS: use _NSGetExecutablePath to get the executable path
+#include <mach-o/dyld.h>
+#include <limits.h>
+#endif
+
 #define CMD_EXIT "exit"
+
+static std::filesystem::path get_server_exec_path() {
+#if defined(_WIN32)
+    wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
+    DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
+    if (len == 0 || len >= _countof(buf)) {
+        throw std::runtime_error("GetModuleFileNameW failed or path too long");
+    }
+    return std::filesystem::path(buf);
+#elif defined(__APPLE__) && defined(__MACH__)
+    char small_path[PATH_MAX];
+    uint32_t size = sizeof(small_path);
+
+    if (_NSGetExecutablePath(small_path, &size) == 0) {
+        // resolve any symlinks to get absolute path
+        try {
+            return std::filesystem::canonical(std::filesystem::path(small_path));
+        } catch (...) {
+            return std::filesystem::path(small_path);
+        }
+    } else {
+        // buffer was too small, allocate required size and call again
+        std::vector<char> buf(size);
+        if (_NSGetExecutablePath(buf.data(), &size) == 0) {
+            try {
+                return std::filesystem::canonical(std::filesystem::path(buf.data()));
+            } catch (...) {
+                return std::filesystem::path(buf.data());
+            }
+        }
+        throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
+    }
+#else
+    char path[FILENAME_MAX];
+    ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
+    if (count <= 0) {
+        throw std::runtime_error("failed to resolve /proc/self/exe");
+    }
+    return std::filesystem::path(std::string(path, count));
+#endif
+}
 
 struct local_model {
     std::string name;
@@ -98,6 +145,14 @@ server_models::server_models(
     }
     for (char ** env = envp; *env != nullptr; env++) {
         base_env.push_back(std::string(*env));
+    }
+    GGML_ASSERT(!base_args.empty());
+    // set binary path
+    try {
+        base_args[0] = get_server_exec_path().string();
+    } catch (const std::exception & e) {
+        LOG_WRN("failed to get server executable path: %s\n", e.what());
+        LOG_WRN("using original argv[0] as fallback: %s\n", base_args[0].c_str());
     }
     // TODO: allow refreshing cached model list
     // add cached models
