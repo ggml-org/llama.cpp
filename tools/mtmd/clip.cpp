@@ -2007,28 +2007,21 @@ struct clip_graph {
 
         return gf;
     }
-    // -------------------------------------------------------------------------
-    // Helper: Space-to-Depth + Grid Stitching (Matches reshape_hd_patches_2x2merge)
-    // -------------------------------------------------------------------------
+
     static struct ggml_tensor * ggml_phi3v_hd_merge(
         struct ggml_context * ctx,
-        struct ggml_tensor * image_features, // Input: {1024, 24, 24, N}
+        struct ggml_tensor * image_features,
         int h_crop,
         int w_crop
     ) {
-        // N = total patches (num_images * h_crop * w_crop)
-        // For inference, we typically process 1 image batch at a time, so N = h_crop * w_crop
-        int N = image_features->ne[3];
-        const int C = 1024;
-        const int H = 24;
-        const int H2 = 12;
+        int n_images = image_features->ne[3];
+        const int n_channels = 1024;
+        const int size = 24;
+        const int size_half = 12;
 
         struct ggml_tensor * t = image_features;
-
-        t = ggml_reshape_4d(ctx, t, C, 2, H2, H * N);
-
-        t = ggml_reshape_4d(ctx, t, C * 2, H2, 2, H2 * N);
-
+        t = ggml_reshape_4d(ctx, t, n_channels, 2, size_half, size * n_images);
+        t = ggml_reshape_4d(ctx, t, n_channels * 2, size_half, 2, size_half * n_images);
         t = ggml_permute(ctx, t, 0, 2, 1, 3);
         t = ggml_cont(ctx, t);
 
@@ -2036,17 +2029,15 @@ struct clip_graph {
             return t;
         }
 
-        const int C_NEW = C * 4;
-
-        t = ggml_reshape_4d(ctx, t, C_NEW * H2, H2, w_crop, h_crop);
-
+        const int n_channels_new = n_channels * 4;
+        t = ggml_reshape_4d(ctx, t, n_channels_new * size_half, size_half, w_crop, h_crop);
         t = ggml_permute(ctx, t, 0, 2, 1, 3);
         t = ggml_cont(ctx, t);
 
         t = ggml_reshape_4d(ctx, t,
-            C_NEW,
-            H2 * w_crop,
-            H2 * h_crop,
+            n_channels_new,
+            size_half * w_crop,
+            size_half * h_crop,
             1
         );
 
@@ -2054,71 +2045,35 @@ struct clip_graph {
     }
 
         ggml_cgraph * build_phi3v() {
-            // 1. Prepare Input (Patches)
-            // ---------------------------------------------------------------------
-            ggml_tensor * inp = build_inp(); // [n_embd, 576, num_crops]
-
-            // Calculate grid (e.g. 2x2 grid -> 4 crops + 1 global = 5 crops)
-            int n_patches_per_crop = 24 * 24; // 576
-            int num_crops = inp->ne[2];       // Passed from the batch encoder
-
-            // Reshape to [n_embd, 576, num_crops]
+            ggml_tensor * inp = build_inp();
+            int n_patches_per_crop = 24 * 24;
+            int num_crops = inp->ne[2];
             inp = ggml_reshape_3d(ctx0, inp, n_embd, n_patches_per_crop, num_crops);
 
-            // 1. Prepend CLS Token
             ggml_tensor * cls = model.class_embedding;
             cls = ggml_reshape_3d(ctx0, cls, n_embd, 1, 1);
             cls = ggml_repeat(ctx0, cls, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, 1, num_crops));
 
-            // Concat: [CLS, Patch0 ... Patch575]
             inp = ggml_concat(ctx0, cls, inp, 1);
-
-            // 2. Add Full Position Embeddings (Do not slice!)
             inp = ggml_add(ctx0, inp, model.position_embeddings);
 
-            // ---------------------------------------------------------------------
-            // 2. Run Vision Transformer (ViT)
-            // ---------------------------------------------------------------------
-
-            // Flatten for the transformer: [n_embd, 577 * num_crops]
             inp = ggml_reshape_2d(ctx0, inp, n_embd, (n_patches_per_crop + 1) * num_crops);
 
-            // Run the layers on the full sequence (577 tokens per crop)
             ggml_tensor * cur = build_vit(inp, (n_patches_per_crop + 1) * num_crops,
                                           NORM_TYPE_NORMAL, hparams.ffn_op, nullptr, nullptr);
 
-            // Reshape back to separate the crops: [n_embd, 577, num_crops]
 
             cur = ggml_reshape_3d(ctx0, cur, n_embd, n_patches_per_crop + 1, num_crops);
-
-            // Slice: Keep indices 1..577 (The 576 spatial patches)
-            // We skip Index 0 (CLS).
-            // Dimensions: n_embd, 576, num_crops
-            // Offset: 1 * nb[1] (Skip one column of embeddings)
 
             cur = ggml_view_3d(ctx0, cur,
                                n_embd, n_patches_per_crop, num_crops,
                                cur->nb[1], cur->nb[2],
-                               cur->nb[1]); // <--- Offset starts at token 1
+                               cur->nb[1]);
 
-            // Make it contiguous memory for the HD Merge step
-            // [n_embd, 24, 24, num_crops]
             cur = ggml_reshape_4d(ctx0, cur, n_embd, 24, 24, num_crops);
             cur = ggml_cont(ctx0, cur);
 
-            // ---------------------------------------------------------------------
-            // 3. HD Merge (Space-to-Depth)
-            // ---------------------------------------------------------------------
-            // Now 'cur' contains only the 24x24 spatial tokens, perfect for merging.
-            // We use 1x1 here because we are processing the batch in the graph,
-            // but we treat crops as independent until the CPU stitching step.
-
             cur = ggml_phi3v_hd_merge(ctx0, cur, 1, 1);
-
-            // ---------------------------------------------------------------------
-            // 4. MLP Projection
-            // ---------------------------------------------------------------------
-            // Flatten to [4096, 144 * num_crops]
             cur = ggml_reshape_2d(ctx0, cur, 4096, 144 * num_crops);
 
             ggml_tensor * final_emb = ggml_mul_mat(ctx0, model.mm_0_w, cur);
@@ -5407,19 +5362,13 @@ static void clip_phi3_setup(clip_ctx * ctx) {
 
     // Helper to build MLP graph for a single vector
     auto build_mlp = [&](ggml_tensor* input) {
-        // Layer 1 (4096 -> 3072)
         ggml_tensor* cur = ggml_mul_mat(ctx0, ctx->model.mm_0_w, input);
-        // Bias 0
         if (ctx->model.mm_0_b) {
              ggml_tensor* b = ctx->model.mm_0_b;
              cur = ggml_add(ctx0, cur, b);
         }
-        // GELU
         cur = ggml_gelu(ctx0, cur);
-
-        // Layer 2 (3072 -> 3072)
         cur = ggml_mul_mat(ctx0, ctx->model.mm_2_w, cur);
-        // Bias 2
         if (ctx->model.mm_2_b) {
              ggml_tensor* b = ctx->model.mm_2_b;
              cur = ggml_add(ctx0, cur, b);
@@ -5441,13 +5390,11 @@ static void clip_phi3_setup(clip_ctx * ctx) {
         ggml_build_forward_expand(gf, res_sub);
     }
 
-    // Compute
     ggml_backend_sched_reset(ctx->sched.get());
     ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
     ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
 
-    // Save results
-    int dim = clip_n_mmproj_embd(ctx); // 3072
+    int dim = clip_n_mmproj_embd(ctx);
 
     if (res_glb) {
         ctx->model.phi3_proj_glb_GN.resize(dim);
@@ -5466,12 +5413,8 @@ static void clip_phi3_setup(clip_ctx * ctx) {
 bool clip_image_batch_encode_phi3(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec) {
     if (!ctx || !imgs || !vec) return false;
 
-    // 1. SETUP: Project Separators (4096 -> 3072)
-    // ----------------------------------------------------------------
-    // This runs the MLP on the special tokens ONCE.
     clip_phi3_setup(ctx);
 
-    // Sanity Check: If setup failed, we cannot proceed because
     if (ctx->model.phi3_proj_sub_GN.empty() || ctx->model.phi3_proj_glb_GN.empty()) {
         fprintf(stderr, "%s: Error - Phi-3 separators not initialized.\n", __func__);
         return false;
@@ -5480,14 +5423,10 @@ bool clip_image_batch_encode_phi3(struct clip_ctx * ctx, int n_threads, const st
     const auto & entries = imgs->entries;
     int n_crops = entries.size();
 
-    // Phi-3 Vision requires at least 1 crop (Global only) or Locals + Global
     if (n_crops < 1) return false;
 
-    // Dimension of the embedding (e.g., 3072 for ViT-L/14 CLIP, or 4096 depending on projection)
     int dim = clip_n_mmproj_embd(ctx);
 
-    // 1. Identify Grid Dimensions
-    // ----------------------------------------------------------------
     int w_crop = imgs->grid_x;
     int h_crop = imgs->grid_y;
     int n_sub_images = w_crop * h_crop;
@@ -5500,11 +5439,8 @@ bool clip_image_batch_encode_phi3(struct clip_ctx * ctx, int n_threads, const st
     const int grid_side = 12; // 12x12 tokens per crop (after 2x2 pooling of 24x24 CLIP output)
     const int sub_crop_tokens = grid_side * grid_side; // 144 tokens (raw image embeddings)
 
-    // Temporary buffer to hold the output of a single crop encoding (144 * dim)
     std::vector<float> crop_output(sub_crop_tokens * dim);
 
-    // Buffer to store ALL raw local crops before stitching
-    // We calculate size: Number of crops * 144 tokens * embedding dimension
     std::vector<float> all_local_crops;
     if (n_sub_images > 0) {
         all_local_crops.resize(n_sub_images * sub_crop_tokens * dim);
@@ -5512,12 +5448,8 @@ bool clip_image_batch_encode_phi3(struct clip_ctx * ctx, int n_threads, const st
 
     float* dest = vec;
 
-    // 2. Encode and Store Local Crops
-    // ----------------------------------------------------------------
-    // We process the first 'n_sub_images' entries as the High-Res crops
     for (int i = 0; i < n_sub_images; ++i) {
-        // Encode individual crop (results in 144 vectors of size 'dim')
-        // Note: clip_image_encode typically handles normalization and the ViT forward pass
+
         bool ok = clip_image_encode(ctx, n_threads, entries[i].get(), crop_output.data());
         if (!ok) return false;
 
@@ -5527,49 +5459,30 @@ bool clip_image_batch_encode_phi3(struct clip_ctx * ctx, int n_threads, const st
                sub_crop_tokens * dim * sizeof(float));
     }
 
-    // 3. Stitch Local Crops into 'vec' with Newlines
-    // ----------------------------------------------------------------
     if (n_sub_images > 0) {
-        // We iterate over the logical rows of the *combined* high-res image.
-        // Total rows = (Number of Vertical Crops) * (12 tokens per crop height)
         for (int row_global = 0; row_global < h_crop * grid_side; ++row_global) {
-
-            // Calculate which vertical crop index we are in (e.g., Crop Row 0 or 1)
             int crop_y = row_global / grid_side;
-            // Calculate the internal row index within that specific crop (0 to 11)
             int internal_y = row_global % grid_side;
-
-            // Iterate through the crops horizontally for this specific row
             for (int crop_x = 0; crop_x < w_crop; ++crop_x) {
-                // Calculate the linear index of the crop in 'all_local_crops'
                 int crop_idx = crop_y * w_crop + crop_x;
 
-                // Calculate pointer to the start of the specific row inside that crop
-                // Offset = [Start of Crop] + [Row offset within Crop]
                 float* src = all_local_crops.data() +
                              (crop_idx * sub_crop_tokens * dim) +
                              (internal_y * grid_side * dim);
 
-                // Copy the row (12 tokens) to the destination
                 memcpy(dest, src, grid_side * dim * sizeof(float));
                 dest += (grid_side * dim);
             }
 
-            // ADD NEWLINE (sub_GN) after the full stitched row is complete
-            // This happens once per Global Row (e.g., 24 times for a 2x2 grid)
             if (!ctx->model.phi3_proj_sub_GN.empty()) {
                 memcpy(dest, ctx->model.phi3_proj_sub_GN.data(), dim * sizeof(float));
             } else {
-                // Fallback for safety, though phi3_proj_sub_GN should be populated during load
                 memset(dest, 0, dim * sizeof(float));
             }
             dest += dim;
         }
     }
 
-    // 4. Inject Global Separator (glb_GN)
-    // ----------------------------------------------------------------
-    // This token separates the High-Res stitched canvas from the Global Low-Res view
     if (!ctx->model.phi3_proj_glb_GN.empty()) {
         memcpy(dest, ctx->model.phi3_proj_glb_GN.data(), dim * sizeof(float));
     } else {
@@ -5577,24 +5490,17 @@ bool clip_image_batch_encode_phi3(struct clip_ctx * ctx, int n_threads, const st
     }
     dest += dim;
 
-    // 5. Process Global Crop (Last Entry)
-    // ----------------------------------------------------------------
-    // The Global crop is always the last one in the batch.
-    // It is treated as a single 12x12 grid with newlines after every row.
     {
         bool ok = clip_image_encode(ctx, n_threads, entries.back().get(), crop_output.data());
         if (!ok) return false;
 
         float* src = crop_output.data();
 
-        // Iterate over the 12 rows of the Global crop
         for (int r = 0; r < grid_side; ++r) {
-            // Copy the row of tokens (12 tokens)
             memcpy(dest, src, grid_side * dim * sizeof(float));
             dest += (grid_side * dim);
             src += (grid_side * dim);
 
-            // Add Newline (sub_GN) after every row
             if (!ctx->model.phi3_proj_sub_GN.empty()) {
                 memcpy(dest, ctx->model.phi3_proj_sub_GN.data(), dim * sizeof(float));
             } else {

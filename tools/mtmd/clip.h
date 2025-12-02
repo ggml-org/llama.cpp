@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ggml.h"
-#include <mtmd.h>
+#include "mtmd.h"
 
 #include <stddef.h>
 #include <stdint.h>

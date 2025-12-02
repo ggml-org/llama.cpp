@@ -489,7 +489,7 @@ for name, data in state_dict.items():
             print("  Converting to float32")
             data = data.astype(np.float32)
             ftype_cur = 0
-    else:
+    if args.projector_type == "phi3_v":
         if data.dtype != np.float32:
             print("  Converting to float32")
             data = data.astype(np.float32)

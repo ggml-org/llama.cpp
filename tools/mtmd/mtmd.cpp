@@ -540,48 +540,30 @@ struct mtmd_tokenizer {
                 LOG_ERR("Unable to preprocess image\n");
                 return 2;
             }
-            // [NEW] Phi-3-Vision Token Calculation Logic
+            // Phi-3-Vision Token Calculation Logic
             if (clip_is_phi3v(ctx->ctx_v)) {
+                const int n_col = batch_f32.grid_x;
+                const int n_row = batch_f32.grid_y;
+                int n_sub_images = n_col * n_row;
+                size_t local_tokens = ((n_row * n_col) + 1) * 144;
 
-                const int n_col = batch_f32.grid_x; // e.g., 2
-                const int n_row = batch_f32.grid_y; // e.g., 2
-                int n_sub_images = n_col * n_row;   // e.g., 4
-
-                // 1. Calculate Local Token Count
-                // ------------------------------------------------
-                // Height in tokens = n_row * 12
-                // Width in tokens  = (n_col * 12) + 1 (Newline)
-                // size_t local_tokens = (n_row * 12) * ((n_col * 12) + 1);
-                size_t local_tokens = ((n_row * n_col )+ 1) *144;
-
-                // If there are no local crops (image too small), handle gracefully
                 if (n_sub_images == 0) local_tokens = 0;
 
-                // 2. Calculate Global Token Count
-                // ------------------------------------------------
-                // Global is always 12x12 with newlines: 12 * (12 + 1) = 156
                 size_t global_tokens = (n_row + 1) * 12;
-
-                // 3. Separator Token
-                // ------------------------------------------------
                 size_t separator_tokens = 1;
-
-                // Total
                 size_t n_tokens = local_tokens + separator_tokens + global_tokens;
 
-                // Create the token container
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-
                 image_tokens->nx = n_tokens;
                 image_tokens->ny = 1;
                 image_tokens->batch_f32 = std::move(batch_f32);
-                image_tokens->id = bitmap->id; // optional
+                image_tokens->id = bitmap->id;
 
                 mtmd_input_chunk chunk{
                     MTMD_INPUT_CHUNK_TYPE_IMAGE,
-                    {}, // text tokens
+                    {},
                     std::move(image_tokens),
-                    nullptr, // audio tokens
+                    nullptr,
                 };
                 cur.entries.emplace_back(std::move(chunk));
             }
