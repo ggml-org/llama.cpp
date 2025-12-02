@@ -64,10 +64,10 @@
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let isRecording = $state(false);
 	let message = $state('');
-    let pasteLongTextToFileLength = $derived((() => {
-        const n = Number(currentConfig.pasteLongTextToFileLen);
-        return Number.isNaN(n) ? 2500 : n;
-    })());
+	let pasteLongTextToFileLength = $derived.by(() => {
+		const n = Number(currentConfig.pasteLongTextToFileLen);
+		return Number.isNaN(n) ? 2500 : n;
+	});
 	let previousIsLoading = $state(isLoading);
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
