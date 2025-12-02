@@ -54,10 +54,6 @@
 #define KEY_A_NUM_MEL_BINS      "clip.audio.num_mel_bins"
 #define KEY_A_PROJ_STACK_FACTOR "clip.audio.projector.stack_factor"
 
-// video-specific
-#define KEY_VIDEO_SECONDS_PER_GRID "clip.video.seconds_per_grid_ts"
-#define KEY_VIDEO_MAX_FRAMES       "clip.video.max_frames"
-#define KEY_VIDEO_FPS              "clip.video.fps"
 
 //
 // tensor name constants
@@ -203,11 +199,6 @@ struct clip_image_u8 {
     int ny;
 
     std::vector<uint8_t> buf;
-
-    // Video metadata (mirrors clip_image_f32)
-    bool     is_video_frame = false;
-    uint32_t frame_idx      = 0;
-    uint32_t total_frames   = 0;
 };
 
 // For images, buf.size() == nx*ny*3
@@ -219,12 +210,6 @@ struct clip_image_f32 {
     int ny;
 
     std::vector<float> buf;
-
-    // Video frame metadata for 3D M-RoPE
-    bool     is_video_frame    = false;
-    uint32_t frame_idx         = 0;     // Frame index in the video sequence
-    uint32_t total_frames      = 0;     // Total number of frames in the video
-    float    temporal_position = 0.0f;  // Temporal position in seconds
 };
 
 //
@@ -505,7 +490,3 @@ static void print_tensor_data(ggml_tensor * t, uint8_t * data, int64_t n) {
 //
 
 projector_type clip_get_projector_type(const struct clip_ctx * ctx);
-float          clip_get_seconds_per_grid_ts(const struct clip_ctx * ctx);
-void           clip_set_seconds_per_grid_ts(struct clip_ctx * ctx, float seconds);
-bool           clip_get_is_video_modality(const struct clip_ctx * ctx);
-void           clip_set_is_video_modality(struct clip_ctx * ctx, bool is_video_modality);

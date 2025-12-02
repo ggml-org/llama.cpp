@@ -29,49 +29,24 @@ struct mtmd_bitmap {
     std::vector<unsigned char> data;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
-    // Video frame metadata
-    bool        is_video_frame = false;  // true if this is a video frame
-    uint32_t    frame_idx      = 0;      // frame index in the video sequence
-    uint32_t    total_frames   = 0;      // total number of frames in the video
 };
 
 struct mtmd_image_tokens {
     uint32_t nx; // number of tokens in x direction
     uint32_t ny; // number of tokens in y direction
     bool use_mrope_pos = false; // use M-RoPE position counting (the whole image is 1 temporal position)
-    uint32_t n_tokens() const { 
-        // For video batches, return total tokens across all frames
-        if (is_video_frame && total_frames > 1) {
-            return total_tokens_video;
-        }
-        return nx * ny; 
-    }
+    uint32_t n_tokens() const { return nx * ny; }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
 
-    // Video frame metadata
-    bool     is_video_frame     = false;
-    uint32_t frame_idx          = 0;
-    uint32_t total_frames       = 0;
-    uint32_t total_tokens_video = 0;  // total tokens across all frames in video batch
-    // 3D M-RoPE temporal metadata
-    float    temporal_position  = 0.0f;  // absolute time in seconds
-    float    seconds_per_grid   = 2.0f;  // temporal grid spacing
-
     mtmd_image_tokens clone() {
-        mtmd_image_tokens result;
-        result.nx                 = nx;
-        result.ny                 = ny;
-        result.use_mrope_pos      = use_mrope_pos;
-        result.batch_f32          = batch_f32.clone();
-        result.id                 = id;
-        result.is_video_frame     = is_video_frame;
-        result.frame_idx          = frame_idx;
-        result.total_frames       = total_frames;
-        result.total_tokens_video = total_tokens_video;
-        result.temporal_position  = temporal_position;
-        result.seconds_per_grid   = seconds_per_grid;
-        return result;
+        return mtmd_image_tokens{
+            nx,
+            ny,
+            use_mrope_pos,
+            batch_f32.clone(),
+            id
+        };
     }
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
@@ -116,14 +91,6 @@ const char * mtmd_default_marker() {
     return "<__media__>";
 }
 
-const char * mtmd_cosmos_marker_video() {
-    return "<|vision_start|><|video_pad|><|vision_end|>";
-}
-
-const char * mtmd_cosmos_marker() {
-    return "<|vision_start|><|image_pad|><|vision_end|>";
-}
-
 static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_type flash_attn_type) {
     switch (flash_attn_type) {
         case LLAMA_FLASH_ATTN_TYPE_AUTO:     return CLIP_FLASH_ATTN_TYPE_AUTO;
@@ -135,16 +102,14 @@ static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_
 
 mtmd_context_params mtmd_context_params_default() {
     mtmd_context_params params {
-        /* use_gpu             */ true,
-        /* print_timings       */ true,
-        /* n_threads           */ 4,
-        /* image_marker        */ MTMD_DEFAULT_IMAGE_MARKER,
-        /* media_marker        */ mtmd_default_marker(),
-        /* flash_attn_type     */ LLAMA_FLASH_ATTN_TYPE_AUTO,
-        /* image_min_tokens    */ -1,
-        /* image_max_tokens    */ -1,
-        /* is_video_modality   */ false,
-        /* seconds_per_grid_ts */ 2.0f,
+        /* use_gpu           */ true,
+        /* print_timings     */ true,
+        /* n_threads         */ 4,
+        /* image_marker      */ MTMD_DEFAULT_IMAGE_MARKER,
+        /* media_marker      */ mtmd_default_marker(),
+        /* flash_attn_type   */ LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /* image_min_tokens  */ -1,
+        /* image_max_tokens  */ -1,
     };
     return params;
 }
@@ -181,15 +146,6 @@ struct mtmd_context {
     bool        ov_img_first      = false;
 
     bool use_mrope = false; // for Qwen2VL, we need to use M-RoPE
-    float seconds_per_grid_ts = 2.0f;   // default temporal grid spacing for videos
-    bool  is_video_modality   = false;
-    // Video frame batching for Qwen25VL
-    bool                  collecting_video_frames = false;
-    uint32_t              video_frames_expected   = 0;
-    uint32_t              video_frames_collected  = 0;
-    clip_image_f32_batch  video_batch_f32;
-    std::vector<uint32_t> video_frame_indices;
-    float                 video_temporal_position_start = 0.0f;
 
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
@@ -206,9 +162,7 @@ struct mtmd_context {
         print_timings(ctx_params.print_timings),
         n_threads    (ctx_params.n_threads),
         media_marker (ctx_params.media_marker),
-        n_embd_text  (llama_model_n_embd_inp(text_model)),
-        seconds_per_grid_ts(ctx_params.seconds_per_grid_ts),
-        is_video_modality(ctx_params.is_video_modality)
+        n_embd_text  (llama_model_n_embd_inp(text_model))
     {
         if (std::string(ctx_params.image_marker) != MTMD_DEFAULT_IMAGE_MARKER) {
             throw std::runtime_error("custom image_marker is not supported anymore, use media_marker instead");
@@ -223,7 +177,6 @@ struct mtmd_context {
             /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
-            /* is_video_modality */ ctx_params.is_video_modality,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);
@@ -231,12 +184,6 @@ struct mtmd_context {
         ctx_a = res.ctx_a;
         if (!ctx_v && !ctx_a) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
-        }
-
-        // Set temporal grid spacing for video 3D M-RoPE
-        if (ctx_v) {
-            clip_set_seconds_per_grid_ts(ctx_v, seconds_per_grid_ts);
-            clip_set_is_video_modality(ctx_v, is_video_modality);
         }
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
@@ -336,16 +283,9 @@ struct mtmd_context {
             img_end = "[IMG_END]";
 
         } else if (proj == PROJECTOR_TYPE_QWEN2VL || proj == PROJECTOR_TYPE_QWEN25VL || proj == PROJECTOR_TYPE_QWEN3VL) {
-            // For video modality, use video_pad token with vision markers
-            if (is_video_modality) {
-                // For video: <|vision_start|><|video_pad|><|vision_end|>
-                img_beg = "<|vision_start|><|video_pad|>";
-                img_end = "<|vision_end|>";
-            } else {
-                // For images: <|vision_start|> ... (image embeddings) ... <|vision_end|>
-                img_beg = "<|vision_start|>";
-                img_end = "<|vision_end|>";
-            }
+            // <|vision_start|> ... (image embeddings) ... <|vision_end|>
+            img_beg = "<|vision_start|>";
+            img_end = "<|vision_end|>";
 
         } else if (proj == PROJECTOR_TYPE_LLAMA4) {
             // (more details in mtmd_context constructor)
@@ -488,10 +428,6 @@ struct mtmd_tokenizer {
         cur.entries.clear();
         std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
         size_t i_bm = 0; // index of the current bitmap
-
-        // Check if we're in video mode
-        bool video_mode = !bitmaps.empty() && bitmaps[0]->is_video_frame && ctx->is_video_modality;
-
         for (auto & part : parts) {
             if (part == ctx->media_marker) {
                 // this is a marker, we should add the next bitmap
@@ -500,26 +436,10 @@ struct mtmd_tokenizer {
                             __func__, bitmaps.size(), parts.size() - 1);
                     return 1;
                 }
-                if (video_mode && i_bm == 0) {
-                    GGML_ASSERT(clip_is_qwen2vl(ctx->ctx_v));   // video input support only for qwen2/2.5vl arch
-                    // Video mode: process all video frame bitmaps at once
-                    LOG_DBG("%s: Video mode: processing %zu frames as single batch\n", __func__, bitmaps.size());
-                    for (size_t i = 0; i < bitmaps.size(); i++) {
-                        const mtmd_bitmap * bitmap = bitmaps[i];
-                        int32_t             res    = add_media(bitmap);
-                        if (res != 0) {
-                            return res;
-                        }
-                    }
-                    i_bm = bitmaps.size();  // Mark all bitmaps as consumed
-                }
-                // image input
-                else {
-                    const mtmd_bitmap * bitmap = bitmaps[i_bm++];
-                    int32_t             res    = add_media(bitmap);
-                    if (res != 0) {
-                        return res;
-                    }
+                const mtmd_bitmap * bitmap = bitmaps[i_bm++];
+                int32_t res = add_media(bitmap);
+                if (res != 0) {
+                    return res;
                 }
             } else {
                 // this is a text part, we should add it as text
@@ -597,115 +517,8 @@ struct mtmd_tokenizer {
                 return 2;
             }
 
-            // Video Input: Check if this is a video frame and thus should be batched before processing
-            if (bitmap->is_video_frame && ctx->is_video_modality)
-            {
-                GGML_ASSERT(clip_is_qwen2vl(ctx->ctx_v));
-                // Start collecting video frames if this is the first one
-                if (!ctx->collecting_video_frames) {
-                    ctx->collecting_video_frames = true;
-                    ctx->video_frames_expected = bitmap->total_frames;
-                    ctx->video_frames_collected = 0;
-                    ctx->video_batch_f32.entries.clear();
-                    ctx->video_frame_indices.clear();
-                    LOG_DBG("%s: Starting video frame collection (%d frames expected)\n", __func__, bitmap->total_frames);
-                }
-
-                clip_image_u8_ptr img_u8(clip_image_u8_init());
-                img_u8->nx = bitmap->nx;
-                img_u8->ny = bitmap->ny;
-                img_u8->buf.resize(bitmap->data.size());
-                std::memcpy(img_u8->buf.data(), bitmap->data.data(), img_u8->nx * img_u8->ny * 3);
-                img_u8->is_video_frame = bitmap->is_video_frame;
-                img_u8->frame_idx = bitmap->frame_idx;
-                img_u8->total_frames = bitmap->total_frames;
-
-                clip_image_f32_batch batch_f32;
-                bool ok = clip_image_preprocess(ctx->ctx_v, img_u8.get(), &batch_f32);
-                if (!ok) {
-                    LOG_ERR("Unable to preprocess video frame %d\n", bitmap->frame_idx);
-                    return 2;
-                }
-
-                // Add preprocessed frame(s) to the video batch. Set video metadata on each entry
-                for (auto & entry : batch_f32.entries) {
-                    clip_image_f32_set_video_metadata(
-                        entry.get(),
-                        true,  // is_video_frame
-                        bitmap->frame_idx,
-                        bitmap->total_frames,
-                        bitmap->frame_idx * ctx->seconds_per_grid_ts  // temporal_position
-                    );
-                    ctx->video_batch_f32.entries.push_back(std::move(entry));
-                }
-                ctx->video_frame_indices.push_back(bitmap->frame_idx);
-                ctx->video_frames_collected++;
-
-                LOG_DBG("%s: Collected video frame %d/%d\n", __func__, ctx->video_frames_collected, ctx->video_frames_expected);
-
-                // If this is the last frame, process the entire batch
-                if (ctx->video_frames_collected >= ctx->video_frames_expected)
-                {
-                    // Create a single mtmd_image_tokens for all video frames
-                    // Note: For Qwen models, temporal merging will reduce frames by factor of 2
-                    const int temporal_merge_factor = (clip_is_qwen2vl(ctx->ctx_v) ? 2 : 1);
-                    const int merged_frame_count = (ctx->video_frames_expected + temporal_merge_factor - 1) / temporal_merge_factor;
-                    
-                    size_t tokens_per_frame = clip_n_output_tokens(ctx->ctx_v, ctx->video_batch_f32.entries[0].get());
-                    size_t n_tokens = tokens_per_frame * merged_frame_count;  // Total tokens after temporal merge
-
-                    int nx = clip_n_output_tokens_x(ctx->ctx_v, ctx->video_batch_f32.entries[0].get());
-                    int ny = clip_n_output_tokens_y(ctx->ctx_v, ctx->video_batch_f32.entries[0].get());
-
-                    mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-                    if (ctx->use_mrope) {
-                        // For video batches:
-                        // nx, ny = spatial dimensions per frame (for M-RoPE calculation in decoder)
-                        // total_tokens_video = total tokens across all merged frames
-                        image_tokens->nx = nx;
-                        image_tokens->ny = ny;
-                        image_tokens->use_mrope_pos = true;
-                    }
-                    else {
-                        image_tokens->nx = n_tokens;
-                        image_tokens->ny = 1;
-                    }
-                    image_tokens->batch_f32 = std::move(ctx->video_batch_f32);
-                    image_tokens->id = bitmap->id; // Use last frame's ID
-                    
-                    // Set video metadata (use merged frame count)
-                    image_tokens->is_video_frame = true;
-                    image_tokens->frame_idx = 0; // First frame
-                    image_tokens->total_frames = merged_frame_count;  // After temporal merge
-                    image_tokens->total_tokens_video = n_tokens; // Total tokens after temporal merge
-                    image_tokens->temporal_position = 0.0f;
-                    image_tokens->seconds_per_grid = ctx->seconds_per_grid_ts;
-
-                    LOG_DBG("Video batch created: nx=%d, ny=%d, n_entries=%d, total_tokens_video=%d, n_tokens()=%d\n", 
-                           image_tokens->nx, image_tokens->ny, (int)image_tokens->batch_f32.entries.size(), 
-                           image_tokens->total_tokens_video, image_tokens->n_tokens());
-
-                    mtmd_input_chunk chunk{
-                        MTMD_INPUT_CHUNK_TYPE_IMAGE,
-                        {}, // text tokens
-                        std::move(image_tokens),
-                        nullptr, // audio tokens
-                    };
-                    cur.entries.emplace_back(std::move(chunk));
-
-                    // Reset collection state
-                    ctx->collecting_video_frames = false;
-                    ctx->video_frames_collected = 0;
-                    ctx->video_frames_expected = 0;
-                    ctx->video_frame_indices.clear();
-                }
-
-                // Don't process individual frames further
-                return 0;
-            }
-
             if (!ctx->img_beg.empty()) {
-                add_text(ctx->img_beg, true);  // add image begin token
+                add_text(ctx->img_beg, true); // add image begin token
             }
 
             // convert mtmd_bitmap to clip_image_u8
@@ -994,21 +807,10 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
         return 1;
     }
     int n_mmproj_embd = clip_n_mmproj_embd(ctx_clip);
-
-    // Check if this is a video input
-    bool is_video      = image_tokens->is_video_frame && ctx->is_video_modality;
     ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
     bool ok = false;
 
-    if (is_video) {
-        // Use video-specific batch encoder
-        ok = clip_image_batch_encode_video(
-            ctx_clip,
-            ctx->n_threads,
-            &image_tokens->batch_f32,
-            ctx->image_embd_v.data());
-    }
-    else if (clip_is_llava(ctx_clip)
+    if (clip_is_llava(ctx_clip)
         || clip_is_minicpmv(ctx_clip)
         || clip_is_glm(ctx_clip)) {
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
@@ -1045,18 +847,6 @@ bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
 
 bool mtmd_decode_use_mrope(mtmd_context * ctx) {
     return ctx->use_mrope;
-}
-
-bool mtmd_is_video_modality(mtmd_context * ctx) {
-    return ctx->is_video_modality;
-}
-
-float mtmd_get_seconds_per_grid_ts(mtmd_context * ctx) {
-    return ctx->seconds_per_grid_ts;
-}
-
-void mtmd_set_seconds_per_grid_ts(mtmd_context * ctx, float seconds) {
-    ctx->seconds_per_grid_ts = seconds;
 }
 
 bool mtmd_support_vision(mtmd_context * ctx) {
@@ -1125,18 +915,6 @@ bool mtmd_bitmap_is_audio(const mtmd_bitmap * bitmap) {
     return bitmap->is_audio;
 }
 
-bool mtmd_bitmap_is_video_frame(const mtmd_bitmap * bitmap) {
-    return bitmap->is_video_frame;
-}
-
-uint32_t mtmd_bitmap_get_video_frame_idx(const mtmd_bitmap * bitmap) {
-    return bitmap->frame_idx;
-}
-
-uint32_t mtmd_bitmap_get_video_total_frames(const mtmd_bitmap * bitmap) {
-    return bitmap->total_frames;
-}
-
 const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap) {
     return bitmap->id.c_str();
 }
@@ -1147,18 +925,6 @@ void mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id) {
     } else {
         bitmap->id.clear();
     }
-}
-
-void mtmd_bitmap_set_is_video_frame(mtmd_bitmap * bitmap, bool is_video_frame) {
-    bitmap->is_video_frame = is_video_frame;
-}
-
-void mtmd_bitmap_set_frame_idx(mtmd_bitmap * bitmap, uint32_t frame_idx) {
-    bitmap->frame_idx = frame_idx;
-}
-
-void mtmd_bitmap_set_total_frames(mtmd_bitmap * bitmap, uint32_t total_frames) {
-    bitmap->total_frames = total_frames;
 }
 
 void mtmd_bitmap_free(mtmd_bitmap * bitmap) {
@@ -1283,26 +1049,6 @@ size_t mtmd_image_tokens_get_nx(const mtmd_image_tokens * image_tokens) {
 
 size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
     return image_tokens->ny;
-}
-
-bool mtmd_image_tokens_is_video_frame(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->is_video_frame;
-}
-
-uint32_t mtmd_image_tokens_get_frame_idx(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->frame_idx;
-}
-
-uint32_t mtmd_image_tokens_get_total_frames(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->total_frames;
-}
-
-float mtmd_image_tokens_get_temporal_position(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->temporal_position;
-}
-
-float mtmd_image_tokens_get_seconds_per_grid(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->seconds_per_grid;
 }
 
 const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {

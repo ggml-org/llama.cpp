@@ -86,15 +86,9 @@ struct mtmd_context_params {
     // limit number of image tokens, only for vision models with dynamic resolution
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
-
-    // video parameters
-    bool  is_video_modality;
-    float seconds_per_grid_ts;  // temporal grid spacing for 3D M-RoPE
 };
 
 MTMD_API const char * mtmd_default_marker(void);
-MTMD_API const char * mtmd_cosmos_marker_video(void);
-MTMD_API const char * mtmd_cosmos_marker(void);
 
 MTMD_API struct mtmd_context_params mtmd_context_params_default(void);
 
@@ -111,12 +105,6 @@ MTMD_API bool mtmd_decode_use_non_causal(mtmd_context * ctx);
 
 // whether the current model use M-RoPE for llama_decode
 MTMD_API bool mtmd_decode_use_mrope(mtmd_context * ctx);
-
-// Whether operating in video modality mode
-MTMD_API bool  mtmd_is_video_modality(mtmd_context * ctx);
-// Get/set temporal grid spacing for 3D M-RoPE video processing
-MTMD_API float mtmd_get_seconds_per_grid_ts(mtmd_context * ctx);
-MTMD_API void  mtmd_set_seconds_per_grid_ts(mtmd_context * ctx, float seconds);
 
 // whether the current model supports vision input
 MTMD_API bool mtmd_support_vision(mtmd_context * ctx);
@@ -143,19 +131,12 @@ MTMD_API uint32_t              mtmd_bitmap_get_ny     (const mtmd_bitmap * bitma
 MTMD_API const unsigned char * mtmd_bitmap_get_data   (const mtmd_bitmap * bitmap);
 MTMD_API size_t                mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap);
 MTMD_API bool                  mtmd_bitmap_is_audio   (const mtmd_bitmap * bitmap);
-MTMD_API bool                  mtmd_bitmap_is_video_frame(const mtmd_bitmap * bitmap);
-MTMD_API uint32_t              mtmd_bitmap_get_video_frame_idx(const mtmd_bitmap * bitmap);
-MTMD_API uint32_t              mtmd_bitmap_get_video_total_frames(const mtmd_bitmap * bitmap);
 MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
 // bitmap ID is optional, but useful for KV cache tracking
 // these getters/setters are dedicated functions, so you can for example calculate the hash of the image based on mtmd_bitmap_get_data()
 MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);
 MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
 
-// Video frame metadata setters
-MTMD_API void mtmd_bitmap_set_is_video_frame(mtmd_bitmap * bitmap, bool is_video_frame);
-MTMD_API void mtmd_bitmap_set_frame_idx(mtmd_bitmap * bitmap, uint32_t frame_idx);
-MTMD_API void mtmd_bitmap_set_total_frames(mtmd_bitmap * bitmap, uint32_t total_frames);
 
 // mtmd_input_chunks
 //
@@ -194,12 +175,6 @@ MTMD_API size_t       mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * i
 MTMD_API size_t       mtmd_image_tokens_get_nx      (const mtmd_image_tokens * image_tokens);
 MTMD_API size_t       mtmd_image_tokens_get_ny      (const mtmd_image_tokens * image_tokens);
 MTMD_API const char * mtmd_image_tokens_get_id      (const mtmd_image_tokens * image_tokens); // TODO: deprecate
-// Video frame metadata for 3D M-RoPE
-MTMD_API bool         mtmd_image_tokens_is_video_frame(const mtmd_image_tokens * image_tokens);
-MTMD_API uint32_t     mtmd_image_tokens_get_frame_idx(const mtmd_image_tokens * image_tokens);
-MTMD_API uint32_t     mtmd_image_tokens_get_total_frames(const mtmd_image_tokens * image_tokens);
-MTMD_API float        mtmd_image_tokens_get_temporal_position(const mtmd_image_tokens * image_tokens);
-MTMD_API float        mtmd_image_tokens_get_seconds_per_grid(const mtmd_image_tokens * image_tokens);
 // number of temporal positions (equals to max(t,h,w) for M-RoPE; equals to n_tokens otherwise)
 MTMD_API llama_pos    mtmd_image_tokens_get_n_pos   (const mtmd_image_tokens * image_tokens); // TODO: deprecate
 

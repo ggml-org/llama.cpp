@@ -537,13 +537,6 @@ struct common_params {
     bool has_speculative() const {
         return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
     }
-
-    // args for video modality
-    std::string video;                     // path to a video file
-    float       video_fps        = 1.0f;   // default 1 FPS
-    int         video_max_frames = 0;      // max frames to extract (0 = unlimited)
-    float       ts_per_grid      = 2.0f;   // seconds per temporal grid (for 3D M-RoPE), default 2.0
-    bool        no_think         = false;  // disable chain-of-thought hints in chat-templates that support it 
 };
 
 // call once at the start of a program if it uses libcommon

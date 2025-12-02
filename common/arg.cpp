@@ -452,10 +452,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.speculative.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
-    // Special handling for custom templates that are handled by specific tools
-    bool is_custom_template = (params.chat_template == "cosmos");
-
-    if (!params.chat_template.empty() && !is_custom_template && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
+    if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
         throw std::runtime_error(string_format(
             "error: the supplied chat template is not supported: %s%s\n",
             params.chat_template.c_str(),
@@ -1225,31 +1222,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.warmup = false;
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY}));
-    add_opt(common_arg({ "--video" },
-        "PATH",
-        "Video file to use as vision input to extract frames from",
-        [](common_params & params, const std::string & value) {
-            params.video = value;
-        }
-    ).set_examples({LLAMA_EXAMPLE_MTMD}));
-    add_opt(common_arg({ "--video-fps" }, "N",
-        "Sampling FPS for video (default: 1.0) input",
-        [](common_params & params, const std::string & value) {
-            params.video_fps = std::stof(value);
-        }
-    ));
-    add_opt(common_arg({ "-vmaxf", "--video-max-frames" }, "N",
-        "Maximum number of frames to extract from video (default: 0 = unlimited)",
-        [](common_params & params, const std::string & value) {
-            params.video_max_frames = std::stoi(value);
-        }
-    ));
-    add_opt(common_arg({ "-tpg", "--ts-per-grid" }, "N",
-        "Seconds per temporal grid for 3D M-RoPE (default: 2.0)",
-        [](common_params & params, const std::string & value) {
-            params.ts_per_grid = std::stof(value);
-        }
-    ));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
@@ -2553,13 +2525,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.reasoning_budget = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK_BUDGET"));
-    add_opt(common_arg(
-        {"--no-think"},
-        string_format("skip adding <think> instructions in templates that support them (default: %s)", params.no_think ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.no_think = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_THINK"));
     add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
