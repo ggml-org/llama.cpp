@@ -10,6 +10,7 @@
 #include "ggml-impl.h"
 
 #include "htp-utils.h"
+#include "htp-drv.h"
 
 #include <domain.h>
 #include <remote.h>
@@ -74,8 +75,8 @@ int get_domains_info(char * domain_type, int * num_domains, fastrpc_domain ** do
     nErr = AEE_EUNSUPPORTED;
     goto bail;
 #endif
-    if (remote_system_request) {
-        nErr = remote_system_request(&req);
+    if (htpdrv_remote_system_request) {
+        nErr = htpdrv_remote_system_request(&req);
         if (nErr != AEE_SUCCESS) {
             GGML_LOG_ERROR("Failure in remote_system_request call: %d.\n", nErr);
             goto bail;
@@ -88,7 +89,7 @@ int get_domains_info(char * domain_type, int * num_domains, fastrpc_domain ** do
             goto bail;
         }
 
-        nErr = remote_system_request(&req);
+        nErr = htpdrv_remote_system_request(&req);
         if (nErr != AEE_SUCCESS) {
             GGML_LOG_ERROR("Failure in remote_system_request call: %d.\n", nErr);
             goto bail;
@@ -124,7 +125,7 @@ int get_effective_domain_id(char * domain_name, int session_id, int * effec_doma
     sess.domain_name_len = strlen(domain_name);
     sess.session_id      = session_id;
 
-    err = remote_session_control(FASTRPC_GET_EFFECTIVE_DOMAIN_ID, &sess, sizeof(sess));
+    err = htpdrv_remote_session_control(FASTRPC_GET_EFFECTIVE_DOMAIN_ID, &sess, sizeof(sess));
     if (err) {
         GGML_LOG_ERROR("Error 0x%x: failed to get effective domain id for %s, session id %d\n", err, sess.domain_name,
                session_id);
@@ -139,9 +140,9 @@ int get_dsp_support(int * domain) {
     int nErr = AEE_SUCCESS;
     *domain  = CDSP_DOMAIN_ID;  // DSP domain default value is CDSP_DOMAIN_ID
 
-    if (remote_handle_control) {
+    if (htpdrv_remote_handle_control) {
         struct remote_dsp_capability dsp_capability_domain = { CDSP_DOMAIN_ID, DOMAIN_SUPPORT, 0 };
-        nErr = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_domain, sizeof(struct remote_dsp_capability));
+        nErr = htpdrv_remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_domain, sizeof(struct remote_dsp_capability));
         if ((nErr & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
             GGML_LOG_ERROR("\nFastRPC Capability API is not supported on this device\n");
             goto bail;
@@ -151,7 +152,7 @@ int get_dsp_support(int * domain) {
             dsp_capability_domain.domain       = ADSP_DOMAIN_ID;  // Check for ADSP support.
             dsp_capability_domain.attribute_ID = DOMAIN_SUPPORT;
             dsp_capability_domain.capability   = 0;
-            nErr                               = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_domain,
+            nErr                               = htpdrv_remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_domain,
                                                                        sizeof(struct remote_dsp_capability));
             if (dsp_capability_domain.capability) {
                 *domain = ADSP_DOMAIN_ID;  // For targets like Agatti (not having cDSP), domain is ADSP_DOMAIN_ID
@@ -181,7 +182,7 @@ int get_vtcm_info(int domain, uint32_t * capability, uint32_t attr) {
         GGML_LOG_ERROR("Unsupported attr. Only VTCM_PAGE and VTCM_COUNT supported\n");
         goto bail;
     }
-    if (remote_handle_control) {
+    if (htpdrv_remote_handle_control) {
         if (domain == ADSP_DOMAIN_ID || domain == CDSP_DOMAIN_ID) {
             /*
             * Query the DSP for VTCM information
@@ -191,7 +192,7 @@ int get_vtcm_info(int domain, uint32_t * capability, uint32_t attr) {
             dsp_capability_vtcm_dsp.domain       = (uint32_t) domain;
             dsp_capability_vtcm_dsp.attribute_ID = attr;
             dsp_capability_vtcm_dsp.capability   = (uint32_t) 0;
-            nErr                                 = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_vtcm_dsp,
+            nErr                                 = htpdrv_remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_vtcm_dsp,
                                                                          sizeof(struct remote_dsp_capability));
             if ((nErr & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
                 GGML_LOG_ERROR("\nFastRPC Capability API is not supported on this device\n");
@@ -220,9 +221,9 @@ bail:
 
 bool is_unsignedpd_supported(int domain_id) {
     int nErr = AEE_SUCCESS;
-    if (remote_handle_control) {
+    if (htpdrv_remote_handle_control) {
         struct remote_dsp_capability dsp_capability_domain = { domain_id, UNSIGNED_PD_SUPPORT, 0 };
-        nErr = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_domain, sizeof(struct remote_dsp_capability));
+        nErr = htpdrv_remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_domain, sizeof(struct remote_dsp_capability));
         if ((nErr & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
             GGML_LOG_ERROR("\nFastRPC Capability API is not supported on this device. Falling back to signed pd.\n");
             return false;
@@ -248,7 +249,7 @@ bool get_unsignedpd_support(void) {
 
 bool is_async_fastrpc_supported(int domain) {
     int nErr = AEE_SUCCESS;
-    if (remote_handle_control) {
+    if (htpdrv_remote_handle_control) {
         if (domain == CDSP_DOMAIN_ID) {
             /*
             * Query the DSP for ASYNC_FASTRPC_SUPPORT information
@@ -258,7 +259,7 @@ bool is_async_fastrpc_supported(int domain) {
             dsp_capability_async_support.domain       = (uint32_t) domain;
             dsp_capability_async_support.attribute_ID = ASYNC_FASTRPC_SUPPORT;
             dsp_capability_async_support.capability   = (uint32_t) 0;
-            nErr = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_async_support,
+            nErr = htpdrv_remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_async_support,
                                          sizeof(struct remote_dsp_capability));
             if ((nErr & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
                 GGML_LOG_ERROR("\nFastRPC Capability API is not supported on this device\n");
@@ -289,7 +290,7 @@ bail:
 bool is_status_notification_supported(int domain) {
     int nErr = AEE_SUCCESS;
 
-    if (remote_handle_control) {
+    if (htpdrv_remote_handle_control) {
         /*
         * Query the DSP for STATUS_NOTIFICATION_SUPPORT information
         * DSP User PD status notification Support
@@ -298,7 +299,7 @@ bool is_status_notification_supported(int domain) {
         dsp_capability_status_notification_support.domain       = (uint32_t) domain;
         dsp_capability_status_notification_support.attribute_ID = STATUS_NOTIFICATION_SUPPORT;
         dsp_capability_status_notification_support.capability   = (uint32_t) 0;
-        nErr = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_status_notification_support,
+        nErr = htpdrv_remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_status_notification_support,
                                      sizeof(struct remote_dsp_capability));
         if ((nErr & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
             GGML_LOG_ERROR("\nFastRPC Capability API is not supported on this device\n");
@@ -330,7 +331,7 @@ int get_hmx_support_info(int domain, uint32_t * capability, uint32_t attr) {
         GGML_LOG_ERROR("Unsupported attr. Only HMX_SUPPORT_SPATIAL and HMX_SUPPORT_DEPTH supported\n");
         goto bail;
     }
-    if (remote_handle_control) {
+    if (htpdrv_remote_handle_control) {
         if (domain == CDSP_DOMAIN_ID) {
             /*
             * Query the DSP for HMX SUPPORT information
@@ -340,7 +341,7 @@ int get_hmx_support_info(int domain, uint32_t * capability, uint32_t attr) {
             dsp_capability_hmx_dsp.domain       = (uint32_t) domain;
             dsp_capability_hmx_dsp.attribute_ID = attr;
             dsp_capability_hmx_dsp.capability   = (uint32_t) 0;
-            nErr                                = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_hmx_dsp,
+            nErr                                = htpdrv_remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_hmx_dsp,
                                                                         sizeof(struct remote_dsp_capability));
             if ((nErr & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
                 GGML_LOG_ERROR("\nFastRPC Capability API is not supported on this device\n");
@@ -368,7 +369,7 @@ bail:
 }
 
 int get_hex_arch_ver(int domain, int * arch) {
-    if (!remote_handle_control) {
+    if (!htpdrv_remote_handle_control) {
         GGML_LOG_ERROR("ggml-hex: remote_handle_control is not supported on this device\n");
         return AEE_EUNSUPPORTEDAPI;
     }
@@ -378,7 +379,7 @@ int get_hex_arch_ver(int domain, int * arch) {
     arch_ver.attribute_ID = ARCH_VER;
     arch_ver.capability   = (uint32_t) 0;
 
-    int err = remote_handle_control(DSPRPC_GET_DSP_INFO, &arch_ver, sizeof(arch_ver));
+    int err = htpdrv_remote_handle_control(DSPRPC_GET_DSP_INFO, &arch_ver, sizeof(arch_ver));
     if ((err & 0xff) == (AEE_EUNSUPPORTEDAPI & 0xff)) {
         GGML_LOG_ERROR("ggml-hex: FastRPC capability API is not supported on this device\n");
         return AEE_EUNSUPPORTEDAPI;
@@ -416,7 +417,7 @@ int get_hvx_support_info(int domain, uint32_t * capability, uint32_t attr) {
     int nErr    = AEE_SUCCESS;
     *capability = 0;
 
-    if (remote_handle_control) {
+    if (htpdrv_remote_handle_control) {
         if (domain == CDSP_DOMAIN_ID) {
             /*
             * Query the DSP for HVX SUPPORT information
@@ -426,7 +427,7 @@ int get_hvx_support_info(int domain, uint32_t * capability, uint32_t attr) {
             dsp_capability_hvx_dsp.domain       = (uint32_t) domain;
             dsp_capability_hvx_dsp.attribute_ID = attr;
             dsp_capability_hvx_dsp.capability   = (uint32_t) 0;
-            nErr                                = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_hvx_dsp,
+            nErr                                = htpdrv_remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_hvx_dsp,
                                                                         sizeof(struct remote_dsp_capability));
             if ((nErr & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
                 GGML_LOG_ERROR("\nFastRPC Capability API is not supported on this device\n");

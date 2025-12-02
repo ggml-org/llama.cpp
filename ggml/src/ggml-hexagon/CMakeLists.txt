@@ -4,6 +4,18 @@ include(ExternalProject)
 option(GGML_HEXAGON_HTP_DEBUG "ggml-hexagon: enable HTP debug output" OFF)
 set(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE 128 CACHE STRING "ggml-hexagon: quantize group size (32, 64, or 128)")
 
+add_library(htp_drv OBJECT
+    ${CMAKE_CURRENT_SOURCE_DIR}/htp-drv.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/htp-drv.cpp)
+
+set_target_properties(htp_drv PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(htp_drv PUBLIC
+    ${HEXAGON_SDK_ROOT}/incs
+    ${HEXAGON_SDK_ROOT}/incs/stddef
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    ${CMAKE_CURRENT_BINARY_DIR})
+
 add_library(htp_iface OBJECT
     ${CMAKE_CURRENT_BINARY_DIR}/htp_iface_stub.c)
 
@@ -20,20 +32,19 @@ build_idl(htp/htp_iface.idl htp_iface)
 if (CMAKE_SYSTEM_NAME MATCHES Android)
     target_link_options(htp_iface PUBLIC -llog -ldl)
 elseif (CMAKE_SYSTEM_NAME MATCHES Windows)
-    add_compile_definitions(_WINDOWS)
     target_precompile_headers(htp_iface PUBLIC <sal.h>)
 else()
     target_link_options(htp_iface PUBLIC -ldl)
 endif()
 
 link_custom_library(htp_iface cdsprpc)
-link_custom_library(htp_iface rpcmem)
+#link_custom_library(htp_iface rpcmem)
 
 set(TARGET_NAME ggml-hexagon)
 ggml_add_backend_library(${TARGET_NAME}
     ggml-hexagon.cpp htp-utils.c htp-utils.h ../../include/ggml-hexagon.h)
 
-target_link_libraries(${TARGET_NAME} PRIVATE htp_iface)
+target_link_libraries(${TARGET_NAME} PRIVATE htp_drv htp_iface)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/htp ${CMAKE_CURRENT_BINARY_DIR})
 
 # Build HTP bits

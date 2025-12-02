@@ -37,6 +37,7 @@
 #include "op-desc.h"
 #include "htp-msg.h"
 #include "htp_iface.h"
+#include "htp-drv.h"
 
 static size_t opt_ndev         = 1;
 static size_t opt_nhvx         = 0; // use all
@@ -143,7 +144,7 @@ void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_
     // Bump pending flag (cleared in the session::flush once we get the responce)
     this->op_pending++;  // atomic inc
 
-    int err = dspqueue_write(this->queue,
+    int err = htpdrv_dspqueue_write(this->queue,
                              0,                       // flags - the framework will autoset this
                              n_bufs,                  // number of buffers
                              bufs,                    // buffer references
@@ -178,7 +179,7 @@ void ggml_hexagon_session::flush() {
         uint32_t               n_bufs;
 
         // Read response packet from queue
-        int err = dspqueue_read(q, &flags,
+        int err = htpdrv_dspqueue_read(q, &flags,
                                 HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
                                 &n_bufs,                 // Number of buffer references
                                 bufs,                    // Buffer references
@@ -233,7 +234,7 @@ struct ggml_backend_hexagon_buffer_context {
                     s->name.c_str(), (void *) this->base, s->domain_id, s->session_id, this->size, this->fd,
                     (int) this->repack);
 
-        int err = fastrpc_mmap(s->domain_id, this->fd, (void *) this->base, 0, this->size, FASTRPC_MAP_FD);
+        int err = htpdrv_fastrpc_mmap(s->domain_id, this->fd, (void *) this->base, 0, this->size, FASTRPC_MAP_FD);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: buffer mapping failed : domain_id %d size %zu fd %d error 0x%08x\n",
                     s->domain_id, this->size, this->fd, (unsigned) err);
@@ -259,18 +260,18 @@ struct ggml_backend_hexagon_buffer_context {
             return;
         }
 
-        fastrpc_munmap(this->sess->domain_id, this->fd, this->base, this->size);
+        htpdrv_fastrpc_munmap(this->sess->domain_id, this->fd, this->base, this->size);
         this->mapped = false;
     }
 
     ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool repack) {
         size += 4 * 1024;  // extra page for padding
 
-        if (rpcmem_alloc2) {
-            this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        if (htpdrv_rpcmem_alloc2) {
+            this->base = (uint8_t *) htpdrv_rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
         } else {
             GGML_LOG_INFO("ggml-hex: %s rpcmem_alloc2 not found, falling back to rpcmem_alloc\n", sess->name.c_str());
-            this->base = (uint8_t *) rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+            this->base = (uint8_t *) htpdrv_rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
         }
 
         if (!this->base) {
@@ -278,10 +279,10 @@ struct ggml_backend_hexagon_buffer_context {
             throw std::runtime_error("ggml-hex: rpcmem_alloc failed (see log for details)");
         }
 
-        this->fd = rpcmem_to_fd(this->base);
+        this->fd = htpdrv_rpcmem_to_fd(this->base);
         if (this->fd < 0) {
             GGML_LOG_ERROR("ggml-hex: %s failed to get FD for buffer %p\n", sess->name.c_str(), (void *) this->base);
-            rpcmem_free(this->base);
+            htpdrv_rpcmem_free(this->base);
             this->base = NULL;
             throw std::runtime_error("ggml-hex: rpcmem_to_fd failed (see log for details)");
         }
@@ -298,7 +299,7 @@ struct ggml_backend_hexagon_buffer_context {
     ~ggml_backend_hexagon_buffer_context() {
         munmap();
         if (this->base) {
-            rpcmem_free(this->base);
+            htpdrv_rpcmem_free(this->base);
             this->base = NULL;
         }
     }
@@ -1571,7 +1572,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         n.session_name     = const_cast<char *>(this->name.c_str());
         n.session_name_len = this->name.size();
 
-        int err = remote_session_control(FASTRPC_RESERVE_NEW_SESSION, (void *) &n, sizeof(n));
+        int err = htpdrv_remote_session_control(FASTRPC_RESERVE_NEW_SESSION, (void *) &n, sizeof(n));
         if (err != AEE_SUCCESS) {
             GGML_LOG_ERROR("ggml-hex: failed to reserve new session %d : error 0x%x\n", dev_id, err);
             throw std::runtime_error("ggml-hex: remote_session_control(new-sess) failed (see log for details)");
@@ -1599,7 +1600,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         u.uri             = session_uri;
         u.uri_len         = sizeof(session_uri);
 
-        int err = remote_session_control(FASTRPC_GET_URI, (void *) &u, sizeof(u));
+        int err = htpdrv_remote_session_control(FASTRPC_GET_URI, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
             // fallback to single session uris
             int htp_URI_domain_len = strlen(htp_uri) + MAX_DOMAIN_NAMELEN;
@@ -1615,7 +1616,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         struct remote_rpc_control_unsigned_module u;
         u.domain = this->domain_id;
         u.enable = 1;
-        int err  = remote_session_control(DSPRPC_CONTROL_UNSIGNED_MODULE, (void *) &u, sizeof(u));
+        int err  = htpdrv_remote_session_control(DSPRPC_CONTROL_UNSIGNED_MODULE, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
             GGML_LOG_ERROR("ggml-hex: failed to enable unsigned PD for session %d : error 0x%x\n", dev_id, err);
             throw std::runtime_error("ggml-hex: remote_session_control(unsign) failed (see log for details)");
@@ -1639,14 +1640,14 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         struct remote_rpc_control_latency l;
         l.enable = 1;
 
-        int err = remote_handle64_control(this->handle, DSPRPC_CONTROL_LATENCY, (void *) &l, sizeof(l));
+        int err = htpdrv_remote_handle64_control(this->handle, DSPRPC_CONTROL_LATENCY, (void *) &l, sizeof(l));
         if (err != 0) {
             GGML_LOG_WARN("ggml-hex: failed to enable fastrpc QOS mode: 0x%08x\n", (unsigned) err);
         }
     }
 
     // Now let's setup the DSP queue
-    err = dspqueue_create(this->domain_id,
+    err = htpdrv_dspqueue_create(this->domain_id,
                           0,              // Flags
                           128 * 1024,     // Request  queue size (in bytes)
                           64 * 1024,      // Response queue size (in bytes)
@@ -1662,7 +1663,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     this->valid_queue = true;
 
     // Export queue for use on the DSP
-    err = dspqueue_export(queue, &this->queue_id);
+    err = htpdrv_dspqueue_export(queue, &this->queue_id);
     if (err != 0) {
         GGML_LOG_ERROR("ggml-hex: dspqueue_export failed: 0x%08x\n", (unsigned) err);
         throw std::runtime_error("ggml-hex: dspqueue export failed (see log for details)");
@@ -1707,7 +1708,7 @@ void ggml_hexagon_session::release() noexcept(true) {
     }
 
     if (this->valid_queue) {
-        err = dspqueue_close(queue);
+        err = htpdrv_dspqueue_close(queue);
         if (err != 0) {
             GGML_ABORT("ggml-hex: dspqueue_close failed: 0x%08x\n", (unsigned) err);
         }
@@ -3152,6 +3153,10 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
         }
         opt_arch = strtoul(str_arch, NULL, 0);
     }
+
+    opt_hostbuf = str_hostbuf ? atoi(str_hostbuf) : 1;
+
+    htpdrv_initialize();
 
     reg->context = new ggml_hexagon_registry(reg);
 
