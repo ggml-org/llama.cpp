@@ -246,6 +246,21 @@ extern "C" {
         LLAMA_KV_OVERRIDE_TYPE_STR,
     };
 
+    enum llama_model_meta_key {
+        LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE,
+        LLAMA_MODEL_META_KEY_SAMPLING_TOP_K,
+        LLAMA_MODEL_META_KEY_SAMPLING_TOP_P,
+        LLAMA_MODEL_META_KEY_SAMPLING_MIN_P,
+        LLAMA_MODEL_META_KEY_SAMPLING_XTC_PROBABILITY,
+        LLAMA_MODEL_META_KEY_SAMPLING_XTC_THRESHOLD,
+        LLAMA_MODEL_META_KEY_SAMPLING_TEMP,
+        LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_LAST_N,
+        LLAMA_MODEL_META_KEY_SAMPLING_PENALTY_REPEAT,
+        LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT,
+        LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_TAU,
+        LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA,
+    };
+
     struct llama_model_kv_override {
         enum llama_model_kv_override_type tag;
 
@@ -463,6 +478,7 @@ extern "C" {
 
     // NOTE: After creating a llama_context, it is recommended to query the actual values using these functions
     //       In some cases the requested values via llama_context_params may differ from the actual values used by the context
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
     LLAMA_API uint32_t llama_n_ctx      (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_ctx_seq  (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_batch    (const struct llama_context * ctx);
@@ -485,6 +501,7 @@ extern "C" {
 
     LLAMA_API int32_t llama_model_n_ctx_train(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_embd_inp (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_layer    (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
@@ -515,6 +532,9 @@ extern "C" {
 
     // Get the number of metadata key/value pairs
     LLAMA_API int32_t llama_model_meta_count(const struct llama_model * model);
+
+    // Get sampling metadata key name. Returns nullptr if the key is invalid
+    LLAMA_API const char * llama_model_meta_key_str(enum llama_model_meta_key key);
 
     // Get metadata key name by index
     LLAMA_API int32_t llama_model_meta_key_by_index(const struct llama_model * model, int32_t i, char * buf, size_t buf_size);

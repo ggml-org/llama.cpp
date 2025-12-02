@@ -105,7 +105,6 @@ mtmd_context_params mtmd_context_params_default() {
         /* use_gpu           */ true,
         /* print_timings     */ true,
         /* n_threads         */ 4,
-        /* verbosity         */ GGML_LOG_LEVEL_INFO,
         /* image_marker      */ MTMD_DEFAULT_IMAGE_MARKER,
         /* media_marker      */ mtmd_default_marker(),
         /* flash_attn_type   */ LLAMA_FLASH_ATTN_TYPE_AUTO,
@@ -163,7 +162,7 @@ struct mtmd_context {
         print_timings(ctx_params.print_timings),
         n_threads    (ctx_params.n_threads),
         media_marker (ctx_params.media_marker),
-        n_embd_text  (llama_model_n_embd(text_model))
+        n_embd_text  (llama_model_n_embd_inp(text_model))
     {
         if (std::string(ctx_params.image_marker) != MTMD_DEFAULT_IMAGE_MARKER) {
             throw std::runtime_error("custom image_marker is not supported anymore, use media_marker instead");
@@ -175,7 +174,6 @@ struct mtmd_context {
 
         clip_context_params ctx_clip_params {
             /* use_gpu           */ ctx_params.use_gpu,
-            /* verbosity         */ ctx_params.verbosity,
             /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
@@ -311,6 +309,10 @@ struct mtmd_context {
             img_end = "";
             tok_row_end_trail = false;
             ov_img_first = false;
+        } else if (proj == PROJECTOR_TYPE_LFM2) {
+            img_beg = "<|image_start|>";
+            img_end = "<|image_end|>";
+
         }
     }
 
@@ -1152,4 +1154,9 @@ mtmd_input_chunks * mtmd_test_create_input_chunks() {
     chunks->entries.emplace_back(std::move(chunk_image));
 
     return chunks;
+}
+
+void mtmd_log_set(ggml_log_callback log_callback, void * user_data) {
+    g_logger_state.log_callback = log_callback ? log_callback : clip_log_callback_default;
+    g_logger_state.log_callback_user_data = user_data;
 }

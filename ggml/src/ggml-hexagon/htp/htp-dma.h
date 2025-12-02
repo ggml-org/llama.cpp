@@ -66,6 +66,13 @@ static inline bool dma_queue_push(dma_queue *  q,
     desc->desctype       = HEXAGON_UDMA_DESC_DESCTYPE_TYPE1;
     desc->dstbypass      = 1;
     desc->srcbypass      = 1;
+#if __HVX_ARCH__ >= 73
+    desc->dstbypass      = 1;
+    desc->srcbypass      = 1;
+#else
+    desc->dstbypass      = 0;
+    desc->srcbypass      = 1;
+#endif
     desc->order          = 0;
     desc->dstate         = HEXAGON_UDMA_DESC_DSTATE_INCOMPLETE;
     desc->src            = (void *) src;

@@ -79,7 +79,6 @@ struct mtmd_context_params {
     bool use_gpu;
     bool print_timings;
     int n_threads;
-    enum ggml_log_level verbosity;
     const char * image_marker; // deprecated, use media_marker instead
     const char * media_marker;
     enum llama_flash_attn_type flash_attn_type;
@@ -214,6 +213,10 @@ MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
 // the reading size (in bytes) is equal to:
 // llama_model_n_embd(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
+
+// Set callback for all future logging events.
+// If this is not called, or NULL is supplied, everything is output on stderr.
+MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
 
 /////////////////////////////////////////
 

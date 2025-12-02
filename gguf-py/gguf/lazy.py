@@ -48,13 +48,18 @@ class LazyMeta(ABCMeta):
         # NOTE: doing this from a metaclass is very convenient
         # TODO: make this even more comprehensive
         for binary_op in (
-            "lt", "le", "eq", "ne", "ge", "gt", "not"
-            "abs", "add", "and", "floordiv", "invert", "lshift", "mod", "mul", "matmul",
-            "neg", "or", "pos", "pow", "rshift", "sub", "truediv", "xor",
+            "lt", "le", "eq", "ne", "ge", "gt",
+            "add", "and", "floordiv", "lshift", "mod", "mul", "matmul",
+            "or", "pow", "rshift", "sub", "truediv", "xor",
             "iadd", "iand", "ifloordiv", "ilshift", "imod", "imul", "ior", "irshift", "isub", "ixor",
             "radd", "rand", "rfloordiv", "rmul", "ror", "rpow", "rsub", "rtruediv", "rxor",
         ):
             attr_name = f"__{binary_op}__"
+            # evaluation on the meta tensor is needed in case there's broadcasting
+            namespace[attr_name] = mk_wrap(attr_name, meta_noop=False)
+
+        for unary_op in ("not", "abs", "invert", "neg", "pos"):
+            attr_name = f"__{unary_op}__"
             # the result of these operators usually has the same shape and dtype as the input,
             # so evaluation on the meta tensor can be skipped.
             namespace[attr_name] = mk_wrap(attr_name, meta_noop=True)

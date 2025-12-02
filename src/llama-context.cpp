@@ -1,5 +1,6 @@
 #include "llama-context.h"
 
+#include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
@@ -21,6 +22,8 @@ llama_context::llama_context(
               llama_context_params params) :
     model(model),
     balloc(std::make_unique<llama_batch_allocr>(model.hparams.n_pos_per_embd())) {
+    // TODO warning when creating llama_context with awkward ctx size that is not a power of 2,
+    //     may need to be backend-dependent
     LLAMA_LOG_INFO("%s: constructing llama_context\n", __func__);
 
     t_start_us = model.t_start_us;
@@ -112,10 +115,14 @@ llama_context::llama_context(
         }
     }
 
+    // ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
+    cparams.n_ctx = GGML_PAD(cparams.n_ctx, 256);
+
     if (cparams.kv_unified) {
         cparams.n_ctx_seq = cparams.n_ctx;
     } else {
         cparams.n_ctx_seq = cparams.n_ctx / cparams.n_seq_max;
+        cparams.n_ctx_seq = GGML_PAD(cparams.n_ctx_seq, 256);
 
         if (cparams.n_ctx_seq == 0) {
             throw std::runtime_error("n_ctx_seq == 0");
@@ -293,7 +300,7 @@ llama_context::llama_context(
 
         cross.v_embd.clear();
 
-        const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
+        const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         // avoid reserving graphs with zero outputs - assume one output per sequence
@@ -536,7 +543,7 @@ bool llama_context::memory_update(bool optimize) {
             throw std::runtime_error("failed to initialize memory context");
         }
 
-        const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
+        const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
@@ -821,7 +828,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const auto & hparams = model.hparams;
 
-    const int64_t n_embd  = hparams.n_embd;
+    const int64_t n_embd  = hparams.n_embd_inp();
     const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
@@ -990,7 +997,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_vocab = vocab.n_tokens();
-    const int64_t n_embd  = hparams.n_embd;
+    const int64_t n_embd  = hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
     const bool output_all = cparams.embeddings;
@@ -1242,7 +1249,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         // make the outputs have the same order they had in the user-provided batch
         // note: this is mostly relevant for recurrent models atm
-        if (!sorted_output) {
+        if (!sorted_output && n_outputs > 1) {
             GGML_ASSERT((size_t) n_outputs == out_ids.size());
 
             // TODO: is there something more efficient which also minimizes swaps?
@@ -1380,6 +1387,9 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes() const {
+    if (model.arch == LLM_ARCH_QWEN3NEXT) {
+        return std::max<uint32_t>(8192u, 32u*model.n_tensors());
+    }
     return std::max<uint32_t>(1024u, 8u*model.n_tensors());
 }
 
@@ -2148,7 +2158,7 @@ void llama_context::opt_epoch_iter(
             batch.logits  [pos_batch]    = true;
         }
 
-        if (!balloc->init(batch, model.vocab, nullptr, model.hparams.n_embd, cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
+        if (!balloc->init(batch, model.vocab, nullptr, model.hparams.n_embd_inp(), cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max, true)) {
             LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
             return;
         }
