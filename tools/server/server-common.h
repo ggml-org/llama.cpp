@@ -13,8 +13,6 @@
 #include <vector>
 #include <cinttypes>
 
-#define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo"
-
 const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
 
 using json = nlohmann::ordered_json;
@@ -298,11 +296,16 @@ json oaicompat_chat_params_parse(
 json convert_anthropic_to_oai(const json & body);
 
 // TODO: move it to server-task.cpp
-json format_embeddings_response_oaicompat(const json & request, const json & embeddings, bool use_base64 = false);
+json format_embeddings_response_oaicompat(
+    const json & request,
+    const std::string & model_name,
+    const json & embeddings,
+    bool use_base64 = false);
 
 // TODO: move it to server-task.cpp
 json format_response_rerank(
         const json & request,
+        const std::string & model_name,
         const json & ranks,
         bool is_tei_format,
         std::vector<std::string> & texts,

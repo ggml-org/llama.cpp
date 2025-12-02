@@ -1263,7 +1263,11 @@ json convert_anthropic_to_oai(const json & body) {
     return oai_body;
 }
 
-json format_embeddings_response_oaicompat(const json & request, const json & embeddings, bool use_base64) {
+json format_embeddings_response_oaicompat(
+        const json & request,
+        const std::string & model_name,
+        const json & embeddings,
+        bool use_base64) {
     json data = json::array();
     int32_t n_tokens = 0;
     int i = 0;
@@ -1293,7 +1297,7 @@ json format_embeddings_response_oaicompat(const json & request, const json & emb
     }
 
     json res = json {
-        {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
+        {"model", json_value(request, "model", model_name)},
         {"object", "list"},
         {"usage", json {
             {"prompt_tokens", n_tokens},
@@ -1307,6 +1311,7 @@ json format_embeddings_response_oaicompat(const json & request, const json & emb
 
 json format_response_rerank(
         const json & request,
+        const std::string & model_name,
         const json & ranks,
         bool is_tei_format,
         std::vector<std::string> & texts,
@@ -1338,7 +1343,7 @@ json format_response_rerank(
     if (is_tei_format) return results;
 
     json res = json{
-        {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
+        {"model", json_value(request, "model", model_name)},
         {"object", "list"},
         {"usage", json{
             {"prompt_tokens", n_tokens},
