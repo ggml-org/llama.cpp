@@ -25,14 +25,15 @@ if(GIT_EXE)
     )
 endif()
 
-# Build the version string with optional dirty flag
 set(GGML_VERSION "${GGML_VERSION_BASE}")
-if(GGML_GIT_DIRTY AND NOT GGML_GIT_DIRTY EQUAL 0)
-    set(GGML_VERSION "${GGML_VERSION}-dirty")
-endif()
 
 if(NOT GGML_BUILD_COMMIT)
     set(GGML_BUILD_COMMIT "unknown")
+endif()
+
+# Build the commit string with optional dirty flag
+if(DEFINED GGML_GIT_DIRTY AND GGML_GIT_DIRTY EQUAL 1)
+    set(GGML_BUILD_COMMIT "${GGML_BUILD_COMMIT}-dirty")
 endif()
 
 include(CheckIncludeFileCXX)
@@ -168,7 +169,7 @@ option(GGML_RV_ZFH           "ggml: enable riscv zfh"        ON)
 option(GGML_RV_ZVFH          "ggml: enable riscv zvfh"       ON)
 option(GGML_RV_ZICBOP        "ggml: enable riscv zicbop"     ON)
 option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"     OFF)
-option(GGML_VXE              "ggml: enable vxe"              ON)
+option(GGML_VXE              "ggml: enable vxe"              ${GGML_NATIVE})
 
 option(GGML_CPU_ALL_VARIANTS "ggml: build all variants of the CPU backend (requires GGML_BACKEND_DL)" OFF)
 set(GGML_CPU_ARM_ARCH        "" CACHE STRING "ggml: CPU architecture for ARM")
@@ -182,6 +183,7 @@ endif()
 # ggml core
 set(GGML_SCHED_MAX_COPIES  "4" CACHE STRING "ggml: max input copies for pipeline parallelism")
 option(GGML_CPU                             "ggml: enable CPU backend"                        ON)
+option(GGML_SCHED_NO_REALLOC                "ggml: disallow reallocations in ggml-alloc (for debugging)" OFF)
 
 # 3rd party libs / backends
 option(GGML_ACCELERATE                      "ggml: enable Accelerate framework"               ON)
@@ -250,6 +252,8 @@ option(GGML_OPENCL_EMBED_KERNELS            "ggml: embed kernels"               
 option(GGML_OPENCL_USE_ADRENO_KERNELS       "ggml: use optimized kernels for Adreno"          ON)
 set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
                                             "gmml: OpenCL API version to target")
+
+option(GGML_HEXAGON                         "ggml: enable Hexagon backend"                    OFF)
 
 # toolchain for vulkan-shaders-gen
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")

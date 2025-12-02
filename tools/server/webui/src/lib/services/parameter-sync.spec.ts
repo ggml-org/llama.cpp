@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { ParameterSyncService } from './parameter-sync';
-import type { ApiLlamaCppServerProps } from '$lib/types/api';
 
 describe('ParameterSyncService', () => {
 	describe('roundFloatingPoint', () => {

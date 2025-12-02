@@ -1,16 +1,26 @@
 <script lang="ts">
-	import { ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
+	import {
+		ModelBadge,
+		ChatMessageActions,
+		ChatMessageStatistics,
+		ChatMessageThinkingBlock,
+		CopyToClipboardIcon,
+		MarkdownContent,
+		ModelsSelector
+	} from '$lib/components/app';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
+	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
 	import { fade } from 'svelte/transition';
-	import { Check, Copy, Package, X } from '@lucide/svelte';
+	import { Check, X, Wrench } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
-	import ChatMessageActions from './ChatMessageActions.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { copyToClipboard } from '$lib/utils/copy';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { isRouterMode } from '$lib/stores/server.svelte';
 
 	interface Props {
 		class?: string;
@@ -27,12 +37,13 @@
 		onCancelEdit?: () => void;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
+		onContinue?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
 		onEditKeydown?: (event: KeyboardEvent) => void;
 		onEditedContentChange?: (content: string) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
-		onRegenerate: () => void;
+		onRegenerate: (modelOverride?: string) => void;
 		onSaveEdit?: () => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
 		onShouldBranchAfterEditChange?: (value: boolean) => void;
@@ -41,6 +52,7 @@
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
 		thinkingContent: string | null;
+		toolCallContent: ApiChatCompletionToolCall[] | string | null;
 	}
 
 	let {
@@ -52,6 +64,7 @@
 		messageContent,
 		onCancelEdit,
 		onConfirmDelete,
+		onContinue,
 		onCopy,
 		onDelete,
 		onEdit,
@@ -66,10 +79,94 @@
 		shouldBranchAfterEdit = false,
 		siblingInfo = null,
 		textareaElement = $bindable(),
-		thinkingContent
+		thinkingContent,
+		toolCallContent = null
 	}: Props = $props();
 
+	const toolCalls = $derived(
+		Array.isArray(toolCallContent) ? (toolCallContent as ApiChatCompletionToolCall[]) : null
+	);
+	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
+
 	const processingState = useProcessingState();
+	let currentConfig = $derived(config());
+	let isRouter = $derived(isRouterMode());
+	let displayedModel = $derived((): string | null => {
+		if (message.model) {
+			return message.model;
+		}
+
+		return null;
+	});
+
+	const { handleModelChange } = useModelChangeValidation({
+		getRequiredModalities: () => conversationsStore.getModalitiesUpToMessage(message.id),
+		onSuccess: (modelName) => onRegenerate(modelName)
+	});
+
+	function handleCopyModel() {
+		const model = displayedModel();
+
+		void copyToClipboard(model ?? '');
+	}
+
+	$effect(() => {
+		if (isEditing && textareaElement) {
+			autoResizeTextarea(textareaElement);
+		}
+	});
+
+	function formatToolCallBadge(toolCall: ApiChatCompletionToolCall, index: number) {
+		const callNumber = index + 1;
+		const functionName = toolCall.function?.name?.trim();
+		const label = functionName || `Call #${callNumber}`;
+
+		const payload: Record<string, unknown> = {};
+
+		const id = toolCall.id?.trim();
+		if (id) {
+			payload.id = id;
+		}
+
+		const type = toolCall.type?.trim();
+		if (type) {
+			payload.type = type;
+		}
+
+		if (toolCall.function) {
+			const fnPayload: Record<string, unknown> = {};
+
+			const name = toolCall.function.name?.trim();
+			if (name) {
+				fnPayload.name = name;
+			}
+
+			const rawArguments = toolCall.function.arguments?.trim();
+			if (rawArguments) {
+				try {
+					fnPayload.arguments = JSON.parse(rawArguments);
+				} catch {
+					fnPayload.arguments = rawArguments;
+				}
+			}
+
+			if (Object.keys(fnPayload).length > 0) {
+				payload.function = fnPayload;
+			}
+		}
+
+		const formattedPayload = JSON.stringify(payload, null, 2);
+
+		return {
+			label,
+			tooltip: formattedPayload,
+			copyValue: formattedPayload
+		};
+	}
+
+	function handleCopyToolCall(payload: string) {
+		void copyToClipboard(payload, 'Tool call copied to clipboard');
+	}
 </script>
 
 <div
@@ -102,7 +199,10 @@
 				bind:value={editedContent}
 				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
 				onkeydown={onEditKeydown}
-				oninput={(e) => onEditedContentChange?.(e.currentTarget.value)}
+				oninput={(e) => {
+					autoResizeTextarea(e.currentTarget);
+					onEditedContentChange?.(e.currentTarget.value);
+				}}
 				placeholder="Edit assistant message..."
 			></textarea>
 
@@ -142,22 +242,71 @@
 		</div>
 	{/if}
 
-	{#if config().showModelInfo && message.model}
-		<span class="mt-6 mb-4 inline-flex items-center gap-1 text-xs text-muted-foreground">
-			<Package class="h-3.5 w-3.5" />
+	<div class="info my-6 grid gap-4">
+		{#if displayedModel()}
+			<span class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+				{#if isRouter}
+					<ModelsSelector
+						currentModel={displayedModel()}
+						onModelChange={handleModelChange}
+						disabled={isLoading()}
+						upToMessageId={message.id}
+					/>
+				{:else}
+					<ModelBadge model={displayedModel() || undefined} onclick={handleCopyModel} />
+				{/if}
 
-			<span>Model used:</span>
+				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
+					<ChatMessageStatistics
+						predictedTokens={message.timings.predicted_n}
+						predictedMs={message.timings.predicted_ms}
+					/>
+				{/if}
+			</span>
+		{/if}
 
-			<button
-				class="inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-				onclick={() => copyToClipboard(message.model)}
-			>
-				{message.model}
+		{#if config().showToolCalls}
+			{#if (toolCalls && toolCalls.length > 0) || fallbackToolCalls}
+				<span class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+					<span class="inline-flex items-center gap-1">
+						<Wrench class="h-3.5 w-3.5" />
 
-				<Copy class="ml-1 h-3 w-3 " />
-			</button>
-		</span>
-	{/if}
+						<span>Tool calls:</span>
+					</span>
+
+					{#if toolCalls && toolCalls.length > 0}
+						{#each toolCalls as toolCall, index (toolCall.id ?? `${index}`)}
+							{@const badge = formatToolCallBadge(toolCall, index)}
+							<button
+								type="button"
+								class="tool-call-badge inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
+								title={badge.tooltip}
+								aria-label={`Copy tool call ${badge.label}`}
+								onclick={() => handleCopyToolCall(badge.copyValue)}
+							>
+								{badge.label}
+								<CopyToClipboardIcon
+									text={badge.copyValue}
+									ariaLabel={`Copy tool call ${badge.label}`}
+								/>
+							</button>
+						{/each}
+					{:else if fallbackToolCalls}
+						<button
+							type="button"
+							class="tool-call-badge tool-call-badge--fallback inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
+							title={fallbackToolCalls}
+							aria-label="Copy tool call payload"
+							onclick={() => handleCopyToolCall(fallbackToolCalls)}
+						>
+							{fallbackToolCalls}
+							<CopyToClipboardIcon text={fallbackToolCalls} ariaLabel="Copy tool call payload" />
+						</button>
+					{/if}
+				</span>
+			{/if}
+		{/if}
+	</div>
 
 	{#if message.timestamp && !isEditing}
 		<ChatMessageActions
@@ -170,6 +319,9 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
+			onContinue={currentConfig.enableContinueGeneration && !thinkingContent
+				? onContinue
+				: undefined}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}
@@ -222,6 +374,19 @@
 		font-size: 0.875rem;
 		line-height: 1.6;
 		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.tool-call-badge {
+		max-width: 12rem;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.tool-call-badge--fallback {
+		max-width: 20rem;
+		white-space: normal;
 		word-break: break-word;
 	}
 </style>

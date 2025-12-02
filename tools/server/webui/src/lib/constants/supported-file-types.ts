@@ -16,7 +16,7 @@ import {
 	MimeTypeImage,
 	MimeTypeApplication,
 	MimeTypeText
-} from '$lib/enums/files';
+} from '$lib/enums';
 
 // File type configuration using enums
 export const AUDIO_FILE_TYPES = {
@@ -68,6 +68,10 @@ export const TEXT_FILE_TYPES = {
 	[FileTypeText.MARKDOWN]: {
 		extensions: [FileExtensionText.MD],
 		mimeTypes: [MimeTypeText.MARKDOWN]
+	},
+	[FileTypeText.ASCIIDOC]: {
+		extensions: [FileExtensionText.ADOC],
+		mimeTypes: [MimeTypeText.ASCIIDOC]
 	},
 	[FileTypeText.JAVASCRIPT]: {
 		extensions: [FileExtensionText.JS],

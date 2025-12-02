@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Settings } from '@lucide/svelte';
-	import { ChatSettingsDialog } from '$lib/components/app';
+	import { DialogChatSettings } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 
 	let settingsOpen = $state(false);
@@ -20,4 +20,4 @@
 	</div>
 </header>
 
-<ChatSettingsDialog open={settingsOpen} onOpenChange={(open) => (settingsOpen = open)} />
+<DialogChatSettings open={settingsOpen} onOpenChange={(open) => (settingsOpen = open)} />
