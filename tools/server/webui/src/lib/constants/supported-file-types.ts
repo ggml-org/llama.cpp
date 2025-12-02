@@ -126,7 +126,12 @@ export const TEXT_FILE_TYPES = {
 		mimeTypes: [MimeTypeText.JAVA]
 	},
 	[FileTypeText.CPP]: {
-		extensions: [FileExtensionText.CPP, FileExtensionText.C, FileExtensionText.H, FileExtensionText.HPP],
+		extensions: [
+			FileExtensionText.CPP,
+			FileExtensionText.C,
+			FileExtensionText.H,
+			FileExtensionText.HPP
+		],
 		mimeTypes: [MimeTypeText.CPP_SRC, MimeTypeText.CPP_HDR, MimeTypeText.C_SRC, MimeTypeText.C_HDR]
 	},
 	[FileTypeText.PHP]: {
