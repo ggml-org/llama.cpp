@@ -190,7 +190,6 @@ static void cumsum_cuda(
             nb1 / type_size,  nb2 / type_size,  nb3 / type_size
         );
     } else {
-        GGML_LOG_ERROR("Running fallback version");
         cumsum_kernel<<<grid_dims, block_dims, shmem_size, stream>>>(
             src, dst,
             ne00, ne01, ne02, ne03,
