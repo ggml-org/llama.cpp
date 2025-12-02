@@ -2195,10 +2195,10 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_pad_circular(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            int                  p0,
-            int                  p1,
-            int                  p2,
-            int                  p3);
+            int                   p0,
+            int                   p1,
+            int                   p2,
+            int                   p3);
 
     GGML_API struct ggml_tensor * ggml_pad_ext(
             struct ggml_context * ctx,
