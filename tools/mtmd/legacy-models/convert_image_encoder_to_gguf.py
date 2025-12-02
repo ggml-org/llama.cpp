@@ -345,7 +345,7 @@ if has_vision_encoder:
     if args.clip_model_is_siglip:
         visual_projection_dim = 0
     else:
-        visual_projection_dim = v_hparams.get("projection_dim", config["projection_dim"])
+        visual_projection_dim = v_hparams.get("projection_dim", config.get("projection_dim", 0))
 
     # set vision_model hparams
     fout.add_uint32("clip.vision.image_size", v_hparams["image_size"])
@@ -431,7 +431,7 @@ if has_vision_encoder:
     fout.add_array("clip.vision.image_mean", image_mean)
     fout.add_array("clip.vision.image_std", image_std)
 
-use_gelu = v_hparams["hidden_act"] == "gelu"
+use_gelu = v_hparams.get("hidden_act","") == "gelu"
 fout.add_bool("clip.use_gelu", use_gelu)
 
 
@@ -439,22 +439,27 @@ if has_llava_projector:
     # By default, we drop the last layer for llava projector
     # models unless we have explicitly set vision feature layers
     if feature_layers is None:
-        model.vision_model.encoder.layers.pop(-1)
+        # Phi-3 Specific Keys
+        if args.projector_type == "phi3_v":
+            model.model.vision_embed_tokens.img_processor.vision_model.encoder.layers.pop(-1)
+        else:
+            model.vision_model.encoder.layers.pop(-1)
     else:
         model.vision_model.encoder.layers = model.vision_model.encoder.layers[:max(feature_layers)]
 
-    projector = torch.load(args.llava_projector)
-    for name, data in projector.items():
-        name = get_tensor_name(name)
-        # pw and dw conv ndim==4
-        if data.ndim == 2 or data.ndim == 4:
-            data = data.squeeze().numpy().astype(np.float16)
-        else:
-            data = data.squeeze().numpy().astype(np.float32)
+    if args.llava_projector:
+        projector = torch.load(args.llava_projector)
+        for name, data in projector.items():
+            name = get_tensor_name(name)
+            # pw and dw conv ndim==4
+            if data.ndim == 2 or data.ndim == 4:
+                data = data.squeeze().numpy().astype(np.float16)
+            else:
+                data = data.squeeze().numpy().astype(np.float32)
 
-        fout.add_tensor(name, data)
+            fout.add_tensor(name, data)
 
-    print("Projector tensors added\n")
+        print("Projector tensors added\n")
 
 print("Processing model tensors...")
 state_dict = model.state_dict()
