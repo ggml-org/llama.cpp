@@ -1705,7 +1705,7 @@ jobs:
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_TESTS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DGGML_RPC=ON \
