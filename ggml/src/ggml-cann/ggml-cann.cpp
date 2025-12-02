@@ -2564,6 +2564,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             return true;
         case GGML_OP_OUT_PROD:
             {
+#ifdef ASCEND_310P
+                // Ger is not supported on 310p device
+                return false;
+#endif
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
