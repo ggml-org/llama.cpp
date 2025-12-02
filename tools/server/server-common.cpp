@@ -819,26 +819,26 @@ json oaicompat_chat_params_parse(
             auto schema_wrapper = json_value(response_format, "json_schema", json::object());
             json_schema = json_value(schema_wrapper, "schema", json::object());
         } else if (!response_type.empty() && response_type != "text") {
-            throw std::runtime_error("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
+            throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
         }
     }
 
     // get input files
     if (!body.contains("messages")) {
-        throw std::runtime_error("'messages' is required");
+        throw std::invalid_argument("'messages' is required");
     }
     json & messages = body.at("messages");
     if (!messages.is_array()) {
-        throw std::runtime_error("Expected 'messages' to be an array");
+        throw std::invalid_argument("Expected 'messages' to be an array");
     }
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
         if (role != "assistant" && !msg.contains("content")) {
-            throw std::runtime_error("All non-assistant messages must contain 'content'");
+            throw std::invalid_argument("All non-assistant messages must contain 'content'");
         }
         if (role == "assistant") {
             if (!msg.contains("content") && !msg.contains("tool_calls")) {
-                throw std::runtime_error("Assistant message must contain either 'content' or 'tool_calls'!");
+                throw std::invalid_argument("Assistant message must contain either 'content' or 'tool_calls'!");
             }
             if (!msg.contains("content")) {
                 continue; // avoid errors with no content
@@ -850,7 +850,7 @@ json oaicompat_chat_params_parse(
         }
 
         if (!content.is_array()) {
-            throw std::runtime_error("Expected 'content' to be a string or an array");
+            throw std::invalid_argument("Expected 'content' to be a string or an array");
         }
 
         for (auto & p : content) {
@@ -884,11 +884,11 @@ json oaicompat_chat_params_parse(
                     // try to decode base64 image
                     std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
                     if (parts.size() != 2) {
-                        throw std::runtime_error("Invalid image_url.url value");
+                        throw std::invalid_argument("Invalid image_url.url value");
                     } else if (!string_starts_with(parts[0], "data:image/")) {
-                        throw std::runtime_error("Invalid image_url.url format: " + parts[0]);
+                        throw std::invalid_argument("Invalid image_url.url format: " + parts[0]);
                     } else if (!string_ends_with(parts[0], "base64")) {
-                        throw std::runtime_error("image_url.url must be base64 encoded");
+                        throw std::invalid_argument("image_url.url must be base64 encoded");
                     } else {
                         auto base64_data = parts[1];
                         auto decoded_data = base64_decode(base64_data);
@@ -911,7 +911,7 @@ json oaicompat_chat_params_parse(
                 std::string format = json_value(input_audio, "format", std::string());
                 // while we also support flac, we don't allow it here so we matches the OAI spec
                 if (format != "wav" && format != "mp3") {
-                    throw std::runtime_error("input_audio.format must be either 'wav' or 'mp3'");
+                    throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
                 }
                 auto decoded_data = base64_decode(data); // expected to be base64 encoded
                 out_files.push_back(decoded_data);
@@ -922,7 +922,7 @@ json oaicompat_chat_params_parse(
                 p.erase("input_audio");
 
             } else if (type != "text") {
-                throw std::runtime_error("unsupported content[].type");
+                throw std::invalid_argument("unsupported content[].type");
             }
         }
     }
@@ -940,7 +940,7 @@ json oaicompat_chat_params_parse(
     inputs.enable_thinking       = opt.enable_thinking;
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
-            throw std::runtime_error("Cannot use custom grammar constraints with tools.");
+            throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
         }
         llama_params["parse_tool_calls"] = true;
     }
@@ -959,7 +959,7 @@ json oaicompat_chat_params_parse(
     } else if (enable_thinking_kwarg == "false") {
         inputs.enable_thinking = false;
     } else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
-        throw std::runtime_error("invalid type for \"enable_thinking\" (expected boolean, got string)");
+        throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token
@@ -972,14 +972,14 @@ json oaicompat_chat_params_parse(
 
         /* sanity check, max one assistant message at the end of the list */
         if (!inputs.messages.empty() && inputs.messages.back().role == "assistant"){
-            throw std::runtime_error("Cannot have 2 or more assistant messages at the end of the list.");
+            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
         }
 
         /* TODO: test this properly */
         inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
 
         if ( inputs.enable_thinking ) {
-            throw std::runtime_error("Assistant response prefill is incompatible with enable_thinking.");
+            throw std::invalid_argument("Assistant response prefill is incompatible with enable_thinking.");
         }
 
         inputs.add_generation_prompt = true;
@@ -1020,18 +1020,18 @@ json oaicompat_chat_params_parse(
     // Handle "n" field
     int n_choices = json_value(body, "n", 1);
     if (n_choices != 1) {
-        throw std::runtime_error("Only one completion choice is allowed");
+        throw std::invalid_argument("Only one completion choice is allowed");
     }
 
     // Handle "logprobs" field
     // TODO: The response format of this option is not yet OAI-compatible, but seems like no one really using it; We may need to fix it in the future
     if (json_value(body, "logprobs", false)) {
         if (has_tools && stream) {
-            throw std::runtime_error("logprobs is not supported with tools + stream");
+            throw std::invalid_argument("logprobs is not supported with tools + stream");
         }
         llama_params["n_probs"] = json_value(body, "top_logprobs", 20);
     } else if (body.contains("top_logprobs") && !body.at("top_logprobs").is_null()) {
-        throw std::runtime_error("top_logprobs requires logprobs to be set to true");
+        throw std::invalid_argument("top_logprobs requires logprobs to be set to true");
     }
 
     // Copy remaining properties to llama_params

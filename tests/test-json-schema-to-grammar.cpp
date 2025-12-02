@@ -1375,7 +1375,7 @@ int main() {
         try {
             tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
             tc.verify_status(SUCCESS);
-        } catch (const std::runtime_error & ex) {
+        } catch (const std::invalid_argument & ex) {
             fprintf(stderr, "Error: %s\n", ex.what());
             tc.verify_status(FAILURE);
         }

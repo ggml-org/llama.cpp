@@ -199,7 +199,7 @@ def test_completion_with_response_format(response_format: dict, n_predicted: int
         choice = res.body["choices"][0]
         assert match_regex(re_content, choice["message"]["content"])
     else:
-        assert res.status_code != 200
+        assert res.status_code == 400
         assert "error" in res.body
 
 
