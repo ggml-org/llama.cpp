@@ -586,7 +586,7 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
             }
             else{
                 if (ec){
-                    GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(search_path).c_str(), ec.message().c_str());
+                    GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(path).c_str(), ec.message().c_str());
                 }
             }
         }
