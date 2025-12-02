@@ -597,21 +597,21 @@ void ggml_gemv_q4_K_4x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 const int8_t * GGML_RESTRICT q8_ptr = q8->qs;
                 int32x4_t prod = vdupq_n_s32(0);
                 const int16x8_t q8_sums = vpaddq_s16(vld1q_s16(q8->bsums), vld1q_s16(q8->bsums + 8));
-                // when using vgetq_lane_s16, its index must be a constant, which cannot be used in a loop, so use vst1q_s16 instead.
+                // When using vgetq_lane_s16, its index must be a constant, which cannot be used in a loop, so use vst1q_s16 instead.
                 int16_t tmp_arry[8];
                 vst1q_s16(tmp_arry, q8_sums);
                 for (int j = 0; j < QK_K / 32; ++j) {
                     int32x4_t sum0 = vdupq_n_s32(0);
                     int32x4_t sum1 = vdupq_n_s32(0);
-                    // each block: scales0 scales1 scales2 scales3 mins0 mins1 mins2 mins3
-                    int16x8_t scales_mins = vmovl_s8(vld1_s8((const int8_t *)q4->scales + 8 * j)) ;
+                    // Each block: scales0 scales1 scales2 scales3 mins0 mins1 mins2 mins3
+                    int16x8_t scales_mins = vmovl_s8(vld1_s8((const int8_t *)q4->scales + 8 * j));
                     prod = vmlal_s16(prod,  vdup_n_s16(tmp_arry[j]), vget_high_s16(scales_mins));
                     uint8x16_t q4_0 = vld1q_u8((const uint8_t *) q4_ptr);
                     uint8x16_t q4_1 = vld1q_u8((const uint8_t *) q4_ptr + 16);
                     uint8x16_t q4_2 = vld1q_u8((const uint8_t *) q4_ptr + 32);
                     uint8x16_t q4_3 = vld1q_u8((const uint8_t *) q4_ptr + 48);
                     q4_ptr += 64;
-                    int8x16_t q8_0 = (int8x16_t) vld1q_dup_s64((const int64_t *) q8_ptr);  // 8 个 8-bit
+                    int8x16_t q8_0 = (int8x16_t) vld1q_dup_s64((const int64_t *) q8_ptr);
                     int8x16_t q8_1 = (int8x16_t) vld1q_dup_s64((const int64_t *) q8_ptr + 1);
                     int8x16_t q8_2 = (int8x16_t) vld1q_dup_s64((const int64_t *) q8_ptr + 2);
                     int8x16_t q8_3 = (int8x16_t) vld1q_dup_s64((const int64_t *) q8_ptr + 3);
