@@ -3328,7 +3328,7 @@ static void evaluate_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cuda_
         }
 #endif
         prev_i = i;
-        
+
         if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
             continue;
         }
