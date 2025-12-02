@@ -455,31 +455,14 @@ static void test_backend_temp_sampling(const char * model_path) {
         }
 
         int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
-        int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
-        GGML_ASSERT(n_logits == test_ctx.n_vocab);
 
-        // Sample from sequence using CPU sampler
-        struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
-        struct llama_sampler * chain = llama_sampler_chain_init(chain_params);
-        llama_sampler_chain_add(chain, llama_sampler_init_dist(18));
-
-        llama_token token = llama_sampler_sample(chain, test_ctx.ctx, batch_idx);
-        const std::string token_str = test_ctx.token_to_piece(token, false);
-        printf("Sequence 0 sampled token id:%d, string: '%s'\n", token, token_str.c_str());
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
         GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
 
-        // Verify that only one logit is available and the rest are masked out
         float * logits = llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx);
-        std::vector<float> unmasked;
-        for (int i = 0; i < n_logits; ++i) {
-            if (logits[i] > -1e9f) {
-                unmasked.push_back(logits[i]);
-            }
-        }
-        GGML_ASSERT(unmasked.size() == 1);
-        printf("Temperature %.1f test: unmasked size: %d\n", temp, (int)unmasked.size());
-
-        llama_sampler_free(chain);
+        GGML_ASSERT(logits == nullptr);
+        int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+        GGML_ASSERT(n_logits == 0);
     };
 
     test_argmax_temp(0.0f);

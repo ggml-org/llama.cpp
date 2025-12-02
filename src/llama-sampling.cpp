@@ -1607,42 +1607,8 @@ static void llama_sampler_temp_backend_apply(
         struct ggml_tensor * max_idx = ggml_argmax(ctx, data->logits);
         ggml_set_name(max_idx, "temp_max_idx");
 
-        // Reshape logits to 2D so we can use get_rows.
-        struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, data->logits->ne[0]);
-        ggml_set_name(logits_rows, "temp_logits_rows");
-
-        // Get the max logit value.
-        struct ggml_tensor * max_logit = ggml_get_rows(ctx, logits_rows, max_idx);
-        ggml_set_name(max_logit, "temp_max_logit");
-
-        // Repeat max_logit to match logits shape for element-wise operations.
-        struct ggml_tensor * max_logit_repeated = ggml_repeat(ctx, max_logit, data->logits);
-        ggml_set_name(max_logit_repeated, "temp_max_logit_repeated");
-
-        // Compute diff = max - logits.
-        // At max_idx position this value will be zero, and positive elsewhere.
-        struct ggml_tensor * diff = ggml_sub(ctx, max_logit_repeated, data->logits);
-        ggml_set_name(diff, "temp_diff");
-
-        // Subtract small epsilon to make max position negative.
-        // This ensures ggml_step returns 0 at max across all backends.
-        struct ggml_tensor * diff_eps = ggml_scale_bias(ctx, diff, 1.0f, -1e-6f);
-        ggml_set_name(diff_eps, "temp_diff_eps");
-
-        // Create mask: max position gets 0, everything else gets 1.
-        struct ggml_tensor * mask = ggml_step(ctx, diff_eps);
-        ggml_set_name(mask, "temp_mask");
-
-        // Convert mask to bias: -1e9 for non-max, 0 for max
-        const float large_val = 1e9f;
-        struct ggml_tensor * bias = ggml_scale_bias(ctx, mask, -large_val, 0.0f);
-        ggml_set_name(bias, "temp_bias");
-
-        // Add the bias to logits to mask out non-max tokens.
-        data->logits = ggml_add(ctx, data->logits, bias);
-        ggml_set_name(data->logits, "temp_zero_logits");
-
-        ggml_build_forward_expand(gf, data->logits);
+        // Set the sampled token to the most probable token.
+        data->sampled = max_idx;
         return;
     }
 
