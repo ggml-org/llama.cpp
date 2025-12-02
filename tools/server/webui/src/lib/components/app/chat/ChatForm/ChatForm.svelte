@@ -9,15 +9,13 @@
 	} from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { config } from '$lib/stores/settings.svelte';
-	import { FileTypeCategory, MimeTypeApplication } from '$lib/enums/files';
+	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { activeMessages } from '$lib/stores/conversations.svelte';
 	import {
-		AudioRecorder,
-		convertToWav,
-		createAudioFile,
-		isAudioRecordingSupported
-	} from '$lib/utils/audio-recording';
-	import { onMount } from 'svelte';
-	import {
+		FileTypeCategory,
+		MimeTypeApplication,
 		FileExtensionAudio,
 		FileExtensionImage,
 		FileExtensionPdf,
@@ -25,8 +23,15 @@
 		MimeTypeAudio,
 		MimeTypeImage,
 		MimeTypeText
-	} from '$lib/enums/files';
-	import { isIMEComposing } from '$lib/utils/is-ime-composing';
+	} from '$lib/enums';
+	import { isIMEComposing } from '$lib/utils';
+	import {
+		AudioRecorder,
+		convertToWav,
+		createAudioFile,
+		isAudioRecordingSupported
+	} from '$lib/utils/browser-only';
+	import { onMount } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -53,6 +58,7 @@
 	}: Props = $props();
 
 	let audioRecorder: AudioRecorder | undefined;
+	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let currentConfig = $derived(config());
 	let fileAcceptString = $state<string | undefined>(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
@@ -63,18 +69,97 @@
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 
+	// Check if model is selected (in ROUTER mode)
+	let conversationModel = $derived(
+		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+	);
+	let isRouter = $derived(isRouterMode());
+	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
+
+	// Get active model ID for capability detection
+	let activeModelId = $derived.by(() => {
+		const options = modelOptions();
+
+		if (!isRouter) {
+			return options.length > 0 ? options[0].model : null;
+		}
+
+		// First try user-selected model
+		const selectedId = selectedModelId();
+		if (selectedId) {
+			const model = options.find((m) => m.id === selectedId);
+			if (model) return model.model;
+		}
+
+		// Fallback to conversation model
+		if (conversationModel) {
+			const model = options.find((m) => m.model === conversationModel);
+			if (model) return model.model;
+		}
+
+		return null;
+	});
+
+	// State for model props reactivity
+	let modelPropsVersion = $state(0);
+
+	// Fetch model props when active model changes (works for both MODEL and ROUTER mode)
+	$effect(() => {
+		if (activeModelId) {
+			const cached = modelsStore.getModelProps(activeModelId);
+			if (!cached) {
+				modelsStore.fetchModelProps(activeModelId).then(() => {
+					modelPropsVersion++;
+				});
+			}
+		}
+	});
+
+	// Derive modalities from active model (works for both MODEL and ROUTER mode)
+	let hasAudioModality = $derived.by(() => {
+		if (activeModelId) {
+			void modelPropsVersion; // Trigger reactivity on props fetch
+			return modelsStore.modelSupportsAudio(activeModelId);
+		}
+
+		return false;
+	});
+
+	let hasVisionModality = $derived.by(() => {
+		if (activeModelId) {
+			void modelPropsVersion; // Trigger reactivity on props fetch
+			return modelsStore.modelSupportsVision(activeModelId);
+		}
+
+		return false;
+	});
+
+	function checkModelSelected(): boolean {
+		if (!hasModelSelected) {
+			// Open the model selector
+			chatFormActionsRef?.openModelSelector();
+			return false;
+		}
+
+		return true;
+	}
+
 	function getAcceptStringForFileType(fileType: FileTypeCategory): string {
 		switch (fileType) {
 			case FileTypeCategory.IMAGE:
 				return [...Object.values(FileExtensionImage), ...Object.values(MimeTypeImage)].join(',');
+
 			case FileTypeCategory.AUDIO:
 				return [...Object.values(FileExtensionAudio), ...Object.values(MimeTypeAudio)].join(',');
+
 			case FileTypeCategory.PDF:
 				return [...Object.values(FileExtensionPdf), ...Object.values(MimeTypeApplication)].join(
 					','
 				);
+
 			case FileTypeCategory.TEXT:
 				return [...Object.values(FileExtensionText), MimeTypeText.PLAIN].join(',');
+
 			default:
 				return '';
 		}
@@ -102,6 +187,9 @@
 			event.preventDefault();
 
 			if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
+
+			// Check if model is selected first
+			if (!checkModelSelected()) return;
 
 			const messageToSend = message.trim();
 			const filesToSend = [...uploadedFiles];
@@ -131,6 +219,7 @@
 		if (files.length > 0) {
 			event.preventDefault();
 			onFileUpload?.(files);
+
 			return;
 		}
 
@@ -154,6 +243,7 @@
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
 			console.warn('Audio recording not supported');
+
 			return;
 		}
 
@@ -186,6 +276,9 @@
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
 		if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
+
+		// Check if model is selected first
+		if (!checkModelSelected()) return;
 
 		const messageToSend = message.trim();
 		const filesToSend = [...uploadedFiles];
@@ -225,12 +318,16 @@
 <ChatFormFileInputInvisible
 	bind:this={fileInputRef}
 	bind:accept={fileAcceptString}
+	{hasAudioModality}
+	{hasVisionModality}
 	onFileSelect={handleFileSelect}
 />
 
 <form
 	onsubmit={handleSubmit}
-	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {className}"
+	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {disabled
+		? 'cursor-not-allowed opacity-60'
+		: ''} {className}"
 >
 	<ChatAttachmentsList
 		bind:uploadedFiles
@@ -238,6 +335,7 @@
 		limitToSingleRow
 		class="py-5"
 		style="scroll-padding: 1rem;"
+		activeModelId={activeModelId ?? undefined}
 	/>
 
 	<div
@@ -252,10 +350,13 @@
 		/>
 
 		<ChatFormActions
+			bind:this={chatFormActionsRef}
 			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
+			hasText={message.trim().length > 0}
 			{disabled}
 			{isLoading}
 			{isRecording}
+			{uploadedFiles}
 			onFileUpload={handleFileUpload}
 			onMicClick={handleMicClick}
 			onStop={handleStop}

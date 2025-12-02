@@ -4,9 +4,7 @@
 		ChatAttachmentThumbnailFile,
 		DialogChatAttachmentPreview
 	} from '$lib/components/app';
-	import { FileTypeCategory } from '$lib/enums/files';
-	import { getFileTypeCategory } from '$lib/utils/file-type';
-	import type { ChatAttachmentDisplayItem, ChatAttachmentPreviewItem } from '$lib/types/chat';
+	import { getAttachmentDisplayItems } from '$lib/utils';
 
 	interface Props {
 		uploadedFiles?: ChatUploadedFile[];
@@ -16,6 +14,7 @@
 		imageHeight?: string;
 		imageWidth?: string;
 		imageClass?: string;
+		activeModelId?: string;
 	}
 
 	let {
@@ -25,88 +24,16 @@
 		onFileRemove,
 		imageHeight = 'h-24',
 		imageWidth = 'w-auto',
-		imageClass = ''
+		imageClass = '',
+		activeModelId
 	}: Props = $props();
 
 	let previewDialogOpen = $state(false);
 	let previewItem = $state<ChatAttachmentPreviewItem | null>(null);
 
-	let displayItems = $derived(getDisplayItems());
+	let displayItems = $derived(getAttachmentDisplayItems({ uploadedFiles, attachments }));
 	let imageItems = $derived(displayItems.filter((item) => item.isImage));
 	let fileItems = $derived(displayItems.filter((item) => !item.isImage));
-
-	function getDisplayItems(): ChatAttachmentDisplayItem[] {
-		const items: ChatAttachmentDisplayItem[] = [];
-
-		for (const file of uploadedFiles) {
-			items.push({
-				id: file.id,
-				name: file.name,
-				size: file.size,
-				preview: file.preview,
-				type: file.type,
-				isImage: getFileTypeCategory(file.type) === FileTypeCategory.IMAGE,
-				uploadedFile: file,
-				textContent: file.textContent
-			});
-		}
-
-		for (const [index, attachment] of attachments.entries()) {
-			if (attachment.type === 'imageFile') {
-				items.push({
-					id: `attachment-${index}`,
-					name: attachment.name,
-					preview: attachment.base64Url,
-					type: 'image',
-					isImage: true,
-					attachment,
-					attachmentIndex: index
-				});
-			} else if (attachment.type === 'textFile') {
-				items.push({
-					id: `attachment-${index}`,
-					name: attachment.name,
-					type: 'text',
-					isImage: false,
-					attachment,
-					attachmentIndex: index,
-					textContent: attachment.content
-				});
-			} else if (attachment.type === 'context') {
-				// Legacy format from old webui - treat as text file
-				items.push({
-					id: `attachment-${index}`,
-					name: attachment.name,
-					type: 'text',
-					isImage: false,
-					attachment,
-					attachmentIndex: index,
-					textContent: attachment.content
-				});
-			} else if (attachment.type === 'audioFile') {
-				items.push({
-					id: `attachment-${index}`,
-					name: attachment.name,
-					type: attachment.mimeType || 'audio',
-					isImage: false,
-					attachment,
-					attachmentIndex: index
-				});
-			} else if (attachment.type === 'pdfFile') {
-				items.push({
-					id: `attachment-${index}`,
-					name: attachment.name,
-					type: 'application/pdf',
-					isImage: false,
-					attachment,
-					attachmentIndex: index,
-					textContent: attachment.content
-				});
-			}
-		}
-
-		return items.reverse();
-	}
 
 	function openPreview(item: (typeof displayItems)[0], event?: Event) {
 		if (event) {
@@ -119,7 +46,6 @@
 			attachment: item.attachment,
 			preview: item.preview,
 			name: item.name,
-			type: item.type,
 			size: item.size,
 			textContent: item.textContent
 		};
@@ -138,12 +64,13 @@
 							class="cursor-pointer"
 							id={item.id}
 							name={item.name}
-							type={item.type}
 							size={item.size}
 							{readonly}
 							onRemove={onFileRemove}
 							textContent={item.textContent}
-							onClick={(event) => openPreview(item, event)}
+							attachment={item.attachment}
+							uploadedFile={item.uploadedFile}
+							onClick={(event?: MouseEvent) => openPreview(item, event)}
 						/>
 					{/each}
 				</div>
@@ -183,8 +110,8 @@
 		attachment={previewItem.attachment}
 		preview={previewItem.preview}
 		name={previewItem.name}
-		type={previewItem.type}
 		size={previewItem.size}
 		textContent={previewItem.textContent}
+		{activeModelId}
 	/>
 {/if}

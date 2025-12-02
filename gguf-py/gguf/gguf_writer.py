@@ -904,6 +904,9 @@ class GGUFWriter:
     def add_attn_temperature_length(self, value: int) -> None:
         self.add_uint32(Keys.Attention.TEMPERATURE_LENGTH.format(arch=self.arch), value)
 
+    def add_attn_temperature_scale(self, value: float) -> None:
+        self.add_float32(Keys.Attention.TEMPERATURE_SCALE.format(arch=self.arch), value)
+
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
 
