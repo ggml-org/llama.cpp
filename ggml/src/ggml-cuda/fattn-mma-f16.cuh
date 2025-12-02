@@ -5,39 +5,37 @@
 
 using namespace ggml_cuda_mma;
 
-// Config options for specific head sizes.
+// Config options for the MMA kernel.
 // Should not affect results, only speed/register pressure/shared memory use.
-//
-// nbatch_fa:      number of KV rows per softmax rescaling of KQ rowsums and VKQ accumulators.
-// nwarps_max:     maximum number of warps per CUDA block, up to 8 warps in total can run per SM (given enough shared memory).
-// Q_in_reg:       whether the Q values should be kept permanently in registers.
-// nstages_target: targeted number of pipeline stages for cp_async (if available), 0 means synchronous data loading.
-// nbatch_K2:      number of K half2 values in direction of DKQ to load in parallel.
-// nbatch_V2:      number of V half2 values in direction of DV to load in parallel.
-// nbatch_combine: number of VKQ half2 values in direction of DV to combine in parallel.
+struct fattn_mma_config {
+    int  nthreads;       // Number of threads per CUDA block.
+    int  occupancy;      // Targeted occupancy for the MMA kernel.
+    int  nbatch_fa;      // Number of KV rows per softmax rescaling of KQ rowsums and VKQ accumulators.
+    int  nbatch_K2;      // Number of K half2 values in direction of DKQ to load in parallel.
+    int  nbatch_V2;      // Number of V half2 values in direction of DV to load in parallel.
+    int  nbatch_combine; // Number of VKQ half2 values in direction of DV to combine in parallel.
+    int  nstages_target; // Number of pipeline stages to use ideally, 1 == always load data synchronously, 2 == preload data if there is hardware support.
+    bool Q_in_reg;       // Whether the Q values should be kept permanently in registers.
 
-// The ROCm compiler cannot handle templating in __launch_bounds__.
-// As a workaround, define a macro to package the kernel parameters as uint32_t:
-#define GGML_CUDA_FATTN_MMA_CONFIG_CASE(DKQ_, DV_, ncols_, nthreads, occupancy, nbatch_fa, nbatch_K2, nbatch_V2, nbatch_combine, nstages_target, Q_in_reg) \
-    if (DKQ == (DKQ_) && DV == (DV_) && ncols == (ncols_)) {                                                                                               \
-        static_assert((nthreads)       % 32 == 0 && (nthreads)       <= 512, "bad nthreads");                                                              \
-        static_assert(                              (occupancy)      <=   8, "bad occupancy");                                                             \
-        static_assert((nbatch_fa)      % 32 == 0 && (nbatch_fa)      <= 256, "bad nbatch_fa");                                                             \
-        static_assert((nbatch_K2)      %  4 == 0 && (nbatch_K2)      <= 512, "bad nbatch_K2");                                                             \
-        static_assert((nbatch_V2)      %  4 == 0 && (nbatch_V2)      <= 256, "bad nbatch_V2");                                                             \
-        static_assert((nbatch_combine) %  4 == 0 && (nbatch_combine) <= 128, "bad nbatch_combine");                                                        \
-        static_assert((nstages_target)      >= 1 && (nstages_target) <=   2, "bad nstages_target");                                                        \
-        return ((((nthreads)       / 32) - 1) <<  0) |                                                                                                     \
-               ((((occupancy)      /  1) - 1) <<  4) |                                                                                                     \
-               ((((nbatch_fa)      / 32) - 1) <<  7) |                                                                                                     \
-               ((((nbatch_K2)      /  8) - 1) << 10) |                                                                                                     \
-               ((((nbatch_V2)      /  8) - 1) << 17) |                                                                                                     \
-               ((((nbatch_combine) /  8) - 1) << 23) |                                                                                                     \
-               ((((nstages_target) /  1) - 1) << 28) |                                                                                                     \
-               (((Q_in_reg) ? 1 : 0)          << 29);                                                                                                      \
-    }                                                                                                                                                      \
+    constexpr __host__ __device__ fattn_mma_config(
+            int nthreads, int occupancy, int nbatch_fa, int nbatch_K2, int nbatch_V2, int nbatch_combine, int nstages_target, bool Q_in_reg) :
+        nthreads(nthreads), occupancy(occupancy), nbatch_fa(nbatch_fa), nbatch_K2(nbatch_K2), nbatch_V2(nbatch_V2), nbatch_combine(nbatch_combine),
+        nstages_target(nstages_target), Q_in_reg(Q_in_reg) {}
+};
 
-static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_mma_get_config_ampere(const int DKQ, const int DV, const int ncols) {
+#define GGML_CUDA_FATTN_MMA_CONFIG_CASE(DKQ_, DV_, ncols_, nthreads_, occupancy_, nbatch_fa_, nbatch_K2_, nbatch_V2_, nbatch_combine_, nstages_target_, Q_in_reg_) \
+    if (DKQ == (DKQ_) && DV == (DV_) && ncols == (ncols_)) {                                                                                                       \
+        static_assert((nthreads_)       % 32 == 0 && (nthreads_)       <= 512, "bad nthreads");                                                                    \
+        static_assert(                               (occupancy_)      <=   8, "bad occupancy");                                                                   \
+        static_assert((nbatch_fa_)      % 32 == 0 && (nbatch_fa_)      <= 256, "bad nbatch_fa");                                                                   \
+        static_assert((nbatch_K2_)      %  4 == 0 && (nbatch_K2_)      <= 512, "bad nbatch_K2");                                                                   \
+        static_assert((nbatch_V2_)      %  4 == 0 && (nbatch_V2_)      <= 256, "bad nbatch_V2");                                                                   \
+        static_assert((nbatch_combine_) %  4 == 0 && (nbatch_combine_) <= 128, "bad nbatch_combine");                                                              \
+        static_assert((nstages_target_)      >= 1 && (nstages_target_) <=   2, "bad nstages_target");                                                              \
+        return fattn_mma_config{(nthreads_), (occupancy_), (nbatch_fa_), (nbatch_K2_), (nbatch_V2_), (nbatch_combine_), (nstages_target_), (Q_in_reg_)};           \
+    }                                                                                                                                                              \
+
+static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_config_ampere(const int DKQ, const int DV, const int ncols) {
     GGML_CUDA_FATTN_MMA_CONFIG_CASE( 64,  64,  8, 128, 2, 128,  32,  32,  32, 2, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE( 64,  64, 16, 128, 2,  64,  32,  32,  32, 2, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE( 64,  64, 32, 128, 2,  64,  32,  32,  32, 2, true);
@@ -73,10 +71,10 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_mma_get_config_amp
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(576, 512, 32, 128, 2,  32, 160, 128, 128, 1, false);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(576, 512, 64, 256, 1,  32, 160, 128, 128, 1, false);
 
-    return 0;
+    return fattn_mma_config(32, 1, 0, 0, 0, 0, 0, false);
 }
 
-static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_mma_get_config_turing(const int DKQ, const int DV, const int ncols) {
+static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_config_turing(const int DKQ, const int DV, const int ncols) {
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256,  8, 128, 2,  64, 128, 128, 128, 2, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 16, 128, 2,  64, 128, 128, 128, 2, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(256, 256, 32, 128, 2,  64, 128, 128,  64, 2, true);
@@ -90,7 +88,7 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_mma_get_config_tur
     return ggml_cuda_fattn_mma_get_config_ampere(DKQ, DV, ncols);
 }
 
-static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_mma_get_config_volta(const int DKQ, const int DV, const int ncols) {
+static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_config_volta(const int DKQ, const int DV, const int ncols) {
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(576, 512,  8,  64, 4,  32, 288, 256,  64, 1, false);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(576, 512, 16,  64, 4,  32, 288, 256,  64, 1, false);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE(576, 512, 32, 128, 2,  32, 160, 128,  64, 1, false);
@@ -100,7 +98,7 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_mma_get_config_vol
     return ggml_cuda_fattn_mma_get_config_ampere(DKQ, DV, ncols);
 }
 
-static __host__ uint32_t ggml_cuda_fattn_mma_get_config(const int DKQ, const int DV, const int ncols, const int cc) {
+static __host__ fattn_mma_config ggml_cuda_fattn_mma_get_config(const int DKQ, const int DV, const int ncols, const int cc) {
     if (ampere_mma_available(cc)) {
         return ggml_cuda_fattn_mma_get_config_ampere(DKQ, DV, ncols);
     }
@@ -111,7 +109,7 @@ static __host__ uint32_t ggml_cuda_fattn_mma_get_config(const int DKQ, const int
     return ggml_cuda_fattn_mma_get_config_volta(DKQ, DV, ncols);
 }
 
-static constexpr __device__ uint32_t ggml_cuda_fattn_mma_get_config(const int DKQ, const int DV, const int ncols) {
+static constexpr __device__ fattn_mma_config ggml_cuda_fattn_mma_get_config(const int DKQ, const int DV, const int ncols) {
 #if defined(AMPERE_MMA_AVAILABLE)
     return ggml_cuda_fattn_mma_get_config_ampere(DKQ, DV, ncols);
 #elif defined(TURING_MMA_AVAILABLE)
@@ -120,72 +118,72 @@ static constexpr __device__ uint32_t ggml_cuda_fattn_mma_get_config(const int DK
     return ggml_cuda_fattn_mma_get_config_volta(DKQ, DV, ncols);
 #else
     GGML_UNUSED_VARS(DKQ, DV, ncols);
-    return 0;
+    return fattn_mma_config(32, 1, 0, 0, 0, 0, 0, false);
 #endif // defined(AMPERE_MMA_AVAILABLE)
 }
 
 static __host__ int ggml_cuda_fattn_mma_get_nthreads(const int DKQ, const int DV, const int ncols, const int cc) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc) >>  0) & ((1 << 4) - 1)) + 1) * 32;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).nthreads;
 }
 
 static constexpr __device__ int ggml_cuda_fattn_mma_get_nthreads(const int DKQ, const int DV, const int ncols) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols)     >>  0) & ((1 << 4) - 1)) + 1) * 32;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).nthreads;
 }
 
 static __host__ int ggml_cuda_fattn_mma_get_occupancy(const int DKQ, const int DV, const int ncols, const int cc) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc) >>  4) & ((1 << 3) - 1)) + 1) * 1;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).occupancy;
 }
 
 static constexpr __device__ int ggml_cuda_fattn_mma_get_occupancy(const int DKQ, const int DV, const int ncols) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols)     >>  4) & ((1 << 3) - 1)) + 1) * 1;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).occupancy;
 }
 
 static __host__ int ggml_cuda_fattn_mma_get_nbatch_fa(const int DKQ, const int DV, const int ncols, const int cc) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc) >>  7) & ((1 << 3) - 1)) + 1) * 32;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).nbatch_fa;
 }
 
 static constexpr __device__ int ggml_cuda_fattn_mma_get_nbatch_fa(const int DKQ, const int DV, const int ncols) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols)     >>  7) & ((1 << 3) - 1)) + 1) * 32;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).nbatch_fa;
 }
 
 static __host__ int ggml_cuda_fattn_mma_get_nbatch_K2(const int DKQ, const int DV, const int ncols, const int cc) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc) >> 10) & ((1 << 7) - 1)) + 1) * 8;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).nbatch_K2;
 }
 
 static constexpr __device__ int ggml_cuda_fattn_mma_get_nbatch_K2(const int DKQ, const int DV, const int ncols) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols)     >> 10) & ((1 << 7) - 1)) + 1) * 8;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).nbatch_K2;
 }
 
 static __host__ int ggml_cuda_fattn_mma_get_nbatch_V2(const int DKQ, const int DV, const int ncols, const int cc) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc) >> 17) & ((1 << 6) - 1)) + 1) * 8;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).nbatch_V2;
 }
 
 static constexpr __device__ int ggml_cuda_fattn_mma_get_nbatch_V2(const int DKQ, const int DV, const int ncols) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols)     >> 17) & ((1 << 6) - 1)) + 1) * 8;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).nbatch_V2;
 }
 
 static __host__ int ggml_cuda_fattn_mma_get_nbatch_combine(const int DKQ, const int DV, const int ncols, const int cc) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc) >> 23) & ((1 << 5) - 1)) + 1) * 8;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).nbatch_combine;
 }
 
 static constexpr __device__ int ggml_cuda_fattn_mma_get_nbatch_combine(const int DKQ, const int DV, const int ncols) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols)     >> 23) & ((1 << 5) - 1)) + 1) * 8;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).nbatch_combine;
 }
 
 static __host__ int ggml_cuda_fattn_mma_get_nstages_target(const int DKQ, const int DV, const int ncols, const int cc) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc) >> 28) & ((1 << 2) - 1)) + 1) * 1;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).nstages_target;
 }
 
 static constexpr __device__ int ggml_cuda_fattn_mma_get_nstages_target(const int DKQ, const int DV, const int ncols) {
-    return (((ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols)     >> 28) & ((1 << 2) - 1)) + 1) * 1;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).nstages_target;
 }
 
 static __host__ bool ggml_cuda_fattn_mma_get_Q_in_reg(const int DKQ, const int DV, const int ncols, const int cc) {
-    return   (ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc) >> 29) & 1;
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols, cc).Q_in_reg;
 }
 
-static constexpr __device__ int ggml_cuda_fattn_mma_get_Q_in_reg(const int DKQ, const int DV, const int ncols) {
-    return   (ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols)     >> 29) & 1;
+static constexpr __device__ bool ggml_cuda_fattn_mma_get_Q_in_reg(const int DKQ, const int DV, const int ncols) {
+    return ggml_cuda_fattn_mma_get_config(DKQ, DV, ncols).Q_in_reg;
 }
 
 // ------------------------------------------------------------------------------------------------------------------
