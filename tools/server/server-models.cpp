@@ -642,26 +642,26 @@ static void res_ok(std::unique_ptr<server_http_res> & res, const json & response
     res->data = safe_json_to_str(response_data);
 }
 
-static void res_error(std::unique_ptr<server_http_res> & res, const json & error_data) {
+static void res_err(std::unique_ptr<server_http_res> & res, const json & error_data) {
     res->status = json_value(error_data, "code", 500);
     res->data = safe_json_to_str({{ "error", error_data }});
 }
 
 static bool router_validate_model(const std::string & name, server_models & models, bool models_autoload, std::unique_ptr<server_http_res> & res) {
     if (name.empty()) {
-        res_error(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
+        res_err(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
     auto meta = models.get_meta(name);
     if (!meta.has_value()) {
-        res_error(res, format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
+        res_err(res, format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
     if (models_autoload) {
         models.ensure_model_loaded(name);
     } else {
         if (meta->status != SERVER_MODEL_STATUS_LOADED) {
-            res_error(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return false;
         }
     }
@@ -761,11 +761,11 @@ void server_models_routes::init_routes() {
         std::string name = json_value(body, "model", std::string());
         auto model = models.get_meta(name);
         if (!model.has_value()) {
-            res_error(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
+            res_err(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
             return res;
         }
         if (model->status == SERVER_MODEL_STATUS_LOADED) {
-            res_error(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         models.load(name, false);
@@ -823,11 +823,11 @@ void server_models_routes::init_routes() {
         std::string name = json_value(body, "model", std::string());
         auto model = models.get_meta(name);
         if (!model.has_value()) {
-            res_error(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         if (model->status != SERVER_MODEL_STATUS_LOADED) {
-            res_error(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         models.unload(name);
