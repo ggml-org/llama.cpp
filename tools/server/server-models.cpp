@@ -24,7 +24,54 @@
 #include <unistd.h>
 #endif
 
+#if defined(__APPLE__) && defined(__MACH__)
+// macOS: use _NSGetExecutablePath to get the executable path
+#include <mach-o/dyld.h>
+#include <limits.h>
+#endif
+
 #define CMD_EXIT "exit"
+
+static std::filesystem::path get_server_exec_path() {
+#if defined(_WIN32)
+    wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
+    DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
+    if (len == 0 || len >= _countof(buf)) {
+        throw std::runtime_error("GetModuleFileNameW failed or path too long");
+    }
+    return std::filesystem::path(buf);
+#elif defined(__APPLE__) && defined(__MACH__)
+    char small_path[PATH_MAX];
+    uint32_t size = sizeof(small_path);
+
+    if (_NSGetExecutablePath(small_path, &size) == 0) {
+        // resolve any symlinks to get absolute path
+        try {
+            return std::filesystem::canonical(std::filesystem::path(small_path));
+        } catch (...) {
+            return std::filesystem::path(small_path);
+        }
+    } else {
+        // buffer was too small, allocate required size and call again
+        std::vector<char> buf(size);
+        if (_NSGetExecutablePath(buf.data(), &size) == 0) {
+            try {
+                return std::filesystem::canonical(std::filesystem::path(buf.data()));
+            } catch (...) {
+                return std::filesystem::path(buf.data());
+            }
+        }
+        throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
+    }
+#else
+    char path[FILENAME_MAX];
+    ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
+    if (count <= 0) {
+        throw std::runtime_error("failed to resolve /proc/self/exe");
+    }
+    return std::filesystem::path(std::string(path, count));
+#endif
+}
 
 struct local_model {
     std::string name;
@@ -98,6 +145,14 @@ server_models::server_models(
     }
     for (char ** env = envp; *env != nullptr; env++) {
         base_env.push_back(std::string(*env));
+    }
+    GGML_ASSERT(!base_args.empty());
+    // set binary path
+    try {
+        base_args[0] = get_server_exec_path().string();
+    } catch (const std::exception & e) {
+        LOG_WRN("failed to get server executable path: %s\n", e.what());
+        LOG_WRN("using original argv[0] as fallback: %s\n", base_args[0].c_str());
     }
     // TODO: allow refreshing cached model list
     // add cached models
@@ -587,26 +642,26 @@ static void res_ok(std::unique_ptr<server_http_res> & res, const json & response
     res->data = safe_json_to_str(response_data);
 }
 
-static void res_error(std::unique_ptr<server_http_res> & res, const json & error_data) {
+static void res_err(std::unique_ptr<server_http_res> & res, const json & error_data) {
     res->status = json_value(error_data, "code", 500);
     res->data = safe_json_to_str({{ "error", error_data }});
 }
 
 static bool router_validate_model(const std::string & name, server_models & models, bool models_autoload, std::unique_ptr<server_http_res> & res) {
     if (name.empty()) {
-        res_error(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
+        res_err(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
     auto meta = models.get_meta(name);
     if (!meta.has_value()) {
-        res_error(res, format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
+        res_err(res, format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
     if (models_autoload) {
         models.ensure_model_loaded(name);
     } else {
         if (meta->status != SERVER_MODEL_STATUS_LOADED) {
-            res_error(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return false;
         }
     }
@@ -706,11 +761,11 @@ void server_models_routes::init_routes() {
         std::string name = json_value(body, "model", std::string());
         auto model = models.get_meta(name);
         if (!model.has_value()) {
-            res_error(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
+            res_err(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
             return res;
         }
         if (model->status == SERVER_MODEL_STATUS_LOADED) {
-            res_error(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         models.load(name, false);
@@ -768,11 +823,11 @@ void server_models_routes::init_routes() {
         std::string name = json_value(body, "model", std::string());
         auto model = models.get_meta(name);
         if (!model.has_value()) {
-            res_error(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         if (model->status != SERVER_MODEL_STATUS_LOADED) {
-            res_error(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         models.unload(name);
