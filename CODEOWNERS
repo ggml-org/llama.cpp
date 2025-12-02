@@ -7,7 +7,7 @@
 /ci/                                    @ggerganov
 /cmake/                                 @ggerganov
 /common/CMakeLists.txt                  @ggerganov
-/common/arg.*                           @ggerganov @ericcurtin
+/common/arg.*                           @ggerganov
 /common/base64.hpp.*                    @ggerganov
 /common/build-info.*                    @ggerganov
 /common/common.*                        @ggerganov
@@ -87,8 +87,7 @@
 /tools/perplexity/                      @ggerganov
 /tools/quantize/                        @ggerganov
 /tools/rpc/                             @rgerganov
-/tools/run/                             @ericcurtin
-/tools/server/*                         @ngxson @ggerganov @ericcurtin # no subdir
+/tools/server/*                         @ngxson @ggerganov # no subdir
 /tools/server/webui/                    @allozaur
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
