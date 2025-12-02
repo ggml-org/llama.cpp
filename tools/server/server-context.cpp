@@ -17,6 +17,7 @@
 #include <cinttypes>
 #include <memory>
 #include <unordered_set>
+#include <filesystem>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -518,6 +519,8 @@ struct server_context_impl {
     // Necessary similarity of prompt for slot selection
     float slot_prompt_similarity = 0.0f;
 
+    std::string model_name; // name of the loaded model, to be used by API
+
     common_chat_templates_ptr chat_templates;
     oaicompat_parser_options  oai_parser_opt;
 
@@ -757,6 +760,18 @@ struct server_context_impl {
             SRV_WRN("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
         SRV_WRN("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
+
+        if (!params_base.model_alias.empty()) {
+            // user explicitly specified model name
+            model_name = params_base.model_alias;
+        } else if (!params_base.model.name.empty()) {
+            // use model name in registry format (for models in cache)
+            model_name = params_base.model.name;
+        } else {
+            // fallback: derive model name from file name
+            auto model_path = std::filesystem::path(params_base.model.path);
+            model_name = model_path.filename().string();
+        }
 
         // thinking is enabled if:
         // 1. It's not explicitly disabled (reasoning_budget == 0)
@@ -2611,7 +2626,7 @@ static std::unique_ptr<server_res_generator> handle_completions_impl(
             // OAI-compat
             task.params.res_type          = res_type;
             task.params.oaicompat_cmpl_id = completion_id;
-            // oaicompat_model is already populated by params_from_json_cmpl
+            task.params.oaicompat_model   = ctx_server.model_name;
 
             tasks.push_back(std::move(task));
         }
@@ -2939,7 +2954,7 @@ void server_routes::init_routes() {
         json data = {
             { "default_generation_settings", default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params_base.n_parallel },
-            { "model_alias",                 ctx_server.params_base.model_alias },
+            { "model_alias",                 ctx_server.model_name },
             { "model_path",                  ctx_server.params_base.model.path },
             { "modalities",                  json {
                 {"vision", ctx_server.oai_parser_opt.allow_image},
@@ -3181,8 +3196,8 @@ void server_routes::init_routes() {
         json models = {
             {"models", {
                 {
-                    {"name", params.model_alias.empty() ? params.model.path : params.model_alias},
-                    {"model", params.model_alias.empty() ? params.model.path : params.model_alias},
+                    {"name", ctx_server.model_name},
+                    {"model", ctx_server.model_name},
                     {"modified_at", ""},
                     {"size", ""},
                     {"digest", ""}, // dummy value, llama.cpp does not support managing model file's hash
@@ -3204,7 +3219,7 @@ void server_routes::init_routes() {
             {"object", "list"},
             {"data", {
                 {
-                    {"id",       params.model_alias.empty() ? params.model.path : params.model_alias},
+                    {"id",       ctx_server.model_name},
                     {"object",   "model"},
                     {"created",  std::time(0)},
                     {"owned_by", "llamacpp"},
@@ -3351,6 +3366,7 @@ void server_routes::init_routes() {
         // write JSON response
         json root = format_response_rerank(
             body,
+            ctx_server.model_name,
             responses,
             is_tei_format,
             documents,
@@ -3613,7 +3629,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 
     // write JSON response
     json root = res_type == TASK_RESPONSE_TYPE_OAI_EMBD
-        ? format_embeddings_response_oaicompat(body, responses, use_base64)
+        ? format_embeddings_response_oaicompat(body, ctx_server.model_name, responses, use_base64)
         : json(responses);
     res->ok(root);
     return res;

@@ -450,9 +450,6 @@ task_params server_task::params_from_json_cmpl(
         }
     }
 
-    std::string model_name = params_base.model_alias.empty() ? DEFAULT_OAICOMPAT_MODEL : params_base.model_alias;
-    params.oaicompat_model = json_value(data, "model", model_name);
-
     return params;
 }
 
