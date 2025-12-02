@@ -151,7 +151,7 @@ __global__ void __launch_bounds__(d_state, 1)
     // for the parallel accumulation
     __shared__ float stateC[splitH * d_state];
 
-#pragma unroll
+#pragma unroll // What I will replace 
     for (int j = 0; j < splitH; j++) {
         state[j] = s0_block[j * d_state + threadIdx.x];
     }
@@ -180,41 +180,73 @@ __global__ void __launch_bounds__(d_state, 1)
 
         __syncthreads();
 
-        // parallel accumulation for stateC
-        // TODO: simplify
+//         // parallel accumulation for stateC  
+//         // TODO: simplify
+//         {
+//             static_assert((d_state & -d_state) == d_state, "the state size has to be a power of 2");
+//             static_assert((splitH & -splitH) == splitH, "splitH has to be a power of 2");
+
+//             // reduce until w matches the warp size
+//             // TODO: does this work even when the physical warp size is 64?
+// #pragma unroll
+//             for (int w = d_state; w > WARP_SIZE; w >>= 1) {
+//                 // (assuming there are d_state threads)
+// #pragma unroll
+//                 for (int j = 0; j < ((w >> 1) * splitH + d_state - 1) / d_state; j++) {
+//                     // TODO: check for bank conflicts
+//                     const int k = (threadIdx.x % (w >> 1)) + (d_state * (threadIdx.x / (w >> 1))) + j * d_state * (d_state / (w >> 1));
+//                     stateC[k] += stateC[k + (w >> 1)];
+
+//                 }
+//                 __syncthreads();
+//             }
+
+//             static_assert(splitH >= d_state / WARP_SIZE);
+
+// #pragma unroll
+//             for (int j = 0; j < splitH / (d_state / WARP_SIZE); j++) {
+//                 float y = stateC[(threadIdx.x % WARP_SIZE) + d_state * (threadIdx.x / WARP_SIZE) + j * d_state * (d_state / WARP_SIZE)];
+//                 y = warp_reduce_sum(y);
+
+//                 // store the above accumulations
+//                 if (threadIdx.x % WARP_SIZE == 0) {
+//                     const int k = threadIdx.x / WARP_SIZE + j * (d_state / WARP_SIZE);
+//                     y_block[i * stride_y + k] = y;
+//                 }
+//             }
+//         }
+        // parallel accumulation for stateC using warp shuffles
         {
-            static_assert((d_state & -d_state) == d_state, "the state size has to be a power of 2");
-            static_assert((splitH & -splitH) == splitH, "splitH has to be a power of 2");
+            constexpr int num_warps = d_state / WARP_SIZE;  // 128/32 = 4 warps
+            __shared__ float warp_sums[splitH][num_warps];  // 16 rows × 4 warp partial sums
 
-            // reduce until w matches the warp size
-            // TODO: does this work even when the physical warp size is 64?
+            const int warp_id = threadIdx.x / WARP_SIZE;    // which warp (0-3)
+            const int lane_id = threadIdx.x % WARP_SIZE;    // position within warp (0-31)
+
+            // Step 1: Each thread grabs its value from each row, reduces within warp
 #pragma unroll
-            for (int w = d_state; w > WARP_SIZE; w >>= 1) {
-                // (assuming there are d_state threads)
-#pragma unroll
-                for (int j = 0; j < ((w >> 1) * splitH + d_state - 1) / d_state; j++) {
-                    // TODO: check for bank conflicts
-                    const int k = (threadIdx.x % (w >> 1)) + (d_state * (threadIdx.x / (w >> 1))) + j * d_state * (d_state / (w >> 1));
-                    stateC[k] += stateC[k + (w >> 1)];
-
-                }
-                __syncthreads();
-            }
-
-            static_assert(splitH >= d_state / WARP_SIZE);
-
-#pragma unroll
-            for (int j = 0; j < splitH / (d_state / WARP_SIZE); j++) {
-                float y = stateC[(threadIdx.x % WARP_SIZE) + d_state * (threadIdx.x / WARP_SIZE) + j * d_state * (d_state / WARP_SIZE)];
-                y = warp_reduce_sum(y);
-
-                // store the above accumulations
-                if (threadIdx.x % WARP_SIZE == 0) {
-                    const int k = threadIdx.x / WARP_SIZE + j * (d_state / WARP_SIZE);
-                    y_block[i * stride_y + k] = y;
+            for (int j = 0; j < splitH; j++) {
+                float val = stateC[j * d_state + threadIdx.x];  // thread's value in row j
+                val = warp_reduce_sum(val);                      // sum within warp
+                if (lane_id == 0) {
+                    warp_sums[j][warp_id] = val;                 // lane 0 stores warp's sum
                 }
             }
-        }
+
+            __syncthreads();
+
+            // Step 2: First warp reduces the 4 warp sums for each row
+            if (warp_id == 0) {
+#pragma unroll
+                for (int j = 0; j < splitH; j++) {
+                    float val = (lane_id < num_warps) ? warp_sums[j][lane_id] : 0.0f;
+                    val = warp_reduce_sum(val);
+                    if (lane_id == 0) {
+                        y_block[i * stride_y + j] = val;         // final output
+                    }
+                }
+            }
+        } // end 
     }
 
     // write back the state
