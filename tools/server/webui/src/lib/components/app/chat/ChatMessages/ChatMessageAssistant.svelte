@@ -1,29 +1,26 @@
 <script lang="ts">
-	import { ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
-	import { fade } from 'svelte/transition';
 	import {
-		Check,
-		Copy,
-		Package,
-		X,
-		Gauge,
-		Clock,
-		WholeWord,
-		ChartNoAxesColumn,
-		Wrench
-	} from '@lucide/svelte';
+		ModelBadge,
+		ChatMessageActions,
+		ChatMessageStatistics,
+		ChatMessageThinkingBlock,
+		CopyToClipboardIcon,
+		MarkdownContent,
+		ModelsSelector
+	} from '$lib/components/app';
+	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
+	import { isLoading } from '$lib/stores/chat.svelte';
+	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
+	import { fade } from 'svelte/transition';
+	import { Check, X, Wrench } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
-	import ChatMessageActions from './ChatMessageActions.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { modelName as serverModelName } from '$lib/stores/server.svelte';
-	import { copyToClipboard } from '$lib/utils/copy';
-	import type { ApiChatCompletionToolCall } from '$lib/types/api';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { isRouterMode } from '$lib/stores/server.svelte';
 
 	interface Props {
 		class?: string;
@@ -46,7 +43,7 @@
 		onEditKeydown?: (event: KeyboardEvent) => void;
 		onEditedContentChange?: (content: string) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
-		onRegenerate: () => void;
+		onRegenerate: (modelOverride?: string) => void;
 		onSaveEdit?: () => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
 		onShouldBranchAfterEditChange?: (value: boolean) => void;
@@ -93,15 +90,18 @@
 
 	const processingState = useProcessingState();
 	let currentConfig = $derived(config());
-	let serverModel = $derived(serverModelName());
+	let isRouter = $derived(isRouterMode());
 	let displayedModel = $derived((): string | null => {
-		if (!currentConfig.showModelInfo) return null;
-
 		if (message.model) {
 			return message.model;
 		}
 
-		return serverModel;
+		return null;
+	});
+
+	const { handleModelChange } = useModelChangeValidation({
+		getRequiredModalities: () => conversationsStore.getModalitiesUpToMessage(message.id),
+		onSuccess: (modelName) => onRegenerate(modelName)
 	});
 
 	function handleCopyModel() {
@@ -244,21 +244,24 @@
 
 	<div class="info my-6 grid gap-4">
 		{#if displayedModel()}
-			<span class="inline-flex items-center gap-2 text-xs text-muted-foreground">
-				<span class="inline-flex items-center gap-1">
-					<Package class="h-3.5 w-3.5" />
+			<span class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+				{#if isRouter}
+					<ModelsSelector
+						currentModel={displayedModel()}
+						onModelChange={handleModelChange}
+						disabled={isLoading()}
+						upToMessageId={message.id}
+					/>
+				{:else}
+					<ModelBadge model={displayedModel() || undefined} onclick={handleCopyModel} />
+				{/if}
 
-					<span>Model used:</span>
-				</span>
-
-				<button
-					class="inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-					onclick={handleCopyModel}
-				>
-					{displayedModel()}
-
-					<Copy class="ml-1 h-3 w-3 " />
-				</button>
+				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
+					<ChatMessageStatistics
+						predictedTokens={message.timings.predicted_n}
+						predictedMs={message.timings.predicted_ms}
+					/>
+				{/if}
 			</span>
 		{/if}
 
@@ -282,8 +285,10 @@
 								onclick={() => handleCopyToolCall(badge.copyValue)}
 							>
 								{badge.label}
-
-								<Copy class="ml-1 h-3 w-3" />
+								<CopyToClipboardIcon
+									text={badge.copyValue}
+									ariaLabel={`Copy tool call ${badge.label}`}
+								/>
 							</button>
 						{/each}
 					{:else if fallbackToolCalls}
@@ -295,44 +300,11 @@
 							onclick={() => handleCopyToolCall(fallbackToolCalls)}
 						>
 							{fallbackToolCalls}
-
-							<Copy class="ml-1 h-3 w-3" />
+							<CopyToClipboardIcon text={fallbackToolCalls} ariaLabel="Copy tool call payload" />
 						</button>
 					{/if}
 				</span>
 			{/if}
-		{/if}
-
-		{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
-			{@const tokensPerSecond = (message.timings.predicted_n / message.timings.predicted_ms) * 1000}
-			<span class="inline-flex items-center gap-2 text-xs text-muted-foreground">
-				<span class="inline-flex items-center gap-1">
-					<ChartNoAxesColumn class="h-3.5 w-3.5" />
-
-					<span>Statistics:</span>
-				</span>
-
-				<div class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-					<span
-						class="inline-flex items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-					>
-						<Gauge class="h-3 w-3" />
-						{tokensPerSecond.toFixed(2)} tokens/s
-					</span>
-					<span
-						class="inline-flex items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-					>
-						<WholeWord class="h-3 w-3" />
-						{message.timings.predicted_n} tokens
-					</span>
-					<span
-						class="inline-flex items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-					>
-						<Clock class="h-3 w-3" />
-						{(message.timings.predicted_ms / 1000).toFixed(2)}s
-					</span>
-				</div>
-			</span>
 		{/if}
 	</div>
 
