@@ -1651,7 +1651,7 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libcurl4-openssl-dev wget ccache
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -1701,6 +1701,7 @@ jobs:
         run: |
           cmake -B build \
             -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_EXAMPLES=ON \
@@ -1747,7 +1748,7 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libcurl4-openssl-dev wget ccache
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -1839,7 +1840,7 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libcurl4-openssl-dev wget ccache
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -1911,7 +1912,7 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libcurl4-openssl-dev wget ccache
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -1952,6 +1953,7 @@ jobs:
         run: |
           cmake -B build \
             -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_EXAMPLES=ON \
