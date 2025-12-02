@@ -1642,7 +1642,7 @@ jobs:
          run: |
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
-  ubuntu-cpu-cmake-rv64-native:
+  ubuntu-cpu-cmake-riscv64-native:
     runs-on: RISCV64
 
     steps:
