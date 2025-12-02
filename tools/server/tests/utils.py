@@ -95,6 +95,7 @@ class ServerProcess:
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
+    media_path: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -217,6 +218,8 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
+        if self.media_path:
+            server_args.extend(["--media-path", self.media_path])
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")

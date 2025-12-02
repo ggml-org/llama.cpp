@@ -11,6 +11,7 @@
 
 #include <random>
 #include <sstream>
+#include <fstream>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -774,6 +775,65 @@ json oaicompat_completion_params_parse(const json & body) {
     return llama_params;
 }
 
+// media_path always end with '/', see arg.cpp
+static void handle_media(
+        std::vector<raw_buffer> & out_files,
+        json & media_obj,
+        const std::string & media_path) {
+    std::string url = json_value(media_obj, "url", std::string());
+    if (string_starts_with(url, "http")) {
+        // download remote image
+        // TODO @ngxson : maybe make these params configurable
+        common_remote_params params;
+        params.headers.push_back("User-Agent: llama.cpp/" + build_info);
+        params.max_size = 1024 * 1024 * 10; // 10MB
+        params.timeout  = 10; // seconds
+        SRV_INF("downloading image from '%s'\n", url.c_str());
+        auto res = common_remote_get_content(url, params);
+        if (200 <= res.first && res.first < 300) {
+            SRV_INF("downloaded %ld bytes\n", res.second.size());
+            raw_buffer data;
+            data.insert(data.end(), res.second.begin(), res.second.end());
+            out_files.push_back(data);
+        } else {
+            throw std::runtime_error("Failed to download image");
+        }
+
+    } else if (string_starts_with(url, "file://")) {
+        if (media_path.empty()) {
+            throw std::invalid_argument("file:// URLs are not allowed unless --media-path is specified");
+        }
+        // load local image file
+        std::string file_path = url.substr(7); // remove "file://"
+        raw_buffer data;
+        if (!fs_validate_filename(file_path, true)) {
+            throw std::invalid_argument("file path is not allowed: " + file_path);
+        }
+        SRV_INF("loading image from local file '%s'\n", (media_path + file_path).c_str());
+        std::ifstream file(media_path + file_path, std::ios::binary);
+        if (!file) {
+            throw std::invalid_argument("file does not exist or cannot be opened: " + file_path);
+        }
+        data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        out_files.push_back(data);
+
+    } else {
+        // try to decode base64 image
+        std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
+        if (parts.size() != 2) {
+            throw std::runtime_error("Invalid url value");
+        } else if (!string_starts_with(parts[0], "data:image/")) {
+            throw std::runtime_error("Invalid url format: " + parts[0]);
+        } else if (!string_ends_with(parts[0], "base64")) {
+            throw std::runtime_error("url must be base64 encoded");
+        } else {
+            auto base64_data = parts[1];
+            auto decoded_data = base64_decode(base64_data);
+            out_files.push_back(decoded_data);
+        }
+    }
+}
+
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
@@ -860,41 +920,8 @@ json oaicompat_chat_params_parse(
                     throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
-                json image_url  = json_value(p, "image_url", json::object());
-                std::string url = json_value(image_url, "url", std::string());
-                if (string_starts_with(url, "http")) {
-                    // download remote image
-                    // TODO @ngxson : maybe make these params configurable
-                    common_remote_params params;
-                    params.headers.push_back("User-Agent: llama.cpp/" + build_info);
-                    params.max_size = 1024 * 1024 * 10; // 10MB
-                    params.timeout  = 10; // seconds
-                    SRV_INF("downloading image from '%s'\n", url.c_str());
-                    auto res = common_remote_get_content(url, params);
-                    if (200 <= res.first && res.first < 300) {
-                        SRV_INF("downloaded %ld bytes\n", res.second.size());
-                        raw_buffer data;
-                        data.insert(data.end(), res.second.begin(), res.second.end());
-                        out_files.push_back(data);
-                    } else {
-                        throw std::runtime_error("Failed to download image");
-                    }
-
-                } else {
-                    // try to decode base64 image
-                    std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
-                    if (parts.size() != 2) {
-                        throw std::invalid_argument("Invalid image_url.url value");
-                    } else if (!string_starts_with(parts[0], "data:image/")) {
-                        throw std::invalid_argument("Invalid image_url.url format: " + parts[0]);
-                    } else if (!string_ends_with(parts[0], "base64")) {
-                        throw std::invalid_argument("image_url.url must be base64 encoded");
-                    } else {
-                        auto base64_data = parts[1];
-                        auto decoded_data = base64_decode(base64_data);
-                        out_files.push_back(decoded_data);
-                    }
-                }
+                json image_url = json_value(p, "image_url", json::object());
+                handle_media(out_files, image_url, opt.media_path);
 
                 // replace this chunk with a marker
                 p["type"] = "text";
@@ -915,6 +942,8 @@ json oaicompat_chat_params_parse(
                 }
                 auto decoded_data = base64_decode(data); // expected to be base64 encoded
                 out_files.push_back(decoded_data);
+
+                // TODO: add audio_url support by reusing handle_media()
 
                 // replace this chunk with a marker
                 p["type"] = "text";

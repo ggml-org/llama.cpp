@@ -694,7 +694,7 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
 
 // Validate if a filename is safe to use
 // To validate a full path, split the path by the OS-specific path separator, and validate each part with this function
-bool fs_validate_filename(const std::string & filename) {
+bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     if (!filename.length()) {
         // Empty filename invalid
         return false;
@@ -754,8 +754,12 @@ bool fs_validate_filename(const std::string & filename) {
             || (c >= 0xD800 && c <= 0xDFFF) // UTF-16 surrogate pairs
             || c == 0xFFFD // Replacement Character (UTF-8)
             || c == 0xFEFF // Byte Order Mark (BOM)
-            || c == '/' || c == '\\' || c == ':' || c == '*' // Illegal characters
+            || c == ':' || c == '*' // Illegal characters
             || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+            return false;
+        }
+        if (!allow_subdirs && (c == '/' || c == '\\')) {
+            // Subdirectories not allowed, reject path separators
             return false;
         }
     }
@@ -857,6 +861,11 @@ bool fs_create_directory_with_parents(const std::string & path) {
 
     return true;
 #endif // _WIN32
+}
+
+bool fs_is_directory(const std::string & path) {
+    std::filesystem::path dir(path);
+    return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
 }
 
 std::string fs_get_cache_directory() {
