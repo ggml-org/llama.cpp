@@ -1595,14 +1595,12 @@ static void llama_sampler_temp_free(struct llama_sampler * smpl) {
     delete (llama_sampler_temp *) smpl->ctx;
 }
 
-static void llama_sampler_temp_backend_apply(
-        struct llama_sampler      * smpl,
+static void temp_sampling(
         struct ggml_context       * ctx,
         struct ggml_cgraph        * gf,
-        struct llama_sampler_data * data) {
-    auto * ctx_data = (llama_sampler_temp *) smpl->ctx;
-
-    if (ctx_data->temp <= 0.0f) {
+        struct llama_sampler_data * data,
+        float                       temp) {
+    if (temp <= 0.0f) {
         // Find the most probable token index.
         struct ggml_tensor * max_idx = ggml_argmax(ctx, data->logits);
         ggml_set_name(max_idx, "temp_max_idx");
@@ -1612,7 +1610,7 @@ static void llama_sampler_temp_backend_apply(
         return;
     }
 
-    struct ggml_tensor * scaled = ggml_scale(ctx, data->logits, 1.0f / ctx_data->temp);
+    struct ggml_tensor * scaled = ggml_scale(ctx, data->logits, 1.0f / temp);
     ggml_set_name(scaled, "temp_scaled");
 
     // Make sure the scaled tensor is contiguous for subsequent operations
@@ -1620,6 +1618,15 @@ static void llama_sampler_temp_backend_apply(
     ggml_set_name(data->logits, "temp_scaled_logits");
 
     ggml_build_forward_expand(gf, data->logits);
+}
+
+static void llama_sampler_temp_backend_apply(
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
+    auto * ctx_data = (llama_sampler_temp *) smpl->ctx;
+    temp_sampling(ctx, gf, data, ctx_data->temp);
 }
 
 static struct llama_sampler_i llama_sampler_temp_i = {
@@ -1742,7 +1749,6 @@ static void llama_sampler_temp_ext_free(struct llama_sampler * smpl) {
     delete (llama_sampler_temp_ext *) smpl->ctx;
 }
 
-// TODO: deduplicate with llama_sampler_temp_backend_apply
 static void llama_sampler_temp_ext_backend_apply(
         struct llama_sampler      * smpl,
         struct ggml_context       * ctx,
@@ -1750,21 +1756,60 @@ static void llama_sampler_temp_ext_backend_apply(
         struct llama_sampler_data * data) {
     auto * ctx_data = (llama_sampler_temp_ext *) smpl->ctx;
 
-    // TODO: implement
-    GGML_ASSERT(ctx_data->delta <= 0.0f && "not implemented");
-
-    if (ctx_data->temp <= 0.0f) {
-        // TODO: this is incorrect - find the most probable token instead
+    // Revert to standard temperature scaling if delta or temp are non-positive.
+    if (ctx_data->delta <= 0.0f || ctx_data->temp <= 0.0f) {
+        temp_sampling(ctx, gf, data, ctx_data->temp);
         return;
     }
 
-    struct ggml_tensor * scaled = ggml_scale(ctx, data->logits, 1.0f / ctx_data->temp);
-    ggml_set_name(scaled, "temp_scaled");
+    // Calculate min_temp, max_temp, and max_entropy.
+    const float min_temp    = std::max(0.0f, ctx_data->temp - ctx_data->delta);
+    const float max_temp    = ctx_data->temp + ctx_data->delta;
+    const float max_entropy = logf(data->logits->ne[0]);
 
-    // Make sure the scaled tensor is contiguous for subsequent operations
-    data->logits = ggml_cont(ctx, scaled);
-    ggml_set_name(data->logits, "temp_scaled_logits");
+    // Calculate the probabilities.
+    struct ggml_tensor * probs = ggml_soft_max(ctx, data->logits);
+    ggml_set_name(probs, "temp_ext_softmax_probs");
 
+    // Clamp probabilities to avoid log(0) which would give -inf
+    struct ggml_tensor * probs_clamped = ggml_clamp(ctx, probs, 1e-10f, 1.0f);
+    ggml_set_name(probs_clamped, "temp_ext_probs_clamped");
+
+    // Calculate the entropy, entropy = -Σ(p * log(p)).
+    struct ggml_tensor * log_probs   = ggml_log(ctx, probs_clamped);
+    struct ggml_tensor * p_log_p     = ggml_mul(ctx, probs_clamped, log_probs);
+    struct ggml_tensor * sum_p_log_p = ggml_sum(ctx, p_log_p);
+    struct ggml_tensor * entropy     = ggml_scale(ctx, sum_p_log_p, -1.0f);
+    ggml_set_name(log_probs,   "temp_ext_log_probs");
+    ggml_set_name(p_log_p,     "temp_ext_p_log_p");
+    ggml_set_name(sum_p_log_p, "temp_ext_sum_p_log_p");
+    ggml_set_name(entropy,     "temp_ext_entropy");
+
+    // Normalize the entropy, norm_entropy = entropy / max_entropy
+    struct ggml_tensor * norm_entropy = ggml_scale(ctx, entropy, 1.0f / max_entropy);
+    ggml_set_name(norm_entropy, "temp_ext_norm_entropy");
+
+    // Calculate the dynamic temperature:
+    // dyn_temp = min_temp + (max_temp - min_temp) * powf(normalized_entropy, exponent);
+    //
+    // Calculate powf(normalized_entropy, exponent) as
+    // norm_entropy^exponent = exp(exponent * log(norm_entropy))
+    struct ggml_tensor * log_norm_entropy = ggml_log(ctx, norm_entropy);
+    struct ggml_tensor * scaled_log       = ggml_scale(ctx, log_norm_entropy, ctx_data->exponent);
+    struct ggml_tensor * pow_entropy      = ggml_exp(ctx, scaled_log);
+    // With pow_entropy computed we can now compute dyn_temp, scaling by
+    // (max_temp - min_temp) and then adding min_temp.
+    struct ggml_tensor * dyn_temp         = ggml_scale_bias(ctx, pow_entropy, max_temp - min_temp, min_temp);
+    ggml_set_name(log_norm_entropy, "temp_ext_log_norm_entropy");
+    ggml_set_name(scaled_log,       "temp_ext_scaled_log");
+    ggml_set_name(pow_entropy,      "temp_ext_pow_entropy");
+    ggml_set_name(dyn_temp,         "temp_ext_dyn_temp");
+
+    // Scale the logits by the dynamic temperature
+    struct ggml_tensor * scaled_logits = ggml_div(ctx, data->logits, dyn_temp);
+    ggml_set_name(scaled_logits, "temp_ext_scaled_logits");
+
+    data->logits = scaled_logits;
     ggml_build_forward_expand(gf, data->logits);
 }
 
@@ -1777,7 +1822,7 @@ static struct llama_sampler_i llama_sampler_temp_ext_i = {
     /* .free              = */ llama_sampler_temp_ext_free,
     /* .backend_init      = */ nullptr,
     /* .backend_accept    = */ nullptr,
-    /* .backend_apply     = */ nullptr,
+    /* .backend_apply     = */ llama_sampler_temp_ext_backend_apply,
     /* .backend_set_input = */ nullptr,
 };
 
@@ -1796,12 +1841,6 @@ struct llama_sampler * llama_sampler_init_temp_ext(float temp, float delta, floa
             /* .exponent = */ exponent,
         }
     );
-
-    const bool is_backend = delta <= 0.0f;
-
-    if (is_backend) {
-        res->iface->backend_apply = llama_sampler_temp_ext_backend_apply;
-    }
 
     return res;
 }

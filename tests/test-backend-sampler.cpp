@@ -472,6 +472,86 @@ static void test_backend_temp_sampling(const char * model_path) {
 
 }
 
+static void test_backend_temp_ext_sampling(const char * model_path) {
+    test_model_context test_ctx;
+
+    {
+        int seq_id = 0;
+        const float temp = 0.8f;
+        const float delta = 0.5f;
+        const float exponent = 1.5f;
+        struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
+        struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
+        llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_temp_ext(temp, delta, exponent));
+
+        std::vector<llama_sampler_seq_config> backend_sampler_configs = {
+            { seq_id, backend_sampler_chain },
+        };
+
+        if (!test_ctx.setup(model_path, backend_sampler_configs)) {
+            return;
+        }
+
+        if (!test_ctx.decode({{seq_id, "Once upon a"}})) {
+            GGML_ASSERT(false && "Failed to decode token");
+        }
+
+        // Verify sequence 0
+        {
+            int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
+            int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+            GGML_ASSERT(n_logits == test_ctx.n_vocab);
+        }
+    }
+
+    test_ctx.reset();
+
+    // lambda to testing non-positive temp/delta/exponent values.
+    auto test_argmax_temp = [&](float temp, float delta, float exponent) {
+        printf("\nTesting temperature = %.1f, delta = %1.f, exponent = %1.f\n", temp, delta, exponent);
+
+        test_ctx.reset();
+
+        int seq_id = 0;
+        struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
+        struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
+        llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_temp_ext(temp, delta, exponent));
+
+        std::vector<llama_sampler_seq_config> backend_sampler_configs = {
+            { seq_id, backend_sampler_chain },
+        };
+
+        if (!test_ctx.setup(model_path, backend_sampler_configs)) {
+            return;
+        }
+
+        if (!test_ctx.decode({{seq_id, "Once"}})) {
+            GGML_ASSERT(false && "Failed to decode token");
+        }
+
+        int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
+
+        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
+
+        if (temp <= 0.0f) {
+            GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
+            GGML_ASSERT(llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx) == nullptr);
+            GGML_ASSERT(llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx) == 0);
+        } else {
+            GGML_ASSERT(token == LLAMA_TOKEN_NULL);
+            int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+            GGML_ASSERT(n_logits == test_ctx.n_vocab);
+        }
+    };
+
+    test_argmax_temp(0.0f,  0.3f, 1.0f); // Greedy (temp=0)
+    test_argmax_temp(-1.0f, 0.3f, 2.0f); // Greedy (temp<0)
+    test_argmax_temp(0.8f,  0.0f, 2.0f); // Temperature scaling (should have scaled logits)
+
+    printf("backend temp_ext sampling test PASSED\n");
+
+}
+
 static void test_backend_min_p_sampling(const char * model_path) {
     test_model_context test_ctx;
 
@@ -1030,6 +1110,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "greedy",          test_backend_greedy_sampling,         true  },
     { "logit_bias",      test_backend_logit_bias_sampling,     true  },
     { "temp",            test_backend_temp_sampling,           true  },
+    { "temp_ext",        test_backend_temp_ext_sampling,       true  },
     { "top_k",           test_backend_top_k_sampling,          true  },
     { "multi_sequence",  test_backend_multi_sequence_sampling, true  },
     { "dist",            test_backend_dist_sampling,           true  },
