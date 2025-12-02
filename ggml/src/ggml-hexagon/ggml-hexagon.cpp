@@ -9,6 +9,7 @@
 #include <chrono>
 #include <mutex>
 #include <string>
+#include <stdexcept>
 
 #ifdef _WIN32
 #    include <sal.h>
@@ -211,11 +212,14 @@ static inline void hex_format_op_names(char * str, const struct ggml_tensor * t)
 // ** backend sessions
 
 struct ggml_hexagon_session {
-    ggml_hexagon_session(int dev_id) noexcept(false);
+    ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false);
     ~ggml_hexagon_session() noexcept(true);
 
     void allocate(int dev_id) noexcept(false);
     void release() noexcept(true);
+
+    void enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync = false);
+    void flush();
 
     ggml_backend_buffer_type buffer_type;
     ggml_backend_buffer_type repack_buffer_type;
@@ -237,15 +241,54 @@ struct ggml_hexagon_session {
     uint32_t         prof_pkts;
 };
 
-// Packet callback
-static void htp_packet_callback(dspqueue_t queue, AEEResult error, void * context) {
-    auto sess = static_cast<ggml_hexagon_session *>(context);
+static inline void hex_print_op_info(const ggml_tensor * op, ggml_hexagon_session * sess, const uint32_t req_flags) {
+    char dims[64 * GGML_MAX_SRC];
+    char strides[64 * GGML_MAX_SRC];
+    char types[16 * GGML_MAX_SRC];
+    char buffs[64 * GGML_MAX_SRC];
+    char names[64 * GGML_MAX_SRC];
+
+    hex_format_op_dims(dims, op);
+    hex_format_op_strides(strides, op);
+    hex_format_op_types(types, op);
+    hex_format_op_buffs(buffs, op);
+    hex_format_op_names(names, op);
+
+    HEX_VERBOSE("ggml-hex: %s %s: %s : %s : %s : %s : %s: flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
+                names, dims, types, strides, buffs, req_flags);
+}
+
+void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync) {
+    // Bump pending flag (cleared in the session::flush once we get the responce)
+    this->op_pending++;  // atomic inc
+
+    int err = dspqueue_write(this->queue,
+                             0,                       // flags - the framework will autoset this
+                             n_bufs,                  // number of buffers
+                             bufs,                    // buffer references
+                             sizeof(req),
+                             (const uint8_t *) &req,  // Message
+                             1000000                  // Timeout
+    );
+
+    if (err != 0) {
+        GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", this->name.c_str(), (unsigned) err);
+    }
+
+    if (sync) {
+        flush();
+    }
+}
+
+// Flush HTP response queue i.e wait for all outstanding requests to complete
+void ggml_hexagon_session::flush() {
+    dspqueue_t q = this->queue;
 
     // Repeatedly read packets from the queue until it's empty. We don't
     // necessarily get a separate callback for each packet, and new packets
     // may arrive while we're processing the previous one.
 
-    while (1) {
+    while (this->op_pending) {
         struct htp_general_rsp rsp;
         uint32_t               rsp_size;
         uint32_t               flags;
@@ -253,22 +296,23 @@ static void htp_packet_callback(dspqueue_t queue, AEEResult error, void * contex
         struct dspqueue_buffer bufs[HTP_MAX_PACKET_BUFFERS];
         uint32_t               n_bufs;
 
-        // Read packet from queue
-        int err = dspqueue_read_noblock(queue, &flags,
-                                        HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
-                                        &n_bufs,                 // Number of buffer references
-                                        bufs,                    // Buffer references
-                                        sizeof(rsp),             // Max message length
-                                        &rsp_size,               // Message length
-                                        (uint8_t *) &rsp);
+        // Read response packet from queue
+        int err = dspqueue_read(q, &flags,
+                                   HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
+                                   &n_bufs,                 // Number of buffer references
+                                   bufs,                    // Buffer references
+                                   sizeof(rsp),             // Max message length
+                                   &rsp_size,               // Message length
+                                   (uint8_t *) &rsp,
+                                   1000000);                // Timeout
 
-        if (err == AEE_EWOULDBLOCK) {
-            // Consumed all packets available for now
-            return;
+        if (err == AEE_EEXPIRED) {
+            // TODO: might need to bail out if the HTP is stuck on something
+            continue;
         }
 
         if (err != 0) {
-            GGML_ABORT("ggml-hex: dspqueue_read_noblock failed: 0x%08x\n", (unsigned) err);
+            GGML_ABORT("ggml-hex: dspqueue_read failed: 0x%08x\n", (unsigned) err);
         }
 
         // Basic sanity checks
@@ -281,19 +325,13 @@ static void htp_packet_callback(dspqueue_t queue, AEEResult error, void * contex
             // TODO: handle errors
         }
 
-        // FIXME: update profiling implementation
-        sess->prof_usecs  = rsp.prof_usecs;
-        sess->prof_cycles = rsp.prof_cycles;
-        sess->prof_pkts   = rsp.prof_pkts;
+        // TODO: update profiling implementation, currently only works for opt_opsync mode
+        this->prof_usecs  = rsp.prof_usecs;
+        this->prof_cycles = rsp.prof_cycles;
+        this->prof_pkts   = rsp.prof_pkts;
 
-        sess->op_pending--;  // atomic dec
+        this->op_pending--;  // atomic dec
     }
-}
-
-// Error callback - simply terminates with an error. Used where we don't
-// expect errors.
-[[noreturn]] static void htp_error_callback(dspqueue_t queue, AEEResult error, void * context) {
-    GGML_ABORT("ggml-hex: dspcall general error 0x%x: for queue %p\n", error, (void *) queue);
 }
 
 // ** backend buffers
@@ -347,7 +385,13 @@ struct ggml_backend_hexagon_buffer_context {
     ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool repack) {
         size += 4 * 1024;  // extra page for padding
 
-        this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        if (rpcmem_alloc2) {
+            this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        } else {
+            GGML_LOG_INFO("ggml-hex: %s rpcmem_alloc2 not found, falling back to rpcmem_alloc\n", sess->name.c_str());
+            this->base = (uint8_t *) rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+        }
+
         if (!this->base) {
             GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer : size %zu\n", sess->name.c_str(), size);
             throw std::runtime_error("ggml-hex: rpcmem_alloc failed (see log for details)");
@@ -656,6 +700,15 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to read more data than is available in the source buffer 'data'
+    // or write more than the tensor can hold.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -667,13 +720,33 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     init_row_q4x4x2((block_q4_0 *) buf_pd, t->ne[0]);  // init padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) data + (i * row_size);
         uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         repack_row_q4x4x2((uint8_t *) buf_rp, (const block_q4_0 *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
+
+        // re-init the row because we are potentially copying a partial row
+        init_row_q4x4x2((block_q4_0 *) buf_pd, t->ne[0]);
+
+        // Copy only the remaining bytes from the source.
+        memcpy(buf_pd, src, n_rem_bytes);
+
+        // Repack the entire buffer
+        repack_row_q4x4x2((uint8_t *) buf_rp, (const block_q4_0 *) buf_pd, t->ne[0]);
+
+        // Write only the corresponding remaining bytes to the destination tensor.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -688,6 +761,14 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q4_0x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to copy more data than the tensor actually contains.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -699,13 +780,28 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
 
     memset(buf_pd, 0, row_size_pd);  // clear-out padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
         uint8_t *       dst = (uint8_t *) data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         unpack_row_q4x4x2((block_q4_0 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) data + (i * row_size);
+
+        // We still need to read and unpack the entire source row because quantization is block-based.
+        memcpy(buf_pd, src, row_size);
+        unpack_row_q4x4x2((block_q4_0 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
+
+        // But we only copy the remaining number of bytes to the destination.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -930,6 +1026,15 @@ static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) 
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q8_0x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to read more data than is available in the source buffer 'data'
+    // or write more than the tensor can hold.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -941,13 +1046,33 @@ static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     init_row_q8x4x2((block_q8_0 *) buf_pd, t->ne[0]);  // init padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) data + (i * row_size);
         uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         repack_row_q8x4x2((uint8_t *) buf_rp, (const block_q8_0 *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
+
+        // re-init the row because we are potentially copying a partial row
+        init_row_q8x4x2((block_q8_0 *) buf_pd, t->ne[0]);
+
+        // Copy only the remaining bytes from the source.
+        memcpy(buf_pd, src, n_rem_bytes);
+
+        // Repack the entire buffer
+        repack_row_q8x4x2((uint8_t *) buf_rp, (const block_q8_0 *) buf_pd, t->ne[0]);
+
+        // Write only the corresponding remaining bytes to the destination tensor.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -962,6 +1087,14 @@ static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) 
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_Q8_0x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to copy more data than the tensor actually contains.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -973,13 +1106,28 @@ static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) 
 
     memset(buf_pd, 0, row_size_pd);  // clear-out padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
         uint8_t *       dst = (uint8_t *) data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         unpack_row_q8x4x2((block_q8_0 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) data + (i * row_size);
+
+        // We still need to read and unpack the entire source row because quantization is block-based.
+        memcpy(buf_pd, src, row_size);
+        unpack_row_q8x4x2((block_q8_0 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
+
+        // But we only copy the remaining number of bytes to the destination.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -1229,6 +1377,15 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to read more data than is available in the source buffer 'data'
+    // or write more than the tensor can hold.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -1240,13 +1397,33 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
 
     init_row_mxfp4x4x2((block_mxfp4 *) buf_pd, t->ne[0]);  // init padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) data + (i * row_size);
         uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         repack_row_mxfp4x4x2((uint8_t *) buf_rp, (const block_mxfp4 *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
+
+        // re-init the row because we are potentially copying a partial row
+        init_row_mxfp4x4x2((block_mxfp4 *) buf_pd, t->ne[0]);
+
+        // Copy only the remaining bytes from the source.
+        memcpy(buf_pd, src, n_rem_bytes);
+
+        // Repack the entire buffer (partial data + zero padding).
+        repack_row_mxfp4x4x2((uint8_t *) buf_rp, (const block_mxfp4 *) buf_pd, t->ne[0]);
+
+        // Write only the corresponding remaining bytes to the destination tensor.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -1261,6 +1438,14 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
     size_t row_size_pd = ggml_row_size(t->type, hex_round_up(t->ne[0], QK_MXFP4x4x2));  // extra elements for the pad
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
+    // Ensure we don't try to copy more data than the tensor actually contains.
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
+
+    // Calculate how many full rows and how many remaining bytes we need to process.
+    const int64_t n_full_rows = n_bytes_to_copy / row_size;
+    const size_t  n_rem_bytes = n_bytes_to_copy % row_size;
+
     void * buf_pd = ggml_aligned_malloc(row_size_pd);
     GGML_ASSERT(buf_pd != NULL);
 
@@ -1272,13 +1457,28 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
 
     memset(buf_pd, 0, row_size_pd);  // clear-out padded buffer to make sure the tail is all zeros
 
-    for (int64_t i = 0; i < nrows; i++) {
+    // 1. Process all the full rows
+    for (int64_t i = 0; i < n_full_rows; i++) {
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
         uint8_t *       dst = (uint8_t *) data + (i * row_size);
 
         memcpy(buf_pd, src, row_size);
         unpack_row_mxfp4x4x2((block_mxfp4 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
         memcpy(dst, buf_rp, row_size);
+    }
+
+    // 2. Process the final, potentially partial, row
+    if (n_rem_bytes > 0) {
+        const int64_t i = n_full_rows;
+        const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
+        uint8_t *       dst = (uint8_t *) data + (i * row_size);
+
+        // We still need to read and unpack the entire source row because the format is block-based.
+        memcpy(buf_pd, src, row_size);
+        unpack_row_mxfp4x4x2((block_mxfp4 *) buf_rp, (const uint8_t *) buf_pd, t->ne[0]);
+
+        // But we only copy the remaining number of bytes to the destination to respect the size limit.
+        memcpy(dst, buf_rp, n_rem_bytes);
     }
 
     ggml_aligned_free(buf_pd, row_size_pd);
@@ -1299,19 +1499,19 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q4_0_q4x4x2(tensor, data, size);
             break;
 
         case GGML_TYPE_Q8_0:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q8_0_q8x4x2(tensor, data, size);
             break;
 
         case GGML_TYPE_MXFP4:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_mxfp4_mxfp4x4x2(tensor, data, size);
             break;
 
@@ -1335,19 +1535,19 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q4x4x2_q4_0(data, tensor, size);
             break;
 
         case GGML_TYPE_Q8_0:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_q8x4x2_q8_0(data, tensor, size);
             break;
 
         case GGML_TYPE_MXFP4:
             GGML_ASSERT(offset == 0);
-            GGML_ASSERT(size == ggml_nbytes(tensor));
+            GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
             repack_mxfp4x4x2_mxfp4(data, tensor, size);
             break;
 
@@ -1503,12 +1703,13 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     }
 
     // Get session URI
-    char htp_uri[256];
-    sprintf(htp_uri, "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0", opt_arch);
 
     char session_uri[256];
     {
-        struct remote_rpc_get_uri u;
+        char htp_uri[256];
+        snprintf(htp_uri, sizeof(htp_uri), "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0", opt_arch);
+
+        struct remote_rpc_get_uri u = {};
         u.session_id      = this->session_id;
         u.domain_name     = const_cast<char *>(CDSP_DOMAIN_NAME);
         u.domain_name_len = strlen(CDSP_DOMAIN_NAME);
@@ -1519,8 +1720,12 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
         int err = remote_session_control(FASTRPC_GET_URI, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
-            GGML_LOG_ERROR("ggml-hex: failed to get URI for session %d : error 0x%x\n", dev_id, err);
-            throw std::runtime_error("ggml-hex: remote_session_control(get-uri) failed (see log for details)");
+            // fallback to single session uris
+            int htp_URI_domain_len = strlen(htp_uri) + MAX_DOMAIN_NAMELEN;
+
+            snprintf(session_uri, htp_URI_domain_len, "%s%s", htp_uri, my_domain->uri);
+
+            GGML_LOG_WARN("ggml-hex: failed to get URI for session %d : error 0x%x. Falling back to single session URI: %s\n", dev_id, err, session_uri);
         }
     }
 
@@ -1564,7 +1769,8 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
                           0,              // Flags
                           128 * 1024,     // Request  queue size (in bytes)
                           64 * 1024,      // Response queue size (in bytes)
-                          htp_packet_callback, htp_error_callback,
+                          nullptr,        // Read packet callback (we handle reads explicitly)
+                          nullptr,        // Error callback (we handle errors during reads)
                           (void *) this,  // Callback context
                           &queue);
     if (err != 0) {
@@ -1631,9 +1837,12 @@ void ggml_hexagon_session::release() noexcept(true) {
     }
 }
 
-ggml_hexagon_session::ggml_hexagon_session(int dev_id) noexcept(false) {
+ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false) {
     buffer_type.context        = nullptr;
     repack_buffer_type.context = nullptr;
+
+    buffer_type.device         = dev;
+    repack_buffer_type.device  = dev;
 
     try {
         allocate(dev_id);
@@ -1721,6 +1930,15 @@ static bool hex_supported_dims(const struct ggml_tensor * x, const struct ggml_t
     return true;
 }
 
+template <typename... _TTensor>
+static inline bool hex_supported_buffer(const struct ggml_hexagon_session * sess, _TTensor... tensors) {
+    return ([&]() -> bool {
+        return !tensors || !tensors->buffer ||
+               (ggml_backend_buffer_is_hexagon(tensors->buffer) &&
+                ggml_backend_hexagon_buffer_get_sess(tensors->buffer) == sess);
+    }() && ...);
+}
+
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -1768,16 +1986,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     }
 
     // src0 & src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0, src1, dst)) {
         return false;
     }
 
@@ -1825,20 +2034,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
 
     // src0 (weights) must be repacked and mapped to the same session
     // src1 & sr2 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (src2->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src2->buffer) || ggml_backend_hexagon_buffer_get_sess(src2->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0, src1, src2, dst)) {
         return false;
     }
 
@@ -1872,16 +2068,7 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0, src1, dst)) {
         return false;
     }
 
@@ -1913,20 +2100,7 @@ static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * se
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (src2->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src2->buffer) || ggml_backend_hexagon_buffer_get_sess(src2->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0, src1, src2, dst)) {
         return false;
     }
 
@@ -1953,12 +2127,7 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
     }
 
     // src0 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0, dst)) {
         return false;
     }
 
@@ -1995,16 +2164,7 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1 && src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0, src1, dst)) {
         return false;
     }
 
@@ -2057,16 +2217,7 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1 && src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0, src1, dst)) {
         return false;
     }
 
@@ -2078,7 +2229,7 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
 
     int mode = op_params[2];
 
-    if ((mode & GGML_ROPE_TYPE_NEOX) || (mode & GGML_ROPE_TYPE_MROPE) || (mode & GGML_ROPE_TYPE_VISION)) {
+    if ((mode & GGML_ROPE_TYPE_MROPE) || (mode & GGML_ROPE_TYPE_VISION)) {
         return false;
     }
     if (mode & 1) {
@@ -2121,20 +2272,7 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     }
 
     // src0, src1, src2 & dst must be mapped to the same session
-    if (src0->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src0->buffer) || ggml_backend_hexagon_buffer_get_sess(src0->buffer) != sess)) {
-        return false;
-    }
-    if (src1->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src1->buffer) || ggml_backend_hexagon_buffer_get_sess(src1->buffer) != sess)) {
-        return false;
-    }
-    if (src2 && src2->buffer &&
-        (!ggml_backend_buffer_is_hexagon(src2->buffer) || ggml_backend_hexagon_buffer_get_sess(src2->buffer) != sess)) {
-        return false;
-    }
-    if (dst->buffer &&
-        (!ggml_backend_buffer_is_hexagon(dst->buffer) || ggml_backend_hexagon_buffer_get_sess(dst->buffer) != sess)) {
+    if (!hex_supported_buffer(sess, src0, src1, src2, dst)) {
         return false;
     }
 
@@ -2155,6 +2293,26 @@ static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t) {
     h->nb[3] = t->nb[3];
 }
 
+static size_t dspqueue_buffers_init(dspqueue_buffer * buf, const ggml_tensor * t, bool flush_host, bool flush_htp) {
+    if (!t) {
+        return 0;
+    }
+
+    memset(buf, 0, sizeof(*buf));
+    auto tensor_buf = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
+    buf->fd      = tensor_buf->fd;
+    buf->ptr     = t->data;
+    buf->offset  = (uint8_t *) t->data - tensor_buf->base;
+    buf->size    = ggml_nbytes(t);
+    buf->flags   = (flush_host ? DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER : 0);        // Flush CPU
+    buf->flags |= (flush_htp ? DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT : 0);  // Invalidate DSP
+    return 1;
+}
+
+static ggml_hexagon_session * get_session_from_tensor(const ggml_tensor * t) {
+    return static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context)->sess;
+}
+
 static void hex_dump_dspbuf(const struct ggml_tensor * t, const dspqueue_buffer * d) {
     auto buf  = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
     auto sess = buf->sess;
@@ -2168,10 +2326,6 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
-
-    auto src0_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src0->buffer->context);
-    auto src1_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src1->buffer->context);
-    auto dst_buf  = static_cast<ggml_backend_hexagon_buffer_context *>(dst->buffer->context);
 
     uint64_t t1, t2;
     t1 = ggml_time_us();
@@ -2194,56 +2348,27 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     }
 
     dspqueue_buffer bufs[3];
-    memset(bufs, 0, sizeof(bufs));
 
     // First buffer Weights.
     // The content is static, there is no need to do any cache management
-    bufs[0].fd     = src0_buf->fd;
-    bufs[0].ptr    = src0->data;
-    bufs[0].offset = (uint8_t *) src0->data - src0_buf->base;
-    bufs[0].size   = ggml_nbytes(src0);
-    bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_REF;
+    dspqueue_buffers_init(bufs, src0, false, false);
 
     // Second buffer Input Activations. This is a buffer that the CPU
     // writes and the DSP reads, so we'll need to flush CPU caches and
     // invalidate DSP ones. On platforms with I/O coherency support the
     // framework will automatically skip cache operations where possible.
-    bufs[1].fd     = src1_buf->fd;
-    bufs[1].ptr    = src1->data;
-    bufs[1].offset = (uint8_t *) src1->data - src1_buf->base;
-    bufs[1].size   = ggml_nbytes(src1);
-    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
+    dspqueue_buffers_init(&bufs[1], src1, true, true);
 
     // Third buffer Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    bufs[2].fd     = dst_buf->fd;
-    bufs[2].ptr    = dst->data;
-    bufs[2].offset = (uint8_t *) dst->data - dst_buf->base;
-    bufs[2].size   = ggml_nbytes(dst);
-    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    dspqueue_buffers_init(&bufs[2], dst, true, false);
 
-    // Primary DSP session from the src0 (normally weight) tensor
-    auto sess = src0_buf->sess;
+    auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[64 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s: %s : %s : %s : %s : %s: flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
-                    names, dims, types, strides, buffs, req.flags);
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             hex_dump_dspbuf(src1, &bufs[1]);
@@ -2252,27 +2377,7 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 3,                       // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000                  // Timeout
-        );
-
-        if (err != 0) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, 3, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2292,11 +2397,6 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
-
-    auto src0_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src0->buffer->context);
-    auto src1_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src1->buffer->context);
-    auto src2_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src2->buffer->context);
-    auto dst_buf  = static_cast<ggml_backend_hexagon_buffer_context *>(dst->buffer->context);
 
     uint64_t t1, t2;
     t1 = ggml_time_us();
@@ -2320,68 +2420,32 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     }
 
     dspqueue_buffer bufs[4];
-    memset(bufs, 0, sizeof(bufs));
-
     // First buffer Weights.
     // The content is static, there is no need to do any cache management
-    bufs[0].fd     = src0_buf->fd;
-    bufs[0].ptr    = src0->data;
-    bufs[0].offset = (uint8_t *) src0->data - src0_buf->base;
-    bufs[0].size   = ggml_nbytes(src0);
-    bufs[0].flags  = DSPQUEUE_BUFFER_FLAG_REF;
+    dspqueue_buffers_init(bufs, src0, false, false);
 
     // Second buffer Input Activations. This is a buffer that the CPU
     // writes and the DSP reads, so we'll need to flush CPU caches and
     // invalidate DSP ones. On platforms with I/O coherency support the
     // framework will automatically skip cache operations where possible.
-    bufs[1].fd     = src1_buf->fd;
-    bufs[1].ptr    = src1->data;
-    bufs[1].offset = (uint8_t *) src1->data - src1_buf->base;
-    bufs[1].size   = ggml_nbytes(src1);
-    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
+    dspqueue_buffers_init(&bufs[1], src1, true, true);
 
     // Third buffer expert IDs. This is a buffer that the CPU
     // writes and the DSP reads, so we'll need to flush CPU caches and
     // invalidate DSP ones. On platforms with I/O coherency support the
     // framework will automatically skip cache operations where possible.
-    bufs[2].fd     = src2_buf->fd;
-    bufs[2].ptr    = src2->data;
-    bufs[2].offset = (uint8_t *) src2->data - src2_buf->base;
-    bufs[2].size   = ggml_nbytes(src2);
-    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
+    dspqueue_buffers_init(&bufs[2], src2, true, true);
 
     // Forth buffer Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    bufs[3].fd     = dst_buf->fd;
-    bufs[3].ptr    = dst->data;
-    bufs[3].offset = (uint8_t *) dst->data - dst_buf->base;
-    bufs[3].size   = ggml_nbytes(dst);
-    bufs[3].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    dspqueue_buffers_init(&bufs[3], dst, true, false);
 
-    // Primary DSP session from the src0 (normally weight) tensor
-    auto sess = src0_buf->sess;
+    auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[64 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s: %s : %s : %s : %s : %s: flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
-                    names, dims, types, strides, buffs, req.flags);
-
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             hex_dump_dspbuf(src1, &bufs[1]);
@@ -2391,27 +2455,7 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 4,                       // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000                  // Timeout
-        );
-
-        if (err != 0) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, 4, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2432,10 +2476,6 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     const struct ggml_tensor * src0 = node->src[0];
     const struct ggml_tensor * src1 = node->src[1];
     const struct ggml_tensor * dst  = node;
-
-    auto src0_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src0->buffer->context);
-    auto src1_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src1->buffer->context);
-    auto dst_buf  = static_cast<ggml_backend_hexagon_buffer_context *>(dst->buffer->context);
 
     uint64_t t1 = 0;
     uint64_t t2 = 0;
@@ -2473,62 +2513,30 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     init_htp_tensor(&req.dst, dst);
 
     dspqueue_buffer bufs[3];
-    memset(bufs, 0, sizeof(bufs));
-
     // First buffer = First Operand of Binary op
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    bufs[0].fd     = src0_buf->fd;
-    bufs[0].ptr    = src0->data;
-    bufs[0].offset = (uint8_t *) src0->data - src0_buf->base;
-    bufs[0].size   = ggml_nbytes(src0);
-    bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP;
+    dspqueue_buffers_init(bufs, src0, true, true);
 
     // Second buffer = Second Operand of Binary op
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    bufs[1].fd     = src1_buf->fd;
-    bufs[1].ptr    = src1->data;
-    bufs[1].offset = (uint8_t *) src1->data - src1_buf->base;
-    bufs[1].size   = ggml_nbytes(src1);
-    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
+    dspqueue_buffers_init(&bufs[1], src1, true, true);
 
     // Third buffer = Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    bufs[2].fd     = dst_buf->fd;
-    bufs[2].ptr    = dst->data;
-    bufs[2].offset = (uint8_t *) dst->data - dst_buf->base;
-    bufs[2].size   = ggml_nbytes(dst);
-    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    dspqueue_buffers_init(&bufs[2], dst, true, false);
 
-    // Primary DSP session from the src0 tensor
-    ggml_hexagon_session * sess = src0_buf->sess;
+    auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[16 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s : %s : %s : %s : %s : %s : flags 0x%x\n", sess->name.c_str(),
-                    ggml_op_name(node->op), names, dims, types, strides, buffs, req.flags);
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             hex_dump_dspbuf(src1, &bufs[1]);
@@ -2537,26 +2545,7 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 3,                       // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000);                // Timeout
-
-        if (0 != err) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, 3, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2577,11 +2566,6 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     const struct ggml_tensor * src1 = node->src[1];
     const struct ggml_tensor * src2 = node->src[2];
     const struct ggml_tensor * dst  = node;
-
-    auto src0_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src0->buffer->context);
-    auto src1_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src1->buffer->context);
-    auto src2_buf = static_cast<ggml_backend_hexagon_buffer_context *>(src2->buffer->context);
-    auto dst_buf  = static_cast<ggml_backend_hexagon_buffer_context *>(dst->buffer->context);
 
     uint64_t t1 = 0;
     uint64_t t2 = 0;
@@ -2614,61 +2598,19 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     init_htp_tensor(&req.dst, dst);
 
     dspqueue_buffer bufs[4];
-    memset(bufs, 0, sizeof(bufs));
-
     // First buffer = input activations
-    bufs[0].fd     = src0_buf->fd;
-    bufs[0].ptr    = src0->data;
-    bufs[0].offset = (uint8_t *) src0->data - src0_buf->base;
-    bufs[0].size   = ggml_nbytes(src0);
-    bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP;
-
+    dspqueue_buffers_init(bufs, src0, true, true);
     // Second buffer = experts bias
-    bufs[1].fd     = src1_buf->fd;
-    bufs[1].ptr    = src1->data;
-    bufs[1].offset = (uint8_t *) src1->data - src1_buf->base;
-    bufs[1].size   = ggml_nbytes(src1);
-    bufs[1].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
-
+    dspqueue_buffers_init(&bufs[1], src1, true, true);
     // Third buffer = activated experts
-    bufs[2].fd     = src2_buf->fd;
-    bufs[2].ptr    = src2->data;
-    bufs[2].offset = (uint8_t *) src2->data - src2_buf->base;
-    bufs[2].size   = ggml_nbytes(src2);
-    bufs[2].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                     DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
-
+    dspqueue_buffers_init(&bufs[2], src2, true, true);
     // Forth buffer = output activations
-    bufs[3].fd     = dst_buf->fd;
-    bufs[3].ptr    = dst->data;
-    bufs[3].offset = (uint8_t *) dst->data - dst_buf->base;
-    bufs[3].size   = ggml_nbytes(dst);
-    bufs[3].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
+    dspqueue_buffers_init(&bufs[3], dst, true, true);
 
-    // Primary DSP session from the src0 tensor
-    ggml_hexagon_session * sess = src0_buf->sess;
+    auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[16 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s : %s : %s : %s : %s : %s : flags 0x%x\n", sess->name.c_str(),
-                    ggml_op_name(node->op), names, dims, types, strides, buffs, req.flags);
-
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             hex_dump_dspbuf(src1, &bufs[1]);
@@ -2678,26 +2620,7 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 4,                       // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000);                // Timeout
-
-        if (0 != err) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, 4, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2781,73 +2704,33 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     dspqueue_buffer bufs[3];
-    int             n_bufs = 0;
-
-    memset(bufs, 0, sizeof(bufs));
 
     // First buffer = Only Operand of Unary op
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    auto src0_buf       = static_cast<ggml_backend_hexagon_buffer_context *>(src0->buffer->context);
-    bufs[n_bufs].fd     = src0_buf->fd;
-    bufs[n_bufs].ptr    = src0->data;
-    bufs[n_bufs].offset = (uint8_t *) src0->data - src0_buf->base;
-    bufs[n_bufs].size   = ggml_nbytes(src0);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                          DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP;
-    ++n_bufs;
+    size_t n_bufs = dspqueue_buffers_init(bufs, src0, true, true);
 
-    if (src1) {
-        // Second buffer = Second Operand of Binary op
-        // This is a buffer that the CPU writes and the DSP reads, so we'll
-        // need to flush CPU caches and invalidate DSP ones. On platforms
-        // with I/O coherency support the framework will automatically skip
-        // cache operations where possible.
-        auto src1_buf       = static_cast<ggml_backend_hexagon_buffer_context *>(src1->buffer->context);
-        bufs[n_bufs].fd     = src1_buf->fd;
-        bufs[n_bufs].ptr    = src1->data;
-        bufs[n_bufs].offset = (uint8_t *) src1->data - src1_buf->base;
-        bufs[n_bufs].size   = ggml_nbytes(src1);
-        bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                              DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                              DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
-        ++n_bufs;
-    }
+    // Second buffer(nullable) = Second Operand of Binary op
+    // This is a buffer that the CPU writes and the DSP reads, so we'll
+    // need to flush CPU caches and invalidate DSP ones. On platforms
+    // with I/O coherency support the framework will automatically skip
+    // cache operations where possible.
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src1, true, true);
 
     // Second or third buffer = Output Activations. We'll handle DSP
     // Second buffer = Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    auto dst_buf        = static_cast<ggml_backend_hexagon_buffer_context *>(dst->buffer->context);
-    bufs[n_bufs].fd     = dst_buf->fd;
-    bufs[n_bufs].ptr    = dst->data;
-    bufs[n_bufs].offset = (uint8_t *) dst->data - dst_buf->base;
-    bufs[n_bufs].size   = ggml_nbytes(dst);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
-    ++n_bufs;
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], dst, true, false);
 
     // Primary DSP session from the src0 tensor
-    ggml_hexagon_session * sess = src0_buf->sess;
+    auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[64 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s : %s : %s : %s : %s : %s : flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
-                    names, dims, types, strides, buffs, req.flags);
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             if (src1) {
@@ -2860,26 +2743,7 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 n_bufs,                  // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000);                // Timeout
-
-        if (0 != err) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, n_bufs, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -2939,88 +2803,40 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     dspqueue_buffer bufs[4];
-    int             n_bufs = 0;
-
-    memset(bufs, 0, sizeof(bufs));
 
     // First buffer
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    auto src0_buf       = static_cast<ggml_backend_hexagon_buffer_context *>(src0->buffer->context);
-    bufs[n_bufs].fd     = src0_buf->fd;
-    bufs[n_bufs].ptr    = src0->data;
-    bufs[n_bufs].offset = (uint8_t *) src0->data - src0_buf->base;
-    bufs[n_bufs].size   = ggml_nbytes(src0);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                          DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP;
-    ++n_bufs;
+    size_t n_bufs = dspqueue_buffers_init(bufs, src0, true, true);
 
     // Second buffer
     // This is a buffer that the CPU writes and the DSP reads, so we'll
     // need to flush CPU caches and invalidate DSP ones. On platforms
     // with I/O coherency support the framework will automatically skip
     // cache operations where possible.
-    auto src1_buf       = static_cast<ggml_backend_hexagon_buffer_context *>(src1->buffer->context);
-    bufs[n_bufs].fd     = src1_buf->fd;
-    bufs[n_bufs].ptr    = src1->data;
-    bufs[n_bufs].offset = (uint8_t *) src1->data - src1_buf->base;
-    bufs[n_bufs].size   = ggml_nbytes(src1);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                          DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
-    ++n_bufs;
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src1, true, true);
 
-    if (src2) {
-        // Third buffer
-        // This is a buffer that the CPU writes and the DSP reads, so we'll
-        // need to flush CPU caches and invalidate DSP ones. On platforms
-        // with I/O coherency support the framework will automatically skip
-        // cache operations where possible.
-        auto src2_buf       = static_cast<ggml_backend_hexagon_buffer_context *>(src2->buffer->context);
-        bufs[n_bufs].fd     = src2_buf->fd;
-        bufs[n_bufs].ptr    = src2->data;
-        bufs[n_bufs].offset = (uint8_t *) src2->data - src2_buf->base;
-        bufs[n_bufs].size   = ggml_nbytes(src2);
-        bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF |                   // Take a reference
-                              DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush CPU
-                              DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate DSP
-        ++n_bufs;
-    }
+    // Third buffer(nullable)
+    // This is a buffer that the CPU writes and the DSP reads, so we'll
+    // need to flush CPU caches and invalidate DSP ones. On platforms
+    // with I/O coherency support the framework will automatically skip
+    // cache operations where possible.
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src2, true, true);
 
     // Final buffer = Output Activations. We'll handle DSP
     // Second buffer = Output Activations. We'll handle DSP
     // cache maintenance in the response message but need to flush
     // CPU caches to ensure any previously written dirty lines are
     // written out before writes from the DSP start.
-    auto dst_buf        = static_cast<ggml_backend_hexagon_buffer_context *>(dst->buffer->context);
-    bufs[n_bufs].fd     = dst_buf->fd;
-    bufs[n_bufs].ptr    = dst->data;
-    bufs[n_bufs].offset = (uint8_t *) dst->data - dst_buf->base;
-    bufs[n_bufs].size   = ggml_nbytes(dst);
-    bufs[n_bufs].flags  = (DSPQUEUE_BUFFER_FLAG_REF | DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER);
-    ++n_bufs;
+    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], dst, true, false);
 
     // Primary DSP session from the src0 tensor
-    ggml_hexagon_session * sess = src0_buf->sess;
+    auto * sess = get_session_from_tensor(src0);
 
     if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[64 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s %s : %s : %s : %s : %s : %s : flags 0x%x\n", sess->name.c_str(), ggml_op_name(op->op),
-                    names, dims, types, strides, buffs, req.flags);
+        hex_print_op_info(op, sess, req.flags);
         if (opt_verbose > 1) {
             hex_dump_dspbuf(src0, &bufs[0]);
             if (src1) {
@@ -3033,26 +2849,7 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
     }
 
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
-        // Bump pending flag (cleared in the callback once we get the responce)
-        sess->op_pending++;  // atomic inc
-
-        int err = dspqueue_write(sess->queue,
-                                 0,                       // flags - the framework will autoset this
-                                 n_bufs,                  // number of buffers
-                                 bufs,                    // buffer references
-                                 sizeof(req),
-                                 (const uint8_t *) &req,  // Message
-                                 1000000);                // Timeout
-
-        if (0 != err) {
-            GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", sess->name.c_str(), (unsigned) err);
-        }
-    }
-
-    if (opt_opsync) {
-        while (sess->op_pending) {
-            ;
-        }
+        sess->enqueue(req, bufs, n_bufs, opt_opsync);
     }
 
     t2 = ggml_time_us();
@@ -3094,26 +2891,17 @@ static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op
     return (op0 && op0->src[1] == op1->src[1]);
 }
 
+static inline bool is_compute_op(ggml_tensor *node)
+{
+    return !(ggml_op_is_empty(node->op) || ggml_is_empty(node));
+}
+
 // scan the graph and figure out last compute op index
 static inline int last_compute_op(ggml_cgraph * graph) {
-    int last;
+    int last = 0;
     for (int i = 0; i < graph->n_nodes; ++i) {
-        ggml_tensor * node = graph->nodes[i];
-
-        switch (node->op) {
-            case GGML_OP_MUL_MAT:
-            case GGML_OP_MUL_MAT_ID:
-            case GGML_OP_MUL:
-            case GGML_OP_ADD:
-            case GGML_OP_SUB:
-            case GGML_OP_RMS_NORM:
-            case GGML_OP_GLU:
-            case GGML_OP_ADD_ID:
-                last = i;
-                break;
-
-            default:
-                break;
+        if (is_compute_op(graph->nodes[i])) {
+            last = i;
         }
     }
 
@@ -3131,6 +2919,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * node = graph->nodes[i];
+
+        if (!is_compute_op(node)) {
+            continue;
+        }
 
         uint32_t flags = 0;
 
@@ -3183,23 +2975,13 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_rope(node, flags);
                 break;
 
-            // non-compute ops
-            case GGML_OP_NONE:
-            case GGML_OP_RESHAPE:
-            case GGML_OP_VIEW:
-            case GGML_OP_PERMUTE:
-            case GGML_OP_TRANSPOSE:
-                break;
-
             default:
                 GGML_ABORT("\nggml-hex: graph-compute %s is not supported\n", ggml_op_desc(node));
         }
     }
 
     // Wait until all pending ops complete
-    while (sess->op_pending) {
-        ;
-    }
+    sess->flush();
 
     return GGML_STATUS_SUCCESS;
 }
@@ -3210,9 +2992,7 @@ static void ggml_backend_hexagon_synchronize(ggml_backend_t backend) {
     HEX_VERBOSE("ggml-hex: %s synchronize\n", sess->name.c_str());
 
     // Wait until all pending ops complete
-    while (sess->op_pending) {
-        ;
-    }
+    sess->flush();
 }
 
 struct node_info {
@@ -3621,6 +3401,11 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
         }
     }
 
+    if(opt_arch < 75) {
+        opt_ndev = 1;
+        GGML_LOG_WARN("ggml-hex: forcing ndev to 1 for SoCs archs lower than v75.\n");
+    }
+
     GGML_LOG_INFO("ggml-hex: Hexagon Arch version v%d\n", opt_arch);
 
     // Create devices / sessions
@@ -3628,7 +3413,7 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
         devices[i].iface   = ggml_backend_hexagon_device_i;
         devices[i].reg     = reg;
         try {
-            devices[i].context = new ggml_hexagon_session(i);
+            devices[i].context = new ggml_hexagon_session(i, &devices[i]);
         } catch (std::exception const &exc) {
             GGML_LOG_ERROR("ggml-hex: failed to create device/session %zu\n", i);
             devices[i].context = nullptr;

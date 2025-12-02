@@ -46,7 +46,7 @@ class ServerProcess:
     debug: bool = False
     server_port: int = 8080
     server_host: str = "127.0.0.1"
-    model_hf_repo: str = "ggml-org/models"
+    model_hf_repo: str | None = "ggml-org/models"
     model_hf_file: str | None = "tinyllamas/stories260K.gguf"
     model_alias: str = "tinyllama-2"
     temperature: float = 0.8
@@ -78,6 +78,7 @@ class ServerProcess:
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
     server_metrics: bool | None = False
+    kv_unified: bool | None = False
     server_slots: bool | None = False
     pooling: str | None = None
     draft: int | None = None
@@ -159,6 +160,8 @@ class ServerProcess:
             server_args.append("--reranking")
         if self.server_metrics:
             server_args.append("--metrics")
+        if self.kv_unified:
+            server_args.append("--kv-unified")
         if self.server_slots:
             server_args.append("--slots")
         else:
@@ -202,6 +205,8 @@ class ServerProcess:
             server_args.append("--no-webui")
         if self.jinja:
             server_args.append("--jinja")
+        else:
+            server_args.append("--no-jinja")
         if self.reasoning_format is not None:
             server_args.extend(("--reasoning-format", self.reasoning_format))
         if self.reasoning_budget is not None:
@@ -516,14 +521,28 @@ class ServerPreset:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()
         # mmproj is already provided by HF registry API
-        server.model_hf_repo = "ggml-org/tinygemma3-GGUF"
-        server.model_hf_file = "tinygemma3-Q8_0.gguf"
-        server.mmproj_url = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/mmproj-tinygemma3.gguf"
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/tinygemma3-GGUF:Q8_0"
         server.model_alias = "tinygemma3"
         server.n_ctx = 1024
         server.n_batch = 32
         server.n_slots = 2
         server.n_predict = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def router() -> ServerProcess:
+        server = ServerProcess()
+        # router server has no models
+        server.model_file = None
+        server.model_alias = None
+        server.model_hf_repo = None
+        server.model_hf_file = None
+        server.n_ctx = 1024
+        server.n_batch = 16
+        server.n_slots = 1
+        server.n_predict = 16
         server.seed = 42
         return server
 

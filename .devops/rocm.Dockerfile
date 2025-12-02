@@ -45,7 +45,7 @@ RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
     && cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib \
-    && find build -name "*.so" -exec cp {} /app/lib \;
+    && find build -name "*.so*" -exec cp -P {} /app/lib \;
 
 RUN mkdir -p /app/full \
     && cp build/bin/* /app/full \

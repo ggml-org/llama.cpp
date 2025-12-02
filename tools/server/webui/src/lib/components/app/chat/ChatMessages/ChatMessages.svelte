@@ -1,15 +1,9 @@
 <script lang="ts">
 	import { ChatMessage } from '$lib/components/app';
-	import { DatabaseStore } from '$lib/stores/database';
-	import {
-		activeConversation,
-		deleteMessage,
-		navigateToSibling,
-		editMessageWithBranching,
-		editAssistantMessage,
-		regenerateMessageWithBranching
-	} from '$lib/stores/chat.svelte';
-	import { getMessageSiblings } from '$lib/utils/branching';
+	import { DatabaseService } from '$lib/services/database';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
+	import { getMessageSiblings } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -25,7 +19,7 @@
 		const conversation = activeConversation();
 
 		if (conversation) {
-			DatabaseStore.getConversationMessages(conversation.id).then((messages) => {
+			DatabaseService.getConversationMessages(conversation.id).then((messages) => {
 				allConversationMessages = messages;
 			});
 		} else {
@@ -63,13 +57,13 @@
 	});
 
 	async function handleNavigateToSibling(siblingId: string) {
-		await navigateToSibling(siblingId);
+		await conversationsStore.navigateToSibling(siblingId);
 	}
 
 	async function handleEditWithBranching(message: DatabaseMessage, newContent: string) {
 		onUserAction?.();
 
-		await editMessageWithBranching(message.id, newContent);
+		await chatStore.editMessageWithBranching(message.id, newContent);
 
 		refreshAllMessages();
 	}
@@ -81,20 +75,40 @@
 	) {
 		onUserAction?.();
 
-		await editAssistantMessage(message.id, newContent, shouldBranch);
+		await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
 
 		refreshAllMessages();
 	}
 
-	async function handleRegenerateWithBranching(message: DatabaseMessage) {
+	async function handleRegenerateWithBranching(message: DatabaseMessage, modelOverride?: string) {
 		onUserAction?.();
 
-		await regenerateMessageWithBranching(message.id);
+		await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
 
 		refreshAllMessages();
 	}
+
+	async function handleContinueAssistantMessage(message: DatabaseMessage) {
+		onUserAction?.();
+
+		await chatStore.continueAssistantMessage(message.id);
+
+		refreshAllMessages();
+	}
+
+	async function handleEditUserMessagePreserveResponses(
+		message: DatabaseMessage,
+		newContent: string
+	) {
+		onUserAction?.();
+
+		await chatStore.editUserMessagePreserveResponses(message.id, newContent);
+
+		refreshAllMessages();
+	}
+
 	async function handleDeleteMessage(message: DatabaseMessage) {
-		await deleteMessage(message.id);
+		await chatStore.deleteMessage(message.id);
 
 		refreshAllMessages();
 	}
@@ -110,7 +124,9 @@
 			onNavigateToSibling={handleNavigateToSibling}
 			onEditWithBranching={handleEditWithBranching}
 			onEditWithReplacement={handleEditWithReplacement}
+			onEditUserMessagePreserveResponses={handleEditUserMessagePreserveResponses}
 			onRegenerateWithBranching={handleRegenerateWithBranching}
+			onContinueAssistantMessage={handleContinueAssistantMessage}
 		/>
 	{/each}
 </div>

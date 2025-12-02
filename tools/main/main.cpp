@@ -147,10 +147,14 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    auto * mem = llama_get_memory(ctx);
-
+    llama_memory_t mem = llama_get_memory(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    // note: the time for chat template initialization is not negligible:
     auto chat_templates = common_chat_templates_init(model, params.chat_template);
+
+    // start measuring performance timings from here
+    llama_perf_context_reset(ctx);
 
     LOG_INF("%s: llama threadpool init, n_threads = %d\n", __func__, (int) params.cpuparams.n_threads);
 
@@ -354,7 +358,11 @@ int main(int argc, char ** argv) {
         }
 
         // remove any "future" tokens that we might have inherited from the previous session
-        llama_memory_seq_rm(mem, -1, n_matching_session_tokens, -1);
+        if (!llama_memory_seq_rm(mem, -1, n_matching_session_tokens, -1)) {
+            LOG_INF("%s: unable to resuse common prefix\n", __func__);
+            n_matching_session_tokens = 0;
+            llama_memory_seq_rm(mem, -1, -1, -1);
+        }
     }
 
     LOG_DBG("recalculate the cached logits (check): embd_inp.size() %zu, n_matching_session_tokens %zu, embd_inp.size() %zu, session_tokens.size() %zu\n",
@@ -512,6 +520,12 @@ int main(int argc, char ** argv) {
 
         is_interacting = params.interactive_first;
     }
+
+    LOG_WRN("*****************************\n");
+    LOG_WRN("IMPORTANT: The current llama-cli will be moved to llama-completion in the near future\n");
+    LOG_WRN("  New llama-cli will have enhanced features and improved user experience\n");
+    LOG_WRN("  More info: https://github.com/ggml-org/llama.cpp/discussions/17618\n");
+    LOG_WRN("*****************************\n");
 
     bool is_antiprompt        = false;
     bool input_echo           = true;

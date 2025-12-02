@@ -15,6 +15,9 @@ MODEL_FILE=models/llama-2-7b.Q4_0.gguf
 NGL=99
 CONTEXT=4096
 
+#support malloc device memory more than 4GB.
+export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
+
 if [ $# -gt 0 ]; then
     GGML_SYCL_DEVICE=$1
     echo "use $GGML_SYCL_DEVICE as main GPU"

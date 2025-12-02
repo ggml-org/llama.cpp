@@ -18,6 +18,15 @@ const GUIDE_FOR_FRONTEND = `
 
 const MAX_BUNDLE_SIZE = 2 * 1024 * 1024;
 
+/**
+ * the maximum size of an embedded asset in bytes,
+ * e.g. maximum size of embedded font (see node_modules/katex/dist/fonts/*.woff2)
+ */
+const MAX_ASSET_SIZE = 32000;
+
+/** public/index.html.gz minified flag */
+const ENABLE_JS_MINIFICATION = true;
+
 function llamaCppBuildPlugin() {
 	return {
 		name: 'llamacpp:build',
@@ -75,12 +84,28 @@ function llamaCppBuildPlugin() {
 }
 
 export default defineConfig({
-	build: {
-		chunkSizeWarningLimit: 3072
+	resolve: {
+		alias: {
+			'katex-fonts': resolve('node_modules/katex/dist/fonts')
+		}
 	},
-
+	build: {
+		assetsInlineLimit: MAX_ASSET_SIZE,
+		chunkSizeWarningLimit: 3072,
+		minify: ENABLE_JS_MINIFICATION
+	},
+	css: {
+		preprocessorOptions: {
+			scss: {
+				additionalData: `
+					$use-woff2: true;
+					$use-woff: false;
+					$use-ttf: false;
+				`
+			}
+		}
+	},
 	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
-
 	test: {
 		projects: [
 			{
@@ -93,8 +118,7 @@ export default defineConfig({
 						provider: 'playwright',
 						instances: [{ browser: 'chromium' }]
 					},
-					include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
-					exclude: ['src/lib/server/**'],
+					include: ['tests/client/**/*.svelte.{test,spec}.{js,ts}'],
 					setupFiles: ['./vitest-setup-client.ts']
 				}
 			},
@@ -103,8 +127,7 @@ export default defineConfig({
 				test: {
 					name: 'server',
 					environment: 'node',
-					include: ['src/**/*.{test,spec}.{js,ts}'],
-					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
+					include: ['tests/server/**/*.{test,spec}.{js,ts}']
 				}
 			},
 			{
@@ -117,7 +140,7 @@ export default defineConfig({
 						provider: 'playwright',
 						instances: [{ browser: 'chromium', headless: true }]
 					},
-					include: ['src/**/*.stories.{js,ts,svelte}'],
+					include: ['tests/stories/**/*.stories.{js,ts,svelte}'],
 					setupFiles: ['./.storybook/vitest.setup.ts']
 				},
 				plugins: [
@@ -133,7 +156,7 @@ export default defineConfig({
 		proxy: {
 			'/v1': 'http://localhost:8080',
 			'/props': 'http://localhost:8080',
-			'/slots': 'http://localhost:8080'
+			'/models': 'http://localhost:8080'
 		},
 		headers: {
 			'Cross-Origin-Embedder-Policy': 'require-corp',

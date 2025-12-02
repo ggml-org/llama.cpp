@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { forceSyncWithServerDefaults } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { RotateCcw } from '@lucide/svelte';
 
 	interface Props {
@@ -18,7 +18,7 @@
 	}
 
 	function handleConfirmReset() {
-		forceSyncWithServerDefaults();
+		settingsStore.forceSyncWithServerDefaults();
 		onReset?.();
 
 		showResetDialog = false;
