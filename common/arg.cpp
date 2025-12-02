@@ -2488,9 +2488,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "path to save slot kv cache (default: disabled)",
         [](common_params & params, const std::string & value) {
             params.slot_save_path = value;
+            if (!fs_is_directory(params.slot_save_path)) {
+                throw std::invalid_argument("not a directory: " + value);
+            }
             // if doesn't end with DIRECTORY_SEPARATOR, add it
             if (!params.slot_save_path.empty() && params.slot_save_path[params.slot_save_path.size() - 1] != DIRECTORY_SEPARATOR) {
                 params.slot_save_path += DIRECTORY_SEPARATOR;
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--media-path"}, "PATH",
+        "directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.media_path = value;
+            if (!fs_is_directory(params.media_path)) {
+                throw std::invalid_argument("not a directory: " + value);
+            }
+            // if doesn't end with DIRECTORY_SEPARATOR, add it
+            if (!params.media_path.empty() && params.media_path[params.media_path.size() - 1] != DIRECTORY_SEPARATOR) {
+                params.media_path += DIRECTORY_SEPARATOR;
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));

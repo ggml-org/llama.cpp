@@ -788,6 +788,7 @@ struct server_context_impl {
             /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
             /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
             /* enable_thinking       */ enable_thinking,
+            /* media_path            */ params_base.media_path,
         };
 
         // print sample chat example to make it clear which template is used
