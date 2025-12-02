@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import { filterByLeafNodeId, findDescendantMessages } from '$lib/utils/branching';
+import { findDescendantMessages } from '$lib/utils';
 
 class LlamacppDatabase extends Dexie {
 	conversations!: EntityTable<DatabaseConversation, string>;
@@ -16,60 +16,59 @@ class LlamacppDatabase extends Dexie {
 }
 
 const db = new LlamacppDatabase();
+import { v4 as uuid } from 'uuid';
 
 /**
- * DatabaseStore - Persistent data layer for conversation and message management
+ * DatabaseService - Stateless IndexedDB communication layer
  *
- * This service provides a comprehensive data access layer built on IndexedDB using Dexie.
- * It handles all persistent storage operations for conversations, messages, and application settings
- * with support for complex conversation branching and message threading.
+ * **Terminology - Chat vs Conversation:**
+ * - **Chat**: The active interaction space with the Chat Completions API (ephemeral, runtime).
+ * - **Conversation**: The persistent database entity storing all messages and metadata.
+ *   This service handles raw database operations for conversations - the lowest layer
+ *   in the persistence stack.
  *
- * **Architecture & Relationships:**
- * - **DatabaseStore** (this class): Stateless data persistence layer
- *   - Manages IndexedDB operations through Dexie ORM
- *   - Handles conversation and message CRUD operations
- *   - Supports complex branching with parent-child relationships
+ * This service provides a stateless data access layer built on IndexedDB using Dexie ORM.
+ * It handles all low-level storage operations for conversations and messages with support
+ * for complex branching and message threading. All methods are static - no instance state.
+ *
+ * **Architecture & Relationships (bottom to top):**
+ * - **DatabaseService** (this class): Stateless IndexedDB operations
+ *   - Lowest layer - direct Dexie/IndexedDB communication
+ *   - Pure CRUD operations without business logic
+ *   - Handles branching tree structure (parent-child relationships)
  *   - Provides transaction safety for multi-table operations
  *
- * - **ChatStore**: Primary consumer for conversation state management
- *   - Uses DatabaseStore for all persistence operations
- *   - Coordinates UI state with database state
- *   - Handles conversation lifecycle and message branching
+ * - **ConversationsService**: Stateless business logic layer
+ *   - Uses DatabaseService for all persistence operations
+ *   - Adds import/export, navigation, and higher-level operations
+ *
+ * - **conversationsStore**: Reactive state management for conversations
+ *   - Uses ConversationsService for database operations
+ *   - Manages conversation list, active conversation, and messages in memory
+ *
+ * - **chatStore**: Active AI interaction management
+ *   - Uses conversationsStore for conversation context
+ *   - Directly uses DatabaseService for message CRUD during streaming
  *
  * **Key Features:**
- * - **Conversation Management**: Create, read, update, delete conversations
- * - **Message Branching**: Support for tree-like conversation structures
+ * - **Conversation CRUD**: Create, read, update, delete conversations
+ * - **Message CRUD**: Add, update, delete messages with branching support
+ * - **Branch Operations**: Create branches, find descendants, cascade deletions
  * - **Transaction Safety**: Atomic operations for data consistency
- * - **Path Resolution**: Navigate conversation branches and find leaf nodes
- * - **Cascading Deletion**: Remove entire conversation branches
  *
  * **Database Schema:**
- * - `conversations`: Conversation metadata with current node tracking
- * - `messages`: Individual messages with parent-child relationships
+ * - `conversations`: id, lastModified, currNode, name
+ * - `messages`: id, convId, type, role, timestamp, parent, children
  *
  * **Branching Model:**
  * Messages form a tree structure where each message can have multiple children,
  * enabling conversation branching and alternative response paths. The conversation's
  * `currNode` tracks the currently active branch endpoint.
  */
-import { v4 as uuid } from 'uuid';
-
-export class DatabaseStore {
-	/**
-	 * Adds a new message to the database.
-	 *
-	 * @param message - Message to add (without id)
-	 * @returns The created message
-	 */
-	static async addMessage(message: Omit<DatabaseMessage, 'id'>): Promise<DatabaseMessage> {
-		const newMessage: DatabaseMessage = {
-			...message,
-			id: uuid()
-		};
-
-		await db.messages.add(newMessage);
-		return newMessage;
-	}
+export class DatabaseService {
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Conversations
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
 	 * Creates a new conversation.
@@ -88,6 +87,10 @@ export class DatabaseStore {
 		await db.conversations.add(conversation);
 		return conversation;
 	}
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Messages
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
 	 * Creates a new message branch by adding a message and updating parent/child relationships.
@@ -256,18 +259,6 @@ export class DatabaseStore {
 	}
 
 	/**
-	 * Gets all leaf nodes (messages with no children) in a conversation.
-	 * Useful for finding all possible conversation endpoints.
-	 *
-	 * @param convId - Conversation ID
-	 * @returns Array of leaf node message IDs
-	 */
-	static async getConversationLeafNodes(convId: string): Promise<string[]> {
-		const allMessages = await this.getConversationMessages(convId);
-		return allMessages.filter((msg) => msg.children.length === 0).map((msg) => msg.id);
-	}
-
-	/**
 	 * Gets all messages in a conversation, sorted by timestamp (oldest first).
 	 *
 	 * @param convId - Conversation ID
@@ -275,34 +266,6 @@ export class DatabaseStore {
 	 */
 	static async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
 		return await db.messages.where('convId').equals(convId).sortBy('timestamp');
-	}
-
-	/**
-	 * Gets the conversation path from root to the current leaf node.
-	 * Uses the conversation's currNode to determine the active branch.
-	 *
-	 * @param convId - Conversation ID
-	 * @returns Array of messages in the current conversation path
-	 */
-	static async getConversationPath(convId: string): Promise<DatabaseMessage[]> {
-		const conversation = await this.getConversation(convId);
-
-		if (!conversation) {
-			return [];
-		}
-
-		const allMessages = await this.getConversationMessages(convId);
-
-		if (allMessages.length === 0) {
-			return [];
-		}
-
-		// If no currNode is set, use the latest message as leaf
-		const leafNodeId =
-			conversation.currNode ||
-			allMessages.reduce((latest, msg) => (msg.timestamp > latest.timestamp ? msg : latest)).id;
-
-		return filterByLeafNodeId(allMessages, leafNodeId, false) as DatabaseMessage[];
 	}
 
 	/**
@@ -321,6 +284,10 @@ export class DatabaseStore {
 			lastModified: Date.now()
 		});
 	}
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Navigation
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
 	 * Updates the conversation's current node (active branch).
@@ -348,6 +315,10 @@ export class DatabaseStore {
 	): Promise<void> {
 		await db.messages.update(id, updates);
 	}
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Import
+	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
 	 * Imports multiple conversations and their messages.

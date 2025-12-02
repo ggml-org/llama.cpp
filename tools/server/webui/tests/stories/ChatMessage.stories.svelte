@@ -92,8 +92,8 @@
 		message: userMessage
 	}}
 	play={async () => {
-		const { updateConfig } = await import('$lib/stores/settings.svelte');
-		updateConfig('disableReasoningFormat', false);
+		const { settingsStore } = await import('$lib/stores/settings.svelte');
+		settingsStore.updateConfig('disableReasoningFormat', false);
 	}}
 />
 
@@ -104,8 +104,8 @@
 		message: assistantMessage
 	}}
 	play={async () => {
-		const { updateConfig } = await import('$lib/stores/settings.svelte');
-		updateConfig('disableReasoningFormat', false);
+		const { settingsStore } = await import('$lib/stores/settings.svelte');
+		settingsStore.updateConfig('disableReasoningFormat', false);
 	}}
 />
 
@@ -116,8 +116,8 @@
 		message: assistantWithReasoning
 	}}
 	play={async () => {
-		const { updateConfig } = await import('$lib/stores/settings.svelte');
-		updateConfig('disableReasoningFormat', false);
+		const { settingsStore } = await import('$lib/stores/settings.svelte');
+		settingsStore.updateConfig('disableReasoningFormat', false);
 	}}
 />
 
@@ -128,8 +128,8 @@
 		message: rawOutputMessage
 	}}
 	play={async () => {
-		const { updateConfig } = await import('$lib/stores/settings.svelte');
-		updateConfig('disableReasoningFormat', true);
+		const { settingsStore } = await import('$lib/stores/settings.svelte');
+		settingsStore.updateConfig('disableReasoningFormat', true);
 	}}
 />
 
@@ -140,8 +140,8 @@
 	}}
 	asChild
 	play={async () => {
-		const { updateConfig } = await import('$lib/stores/settings.svelte');
-		updateConfig('disableReasoningFormat', false);
+		const { settingsStore } = await import('$lib/stores/settings.svelte');
+		settingsStore.updateConfig('disableReasoningFormat', false);
 		// Phase 1: Stream reasoning content in chunks
 		let reasoningText =
 			'I need to think about this carefully. Let me break down the problem:\n\n1. The user is asking for help with something complex\n2. I should provide a thorough and helpful response\n3. I need to consider multiple approaches\n4. The best solution would be to explain step by step\n\nThis approach will ensure clarity and understanding.';
@@ -192,8 +192,8 @@
 		message: processingMessage
 	}}
 	play={async () => {
-		const { updateConfig } = await import('$lib/stores/settings.svelte');
-		updateConfig('disableReasoningFormat', false);
+		const { settingsStore } = await import('$lib/stores/settings.svelte');
+		settingsStore.updateConfig('disableReasoningFormat', false);
 		// Import the chat store to simulate loading state
 		const { chatStore } = await import('$lib/stores/chat.svelte');
 

@@ -379,6 +379,7 @@ enum llm_tensor {
     LLM_TENSOR_SSM_DT,
     LLM_TENSOR_SSM_DT_NORM,
     LLM_TENSOR_SSM_A,
+    LLM_TENSOR_SSM_A_NOSCAN,        // qwen3next special case with MUL instead of SSM_SCAN
     LLM_TENSOR_SSM_B_NORM,
     LLM_TENSOR_SSM_C_NORM,
     LLM_TENSOR_SSM_D,
