@@ -15,8 +15,6 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
-#include <cctype>
-#include <unordered_set>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -900,13 +898,9 @@ static std::string to_lower_copy(const std::string & value) {
 
 static bool should_strip_proxy_header(const std::string & header_name) {
     // Headers that get duplicated when router forwards child responses
-    static const std::unordered_set<std::string> strip_list = {
-        "server",
-        "transfer-encoding",
-        "keep-alive"
-    };
-
-    if (strip_list.count(header_name) > 0) {
+    if (header_name == "server" ||
+        header_name == "transfer-encoding" ||
+        header_name == "keep-alive") {
         return true;
     }
 
@@ -1001,15 +995,17 @@ server_http_proxy::server_http_proxy(
     this->thread.detach();
 
     // wait for the first chunk (headers)
-    msg_t header;
-    if (pipe->read(header, should_stop)) {
-        SRV_DBG("%s", "received response headers\n");
-        this->status  = header.status;
-        this->headers = std::move(header.headers);
-        if (!header.content_type.empty()) {
-            this->content_type = std::move(header.content_type);
+    {
+        msg_t header;
+        if (pipe->read(header, should_stop)) {
+            SRV_DBG("%s", "received response headers\n");
+            this->status  = header.status;
+            this->headers = std::move(header.headers);
+            if (!header.content_type.empty()) {
+                this->content_type = std::move(header.content_type);
+            }
+        } else {
+            SRV_DBG("%s", "no response headers received (request cancelled?)\n");
         }
-    } else {
-        SRV_DBG("%s", "no response headers received (request cancelled?)\n");
     }
 }
