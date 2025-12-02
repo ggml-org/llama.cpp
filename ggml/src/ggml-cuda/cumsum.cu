@@ -1,15 +1,85 @@
 #include <algorithm>
 
 #include "cumsum.cuh"
+#include "ggml-impl.h"
 
-// Kernel to compute cumulative sum along the innermost dimension (ne[0])
-// Each block processes one row (ne[0] elements)
-// Algorithm matches Metal implementation:
-// 1. Each warp computes prefix sum within itself
-// 2. Last thread of each warp stores result in shared memory
-// 3. All warps sync
-// 4. Each element adds the sum of all preceding warps
+// Check if CUB is available
+#ifdef __has_include
+#  if __has_include(<cub/device/device_scan.cuh>)
+#    define HAS_CUB_DEVICE_SCAN 1
+#    include <cub/device/device_scan.cuh>
+#  else
+#    define HAS_CUB_DEVICE_SCAN 0
+#  endif
+#else
+#  define HAS_CUB_DEVICE_SCAN 0
+#endif
 
+#if HAS_CUB_DEVICE_SCAN
+
+template<typename T, int BLOCK_SIZE>
+static __global__ void cumsum_cub_kernel(
+    const T* __restrict__ src,
+    T* __restrict__ dst,
+    int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,
+    int64_t nb01, int64_t nb02, int64_t nb03,
+    int64_t nb1,  int64_t nb2,  int64_t nb3)
+{
+    using BlockScan = cub::BlockScan<T, BLOCK_SIZE>;
+
+    __shared__ typename BlockScan::TempStorage temp_storage;
+    __shared__ T block_carry;      // carry from previous tile
+    __shared__ T block_total;      // total of current tile
+
+    const int tid = threadIdx.x;
+
+    const int64_t i1 = blockIdx.x;
+    const int64_t i2 = blockIdx.y;
+    const int64_t i3 = blockIdx.z;
+
+    if (i1 >= ne01 || i2 >= ne02 || i3 >= ne03) {
+        return;
+    }
+
+    const T* src_row = src + i1 * nb01 + i2 * nb02 + i3 * nb03;
+    T*       dst_row = dst + i1 * nb1  + i2 * nb2  + i3 * nb3;
+
+    if (tid == 0) {
+        block_carry = 0;
+    }
+    __syncthreads();
+
+    for (int64_t start = 0; start < ne00; start += BLOCK_SIZE) {
+        int64_t idx = start + tid;
+
+        T x = (idx < ne00) ? src_row[idx] : T(0);
+
+        T inclusive;
+        BlockScan(temp_storage).InclusiveSum(x, inclusive);
+
+        // Last thread stores total
+        if (tid == BLOCK_SIZE - 1) {
+            block_total = inclusive;
+        }
+        __syncthreads();
+
+        T final = inclusive + block_carry;
+
+        if (idx < ne00) {
+            dst_row[idx] = final;
+        }
+        __syncthreads();
+
+        if (tid == 0) {
+            block_carry += block_total;
+        }
+        __syncthreads();
+    }
+}
+
+#endif // HAS_CUB_DEVICE_SCAN
+
+// Fallback kernel implementation (original)
 template<typename T>
 static __global__ void cumsum_kernel(
     const T * src, T * dst,
@@ -94,6 +164,16 @@ static void cumsum_cuda(
     const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3,
     cudaStream_t stream) {
 
+    const size_t type_size = sizeof(T);
+    bool use_cub = false;
+#if HAS_CUB_DEVICE_SCAN
+    // Check if we can use CUB (data must be contiguous along innermost dimension)
+    const bool is_contiguous = (nb00 == type_size) && (nb0 == type_size);
+
+    if (is_contiguous) {
+        use_cub = true;
+    }
+#endif // HAS_CUB_DEVICE_SCAN
     dim3 grid_dims(ne01, ne02, ne03);
     const int num_warps = (ne00 + WARP_SIZE - 1) / WARP_SIZE;
     int block_size = num_warps * WARP_SIZE;
@@ -101,14 +181,23 @@ static void cumsum_cuda(
     dim3 block_dims(block_size, 1, 1);
     const int warps_per_block = block_size / WARP_SIZE;
     const size_t shmem_size = (block_size + warps_per_block + 2) * sizeof(float);
-    const size_t type_size = sizeof(T);
 
-    cumsum_kernel<<<grid_dims, block_dims, shmem_size, stream>>>(
-        src, dst,
-        ne00, ne01, ne02, ne03,
-        nb00 / type_size, nb01 / type_size, nb02 / type_size, nb03 / type_size,
-        nb0 / type_size, nb1 / type_size, nb2 / type_size, nb3 / type_size
-    );
+    if (use_cub) {
+        cumsum_cub_kernel<T, CUDA_CUMSUM_BLOCK_SIZE><<<grid_dims, CUDA_CUMSUM_BLOCK_SIZE, 0, stream>>>(
+            src, dst,
+            ne00, ne01, ne02, ne03,
+            nb01 / type_size, nb02 / type_size, nb03 / type_size,
+            nb1 / type_size,  nb2 / type_size,  nb3 / type_size
+        );
+    } else {
+        GGML_LOG_ERROR("Running fallback version");
+        cumsum_kernel<<<grid_dims, block_dims, shmem_size, stream>>>(
+            src, dst,
+            ne00, ne01, ne02, ne03,
+            nb00 / type_size, nb01 / type_size, nb02 / type_size, nb03 / type_size,
+            nb0 / type_size, nb1 / type_size, nb2 / type_size, nb3 / type_size
+        );
+    }
 }
 
 void ggml_cuda_op_cumsum(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
