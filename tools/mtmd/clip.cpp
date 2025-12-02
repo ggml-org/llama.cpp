@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
+#include <algorithm>
 #include <cinttypes>
 #include <limits>
 #include <array>
@@ -196,6 +197,11 @@ struct clip_hparams {
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
+
+    // video
+    float   seconds_per_grid_ts = 0.5f;  // temporal grid spacing for 3D M-RoPE
+    int32_t max_video_frames    = 64;    // maximum frames to process from video
+    float   video_fps           = 1.0f;  // frames per second for extraction
 
     // legacy
     bool has_llava_projector = false;
@@ -429,6 +435,9 @@ struct clip_ctx {
     ggml_backend_sched_ptr sched;
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
 
+    bool is_video_modality   = false;
+    float seconds_per_grid_ts = 0.5f;  // temporal grid spacing for video 3D M-RoPE
+
     // for debugging
     bool debug_graph = false;
     std::vector<ggml_tensor *> debug_print_tensors;
@@ -476,6 +485,8 @@ struct clip_ctx {
         sched.reset(
             ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false, true)
         );
+
+        is_video_modality = ctx_params.is_video_modality;
     }
 
     ~clip_ctx() {
@@ -510,6 +521,12 @@ struct clip_graph {
     const float eps;
     const float kq_scale;
 
+    // Video frame metadata for 3D M-RoPE
+    bool     is_video_frame    = false;
+    uint32_t temporal_idx      = 0;
+    uint32_t total_frames      = 1;
+    float    temporal_position = 0.0f;
+
     ggml_context_ptr ctx0_ptr;
     ggml_context * ctx0;
     ggml_cgraph * gf;
@@ -529,6 +546,14 @@ struct clip_graph {
             n_layer(hparams.n_layer),
             eps(hparams.eps),
             kq_scale(1.0f / sqrtf((float)d_head)) {
+        // Initialize video metadata if this is a video frame
+        if (img.is_video_frame && (ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL || 
+                                   ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL)) {
+            is_video_frame = img.is_video_frame;
+            temporal_idx = img.frame_idx;
+            total_frames = img.total_frames;
+            temporal_position = img.temporal_position;
+        }
         struct ggml_init_params params = {
             /*.mem_size   =*/ ctx->buf_compute_meta.size(),
             /*.mem_buffer =*/ ctx->buf_compute_meta.data(),
@@ -712,40 +737,70 @@ struct clip_graph {
         GGML_ASSERT(model.patch_bias == nullptr);
         GGML_ASSERT(model.class_embedding == nullptr);
 
-        const int batch_size       = 1;
-        const bool use_window_attn = hparams.n_wa_pattern > 0;
-        const int n_wa_pattern     = hparams.n_wa_pattern;
-        const int n_pos            = n_patches;
-        const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
+        const int batch_size           = 1;
+        const bool use_window_attn     = hparams.n_wa_pattern > 0;
+        const int n_wa_pattern         = hparams.n_wa_pattern;
+        const int n_pos                = n_patches;
+        const int num_position_ids     = n_pos * 4; // m-rope requires 4 dim per position
+        const bool is_video_superframe = (img.is_video_frame && img.total_frames >= 1 && img.buf.size() == (size_t)(img.nx * img.ny * 6));
 
         norm_type norm_t = ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL
             ? NORM_TYPE_RMS // qwen 2.5 vl
             : NORM_TYPE_NORMAL; // qwen 2 vl
 
-        int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
+        if (is_video_superframe) {
+            // Video path always uses RMSNorm (matches dedicated video builder)
+            norm_t = NORM_TYPE_RMS;
+        }
 
-        ggml_tensor * inp_raw = build_inp_raw();
-        ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+        int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
         GGML_ASSERT(img.nx % (patch_size * 2) == 0);
         GGML_ASSERT(img.ny % (patch_size * 2) == 0);
 
-        // second conv dimension
-        {
-            auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-            inp = ggml_add(ctx0, inp, inp_1);
+        ggml_tensor * inp = nullptr;
 
-            inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [w, h, c, b] -> [c, w, h, b]
-            inp = ggml_cont_4d(
-                ctx0, inp,
-                n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
-            inp = ggml_reshape_4d(
-                ctx0, inp,
-                n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
-            inp = ggml_permute(ctx0, inp, 0, 2, 1, 3);
-            inp = ggml_cont_3d(
-                ctx0, inp,
-                n_embd, n_patches_x * n_patches_y, batch_size);
+        if (is_video_superframe) {
+            LOG_INF("%s: qwen2vl graph (video): img=(%d x %d), patches=(%d x %d), n_pos=%d, n_head=%d, d_head=%d, use_window_attn=%d, n_wa_pattern=%d, is_video=%d\n",
+                __func__, img.nx, img.ny, n_patches_x, n_patches_y, n_pos, n_head, d_head, (int)use_window_attn, n_wa_pattern, (int)is_video_superframe);
+
+            const int input_channels = 6;
+            ggml_tensor * inp_raw = build_inp_raw(input_channels);
+
+            ggml_tensor * inp_t0 = ggml_view_3d(ctx0, inp_raw, img.nx, img.ny, 3, inp_raw->nb[1], inp_raw->nb[2], 0);
+            ggml_tensor * inp_t1 = ggml_view_3d(ctx0, inp_raw, img.nx, img.ny, 3, inp_raw->nb[1], inp_raw->nb[2], 3 * inp_raw->nb[2]);
+
+            ggml_tensor * conv_t0 = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_t0, patch_size, patch_size, 0, 0, 1, 1);
+            ggml_tensor * conv_t1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_t1, patch_size, patch_size, 0, 0, 1, 1);
+            inp = ggml_add(ctx0, conv_t0, conv_t1);
+
+            inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
+            inp = ggml_reshape_4d(ctx0, inp, n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
+            inp = ggml_reshape_4d(ctx0, inp, n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
+            inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 0, 2, 1, 3));
+            inp = ggml_reshape_3d(ctx0, inp, n_embd, n_patches_x * n_patches_y, batch_size);
+        } 
+        else {
+            ggml_tensor * inp_raw = build_inp_raw();
+            inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+
+            // second conv dimension
+            {
+                auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+                inp = ggml_add(ctx0, inp, inp_1);
+
+                inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [w, h, c, b] -> [c, w, h, b]
+                inp = ggml_cont_4d(
+                    ctx0, inp,
+                    n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
+                inp = ggml_reshape_4d(
+                    ctx0, inp,
+                    n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
+                inp = ggml_permute(ctx0, inp, 0, 2, 1, 3);
+                inp = ggml_cont_3d(
+                    ctx0, inp,
+                    n_embd, n_patches_x * n_patches_y, batch_size);
+            }
         }
 
         ggml_tensor * inpL           = inp;
@@ -2699,6 +2754,13 @@ struct clip_model_loader {
                 GGML_ASSERT(false && "unknown modality");
             }
 
+            // Load video-specific parameters (optional, apply to vision modality)
+            if (is_vision) {
+                get_f32(KEY_VIDEO_SECONDS_PER_GRID, hparams.seconds_per_grid_ts, false);
+                get_i32(KEY_VIDEO_MAX_FRAMES, hparams.max_video_frames, false);
+                get_f32(KEY_VIDEO_FPS, hparams.video_fps, false);
+            }
+
             // for pinpoints, we need to convert it into a list of resolution candidates
             {
                 std::vector<int> pinpoints;
@@ -2892,6 +2954,13 @@ struct clip_model_loader {
                 }
                 if (hparams.image_max_pixels > 0) {
                     LOG_INF("%s: image_max_pixels:   %d%s\n", __func__, hparams.image_max_pixels, hparams.custom_image_max_tokens > 0 ? " (custom value)" : "");
+                }
+                // Log video parameters if they differ from defaults
+                if (hparams.seconds_per_grid_ts != 0.5f || hparams.max_video_frames != 64 || hparams.video_fps != 1.0f) {
+                    LOG_INF("\n--- video hparams ---\n");
+                    LOG_INF("%s: seconds_per_grid_ts: %.2f\n", __func__, hparams.seconds_per_grid_ts);
+                    LOG_INF("%s: max_video_frames:   %d\n", __func__, hparams.max_video_frames);
+                    LOG_INF("%s: video_fps:          %.2f\n", __func__, hparams.video_fps);
                 }
             } else if (is_audio) {
                 LOG_INF("\n--- audio hparams ---\n");
@@ -3380,6 +3449,14 @@ struct clip_model_loader {
             img->nx = hparams.warmup_image_size;
             img->ny = hparams.warmup_image_size;
             LOG_INF("%s: warmup with image size = %d x %d\n", __func__, img->nx, img->ny);
+            // If in video modality, set video frame metadata for accurate warmup
+            if (ctx_clip.is_video_modality &&
+                (ctx_clip.proj_type() == PROJECTOR_TYPE_QWEN2VL || ctx_clip.proj_type() == PROJECTOR_TYPE_QWEN25VL)) {
+                img->is_video_frame    = true;
+                img->frame_idx         = 0;
+                img->total_frames      = 8;  // typical video frame count
+                img->temporal_position = 0.0f;
+            }
         } else {
             img->nx = hparams.warmup_audio_size;
             img->ny = hparams.n_mel_bins;
@@ -3527,6 +3604,8 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             loader.load_hparams(ctx_vision->model, CLIP_MODALITY_VISION);
             loader.load_tensors(*ctx_vision);
             loader.warmup(*ctx_vision);
+            // Initialize video parameters from loaded hparams
+            ctx_vision->seconds_per_grid_ts = ctx_vision->model.hparams.seconds_per_grid_ts;
         }
 
         if (loader.has_audio) {
@@ -4675,8 +4754,11 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     // set input pixel values
     if (!imgs.is_audio) {
         size_t nelem = 0;
+        const bool is_video_input = ctx->is_video_modality && !imgs.entries.empty() && imgs.entries[0]->is_video_frame;
+        const int  expected_channels = is_video_input ? 6 : 3;
+
         for (const auto & img : imgs.entries) {
-            nelem += img->nx * img->ny * 3;
+            nelem += img->nx * img->ny * expected_channels;
         }
         std::vector<float> inp_raw(nelem);
 
@@ -4691,16 +4773,34 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         // └─────┘ │
         //   ──────┘ x B
 
+        // layout of data for video super-frame
+        //
+        // ┌──W──┐
+        // │     H │  channel = R (frame t)
+        // ├─────┤ │
+        // │     H │  channel = G (frame t)
+        // ├─────┤ │
+        // │     H │  channel = B (frame t)
+        // └─────┘ │
+        // ┌──W──┐
+        // │     H │  channel = R (frame t+1)
+        // ├─────┤ │
+        // │     H │  channel = G (frame t+1)
+        // ├─────┤ │
+        // │     H │  channel = B (frame t+1)
+        // └─────┘ │
+        //   ──────┘ x B
+
         for (size_t i = 0; i < imgs.entries.size(); i++) {
             const int nx = imgs.entries[i]->nx;
             const int ny = imgs.entries[i]->ny;
             const int n = nx * ny;
 
             for (int b = 0; b < batch_size; b++) {
-                float * batch_entry = inp_raw.data() + b * (3*n);
+                float * batch_entry = inp_raw.data() + b * (expected_channels * n);
                 for (int y = 0; y < ny; y++) {
                     for (int x = 0; x < nx; x++) {
-                        size_t base_src = 3*(y * nx + x); // idx of the first channel
+                        size_t base_src = expected_channels*(y * nx + x); // idx of the first channel
                         size_t base_dst =    y * nx + x;  // idx of the first channel
                         batch_entry[      base_dst] = imgs.entries[b]->buf[base_src    ];
                         batch_entry[1*n + base_dst] = imgs.entries[b]->buf[base_src + 1];
@@ -5000,6 +5100,106 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     return true;
 }
 
+// batch-encoding to handle video inputs: by merging frame pairs into "super-frames" containing temporal patches.
+// uses clip_image_batch_encode method in a loop per super-frame of the video
+bool clip_image_batch_encode_video(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+    ctx->debug_print_tensors.clear();
+
+    const clip_image_f32_batch & imgs = *imgs_c_ptr;
+    const int frame_count = (int) imgs.entries.size();
+
+    if (frame_count <= 0) {
+        LOG_ERR("%s: Invalid frame count %d\n", __func__, frame_count);
+        return false;
+    }
+
+    // Uses temporal_patch_size = 2 by default
+    const int temporal_patch_size = 2;
+    const int merged_frame_count = (frame_count + temporal_patch_size - 1) / temporal_patch_size;
+
+    const int frame_w = imgs.entries[0]->nx;
+    const int frame_h = imgs.entries[0]->ny;
+    const int pixels_per_frame = frame_w * frame_h;
+    const int channel_count = 3;
+    const int frame_stride = pixels_per_frame * channel_count;
+
+    for (int i = 1; i < frame_count; ++i) {
+        if (imgs.entries[i]->nx != frame_w || imgs.entries[i]->ny != frame_h) {
+            LOG_ERR("%s: All video frames must share identical dimensions. Frame 0: %dx%d, frame %d: %dx%d\n", __func__, frame_w, frame_h, i, imgs.entries[i]->nx, imgs.entries[i]->ny);
+            return false;
+        }
+    }
+
+    // Build super-frames with 6 channels (concatenate two consecutive RGB frames)
+    std::vector<clip_image_f32_ptr> super_frames;
+    super_frames.reserve(merged_frame_count);
+
+    for (int merged_idx = 0; merged_idx < merged_frame_count; ++merged_idx) {
+        const int frame_idx0 = merged_idx * temporal_patch_size;
+        const int frame_idx1 = std::min(frame_idx0 + 1, frame_count - 1);
+        const bool has_second_frame = frame_idx1 < frame_count;
+
+        const clip_image_f32 * frame0 = imgs.entries[frame_idx0].get();
+        const clip_image_f32 * frame1 = has_second_frame ? imgs.entries[frame_idx1].get() : frame0;
+
+        clip_image_f32_ptr merged(clip_image_f32_init());
+        merged->nx = frame_w;
+        merged->ny = frame_h;
+        merged->buf.resize(frame_stride * temporal_patch_size);
+
+        float * dst = merged->buf.data();
+        const float * src0 = frame0->buf.data();
+        const float * src1 = frame1->buf.data();
+
+        for (int p = 0; p < pixels_per_frame; ++p) {
+            const size_t src_base = p * channel_count;
+            const size_t dst_base = p * channel_count * temporal_patch_size;
+
+            dst[dst_base + 0] = src0[src_base + 0];
+            dst[dst_base + 1] = src0[src_base + 1];
+            dst[dst_base + 2] = src0[src_base + 2];
+
+            dst[dst_base + 3] = src1[src_base + 0];
+            dst[dst_base + 4] = src1[src_base + 1];
+            dst[dst_base + 5] = src1[src_base + 2];
+        }
+
+        // Preserve video metadata for downstream 3D M-RoPE handling
+        const float temporal_position = frame0->temporal_position;
+        clip_image_f32_set_video_metadata(
+            merged.get(),
+            /*is_video_frame=*/true,
+            /*frame_idx=*/merged_idx,
+            /*total_frames=*/merged_frame_count,
+            temporal_position);
+
+        super_frames.push_back(std::move(merged));
+    }
+
+    if (super_frames.empty()) {
+        LOG_ERR("%s: Failed to build super-frames for video encoding\n", __func__);
+        return false;
+    }
+
+    const size_t embd_dim = clip_n_mmproj_embd(ctx);
+    const size_t tokens_per_superframe = clip_n_output_tokens(ctx, super_frames[0].get());
+    const size_t tokens_total = tokens_per_superframe * merged_frame_count;
+
+    size_t output_offset = 0;
+    for (int merged_idx = 0; merged_idx < merged_frame_count; ++merged_idx) {
+        clip_image_f32_batch single_batch;
+        single_batch.entries.push_back(std::move(super_frames[merged_idx]));
+
+        float * frame_out = vec + output_offset;
+        if (!clip_image_batch_encode(ctx, n_threads, &single_batch, frame_out)) {
+            LOG_ERR("%s: Failed to encode super-frame %d\n", __func__, merged_idx);
+            return false;
+        }
+        output_offset += tokens_per_superframe * embd_dim;
+    }
+    return true;
+}
+
 int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
     switch (ctx->model.proj_type) {
         case PROJECTOR_TYPE_LDP:
@@ -5115,4 +5315,28 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
     batch->entries.push_back(clip_image_f32_ptr(audio));
     batch->is_audio = true;
+}
+
+float clip_get_seconds_per_grid_ts(const struct clip_ctx * ctx) {
+    return ctx->seconds_per_grid_ts;
+}
+
+void clip_set_seconds_per_grid_ts(struct clip_ctx * ctx, float seconds) {
+    ctx->seconds_per_grid_ts = seconds;
+}
+
+bool clip_get_is_video_modality(const struct clip_ctx * ctx) {
+    return ctx->is_video_modality;
+}
+
+void clip_set_is_video_modality(struct clip_ctx * ctx, bool is_video_modality) {
+    ctx->is_video_modality = is_video_modality;
+}
+
+void clip_image_f32_set_video_metadata(struct clip_image_f32 * img, bool is_video_frame, uint32_t frame_idx, uint32_t total_frames, float temporal_position)
+{
+    img->is_video_frame = is_video_frame;
+    img->frame_idx = frame_idx;
+    img->total_frames = total_frames;
+    img->temporal_position = temporal_position;
 }

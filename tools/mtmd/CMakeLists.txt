@@ -11,6 +11,8 @@ add_library(mtmd
             clip-impl.h
             mtmd-helper.cpp
             mtmd-helper.h
+			mtmd-video.cpp
+			mtmd-video.h
             )
 
 set_target_properties(mtmd PROPERTIES
@@ -34,6 +36,7 @@ endif()
 set(MTMD_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd.h
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-helper.h
+	${CMAKE_CURRENT_SOURCE_DIR}/mtmd-video.h
     )
 
 set_target_properties(mtmd

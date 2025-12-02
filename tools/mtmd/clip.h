@@ -34,6 +34,7 @@ struct clip_context_params {
     enum clip_flash_attn_type flash_attn_type;
     int image_min_tokens;
     int image_max_tokens;
+    bool is_video_modality;
 };
 
 struct clip_init_result {
@@ -91,6 +92,10 @@ struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch
  */
 void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny, struct clip_image_u8 * img);
 
+bool clip_image_load_from_file(const char * fname, struct clip_image_u8 * img);
+/** interpret bytes as an image file with length bytes_length, and use the result to populate img */
+bool clip_image_load_from_bytes(const unsigned char * bytes, size_t bytes_length, struct clip_image_u8 * img);
+
 /** preprocess img and store the result in res_imgs, pad_to_square may be overridden to false depending on model configuration */
 bool clip_image_preprocess(struct clip_ctx * ctx, const struct clip_image_u8 * img, struct clip_image_f32_batch * res_imgs );
 
@@ -98,6 +103,9 @@ struct ggml_tensor * clip_get_newline_tensor(const struct clip_ctx * ctx);
 
 bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, float * vec);
 bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
+
+// Video-specific encoding: encodes all video frames in sequence while preserving temporal context
+bool clip_image_batch_encode_video(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
 
 int clip_is_minicpmv(const struct clip_ctx * ctx);
 bool clip_is_glm(const struct clip_ctx * ctx);
@@ -109,6 +117,15 @@ bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img,
 
 // use by audio input
 void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel, int n_frames, float * mel);
+
+// use by video input - set video frame metadata for 3D M-RoPE
+void clip_image_f32_set_video_metadata(
+    struct clip_image_f32 * img,
+    bool is_video_frame,
+    uint32_t frame_idx,
+    uint32_t total_frames,
+    float temporal_position
+);
 
 bool clip_has_vision_encoder(const struct clip_ctx * ctx);
 bool clip_has_audio_encoder(const struct clip_ctx * ctx);

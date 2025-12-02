@@ -9,9 +9,11 @@
 
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-video.h"
 #include "llama.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cinttypes>
 #include <vector>
 
@@ -170,6 +172,42 @@ struct decode_embd_batch {
         }
     }
 
+    // M-RoPE for video (3D with temporal dimension) [t_index, h_index, w_index]:
+    // - t_index = round(frame_idx * seconds_per_grid * tokens_per_second)
+    // - h_index = y (row index after merge)
+    // - w_index = x (col index after merge)
+    void set_position_mrope_3d(llama_pos pos_0, int nx, int ny, int total_superframes, float seconds_per_grid, llama_seq_id seq_id) {
+        GGML_ASSERT(n_pos_per_embd == 4);
+        seq_id_0[0]                       = seq_id;
+        const int   n_tokens_total        = batch.n_tokens;
+        const int   tokens_per_superframe = nx * ny;
+        const float tokens_per_second     = 2.0f;
+        bool        exhausted             = false;
+        for (int superframe_idx = 0; superframe_idx < total_superframes && !exhausted; superframe_idx++) {
+            const int token_offset = superframe_idx * tokens_per_superframe;
+            const int t_index      = (int) llroundf(superframe_idx * seconds_per_grid * tokens_per_second);
+            for (int y = 0; y < ny && !exhausted; y++) {
+                for (int x = 0; x < nx; x++) {
+                    const int i_local  = y * nx + x;
+                    const int i_global = token_offset + i_local;
+                    if (i_global >= n_tokens_total) {
+                        exhausted = true;
+                        break;
+                    }
+                    pos[i_global]                      = pos_0;    // base text position
+                    pos[i_global + n_tokens_total]     = t_index;  // temporal index
+                    pos[i_global + n_tokens_total * 2] = y;        // height index
+                    pos[i_global + n_tokens_total * 3] = x;        // width index
+                }
+            }
+        }
+        for (int i = 0; i < batch.n_tokens; i++) {
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i]   = seq_id_0.data();
+            batch.logits[i]   = false;
+        }
+    }
+
     // M-RoPE for audio
     void set_position_mrope_1d(llama_pos pos_0, llama_seq_id seq_id) {
         GGML_ASSERT(n_pos_per_embd == 4);
@@ -256,8 +294,20 @@ int32_t mtmd_helper_decode_image_chunk(
             }
             const int nx = mtmd_image_tokens_get_nx(image_tokens);
             const int ny = mtmd_image_tokens_get_ny(image_tokens);
-            batch_embd.set_position_mrope_2d(n_past, nx, ny, seq_id);
-        } else if (chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+
+            // Check if this is a video batch (merged super-frames) that needs 3D M-RoPE
+            if (mtmd_image_tokens_is_video_frame(image_tokens)) {
+                const int   total_superframes = mtmd_image_tokens_get_total_frames(image_tokens);
+                const float seconds_per_grid  = mtmd_image_tokens_get_seconds_per_grid(image_tokens);
+                // Use 3D M-RoPE for video super-frames (T×H×W)
+                batch_embd.set_position_mrope_3d(n_past, nx, ny, total_superframes, seconds_per_grid, seq_id);
+            }
+            else {
+                // Use 2D M-RoPE for regular images (H×W)
+                batch_embd.set_position_mrope_2d(n_past, nx, ny, seq_id);
+            }
+        }
+        else if (chunk_type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
             batch_embd.set_position_mrope_1d(n_past, seq_id);
         } else {
             GGML_ABORT("invalid chunk type for M-RoPE");

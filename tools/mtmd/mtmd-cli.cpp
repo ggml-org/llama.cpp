@@ -8,10 +8,13 @@
 #include "chat.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-video.h"
 
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
+#include <map>
+#include <fstream>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -85,6 +88,10 @@ struct mtmd_cli_context {
     // support for legacy templates (models not having EOT token)
     llama_tokens antiprompt_tokens;
 
+    // Store the chat template name for later use
+    std::string chat_template;
+    bool        no_think_mode = false;
+
     int n_threads    = 1;
     llama_pos n_past = 0;
 
@@ -97,6 +104,9 @@ struct mtmd_cli_context {
         batch = llama_batch_init(1, 0, 1); // batch for next token generation
         n_batch = params.n_batch;
 
+        chat_template = params.chat_template;  // Store the chat template name
+        no_think_mode = params.no_think;
+
         if (!model || !lctx) {
             exit(1);
         }
@@ -106,13 +116,20 @@ struct mtmd_cli_context {
             LOG_ERR("  For old llava models, you may need to use '--chat-template vicuna'\n");
             LOG_ERR("  For MobileVLM models, use '--chat-template deepseek'\n");
             LOG_ERR("  For Mistral Small 3.1, use '--chat-template mistral-v7'\n");
+            LOG_ERR("  For Cosmos models, use '--chat-template cosmos'\n");
             exit(1);
         }
 
-        tmpls = common_chat_templates_init(model, params.chat_template);
-        use_jinja = params.use_jinja;
-        chat_history.clear();
-        LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(tmpls.get(), params.use_jinja, params.default_template_kwargs).c_str());
+        // If chat_template == "cosmos" no need for standard template initialization. It is handled in eval_message() to support required formatting.
+        if (params.chat_template == "cosmos") {
+            LOG_INF("%s: Using Cosmos chat template (custom handling in eval_message)\n", __func__);
+        }
+        else {
+            tmpls     = common_chat_templates_init(model, params.chat_template);
+            use_jinja = params.use_jinja;
+            chat_history.clear();
+            LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(tmpls.get(), params.use_jinja, params.default_template_kwargs).c_str());
+        }
 
         init_vision_context(params);
 
@@ -121,6 +138,8 @@ struct mtmd_cli_context {
             antiprompt_tokens = common_tokenize(lctx, "ASSISTANT:", false, true);
         } else if (params.chat_template == "deepseek") {
             antiprompt_tokens = common_tokenize(lctx, "###", false, true);
+        } else if (params.chat_template == "cosmos") {
+            antiprompt_tokens = common_tokenize(lctx, "<|im_end|>", false, true);
         }
     }
 
@@ -132,12 +151,20 @@ struct mtmd_cli_context {
     void init_vision_context(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
-        mparams.use_gpu          = params.mmproj_use_gpu;
-        mparams.print_timings    = true;
-        mparams.n_threads        = params.cpuparams.n_threads;
-        mparams.flash_attn_type  = params.flash_attn_type;
-        mparams.image_min_tokens = params.image_min_tokens;
-        mparams.image_max_tokens = params.image_max_tokens;
+        mparams.use_gpu             = params.mmproj_use_gpu;
+        mparams.print_timings       = true;
+        mparams.n_threads           = params.cpuparams.n_threads;
+        mparams.flash_attn_type     = params.flash_attn_type;
+        mparams.image_min_tokens    = params.image_min_tokens;
+        mparams.image_max_tokens    = params.image_max_tokens;
+        mparams.seconds_per_grid_ts = params.ts_per_grid;  // pass temporal grid spacing
+        mparams.is_video_modality   = (params.video.length() > 0);
+
+        if (params.chat_template == "cosmos") {
+            const bool wants_video_marker = !params.video.empty();
+            mparams.media_marker          = wants_video_marker ? mtmd_cosmos_marker_video() : mtmd_cosmos_marker();
+        }
+
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
@@ -163,6 +190,51 @@ struct mtmd_cli_context {
         }
         bitmaps.entries.push_back(std::move(bmp));
         return true;
+    }
+
+    bool load_video(const std::string & video_path, float fps = 1.0f, int max_frames = 0, float ts_per_grid = 0.5f) {
+        mtmd_video_opts opts;
+        opts.fps = fps;
+        opts.max_frames = max_frames;
+        
+        mtmd_video_result result;
+        std::string err;
+        
+        if (!mtmd_video_extract_frames(video_path, opts, result, err)) {
+            LOG_ERR("%s: Failed to extract frames from video: %s\n", __func__, err.c_str());
+            return false;
+        }
+        
+        // Load each frame as an image with video metadata
+        bool success = true;
+        uint32_t total_frames = static_cast<uint32_t>(result.frames.size());
+        
+        // Store the starting index for video frames
+        size_t video_start_idx = bitmaps.entries.size();
+        
+        for (uint32_t i = 0; i < total_frames; ++i) {
+            const auto & frame_path = result.frames[i];
+            if (!load_media(frame_path.string())) {
+                LOG_ERR("%s: Failed to load frame: %s\n", __func__, frame_path.string().c_str());
+                success = false;
+                break;
+            }
+            // Set video frame metadata on the last loaded bitmap
+            if (!bitmaps.entries.empty())
+            {
+                auto & last_bitmap = bitmaps.entries.back();
+                mtmd_bitmap_set_is_video_frame(last_bitmap.ptr.get(), true);
+                mtmd_bitmap_set_frame_idx(last_bitmap.ptr.get(), i);
+                mtmd_bitmap_set_total_frames(last_bitmap.ptr.get(), total_frames);
+                // Set a unique ID for the video frame
+                std::string frame_id = video_path + "_frame_" + std::to_string(i);
+                mtmd_bitmap_set_id(last_bitmap.ptr.get(), frame_id.c_str());
+            }
+        }
+        
+        // Cleanup temp directory after use
+        mtmd_video_cleanup(result);
+        return success;
     }
 };
 
@@ -220,9 +292,35 @@ static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg &
 }
 
 static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
-    bool add_bos = ctx.chat_history.empty();
-    auto formatted_chat = chat_add_and_format(ctx, msg);
-    LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
+    std::string formatted_chat = "";
+    bool        add_bos        = ctx.chat_history.empty();
+
+    // Special handling for cosmos template
+    if (ctx.chat_template == "cosmos") {
+        std::string cosmos_content = msg.content;
+        // Build the cosmos chat template with the required media markers
+        std::string system_msg;
+        if (ctx.no_think_mode) {
+            system_msg = "<|im_start|>system\n"
+                         "You are a helpful assistant. Provide only the final answer. "
+                         "Do not include chain-of-thought. Respond in:\n"
+                         "<answer>\nyour answer\n</answer>.<|im_end|>\n";
+        }
+        else {
+            system_msg = "<|im_start|>system\n"
+                         "You are a helpful assistant. "
+                         "Answer the question in the following format:\n"
+                         "<think>\nyour reasoning\n</think>\n\n"
+                         "<answer>\nyour answer\n</answer>.<|im_end|>\n";
+        }
+        std::string user_msg = "<|im_start|>user\n" + cosmos_content + "<|im_end|>\n";
+        std::string assistant_start = "<|im_start|>assistant\n";
+        formatted_chat = system_msg + user_msg + assistant_start;
+    }
+    else {
+        formatted_chat = chat_add_and_format(ctx, msg);
+        LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
+    }
 
     mtmd_input_text text;
     text.text          = formatted_chat.c_str();
@@ -287,7 +385,7 @@ int main(int argc, char ** argv) {
     mtmd_cli_context ctx(params);
     LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
-    bool is_single_turn = !params.prompt.empty() && !params.image.empty();
+    bool is_single_turn = !params.prompt.empty() && (!params.image.empty() || params.video.length() > 0);
 
     int n_predict = params.n_predict < 0 ? INT_MAX : params.n_predict;
 
@@ -310,12 +408,29 @@ int main(int argc, char ** argv) {
     if (g_is_interrupted) return 130;
 
     if (is_single_turn) {
+        auto mtmd_marker = (params.chat_template == "cosmos" && mtmd_is_video_modality(ctx.ctx_vision.get()))
+                               ? mtmd_cosmos_marker_video()
+                               : (params.chat_template == "cosmos" ? mtmd_cosmos_marker() : mtmd_default_marker());
         g_is_generating = true;
-        if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
+        // Handle video input
+        if (mtmd_is_video_modality(ctx.ctx_vision.get()) && mtmd_decode_use_mrope(ctx.ctx_vision.get())) {
+            LOG_INF("%s: Processing video: %s\n", __func__, params.video.c_str());
+            if (!ctx.load_video(params.video, params.video_fps, params.video_max_frames, params.ts_per_grid)) {
+                return 1;
+            }
+            if (params.prompt.find(mtmd_marker) == std::string::npos) {
+                // For video input (Qwen2VL/Qwen25VL), all frames are processed as ONE chunk, so we only need 1 marker for the entire video, regardless of frame count
+                params.prompt = std::string(mtmd_marker) + params.prompt;
+                LOG_INF("%s: Added single marker for video batch\n", __func__);
+            }
+        }
+        // Handle image input
+        else if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
             for (size_t i = 0; i < params.image.size(); i++) {
                 params.prompt += mtmd_default_marker();
             }
         }
+
         common_chat_msg msg;
         msg.role = "user";
         msg.content = params.prompt;
@@ -332,9 +447,12 @@ int main(int argc, char ** argv) {
         }
 
     } else {
+        // To add markers for video frames
+        auto mtmd_marker = (params.chat_template == "cosmos" && mtmd_is_video_modality(ctx.ctx_vision.get())) ? mtmd_cosmos_marker_video() : (params.chat_template == "cosmos" ? mtmd_cosmos_marker() : mtmd_default_marker());
         LOG("\n Running in chat mode, available commands:");
         if (mtmd_support_vision(ctx.ctx_vision.get())) {
             LOG("\n   /image <path>    load an image");
+            LOG("\n   /video <path>    load a video (extract frames)");
         }
         if (mtmd_support_audio(ctx.ctx_vision.get())) {
             LOG("\n   /audio <path>    load an audio");
@@ -370,6 +488,7 @@ int main(int argc, char ** argv) {
             g_is_generating = true;
             bool is_image = line == "/image" || line.find("/image ") == 0;
             bool is_audio = line == "/audio" || line.find("/audio ") == 0;
+            bool is_video   = line == "/video" || line.find("/video ") == 0;
             if (is_image || is_audio) {
                 if (line.size() < 8) {
                     LOG_ERR("ERR: Missing media filename\n");
@@ -378,11 +497,41 @@ int main(int argc, char ** argv) {
                 std::string media_path = line.substr(7);
                 if (ctx.load_media(media_path)) {
                     LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
-                    content += mtmd_default_marker();
+                    if (params.chat_template == "cosmos") {
+                        content = std::string(mtmd_marker) + content;
+                    } else {
+                        content += mtmd_marker;
+                    }
                 }
                 // else, error is already printed by libmtmd
                 continue;
-            } else {
+            }
+            else if (is_video) {
+                if (line.size() < 8) {
+                    LOG_ERR("ERR: Missing video filename\n");
+                    continue;
+                }
+                std::string video_path = line.substr(7);
+                size_t prev_size = ctx.bitmaps.entries.size();
+                if (ctx.load_video(video_path, params.video_fps, params.video_max_frames, params.ts_per_grid)) {
+                    size_t n_frames = ctx.bitmaps.entries.size() - prev_size;
+                    LOG_INF("Video %s loaded (%zu frames extracted)\n", video_path.c_str(), n_frames);
+                    // Add markers for video frames
+                    if (mtmd_is_video_modality(ctx.ctx_vision.get()) && mtmd_decode_use_mrope(ctx.ctx_vision.get())) {
+                        // single marker for all frames
+                        content = std::string(mtmd_marker) + " " + content;
+                    }
+                    else {
+                        for (size_t i = 0; i < n_frames; i++) {
+                            content += mtmd_marker;
+                            if (i < n_frames - 1) content += " ";
+                        }
+                    }
+                }
+                // else, error is already printed by load_video
+                continue;
+            }
+            else {
                 content += line;
             }
             common_chat_msg msg;
