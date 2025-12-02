@@ -83,15 +83,16 @@ void ggml_sycl_op_flash_attn_2(ggml_backend_sycl_context & ctx, ggml_tensor * ds
         sycl::local_accessor<float, 1> m_local({Br}, cgh);
         sycl::local_accessor<float, 1> l_local({Br}, cgh);
 
-        float* q_loc = Qtile.template get_multi_ptr<sycl::access::decorated::no>().get();
-        float* k_loc = Ktile.template get_multi_ptr<sycl::access::decorated::no>().get();
-        float* v_loc = Vtile.template get_multi_ptr<sycl::access::decorated::no>().get();
-        float* s_loc = Stile.template get_multi_ptr<sycl::access::decorated::no>().get();
-        float* p_loc = Ptile.template get_multi_ptr<sycl::access::decorated::no>().get();
-        float* m_loc = m_local.template get_multi_ptr<sycl::access::decorated::no>().get();
-        float* l_loc = l_local.template get_multi_ptr<sycl::access::decorated::no>().get();
-
         cgh.parallel_for(sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> it) {
+
+            float* q_loc = Qtile.template get_multi_ptr<sycl::access::decorated::no>().get();
+            float* k_loc = Ktile.template get_multi_ptr<sycl::access::decorated::no>().get();
+            float* v_loc = Vtile.template get_multi_ptr<sycl::access::decorated::no>().get();
+            float* s_loc = Stile.template get_multi_ptr<sycl::access::decorated::no>().get();
+            float* p_loc = Ptile.template get_multi_ptr<sycl::access::decorated::no>().get();
+            float* m_loc = m_local.template get_multi_ptr<sycl::access::decorated::no>().get();
+            float* l_loc = l_local.template get_multi_ptr<sycl::access::decorated::no>().get();
+
             auto group = it.get_group();
             int group_id_i = group.get_group_id(0);
             int group_id_j = group.get_group_id(1);
@@ -174,7 +175,6 @@ void ggml_sycl_op_flash_attn_2(ggml_backend_sycl_context & ctx, ggml_tensor * ds
     sycl::free(m_d, *stream);
 }
 
-
 void ggml_sycl_op_flash_attn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * Q    = dst->src[0];
     const ggml_tensor * V    = dst->src[2];
@@ -204,8 +204,12 @@ void ggml_sycl_op_flash_attn(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             GGML_ASSERT(V->ne[0] == 256);
             ggml_sycl_op_flash_attn_2<256, 256>(ctx, dst);
             break;
+        case 576:
+            GGML_ASSERT(V->ne[0] == 512);
+            ggml_sycl_op_flash_attn_2<576, 512>(ctx, dst);
+            break;
         default:
-            GGML_ABORT("fatal error");
+            GGML_ABORT("Unsupported head size");
             break;
     }
 }

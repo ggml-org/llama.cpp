@@ -53,14 +53,14 @@ inline void flash_attn_softmax_kernel(
     float m_old = m_d[row];
     float l_old = l_d[row];
 
-    // 2. Block max
+    // Block max
     float m_block = -INFINITY;
     for (int j = 0; j < Bc; ++j) {
         const float s_ij = S[row_offset + j];
         m_block = sycl::fmax(m_block, s_ij);
     }
 
-    // 3. Block exp-sum
+    // Block exp-sum
     float l_block = 0.0f;
     for (int j = 0; j < Bc; ++j) {
         const float e = sycl::exp(S[row_offset + j] - m_block);
@@ -68,7 +68,7 @@ inline void flash_attn_softmax_kernel(
         l_block += e;
     }
 
-    // 4. Merge block stats with global (streaming softmax)
+    // Merge block stats with global (streaming softmax)
     float m_new;
     float l_new;
 
@@ -85,11 +85,11 @@ inline void flash_attn_softmax_kernel(
         l_new = alpha * l_old + beta * l_block;
     }
 
-    // 5. Store updated global stats
+    // Store updated global stats
     m_d[row] = m_new;
     l_d[row] = l_new;
 
-    // 6. Convert local e_ij to global probabilities p_ij
+    // Convert local e_ij to global probabilities p_ij
     float scale_block = 0.0f;
     if (l_new > 0.0f) {
         scale_block = sycl::exp(m_block - m_new) / l_new;
@@ -99,7 +99,7 @@ inline void flash_attn_softmax_kernel(
         P[row_offset + j] *= scale_block;
     }
 
-    // 7. Optional: keep local copies
+    // Optional: keep local copies
     m_local[li] = m_new;
     l_local[li] = l_new;
 }
