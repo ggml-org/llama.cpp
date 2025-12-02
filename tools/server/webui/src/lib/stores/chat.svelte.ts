@@ -58,7 +58,11 @@ class ChatStore {
 
 	activeProcessingState = $state<ApiProcessingState | null>(null);
 	currentResponse = $state('');
-	errorDialogState = $state<{ type: 'timeout' | 'server'; message: string } | null>(null);
+	errorDialogState = $state<{
+		type: 'timeout' | 'server';
+		message: string;
+		contextInfo?: { n_prompt_tokens: number; n_ctx: number };
+	} | null>(null);
 	isLoading = $state(false);
 	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
@@ -335,8 +339,12 @@ class ChatStore {
 		return error instanceof Error && (error.name === 'AbortError' || error instanceof DOMException);
 	}
 
-	private showErrorDialog(type: 'timeout' | 'server', message: string): void {
-		this.errorDialogState = { type, message };
+	private showErrorDialog(
+		type: 'timeout' | 'server',
+		message: string,
+		contextInfo?: { n_prompt_tokens: number; n_ctx: number }
+	): void {
+		this.errorDialogState = { type, message, contextInfo };
 	}
 
 	dismissErrorDialog(): void {
@@ -346,6 +354,23 @@ class ChatStore {
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Message Operations
 	// ─────────────────────────────────────────────────────────────────────────────
+
+	/**
+	 * Finds a message by ID and optionally validates its role.
+	 * Returns message and index, or null if not found or role doesn't match.
+	 */
+	private getMessageByIdWithRole(
+		messageId: string,
+		expectedRole?: ChatRole
+	): { message: DatabaseMessage; index: number } | null {
+		const index = conversationsStore.findMessageIndex(messageId);
+		if (index === -1) return null;
+
+		const message = conversationsStore.activeMessages[index];
+		if (expectedRole && message.role !== expectedRole) return null;
+
+		return { message, index };
+	}
 
 	async addMessage(
 		role: ChatRole,
@@ -508,7 +533,6 @@ class ChatStore {
 				) => {
 					this.stopStreaming();
 
-					// Build update data - only include model if not already persisted
 					const updateData: Record<string, unknown> = {
 						content: finalContent || streamedContent,
 						thinking: reasoningContent || streamedReasoningContent,
@@ -520,7 +544,6 @@ class ChatStore {
 					}
 					await DatabaseService.updateMessage(assistantMessage.id, updateData);
 
-					// Update UI state - always include model and timings if available
 					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 					const uiUpdate: Partial<DatabaseMessage> = {
 						content: updateData.content as string,
@@ -543,22 +566,38 @@ class ChatStore {
 				},
 				onError: (error: Error) => {
 					this.stopStreaming();
+
 					if (this.isAbortError(error)) {
 						this.setChatLoading(assistantMessage.convId, false);
 						this.clearChatStreaming(assistantMessage.convId);
 						this.clearProcessingState(assistantMessage.convId);
+
 						return;
 					}
+
 					console.error('Streaming error:', error);
+
 					this.setChatLoading(assistantMessage.convId, false);
 					this.clearChatStreaming(assistantMessage.convId);
 					this.clearProcessingState(assistantMessage.convId);
+
 					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+
 					if (idx !== -1) {
 						const failedMessage = conversationsStore.removeMessageAtIndex(idx);
 						if (failedMessage) DatabaseService.deleteMessage(failedMessage.id).catch(console.error);
 					}
-					this.showErrorDialog(error.name === 'TimeoutError' ? 'timeout' : 'server', error.message);
+
+					const contextInfo = (
+						error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
+					).contextInfo;
+
+					this.showErrorDialog(
+						error.name === 'TimeoutError' ? 'timeout' : 'server',
+						error.message,
+						contextInfo
+					);
+
 					if (onError) onError(error);
 				}
 			},
@@ -591,7 +630,9 @@ class ChatStore {
 				await conversationsStore.updateConversationName(currentConv.id, content.trim());
 
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
+
 			if (!assistantMessage) throw new Error('Failed to create assistant message');
+
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
@@ -607,15 +648,26 @@ class ChatStore {
 			if (!this.errorDialogState) {
 				const dialogType =
 					error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'server';
-				this.showErrorDialog(dialogType, error instanceof Error ? error.message : 'Unknown error');
+				const contextInfo = (
+					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
+				).contextInfo;
+
+				this.showErrorDialog(
+					dialogType,
+					error instanceof Error ? error.message : 'Unknown error',
+					contextInfo
+				);
 			}
 		}
 	}
 
 	async stopGeneration(): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) return;
+
 		await this.savePartialResponseIfNeeded(activeConv.id);
+
 		this.stopStreaming();
 		this.abortRequest(activeConv.id);
 		this.setChatLoading(activeConv.id, false);
@@ -655,17 +707,22 @@ class ChatStore {
 
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
+
 		if (!conversationId) return;
+
 		const streamingState = this.chatStreamingStates.get(conversationId);
+
 		if (!streamingState || !streamingState.response.trim()) return;
 
 		const messages =
 			conversationId === conversationsStore.activeConversation?.id
 				? conversationsStore.activeMessages
 				: await conversationsStore.getConversationMessages(conversationId);
+
 		if (!messages.length) return;
 
 		const lastMessage = messages[messages.length - 1];
+
 		if (lastMessage?.role === 'assistant') {
 			try {
 				const updateData: { content: string; thinking?: string; timings?: ChatMessageTimings } = {
@@ -684,9 +741,13 @@ class ChatStore {
 								: undefined
 					};
 				}
+
 				await DatabaseService.updateMessage(lastMessage.id, updateData);
+
 				lastMessage.content = this.currentResponse;
+
 				if (updateData.thinking) lastMessage.thinking = updateData.thinking;
+
 				if (updateData.timings) lastMessage.timings = updateData.timings;
 			} catch (error) {
 				lastMessage.content = this.currentResponse;
@@ -700,14 +761,12 @@ class ChatStore {
 		if (!activeConv) return;
 		if (this.isLoading) this.stopGeneration();
 
+		const result = this.getMessageByIdWithRole(messageId, 'user');
+		if (!result) return;
+		const { message: messageToUpdate, index: messageIndex } = result;
+		const originalContent = messageToUpdate.content;
+
 		try {
-			const messageIndex = conversationsStore.findMessageIndex(messageId);
-			if (messageIndex === -1) return;
-
-			const messageToUpdate = conversationsStore.activeMessages[messageIndex];
-			const originalContent = messageToUpdate.content;
-			if (messageToUpdate.role !== 'user') return;
-
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 			const isFirstUserMessage = rootMessage && messageToUpdate.parent === rootMessage.id;
@@ -724,7 +783,9 @@ class ChatStore {
 			}
 
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
+
 			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
+
 			conversationsStore.sliceActiveMessages(messageIndex + 1);
 			conversationsStore.updateConversationTimestamp();
 
@@ -732,8 +793,11 @@ class ChatStore {
 			this.clearChatStreaming(activeConv.id);
 
 			const assistantMessage = await this.createAssistantMessage();
+
 			if (!assistantMessage) throw new Error('Failed to create assistant message');
+
 			conversationsStore.addMessageToActive(assistantMessage);
+
 			await conversationsStore.updateCurrentNode(assistantMessage.id);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
@@ -758,12 +822,11 @@ class ChatStore {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isLoading) return;
 
-		try {
-			const messageIndex = conversationsStore.findMessageIndex(messageId);
-			if (messageIndex === -1) return;
-			const messageToRegenerate = conversationsStore.activeMessages[messageIndex];
-			if (messageToRegenerate.role !== 'assistant') return;
+		const result = this.getMessageByIdWithRole(messageId, 'assistant');
+		if (!result) return;
+		const { index: messageIndex } = result;
 
+		try {
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex);
 			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
 			conversationsStore.sliceActiveMessages(messageIndex);
@@ -832,6 +895,7 @@ class ChatStore {
 				const siblings = allMessages.filter(
 					(m) => m.parent === messageToDelete.parent && m.id !== messageId
 				);
+
 				if (siblings.length > 0) {
 					const latestSibling = siblings.reduce((latest, sibling) =>
 						sibling.timestamp > latest.timestamp ? sibling : latest
@@ -845,6 +909,7 @@ class ChatStore {
 			}
 			await DatabaseService.deleteMessageCascading(activeConv.id, messageId);
 			await conversationsStore.refreshActiveMessages();
+
 			conversationsStore.updateConversationTimestamp();
 		} catch (error) {
 			console.error('Failed to delete message:', error);
@@ -862,12 +927,12 @@ class ChatStore {
 	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isLoading) return;
-		try {
-			const idx = conversationsStore.findMessageIndex(messageId);
-			if (idx === -1) return;
-			const msg = conversationsStore.activeMessages[idx];
-			if (msg.role !== 'assistant') return;
 
+		const result = this.getMessageByIdWithRole(messageId, 'assistant');
+		if (!result) return;
+		const { message: msg, index: idx } = result;
+
+		try {
 			if (shouldBranch) {
 				const newMessage = await DatabaseService.createMessageBranch(
 					{
@@ -902,12 +967,12 @@ class ChatStore {
 	async editUserMessagePreserveResponses(messageId: string, newContent: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) return;
-		try {
-			const idx = conversationsStore.findMessageIndex(messageId);
-			if (idx === -1) return;
-			const msg = conversationsStore.activeMessages[idx];
-			if (msg.role !== 'user') return;
 
+		const result = this.getMessageByIdWithRole(messageId, 'user');
+		if (!result) return;
+		const { message: msg, index: idx } = result;
+
+		try {
 			await DatabaseService.updateMessage(messageId, {
 				content: newContent,
 				timestamp: Date.now()
@@ -916,6 +981,7 @@ class ChatStore {
 
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+
 			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
 				await conversationsStore.updateConversationTitleWithConfirmation(
 					activeConv.id,
@@ -932,15 +998,16 @@ class ChatStore {
 	async editMessageWithBranching(messageId: string, newContent: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isLoading) return;
-		try {
-			const idx = conversationsStore.findMessageIndex(messageId);
-			if (idx === -1) return;
-			const msg = conversationsStore.activeMessages[idx];
-			if (msg.role !== 'user') return;
 
+		const result = this.getMessageByIdWithRole(messageId, 'user');
+		if (!result) return;
+		const { message: msg } = result;
+
+		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 			const isFirstUserMessage = rootMessage && msg.parent === rootMessage.id;
+
 			const parentId = msg.parent || rootMessage?.id;
 			if (!parentId) return;
 
@@ -1034,7 +1101,9 @@ class ChatStore {
 
 	private async generateResponseForMessage(userMessageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
+
 		if (!activeConv) return;
+
 		this.errorDialogState = null;
 		this.setChatLoading(activeConv.id, true);
 		this.clearChatStreaming(activeConv.id);
@@ -1071,26 +1140,30 @@ class ChatStore {
 	async continueAssistantMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isLoading) return;
-		try {
-			const idx = conversationsStore.findMessageIndex(messageId);
-			if (idx === -1) return;
-			const msg = conversationsStore.activeMessages[idx];
-			if (msg.role !== 'assistant') return;
-			if (this.isChatLoading(activeConv.id)) return;
 
+		const result = this.getMessageByIdWithRole(messageId, 'assistant');
+		if (!result) return;
+		const { message: msg, index: idx } = result;
+
+		if (this.isChatLoading(activeConv.id)) return;
+
+		try {
 			this.errorDialogState = null;
 			this.setChatLoading(activeConv.id, true);
 			this.clearChatStreaming(activeConv.id);
 
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const dbMessage = allMessages.find((m) => m.id === messageId);
+
 			if (!dbMessage) {
 				this.setChatLoading(activeConv.id, false);
+
 				return;
 			}
 
 			const originalContent = dbMessage.content;
 			const originalThinking = dbMessage.thinking || '';
+
 			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
 			const contextWithContinue = [
 				...conversationContext,
@@ -1107,6 +1180,7 @@ class ChatStore {
 				contextWithContinue,
 				{
 					...this.getApiOptions(),
+
 					onChunk: (chunk: string) => {
 						hasReceivedContent = true;
 						appendedContent += chunk;
@@ -1114,6 +1188,7 @@ class ChatStore {
 						this.setChatStreaming(msg.convId, fullContent, msg.id);
 						conversationsStore.updateMessageAtIndex(idx, { content: fullContent });
 					},
+
 					onReasoningChunk: (reasoningChunk: string) => {
 						hasReceivedContent = true;
 						appendedThinking += reasoningChunk;
@@ -1121,6 +1196,7 @@ class ChatStore {
 							thinking: originalThinking + appendedThinking
 						});
 					},
+
 					onTimings: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 						const tokensPerSecond =
 							timings?.predicted_ms && timings?.predicted_n
@@ -1137,6 +1213,7 @@ class ChatStore {
 							msg.convId
 						);
 					},
+
 					onComplete: async (
 						finalContent?: string,
 						reasoningContent?: string,
@@ -1161,6 +1238,7 @@ class ChatStore {
 						this.clearChatStreaming(msg.convId);
 						this.clearProcessingState(msg.convId);
 					},
+
 					onError: async (error: Error) => {
 						if (this.isAbortError(error)) {
 							if (hasReceivedContent && appendedContent) {
