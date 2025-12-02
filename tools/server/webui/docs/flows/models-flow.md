@@ -56,7 +56,7 @@ sequenceDiagram
     UI->>modelsStore: fetchRouterModels()
     activate modelsStore
     modelsStore->>ModelsSvc: listRouter()
-    ModelsSvc->>API: GET /models
+    ModelsSvc->>API: GET /v1/models
     API-->>ModelsSvc: ApiRouterModelsListResponse
     Note right of API: {data: [{id, status, path, in_cache}]}
     modelsStore->>modelsStore: routerModels = $state(data)
@@ -132,7 +132,7 @@ sequenceDiagram
     loop poll every 500ms (max 60 attempts)
         modelsStore->>modelsStore: fetchRouterModels()
         modelsStore->>ModelsSvc: listRouter()
-        ModelsSvc->>API: GET /models
+        ModelsSvc->>API: GET /v1/models
         API-->>ModelsSvc: models[]
         modelsStore->>modelsStore: getModelStatus(modelId)
         alt status === LOADED
@@ -165,7 +165,7 @@ sequenceDiagram
     modelsStore->>modelsStore: pollForModelStatus(modelId, UNLOADED)
     loop poll until unloaded
         modelsStore->>ModelsSvc: listRouter()
-        ModelsSvc->>API: GET /models
+        ModelsSvc->>API: GET /v1/models
     end
 
     modelsStore->>modelsStore: modelLoadingStates.set(modelId, false)
