@@ -989,6 +989,10 @@ struct ggml_cuda_concurrent_event {
     int                                          n_streams = 0;
     std::unordered_map<const ggml_tensor *, int> stream_mapping;
 
+    // Original order of nodes in this concurrent region (before interleaving)
+    // Used to restore grouping for fusion within streams
+    std::vector<const ggml_tensor *> original_order;
+
     const ggml_tensor * join_node;
 
     ggml_cuda_concurrent_event() = default;
@@ -1011,6 +1015,7 @@ struct ggml_cuda_concurrent_event {
     , fork_event(other.fork_event)
     , n_streams(other.n_streams)
     , stream_mapping(std::move(other.stream_mapping))
+    , original_order(std::move(other.original_order))
     , join_node(other.join_node) {
         other.fork_event = nullptr;
     }
@@ -1121,11 +1126,9 @@ struct ggml_cuda_concurrent_event {
 };
 
 struct ggml_cuda_stream_context {
-    std::vector<const ggml_tensor *>                                    original_nodes;
     std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> concurrent_events;
 
     void reset() {
-        original_nodes.clear();
         concurrent_events.clear();
     }
 };
