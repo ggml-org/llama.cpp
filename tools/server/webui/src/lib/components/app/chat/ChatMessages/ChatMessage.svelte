@@ -1,8 +1,6 @@
 <script lang="ts">
-	import { getDeletionInfo } from '$lib/stores/chat.svelte';
-	import { copyToClipboard } from '$lib/utils/copy';
-	import { isIMEComposing } from '$lib/utils/is-ime-composing';
-	import type { ApiChatCompletionToolCall } from '$lib/types/api';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { copyToClipboard, isIMEComposing } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
 
@@ -20,7 +18,7 @@
 		) => void;
 		onEditUserMessagePreserveResponses?: (message: DatabaseMessage, newContent: string) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
-		onRegenerateWithBranching?: (message: DatabaseMessage) => void;
+		onRegenerateWithBranching?: (message: DatabaseMessage, modelOverride?: string) => void;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
 
@@ -98,7 +96,7 @@
 	}
 
 	async function handleDelete() {
-		deletionInfo = await getDeletionInfo(message.id);
+		deletionInfo = await chatStore.getDeletionInfo(message.id);
 		showDeleteDialog = true;
 	}
 
@@ -133,8 +131,8 @@
 		}
 	}
 
-	function handleRegenerate() {
-		onRegenerateWithBranching?.(message);
+	function handleRegenerate(modelOverride?: string) {
+		onRegenerateWithBranching?.(message, modelOverride);
 	}
 
 	function handleContinue() {

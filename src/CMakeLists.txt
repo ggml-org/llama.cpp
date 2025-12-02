@@ -114,7 +114,9 @@ add_library(llama
             models/qwen3vl.cpp
             models/qwen3vl-moe.cpp
             models/qwen3moe.cpp
+            models/qwen3next.cpp
             models/refact.cpp
+            models/rnd1.cpp
             models/rwkv6-base.cpp
             models/rwkv6.cpp
             models/rwkv6qwen2.cpp
@@ -130,6 +132,7 @@ add_library(llama
             models/t5-enc.cpp
             models/wavtokenizer-dec.cpp
             models/xverse.cpp
+            models/mistral3.cpp
             models/graph-context-mamba.cpp
             )
 

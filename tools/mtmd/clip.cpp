@@ -987,12 +987,20 @@ struct clip_graph {
                 cur = ggml_mul_mat(ctx0, layer.qkv_w, cur);
                 cur = ggml_add(ctx0, cur, layer.qkv_b);
 
-                ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos, d_head*sizeof(float),
-                    cur->nb[1], 0);
-                ggml_tensor * Kcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos, d_head*sizeof(float),
-                    cur->nb[1], n_embd * sizeof(float));
-                ggml_tensor * Vcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos, d_head*sizeof(float),
-                    cur->nb[1], 2 * n_embd * sizeof(float));
+                ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
+                        /* nb1    */ ggml_row_size(cur->type, d_head),
+                        /* nb2    */ cur->nb[1],
+                        /* offset */ 0);
+
+                ggml_tensor * Kcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
+                        /* nb1    */ ggml_row_size(cur->type, d_head),
+                        /* nb2    */ cur->nb[1],
+                        /* offset */ ggml_row_size(cur->type, n_embd));
+
+                ggml_tensor * Vcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
+                        /* nb1    */ ggml_row_size(cur->type, d_head),
+                        /* nb2    */ cur->nb[1],
+                        /* offset */ ggml_row_size(cur->type, 2 * n_embd));
 
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
@@ -1175,10 +1183,11 @@ struct clip_graph {
             cb(K, "resampler_K", -1);
             cb(V, "resampler_V", -1);
 
+            float resampler_kq_scale = 1.0f/ sqrtf(float(d_head));
             embeddings = build_attn(
                 model.mm_model_attn_o_w,
                 model.mm_model_attn_o_b,
-                Q, K, V, nullptr, kq_scale, -1);
+                Q, K, V, nullptr, resampler_kq_scale, -1);
             cb(embeddings, "resampler_attn_out", -1);
         }
         // layernorm
@@ -2011,7 +2020,7 @@ private:
         ggml_tensor * pos_embd = model.position_embeddings;
         const int height       = img.ny / patch_size;
         const int width        = img.nx / patch_size;
-        const uint32_t mode    = GGML_SCALE_MODE_BILINEAR;
+        const uint32_t mode    = GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ANTIALIAS;
         const int n_per_side   = (int)std::sqrt(pos_embd->ne[1]);
 
         GGML_ASSERT(pos_embd);
@@ -2786,7 +2795,8 @@ struct clip_model_loader {
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         // ref: https://huggingface.co/LiquidAI/LFM2-VL-3B/blob/main/preprocessor_config.json
-                        hparams.set_limit_image_tokens(64, 256);
+                        // config above specifies number of tokens after downsampling, while here it is before, relax lowerbound to 64
+                        hparams.set_limit_image_tokens(64, 1024);
                     } break;
                 case PROJECTOR_TYPE_PIXTRAL:
                 case PROJECTOR_TYPE_LIGHTONOCR:
@@ -3516,14 +3526,18 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             ctx_vision = new clip_ctx(ctx_params);
             loader.load_hparams(ctx_vision->model, CLIP_MODALITY_VISION);
             loader.load_tensors(*ctx_vision);
-            loader.warmup(*ctx_vision);
+            if (ctx_params.warmup) {
+                loader.warmup(*ctx_vision);
+            }
         }
 
         if (loader.has_audio) {
             ctx_audio = new clip_ctx(ctx_params);
             loader.load_hparams(ctx_audio->model, CLIP_MODALITY_AUDIO);
             loader.load_tensors(*ctx_audio);
-            loader.warmup(*ctx_audio);
+            if (ctx_params.warmup) {
+                loader.warmup(*ctx_audio);
+            }
         }
 
     } catch (const std::exception & e) {
@@ -3736,12 +3750,13 @@ struct img_tool {
         const int width  = inp_size.width;
         const int height = inp_size.height;
 
+        auto round_by_factor = [f = align_size](float x) { return static_cast<int>(std::round(x / static_cast<float>(f))) * f; };
         auto ceil_by_factor  = [f = align_size](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
         auto floor_by_factor = [f = align_size](float x) { return static_cast<int>(std::floor(x / static_cast<float>(f))) * f; };
 
         // always align up first
-        int h_bar = std::max(align_size, ceil_by_factor(height));
-        int w_bar = std::max(align_size, ceil_by_factor(width));
+        int h_bar = std::max(align_size, round_by_factor(height));
+        int w_bar = std::max(align_size, round_by_factor(width));
 
         if (h_bar * w_bar > max_pixels) {
             const auto beta = std::sqrt(static_cast<float>(height * width) / max_pixels);
@@ -4356,7 +4371,8 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 const std::array<uint8_t, 3> pad_color = {122, 116, 104};
 
                 clip_image_u8 resized_img;
-                img_tool::resize(*img, resized_img, target_size, img_tool::RESIZE_ALGO_BILINEAR, true, pad_color);
+                const bool pad = (ctx->proj_type() != PROJECTOR_TYPE_LFM2);
+                img_tool::resize(*img, resized_img, target_size, img_tool::RESIZE_ALGO_BILINEAR, pad, pad_color);
                 clip_image_f32_ptr res(clip_image_f32_init());
                 normalize_image_u8_to_f32(resized_img, *res, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(res));

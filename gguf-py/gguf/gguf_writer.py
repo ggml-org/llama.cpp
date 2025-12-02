@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import struct
+import sys
 import tempfile
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -370,10 +371,15 @@ class GGUFWriter:
 
     def add_tensor(
         self, name: str, tensor: np.ndarray[Any, Any], raw_shape: Sequence[int] | None = None,
-        raw_dtype: GGMLQuantizationType | None = None,
+        raw_dtype: GGMLQuantizationType | None = None, tensor_endianess: GGUFEndian | None = None
     ) -> None:
-        if self.endianess == GGUFEndian.BIG:
-            tensor.byteswap(inplace=True)
+        # if tensor endianness is not passed, assume it's native to system
+        if tensor_endianess is None:
+            tensor_endianess = GGUFEndian.BIG if sys.byteorder == 'big' else GGUFEndian.LITTLE
+
+        if tensor_endianess != self.endianess:
+            # Don't byteswap inplace since lazy copies cannot handle it
+            tensor = tensor.byteswap(inplace=False)
         if self.use_temp_file and self.temp_file is None:
             fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024)
             fp.seek(0)
@@ -394,13 +400,18 @@ class GGUFWriter:
         if pad != 0:
             fp.write(bytes([0] * pad))
 
-    def write_tensor_data(self, tensor: np.ndarray[Any, Any]) -> None:
+    def write_tensor_data(self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None) -> None:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
         assert self.fout is not None
 
-        if self.endianess == GGUFEndian.BIG:
-            tensor.byteswap(inplace=True)
+        # if tensor endianness is not passed, assume it's native to system
+        if tensor_endianess is None:
+            tensor_endianess = GGUFEndian.BIG if sys.byteorder == 'big' else GGUFEndian.LITTLE
+
+        if tensor_endianess != self.endianess:
+            # Don't byteswap inplace since lazy copies cannot handle it
+            tensor = tensor.byteswap(inplace=False)
 
         file_id = -1
         for i, tensors in enumerate(self.tensors):
@@ -495,6 +506,42 @@ class GGUFWriter:
 
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
+
+    def add_sampling_sequence(self, sequence: str) -> None:
+        self.add_string(Keys.General.SAMPLING_SEQUENCE, sequence)
+
+    def add_sampling_top_k(self, top_k: int) -> None:
+        self.add_int32(Keys.General.SAMPLING_TOP_K, top_k)
+
+    def add_sampling_top_p(self, top_p: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_TOP_P, top_p)
+
+    def add_sampling_min_p(self, min_p: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_MIN_P, min_p)
+
+    def add_sampling_xtc_probability(self, xtc_probability: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_XTC_PROBABILITY, xtc_probability)
+
+    def add_sampling_xtc_threshold(self, xtc_threshold: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_XTC_THRESHOLD, xtc_threshold)
+
+    def add_sampling_temp(self, temp: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_TEMP, temp)
+
+    def add_sampling_penalty_last_n(self, penalty_last_n: int) -> None:
+        self.add_int32(Keys.General.SAMPLING_PENALTY_LAST_N, penalty_last_n)
+
+    def add_sampling_penalty_repeat(self, penalty_repeat: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_PENALTY_REPEAT, penalty_repeat)
+
+    def add_sampling_mirostat(self, mirostat: int) -> None:
+        self.add_int32(Keys.General.SAMPLING_MIROSTAT, mirostat)
+
+    def add_sampling_mirostat_tau(self, mirostat_tau: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_MIROSTAT_TAU, mirostat_tau)
+
+    def add_sampling_mirostat_eta(self, mirostat_eta: float) -> None:
+        self.add_float32(Keys.General.SAMPLING_MIROSTAT_ETA, mirostat_eta)
 
     def add_name(self, name: str) -> None:
         self.add_string(Keys.General.NAME, name)
@@ -856,6 +903,9 @@ class GGUFWriter:
 
     def add_attn_temperature_length(self, value: int) -> None:
         self.add_uint32(Keys.Attention.TEMPERATURE_LENGTH.format(arch=self.arch), value)
+
+    def add_attn_temperature_scale(self, value: float) -> None:
+        self.add_float32(Keys.Attention.TEMPERATURE_SCALE.format(arch=self.arch), value)
 
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)

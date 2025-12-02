@@ -30,7 +30,9 @@
 	}: Props = $props();
 </script>
 
-<div class="group relative overflow-hidden rounded-lg border border-border bg-muted {className}">
+<div
+	class="group relative overflow-hidden rounded-lg bg-muted shadow-lg dark:border dark:border-muted {className}"
+>
 	{#if onClick}
 		<button
 			type="button"
