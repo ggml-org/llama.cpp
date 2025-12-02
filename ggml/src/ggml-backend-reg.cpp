@@ -534,8 +534,7 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
     fs::path best_path;
 
     for (const auto & search_path : search_paths) {
-        std::error_code ec;
-        if (!fs::exists(search_path, ec)) {
+        if (std::error_code ec; !fs::exists(search_path, ec)) {
             if (ec){
                 GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(search_path).c_str(), ec.message().c_str());
             } else{
