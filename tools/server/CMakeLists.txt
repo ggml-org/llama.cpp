@@ -2,11 +2,6 @@ set(TARGET llama-server)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
-if (MINGW)
-    # fix: https://github.com/ggml-org/llama.cpp/actions/runs/9651004652/job/26617901362?pr=8006
-    add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
-endif()
-
 if (NOT LLAMA_HTTPLIB)
     message(FATAL_ERROR "LLAMA_HTTPLIB is OFF, cannot build llama-server. Hint: to skip building server, set -DLLAMA_BUILD_SERVER=OFF")
 endif()
