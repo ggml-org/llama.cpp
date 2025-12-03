@@ -535,9 +535,9 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
 
     for (const auto & search_path : search_paths) {
         if (std::error_code ec; !fs::exists(search_path, ec)) {
-            if (ec){
+            if (ec) {
                 GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(search_path).c_str(), ec.message().c_str());
-            } else{
+            } else {
                 GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
             }
             continue;
@@ -579,12 +579,10 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
         for (const auto & search_path : search_paths) {
             fs::path filename = backend_filename_prefix().native() + name_path.native() + backend_filename_extension().native();
             fs::path path = search_path / filename;
-            std::error_code ec;
-            if (fs::exists(path, ec)) {
+            if (std::error_code ec; fs::exists(path, ec)) {
                 return get_reg().load_backend(path, silent);
-            }
-            else{
-                if (ec){
+            } else {
+                if (ec) {
                     GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(path).c_str(), ec.message().c_str());
                 }
             }
