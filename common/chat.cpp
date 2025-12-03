@@ -1487,28 +1487,6 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
     data.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_2;
 
-    /*minja::chat_template_inputs tmpl_inputs;
-    tmpl_inputs.messages = params.messages;
-    tmpl_inputs.tools = params.tools.empty() ? json() : params.tools;
-    tmpl_inputs.add_generation_prompt = params.add_generation_prompt;
-    tmpl_inputs.extra_context = params.extra_context;
-    tmpl_inputs.extra_context["enable_thinking"] = params.enable_thinking;
-
-    minja::chat_template_options tmpl_opts;
-    tmpl_opts.apply_polyfills = true;
-    tmpl_opts.polyfill_object_arguments = true;
-    tmpl_opts.polyfill_tools = false;
-    tmpl_opts.polyfill_tool_calls = false;
-    tmpl_opts.polyfill_tool_responses = false;
-    tmpl_opts.polyfill_system_role = false;
-    auto prompt = tmpl.apply(tmpl_inputs, tmpl_opts);
-    if (params.add_bos && string_starts_with(prompt, tmpl.bos_token())) {
-        prompt = prompt.substr(tmpl.bos_token().size());
-    }
-    if (params.add_eos && string_ends_with(prompt, tmpl.eos_token())) {
-        prompt = prompt.substr(0, prompt.size() - tmpl.eos_token().size());
-    }*/
-
     data.prompt = apply(tmpl, params);
 
     if (string_ends_with(data.prompt, "<think>")) {
