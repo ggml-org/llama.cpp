@@ -22,14 +22,6 @@ try:
     from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
         SentencePieceTokenizer,
     )
-
-    try:
-        from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
-            get_one_valid_tokenizer_file,
-        )
-    except ImportError:
-        # We still want the conversion to work with older mistral-common versions.
-        get_one_valid_tokenizer_file = None
 except ImportError:
     _mistral_common_installed = False
     MistralTokenizer = None
@@ -38,6 +30,14 @@ except ImportError:
     _filter_valid_tokenizer_files = None
 else:
     _mistral_common_installed = True
+
+try:
+    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
+        get_one_valid_tokenizer_file,
+    )
+except ImportError:
+    # We still want the conversion to work with older mistral-common versions.
+    get_one_valid_tokenizer_file = None
 
 
 import gguf
