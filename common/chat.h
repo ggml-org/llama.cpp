@@ -77,7 +77,7 @@ struct common_chat_msg_diff {
     size_t tool_call_index = std::string::npos;
     common_chat_tool_call tool_call_delta;
 
-    static std::vector<common_chat_msg_diff> compute_diffs(const common_chat_msg & previous_msg, const common_chat_msg & new_msg);
+    static std::vector<common_chat_msg_diff> compute_diffs(const common_chat_msg & msg_prv, const common_chat_msg & msg_new);
 
     bool operator==(const common_chat_msg_diff & other) const {
         return content_delta == other.content_delta
