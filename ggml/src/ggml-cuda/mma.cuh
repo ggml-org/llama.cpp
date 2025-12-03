@@ -175,7 +175,7 @@ namespace ggml_cuda_mma {
         static constexpr int ne = I * J / 32;
 #elif defined(RDNA3)
         static constexpr int ne = (I == 16 && J == 16) ? I * J / 32 : I * J / 16;
-#endif
+#endif // defined(RDNA4)
         T x[ne] = {0};
 
         static constexpr __device__ bool supported() {
@@ -189,7 +189,7 @@ namespace ggml_cuda_mma {
                 return 8 * (threadIdx.x / 16) + l;
 #elif defined(RDNA3)
                 return 2 * l + (threadIdx.x / 16);
-#endif
+#endif // defined(RDNA4)
             } else {
                 NO_DEVICE_CODE;
                 return -1;
@@ -294,7 +294,7 @@ namespace ggml_cuda_mma {
         static constexpr int ne = (I == 16 && J == 16) ? I * J / 32 : I * J / 16;
 #else
         static constexpr int ne = I * J / 32;
-#endif
+#endif // defined(RDNA3)
         half2 x[ne] = {{0.0f, 0.0f}};
 
         static constexpr __device__ bool supported() {
@@ -376,7 +376,7 @@ namespace ggml_cuda_mma {
         static constexpr int ne = (I == 16 && J == 16) ? I * J / 32 : I * J / 16;
 #else
         static constexpr int ne = I * J / 32;
-#endif
+#endif // defined(RDNA3)
         nv_bfloat162 x[ne] = {{0.0f, 0.0f}};
 
 #if defined(AMD_WMMA_AVAILABLE)
@@ -593,7 +593,7 @@ namespace ggml_cuda_mma {
         } else {
             NO_DEVICE_CODE;
         }
-#endif
+#endif // defined(RDNA4)
 #else
 #pragma unroll
         for (int l = 0; l < t.ne; ++l) {
@@ -993,7 +993,7 @@ namespace ggml_cuda_mma {
             acc[0],
             true
         );
-#endif
+#endif // RDNA4
 
 #else
         GGML_UNUSED_VARS(D, A, B);
@@ -1108,12 +1108,12 @@ static __device__ __forceinline__ void mma(
             acc[0],
             false
         );
-#endif 
+#endif // RDNA4
 #else
         GGML_UNUSED(D);
         GGML_UNUSED(A);
         GGML_UNUSED(B);
         NO_DEVICE_CODE;
-#endif
+#endif // AMD_WMMA_AVAILABLE
     }
 }
