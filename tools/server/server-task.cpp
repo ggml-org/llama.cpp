@@ -297,6 +297,9 @@ task_params server_task::params_from_json_cmpl(
         params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
         params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
         params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
+        if (data.contains("chat_parser")) {
+            params.oaicompat_chat_syntax.parser.load(data.at("chat_parser").get<std::string>());
+        }
     }
 
     {
