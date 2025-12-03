@@ -46,7 +46,7 @@ class ServerProcess:
     debug: bool = False
     server_port: int = 8080
     server_host: str = "127.0.0.1"
-    model_hf_repo: str = "ggml-org/models"
+    model_hf_repo: str | None = "ggml-org/models"
     model_hf_file: str | None = "tinyllamas/stories260K.gguf"
     model_alias: str = "tinyllama-2"
     temperature: float = 0.8
@@ -95,6 +95,7 @@ class ServerProcess:
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
+    media_path: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -217,6 +218,8 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
+        if self.media_path:
+            server_args.extend(["--media-path", self.media_path])
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
@@ -521,14 +524,28 @@ class ServerPreset:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()
         # mmproj is already provided by HF registry API
-        server.model_hf_repo = "ggml-org/tinygemma3-GGUF"
-        server.model_hf_file = "tinygemma3-Q8_0.gguf"
-        server.mmproj_url = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/mmproj-tinygemma3.gguf"
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/tinygemma3-GGUF:Q8_0"
         server.model_alias = "tinygemma3"
         server.n_ctx = 1024
         server.n_batch = 32
         server.n_slots = 2
         server.n_predict = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def router() -> ServerProcess:
+        server = ServerProcess()
+        # router server has no models
+        server.model_file = None
+        server.model_alias = None
+        server.model_hf_repo = None
+        server.model_hf_file = None
+        server.n_ctx = 1024
+        server.n_batch = 16
+        server.n_slots = 1
+        server.n_predict = 16
         server.seed = 42
         return server
 
