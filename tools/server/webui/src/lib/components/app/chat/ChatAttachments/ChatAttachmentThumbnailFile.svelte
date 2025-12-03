@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { RemoveButton } from '$lib/components/app';
-	import { formatFileSize, getFileTypeLabel, isTextFile } from '$lib/utils';
-	import { getPreviewText } from '$lib/utils/text';
+	import { formatFileSize, getFileTypeLabel, getPreviewText, isTextFile } from '$lib/utils';
 	import { AttachmentType } from '$lib/enums';
 
 	interface Props {
