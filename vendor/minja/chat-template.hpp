@@ -197,7 +197,7 @@ class chat_template {
                 || contains(out_str, "\"argument_needle\":")
                 || contains(out_str, "'argument_needle':")
                 || contains(out_str, ">argument_needle<")
-                || contains(out_str, "<parameter name=\"argument_needle\">");
+                || contains(out_str, "=\"argument_needle\"");
         };
 
         // Note: the arguments are rendered in both cases, but may be double-escaped, which we don't want.

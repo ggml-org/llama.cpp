@@ -14,7 +14,7 @@
 {%- endmacro %}
 
 {%- set tool_response_queue = namespace(ids=[]) -%}
-{%- set tool_call_counter = namespace(value=1) -%}
+{%- set tool_call_counter = namespace(value=0) -%}
 
 {%- if tools -%}
   <|im_system|>tool_declare<|im_middle|>{{ tools | tojson }}<|im_end|>
@@ -36,12 +36,8 @@
   {%- if message['role'] == 'assistant' and message.get('tool_calls') -%}
     {{render_content(message)}}<|tool_calls_section_begin|>
     {%- for tool_call in message['tool_calls'] -%}
-      {%- if tool_call['id'] is defined -%}
-        {%- set formatted_id = tool_call['id'] -%}
-      {%- else -%}
-        {%- set formatted_id = 'functions.' + tool_call['function']['name'] + ':' + (tool_call_counter.value | string) -%}
-        {%- set tool_call_counter.value = tool_call_counter.value + 1 -%}
-      {%- endif -%}
+      {%- set formatted_id = 'functions.' + tool_call['function']['name'] + ':' + (tool_call_counter.value | string) -%}
+      {%- set tool_call_counter.value = tool_call_counter.value + 1 -%}
       {%- set _ = tool_response_queue.ids.append(formatted_id) -%}
       <|tool_call_begin|>{{ formatted_id }}<|tool_call_argument_begin|>{% if tool_call['function']['arguments'] is string %}{{ tool_call['function']['arguments'] }}{% else %}{{ tool_call['function']['arguments'] | tojson }}{% endif %}<|tool_call_end|>
     {%- endfor -%}

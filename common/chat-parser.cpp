@@ -877,6 +877,24 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
     }
 }
 
+static void common_chat_parse_deepseek_v3_2(common_chat_msg_parser & builder) {
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start  = "<｜DSML｜function_calls>";
+        form.tool_start   = "<｜DSML｜invoke name=\"";
+        form.tool_sep     = "\">";
+        form.key_start    = "<｜DSML｜parameter name=\"";
+        form.key_val_sep  = "\" string=\"";
+        form.allowed_literal_between_kvsep = {"true", "false"};
+        form.key_val_sep2 = "\">";
+        form.val_end      = "</｜DSML｜parameter>";
+        form.tool_end     = "</｜DSML｜invoke>";
+        form.scope_end    = "</｜DSML｜function_calls>";
+        return form;
+    })();
+    builder.consume_reasoning_with_xml_tool_calls(form, "<think>", "</think>");
+}
+
 static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
     static const xml_tool_call_format form {
         /* form.scope_start = */ "<minimax:tool_call>",
@@ -915,12 +933,13 @@ static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
         form.tool_start  = "<|tool_call_begin|>";
         form.tool_sep    = "<|tool_call_argument_begin|>{";
         form.key_start   = "\"";
-        form.key_val_sep = "\": ";
-        form.val_end     = ", ";
+        form.key_val_sep = "\":";
+        form.val_end     = ",";
         form.tool_end    = "}<|tool_call_end|>";
         form.scope_end   = "<|tool_calls_section_end|>";
         form.raw_argval  = false;
         form.last_val_end = "";
+        form.allow_toolcall_in_think = true;
         return form;
     })();
     builder.consume_reasoning_with_xml_tool_calls(form, "<think>", "</think>");
@@ -1475,6 +1494,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO:
             common_chat_parse_xiaomi_mimo(builder);
+            break;
+        case COMMON_CHAT_FORMAT_DEEPSEEK_V3_2:
+            common_chat_parse_deepseek_v3_2(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
