@@ -344,6 +344,12 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             } else if (name.find("Kcur-0") == 0 || std::string(node->src[0]->name).find("Kcur-0") == 0) {
                 model_params.n_heads_kv = node->ne[1];
             }
+        } else if (node->op == GGML_OP_GET_ROWS && std::string(node->src[1]->name) == "inp_out_ids") {
+            // for static case, output_len is always 1 except for llama-perplexity
+            compute_params.output_len = node->src[1]->ne[0];
+            if (is_static && compute_params.output_len == 0) {
+                compute_params.output_len = 1;
+            }
         }
     }
     model_params.ctx = model_params.ctx_per_seq * model_params.n_seq;
@@ -366,7 +372,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
         input_shape = ov::PartialShape{1, 1, 1, len};
 
     } else if (name == "inp_out_ids") {
-        input_shape = ov::PartialShape{1, 1, 1, m_is_static ? 1 : -1};
+        input_shape = ov::PartialShape{1, 1, 1, m_is_static ? m_compute_params.output_len : -1};
 
     } else if (name.find("KQ_mask") == 0) {
         if (m_is_static) {

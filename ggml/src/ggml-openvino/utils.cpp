@@ -513,15 +513,16 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
     }
 
     if (param_name == "inp_out_ids") {
-        ov::Shape input_shape = {1, 1, 1, 1};
+        size_t output_len = ggml_decoder->get_compute_params().output_len;
+        ov::Shape input_shape = {1, 1, 1, output_len};
         ov::Tensor input_tensor(ggml_decoder->get_input_type(param_name), input_shape);
         if (ggml_tensor->ne[0] == 0) {
             *input_tensor.data<int32_t>() = 0;
-        } else if (ggml_tensor->ne[0] == 1) {
-            int32_t inp_out_id = *((int32_t *) ggml_tensor->data) % chunk_size;
-            *input_tensor.data<int32_t>() = inp_out_id;
         } else {
-            throw std::runtime_error("NPU does not support outputing logits for multiple tokens at once.");
+            auto * data_addr = input_tensor.data<int32_t>();
+            for (size_t i = 0; i < output_len; i++) {
+                data_addr[i] = ((int32_t *) ggml_tensor->data)[i] % chunk_size;
+            }
         }
         return input_tensor;
     }
