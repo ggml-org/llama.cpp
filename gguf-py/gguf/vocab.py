@@ -22,6 +22,14 @@ try:
     from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
         SentencePieceTokenizer,
     )
+
+    try:
+        from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
+            get_one_valid_tokenizer_file,
+        )
+    except ImportError:
+        # We still want the conversion to work with older mistral-common versions.
+        get_one_valid_tokenizer_file = None
 except ImportError:
     _mistral_common_installed = False
     MistralTokenizer = None
@@ -673,26 +681,25 @@ class MistralVocab(Vocab):
 
         # Find the tokenizer files
         all_files = [f.as_posix() for f in base_path.glob("**/*") if f.is_file()]
-        valid_tokenizer_files = _filter_valid_tokenizer_files(all_files)
 
-        if len(valid_tokenizer_files) >= 1 and isinstance(valid_tokenizer_files[0], tuple):
-            # Later mistral-common versions return tuples of (file_name, file_path) instead of a string list file_names[]. 
-            # ref: https://github.com/ggml-org/llama.cpp/issues/17691
-            valid_tokenizer_files = [vf[0] for vf in valid_tokenizer_files]
-
-        if len(valid_tokenizer_files) == 0:
-            raise ValueError(f"No tokenizer file found in the directory: {base_path}")
-        # If there are multiple tokenizer files, we use tekken.json if it exists, otherwise the versioned one.
-        if len(valid_tokenizer_files) > 1:
-            if "tekken.json" in valid_tokenizer_files:
-                tokenizer_file = "tekken.json"
-            else:
-                tokenizer_file = sorted(valid_tokenizer_files)[-1]
-            logger.warning(
-                f"Multiple tokenizer files found in {base_path}. Using {tokenizer_file}"
-            )
+        if get_one_valid_tokenizer_file is not None:
+            tokenizer_file = get_one_valid_tokenizer_file(all_files)
         else:
-            tokenizer_file = valid_tokenizer_files[0]
+            valid_tokenizer_files = _filter_valid_tokenizer_files(all_files)
+
+            if len(valid_tokenizer_files) == 0:
+                raise ValueError(f"No tokenizer file found in the directory: {base_path}")
+            # If there are multiple tokenizer files, we use tekken.json if it exists, otherwise the versioned one.
+            if len(valid_tokenizer_files) > 1:
+                if "tekken.json" in valid_tokenizer_files:
+                    tokenizer_file = "tekken.json"
+                else:
+                    tokenizer_file = sorted(valid_tokenizer_files)[-1]
+                logger.warning(
+                    f"Multiple tokenizer files found in {base_path}. Using {tokenizer_file}"
+                )
+            else:
+                tokenizer_file = valid_tokenizer_files[0]
 
         self.tokenizer = MistralTokenizer.from_file(
             base_path / tokenizer_file
