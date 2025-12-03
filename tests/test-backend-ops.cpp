@@ -3721,6 +3721,71 @@ struct test_mul_mat_id : public test_case {
     }
 };
 
+// GGML_OP_MUL_MAT + GGML_OP_ADD (fused operation)
+struct test_mul_mat_add : public test_case {
+    const ggml_type type_a;
+    const ggml_type type_b;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const std::array<int64_t, 2> bs;  // dims 3 and 4
+    const std::array<int64_t, 2> nr;  // repeat in dims 3 and 4
+    const bool broadcast_bias; // whether to broadcast bias (single value per output channel)
+
+    std::string vars() override {
+        return VARS_TO_STR8(type_a, type_b, m, n, k, bs, nr, broadcast_bias);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_ADD";
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2 * m * n * k * bs[0] * nr[0] * bs[1] * nr[1] + m * n * bs[0] * nr[0] * bs[1] * nr[1];
+    }
+
+    test_mul_mat_add(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
+            int64_t m = 32, int64_t n = 32, int64_t k = 32,
+            std::array<int64_t, 2> bs = {10, 10},
+            std::array<int64_t, 2> nr = {2, 2},
+            bool broadcast_bias = false)
+        : type_a(type_a), type_b(type_b), m(m), n(n), k(k), bs(bs), nr(nr), broadcast_bias(broadcast_bias) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+
+        ggml_tensor * a = ::ggml_new_tensor_4d(ctx, type_a, k, m, bs[0], bs[1]);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * b = ::ggml_new_tensor_4d(ctx, type_b, k, n, bs[0]*nr[0], bs[1]*nr[1]);
+        ggml_set_name(b, "b");
+
+        
+        ggml_tensor * mul_mat_result = ggml_mul_mat(ctx, a, b);
+        ggml_set_name(mul_mat_result, "mul_mat_result");
+
+        
+        ggml_tensor * bias;
+        if (broadcast_bias) {
+            bias = ::ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, n, bs[0]*nr[0], bs[1]*nr[1]);
+        } else {
+            bias = ::ggml_new_tensor_4d(ctx, GGML_TYPE_F32, m, 1, bs[0]*nr[0], bs[1]*nr[1]);
+        }
+        ggml_set_name(bias, "bias");
+        ggml_tensor * out = ggml_add(ctx, mul_mat_result, bias);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    bool run_whole_graph() override { return true; }
+};
+
 // GGML_OP_MUL_MAT_ID + GGML_OP_ADD or GGML_OP_MUL
 struct test_mul_mat_id_fusion : public test_case {
     const ggml_type type_a;
@@ -7433,6 +7498,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    for (int m : {128, 896}) {
+        // For pattern testing
+        for (int n : {1, 14, 20, 21}) {
+            for (int k : {128,896}) {
+                for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+                    for (ggml_type type_b : {GGML_TYPE_F32}) {
+                        test_cases.emplace_back(new test_mul_mat_add(type_a, type_b, m, n, k, {1, 1}, {1, 1}, false));
+                    }
+                }
+            }
+    }
+}
 
     // add_id
     for (ggml_type type_a : {GGML_TYPE_F32}) {

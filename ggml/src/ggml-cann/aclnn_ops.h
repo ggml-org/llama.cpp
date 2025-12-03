@@ -1145,3 +1145,15 @@ void ggml_cann_op_unary_gated(std::function<void(ggml_backend_cann_context &, ac
  * @see GGML_CANN_CALL_ACLNN_OP for CANN operator invocation
  */
 void ggml_cann_out_prod(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief Performs fused MUL + ADD operation using the CANN backend.
+ *
+ * This function fuses the MUL and ADD operations into a single kernel call
+ * for better performance. 
+ *
+ * @param ctx The context for the CANN backend operations.
+ * @param mul_tensor The MUL operation node, contains the two input tensors to be calculated.
+ * @param add_tensor The ADD operation node, contains the tensor to be added.
+ */
+void ggml_cann_op_add_mul_fused(ggml_backend_cann_context & ctx, ggml_tensor * mul_tensor, ggml_tensor * add_tensor);

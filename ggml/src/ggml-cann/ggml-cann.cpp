@@ -2231,6 +2231,40 @@ static bool is_matched_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph *
 }
 #endif  // USE_ACL_GRAPH
 
+static bool ggml_cann_can_fuse(const struct ggml_cgraph *          cgraph,
+                               int                                 node_idx,
+                               std::initializer_list<enum ggml_op> ops) {
+    if (!ggml_can_fuse(cgraph, node_idx, ops)) {
+        return false;
+    }
+    if ((ops.size() == 2) && ops.begin()[0] == GGML_OP_MUL_MAT && ops.begin()[1] == GGML_OP_ADD) {
+        ggml_tensor * mul_node = cgraph->nodes[node_idx];
+        ggml_tensor * add_node = cgraph->nodes[node_idx + 1];
+        
+        if (mul_node->src[0]->ne[2] != 1 || mul_node->src[0]->ne[3] != 1 ||
+            mul_node->src[1]->ne[2] != 1 || mul_node->src[1]->ne[3] != 1 ||
+            add_node->src[1]->ne[2] != 1 || add_node->src[1]->ne[3] != 1) {
+            return false;
+        }
+        
+        if (add_node->src[0]->ne[0] != add_node->src[1]->ne[0] ||
+            add_node->src[0]->ne[1] != add_node->src[1]->ne[1]) {
+            return false;
+        }
+
+        if (add_node->src[0] != mul_node) {
+            return false;
+        }
+
+        // if (strstr(mul_node->src[0]->name, "attn_q.weight") == NULL) {
+        //     return false;
+        // }
+        return true;
+    }
+
+    return false;
+}
+
 /**
  * @brief Evaluate the computation graph and optionally capture or execute it using CANN graph API.
  *
@@ -2255,9 +2289,18 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 #endif  // USE_ACL_GRAPH
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
+    static bool opt_fusion = parse_bool(get_env("GGML_CANN_OPERATOR_FUSION").value_or(""));
     if (!use_cann_graph || cann_graph_update_required) {
         for (int i = 0; i < cgraph->n_nodes; i++) {
             ggml_tensor * node = cgraph->nodes[i];
+            
+            if (opt_fusion) {
+                if (ggml_cann_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
+                    ggml_cann_op_add_mul_fused(*cann_ctx, node, cgraph->nodes[i + 1]);
+                    i++;
+                    continue;
+                }
+            }
 
             if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE ||
                 node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
