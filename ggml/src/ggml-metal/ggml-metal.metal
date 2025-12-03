@@ -1977,11 +1977,8 @@ kernel void kernel_tri(
     // Each thread is a single element of the row if ne00 < max threads per
     // threadgroup, so this will loop once for each index that this thread is
     // responsible for
-    const bool keep_org_val = isnan(args.c);
     for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
-        dst_row[i0] = _ggml_vec_tri_cmp(i0, i1, args.ttype)
-            ? (keep_org_val ? src_row[i0] : static_cast<T>(args.c))
-            : static_cast<T>(0.f);
+        dst_row[i0] = _ggml_vec_tri_cmp(i0, i1, args.ttype) ? src_row[i0] : static_cast<T>(0.f);
     }
 }
 

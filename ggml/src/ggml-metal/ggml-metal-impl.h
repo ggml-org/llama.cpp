@@ -848,7 +848,6 @@ typedef struct {
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
-    float    c;
     uint32_t ttype;
 } ggml_metal_kargs_tri;
 
