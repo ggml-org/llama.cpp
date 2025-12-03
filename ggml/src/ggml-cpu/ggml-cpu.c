@@ -2698,6 +2698,11 @@ struct ggml_cplan ggml_graph_plan(
         n_threads = threadpool ? threadpool->n_threads_max : GGML_DEFAULT_N_THREADS;
     }
 
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    // Emscripten without pthreads support can only use a single thread
+    n_threads = 1;
+#endif
+
     size_t work_size = 0;
 
     struct ggml_cplan cplan;
