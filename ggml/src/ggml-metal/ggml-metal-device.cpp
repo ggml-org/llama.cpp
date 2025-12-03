@@ -50,7 +50,7 @@ void ggml_metal_pipelines_add(ggml_metal_pipelines_t ppls, const char * name, gg
 }
 
 ggml_metal_pipeline_t ggml_metal_pipelines_get(ggml_metal_pipelines_t ppls, const char * name) {
-    if  (ppls->data.find(name) == ppls->data.end()) {
+    if (ppls->data.find(name) == ppls->data.end()) {
         return nullptr;
     }
 
