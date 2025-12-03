@@ -286,6 +286,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_scale(ctx, idx);
             } break;
+        case GGML_OP_FILL:
+            {
+                n_fuse = ggml_metal_op_fill(ctx, idx);
+            } break;
         case GGML_OP_CLAMP:
             {
                 n_fuse = ggml_metal_op_clamp(ctx, idx);
@@ -717,6 +721,41 @@ int ggml_metal_op_scale(ggml_metal_op_t ctx, int idx) {
     ggml_metal_kargs_scale args = {
         /*.scale =*/ scale,
         /*.bias  =*/ bias,
+    };
+
+    int64_t n = ggml_nelements(op);
+
+    if (n % 4 == 0) {
+        n /= 4;
+    }
+
+    ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_unary(lib, op);
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, 1, 1, 1);
+
+    return 1;
+}
+
+int ggml_metal_op_fill(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
+    GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
+
+    const float val = ggml_get_op_params_f32(op, 0);
+
+    ggml_metal_kargs_fill args = {
+        /*.val =*/ val
     };
 
     int64_t n = ggml_nelements(op);

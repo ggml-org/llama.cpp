@@ -183,6 +183,10 @@ typedef struct {
 } ggml_metal_kargs_scale;
 
 typedef struct {
+    float val;
+} ggml_metal_kargs_fill;
+
+typedef struct {
     float min;
     float max;
 } ggml_metal_kargs_clamp;

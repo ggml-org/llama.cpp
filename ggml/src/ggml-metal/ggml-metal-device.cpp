@@ -187,6 +187,7 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_unary(ggml_metal_library_t
     const char * op_str = "undefined";
     switch (op->op) {
         case GGML_OP_SCALE:      op_str = "scale";      break;
+        case GGML_OP_FILL:       op_str = "fill";       break;
         case GGML_OP_CLAMP:      op_str = "clamp";      break;
         case GGML_OP_SQR:        op_str = "sqr";        break;
         case GGML_OP_SQRT:       op_str = "sqrt";       break;

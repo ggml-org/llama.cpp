@@ -865,6 +865,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ACC:
         case GGML_OP_REPEAT:
         case GGML_OP_SCALE:
+        case GGML_OP_FILL:
         case GGML_OP_CONV_TRANSPOSE_1D:
             return true;
         case GGML_OP_CONV_TRANSPOSE_2D:

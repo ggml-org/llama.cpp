@@ -1249,6 +1249,22 @@ kernel void kernel_scale_f32_4(
     dst[tpig] = src0[tpig] * args.scale + args.bias;
 }
 
+kernel void kernel_fill_f32(
+        constant ggml_metal_kargs_fill & args,
+        device const float * src0,
+        device       float * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = args.val;
+}
+
+kernel void kernel_fill_f32_4(
+        constant ggml_metal_kargs_fill & args,
+        device const float4 * src0,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = args.val;
+}
+
 kernel void kernel_clamp_f32(
         constant ggml_metal_kargs_clamp & args,
         device const float * src0,
