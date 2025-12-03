@@ -1047,8 +1047,8 @@ static void llama_sampler_top_k_free(struct llama_sampler * smpl) {
 }
 
 static void llama_sampler_top_k_backend_init(
-        struct llama_sampler           * smpl,
-        ggml_backend_buffer_type_t       buft) {
+        struct llama_sampler       * smpl,
+        ggml_backend_buffer_type_t   buft) {
     auto * ctx_data = (llama_sampler_top_k *) smpl->ctx;
     ctx_data->device = ggml_backend_buft_get_device(buft);
 }
@@ -1117,9 +1117,6 @@ struct llama_sampler_top_p {
     const size_t min_keep;
 
     std::vector<llama_token_data> buf_sort;
-
-    // Only required for checking operation support and can be removed later.
-    ggml_backend_dev_t device;
 };
 
 static const char * llama_sampler_top_p_name(const struct llama_sampler * /*smpl*/) {
@@ -1193,8 +1190,8 @@ static void llama_sampler_top_p_free(struct llama_sampler * smpl) {
 static void llama_sampler_top_p_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft) {
-    auto * sctx = (llama_sampler_top_p *) smpl->ctx;
-    sctx->device = ggml_backend_buft_get_device(buft);
+    GGML_UNUSED(smpl);
+    GGML_UNUSED(buft);
 }
 
 static void llama_sampler_top_p_backend_apply(
@@ -1299,7 +1296,6 @@ struct llama_sampler * llama_sampler_init_top_p(float p, size_t min_keep) {
             /* .p        = */ p,
             /* .min_keep = */ min_keep,
             /* .buf_sort = */ {},
-            /* .device   = */ nullptr,
         }
     );
 }
@@ -1309,9 +1305,6 @@ struct llama_sampler * llama_sampler_init_top_p(float p, size_t min_keep) {
 struct llama_sampler_min_p {
     const float  p;
     const size_t min_keep;
-
-    // Only required for checking operation support and can be removed later.
-    ggml_backend_dev_t device;
 };
 
 static const char * llama_sampler_min_p_name(const struct llama_sampler * /*smpl*/) {
@@ -1384,8 +1377,8 @@ static void llama_sampler_min_p_free(struct llama_sampler * smpl) {
 static void llama_sampler_min_p_backend_init(
         struct llama_sampler       * smpl,
         ggml_backend_buffer_type_t   buft) {
-    auto * sctx = (llama_sampler_min_p *) smpl->ctx;
-    sctx->device = ggml_backend_buft_get_device(buft);
+    GGML_UNUSED(smpl);
+    GGML_UNUSED(buft);
 }
 
 static void llama_sampler_min_p_backend_apply(
@@ -1456,7 +1449,6 @@ struct llama_sampler * llama_sampler_init_min_p(float p, size_t min_keep) {
         /* .ctx   = */ new llama_sampler_min_p {
             /* .p        = */ p,
             /* .min_keep = */ min_keep,
-            /* .device   = */ nullptr,
         }
     );
 }
@@ -3105,8 +3097,8 @@ static void llama_sampler_logit_bias_backend_set_input(struct llama_sampler * sm
 }
 
 static void llama_sampler_logit_bias_backend_init(
-        struct llama_sampler      * smpl,
-        ggml_backend_buffer_type_t  buft) {
+        struct llama_sampler       * smpl,
+        ggml_backend_buffer_type_t   buft) {
     auto * sctx = (llama_sampler_logit_bias *) smpl->ctx;
 
     if (sctx->logit_bias.empty()) {
