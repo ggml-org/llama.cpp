@@ -1092,8 +1092,7 @@ static void matmul(struct htp_matmul_type * mt,
     uint8_t * restrict spad_src0 = src0_spad->data + src0_spad->size_per_thread * ith;
     uint8_t * restrict src1_data = src1_spad->data;
 
-    volatile uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
+    PROFILER_START(matmul);
 
     const uint8_t * restrict src0_row = (const uint8_t *) src0->data;
 
@@ -1144,12 +1143,9 @@ static void matmul(struct htp_matmul_type * mt,
         }
     }
 
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matmul-%s %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mt->type, ith, nth,
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1],
-         src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    PROFILER_END(matmul, "matmul-%s %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mt->type, ith,
+                 nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0],
+                 src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
 }
 
 // q8x4x2 src1 tensor is already in VTCM spad
@@ -1190,8 +1186,7 @@ static void matvec(struct htp_matmul_type * mt,
     uint8_t * spad_src0 = src0_spad->data + src0_spad->size_per_thread * ith;
     uint8_t * src1_data = src1_spad->data;
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
+    PROFILER_START(matvec);
 
     float * tmp = (float *) spad_dst;
 
@@ -1236,12 +1231,9 @@ static void matvec(struct htp_matmul_type * mt,
 
     hvx_copy_fp32_ua((uint8_t *) &dst_col[src0_start_row], (uint8_t *) tmp, src0_end_row - src0_start_row);
 
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matvec-%s %u/%u: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mt->type, ith, nth,
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1],
-         src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    PROFILER_END(matvec, "matvec-%s %u/%u: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", mt->type, ith,
+                 nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0],
+                 src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
 }
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * ids->ne[0] * ids->ne[1] + (i1)]
@@ -1267,8 +1259,7 @@ static void matmul_id(struct htp_matmul_type * mt,
                       dma_queue * dma_queue) {
     htp_matmul_preamble;
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
+    PROFILER_START(matmul_id);
 
     const uint32_t src0_nrows = ne01;  // src0 rows per expert
     const uint32_t src1_nrows = ne11;
@@ -1373,12 +1364,11 @@ static void matmul_id(struct htp_matmul_type * mt,
         }
     }
 
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matmul-id-%s %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u (%ux%ux%ux%u) -> %ux%ux%ux%u usec %u\n", mt->type,
-         ith, nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0],
-         src1->ne[1], src1->ne[2], src1->ne[3], ids->ne[0], ids->ne[1], ids->ne[2], ids->ne[3], dst->ne[0], dst->ne[1],
-         dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    PROFILER_END(matmul_id,
+                 "matmul-id-%s %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u (%ux%ux%ux%u) -> %ux%ux%ux%u usec %u\n",
+                 mt->type, ith, nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row,
+                 src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], ids->ne[0], ids->ne[1], ids->ne[2], ids->ne[3],
+                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
 }
 
 // q8x4 src1 tensor is already in VTCM spad
@@ -1397,8 +1387,7 @@ static void matvec_id(struct htp_matmul_type * mt,
                       dma_queue * dma_queue) {
     htp_matmul_preamble;
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
+    PROFILER_START(matvec_id);
 
     const uint32_t src0_nrows = ne01;  // src0 rows per expert
 
@@ -1473,12 +1462,11 @@ static void matvec_id(struct htp_matmul_type * mt,
         }
     }
 
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matvec-id-%s %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u (%ux%ux%ux%u) -> %ux%ux%ux%u usec %u\n", mt->type,
-         ith, nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0],
-         src1->ne[1], src1->ne[2], src1->ne[3], src2->ne[0], src2->ne[1], src2->ne[2], src2->ne[3], dst->ne[0],
-         dst->ne[1], dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    PROFILER_END(matvec_id,
+                 "matvec-id-%s %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u (%ux%ux%ux%u) -> %ux%ux%ux%u usec %u\n",
+                 mt->type, ith, nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row,
+                 src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], src2->ne[0], src2->ne[1], src2->ne[2], src2->ne[3],
+                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
 }
 
 // *** matmul in fp16
@@ -1495,8 +1483,7 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
                            dma_queue * dma_queue) {
     htp_matmul_preamble;
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
+    PROFILER_START(matmul_f16_f32);
 
     const size_t src0_row_size = sizeof(__fp16) * ne00;
     const size_t src1_row_size = sizeof(float) * ne10;
@@ -1575,12 +1562,10 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
         }
     }
 
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matmul-f16-f32 %d/%d: %ux%ux%ux%u (%u:%u %u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], ir0_start, ir0_end, ir1_start, ir1_end, src1->ne[0],
-         src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    PROFILER_END(matmul_f16_f32,
+                 "matmul-f16-f32 %d/%d: %ux%ux%ux%u (%u:%u %u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
+                 src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], ir0_start, ir0_end, ir1_start, ir1_end,
+                 src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
 }
 
 // *** dynamic quant
@@ -1662,7 +1647,7 @@ static void quantize_fp32_q8x4x2(const struct htp_tensor * src,
                                  uint32_t          nth,
                                  uint32_t          ith,
                                  uint32_t          nrows_per_thread) {
-    uint64_t t1 = HAP_perf_get_qtimer_count();
+    PROFILER_START(quantize_fp32_q8x4);
 
     const uint32_t ne0 = src->ne[0];
     const uint32_t ne1 = src->ne[1];
@@ -1694,10 +1679,8 @@ static void quantize_fp32_q8x4x2(const struct htp_tensor * src,
         src_data += src_row_size;
     }
 
-    uint64_t t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "quantize-fp32-q8x4: %u/%u : n-rows %u (%u:%u) row-size %u -> %u usec %u\n", ith, nth, nrows, ir_first,
-         ir_last, src_row_size, dst_row_size, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    PROFILER_END(quantize_fp32_q8x4, "quantize-fp32-q8x4: %u/%u : n-rows %u (%u:%u) row-size %u -> %u usec %u\n", ith,
+                 nth, nrows, ir_first, ir_last, src_row_size, dst_row_size);
 }
 
 static void htp_quantize_fp32_q8x4x2(unsigned int n, unsigned int i, void * data) {
