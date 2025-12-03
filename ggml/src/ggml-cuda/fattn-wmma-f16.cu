@@ -220,7 +220,7 @@ static __global__ void flash_attn_ext_f16(
 
                     KQ_f_tmp[k0/warp_size] += mask && ic0 + j < int(ne01.z) ?
                         __half2float(slopeh*maskh[j*(nb31/sizeof(half)) + k_VKQ_0 + k]) : 0.0f;
-                    KQ_max_new = max(KQ_max_new, KQ_f_tmp[k0/warp_size]);
+                    KQ_max_new = max(KQ_max_new, KQ_f_tmp[k0/warp_size] + FATTN_KQ_MAX_OFFSET);
                 }
                 KQ_max_new = warp_reduce_max<warp_size>(KQ_max_new);
 
