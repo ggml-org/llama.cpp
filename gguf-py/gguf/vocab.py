@@ -683,7 +683,9 @@ class MistralVocab(Vocab):
         all_files = [f.as_posix() for f in base_path.glob("**/*") if f.is_file()]
 
         if get_one_valid_tokenizer_file is not None:
-            tokenizer_file = get_one_valid_tokenizer_file(all_files)
+            tokenizer_file_path = get_one_valid_tokenizer_file(all_files)
+            # get_one_valid_tokenizer_file returns a path rather than just the file name e.g: "ministral3b\tekken.json" instead of "tekken.json"
+            tokenizer_file = Path(tokenizer_file_path).name
         else:
             valid_tokenizer_files = _filter_valid_tokenizer_files(all_files)
 
