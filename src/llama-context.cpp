@@ -1387,7 +1387,11 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
-    if (model.arch == LLM_ARCH_QWEN3NEXT) {
+    if (model.arch == LLM_ARCH_QWEN3NEXT ||
+        model.arch == LLM_ARCH_GRANITE_HYBRID ||
+        model.arch == LLM_ARCH_MAMBA2 ||
+        model.arch == LLM_ARCH_FALCON_H1 ||
+        model.arch == LLM_ARCH_NEMOTRON_H) {
         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
     }
     return std::max<uint32_t>(1024u, 8u*model.n_tensors());
