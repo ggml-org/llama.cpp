@@ -776,7 +776,7 @@ class GGUFWriter:
 
     def add_sliding_window_pattern(self, value: Sequence[bool]) -> None:
         self.add_array(Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch), value)
-    
+
     def add_dense_every_n_layers(self, value: int) -> None:
         self.add_uint32(Keys.Attention.DENSE_EVERY_N_LAYERS.format(arch=self.arch), value)
 
