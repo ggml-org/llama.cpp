@@ -243,6 +243,11 @@
 
 		if (viewportWidth === 0 || viewportHeight === 0) return;
 
+		// Reset widths before measuring to avoid carrying over constrained sizes
+		// from previous openings (which could progressively shrink the menu).
+		menuRef.style.width = '';
+		menuRef.style.maxWidth = '';
+
 		const scrollWidth = menuRef.scrollWidth;
 		const scrollHeight = menuRef.scrollHeight;
 
