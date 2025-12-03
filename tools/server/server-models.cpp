@@ -7,6 +7,7 @@
 #include <sheredom/subprocess.h>
 
 #include <functional>
+#include <algorithm>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -889,6 +890,28 @@ struct pipe_t {
     }
 };
 
+static std::string to_lower_copy(const std::string & value) {
+    std::string lowered(value.size(), '\0');
+    std::transform(value.begin(), value.end(), lowered.begin(), [](unsigned char c) { return std::tolower(c); });
+    return lowered;
+}
+
+static bool should_strip_proxy_header(const std::string & header_name) {
+    // Headers that get duplicated when router forwards child responses
+    if (header_name == "server" ||
+        header_name == "transfer-encoding" ||
+        header_name == "keep-alive") {
+        return true;
+    }
+
+    // Router injects CORS, child also sends them: duplicate
+    if (header_name.rfind("access-control-", 0) == 0) {
+        return true;
+    }
+
+    return false;
+}
+
 server_http_proxy::server_http_proxy(
         const std::string & method,
         const std::string & host,
@@ -925,6 +948,14 @@ server_http_proxy::server_http_proxy(
         msg_t msg;
         msg.status = response.status;
         for (const auto & [key, value] : response.headers) {
+            const auto lowered = to_lower_copy(key);
+            if (should_strip_proxy_header(lowered)) {
+                continue;
+            }
+            if (lowered == "content-type") {
+                msg.content_type = value;
+                continue;
+            }
             msg.headers[key] = value;
         }
         return pipe->write(std::move(msg)); // send headers first
@@ -932,7 +963,7 @@ server_http_proxy::server_http_proxy(
     httplib::ContentReceiverWithProgress content_receiver = [pipe](const char * data, size_t data_length, size_t, size_t) {
         // send data chunks
         // returns false if pipe is closed / broken (signal to stop receiving)
-        return pipe->write({{}, 0, std::string(data, data_length)});
+        return pipe->write({{}, 0, std::string(data, data_length), ""});
     };
 
     // prepare the request to destination server
@@ -955,8 +986,8 @@ server_http_proxy::server_http_proxy(
         if (result.error() != httplib::Error::Success) {
             auto err_str = httplib::to_string(result.error());
             SRV_ERR("http client error: %s\n", err_str.c_str());
-            pipe->write({{}, 500, ""}); // header
-            pipe->write({{}, 0, "proxy error: " + err_str}); // body
+            pipe->write({{}, 500, "", ""}); // header
+            pipe->write({{}, 0, "proxy error: " + err_str, ""}); // body
         }
         pipe->close_write(); // signal EOF to reader
         SRV_DBG("%s", "client request thread ended\n");
@@ -964,12 +995,17 @@ server_http_proxy::server_http_proxy(
     this->thread.detach();
 
     // wait for the first chunk (headers)
-    msg_t header;
-    if (pipe->read(header, should_stop)) {
-        SRV_DBG("%s", "received response headers\n");
-        this->status  = header.status;
-        this->headers = header.headers;
-    } else {
-        SRV_DBG("%s", "no response headers received (request cancelled?)\n");
+    {
+        msg_t header;
+        if (pipe->read(header, should_stop)) {
+            SRV_DBG("%s", "received response headers\n");
+            this->status  = header.status;
+            this->headers = std::move(header.headers);
+            if (!header.content_type.empty()) {
+                this->content_type = std::move(header.content_type);
+            }
+        } else {
+            SRV_DBG("%s", "no response headers received (request cancelled?)\n");
+        }
     }
 }
