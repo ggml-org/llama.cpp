@@ -1943,6 +1943,56 @@ typedef decltype(kernel_cumsum_add<float>) kernel_cumsum_add_t;
 
 template [[host_name("kernel_cumsum_add_f32")]] kernel kernel_cumsum_add_t kernel_cumsum_add<float>;
 
+inline static bool _ggml_vec_tri_cmp(const int i, const int r, const uint32_t type) {
+    switch (type) {
+        // ggml.h:620
+        case /* GGML_TRI_TYPE_LOWER      */ 3: return i < r; break;
+        case /* GGML_TRI_TYPE_LOWER_DIAG */ 2: return i <= r; break;
+        case /* GGML_TRI_TYPE_UPPER      */ 1: return i > r; break;
+        case /* GGML_TRI_TYPE_UPPER_DIAG */ 0: return i >= r; break;
+    }
+}
+
+template<typename T>
+kernel void kernel_tri(
+        constant ggml_metal_kargs_tri & args,
+        device const char * src0,
+        device const char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int64_t i3 = tgpig.z;
+    const int64_t i2 = tgpig.y;
+    const int64_t i1 = tgpig.x;
+
+    if (i3 >= args.ne03 || i2 >= args.ne02 || i1 >= args.ne01) {
+        return;
+    }
+
+    device const T * src_row = (device const T *) ((device const char *) src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03);
+    device       T * dst_row = (device       T *) ((device       char *) dst  + i1*args.nb1  + i2*args.nb2  + i3*args.nb3);
+
+    // Each thread is a single element of the row if ne00 < max threads per
+    // threadgroup, so this will loop once for each index that this thread is
+    // responsible for
+    const bool keep_org_val = isnan(args.c);
+    for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
+        dst_row[i0] = _ggml_vec_tri_cmp(i0, i1, args.ttype)
+            ? (keep_org_val ? src_row[i0] : static_cast<T>(args.c))
+            : static_cast<T>(0.f);
+    }
+}
+
+typedef decltype(kernel_tri<float>) kernel_tri_t;
+
+template [[host_name("kernel_tri_f32")]] kernel kernel_tri_t kernel_tri<float>;
+template [[host_name("kernel_tri_f16")]] kernel kernel_tri_t kernel_tri<half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_tri_bf16")]] kernel kernel_tri_t kernel_tri<bfloat>;
+#endif
+
 template<typename T>
 kernel void kernel_soft_max(
         constant ggml_metal_kargs_soft_max & args,

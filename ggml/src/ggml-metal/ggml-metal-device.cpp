@@ -356,6 +356,26 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_cumsum_add(ggml_metal_libr
     return res;
 }
 
+ggml_metal_pipeline_t ggml_metal_library_get_pipeline_tri(ggml_metal_library_t lib, const ggml_tensor * op) {
+    GGML_ASSERT(op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+
+    char base[256];
+    char name[256];
+
+    const char * op_str = "tri";
+
+    snprintf(base, 256, "kernel_%s_%s", op_str, ggml_type_name(op->src[0]->type));
+
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_t res = ggml_metal_library_get_pipeline(lib, name);
+    if (res) {
+        return res;
+    }
+
+    return ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+}
+
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_soft_max(ggml_metal_library_t lib, const ggml_tensor * op) {
     GGML_ASSERT(!op->src[1] || op->src[1]->type == GGML_TYPE_F16 || op->src[1]->type == GGML_TYPE_F32);
 
