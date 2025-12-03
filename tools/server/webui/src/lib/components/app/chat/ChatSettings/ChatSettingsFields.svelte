@@ -7,7 +7,6 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import { settingsStore } from '$lib/stores/settings.svelte';
-	import { ParameterSyncService } from '$lib/services/parameter-sync';
 	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
 	import type { Component } from 'svelte';
 
@@ -22,7 +21,7 @@
 
 	// Helper function to get parameter source info for syncable parameters
 	function getParameterSourceInfo(key: string) {
-		if (!ParameterSyncService.canSyncParameter(key)) {
+		if (!settingsStore.canSyncParameter(key)) {
 			return null;
 		}
 
