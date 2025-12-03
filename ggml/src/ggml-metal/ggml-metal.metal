@@ -1977,9 +1977,9 @@ kernel void kernel_tri(
         ushort  sgitg[[simdgroup_index_in_threadgroup]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
-    const int64_t i3 = tgpig.z;
-    const int64_t i2 = tgpig.y;
-    const int64_t i1 = tgpig.x;
+    const int i3 = tgpig.z;
+    const int i2 = tgpig.y;
+    const int i1 = tgpig.x;
 
     if (i3 >= args.ne03 || i2 >= args.ne02 || i1 >= args.ne01) {
         return;

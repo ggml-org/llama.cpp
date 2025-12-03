@@ -357,6 +357,7 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_cumsum_add(ggml_metal_libr
 }
 
 ggml_metal_pipeline_t ggml_metal_library_get_pipeline_tri(ggml_metal_library_t lib, const ggml_tensor * op) {
+    GGML_ASSERT(op->op == GGML_OP_TRI);
     GGML_ASSERT(op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
 
     char base[256];

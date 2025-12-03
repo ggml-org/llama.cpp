@@ -3912,7 +3912,7 @@ int ggml_metal_op_tri(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
-    GGML_TENSOR_LOCALS(uint32_t, nb,  op,         nb);
+    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
     ggml_metal_kargs_tri args = {
         /*.ne00  =*/ ne00,
