@@ -9427,12 +9427,22 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
         #define GGML_F32X_MUL GGML_F32x4_MUL
         #define GGML_F32X_FMA GGML_F32x4_FMA
         #define WKV_VECTOR_SIZE 4
+    #elif defined(__riscv_v_intrinsic)
+        #define GGML_F32X GGML_F32xt
+        #define GGML_F32X_SET1 GGML_F32xt_SET1
+        #define GGML_F32X_LOAD GGML_F32xt_LOAD
+        #define GGML_F32X_STORE GGML_F32xt_STORE
+        #define GGML_F32X_MUL GGML_F32xt_MUL
+        #define GGML_F32X_FMA GGML_F32xt_FMA
+        #define WKV_VECTOR_SIZE 4
     #endif
 
     #ifdef WKV_VECTOR_SIZE
         int wkv_vector_size;
         #if defined(__ARM_FEATURE_SVE)
             wkv_vector_size = svcntw();
+        #elif defined(__riscv_v_intrinsic)
+            wkv_vector_size = __riscv_vlenb() / sizeof(float);
         #else
             wkv_vector_size = WKV_VECTOR_SIZE;
         #endif

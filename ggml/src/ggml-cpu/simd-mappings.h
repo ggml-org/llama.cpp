@@ -1182,24 +1182,24 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
 #define GGML_F32_STEP 16
 #define GGML_F32_EPR  4
 
-#define GGML_F32x4              vfloat32m1_t
-#define GGML_F32x4_ZERO         __riscv_vfmv_v_f_f32m1(0.0f, GGML_F32_EPR)
-#define GGML_F32x4_SET1(x)      __riscv_vfmv_v_f_f32m1(x, GGML_F32_EPR)
-#define GGML_F32x4_LOAD(x)      __riscv_vle32_v_f32m1(x, GGML_F32_EPR)
-#define GGML_F32x4_STORE(b, v)  __riscv_vse32_v_f32m1(b, v, GGML_F32_EPR)
-#define GGML_F32x4_FMA(a, b, c) __riscv_vfmacc_vv_f32m1(a, b, c, GGML_F32_EPR)
-#define GGML_F32x4_ADD(a, b)    __riscv_vfadd_vv_f32m1(a, b, GGML_F32_EPR)
-#define GGML_F32x4_MUL(a, b)    __riscv_vfmul_vv_f32m1(a, b, GGML_F32_EPR)
+#define GGML_F32xt              vfloat32m1_t
+#define GGML_F32xt_ZERO         __riscv_vfmv_v_f_f32m1(0.0f, __riscv_vsetvlmax_e32m1())
+#define GGML_F32xt_SET1(x)      __riscv_vfmv_v_f_f32m1(x, __riscv_vsetvlmax_e32m1())
+#define GGML_F32xt_LOAD(x)      __riscv_vle32_v_f32m1(x, __riscv_vsetvlmax_e32m1())
+#define GGML_F32xt_STORE(b, v)  __riscv_vse32_v_f32m1(b, v, __riscv_vsetvlmax_e32m1())
+#define GGML_F32xt_FMA(a, b, c) __riscv_vfmacc_vv_f32m1(a, b, c, __riscv_vsetvlmax_e32m1())
+#define GGML_F32xt_ADD(a, b)    __riscv_vfadd_vv_f32m1(a, b, __riscv_vsetvlmax_e32m1())
+#define GGML_F32xt_MUL(a, b)    __riscv_vfmul_vv_f32m1(a, b, __riscv_vsetvlmax_e32m1())
 
-#define GGML_F32_VEC        GGML_F32x4
-#define GGML_F32_VEC_ZERO   GGML_F32x4_ZERO
-#define GGML_F32_VEC_SET1   GGML_F32x4_SET1
-#define GGML_F32_VEC_LOAD   GGML_F32x4_LOAD
-#define GGML_F32_VEC_STORE  GGML_F32x4_STORE
-#define GGML_F32_VEC_FMA    GGML_F32x4_FMA
-#define GGML_F32_VEC_ADD    GGML_F32x4_ADD
-#define GGML_F32_VEC_MUL    GGML_F32x4_MUL
-#define GGML_F32_VEC_REDUCE GGML_F32x4_REDUCE
+#define GGML_F32_VEC        GGML_F32xt
+#define GGML_F32_VEC_ZERO   GGML_F32xt_ZERO
+#define GGML_F32_VEC_SET1   GGML_F32xt_SET1
+#define GGML_F32_VEC_LOAD   GGML_F32xt_LOAD
+#define GGML_F32_VEC_STORE  GGML_F32xt_STORE
+#define GGML_F32_VEC_FMA    GGML_F32xt_FMA
+#define GGML_F32_VEC_ADD    GGML_F32xt_ADD
+#define GGML_F32_VEC_MUL    GGML_F32xt_MUL
+#define GGML_F32_VEC_REDUCE GGML_F32xt_REDUCE
 
 #endif
 
