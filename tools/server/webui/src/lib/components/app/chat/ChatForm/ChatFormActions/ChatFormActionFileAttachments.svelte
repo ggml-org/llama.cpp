@@ -1,22 +1,29 @@
 <script lang="ts">
-	import { Paperclip, Image, FileText, File, Volume2 } from '@lucide/svelte';
+	import { Paperclip } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
-	import { FileTypeCategory } from '$lib/enums/files';
-	import { supportsAudio, supportsVision } from '$lib/stores/server.svelte';
+	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
+	import { FileTypeCategory } from '$lib/enums';
 
 	interface Props {
 		class?: string;
 		disabled?: boolean;
+		hasAudioModality?: boolean;
+		hasVisionModality?: boolean;
 		onFileUpload?: (fileType?: FileTypeCategory) => void;
 	}
 
-	let { class: className = '', disabled = false, onFileUpload }: Props = $props();
+	let {
+		class: className = '',
+		disabled = false,
+		hasAudioModality = false,
+		hasVisionModality = false,
+		onFileUpload
+	}: Props = $props();
 
 	const fileUploadTooltipText = $derived.by(() => {
-		return !supportsVision()
+		return !hasVisionModality
 			? 'Text files and PDFs supported. Images, audio, and video require vision models.'
 			: 'Attach files';
 	});
@@ -29,7 +36,7 @@
 <div class="flex items-center gap-1 {className}">
 	<DropdownMenu.Root>
 		<DropdownMenu.Trigger name="Attach files">
-			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<Button
 						class="file-upload-button h-8 w-8 rounded-full bg-transparent p-0 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
@@ -49,40 +56,40 @@
 		</DropdownMenu.Trigger>
 
 		<DropdownMenu.Content align="start" class="w-48">
-			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+			<Tooltip.Root>
 				<Tooltip.Trigger class="w-full">
 					<DropdownMenu.Item
 						class="images-button flex cursor-pointer items-center gap-2"
-						disabled={!supportsVision()}
+						disabled={!hasVisionModality}
 						onclick={() => handleFileUpload(FileTypeCategory.IMAGE)}
 					>
-						<Image class="h-4 w-4" />
+						<FILE_TYPE_ICONS.image class="h-4 w-4" />
 
 						<span>Images</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
 
-				{#if !supportsVision()}
+				{#if !hasVisionModality}
 					<Tooltip.Content>
 						<p>Images require vision models to be processed</p>
 					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
 
-			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+			<Tooltip.Root>
 				<Tooltip.Trigger class="w-full">
 					<DropdownMenu.Item
 						class="audio-button flex cursor-pointer items-center gap-2"
-						disabled={!supportsAudio()}
+						disabled={!hasAudioModality}
 						onclick={() => handleFileUpload(FileTypeCategory.AUDIO)}
 					>
-						<Volume2 class="h-4 w-4" />
+						<FILE_TYPE_ICONS.audio class="h-4 w-4" />
 
 						<span>Audio Files</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
 
-				{#if !supportsAudio()}
+				{#if !hasAudioModality}
 					<Tooltip.Content>
 						<p>Audio files require audio models to be processed</p>
 					</Tooltip.Content>
@@ -93,24 +100,24 @@
 				class="flex cursor-pointer items-center gap-2"
 				onclick={() => handleFileUpload(FileTypeCategory.TEXT)}
 			>
-				<FileText class="h-4 w-4" />
+				<FILE_TYPE_ICONS.text class="h-4 w-4" />
 
 				<span>Text Files</span>
 			</DropdownMenu.Item>
 
-			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
+			<Tooltip.Root>
 				<Tooltip.Trigger class="w-full">
 					<DropdownMenu.Item
 						class="flex cursor-pointer items-center gap-2"
 						onclick={() => handleFileUpload(FileTypeCategory.PDF)}
 					>
-						<File class="h-4 w-4" />
+						<FILE_TYPE_ICONS.pdf class="h-4 w-4" />
 
 						<span>PDF Files</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
 
-				{#if !supportsVision()}
+				{#if !hasVisionModality}
 					<Tooltip.Content>
 						<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
 					</Tooltip.Content>

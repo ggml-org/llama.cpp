@@ -14,8 +14,10 @@ struct common_cached_model_info {
     std::string model;
     std::string tag;
     size_t      size = 0; // GGUF size in bytes
+    // return string representation like "user/model:tag"
+    // if tag is "latest", it will be omitted
     std::string to_string() const {
-        return user + "/" + model + ":" + tag;
+        return user + "/" + model + (tag == "latest" ? "" : ":" + tag);
     }
 };
 

@@ -15,12 +15,16 @@ set(TARGET_SRCS
     server.cpp
     server-http.cpp
     server-http.h
+    server-models.cpp
+    server-models.h
     server-task.cpp
     server-task.h
     server-queue.cpp
     server-queue.h
     server-common.cpp
     server-common.h
+    server-context.cpp
+    server-context.h
 )
 set(PUBLIC_ASSETS
     index.html.gz

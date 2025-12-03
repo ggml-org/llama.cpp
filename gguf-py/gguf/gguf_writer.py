@@ -371,10 +371,13 @@ class GGUFWriter:
 
     def add_tensor(
         self, name: str, tensor: np.ndarray[Any, Any], raw_shape: Sequence[int] | None = None,
-        raw_dtype: GGMLQuantizationType | None = None,
+        raw_dtype: GGMLQuantizationType | None = None, tensor_endianess: GGUFEndian | None = None
     ) -> None:
-        if (self.endianess == GGUFEndian.BIG and sys.byteorder != 'big') or \
-                (self.endianess == GGUFEndian.LITTLE and sys.byteorder != 'little'):
+        # if tensor endianness is not passed, assume it's native to system
+        if tensor_endianess is None:
+            tensor_endianess = GGUFEndian.BIG if sys.byteorder == 'big' else GGUFEndian.LITTLE
+
+        if tensor_endianess != self.endianess:
             # Don't byteswap inplace since lazy copies cannot handle it
             tensor = tensor.byteswap(inplace=False)
         if self.use_temp_file and self.temp_file is None:
@@ -397,13 +400,16 @@ class GGUFWriter:
         if pad != 0:
             fp.write(bytes([0] * pad))
 
-    def write_tensor_data(self, tensor: np.ndarray[Any, Any]) -> None:
+    def write_tensor_data(self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None) -> None:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
         assert self.fout is not None
 
-        if (self.endianess == GGUFEndian.BIG and sys.byteorder != 'big') or \
-                (self.endianess == GGUFEndian.LITTLE and sys.byteorder != 'little'):
+        # if tensor endianness is not passed, assume it's native to system
+        if tensor_endianess is None:
+            tensor_endianess = GGUFEndian.BIG if sys.byteorder == 'big' else GGUFEndian.LITTLE
+
+        if tensor_endianess != self.endianess:
             # Don't byteswap inplace since lazy copies cannot handle it
             tensor = tensor.byteswap(inplace=False)
 
@@ -897,6 +903,9 @@ class GGUFWriter:
 
     def add_attn_temperature_length(self, value: int) -> None:
         self.add_uint32(Keys.Attention.TEMPERATURE_LENGTH.format(arch=self.arch), value)
+
+    def add_attn_temperature_scale(self, value: float) -> None:
+        self.add_float32(Keys.Attention.TEMPERATURE_SCALE.format(arch=self.arch), value)
 
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
