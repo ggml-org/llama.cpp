@@ -726,21 +726,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // sanity checks for models that have attention layers
     if (qs.n_attention_wv != 0 && !is_clip_model)
     {
-        const auto & n_head_kv_iter = model.hparams.n_head_kv_arr.begin();
-        // attention layers have a non-zero number of kv heads
-        int32_t n_layer_attn = model.hparams.n_layer - std::count(n_head_kv_iter, n_head_kv_iter + model.hparams.n_layer, 0);
+        int32_t n_layer_all = model.hparams.n_layer;
         if (llama_model_has_encoder(&model)) {
-            // now n_layer_attn is the number of attention layers in the encoder
+            // now n_layer_all is the number of attention layers in the encoder
             // for each decoder block, there are 2 attention layers
-            n_layer_attn += 2 * model.hparams.dec_n_layer;
+            n_layer_all += 2 * model.hparams.dec_n_layer;
         }
 
         // note: for linear-attention models (such as Qwen3 Next) this is the number of linear layers
         const int32_t n_layer_recr = std::count(model.hparams.recurrent_layer_arr.begin(), model.hparams.recurrent_layer_arr.end(), true);
 
-        LLAMA_LOG_INFO("%s: n_layer_attn = %d, n_layer_recr = %d, pruned_attention_w = %d\n", __func__, n_layer_attn, n_layer_recr, pruned_attention_w);
+        LLAMA_LOG_INFO("%s: n_layer_all = %d, n_layer_recr = %d, pruned_attention_w = %d\n", __func__, n_layer_all, n_layer_recr, pruned_attention_w);
 
-        GGML_ASSERT((qs.n_attention_wv == n_layer_attn - pruned_attention_w - n_layer_recr) && "n_attention_wv is unexpected");
+        GGML_ASSERT((qs.n_attention_wv == n_layer_all - pruned_attention_w - n_layer_recr) && "n_attention_wv is unexpected");
     }
 
     size_t total_size_org = 0;
