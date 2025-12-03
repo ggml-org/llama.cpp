@@ -2,9 +2,8 @@
 	import { Download, Upload } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { DialogConversationSelection } from '$lib/components/app';
-	import { DatabaseService } from '$lib/services/database';
 	import { createMessageCountMap } from '$lib/utils';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
 	let importedConversations = $state<DatabaseConversation[]>([]);
@@ -21,15 +20,15 @@
 
 	async function handleExportClick() {
 		try {
-			const allConversations = await DatabaseService.getAllConversations();
+			const allConversations = conversations();
 			if (allConversations.length === 0) {
 				alert('No conversations to export');
 				return;
 			}
 
 			const conversationsWithMessages = await Promise.all(
-				allConversations.map(async (conv) => {
-					const messages = await DatabaseService.getConversationMessages(conv.id);
+				allConversations.map(async (conv: DatabaseConversation) => {
+					const messages = await conversationsStore.getConversationMessages(conv.id);
 					return { conv, messages };
 				})
 			);
@@ -47,7 +46,7 @@
 		try {
 			const allData: ExportedConversations = await Promise.all(
 				selectedConversations.map(async (conv) => {
-					const messages = await DatabaseService.getConversationMessages(conv.id);
+					const messages = await conversationsStore.getConversationMessages(conv.id);
 					return { conv: $state.snapshot(conv), messages: $state.snapshot(messages) };
 				})
 			);
@@ -135,9 +134,7 @@
 				.snapshot(fullImportData)
 				.filter((item) => selectedIds.has(item.conv.id));
 
-			await DatabaseService.importConversations(selectedData);
-
-			await conversationsStore.loadConversations();
+			await conversationsStore.importConversationsData(selectedData);
 
 			importedConversations = selectedConversations;
 			showImportSummary = true;
