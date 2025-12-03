@@ -1,13 +1,15 @@
 llama_add_compile_flags()
 
 function(llama_build source)
+    set(TEST_SOURCES ${source} ${ARGN})
+
     if (DEFINED LLAMA_TEST_NAME)
         set(TEST_TARGET ${LLAMA_TEST_NAME})
     else()
         get_filename_component(TEST_TARGET ${source} NAME_WE)
     endif()
 
-    add_executable(${TEST_TARGET} ${source})
+    add_executable(${TEST_TARGET} ${TEST_SOURCES})
     target_link_libraries(${TEST_TARGET} PRIVATE common)
     install(TARGETS ${TEST_TARGET} RUNTIME)
 endfunction()
@@ -83,6 +85,8 @@ function(llama_build_and_test source)
     set(multiValueArgs ARGS)
     cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
+    set(TEST_SOURCES ${source} ${LLAMA_TEST_UNPARSED_ARGUMENTS} get-model.cpp)
+
     if (NOT DEFINED LLAMA_TEST_LABEL)
         set(LLAMA_TEST_LABEL "main")
     endif()
@@ -95,7 +99,7 @@ function(llama_build_and_test source)
         get_filename_component(TEST_TARGET ${source} NAME_WE)
     endif()
 
-    add_executable(${TEST_TARGET} ${source} get-model.cpp)
+    add_executable(${TEST_TARGET} ${TEST_SOURCES})
     install(TARGETS ${TEST_TARGET} RUNTIME)
     target_link_libraries(${TEST_TARGET} PRIVATE common)
 
@@ -180,9 +184,21 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 endif()
 
 llama_build_and_test(test-chat-parser.cpp)
+llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
+llama_build_and_test(
+    test-peg-parser.cpp
+    peg-parser/simple-tokenize.cpp
+    peg-parser/test-basic.cpp
+    peg-parser/test-gbnf-generation.cpp
+    peg-parser/test-json-parser.cpp
+    peg-parser/test-json-serialization.cpp
+    peg-parser/test-unicode.cpp
+    peg-parser/testing.h
+    peg-parser/tests.h
+)
 llama_build_and_test(test-regex-partial.cpp)
 
 if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")

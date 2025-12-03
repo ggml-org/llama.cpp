@@ -10,13 +10,16 @@
 /common/arg.*                           @ggerganov
 /common/base64.hpp.*                    @ggerganov
 /common/build-info.*                    @ggerganov
+/common/chat-peg-parser.*               @aldehir
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
 /common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
+/common/peg-parser.*                    @aldehir
 /common/sampling.*                      @ggerganov
 /common/speculative.*                   @ggerganov
+/common/unicode.*                       @aldehir
 /convert_*.py                           @CISC
 /examples/batched.swift/                @ggerganov
 /examples/batched/                      @ggerganov
