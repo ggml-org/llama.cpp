@@ -170,5 +170,6 @@ private:
         std::map<std::string, std::string> headers;
         int status = 0;
         std::string data;
+        std::string content_type;
     };
 };
