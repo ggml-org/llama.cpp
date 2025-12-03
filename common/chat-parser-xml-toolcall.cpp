@@ -169,15 +169,9 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
     GGML_ASSERT(!form.tool_start.empty());
     GGML_ASSERT(!form.tool_sep.empty());
     GGML_ASSERT(!form.key_start.empty());
+    GGML_ASSERT(!form.key_val_sep.empty());
     GGML_ASSERT(!form.val_end.empty());
     GGML_ASSERT(!form.tool_end.empty());
-
-    std::string key_val_sep = form.key_val_sep;
-    if (form.key_val_sep2) {
-        key_val_sep += "\n";
-        key_val_sep += *form.key_val_sep2;
-    }
-    GGML_ASSERT(!key_val_sep.empty());
 
     if (tools.is_array() && !tools.empty()) {
         data.grammar = build_grammar([&](const common_grammar_builder &builder) {
@@ -224,14 +218,29 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                     for (const auto & [key, value] : parameters.at("properties").items()) {
                         std::string quoted_key = key;
                         bool required = std::binary_search(requiredParameters.begin(), requiredParameters.end(), key);
-                        if (form.key_start.back() == '"' && key_val_sep[0] == '"') {
+                        if (form.key_start.back() == '"' && form.key_val_sep[0] == '"') {
                             quoted_key = gbnf_format_literal(key);
                             quoted_key = quoted_key.substr(1, quoted_key.size() - 2);
+                        }
+                        std::string kvsep = gbnf_format_literal(form.key_val_sep);
+                        if (!form.allowed_literal_between_kvsep.empty()) {
+                            kvsep += " (";
+                            for (auto s: form.allowed_literal_between_kvsep) {
+                                kvsep += " ";
+                                kvsep += gbnf_format_literal(s);
+                                kvsep += " |";
+                            }
+                            kvsep.resize(kvsep.size() - 2);
+                            kvsep += " )";
+                        }
+                        if (form.key_val_sep2) {
+                            kvsep += " ";
+                            kvsep += gbnf_format_literal(*form.key_val_sep2);
                         }
                         arg_rules.push_back(parameter_rule {builder.add_rule("func-" + name + "-kv-" + key,
                             gbnf_format_literal(form.key_start) + " " +
                             gbnf_format_literal(quoted_key) + " " +
-                            gbnf_format_literal(key_val_sep) + " " +
+                            kvsep + " " +
                             ((value.contains("type") && value["type"].is_string() && value["type"] == "string" && (!form.raw_argval || *form.raw_argval)) ?
                                     (form.raw_argval ?
                                             string_arg_val :
@@ -475,6 +484,23 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
             }
             auto &key = key_res->prelude;
             recovery = false;
+
+            if (!form.allowed_literal_between_kvsep.empty()) {
+                for (bool consumed = true; consumed;) {
+                    consumed = false;
+                    auto pos = builder.pos();
+                    for (auto s: form.allowed_literal_between_kvsep) {
+                        if (auto tc = builder.try_find_literal(s)) {
+                            if (all_space(tc->prelude)) {
+                                consumed = true;
+                                pos = builder.pos();
+                            } else {
+                                builder.move_to(pos);
+                            }
+                        }
+                    }
+                }
+            }
 
             // Parse arg_value
             if (form.key_val_sep2) {
