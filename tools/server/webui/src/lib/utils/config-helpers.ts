@@ -5,8 +5,6 @@
  * with dynamic keys while maintaining TypeScript type safety.
  */
 
-import type { SettingsConfigType } from '$lib/types/settings';
-
 /**
  * Type-safe helper to access config properties dynamically
  * Provides better type safety than direct casting to Record

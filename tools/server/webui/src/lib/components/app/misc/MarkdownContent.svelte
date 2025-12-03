@@ -7,8 +7,8 @@
 	import remarkRehype from 'remark-rehype';
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
-	import { copyCodeToClipboard } from '$lib/utils/copy';
-	import { preprocessLaTeX } from '$lib/utils/latex-protection';
+	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
+	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
 	import { browser } from '$app/environment';
 	import '$styles/katex-custom.scss';
 
@@ -60,6 +60,7 @@
 			.use(remarkRehype) // Convert Markdown AST to rehype
 			.use(rehypeKatex) // Render math using KaTeX
 			.use(rehypeHighlight) // Add syntax highlighting
+			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeStringify); // Convert to HTML string
 	});
 

@@ -683,22 +683,14 @@ bool ggml_is_numa(void) {
 }
 
 #if defined(__ARM_ARCH)
-
-#if defined(__linux__) && defined(__aarch64__)
-#include <sys/auxv.h>
-#endif
-
-static void ggml_init_arm_arch_features(void) {
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
-#if defined(__linux__)
-    ggml_arm_arch_features.sve_cnt = PR_SVE_VL_LEN_MASK & prctl(PR_SVE_GET_VL);
-#else
-    // TODO: add support of SVE for non-linux systems
-#error "TODO: SVE is not supported on this platform. To use SVE, sve_cnt needs to be initialized here."
-#endif
-#endif
+#include <arm_sve.h>
+static void ggml_init_arm_arch_features(void) {
+    ggml_arm_arch_features.sve_cnt = svcntb();
 }
-
+#else
+static void ggml_init_arm_arch_features(void) {}
+#endif
 #endif // __ARM_ARCH
 
 struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value) {
@@ -1927,6 +1919,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_argsort(params, tensor);
             } break;
+        case GGML_OP_TOP_K:
+            {
+                ggml_compute_forward_top_k(params, tensor);
+            } break;
         case GGML_OP_LEAKY_RELU:
             {
                 ggml_compute_forward_leaky_relu(params, tensor);
@@ -2311,6 +2307,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_ARGSORT:
+        case GGML_OP_TOP_K:
         case GGML_OP_FLASH_ATTN_EXT:
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
@@ -2701,6 +2698,11 @@ struct ggml_cplan ggml_graph_plan(
         n_threads = threadpool ? threadpool->n_threads_max : GGML_DEFAULT_N_THREADS;
     }
 
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    // Emscripten without pthreads support can only use a single thread
+    n_threads = 1;
+#endif
+
     size_t work_size = 0;
 
     struct ggml_cplan cplan;
@@ -2833,6 +2835,10 @@ struct ggml_cplan ggml_graph_plan(
 
                         cur += sizeof(ggml_fp16_t)*ne00*ne01*ne02*ne03;
                         cur += sizeof(ggml_fp16_t)*ne10*ne11*ne12;
+                    } break;
+                case GGML_OP_TOP_K:
+                    {
+                        cur += sizeof(int32_t)*node->src[0]->ne[0]*n_tasks;
                     } break;
                 case GGML_OP_FLASH_ATTN_EXT:
                     {
