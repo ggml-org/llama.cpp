@@ -1,35 +1,21 @@
 #include <algorithm>
-
 #include "cumsum.cuh"
-#include "ggml-impl.h"
 
-// Check if CUB is available
-#ifdef __has_include
-#  if __has_include(<cub/device/device_scan.cuh>)
-#    define HAS_CUB_DEVICE_SCAN 1
-#    include <cub/device/device_scan.cuh>
-#  else
-#    define HAS_CUB_DEVICE_SCAN 0
-#  endif
-#else
-#  define HAS_CUB_DEVICE_SCAN 0
-#endif
-
-#if HAS_CUB_DEVICE_SCAN
+#ifdef GGML_CUDA_USE_CUB
+#   include <cub/device/device_scan.cuh>
 
 template<typename T, int BLOCK_SIZE>
 static __global__ void cumsum_cub_kernel(
     const T* __restrict__ src,
     T* __restrict__ dst,
-    int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,
-    int64_t nb01, int64_t nb02, int64_t nb03,
-    int64_t nb1,  int64_t nb2,  int64_t nb3)
+    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+    const int64_t nb01, const int64_t nb02, const int64_t nb03,
+    const int64_t nb1,  const int64_t nb2,  const int64_t nb3)
 {
     using BlockScan = cub::BlockScan<T, BLOCK_SIZE>;
 
     __shared__ typename BlockScan::TempStorage temp_storage;
     __shared__ T block_carry;      // carry from previous tile
-    __shared__ T block_total;      // total of current tile
 
     const int tid = threadIdx.x;
 
@@ -51,33 +37,40 @@ static __global__ void cumsum_cub_kernel(
 
     for (int64_t start = 0; start < ne00; start += BLOCK_SIZE) {
         int64_t idx = start + tid;
-
         T x = (idx < ne00) ? src_row[idx] : T(0);
 
         T inclusive;
-        BlockScan(temp_storage).InclusiveSum(x, inclusive);
+        T block_total;
+        BlockScan(temp_storage).InclusiveSum(x, inclusive, block_total);
 
-        // Last thread stores total
-        if (tid == BLOCK_SIZE - 1) {
-            block_total = inclusive;
-        }
         __syncthreads();
 
-        T final = inclusive + block_carry;
+        T final_val = inclusive + block_carry;
 
+        // store result
         if (idx < ne00) {
-            dst_row[idx] = final;
+            dst_row[idx] = final_val;
         }
+
         __syncthreads();
 
         if (tid == 0) {
             block_carry += block_total;
         }
+
         __syncthreads();
     }
 }
-
-#endif // HAS_CUB_DEVICE_SCAN
+#else
+template<typename T, int BLOCK_SIZE>
+static __global__ void cumsum_cub_kernel(
+    const T* __restrict__ src,
+    T* __restrict__ dst,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+    const int64_t nb01, const int64_t nb02, const int64_t nb03,
+    const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {}
+// empty function to avoid triggering compilation errors on non-CUB paths, just in case compiler doesn't optimize away
+#endif // GGML_CUDA_USE_CUB
 
 // Fallback kernel implementation (original)
 template<typename T>
@@ -166,14 +159,14 @@ static void cumsum_cuda(
 
     const size_t type_size = sizeof(T);
     bool use_cub = false;
-#if HAS_CUB_DEVICE_SCAN
+#ifdef GGML_CUDA_USE_CUB
     // Check if we can use CUB (data must be contiguous along innermost dimension)
     const bool is_contiguous = (nb00 == type_size) && (nb0 == type_size);
 
     if (is_contiguous) {
         use_cub = true;
     }
-#endif // HAS_CUB_DEVICE_SCAN
+#endif // GGML_CUDA_USE_CUB
     dim3 grid_dims(ne01, ne02, ne03);
     const int num_warps = (ne00 + WARP_SIZE - 1) / WARP_SIZE;
     int block_size = num_warps * WARP_SIZE;
