@@ -568,9 +568,11 @@ void ggml_gemv_q4_K_4x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     const int qk = QK_K;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
-    const int blocklen = 4;
+    const int blocklen = 8;
+
     assert (n % qk == 0);
     assert (nc % ncols_interleaved == 0);
+
     UNUSED(s);
     UNUSED(bs);
     UNUSED(vx);
@@ -580,6 +582,7 @@ void ggml_gemv_q4_K_4x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(nb);
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
+
 #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     if (ggml_cpu_has_neon() && ggml_cpu_has_dotprod()) {
         const block_q4_Kx4 *GGML_RESTRICT q4 = (const block_q4_Kx4*) vx;
@@ -2508,7 +2511,7 @@ void ggml_gemm_q4_K_4x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     const int qk = QK_K;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
-    const int blocklen = 8;  // c implementation will use
+    const int blocklen = 8;
 
     assert(n % qk == 0);
     assert(nr % 4 == 0);
