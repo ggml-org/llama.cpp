@@ -119,7 +119,7 @@ static void test_active(int n_threads, int n_rounds) {
               << "\n";
     // ggml_graph_print(gf);
 
-    // In this test we keep changing number of threads every 4th iteration
+    // In this test we keep changing the number of threads every 4th iteration
     // to test for race conditions in that path
 
     for (int i=0; i < n_rounds; i++) {
