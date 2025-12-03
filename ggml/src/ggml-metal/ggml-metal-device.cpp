@@ -363,8 +363,9 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_tri(ggml_metal_library_t l
     char name[256];
 
     const char * op_str = "tri";
+    const int ttype = op->op_params[0];
 
-    snprintf(base, 256, "kernel_%s_%s", op_str, ggml_type_name(op->src[0]->type));
+    snprintf(base, 256, "kernel_%s_%s_%d", op_str, ggml_type_name(op->src[0]->type), ttype);
 
     snprintf(name, 256, "%s", base);
 

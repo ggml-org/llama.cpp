@@ -3914,8 +3914,6 @@ int ggml_metal_op_tri(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint32_t, nb,  op,         nb);
 
-    const ggml_tri_type ttype = (ggml_tri_type) op->op_params[0];
-
     ggml_metal_kargs_tri args = {
         /*.ne00  =*/ ne00,
         /*.ne01  =*/ ne01,
@@ -3933,7 +3931,6 @@ int ggml_metal_op_tri(ggml_metal_op_t ctx, int idx) {
         /*.nb1   =*/ nb1,
         /*.nb2   =*/ nb2,
         /*.nb3   =*/ nb3,
-        /*.ttype =*/ static_cast<uint32_t>(ttype)
     };
 
     ggml_metal_pipeline_t pipeline = ggml_metal_library_get_pipeline_tri(lib, op);
