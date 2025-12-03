@@ -675,6 +675,11 @@ class MistralVocab(Vocab):
         all_files = [f.as_posix() for f in base_path.glob("**/*") if f.is_file()]
         valid_tokenizer_files = _filter_valid_tokenizer_files(all_files)
 
+        if len(valid_tokenizer_files) >= 1 and isinstance(valid_tokenizer_files[0], tuple):
+            # Later mistral-common versions return tuples of (file_name, file_path) instead of a string list file_names[]. 
+            # ref: https://github.com/ggml-org/llama.cpp/issues/17691
+            valid_tokenizer_files = [vf[0] for vf in valid_tokenizer_files]
+
         if len(valid_tokenizer_files) == 0:
             raise ValueError(f"No tokenizer file found in the directory: {base_path}")
         # If there are multiple tokenizer files, we use tekken.json if it exists, otherwise the versioned one.
