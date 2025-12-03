@@ -11,6 +11,42 @@
 #include <optional>
 #include <vector>
 
+struct ModelParams {
+    int ctx = -1;
+    int ctx_swa = -1;
+    int ctx_per_seq = -1;
+    int ctx_per_seq_swa = -1;
+    int n_seq = -1;
+    int n_heads = -1;
+    int n_heads_kv = -1;
+    int head_size = -1;
+    int32_t * rope_params = nullptr;
+    std::vector<int> swa_layers;
+
+    // std::vector<std::string> kv_names;
+
+    bool can_reuse_dynamically(const ModelParams & other) const {
+        return n_seq == other.n_seq && n_heads == other.n_heads && n_heads_kv == other.n_heads_kv &&
+               head_size == other.head_size && rope_params == other.rope_params && swa_layers == other.swa_layers;
+    }
+
+    bool can_reuse_statically(const ModelParams & other) const {
+        return can_reuse_dynamically(other) && ctx_per_seq == other.ctx_per_seq &&
+               ctx_per_seq_swa == other.ctx_per_seq_swa;
+    }
+};
+
+struct ComputeParams {
+    int n_seq_active = -1;
+    int seq_active_start = -1;
+    int attention_size = -1;
+    int attention_size_swa = -1;
+    int input_len = -1;
+    int token_len_per_seq = -1;
+    int past_kv_len = -1;
+    int output_len = -1;
+};
+
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
     struct NodeInfo {
@@ -25,6 +61,8 @@ public:
     };
     // Graph decoder
     GgmlOvDecoder(ggml_cgraph * cgraph,
+                  ModelParams & model_params,
+                  ComputeParams & compute_params,
                   std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                   bool is_static,
                   bool is_prefill = false,
@@ -120,27 +158,28 @@ public:
 
     virtual const std::vector<std::string> & get_model_output_names() const override { return m_model_output_names; }
 
-    virtual int get_ctx_size() const { return m_ctx; }
+    virtual int get_ctx_size() const { return m_model_params.ctx; }
 
-    virtual int get_ctx_swa_size() const { return m_ctx_swa; }
+    virtual int get_ctx_swa_size() const { return m_model_params.ctx_swa; }
 
-    virtual int get_ctx_per_seq() const { return m_ctx_per_seq; }
+    virtual int get_ctx_per_seq() const { return m_model_params.ctx_per_seq; }
 
-    virtual int get_ctx_per_seq_swa() const { return m_ctx_per_seq_swa; }
+    virtual int get_ctx_per_seq_swa() const { return m_model_params.ctx_per_seq_swa; }
 
-    virtual int get_n_seq() const { return m_n_seq; }
+    virtual int get_n_seq() const { return m_model_params.n_seq; }
 
     virtual int is_swa_layer(int layer) const override {
-        return std::find(m_swa_layers.begin(), m_swa_layers.end(), layer) != m_swa_layers.end();
+        return std::find(m_model_params.swa_layers.begin(), m_model_params.swa_layers.end(), layer) !=
+               m_model_params.swa_layers.end();
     }
 
-    int get_past_kv_len() const { return m_past_kv_len; }
+    int get_past_kv_len() const { return m_compute_params.past_kv_len; }
 
-    int get_input_len() const { return m_input_len; }
+    int get_input_len() const { return m_compute_params.input_len; }
 
-    virtual int32_t * get_rope_params() const override { return m_rope_params; }
+    virtual int32_t * get_rope_params() const override { return m_model_params.rope_params; }
 
-    virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
+    // virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
 
     virtual bool is_static() const override { return m_is_static; }
 
@@ -161,6 +200,16 @@ public:
 
     void clear_model_weights() { m_model_weights.clear(); }
 
+    static std::pair<ModelParams, ComputeParams> compute_llm_params(ggml_cgraph * cgraph, bool is_static);
+
+    ModelParams get_model_params() const { return m_model_params; }
+
+    ComputeParams get_compute_params() const { return m_compute_params; }
+
+    void set_model_params(const ModelParams & model_params) { m_model_params = model_params; }
+
+    void set_compute_params(const ComputeParams & compute_params) { m_compute_params = compute_params; }
+
     bool m_is_static = false;
     bool m_is_prefill = false;
     int m_prefill_chunk_size = 0;
@@ -174,7 +223,6 @@ private:
     int compute_op_case(const ggml_tensor * node);
     std::string compute_op_type(const ggml_tensor * node);
 
-    void set_llm_params();
     void validate_cgraph() const;
 
     ggml_cgraph * m_cgraph = nullptr;
@@ -191,27 +239,8 @@ private:
     std::vector<std::string> m_model_output_names;
     std::vector<NodeInfo> m_node_info_list;
 
-    // Fixed for a model
-    int m_ctx = -1;
-    int m_ctx_swa = -1;
-    int m_ctx_per_seq = -1;
-    int m_ctx_per_seq_swa = -1;
-    int m_n_seq = -1;
-    int m_n_heads = -1;
-    int m_n_heads_kv = -1;
-    int m_head_size = -1;
-    std::vector<int> m_swa_layers;
-    std::vector<std::string> m_kv_names;
-
-    // Changed per inference
-    int m_n_seq_active = -1;
-    int m_seq_active_start = -1;
-    int m_attention_size = -1;
-    int m_attention_size_swa = -1;
-    int m_input_len = -1;
-    int m_token_len_per_seq = -1;
-    int m_past_kv_len = -1;
-    int32_t * m_rope_params = nullptr;
+    ModelParams m_model_params;
+    ComputeParams m_compute_params;
 };
 
 void print_tensor_address_map(const ggml_cgraph * cgraph);

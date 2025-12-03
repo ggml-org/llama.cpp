@@ -79,16 +79,21 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
     }
 
     static std::mutex cache_mutex;
-    static std::unordered_map<ggml_cgraph *, std::shared_ptr<ov::InferRequest>> infer_request_cache;
-    static std::unordered_map<ggml_cgraph *, std::shared_ptr<ov::InferRequest>> infer_request_cache_prefill;
-    static std::unordered_map<ggml_cgraph *, std::vector<std::string>> ov_input_names_cache;
-    static std::unordered_map<ggml_cgraph *, std::vector<std::string>> ov_output_names_cache;
+    static std::unordered_map<graph_key, std::shared_ptr<GgmlOvDecoder>, graph_key_hash> decoder_cache;
+    static std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache;
+    static std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache_prefill;
+    static std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache;
+    static std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
 
     std::shared_ptr<GgmlOvDecoder> ggml_decoder;
     std::shared_ptr<ov::InferRequest> infer_request;
+    ModelParams m_params;
+    ComputeParams c_params;
+    std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static);
 
     const auto * inp_pos = get_inp_pos_tensor(cgraph);
     const auto is_prefill = get_is_prefill(inp_pos);
+    const auto key = compute_graph_key(cgraph);
 
     int64_t decoder_end_time;
     int64_t conversion_end_time;
@@ -98,25 +103,34 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
     {
         std::lock_guard<std::mutex> lock(cache_mutex);
 
-        auto it = infer_request_cache.find(cgraph);
-        if (it != infer_request_cache.end()) {
+        auto it = decoder_cache.find(key);
+
+        auto cache_hit = it != decoder_cache.end();
+        if (cache_hit) {
+            ggml_decoder = it->second;
+            cache_hit = is_static ? ggml_decoder->get_model_params().can_reuse_statically(m_params) :
+                                    ggml_decoder->get_model_params().can_reuse_dynamically(m_params);
+        }
+
+        if (cache_hit) {
             std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
-            ggml_decoder =
-                std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static, is_prefill, prefill_chunk_size);
+            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static,
+                                                           is_prefill, prefill_chunk_size);
+            decoder_cache[key] = ggml_decoder;
             decoder_end_time = ggml_time_us();
 
-            infer_request = infer_request_cache[cgraph];
-            if (is_static && is_prefill) {
-                infer_request = infer_request_cache_prefill[cgraph];
-            }
+            infer_request = is_static && is_prefill ? infer_request_cache_prefill[key] : infer_request_cache[key];
             conversion_end_time = ggml_time_us();
             compile_end_time = conversion_end_time;
         } else {
+            infer_request_cache.erase(key);
+            infer_request_cache_prefill.erase(key);
+
             std::shared_ptr<ov::Model> model;
             auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, get_types_to_requant(device));
 
             if (!is_static) {
-                ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static);
+                ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static);
                 decoder_end_time = ggml_time_us();
 
                 auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
@@ -133,13 +147,14 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
 
                 auto compiled_model = core.compile_model(model, device, get_ov_compile_config(device));
                 compile_end_time = ggml_time_us();
-                infer_request_cache[cgraph] = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
-                infer_request = infer_request_cache[cgraph];
+                infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
+                infer_request_cache[key] = infer_request;
+                decoder_cache[key] = ggml_decoder;
             } else {
-                auto ggml_decoder_prefill =
-                    std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static, true, prefill_chunk_size);
-                auto ggml_decoder_decode =
-                    std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static, false, prefill_chunk_size);
+                auto ggml_decoder_prefill = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights,
+                                                                            is_static, true, prefill_chunk_size);
+                auto ggml_decoder_decode = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights,
+                                                                           is_static, false, prefill_chunk_size);
                 decoder_end_time = ggml_time_us();
 
                 auto input_model_prefill = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder_prefill);
@@ -162,15 +177,17 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
 
                 auto compiled_model_prefill = core.compile_model(model_prefill, device, get_ov_compile_config(device));
                 auto compiled_model_decode = core.compile_model(model_decode, device, get_ov_compile_config(device));
-                infer_request_cache_prefill[cgraph] =
+
+                infer_request_cache_prefill[key] =
                     std::make_shared<ov::InferRequest>(compiled_model_prefill.create_infer_request());
-                infer_request_cache[cgraph] =
+                infer_request_cache[key] =
                     std::make_shared<ov::InferRequest>(compiled_model_decode.create_infer_request());
                 compile_end_time = ggml_time_us();
 
                 model = is_prefill ? model_prefill : model_decode;
                 ggml_decoder = is_prefill ? ggml_decoder_prefill : ggml_decoder_decode;
-                infer_request = is_prefill ? infer_request_cache_prefill[cgraph] : infer_request_cache[cgraph];
+                infer_request = is_prefill ? infer_request_cache_prefill[key] : infer_request_cache[key];
+                decoder_cache[key] = ggml_decoder;
             }
 
             std::vector<std::string> ov_input_names;
@@ -181,8 +198,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
             for (const auto & ov_output : model->get_results()) {
                 ov_output_names.push_back(ov_output->get_friendly_name());
             }
-            ov_input_names_cache[cgraph] = ov_input_names;
-            ov_output_names_cache[cgraph] = ov_output_names;
+            ov_input_names_cache[key] = ov_input_names;
+            ov_output_names_cache[key] = ov_output_names;
 
             // Set output tensors (for NPU) and kvcache i/o tensors once and for all
             // Note: does not seem to improve perf on CPU/GPU, but breaks llama-bench, so disabled it for CPU/GPU
@@ -205,8 +222,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, ggml_cgraph *
         }
     }
 
-    auto ov_input_names = ov_input_names_cache[cgraph];
-    auto ov_output_names = ov_output_names_cache[cgraph];
+    auto ov_input_names = ov_input_names_cache[key];
+    auto ov_output_names = ov_output_names_cache[key];
 
     if (!is_static) {
         for (size_t i = 0; i < ov_input_names.size(); i++) {
@@ -673,6 +690,21 @@ const ggml_tensor * get_inp_pos_tensor(ggml_cgraph * cgraph) {
 
 bool get_is_prefill(const ggml_tensor * inp_pos) {
     return inp_pos->ne[0] > 1;
+}
+
+graph_key compute_graph_key(ggml_cgraph * cgraph) {
+    graph_key key;
+    key.n_nodes = cgraph->n_nodes;
+
+    if (cgraph->n_nodes > 0) {
+        key.first_node_name = std::string(cgraph->nodes[0]->name);
+        key.last_node_name = std::string(cgraph->nodes[cgraph->n_nodes - 1]->name);
+    } else {
+        key.first_node_name = "";
+        key.last_node_name = "";
+    }
+
+    return key;
 }
 
 #pragma GCC diagnostic pop

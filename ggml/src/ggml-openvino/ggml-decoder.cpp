@@ -36,6 +36,8 @@
 #include <vector>
 
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
+                             ModelParams & model_params,
+                             ComputeParams & compute_params,
                              std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                              bool is_static,
                              bool is_prefill,
@@ -44,7 +46,9 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
     m_is_prefill(is_prefill),
     m_prefill_chunk_size(prefill_chunk_size),
     m_cgraph(cgraph),
-    m_model_weights(model_weights) {
+    m_model_weights(model_weights),
+    m_model_params(model_params),
+    m_compute_params(compute_params) {
     if (auto * env = getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS"); env && std::string(env) != "0") {
         #ifdef _WIN32
 		    _putenv_s("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS", "");
@@ -54,7 +58,6 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
         print_tensor_address_map(cgraph);
     }
 
-    set_llm_params();
     validate_cgraph();
 
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
@@ -163,12 +166,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
         // Workaround: the final tensor "result_output" does not have GGML_TENSOR_FLAG_OUTPUT flag set in cgraph
         if (node->op == GGML_OP_SET_ROWS || node->flags & GGML_TENSOR_FLAG_OUTPUT ||
             node_name.find("output") != std::string::npos || debug_output_names.count(node_name)) {
-            if (node->op == GGML_OP_SET_ROWS) {
-                assert(node_name.find("cache_k") == 0 || node_name.find("cache_v") == 0);
-                if (auto it = std::find(m_kv_names.begin(), m_kv_names.end(), node_name); it == m_kv_names.end()) {
-                    m_kv_names.push_back(node_name);
-                }
-            }
             if (auto it = std::find(m_model_output_names.begin(), m_model_output_names.end(), node_name);
                 it == m_model_output_names.end()) {
                 m_model_output_names.push_back(node_name);
@@ -277,9 +274,11 @@ int extract_layer_from_name(const std::string & name) {
     return layer;
 }
 
-void GgmlOvDecoder::set_llm_params() {
-    for (int i = 0; i < m_cgraph->n_nodes; i++) {
-        auto * node = m_cgraph->nodes[i];
+std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgraph * cgraph, bool is_static) {
+    ModelParams model_params;
+    ComputeParams compute_params;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        auto * node = cgraph->nodes[i];
         std::string name = std::string(node->name);
         if (node->op == GGML_OP_FLASH_ATTN_EXT) {
             auto * cache_k_perm = node->src[1];
@@ -294,49 +293,50 @@ void GgmlOvDecoder::set_llm_params() {
             assert(mask_name.find("KQ_mask") == 0);
 
             if (std::string(node->src[3]->name).find("swa") != std::string::npos) {
-                m_swa_layers.push_back(layer);
-                m_ctx_per_seq_swa = cache_k->ne[1];
+                model_params.swa_layers.push_back(layer);
+                model_params.ctx_per_seq_swa = cache_k->ne[1];
             } else {
-                m_ctx_per_seq = cache_k->ne[1];
-                m_n_seq = cache_k->ne[2];
+                model_params.ctx_per_seq = cache_k->ne[1];
+                model_params.n_seq = cache_k->ne[2];
             }
 
-            m_n_seq_active = mask->ne[3];
+            compute_params.n_seq_active = mask->ne[3];
             auto seq_size = cache_k->ne[0] * cache_k->ne[1] * ggml_type_size(cache_k->type);
             size_t offset;
             memcpy(&offset, cache_k_view->op_params, sizeof(size_t));
-            m_seq_active_start = offset / seq_size;
-            m_token_len_per_seq = node->ne[2];
+            compute_params.seq_active_start = offset / seq_size;
+            compute_params.token_len_per_seq = node->ne[2];
 
             if (mask_name.find("swa") != std::string::npos) {
-                m_attention_size_swa = mask->ne[0];
+                compute_params.attention_size_swa = mask->ne[0];
             } else {
-                m_attention_size = mask->ne[0];
+                compute_params.attention_size = mask->ne[0];
             }
-            if (m_is_static) {
-                m_attention_size = m_ctx_per_seq;
-                m_attention_size_swa = m_ctx_per_seq_swa;
-                m_token_len_per_seq = 1;
+            if (is_static) {
+                compute_params.attention_size = model_params.ctx_per_seq;
+                compute_params.attention_size_swa = model_params.ctx_per_seq_swa;
+                compute_params.token_len_per_seq = 1;
             }
 
         } else if (node->op == GGML_OP_ROPE) {
             if (name.find("Qcur-0") == 0 || std::string(node->src[0]->name).find("Qcur-0") == 0) {
-                m_head_size = node->ne[0];
-                m_n_heads = node->ne[1];
-                m_rope_params = node->op_params;
+                model_params.head_size = node->ne[0];
+                model_params.n_heads = node->ne[1];
+                model_params.rope_params = node->op_params;
                 auto * inp_pos = node->src[1];
-                m_input_len = inp_pos->ne[0];
+                compute_params.input_len = inp_pos->ne[0];
             } else if (name.find("Kcur-0") == 0 || std::string(node->src[0]->name).find("Kcur-0") == 0) {
-                m_n_heads_kv = node->ne[1];
+                model_params.n_heads_kv = node->ne[1];
             }
         }
     }
-    m_ctx = m_ctx_per_seq * m_n_seq;
-    m_ctx_swa = m_ctx_per_seq_swa * m_n_seq;
+    model_params.ctx = model_params.ctx_per_seq * model_params.n_seq;
+    model_params.ctx_swa = model_params.ctx_per_seq_swa * model_params.n_seq;
+    return {model_params, compute_params};
 }
 
 void GgmlOvDecoder::validate_cgraph() const {
-    if (m_n_seq > 1 && m_is_static == true) {
+    if (m_model_params.n_seq > 1 && m_is_static == true) {
         throw std::runtime_error("n_seq > 1 is not supported on NPU. Try setting -np 1.");
     }
 }
@@ -354,7 +354,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
 
     } else if (name.find("KQ_mask") == 0) {
         if (m_is_static) {
-            input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_ctx};
+            input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_model_params.ctx};
         } else {
             input_shape = ov::PartialShape{-1, 1, -1, -1};
         }
@@ -403,14 +403,14 @@ void GgmlOvDecoder::add_extra_inputs() {
         }
     };
 
-    create_1d_input("attention_size", m_attention_size);
-    if (m_attention_size_swa != -1) {
-        create_1d_input("attention_size_swa", m_attention_size_swa);
+    create_1d_input("attention_size", m_compute_params.attention_size);
+    if (m_compute_params.attention_size_swa != -1) {
+        create_1d_input("attention_size_swa", m_compute_params.attention_size_swa);
     }
-    create_1d_input("n_seq_active", m_n_seq_active);
-    create_1d_input("seq_active_start", m_seq_active_start);
-    create_1d_input("seq_active_end", m_seq_active_start + m_n_seq_active);
-    create_1d_input("token_len_per_seq", m_token_len_per_seq);
+    create_1d_input("n_seq_active", m_compute_params.n_seq_active);
+    create_1d_input("seq_active_start", m_compute_params.seq_active_start);
+    create_1d_input("seq_active_end", m_compute_params.seq_active_start + m_compute_params.n_seq_active);
+    create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
     // create_1d_input("token_len", m_token_len_per_seq * m_n_seq_active);
 }
 
@@ -445,15 +445,15 @@ const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name
     return nullptr;
 }
 
-std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
-    std::map<std::string, std::string> kv_param_res_names;
-    for (const auto & name : m_kv_names) {
-        if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
-            kv_param_res_names[name] = name;
-        }
-    }
-    return kv_param_res_names;
-}
+// std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
+//     std::map<std::string, std::string> kv_param_res_names;
+//     for (const auto & name : m_model_params.kv_names) {
+//         if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
+//             kv_param_res_names[name] = name;
+//         }
+//     }
+//     return kv_param_res_names;
+// }
 
 std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(
     ggml_cgraph * cgraph,

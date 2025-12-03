@@ -6,6 +6,26 @@
 #include <cstddef>
 #include <openvino/runtime/core.hpp>
 
+struct graph_key {
+    size_t n_nodes;
+    std::string first_node_name;
+    std::string last_node_name;
+
+    bool operator==(const graph_key & other) const {
+        return n_nodes == other.n_nodes && first_node_name == other.first_node_name &&
+               last_node_name == other.last_node_name;
+    }
+};
+
+struct graph_key_hash {
+    size_t operator()(const graph_key & key) const {
+        size_t h = std::hash<size_t>{}(key.n_nodes);
+        h ^= std::hash<std::string>{}(key.first_node_name) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<std::string>{}(key.last_node_name) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+
 enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph);
 
 size_t checksum(const void * data, size_t size);
@@ -45,6 +65,8 @@ void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols);
 const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 
 bool get_is_prefill(const ggml_tensor * inp_pos);
+
+graph_key compute_graph_key(struct ggml_cgraph * cgraph);
 
 ov::AnyMap get_ov_compile_config(const std::string & device);
 
