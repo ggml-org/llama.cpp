@@ -208,7 +208,8 @@ void ggml_cuda_op_cumsum(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                     stream
                 );
             } break;
-        case GGML_TYPE_F16:
+        // We do not support those on CPU for now anyway, so comment them out because they cause errors on some CI platforms
+        /*case GGML_TYPE_F16:
             {
                 cumsum_cuda(
                     (const half *)src0->data, (half *)dst->data,
@@ -227,7 +228,7 @@ void ggml_cuda_op_cumsum(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                     dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3],
                     stream
                 );
-            } break;
+            } break;*/
         default:
             GGML_ABORT("fatal error");
     }
