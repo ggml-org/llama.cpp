@@ -684,8 +684,6 @@ class MistralVocab(Vocab):
 
         if get_one_valid_tokenizer_file is not None:
             tokenizer_file_path = get_one_valid_tokenizer_file(all_files)
-            # get_one_valid_tokenizer_file returns a path rather than just the file name e.g: "ministral3b\tekken.json" instead of "tekken.json"
-            tokenizer_file = Path(tokenizer_file_path).name
         else:
             valid_tokenizer_files = _filter_valid_tokenizer_files(all_files)
 
@@ -703,8 +701,10 @@ class MistralVocab(Vocab):
             else:
                 tokenizer_file = valid_tokenizer_files[0]
 
+            tokenizer_file_path = base_path / tokenizer_file
+
         self.tokenizer = MistralTokenizer.from_file(
-            base_path / tokenizer_file
+            tokenizer_file_path
         ).instruct_tokenizer.tokenizer
         self.tokenizer_type = (
             MistralTokenizerType.tekken
@@ -712,7 +712,7 @@ class MistralVocab(Vocab):
             else MistralTokenizerType.spm
         )
         self.vocab_size = self.tokenizer.n_words
-        self.fname_tokenizer = base_path / tokenizer_file
+        self.fname_tokenizer = tokenizer_file_path
         self._name = (
             "mistral-" + self.tokenizer_type.value + "-" + self.tokenizer.version
         )
