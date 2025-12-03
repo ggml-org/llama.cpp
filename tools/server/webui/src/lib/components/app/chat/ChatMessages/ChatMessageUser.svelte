@@ -5,7 +5,7 @@
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { config } from '$lib/stores/settings.svelte';
-	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
+	import { autoResizeTextarea } from '$lib/utils';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 
 	interface Props {
