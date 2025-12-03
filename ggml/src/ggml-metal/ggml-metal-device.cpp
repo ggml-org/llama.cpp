@@ -211,6 +211,7 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_unary(ggml_metal_library_t
                 case GGML_UNARY_OP_HARDSWISH:   op_str = "hardswish";   break;
                 case GGML_UNARY_OP_HARDSIGMOID: op_str = "hardsigmoid"; break;
                 case GGML_UNARY_OP_EXP:         op_str = "exp";         break;
+                case GGML_UNARY_OP_SOFTPLUS:    op_str = "softplus";    break;
                 default: GGML_ABORT("fatal error");
             } break;
         default: GGML_ABORT("fatal error");
