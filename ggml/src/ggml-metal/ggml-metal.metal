@@ -1611,6 +1611,20 @@ kernel void kernel_softplus_f32_4(
     dst[tpig] = select(log(1.0f + exp(x)), x, x > 20.0f);
 }
 
+kernel void kernel_expm1_f32(
+        device const float * src0,
+        device       float * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = exp(src0[tpig]) - 1.0f;
+}
+
+kernel void kernel_expm1_f32_4(
+        device const float4 * src0,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = exp(src0[tpig]) - 1.0f;
+}
+
 kernel void kernel_reglu_f32(
         constant ggml_metal_kargs_glu & args,
         device const char * src0,
