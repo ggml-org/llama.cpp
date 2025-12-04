@@ -81,6 +81,7 @@ int main(int argc, char ** argv) {
         sampler_configs.push_back({ i, smpl });
     }
 
+    // TODO: temporarily gated behind a flag
     if (params.sampling.backend_sampling) {
         ctx_params.samplers   = sampler_configs.data();
         ctx_params.n_samplers = sampler_configs.size();
