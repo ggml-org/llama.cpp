@@ -53,9 +53,8 @@ static const char * ggml_backend_openvino_get_name(ggml_backend_t backend) {
 }
 
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-    openvino_frontend_compute(backend, cgraph);
-
-    return GGML_STATUS_SUCCESS;
+    return ov_graph_compute(cgraph);
+    GGML_UNUSED(backend);
 }
 
 static const ggml_backend_i ggml_backend_openvino_interface = {

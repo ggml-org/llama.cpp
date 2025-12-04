@@ -26,7 +26,10 @@ struct graph_key_hash {
     }
 };
 
-enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph);
+enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph);
+
+enum ggml_status ov_graph_compute_dynamic(struct ggml_cgraph * cgraph, const std::string & device);
+enum ggml_status ov_graph_compute_static(struct ggml_cgraph * cgraph);
 
 size_t checksum(const void * data, size_t size);
 
