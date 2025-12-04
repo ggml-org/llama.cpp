@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { ChatMessage } from '$lib/components/app';
-	import { DatabaseService } from '$lib/services/database';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { getMessageSiblings } from '$lib/utils';
@@ -19,7 +18,7 @@
 		const conversation = activeConversation();
 
 		if (conversation) {
-			DatabaseService.getConversationMessages(conversation.id).then((messages) => {
+			conversationsStore.getConversationMessages(conversation.id).then((messages) => {
 				allConversationMessages = messages;
 			});
 		} else {
