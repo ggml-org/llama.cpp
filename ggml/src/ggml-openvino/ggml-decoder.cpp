@@ -147,7 +147,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
             continue;
         }
         std::string src_name = std::string(src->name);
-        m_inputs[src_name] = src;
         current_node_info.node_inputs[src_name] = src;
         current_node_info.node_inputs_names.push_back(src_name);
 
@@ -163,6 +162,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
                 if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
                     continue;
                 }
+                m_inputs[src_name] = src;
                 auto param_node =
                     std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), get_graph_input_shape(node, src));
                 param_node->set_friendly_name(src_name);
@@ -749,6 +749,10 @@ std::vector<size_t> GgmlOvDecoder::get_input_stride(int node_idx, const std::str
 
 ov::element::Type GgmlOvDecoder::get_input_type(const std::string & name) const {
     return get_ov_type(m_inputs.at(name));
+}
+
+ov::element::Type GgmlOvDecoder::get_input_type(int node_idx, const std::string & name) const {
+    return get_ov_type(m_node_info_list[node_idx].node_inputs.at(name));
 }
 
 size_t GgmlOvDecoder::get_input_size() const {

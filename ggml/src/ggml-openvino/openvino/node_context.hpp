@@ -40,7 +40,7 @@ public:
     }
 
     ov::element::Type get_input_type(size_t index) const {
-        return m_decoder->get_input_type(m_input_names[index]);
+        return m_decoder->get_input_type(m_node_idx, m_input_names[index]);
     }
 
     PartialShape get_input_shape(size_t input_index) const {

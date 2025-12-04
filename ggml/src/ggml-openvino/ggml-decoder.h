@@ -85,6 +85,8 @@ public:
 
     virtual ov::element::Type get_input_type(const std::string & name) const override;
 
+    virtual ov::element::Type get_input_type(int node_idx, const std::string & name) const override;
+
     virtual size_t get_input_size() const override;
 
     virtual size_t get_input_size(int node_idx) const override;
