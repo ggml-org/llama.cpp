@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_set>
 #include <list>
+#include <optional>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
@@ -73,6 +74,7 @@ struct task_params {
     std::string                  oaicompat_model;
     std::string                  oaicompat_cmpl_id;
     common_chat_syntax           oaicompat_chat_syntax;
+    std::optional<int32_t>       reasoning_budget_override;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)

@@ -1161,11 +1161,15 @@ struct server_context_impl {
             SLT_DBG(slot, "stopped by limit, n_decoded = %d, n_predict = %d\n", slot.n_decoded, slot.task->params.n_predict);
         }
 
+        const int32_t reasoning_budget = (slot.task && slot.task->params.reasoning_budget_override.has_value())
+            ? slot.task->params.reasoning_budget_override.value()
+            : params_base.reasoning_budget;
+
         // check reasoning budget limit
         // Track reasoning tokens when we're inside thinking blocks (<think>...</think> or similar)
         // When the budget is exceeded we enqueue the closing tag tokens so they get sent to the client
         // and fed back into the model before continuing normal generation
-        if (slot.has_next_token && params_base.reasoning_budget > 0) {
+        if (slot.has_next_token && reasoning_budget > 0) {
             // Check if we've entered or exited reasoning mode
             for (const auto & [start_tag, end_tag] : kReasoningThinkMarkers) {
                 size_t start_pos = slot.generated_text.rfind(start_tag);
@@ -1195,9 +1199,9 @@ struct server_context_impl {
             if (slot.in_reasoning && !slot.reasoning_close_pending) {
                 slot.n_reasoning_tokens++;
 
-                if (slot.n_reasoning_tokens >= params_base.reasoning_budget) {
+                if (slot.n_reasoning_tokens >= reasoning_budget) {
                     SLT_INF(slot, "reasoning budget exceeded, forcing close with '%s', n_reasoning_tokens = %d, reasoning_budget = %d\n",
-                            (kReasoningForcedEndMessage + slot.reasoning_end_tag).c_str(), slot.n_reasoning_tokens, params_base.reasoning_budget);
+                            (kReasoningForcedEndMessage + slot.reasoning_end_tag).c_str(), slot.n_reasoning_tokens, reasoning_budget);
 
                     auto fail_close = [&](const char * reason) {
                         SLT_WRN(slot, "failed to inject reasoning close tag (%s) -> stopping generation\n", reason);
