@@ -3523,22 +3523,12 @@ void ggml_cann_ssm_conv(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     // we want a view:  ne_w = { nc, 1, nr }   // [K, 1, C]
     // so that reversed dims -> [C, 1, K] which matches
     //   [out_channels, in_channels/groups, kernel_size]
-    int64_t w_ne[GGML_MAX_DIMS] = { 0 };
-    size_t  w_nb[GGML_MAX_DIMS] = { 0 };
-
-    w_ne[0] = nc;  // K
-    w_ne[1] = 1;   // 1 input channel per group
-    w_ne[2] = nr;  // C groups
-    w_ne[3] = 1;
-
+    int64_t w_ne[GGML_MAX_DIMS] = { nc, 1, nr, 1 }; // [K, 1 input ch. per group, C groups]
     // Layout: src1 data is [K, C] with
     //   offset(k, c) = k*nb0 + c*nb1
     // We want offset_w(k, 0, c) = k*nb0 + c*nb1,
     // so we can reuse nb0 and nb1, and set nb2 = nb1.
-    w_nb[0] = src1->nb[0];  // sizeof(float)
-    w_nb[1] = src1->nb[1];  // nc * sizeof(float)
-    w_nb[2] = src1->nb[1];  // same stride for each (fake) "channel"
-    w_nb[3] = src1->nb[3];
+    size_t  w_nb[GGML_MAX_DIMS] = { src1->nb[0], src1->nb[1], src1->nb[1], src1->nb[3] }; // same as src1
 
     acl_tensor_ptr acl_w = ggml_cann_create_tensor(
         src1->data, ggml_cann_type_mapping(src1->type), ggml_type_size(src1->type), w_ne, w_nb, 3, ACL_FORMAT_NCL);
@@ -3559,18 +3549,8 @@ void ggml_cann_ssm_conv(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     //   nb_y[0] = nr * sizeof(float);           // step in L
     //   nb_y[1] = sizeof(float);                // step in C
     //   nb_y[2] = nr * n_t * sizeof(float);     // step in N
-    int64_t y_ne[GGML_MAX_DIMS] = { 0 };
-    size_t  y_nb[GGML_MAX_DIMS] = { 0 };
-
-    y_ne[0] = n_t;  // L_out
-    y_ne[1] = nr;   // C
-    y_ne[2] = n_s;  // N
-    y_ne[3] = 1;
-
-    y_nb[0] = dst->ne[0] * sizeof(float);               // nr * sizeof(float)
-    y_nb[1] = sizeof(float);
-    y_nb[2] = dst->ne[0] * dst->ne[1] * sizeof(float);  // nr * n_t * sizeof(float)
-    y_nb[3] = dst->nb[3];
+    int64_t y_ne[GGML_MAX_DIMS] = { n_t, nr, n_s, 1 }; // [L_out, C, N]
+    size_t  y_nb[GGML_MAX_DIMS] = { dst->ne[0] * sizeof(float), sizeof(float), dst->ne[0] * dst->ne[1] * sizeof(float), dst->nb[3] }; // [nr, 1, nr * n_t]
 
     acl_tensor_ptr acl_y = ggml_cann_create_tensor(
         dst->data, ggml_cann_type_mapping(dst->type), ggml_type_size(dst->type), y_ne, y_nb, 3, ACL_FORMAT_NCL);
