@@ -189,7 +189,7 @@ class tinyBLAS_Q0_PPC {
                         c1[it] = c[it][0];
                         c2[it] = c[it][1];
                         if (comparray){
-                                process_q8_elements((aoffsets[it]+ blk)->qs, &comparray[index + 8*blk + it]);
+                            process_q8_elements((aoffsets[it]+ blk)->qs, &comparray[index + 8*blk + it]);
                         }
                     }
                     vector_permute_store<VA, VB>(c1[0], c1[1], c1[2], c1[3], vecOffset, flip);
