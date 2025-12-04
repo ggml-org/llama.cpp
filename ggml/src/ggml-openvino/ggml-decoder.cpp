@@ -134,7 +134,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
         node_output = node->view_src;
     }
 
-    m_output_names.push_back(node_output_name);
     m_outputs[node_output_name] = node_output;
 
     current_node_info.node = node;
@@ -787,10 +786,6 @@ ov::PartialShape GgmlOvDecoder::get_output_shape(int node_idx) const {
 
 ov::element::Type GgmlOvDecoder::get_output_type(const std::string & name) const {
     return get_ov_type(m_outputs.at(name));
-}
-
-std::vector<std::string> GgmlOvDecoder::get_output_names() const {
-    return m_output_names;
 }
 
 std::vector<std::string> GgmlOvDecoder::get_output_names(int node_idx) const {

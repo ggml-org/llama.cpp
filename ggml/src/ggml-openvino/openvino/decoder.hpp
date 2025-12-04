@@ -51,8 +51,6 @@ public:
 
     virtual int32_t * get_output_op_params(int node_idx) const = 0;
 
-    virtual std::vector<std::string> get_output_names() const = 0;
-
     virtual std::vector<std::string> get_output_names(int node_idx) const = 0;
 
     virtual const std::string& get_op_type() const = 0;
