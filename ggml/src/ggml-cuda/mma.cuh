@@ -290,11 +290,8 @@ namespace ggml_cuda_mma {
             }
         }
 #elif defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA3)
-        static constexpr int ne = (I == 16 && J == 16) ? I * J / 32 : I * J / 16;
-#else
+
         static constexpr int ne = I * J / 32;
-#endif // defined(RDNA3)
         half2 x[ne] = {{0.0f, 0.0f}};
 
         static constexpr __device__ bool supported() {
@@ -371,12 +368,6 @@ namespace ggml_cuda_mma {
         static constexpr data_layout dl = DATA_LAYOUT_I_MAJOR;
         static constexpr int         ne = I * J / WARP_SIZE;
 
-#if defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA3)
-        static constexpr int ne = (I == 16 && J == 16) ? I * J / 32 : I * J / 16;
-#else
-        static constexpr int ne = I * J / 32;
-#endif // defined(RDNA3)
         nv_bfloat162 x[ne] = {{0.0f, 0.0f}};
 
 #if defined(AMD_WMMA_AVAILABLE)
