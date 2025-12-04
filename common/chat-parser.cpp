@@ -1,6 +1,8 @@
 #include "chat-parser.h"
+#include "chat-peg-parser.h"
 #include "common.h"
 #include "log.h"
+#include "peg-parser.h"
 #include "regex-partial.h"
 
 #include <algorithm>
@@ -1483,6 +1485,11 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
 }
 
 common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
+    if (syntax.format == COMMON_CHAT_FORMAT_PEG_SIMPLE ||
+        syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE ||
+        syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
+        return common_chat_peg_parse(syntax.parser, input, is_partial, syntax);
+    }
     common_chat_msg_parser builder(input, is_partial, syntax);
     try {
         common_chat_parse(builder);
@@ -1495,6 +1502,39 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
         }
     }
     auto msg = builder.result();
+    if (!is_partial) {
+        LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
+    }
+    return msg;
+}
+
+common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
+    if (parser.empty()) {
+        throw std::runtime_error("Failed to parse due to missing parser definition.");
+    }
+
+    LOG_DBG("Parsing input with format %s: %s\n", common_chat_format_name(syntax.format), input.c_str());
+
+    common_peg_parse_context ctx(input, is_partial);
+    auto result = parser.parse(ctx);
+    if (result.fail()) {
+        throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end));
+    }
+
+    common_chat_msg msg;
+    msg.role = "assistant";
+
+    if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
+        auto mapper = common_chat_peg_native_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+    } else if (syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
+        auto mapper = common_chat_peg_constructed_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+    } else {
+        // Generic mapper
+        auto mapper = common_chat_peg_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+    }
     if (!is_partial) {
         LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
     }

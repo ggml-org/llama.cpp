@@ -25,6 +25,7 @@ layout (push_constant) uniform parameter {
     uint orig_ncols;
     uint ncols_input;
     uint ncols_output;
+    uint k;
     uint nrows;
     uint first_pass;
     uint last_pass;
@@ -60,7 +61,7 @@ void topk(const uint row) {
             const uint row_offset = row * p.ncols_input;
             dst_row[tid] = ivec2(gl_GlobalInvocationID.x, floatBitsToInt(data_a[row_offset + gl_GlobalInvocationID.x]));
         } else {
-            const uint row_offset = row * p.orig_ncols;
+            const uint row_offset = row * p.ncols_input;
             dst_row[tid] = data_s[row_offset + gl_GlobalInvocationID.x];
         }
     } else {
@@ -68,7 +69,7 @@ void topk(const uint row) {
     }
     barrier();
 
-    if (p.ncols_output == 1) {
+    if (p.k == 1) {
         // Fast path for single output - just do a max reduction
         [[unroll]] for (int s = BLOCK_SIZE / 2; s >= 1; s /= 2) {
             if (tid < s) {
@@ -98,7 +99,7 @@ void topk(const uint row) {
         uint range_max = 0xFF800000;
         // How many are above the current range, and how many we need to find.
         uint total = 0;
-        uint limit = min(p.ncols_output, p.ncols_input - gl_WorkGroupID.x * BLOCK_SIZE);
+        uint limit = min(p.k, p.ncols_input - gl_WorkGroupID.x * BLOCK_SIZE);
 
         while (mask != 0) {
             barrier();
@@ -139,7 +140,7 @@ void topk(const uint row) {
             range_max = range_min + ((min_idx + 1) << shift);
             range_min = range_min + (min_idx << shift);
 
-            if (total == p.ncols_output) {
+            if (total == p.k) {
                 break;
             }
             total -= counts[min_idx];
@@ -179,13 +180,17 @@ void topk(const uint row) {
         barrier();
     }
 
-    if (tid < p.ncols_output && gl_GlobalInvocationID.x < p.orig_ncols) {
+    if (tid < p.k) {
         if (p.last_pass != 0) {
-            const uint row_offset = row * p.ncols_output;
-            data_d[row_offset + tid] = dst_row[tid].x;
+            if (gl_GlobalInvocationID.x < p.ncols_input) {
+                const uint row_offset = row * p.k;
+                data_d[row_offset + tid] = dst_row[tid].x;
+            }
         } else {
-            const uint row_offset = row * p.orig_ncols + gl_WorkGroupID.x * p.ncols_output;
-            data_t[row_offset + tid] = dst_row[tid];
+            if (gl_WorkGroupID.x * p.k + tid < p.ncols_output) {
+                const uint row_offset = row * p.ncols_output + gl_WorkGroupID.x * p.k;
+                data_t[row_offset + tid] = dst_row[tid];
+            }
         }
     }
 }

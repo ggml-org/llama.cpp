@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { Trash2, Pencil, MoreHorizontal, Download, Loader2 } from '@lucide/svelte';
 	import { ActionDropdown } from '$lib/components/app';
-	import { downloadConversation, getAllLoadingConversations } from '$lib/stores/chat.svelte';
+	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -25,7 +26,7 @@
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 
-	let isLoading = $derived(getAllLoadingConversations().includes(conversation.id));
+	let isLoading = $derived(getAllLoadingChats().includes(conversation.id));
 
 	function handleEdit(event: Event) {
 		event.stopPropagation();
@@ -114,7 +115,7 @@
 						label: 'Export',
 						onclick: (e) => {
 							e.stopPropagation();
-							downloadConversation(conversation.id);
+							conversationsStore.downloadConversation(conversation.id);
 						},
 						shortcut: ['shift', 'cmd', 's']
 					},
