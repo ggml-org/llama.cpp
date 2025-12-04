@@ -134,8 +134,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
         node_output = node->view_src;
     }
 
-    m_outputs[node_output_name] = node_output;
-
     current_node_info.node = node;
     current_node_info.node_name = node_name;
     current_node_info.node_output = node_output;

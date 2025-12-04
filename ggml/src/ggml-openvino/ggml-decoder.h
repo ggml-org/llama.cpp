@@ -230,7 +230,6 @@ private:
     std::vector<ggml_tensor *> m_nodes;
     std::map<std::string, ggml_tensor *> m_inputs;
     std::vector<std::string> m_input_names;
-    std::map<std::string, ggml_tensor *> m_outputs;
     std::vector<std::string> m_output_names;
 
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
