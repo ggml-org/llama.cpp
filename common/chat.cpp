@@ -989,7 +989,7 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     return data;
 }
 
-static common_chat_params common_chat_params_init_mistral_3(const common_chat_template & tmpl, const struct templates_params & inputs) {
+static common_chat_params common_chat_params_init_ministral_3(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
 
     // Build up messages to follow the format: https://huggingface.co/mistralai/Ministral-3-14B-Reasoning-2512/blob/main/chat_template.jinja
@@ -1049,7 +1049,7 @@ static common_chat_params common_chat_params_init_mistral_3(const common_chat_te
 
         // Response format parser
         if (inputs.json_schema.is_object() && !inputs.json_schema.empty()) {
-            // Ministral wants to emit json surrounded code fences
+            // Ministral wants to emit json surrounded by code fences
             return reasoning << "```json" << p.content(p.schema(p.json(), "response-format", inputs.json_schema)) << "```";
         }
 
@@ -2619,11 +2619,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_llama_3_x(tmpl, params, allow_python_tag_builtin_tools);
     }
 
-    // Ministral/Mistral 3
+    // Ministral/Mistral Large 3
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos &&
         src.find("[TOOL_CALLS]") != std::string::npos &&
         src.find("[ARGS]") != std::string::npos) {
-        return common_chat_params_init_mistral_3(tmpl, params);
+        return common_chat_params_init_ministral_3(tmpl, params);
     }
 
     if (src.find("[THINK]") != std::string::npos && src.find("[/THINK]") != std::string::npos) {
