@@ -441,6 +441,8 @@ static void test_backend_temp_sampling(const char * model_path) {
         struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
         struct llama_sampler * backend_sampler_chain = llama_sampler_chain_init(backend_chain_params);
         llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_temp(temp));
+        llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_top_k(40));
+        llama_sampler_chain_add(backend_sampler_chain, llama_sampler_init_dist(18));
 
         std::vector<llama_sampler_seq_config> backend_sampler_configs = {
             { seq_id, backend_sampler_chain },
