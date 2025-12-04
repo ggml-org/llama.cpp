@@ -74,10 +74,10 @@ template<typename T>
 static __global__ void cumsum_kernel(
         const T * src, T * dst,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-        const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
-        const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
+        const int64_t  s00, const int64_t  s01, const int64_t  s02, const int64_t  s03,
+        const int64_t   s0, const int64_t   s1, const int64_t   s2, const int64_t   s3) {
 
-    GGML_UNUSED_VARS(nb00, nb0);
+    GGML_UNUSED_VARS(s00, s0);
 
     const int tid = threadIdx.x;
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -104,8 +104,8 @@ static __global__ void cumsum_kernel(
         return;
     }
 
-    const T * src_row = src + i1 * nb01 + i2 * nb02 + i3 * nb03;
-    T       * dst_row = dst + i1 * nb1  + i2 * nb2  + i3 * nb3;
+    const T * src_row = src + i1 * s01 + i2 * s02 + i3 * s03;
+    T       * dst_row = dst + i1 * s1  + i2 * s2  + i3 * s3;
 
     for (int64_t start = 0; start < ne00; start += blockDim.x) {
         int64_t idx = start + tid;
@@ -153,22 +153,23 @@ template<typename T>
 static void cumsum_cuda(
         const T * src, T * dst,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-        const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
-        const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3,
+        const int64_t  s00, const int64_t  s01, const int64_t  s02, const int64_t  s03,
+        const int64_t   s0,  const int64_t  s1,  const int64_t  s2,  const int64_t  s3,
         cudaStream_t stream) {
 
     const size_t type_size = sizeof(T);
     bool use_cub = false;
 #ifdef GGML_CUDA_USE_CUB
     // Check if we can use CUB (data must be contiguous along innermost dimension)
-    const bool is_contiguous = (nb00 == type_size) && (nb0 == type_size);
+    const bool is_contiguous = (s00 == type_size) && (s0 == type_size);
 
     if (is_contiguous) {
         use_cub = true;
     }
 #endif // GGML_CUDA_USE_CUB
     dim3 grid_dims(ne01, ne02, ne03);
-    const int warp_size = ggml_cuda_get_physical_warp_size_host();
+    const auto &info = ggml_cuda_info().devices[ggml_cuda_get_device()];
+    const int warp_size = info.warp_size;
     const int num_warps = (ne00 + warp_size - 1) / warp_size;
     int block_size = num_warps * warp_size;
     block_size = std::min(block_size, CUDA_CUMSUM_BLOCK_SIZE);
@@ -180,15 +181,15 @@ static void cumsum_cuda(
         cumsum_cub_kernel<T, CUDA_CUMSUM_BLOCK_SIZE><<<grid_dims, CUDA_CUMSUM_BLOCK_SIZE, 0, stream>>>(
             src, dst,
             ne00, ne01, ne02, ne03,
-            nb01 / type_size, nb02 / type_size, nb03 / type_size,
-            nb1 / type_size,  nb2 / type_size,  nb3 / type_size
+            s01 / type_size, s02 / type_size, s03 / type_size,
+            s1 / type_size,  s2 / type_size,  s3 / type_size
         );
     } else {
         cumsum_kernel<<<grid_dims, block_dims, shmem_size, stream>>>(
             src, dst,
             ne00, ne01, ne02, ne03,
-            nb00 / type_size, nb01 / type_size, nb02 / type_size, nb03 / type_size,
-            nb0 / type_size, nb1 / type_size, nb2 / type_size, nb3 / type_size
+            s00 / type_size, s01 / type_size, s02 / type_size, s03 / type_size,
+            s0 / type_size, s1 / type_size, s2 / type_size, s3 / type_size
         );
     }
 }

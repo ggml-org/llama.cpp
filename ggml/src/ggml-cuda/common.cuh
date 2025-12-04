@@ -461,20 +461,6 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
     return x;
 }
 
-#ifdef __HIP_PLATFORM_AMD__
-typedef uint64_t ggml_lane_mask_t;
-#else
-typedef uint32_t ggml_lane_mask_t;
-#endif // __HIP_PLATFORM_AMD__
-
-static __device__ __forceinline__ ggml_lane_mask_t get_warp_mask() {
-#ifdef __HIP_PLATFORM_AMD__
-    return __ballot(1); // HIP equivalent
-#else
-    return __activemask(); // CUDA
-#endif
-}
-
 template<typename T, int width = WARP_SIZE>
 static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
     const int lane_id = threadIdx.x % width;
@@ -944,11 +930,6 @@ const ggml_cuda_device_info & ggml_cuda_info();
 
 void ggml_cuda_set_device(int device);
 int ggml_cuda_get_device();
-
-static __host__ int ggml_cuda_get_physical_warp_size_host() {
-    const auto &info = ggml_cuda_info().devices[ggml_cuda_get_device()];
-    return info.warp_size;
-}
 
 struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
