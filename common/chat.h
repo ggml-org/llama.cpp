@@ -3,6 +3,7 @@
 #pragma once
 
 #include "common.h"
+#include "peg-parser.h"
 #include <functional>
 #include <chrono>
 #include <string>
@@ -76,7 +77,7 @@ struct common_chat_msg_diff {
     size_t tool_call_index = std::string::npos;
     common_chat_tool_call tool_call_delta;
 
-    static std::vector<common_chat_msg_diff> compute_diffs(const common_chat_msg & previous_msg, const common_chat_msg & new_msg);
+    static std::vector<common_chat_msg_diff> compute_diffs(const common_chat_msg & msg_prv, const common_chat_msg & msg_new);
 
     bool operator==(const common_chat_msg_diff & other) const {
         return content_delta == other.content_delta
@@ -124,6 +125,11 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_APRIEL_1_5,
     COMMON_CHAT_FORMAT_XIAOMI_MIMO,
 
+    // These are intended to be parsed by the PEG parser
+    COMMON_CHAT_FORMAT_PEG_SIMPLE,
+    COMMON_CHAT_FORMAT_PEG_NATIVE,
+    COMMON_CHAT_FORMAT_PEG_CONSTRUCTED,
+
     COMMON_CHAT_FORMAT_COUNT, // Not a format, just the # formats
 };
 
@@ -154,6 +160,7 @@ struct common_chat_params {
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
+    std::string                         parser;
 };
 
 struct common_chat_syntax {
@@ -163,6 +170,7 @@ struct common_chat_syntax {
     bool                     reasoning_in_content  = false;
     bool                     thinking_forced_open  = false;
     bool                     parse_tool_calls      = true;
+    common_peg_arena         parser                = {};
 };
 
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
@@ -206,6 +214,7 @@ const char*               common_chat_format_name(common_chat_format format);
 const char*               common_reasoning_format_name(common_reasoning_format format);
 common_reasoning_format   common_reasoning_format_from_name(const std::string & format);
 common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+common_chat_msg           common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax);
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
 

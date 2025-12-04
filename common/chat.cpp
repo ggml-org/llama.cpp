@@ -85,29 +85,36 @@ json common_chat_msg::to_json_oaicompat() const
     return message;
 }
 
-std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const common_chat_msg & previous_msg, const common_chat_msg & new_msg) {
+std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const common_chat_msg & msg_prv, const common_chat_msg & msg_new) {
     std::vector<common_chat_msg_diff> diffs;
-    if (previous_msg.reasoning_content != new_msg.reasoning_content) {
-        auto & diff = diffs.emplace_back();
-        diff.reasoning_content_delta = string_diff(previous_msg.reasoning_content, new_msg.reasoning_content);
-    }
-    if (previous_msg.content != new_msg.content) {
-        auto & diff = diffs.emplace_back();
-        diff.content_delta = string_diff(previous_msg.content, new_msg.content);
+    if (msg_new.tool_calls.size() > msg_prv.tool_calls.size()) {
+        diffs.reserve(msg_new.tool_calls.size() - msg_prv.tool_calls.size() + 3);
+    } else {
+        diffs.reserve(3);
     }
 
-    if (new_msg.tool_calls.size() < previous_msg.tool_calls.size()) {
+    // TODO: these can become expensive for long messages - how to optimize?
+    if (msg_prv.reasoning_content != msg_new.reasoning_content) {
+        auto & diff = diffs.emplace_back();
+        diff.reasoning_content_delta = string_diff(msg_prv.reasoning_content, msg_new.reasoning_content);
+    }
+    if (msg_prv.content != msg_new.content) {
+        auto & diff = diffs.emplace_back();
+        diff.content_delta = string_diff(msg_prv.content, msg_new.content);
+    }
+
+    if (msg_new.tool_calls.size() < msg_prv.tool_calls.size()) {
         throw std::runtime_error("Invalid diff: now finding less tool calls!");
     }
 
-    if (!previous_msg.tool_calls.empty()) {
-        auto idx = previous_msg.tool_calls.size() - 1;
-        const auto & pref = previous_msg.tool_calls[idx];
-        const auto & newf = new_msg.tool_calls[idx];
+    if (!msg_prv.tool_calls.empty()) {
+        const auto idx = msg_prv.tool_calls.size() - 1;
+        const auto & pref = msg_prv.tool_calls[idx];
+        const auto & newf = msg_new.tool_calls[idx];
         if (pref.name != newf.name) {
             throw std::runtime_error("Invalid diff: tool call mismatch!");
         }
-        auto args_diff = string_diff(pref.arguments, newf.arguments);
+        const auto args_diff = string_diff(pref.arguments, newf.arguments);
         if (!args_diff.empty() || pref.id != newf.id) {
             auto & diff = diffs.emplace_back();
             diff.tool_call_index = idx;
@@ -118,11 +125,12 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
             diff.tool_call_delta.arguments = args_diff;
         }
     }
-    for (size_t idx = previous_msg.tool_calls.size(); idx < new_msg.tool_calls.size(); ++idx) {
+    for (size_t idx = msg_prv.tool_calls.size(); idx < msg_new.tool_calls.size(); ++idx) {
         auto & diff = diffs.emplace_back();
         diff.tool_call_index = idx;
-        diff.tool_call_delta = new_msg.tool_calls[idx];
+        diff.tool_call_delta = msg_new.tool_calls[idx];
     }
+
     return diffs;
 }
 
@@ -163,7 +171,7 @@ common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::strin
     if (tool_choice == "required") {
         return COMMON_CHAT_TOOL_CHOICE_REQUIRED;
     }
-    throw std::runtime_error("Invalid tool_choice: " + tool_choice);
+    throw std::invalid_argument("Invalid tool_choice: " + tool_choice);
 }
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates) {
@@ -186,17 +194,17 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
     try {
 
         if (!messages.is_array()) {
-            throw std::runtime_error("Expected 'messages' to be an array, got " + messages.dump());
+            throw std::invalid_argument("Expected 'messages' to be an array, got " + messages.dump());
         }
 
         for (const auto & message : messages) {
             if (!message.is_object()) {
-                throw std::runtime_error("Expected 'message' to be an object, got " + message.dump());
+                throw std::invalid_argument("Expected 'message' to be an object, got " + message.dump());
             }
 
             common_chat_msg msg;
             if (!message.contains("role")) {
-                throw std::runtime_error("Missing 'role' in message: " + message.dump());
+                throw std::invalid_argument("Missing 'role' in message: " + message.dump());
             }
             msg.role = message.at("role");
 
@@ -209,11 +217,11 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                 } else if (content.is_array()) {
                     for (const auto & part : content) {
                         if (!part.contains("type")) {
-                            throw std::runtime_error("Missing content part type: " + part.dump());
+                            throw std::invalid_argument("Missing content part type: " + part.dump());
                         }
                         const auto & type = part.at("type");
                         if (type != "text") {
-                            throw std::runtime_error("Unsupported content part type: " + type.dump());
+                            throw std::invalid_argument("Unsupported content part type: " + type.dump());
                         }
                         common_chat_msg_content_part msg_part;
                         msg_part.type = type;
@@ -221,25 +229,25 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                         msg.content_parts.push_back(msg_part);
                     }
                 } else if (!content.is_null()) {
-                    throw std::runtime_error("Invalid 'content' type: expected string or array, got " + content.dump() + " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
+                    throw std::invalid_argument("Invalid 'content' type: expected string or array, got " + content.dump() + " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
                 }
             }
             if (has_tool_calls) {
                 for (const auto & tool_call : message.at("tool_calls")) {
                     common_chat_tool_call tc;
                     if (!tool_call.contains("type")) {
-                        throw std::runtime_error("Missing tool call type: " + tool_call.dump());
+                        throw std::invalid_argument("Missing tool call type: " + tool_call.dump());
                     }
                     const auto & type = tool_call.at("type");
                     if (type != "function") {
-                        throw std::runtime_error("Unsupported tool call type: " + tool_call.dump());
+                        throw std::invalid_argument("Unsupported tool call type: " + tool_call.dump());
                     }
                     if (!tool_call.contains("function")) {
-                        throw std::runtime_error("Missing tool call function: " + tool_call.dump());
+                        throw std::invalid_argument("Missing tool call function: " + tool_call.dump());
                     }
                     const auto & fc = tool_call.at("function");
                     if (!fc.contains("name")) {
-                        throw std::runtime_error("Missing tool call name: " + tool_call.dump());
+                        throw std::invalid_argument("Missing tool call name: " + tool_call.dump());
                     }
                     tc.name = fc.at("name");
                     tc.arguments = fc.at("arguments");
@@ -250,7 +258,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                 }
             }
             if (!has_content && !has_tool_calls) {
-                throw std::runtime_error("Expected 'content' or 'tool_calls' (ref: https://github.com/ggml-org/llama.cpp/issues/8367 & https://github.com/ggml-org/llama.cpp/issues/12279)");
+                throw std::invalid_argument("Expected 'content' or 'tool_calls' (ref: https://github.com/ggml-org/llama.cpp/issues/8367 & https://github.com/ggml-org/llama.cpp/issues/12279)");
             }
             if (message.contains("reasoning_content")) {
                 msg.reasoning_content = message.at("reasoning_content");
@@ -353,18 +361,18 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
     try {
         if (!tools.is_null()) {
             if (!tools.is_array()) {
-                throw std::runtime_error("Expected 'tools' to be an array, got " + tools.dump());
+                throw std::invalid_argument("Expected 'tools' to be an array, got " + tools.dump());
             }
             for (const auto & tool : tools) {
                 if (!tool.contains("type")) {
-                    throw std::runtime_error("Missing tool type: " + tool.dump());
+                    throw std::invalid_argument("Missing tool type: " + tool.dump());
                 }
                 const auto & type = tool.at("type");
                 if (!type.is_string() || type != "function") {
-                    throw std::runtime_error("Unsupported tool type: " + tool.dump());
+                    throw std::invalid_argument("Unsupported tool type: " + tool.dump());
                 }
                 if (!tool.contains("function")) {
-                    throw std::runtime_error("Missing tool function: " + tool.dump());
+                    throw std::invalid_argument("Missing tool function: " + tool.dump());
                 }
 
                 const auto & function = tool.at("function");
@@ -649,6 +657,9 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
+        case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
+        case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
+        case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
         default:
             throw std::runtime_error("Unknown chat format");
     }

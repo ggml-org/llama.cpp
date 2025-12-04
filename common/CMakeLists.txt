@@ -52,6 +52,8 @@ add_library(${TARGET} STATIC
     chat-parser.h
     chat-parser-xml-toolcall.h
     chat-parser-xml-toolcall.cpp
+    chat-peg-parser.cpp
+    chat-peg-parser.h
     chat.cpp
     chat.h
     common.cpp
@@ -69,12 +71,16 @@ add_library(${TARGET} STATIC
     log.h
     ngram-cache.cpp
     ngram-cache.h
+    peg-parser.cpp
+    peg-parser.h
     regex-partial.cpp
     regex-partial.h
     sampling.cpp
     sampling.h
     speculative.cpp
     speculative.h
+    unicode.cpp
+    unicode.h
     )
 
 if (BUILD_SHARED_LIBS)

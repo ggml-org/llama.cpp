@@ -2842,6 +2842,10 @@ class Mistral3Model(LlamaModel):
             self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        # TODO: probably not worth supporting quantized weight, as official BF16 is also available
+        if name.endswith("weight_scale_inv"):
+            raise ValueError("This is a quantized weight, please use BF16 weight instead")
+
         name = name.replace("language_model.", "")
         if "multi_modal_projector" in name or "vision_tower" in name:
             return []
