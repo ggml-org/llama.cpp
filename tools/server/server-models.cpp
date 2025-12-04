@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
+#include <map>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -86,49 +87,61 @@ static std::vector<local_model> list_local_models(const std::string & dir) {
     }
 
     std::vector<local_model> models;
-    auto scan_subdir = [&models](const std::string & subdir_path, const std::string & name) {
-        auto files = fs_list(subdir_path, false);
+
+    struct dir_model_files {
         common_file_info model_file;
         common_file_info first_shard_file;
         common_file_info mmproj_file;
-        for (const auto & file : files) {
-            if (string_ends_with(file.name, ".gguf")) {
-                if (file.name.find("mmproj") != std::string::npos) {
-                    mmproj_file = file;
-                } else if (file.name.find("-00001-of-") != std::string::npos) {
-                    first_shard_file = file;
-                } else {
-                    model_file = file;
-                }
-            }
-        }
-        // single file model
-        local_model model{
-            /* name        */ name,
-            /* path        */ first_shard_file.path.empty() ? model_file.path : first_shard_file.path,
-            /* path_mmproj */ mmproj_file.path // can be empty
-        };
-        if (!model.path.empty()) {
-            models.push_back(model);
-        }
     };
 
-    auto files = fs_list(dir, true);
-    for (const auto & file : files) {
-        if (file.is_dir) {
-            scan_subdir(file.path, file.name);
-        } else if (string_ends_with(file.name, ".gguf")) {
-            // single file model
-            std::string name = file.name;
-            string_replace_all(name, ".gguf", "");
-            local_model model{
-                /* name        */ name,
-                /* path        */ file.path,
-                /* path_mmproj */ ""
-            };
-            models.push_back(model);
+    std::map<std::filesystem::path, dir_model_files> model_directories;
+
+    for (const auto & entry : std::filesystem::recursive_directory_iterator(
+                 dir, std::filesystem::directory_options::skip_permission_denied)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+
+        const auto & path = entry.path();
+        if (!string_ends_with(path.filename().string(), ".gguf")) {
+            continue;
+        }
+
+        auto & files = model_directories[path.parent_path()];
+        const auto filename = path.filename().string();
+        if (filename.find("mmproj") != std::string::npos) {
+            files.mmproj_file = {path.string(), filename, 0, false};
+        } else if (filename.find("-00001-of-") != std::string::npos) {
+            files.first_shard_file = {path.string(), filename, 0, false};
+        } else {
+            files.model_file = {path.string(), filename, 0, false};
         }
     }
+
+    for (const auto & [parent_path, files] : model_directories) {
+        std::string model_path = files.first_shard_file.path.empty() ? files.model_file.path : files.first_shard_file.path;
+        if (model_path.empty()) {
+            continue;
+        }
+
+        std::string name;
+        std::error_code ec;
+        auto rel_parent = std::filesystem::relative(parent_path, dir, ec);
+        if (!ec && !rel_parent.empty() && rel_parent.string() != ".") {
+            name = rel_parent.generic_string();
+        } else {
+            std::filesystem::path model_file_path(model_path);
+            name = model_file_path.stem().string();
+        }
+
+        local_model model{
+            /* name        */ name,
+            /* path        */ model_path,
+            /* path_mmproj */ files.mmproj_file.path
+        };
+        models.push_back(model);
+    }
+
     return models;
 }
 
