@@ -387,7 +387,7 @@ class GGUFWriter:
 
             if self.temp_dir is not None:
                 temp_dir = str(self.temp_dir)
-                os.makedirs(temp_dir)
+                os.makedirs(temp_dir, exist_ok=True)
 
             fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024, dir=temp_dir)
             fp.seek(0)
