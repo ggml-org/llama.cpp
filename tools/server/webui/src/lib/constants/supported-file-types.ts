@@ -126,8 +126,13 @@ export const TEXT_FILE_TYPES = {
 		mimeTypes: [MimeTypeText.JAVA]
 	},
 	[FileTypeText.CPP]: {
-		extensions: [FileExtensionText.CPP, FileExtensionText.C, FileExtensionText.H],
-		mimeTypes: [MimeTypeText.CPP_SRC, MimeTypeText.C_SRC, MimeTypeText.C_HDR]
+		extensions: [
+			FileExtensionText.CPP,
+			FileExtensionText.C,
+			FileExtensionText.H,
+			FileExtensionText.HPP
+		],
+		mimeTypes: [MimeTypeText.CPP_SRC, MimeTypeText.CPP_HDR, MimeTypeText.C_SRC, MimeTypeText.C_HDR]
 	},
 	[FileTypeText.PHP]: {
 		extensions: [FileExtensionText.PHP],
@@ -183,10 +188,30 @@ export const TEXT_FILE_TYPES = {
 	},
 	[FileTypeText.LATEX]: {
 		extensions: [FileExtensionText.TEX],
-		mimeTypes: [MimeTypeText.LATEX]
+		mimeTypes: [MimeTypeText.LATEX, MimeTypeText.TEX, MimeTypeText.TEX_APP]
 	},
 	[FileTypeText.BIBTEX]: {
 		extensions: [FileExtensionText.BIB],
 		mimeTypes: [MimeTypeText.BIBTEX]
+	},
+	[FileTypeText.CUDA]: {
+		extensions: [FileExtensionText.CU, FileExtensionText.CUH],
+		mimeTypes: [MimeTypeText.CUDA]
+	},
+	[FileTypeText.VULKAN]: {
+		extensions: [FileExtensionText.COMP],
+		mimeTypes: [MimeTypeText.PLAIN]
+	},
+	[FileTypeText.HASKELL]: {
+		extensions: [FileExtensionText.HS],
+		mimeTypes: [MimeTypeText.HASKELL]
+	},
+	[FileTypeText.CSHARP]: {
+		extensions: [FileExtensionText.CS],
+		mimeTypes: [MimeTypeText.CSHARP]
+	},
+	[FileTypeText.PROPERTIES]: {
+		extensions: [FileExtensionText.PROPERTIES],
+		mimeTypes: [MimeTypeText.PROPERTIES]
 	}
 } as const;

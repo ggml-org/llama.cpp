@@ -678,48 +678,6 @@ export class ChatService {
 	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
-	 * Get server properties - static method for API compatibility (to be refactored)
-	 */
-	static async getServerProps(): Promise<ApiLlamaCppServerProps> {
-		try {
-			const response = await fetch(`./props`, {
-				headers: getJsonHeaders()
-			});
-
-			if (!response.ok) {
-				throw new Error(`Failed to fetch server props: ${response.status}`);
-			}
-
-			const data = await response.json();
-			return data;
-		} catch (error) {
-			console.error('Error fetching server props:', error);
-			throw error;
-		}
-	}
-
-	/**
-	 * Get model information from /models endpoint (to be refactored)
-	 */
-	static async getModels(): Promise<ApiModelListResponse> {
-		try {
-			const response = await fetch(`./models`, {
-				headers: getJsonHeaders()
-			});
-
-			if (!response.ok) {
-				throw new Error(`Failed to fetch models: ${response.status} ${response.statusText}`);
-			}
-
-			const data = await response.json();
-			return data;
-		} catch (error) {
-			console.error('Error fetching models:', error);
-			throw error;
-		}
-	}
-
-	/**
 	 * Injects a system message at the beginning of the conversation if provided.
 	 * Checks for existing system messages to avoid duplication.
 	 *

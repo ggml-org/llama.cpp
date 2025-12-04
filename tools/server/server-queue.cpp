@@ -271,6 +271,10 @@ void server_response::terminate() {
 // server_response_reader
 //
 
+void server_response_reader::set_states(std::vector<task_result_state> && states) {
+    this->states = std::move(states);
+}
+
 void server_response_reader::post_tasks(std::vector<server_task> && tasks) {
     id_tasks = server_task::get_list_id(tasks);
     queue_results.add_waiting_tasks(tasks);
@@ -297,6 +301,12 @@ server_task_result_ptr server_response_reader::next(const std::function<bool()> 
                 stop(); // cancel remaining tasks
                 SRV_DBG("%s", "received error result, stopping further processing\n");
                 return result;
+            }
+            if (!states.empty()) {
+                // update the generation state if needed
+                size_t idx = result->get_index();
+                GGML_ASSERT(idx < states.size());
+                result->update(states[idx]);
             }
             if (result->is_stop()) {
                 received_count++;

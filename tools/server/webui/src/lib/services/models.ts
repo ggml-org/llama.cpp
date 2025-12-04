@@ -7,7 +7,7 @@ import { getJsonHeaders } from '$lib/utils';
  *
  * This service handles communication with model-related endpoints:
  * - `/v1/models` - OpenAI-compatible model list (MODEL + ROUTER mode)
- * - `/models` - Router-specific model management (ROUTER mode only)
+ * - `/models/load`, `/models/unload` - Router-specific model management (ROUTER mode only)
  *
  * **Responsibilities:**
  * - List available models
@@ -43,7 +43,7 @@ export class ModelsService {
 	 * Returns models with load status, paths, and other metadata
 	 */
 	static async listRouter(): Promise<ApiRouterModelsListResponse> {
-		const response = await fetch(`${base}/models`, {
+		const response = await fetch(`${base}/v1/models`, {
 			headers: getJsonHeaders()
 		});
 

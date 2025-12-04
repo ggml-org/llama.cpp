@@ -77,6 +77,13 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		case MimeTypeText.SVELTE:
 		case MimeTypeText.LATEX:
 		case MimeTypeText.BIBTEX:
+		case MimeTypeText.CUDA:
+		case MimeTypeText.CPP_HDR:
+		case MimeTypeText.CSHARP:
+		case MimeTypeText.HASKELL:
+		case MimeTypeText.PROPERTIES:
+		case MimeTypeText.TEX:
+		case MimeTypeText.TEX_APP:
 			return FileTypeCategory.TEXT;
 
 		default:
@@ -144,6 +151,12 @@ export function getFileTypeCategoryByExtension(filename: string): FileTypeCatego
 		case FileExtensionText.SVELTE:
 		case FileExtensionText.TEX:
 		case FileExtensionText.BIB:
+		case FileExtensionText.COMP:
+		case FileExtensionText.CU:
+		case FileExtensionText.CUH:
+		case FileExtensionText.HPP:
+		case FileExtensionText.HS:
+		case FileExtensionText.PROPERTIES:
 			return FileTypeCategory.TEXT;
 
 		default:
