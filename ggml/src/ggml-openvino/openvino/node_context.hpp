@@ -43,8 +43,8 @@ public:
         return m_decoder->get_input_type(m_input_names[index]);
     }
 
-    PartialShape get_input_shape(size_t index) const {
-        return m_decoder->get_input_shape(m_node_idx, m_input_names[index]);
+    PartialShape get_input_shape(size_t input_index) const {
+        return m_decoder->get_input_shape(m_node_idx, m_input_names[input_index]);
     }
 
     std::vector<size_t> get_input_stride(size_t index) const {

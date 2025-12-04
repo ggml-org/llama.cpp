@@ -147,7 +147,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
             continue;
         }
         std::string src_name = std::string(src->name);
-        m_input_names.push_back(src_name);
         m_inputs[src_name] = src;
         current_node_info.node_inputs[src_name] = src;
         current_node_info.node_inputs_names.push_back(src_name);
@@ -757,15 +756,11 @@ ov::element::Type GgmlOvDecoder::get_input_type(const std::string & name) const 
 }
 
 size_t GgmlOvDecoder::get_input_size() const {
-    return m_input_names.size();
+    return m_model_inputs.size();
 }
 
 size_t GgmlOvDecoder::get_input_size(int node_idx) const {
     return m_node_info_list[node_idx].node_inputs_names.size();
-}
-
-std::vector<std::string> GgmlOvDecoder::get_input_names() const {
-    return m_input_names;
 }
 
 std::vector<std::string> GgmlOvDecoder::get_input_names(int node_idx) const {

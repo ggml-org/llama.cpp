@@ -33,8 +33,6 @@ public:
                                 std::string& producer_output_port_name,
                                 size_t& producer_output_port_index) const = 0;
 
-    virtual std::vector<std::string> get_input_names() const = 0;
-
     virtual std::vector<std::string> get_input_names(int node_idx) const = 0;
 
     virtual PartialShape get_output_shape(int node_idx) const = 0;

@@ -101,8 +101,6 @@ public:
         GGML_UNUSED(producer_output_port_index);
     }
 
-    virtual std::vector<std::string> get_input_names() const override;
-
     virtual std::vector<std::string> get_input_names(int node_idx) const override;
 
     virtual ov::PartialShape get_output_shape(int node_idx) const override;
@@ -229,7 +227,6 @@ private:
     ggml_cgraph * m_cgraph = nullptr;
     std::vector<ggml_tensor *> m_nodes;
     std::map<std::string, ggml_tensor *> m_inputs;
-    std::vector<std::string> m_input_names;
 
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_extra_inputs;
