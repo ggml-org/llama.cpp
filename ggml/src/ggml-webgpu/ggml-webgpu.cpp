@@ -1005,19 +1005,20 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
     };
 
     switch (unary_op) {
-        case GGML_UNARY_OP_XIELU: {
-            // Get float parameters and reinterpret their bit patterns as uint32_t
-            // for passing through the params buffer
-            float alpha_n = ggml_get_op_params_f32(dst, 1);
-            float alpha_p = ggml_get_op_params_f32(dst, 2);
-            float beta = ggml_get_op_params_f32(dst, 3);
-            float eps = ggml_get_op_params_f32(dst, 4);
-            params.push_back(*reinterpret_cast<const uint32_t *>(&alpha_n));
-            params.push_back(*reinterpret_cast<const uint32_t *>(&alpha_p));
-            params.push_back(*reinterpret_cast<const uint32_t *>(&beta));
-            params.push_back(*reinterpret_cast<const uint32_t *>(&eps));
-            break;
-        }
+        case GGML_UNARY_OP_XIELU:
+            {
+                // Get float parameters and reinterpret their bit patterns as uint32_t
+                // for passing through the params buffer
+                float alpha_n = ggml_get_op_params_f32(dst, 1);
+                float alpha_p = ggml_get_op_params_f32(dst, 2);
+                float beta    = ggml_get_op_params_f32(dst, 3);
+                float eps     = ggml_get_op_params_f32(dst, 4);
+                params.push_back(*reinterpret_cast<const uint32_t *>(&alpha_n));
+                params.push_back(*reinterpret_cast<const uint32_t *>(&alpha_p));
+                params.push_back(*reinterpret_cast<const uint32_t *>(&beta));
+                params.push_back(*reinterpret_cast<const uint32_t *>(&eps));
+                break;
+            }
         default:
             break;
     }
