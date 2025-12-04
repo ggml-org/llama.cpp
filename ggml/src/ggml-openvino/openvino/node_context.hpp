@@ -61,8 +61,8 @@ public:
 
     int32_t * get_output_op_params() const { return m_decoder->get_output_op_params(m_node_idx); }
 
-    ov::element::Type get_output_type(size_t index) const {
-        return m_decoder->get_output_type(m_output_names[index]);
+    ov::element::Type get_output_type() const {
+        return m_decoder->get_output_type(m_node_idx);
     }
 
     Output<Node> get_input(int idx) const override {

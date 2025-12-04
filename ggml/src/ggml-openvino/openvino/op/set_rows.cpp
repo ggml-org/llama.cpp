@@ -32,7 +32,7 @@ OutputVector translate_set_rows(const NodeContext & context) {
     auto indices = context.get_input(1);
     auto dst = context.get_input(2);
 
-    data = std::make_shared<ov::op::v0::Convert>(data, context.get_output_type(0));
+    data = std::make_shared<ov::op::v0::Convert>(data, context.get_output_type());
 
     auto dst_shape = context.get_output_shape().to_shape();
 

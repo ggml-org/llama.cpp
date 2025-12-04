@@ -11,7 +11,7 @@ namespace ggml {
 namespace op {
 
 OutputVector translate_cpy(const NodeContext & context) {
-    auto res = std::make_shared<ov::op::v0::Convert>(context.get_input(0), context.get_output_type(0));
+    auto res = std::make_shared<ov::op::v0::Convert>(context.get_input(0), context.get_output_type());
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

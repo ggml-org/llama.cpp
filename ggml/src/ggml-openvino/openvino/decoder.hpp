@@ -39,7 +39,7 @@ public:
 
     virtual PartialShape get_output_shape(int node_idx) const = 0;
 
-    virtual element::Type get_output_type(const std::string& name) const = 0;
+    virtual element::Type get_output_type(const int node_idx) const = 0;
 
     virtual int32_t* get_input_op_params(const std::string& name) const = 0;
 

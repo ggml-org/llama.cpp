@@ -63,8 +63,8 @@ OutputVector translate_soft_max(const NodeContext & context) {
         mask_node_sliced = std::make_shared<ov::op::v8::Slice>(mask_node, zero, token_len, one, one);
     }
 
-    if (mask_node_sliced.get_element_type() != context.get_output_type(0)) {
-        mask_node_sliced = std::make_shared<ov::op::v0::Convert>(mask_node_sliced, context.get_output_type(0));
+    if (mask_node_sliced.get_element_type() != context.get_output_type()) {
+        mask_node_sliced = std::make_shared<ov::op::v0::Convert>(mask_node_sliced, context.get_output_type());
     }
 
     Output<Node> slope_mask;

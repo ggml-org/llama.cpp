@@ -42,8 +42,8 @@ OutputVector translate_get_rows(const NodeContext & context) {
         res = std::make_shared<ov::op::v8::Gather>(data, indices, axis);
     }
 
-    if (res.get_element_type() != context.get_output_type(0)) {
-        res = std::make_shared<ov::op::v0::Convert>(res, context.get_output_type(0));
+    if (res.get_element_type() != context.get_output_type()) {
+        res = std::make_shared<ov::op::v0::Convert>(res, context.get_output_type());
     }
     res = std::make_shared<ov::op::v0::Unsqueeze>(res, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
     return rename_outputs_with_suffix({res}, context.get_name());
