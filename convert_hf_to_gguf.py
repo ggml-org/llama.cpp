@@ -112,7 +112,7 @@ class ModelBase:
     sentence_transformers_dense_modules: bool = False
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
-                 use_temp_file: bool = False, temp_dir: str | None = None, eager: bool = False,
+                 use_temp_file: bool = False, temp_dir: Path | None = None, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
