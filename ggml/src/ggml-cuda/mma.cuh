@@ -962,7 +962,7 @@ namespace ggml_cuda_mma {
             true
         );
 
-#elif defined(RDNA3) 
+#elif defined(RDNA3)
         using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
         int32x4_t * a_vec = (int32x4_t *) A.x;
         int32x4_t * b_vec = (int32x4_t *) B.x;
