@@ -1098,8 +1098,7 @@ common_init_result::common_init_result(common_params & params) :
 
     for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
         pimpl->samplers[i].reset(common_sampler_init(model, params.sampling));
-        llama_sampler * backend_chain = common_sampler_chain_backend(pimpl->samplers[i].get());
-        pimpl->samplers_seq_config[i] = { i, backend_chain };
+        pimpl->samplers_seq_config[i] = { i, common_sampler_get(pimpl->samplers[i].get()) };
     }
 
     cparams.samplers   = pimpl->samplers_seq_config.data();

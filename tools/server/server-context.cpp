@@ -1028,10 +1028,9 @@ struct server_context_impl {
                 return false;
             }
 
-            SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
+            llama_set_sampler(ctx, slot.id, common_sampler_get(slot.smpl.get()));
 
-            llama_sampler * backend_chain = common_sampler_chain_backend(slot.smpl.get());
-            llama_set_sampler(ctx, slot.id, backend_chain);
+            SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
         }
 
         // initialize draft batch

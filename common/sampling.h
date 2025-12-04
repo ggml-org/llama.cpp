@@ -48,7 +48,7 @@ struct common_sampler * common_sampler_clone (struct common_sampler * gsmpl);
 // arguments can be nullptr to skip printing
 void common_perf_print(const struct llama_context * ctx, const struct common_sampler * gsmpl);
 
-struct llama_sampler * common_sampler_chain_backend(const struct common_sampler * gsmpl);
+struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
 
 // extended sampling implementation:
 //

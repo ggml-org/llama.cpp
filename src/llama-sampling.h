@@ -14,7 +14,16 @@ struct llama_grammar;
 struct llama_sampler_chain {
     llama_sampler_chain_params params;
 
-    std::vector<struct llama_sampler *> samplers;
+    // has .backend_init() been called?
+    bool is_init = false;
+
+    struct info {
+        bool is_backend;
+
+        llama_sampler * ptr;
+    };
+
+    std::vector<info> samplers;
 
     // timing
 
