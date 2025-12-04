@@ -36,7 +36,8 @@ gMe = {
     '--config': '/dev/null',
     '--debug': False,
     'bearer.transformed.year': "",
-    'server': None
+    'server': None,
+    'sslContext': None,
 }
 
 gConfigType = {
@@ -164,6 +165,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def handle(self) -> None:
         print(f"\n\n\nDBUG:ProxyHandler:Handle:RequestFrom:{self.client_address}")
+        try:
+            if (gMe['sslContext']):
+                self.request = gMe['sslContext'].wrap_socket(self.request, server_side=True)
+                self.rfile = self.request.makefile('rb', self.rbufsize)
+                self.wfile = self.request.makefile('wb', self.wbufsize)
+        except:
+            print(f"ERRR:ProxyHandler:SSLHS:{traceback.format_exception_only(sys.exception())}")
+            return
         return super().handle()
 
 
@@ -279,13 +288,13 @@ def setup_server():
     """
     try:
         gMe['serverAddr'] = ('', gMe['--port'])
-        gMe['server'] = http.server.HTTPServer(gMe['serverAddr'], ProxyHandler)
+        gMe['server'] = http.server.ThreadingHTTPServer(gMe['serverAddr'], ProxyHandler)
         if gMe.get('--sec.keyfile') and gMe.get('--sec.certfile'):
             sslCtxt = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             sslCtxt.load_cert_chain(certfile=gMe['--sec.certfile'], keyfile=gMe['--sec.keyfile'])
             sslCtxt.minimum_version = ssl.TLSVersion.MAXIMUM_SUPPORTED
             sslCtxt.maximum_version = ssl.TLSVersion.MAXIMUM_SUPPORTED
-            gMe['server'].socket = sslCtxt.wrap_socket(gMe['server'].socket, server_side=True)
+            gMe['sslContext'] = sslCtxt
             print(f"INFO:SetupServer:Starting on {gMe['serverAddr']}:Https mode")
         else:
             print(f"INFO:SetupServer:Starting on {gMe['serverAddr']}:Http mode")
