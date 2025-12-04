@@ -52,7 +52,7 @@ The project is under active development, and we are [looking for feedback and co
 | `-ub, --ubatch-size N` | physical maximum batch size (default: 512)<br/>(env: LLAMA_ARG_UBATCH) |
 | `--keep N` | number of tokens to keep from the initial prompt (default: 0, -1 = all) |
 | `--swa-full` | use full-size SWA cache (default: false)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)<br/>(env: LLAMA_ARG_SWA_FULL) |
-| `--kv-unified, -kvu` | use single unified KV buffer for the KV cache of all sequences (default: false)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/14363)<br/>(env: LLAMA_ARG_KV_SPLIT) |
+| `--kv-unified, -kvu` | use single unified KV buffer for the KV cache of all sequences (default: false)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/14363)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `-fa, --flash-attn [on\|off\|auto]` | set Flash Attention use ('on', 'off', or 'auto', default: 'auto')<br/>(env: LLAMA_ARG_FLASH_ATTN) |
 | `--no-perf` | disable internal libllama performance timings (default: false)<br/>(env: LLAMA_ARG_NO_PERF) |
 | `-e, --escape` | process escapes sequences (\n, \r, \t, \', \", \\) (default: true) |
@@ -93,7 +93,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--control-vector FNAME` | add a control vector<br/>note: this argument can be repeated to add multiple control vectors |
 | `--control-vector-scaled FNAME SCALE` | add a control vector with user defined scaling SCALE<br/>note: this argument can be repeated to add multiple scaled control vectors |
 | `--control-vector-layer-range START END` | layer range to apply the control vector(s) to, start and end inclusive |
-| `-m, --model FNAME` | model path (default: `models/$filename` with filename from `--hf-file` or `--model-url` if set, otherwise models/7B/ggml-model-f16.gguf)<br/>(env: LLAMA_ARG_MODEL) |
+| `-m, --model FNAME` | model path to load<br/>(env: LLAMA_ARG_MODEL) |
 | `-mu, --model-url MODEL_URL` | model download url (default: unused)<br/>(env: LLAMA_ARG_MODEL_URL) |
 | `-dr, --docker-repo [<repo>/]<model>[:quant]` | Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest.<br/>example: gemma3<br/>(default: unused)<br/>(env: LLAMA_ARG_DOCKER_REPO) |
 | `-hf, -hfr, --hf-repo <user>/<model>[:quant]` | Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.<br/>mmproj is also downloaded automatically if available. to disable, add --no-mmproj<br/>example: unsloth/phi-4-GGUF:q4_k_m<br/>(default: unused)<br/>(env: LLAMA_ARG_HF_REPO) |
@@ -103,11 +103,11 @@ The project is under active development, and we are [looking for feedback and co
 | `-hffv, --hf-file-v FILE` | Hugging Face model file for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_FILE_V) |
 | `-hft, --hf-token TOKEN` | Hugging Face access token (default: value from HF_TOKEN environment variable)<br/>(env: HF_TOKEN) |
 | `--log-disable` | Log disable |
-| `--log-file FNAME` | Log to file |
+| `--log-file FNAME` | Log to file<br/>(env: LLAMA_LOG_FILE) |
 | `--log-colors [on\|off\|auto]` | Set colored logging ('on', 'off', or 'auto', default: 'auto')<br/>'auto' enables colors when output is to a terminal<br/>(env: LLAMA_LOG_COLORS) |
 | `-v, --verbose, --log-verbose` | Set verbosity level to infinity (i.e. log all messages, useful for debugging) |
 | `--offline` | Offline mode: forces use of cache, prevents network access<br/>(env: LLAMA_OFFLINE) |
-| `-lv, --verbosity, --log-verbosity N` | Set the verbosity threshold. Messages with a higher verbosity will be ignored.<br/>(env: LLAMA_LOG_VERBOSITY) |
+| `-lv, --verbosity, --log-verbosity N` | Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:<br/> - 0: generic output<br/> - 1: error<br/> - 2: warning<br/> - 3: info<br/> - 4: debug<br/>(default: 3)<br/><br/>(env: LLAMA_LOG_VERBOSITY) |
 | `--log-prefix` | Enable prefix in log messages<br/>(env: LLAMA_LOG_PREFIX) |
 | `--log-timestamps` | Enable timestamps in log messages<br/>(env: LLAMA_LOG_TIMESTAMPS) |
 | `-ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K_DRAFT) |
@@ -196,6 +196,10 @@ The project is under active development, and we are [looking for feedback and co
 | `--slots` | enable slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
 | `--no-slots` | disables slots monitoring endpoint<br/>(env: LLAMA_ARG_NO_ENDPOINT_SLOTS) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
+| `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |
+| `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
+| `--models-allow-extra-args` | for router server, allow extra arguments for models; important: some arguments can allow users to access local file system, use with caution (default: disabled)<br/>(env: LLAMA_ARG_MODELS_ALLOW_EXTRA_ARGS) |
+| `--no-models-autoload` | disables automatic loading of models (default: enabled)<br/>(env: LLAMA_ARG_NO_MODELS_AUTOLOAD) |
 | `--jinja` | use jinja template for chat (default: enabled)<br/><br/>(env: LLAMA_ARG_JINJA) |
 | `--no-jinja` | disable jinja template for chat (default: enabled)<br/><br/>(env: LLAMA_ARG_NO_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
@@ -287,38 +291,66 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 
 ## Web UI
 
-The project includes a web-based user interface that enables interaction with the model through the `/v1/chat/completions` endpoint.
+The project includes a web-based user interface for interacting with `llama-server`. It supports both single-model (`MODEL` mode) and multi-model (`ROUTER` mode) operation.
 
-The web UI is developed using:
-- `react` framework for frontend development
-- `tailwindcss` and `daisyui` for styling
-- `vite` for build tooling
+### Features
 
-A pre-built version is available as a single HTML file under `/public` directory.
+-   **Chat interface** with streaming responses
+-   **Multi-model support** (ROUTER mode) - switch between models, auto-load on selection
+-   **Modality validation** - ensures selected model supports conversation's attachments (images, audio)
+-   **Conversation management** - branching, regeneration, editing with history preservation
+-   **Attachment support** - images, audio, PDFs (with vision/text fallback)
+-   **Configurable parameters** - temperature, top_p, etc. synced with server defaults
+-   **Dark/light theme**
 
-To build or to run the dev server (with hot reload):
+### Tech Stack
+
+-   **SvelteKit** - frontend framework with Svelte 5 runes for reactive state
+-   **TailwindCSS** + **shadcn-svelte** - styling and UI components
+-   **Vite** - build tooling
+-   **IndexedDB** (Dexie) - local storage for conversations
+-   **LocalStorage** - user settings persistence
+
+### Architecture
+
+The WebUI follows a layered architecture:
+
+```
+Routes → Components → Hooks → Stores → Services → Storage/API
+```
+
+-   **Stores** - reactive state management (`chatStore`, `conversationsStore`, `modelsStore`, `serverStore`, `settingsStore`)
+-   **Services** - stateless API/database communication (`ChatService`, `ModelsService`, `PropsService`, `DatabaseService`)
+-   **Hooks** - reusable logic (`useModelChangeValidation`, `useProcessingState`)
+
+For detailed architecture diagrams, see [`tools/server/webui/docs/`](webui/docs/):
+
+-   `high-level-architecture.mmd` - full architecture with all modules
+-   `high-level-architecture-simplified.mmd` - simplified overview
+-   `data-flow-simplified-model-mode.mmd` - data flow for single-model mode
+-   `data-flow-simplified-router-mode.mmd` - data flow for multi-model mode
+-   `flows/*.mmd` - detailed per-domain flows (chat, conversations, models, etc.)
+
+### Development
 
 ```sh
-# make sure you have nodejs installed
+# make sure you have Node.js installed
 cd tools/server/webui
 npm i
 
-# to run the dev server
+# run dev server (with hot reload)
 npm run dev
 
-# to build the public/index.html.gz
+# run tests
+npm run test
+
+# build production bundle
 npm run build
 ```
-After `public/index.html.gz` has been generated we need to generate the c++
-headers (like build/tools/server/index.html.gz.hpp) that will be included
-by server.cpp. This is done by building `llama-server` as described in the
-[build](#build) section above.
 
-NOTE: if you are using the vite dev server, you can change the API base URL to llama.cpp. To do that, run this code snippet in browser's console:
+After `public/index.html.gz` has been generated, rebuild `llama-server` as described in the [build](#build) section to include the updated UI.
 
-```js
-localStorage.setItem('base', 'http://localhost:8080')
-```
+**Note:** The Vite dev server automatically proxies API requests to `http://localhost:8080`. Make sure `llama-server` is running on that port during development.
 
 ## Quick Start
 
@@ -1422,6 +1454,184 @@ curl http://localhost:8080/v1/messages/count_tokens \
 
 ```json
 {"input_tokens": 10}
+```
+
+## Using multiple models
+
+`llama-server` can be launched in a **router mode** that exposes an API for dynamically loading and unloading models. The main process (the "router") automatically forwards each request to the appropriate model instance.
+
+To start in router mode, launch `llama-server` **without specifying any model**:
+
+```sh
+llama-server
+```
+
+### Model sources
+
+By default, the router looks for models in the cache. You can add Hugging Face models to the cache with:
+
+```sh
+llama-server -hf <user>/<model>:<tag>
+```
+
+*The server must be restarted after adding a new model.*
+
+Alternatively, you can point the router to a local directory containing your GGUF files using `--models-dir`. Example command:
+
+```sh
+llama-server --models-dir ./models_directory
+```
+
+If the model contains multiple GGUF (for multimodal or multi-shard), files should be put into a subdirectory. The directory structure should look like this:
+
+```sh
+models_directory
+ │
+ │  # single file
+ ├─ llama-3.2-1b-Q4_K_M.gguf
+ ├─ Qwen3-8B-Q4_K_M.gguf
+ │
+ │  # multimodal
+ ├─ gemma-3-4b-it-Q8_0
+ │    ├─ gemma-3-4b-it-Q8_0.gguf
+ │    └─ mmproj-F16.gguf   # file name must start with "mmproj"
+ │
+ │  # multi-shard
+ ├─ Kimi-K2-Thinking-UD-IQ1_S
+ │    ├─ Kimi-K2-Thinking-UD-IQ1_S-00001-of-00006.gguf
+ │    ├─ Kimi-K2-Thinking-UD-IQ1_S-00002-of-00006.gguf
+ │    ├─ ...
+ │    └─ Kimi-K2-Thinking-UD-IQ1_S-00006-of-00006.gguf
+```
+
+You may also specify default arguments that will be passed to every model instance:
+
+```sh
+llama-server -ctx 8192 -n 1024 -np 2
+```
+
+Note: model instances inherit both command line arguments and environment variables from the router server.
+
+### Routing requests
+
+Requests are routed according to the requested model name.
+
+For **POST** endpoints (`/v1/chat/completions`, `/v1/completions`, `/infill`, etc.) The router uses the `"model"` field in the JSON body:
+
+```json
+{
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hello"
+    }
+  ]
+}
+```
+
+For **GET** endpoints (`/props`, `/metrics`, etc.) The router uses the `model` query parameter (URL-encoded):
+
+```
+GET /props?model=ggml-org%2Fgemma-3-4b-it-GGUF%3AQ4_K_M
+```
+
+By default, the model will be loaded automatically if it's not loaded. To disable this, add `--no-models-autoload` when starting the server. Additionally, you can include `?autoload=true|false` in the query param to control this behavior per-request.
+
+### GET `/models`: List available models
+
+Listing all models in cache. The model metadata will also include a field to indicate the status of the model:
+
+```json
+{
+  "data": [{
+    "id": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+    "in_cache": true,
+    "path": "/Users/REDACTED/Library/Caches/llama.cpp/ggml-org_gemma-3-4b-it-GGUF_gemma-3-4b-it-Q4_K_M.gguf",
+    "status": {
+      "value": "loaded",
+      "args": ["llama-server", "-ctx", "4096"]
+    },
+    ...
+  }]
+}
+```
+
+Note: For a local GGUF (stored offline in a custom directory), the model object will have `"in_cache": false`.
+
+The `status` object can be:
+
+```json
+"status": {
+  "value": "unloaded"
+}
+```
+
+```json
+"status": {
+  "value": "loading",
+  "args": ["llama-server", "-ctx", "4096"]
+}
+```
+
+```json
+"status": {
+  "value": "unloaded",
+  "args": ["llama-server", "-ctx", "4096"],
+  "failed": true,
+  "exit_code": 1
+}
+```
+
+```json
+"status": {
+  "value": "loaded",
+  "args": ["llama-server", "-ctx", "4096"]
+}
+```
+
+### POST `/models/load`: Load a model
+
+Load a model
+
+Payload:
+- `model`: name of the model to be loaded.
+- `extra_args`: (optional) an array of additional arguments to be passed to the model instance. Note: you must start the server with `--models-allow-extra-args` to enable this feature.
+
+```json
+{
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+  "extra_args": ["-n", "128", "--top-k", "4"]
+}
+```
+
+Response:
+
+```json
+{
+  "success": true
+}
+```
+
+
+### POST `/models/unload`: Unload a model
+
+Unload a model
+
+Payload:
+
+```json
+{
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+}
+```
+
+Response:
+
+```json
+{
+  "success": true
+}
 ```
 
 ## More examples

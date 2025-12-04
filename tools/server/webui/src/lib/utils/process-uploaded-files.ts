@@ -1,11 +1,12 @@
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isTextFileByName } from './text-files';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { FileTypeCategory } from '$lib/enums/files';
-import { getFileTypeCategory } from '$lib/utils/file-type';
-import { supportsVision } from '$lib/stores/server.svelte';
+import { FileTypeCategory } from '$lib/enums';
+import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toast } from 'svelte-sonner';
+import { getFileTypeCategory } from '$lib/utils';
+import { convertPDFToText } from './pdf-processing';
 
 /**
  * Read a file as a data URL (base64 encoded)
@@ -47,7 +48,10 @@ function readFileAsUTF8(file: File): Promise<string> {
  * @param files - Array of File objects to process
  * @returns Promise resolving to array of ChatUploadedFile objects
  */
-export async function processFilesToChatUploaded(files: File[]): Promise<ChatUploadedFile[]> {
+export async function processFilesToChatUploaded(
+	files: File[],
+	activeModelId?: string
+): Promise<ChatUploadedFile[]> {
 	const results: ChatUploadedFile[] = [];
 
 	for (const file of files) {
@@ -92,11 +96,19 @@ export async function processFilesToChatUploaded(files: File[]): Promise<ChatUpl
 					results.push(base);
 				}
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
-				// PDFs handled later when building extras; keep metadata only
-				results.push(base);
+				// Extract text content from PDF for preview
+				try {
+					const textContent = await convertPDFToText(file);
+					results.push({ ...base, textContent });
+				} catch (err) {
+					console.warn('Failed to extract text from PDF, adding without content:', err);
+					results.push(base);
+				}
 
 				// Show suggestion toast if vision model is available but PDF as image is disabled
-				const hasVisionSupport = supportsVision();
+				const hasVisionSupport = activeModelId
+					? modelsStore.modelSupportsVision(activeModelId)
+					: false;
 				const currentConfig = settingsStore.config;
 				if (hasVisionSupport && !currentConfig.pdfAsImage) {
 					toast.info(`You can enable parsing PDF as images with vision models.`, {
