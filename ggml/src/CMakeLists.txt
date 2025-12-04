@@ -189,9 +189,9 @@ endif()
 
 # ggml
 
-if (GGML_BACKEND_DL AND NOT BUILD_SHARED_LIBS)
-    message(FATAL_ERROR "GGML_BACKEND_DL requires BUILD_SHARED_LIBS")
-endif()
+# if (GGML_BACKEND_DL AND NOT BUILD_SHARED_LIBS)
+#    message(FATAL_ERROR "GGML_BACKEND_DL requires BUILD_SHARED_LIBS")
+# endif()
 
 add_library(ggml-base
             ../include/ggml.h

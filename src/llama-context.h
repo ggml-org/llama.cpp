@@ -54,6 +54,8 @@ struct llama_context {
 
     llama_memory_t get_memory() const;
 
+    llama_memory_i * get_memory_ptr() { return memory.get(); }
+
     // return true if the memory was updated
     bool memory_update(bool optimize);
 

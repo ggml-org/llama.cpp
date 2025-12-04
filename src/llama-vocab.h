@@ -174,6 +174,8 @@ struct llama_vocab {
 
     void print_info() const;
 
+    void set_n_vocab(uint32_t n);
+
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;

@@ -3829,3 +3829,7 @@ int32_t llama_detokenize(
                         bool   unparse_special) {
     return vocab->detokenize(tokens, n_tokens, text, text_len_max, remove_special, unparse_special);
 }
+
+void llama_vocab::set_n_vocab(uint32_t n) {
+    pimpl->id_to_token.resize(n);
+}
