@@ -2569,6 +2569,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK_BUDGET"));
     add_opt(common_arg(
+        {"--reasoning-force-close-message"}, "STRING",
+        string_format(
+            "if specified, forces the model to close its reasoning/thoughts when generating this message (default: %s)\n",
+            params.reasoning_force_close_message.c_str()
+        ),
+        [](common_params & params, const std::string & value) {
+            params.reasoning_force_close_message = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK_FORCE_CLOSE_MESSAGE"));
+    add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
             "set custom jinja chat template (default: template taken from model's metadata)\n"

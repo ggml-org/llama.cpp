@@ -39,8 +39,6 @@ static const std::vector<std::pair<std::string, std::string>> kReasoningThinkMar
     {"<|START_THINKING|>", "<|END_THINKING|>"},
 };
 
-static const std::string kReasoningForcedEndMessage = "... I now conclude my reasoning and will provide the final answer.";
-
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
     SLOT_STATE_IDLE,
@@ -1207,7 +1205,10 @@ struct server_context_impl {
                         if (slot.reasoning_end_tag.empty()) {
                             fail_close("no closing tag detected");
                         } else {
-                            const std::string forced_injection = kReasoningForcedEndMessage + slot.reasoning_end_tag;
+                            const std::string forced_message = slot.task->params.reasoning_force_close_message.empty()
+                                ? std::string(COMMON_DEFAULT_REASONING_FORCE_CLOSE_MESSAGE)
+                                : slot.task->params.reasoning_force_close_message;
+                            const std::string forced_injection = forced_message + slot.reasoning_end_tag;
 
                             llama_tokens closing_tokens;
                             try {
