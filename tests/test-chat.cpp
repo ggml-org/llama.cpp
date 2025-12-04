@@ -150,6 +150,22 @@ static std::string renormalize_json(const std::string & json_str) {
         return json_str;
     }
 }
+
+// Use for PEG parser implementations
+struct make_peg_parser {
+    common_chat_params params_;
+    common_peg_arena arena_;
+
+    make_peg_parser(common_chat_templates * tmpls, const common_chat_templates_inputs & inputs) {
+        params_ = common_chat_templates_apply(tmpls, inputs);
+        arena_.load(params_.parser);
+    }
+
+    common_chat_msg operator()(const std::string & msg, bool is_partial) {
+        return common_chat_peg_parse(arena_, msg, is_partial, /* syntax = */ {params_.format});
+    }
+};
+
 static void assert_msg_equals(const common_chat_msg & expected, const common_chat_msg & actual, bool ignore_whitespace_differences = false) {
     assert_equals(expected.role, actual.role);
     if (ignore_whitespace_differences) {
@@ -429,9 +445,16 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
 template <typename T>
 static void test_parser_with_streaming(const common_chat_msg & expected, const std::string & raw_message, T parse_msg) {
     auto merged = simple_assist_msg("");
-    auto last_msg = parse_msg("");
+    common_chat_msg last_msg;
+    last_msg.role = "assistant";
     for (size_t i = 1; i <= raw_message.size(); ++i) {
-        auto curr_msg = parse_msg(raw_message.substr(0, i));
+        auto is_partial = i < raw_message.size();
+        common_chat_msg curr_msg;
+        if constexpr (std::is_invocable_v<T, std::string, bool>) {
+            curr_msg = parse_msg(raw_message.substr(0, i), is_partial);
+        } else {
+            curr_msg = parse_msg(raw_message.substr(0, i));
+        }
         if (curr_msg == simple_assist_msg("")) continue;
         LOG_INF("Streaming msg: %s\n", common_chat_msgs_to_json_oaicompat<json>({curr_msg}).dump().c_str());
         for (auto diff: common_chat_msg_diff::compute_diffs(last_msg, curr_msg)) {
@@ -456,7 +479,11 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
         assert_msg_equals(curr_msg, merged, true);
         last_msg = curr_msg;
     }
-    assert_msg_equals(expected, parse_msg(raw_message), true);
+    if constexpr (std::is_invocable_v<T, std::string, bool>) {
+        assert_msg_equals(expected, parse_msg(raw_message, false), true);
+    } else {
+        assert_msg_equals(expected, parse_msg(raw_message), true);
+    }
     assert_msg_equals(expected, merged, true);
 }
 
@@ -3302,6 +3329,152 @@ Hey there!<|im_end|>
         GGML_ASSERT(grammar && "Failed to build Qwen3-Coder grammar with union types");
     }
 
+    {
+        // Ministral-3-14B-Reasoning-2512
+        auto tmpls = read_templates("models/templates/unsloth-mistral-Ministral-3-14B-Reasoning-2512.jinja");
+        common_chat_msg msg;
+        msg.role = "user";
+        msg.content = "hello";
+
+        {
+            // Test basic message
+            common_chat_msg expected;
+            expected.role = "assistant";
+            expected.content = "Hello world";
+
+            common_chat_templates_inputs inputs;
+            inputs.messages = {msg};
+
+            test_parser_with_streaming(expected,
+                "Hello world",
+                make_peg_parser(tmpls.get(), inputs)
+            );
+        }
+        {
+            // Test basic message and reasoning with reasoning_format = none
+            common_chat_msg expected;
+            expected.role = "assistant";
+            expected.content = "[THINK]I am thinking[/THINK]Hello world";
+
+            common_chat_templates_inputs inputs;
+            inputs.messages = {msg};
+
+            test_parser_with_streaming(expected,
+                "[THINK]I am thinking[/THINK]Hello world",
+                make_peg_parser(tmpls.get(), inputs)
+            );
+        }
+        {
+            // Test basic message and reasoning with reasoning_format = auto
+            common_chat_msg expected;
+            expected.role = "assistant";
+            expected.content = "Hello world";
+            expected.reasoning_content = "I am thinking";
+
+            common_chat_templates_inputs inputs;
+            inputs.messages = {msg};
+            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+            test_parser_with_streaming(expected,
+                "[THINK]I am thinking[/THINK]Hello world",
+                make_peg_parser(tmpls.get(), inputs)
+            );
+        }
+        {
+            // Test basic tool call
+            common_chat_msg expected;
+            expected.role = "assistant";
+            expected.reasoning_content = "I need to get the weather in New York City";
+            expected.tool_calls = {{
+                /* .name = */      "get_weather",
+                /* .arguments = */ R"({"location": "New York City, NY"})",
+                /* .id = */        {},
+            }};
+
+            common_chat_templates_inputs inputs;
+            inputs.messages = {msg};
+            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            inputs.tools = {{
+                /* .name = */        "get_weather",
+                /* .description = */ "get the weather",
+                /* .parameters  = */ R"({
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    }
+                })"
+            }};
+
+            test_parser_with_streaming(expected,
+                "[THINK]I need to get the weather in New York City[/THINK]"
+                R"([TOOL_CALLS]get_weather[ARGS]{"location": "New York City, NY"})",
+                make_peg_parser(tmpls.get(), inputs)
+            );
+        }
+        {
+            // Test basic tool call with parallel_tool_calls = true
+            common_chat_msg expected;
+            expected.role = "assistant";
+            expected.reasoning_content = "I need to get the weather in New York City and Los Angeles";
+            expected.tool_calls = {{
+                /* .name = */      "get_weather",
+                /* .arguments = */ R"({"location": "New York City, NY"})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "get_weather",
+                /* .arguments = */ R"({"location": "Los Angeles, CA"})",
+                /* .id = */        {},
+            }};
+
+            common_chat_templates_inputs inputs;
+            inputs.messages = {msg};
+            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            inputs.parallel_tool_calls = true;
+            inputs.tools = {{
+                /* .name = */        "get_weather",
+                /* .description = */ "get the weather",
+                /* .parameters  = */ R"({
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    }
+                })"
+            }};
+
+            test_parser_with_streaming(expected,
+                "[THINK]I need to get the weather in New York City and Los Angeles[/THINK]"
+                R"([TOOL_CALLS]get_weather[ARGS]{"location": "New York City, NY"})"
+                R"([TOOL_CALLS]get_weather[ARGS]{"location": "Los Angeles, CA"})",
+                make_peg_parser(tmpls.get(), inputs)
+            );
+        }
+        {
+            // Test response format
+            common_chat_msg expected;
+            expected.role = "assistant";
+            expected.reasoning_content = "I need to output the invoice details in JSON";
+            expected.content = R"({"amount": 123.45, "date": "2025-12-03"})";
+
+            common_chat_templates_inputs inputs;
+            inputs.messages = {msg};
+            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            inputs.json_schema = R"({
+                "type": "object",
+                "properties": {
+                    "amount": {"type": "number"},
+                    "date": {"type": "string"}
+                }
+            })";
+
+            test_parser_with_streaming(expected,
+                "[THINK]I need to output the invoice details in JSON[/THINK]"
+                "```json\n"
+                R"({"amount": 123.45, "date": "2025-12-03"})"
+                "\n```",
+                make_peg_parser(tmpls.get(), inputs)
+            );
+        }
+    }
 }
 
 static void test_msg_diffs_compute() {
