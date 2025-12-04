@@ -1616,7 +1616,7 @@ kernel void kernel_softplus_f32(
         device       float * dst,
         uint tpig[[thread_position_in_grid]]) {
     device const float & x = src0[tpig];
-    dst[tpig] = (x > 20.0f) ? x : log(1.0f + exp(x));
+    dst[tpig] = select(log(1.0f + exp(x)), x, x > 20.0f);
 }
 
 kernel void kernel_softplus_f32_4(
