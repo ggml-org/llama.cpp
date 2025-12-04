@@ -14,6 +14,8 @@ static __global__ void tri_kernel(
     const int64_t i1 = blockIdx.x;
     const int64_t split_point = i1 + add_to_split;
 
+    GGML_UNUSED_VARS(nb00, nb0);
+
     if (i3 >= ne03 || i2 >= ne02 || i1 >= ne01) {
         return;
     }
