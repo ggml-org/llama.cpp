@@ -1070,6 +1070,9 @@ class GGUFWriter:
     def add_clip_has_vision_encoder(self, value: bool) -> None:
         self.add_bool(Keys.Clip.HAS_VISION_ENCODER, value)
 
+    def add_clip_has_llava_projector(self, value: bool) -> None:
+        self.add_bool(Keys.Clip.HAS_LLAVA_PROJECTOR, value)
+
     def add_clip_has_audio_encoder(self, value: bool) -> None:
         self.add_bool(Keys.Clip.HAS_AUDIO_ENCODER, value)
 

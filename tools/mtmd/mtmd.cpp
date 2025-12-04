@@ -4,6 +4,7 @@
 #include "mtmd-audio.h"
 
 #include "llama.h"
+#include <cmath>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -111,6 +112,7 @@ mtmd_context_params mtmd_context_params_default() {
         /* warmup            */ true,
         /* image_min_tokens  */ -1,
         /* image_max_tokens  */ -1,
+        /* num_crops         */ -1,
     };
     return params;
 }
@@ -178,6 +180,7 @@ struct mtmd_context {
             /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
+            /* num_crops         */ ctx_params.num_crops,
             /* warmup            */ ctx_params.warmup,
         };
 
@@ -306,6 +309,11 @@ struct mtmd_context {
             img_beg = "<|im_start|>";
             img_end = "<|im_end|>";
 
+        } else if (proj == PROJECTOR_TYPE_PHI3_V) {
+            img_beg = "";
+            img_end = "";
+            tok_row_end_trail = false;
+            ov_img_first = false;
         } else if (proj == PROJECTOR_TYPE_LFM2) {
             img_beg = "<|image_start|>";
             img_end = "<|image_end|>";
@@ -537,9 +545,37 @@ struct mtmd_tokenizer {
                 LOG_ERR("Unable to preprocess image\n");
                 return 2;
             }
+            // Phi-3-Vision Token Calculation Logic
+            if (clip_is_phi3v(ctx->ctx_v)) {
+                const int n_col = batch_f32.grid_x;
+                const int n_row = batch_f32.grid_y;
+                const int n_tokens_per_crop = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
+                const int n_token_for_global_crop = (int)std::sqrt((n_tokens_per_crop));
 
-            // handle llava-uhd style preprocessing
-            if (
+                int n_sub_images = n_col * n_row;
+                size_t local_tokens = (n_sub_images + 1) * n_tokens_per_crop;
+
+                if (n_sub_images == 0) local_tokens = 0;
+
+                size_t global_tokens = (n_row + 1) * n_token_for_global_crop;
+                size_t separator_tokens = 1;
+                size_t n_tokens = local_tokens + separator_tokens + global_tokens;
+
+                mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
+                image_tokens->nx = n_tokens;
+                image_tokens->ny = 1;
+                image_tokens->batch_f32 = std::move(batch_f32);
+                image_tokens->id = bitmap->id;
+
+                mtmd_input_chunk chunk{
+                    MTMD_INPUT_CHUNK_TYPE_IMAGE,
+                    {},
+                    std::move(image_tokens),
+                    nullptr,
+                };
+                cur.entries.emplace_back(std::move(chunk));
+            }
+            else if (
                 ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_5
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_6
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_LLAMA4
@@ -812,7 +848,16 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
     bool ok = false;
 
-    if (clip_is_llava(ctx_clip)
+    if (clip_is_phi3v(ctx_clip)) {
+        // Delegate the entire stitching logic to clip.cpp
+        ok = clip_image_batch_encode_phi3(
+            ctx_clip,
+            ctx->n_threads,
+            &image_tokens->batch_f32,
+            ctx->image_embd_v.data()
+        );
+    }
+    else if (clip_is_llava(ctx_clip)
         || clip_is_minicpmv(ctx_clip)
         || clip_is_glm(ctx_clip)) {
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()

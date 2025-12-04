@@ -206,6 +206,13 @@ struct clip_hparams {
     int32_t custom_image_min_tokens = -1;
     int32_t custom_image_max_tokens = -1;
 
+    // phi3v
+    bool use_hd = false;
+    bool with_learnable_separator = false;
+    std::string hd_order = "sub_glb";
+    int32_t num_img_tokens = 144;
+    int32_t num_crops = -1;
+
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
         const int cur_merge = n_merge == 0 ? 1 : n_merge;
         const int patch_area = patch_size * patch_size * cur_merge * cur_merge;
@@ -399,6 +406,15 @@ struct clip_model {
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
 
+    // phi3v
+    ggml_tensor * mm_glb_GN = nullptr; // global separator
+    ggml_tensor * mm_sub_GN = nullptr; // sub-image separator
+    bool phi3_setup_done = false;
+
+    // Pre-calculated projected vectors
+    std::vector<float> phi3_proj_glb_GN;
+    std::vector<float> phi3_proj_sub_GN;
+
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
             || proj_type == PROJECTOR_TYPE_VOXTRAL;
@@ -469,6 +485,9 @@ struct clip_ctx {
         }
         if (ctx_params.image_max_tokens > 0) {
             model.hparams.custom_image_max_tokens = ctx_params.image_max_tokens;
+        }
+        if (ctx_params.num_crops > 0) {
+            model.hparams.num_crops = ctx_params.num_crops;
         }
 
         backend_ptrs.push_back(backend_cpu);
@@ -2000,6 +2019,70 @@ struct clip_graph {
         return gf;
     }
 
+    static struct ggml_tensor * ggml_phi3v_hd_merge(
+        struct ggml_context * ctx,
+        struct ggml_tensor * image_features,
+        int h_crop,
+        int w_crop,
+        int patch_size
+    ) {
+        int n_images = image_features->ne[3];
+        const int n_channels = image_features->ne[0];;
+        const int patch_size_half = patch_size/2;
+
+        struct ggml_tensor * t = image_features;
+        t = ggml_reshape_4d(ctx, t, n_channels, 2, patch_size_half, patch_size * n_images);
+        t = ggml_reshape_4d(ctx, t, n_channels * 2, patch_size_half, 2, patch_size_half * n_images);
+        t = ggml_permute(ctx, t, 0, 2, 1, 3);
+        t = ggml_cont(ctx, t);
+
+        return t;
+    }
+
+        ggml_cgraph * build_phi3v() {
+            ggml_tensor * inp = build_inp();
+            int n_patches_per_crop = inp->ne[1];
+            int patch_size_transformed = sqrt(n_patches_per_crop);
+
+            int num_crops = inp->ne[2];
+            inp = ggml_reshape_3d(ctx0, inp, n_embd, n_patches_per_crop, num_crops);
+
+            ggml_tensor * cls = model.class_embedding;
+            cls = ggml_reshape_3d(ctx0, cls, n_embd, 1, 1);
+            cls = ggml_repeat(ctx0, cls, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, 1, num_crops));
+
+            inp = ggml_concat(ctx0, cls, inp, 1);
+            inp = ggml_add(ctx0, inp, model.position_embeddings);
+
+            inp = ggml_reshape_2d(ctx0, inp, n_embd, (n_patches_per_crop + 1) * num_crops);
+
+            ggml_tensor * cur = build_vit(inp, (n_patches_per_crop + 1) * num_crops,
+                                          NORM_TYPE_NORMAL, hparams.ffn_op, nullptr, nullptr);
+
+
+            cur = ggml_reshape_3d(ctx0, cur, n_embd, n_patches_per_crop + 1, num_crops);
+
+            cur = ggml_view_3d(ctx0, cur,
+                               n_embd, n_patches_per_crop, num_crops,
+                               cur->nb[1], cur->nb[2],
+                               cur->nb[1]);
+
+            cur = ggml_reshape_4d(ctx0, cur, n_embd, patch_size_transformed, patch_size_transformed, num_crops);
+            cur = ggml_cont(ctx0, cur);
+
+            cur = ggml_phi3v_hd_merge(ctx0, cur, 1, 1, patch_size_transformed);
+            cur = ggml_reshape_2d(ctx0, cur, hparams.n_ff, hparams.num_img_tokens * num_crops);
+
+            ggml_tensor * final_emb = ggml_mul_mat(ctx0, model.mm_0_w, cur);
+            final_emb = ggml_add(ctx0, final_emb, model.mm_0_b);
+            final_emb = ggml_gelu(ctx0, final_emb);
+            final_emb = ggml_mul_mat(ctx0, model.mm_2_w, final_emb);
+            final_emb = ggml_add(ctx0, final_emb, model.mm_2_b);
+
+            ggml_build_forward_expand(gf, final_emb);
+            return gf;
+        }
+
 private:
     //
     // utility functions
@@ -2533,6 +2616,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 res = graph.build_cogvlm();
             } break;
+        case PROJECTOR_TYPE_PHI3_V:
+            {
+                res = graph.build_phi3v();
+            } break;
         default:
             {
                 res = graph.build_llava();
@@ -2861,6 +2948,24 @@ struct clip_model_loader {
                         }
                         hparams.ffn_op = FFN_GELU_ERF;
                         log_ffn_op = "gelu_erf"; // temporary solution for logging
+                    } break;
+                case PROJECTOR_TYPE_PHI3_V:
+                    {
+                        get_bool(KEY_PHI3_USE_HD, hparams.use_hd, false);
+                        if (!hparams.use_hd) {
+                            LOG_WRN("%s: Phi-3-Vision model missing %s=true, assuming HD transform is required\n", __func__, KEY_PHI3_USE_HD);
+                        }
+
+                        get_string(KEY_PHI3_HD_ORDER, hparams.hd_order, false);
+                        if (hparams.hd_order != "sub_glb") {
+                            throw std::runtime_error(string_format("%s: unsupported HD transform order: %s (only 'sub_glb' supported)\n", __func__, hparams.hd_order.c_str()));
+                        }
+
+                        get_u32(KEY_PHI3_NUM_IMG_TOKENS, hparams.num_img_tokens, false);
+                        if (hparams.num_crops == -1) {
+                            get_u32(KEY_PHI3_NUM_CROPS, hparams.num_crops, false);
+                        }
+                        get_bool(KEY_PHI3_WITH_SEP, hparams.with_learnable_separator, false);
                     } break;
                 default:
                     break;
@@ -3248,6 +3353,20 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                } break;
+            case PROJECTOR_TYPE_PHI3_V:
+                {
+                    // Load MLP weights: mm.model.mlp.0.weight / bias
+                    model.mm_0_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "bias"));
+
+                    // Load MLP weights: mm.model.mlp.2.weight / bias
+                    model.mm_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "bias"));
+
+                    // Load Separators
+                    model.mm_glb_GN = get_tensor(TN_PHI3_GLB_GN);
+                    model.mm_sub_GN = get_tensor(TN_PHI3_SUB_GN);
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -4214,6 +4333,77 @@ private:
     }
 };
 
+struct phi3v_hd {
+    struct slice_instructions {
+        clip_image_size overview_size;
+        clip_image_size grid_size;
+        std::vector<clip_image_size> crops;
+    };
+
+    static int padding_336(int x) {
+        return (int)(std::ceil((float)x / 336.0f) * 336);
+    }
+
+    static clip_image_size calc_hd_transform_size(int width, int height, int hd_num) {
+        bool transposed = false;
+        if (width < height) {
+            std::swap(width, height);
+            transposed = true;
+        }
+        float ratio = (float)width / (float)height;
+
+        int scale = 1;
+        while (scale * std::ceil(scale / ratio) <= hd_num) {
+            scale++;
+        }
+        scale--;
+        if (scale < 1) scale = 1;
+
+
+        int new_w = scale * 336;
+        int new_h = (int)((float)new_w / ratio);
+
+        clip_image_size res;
+        res.width = padding_336(new_w);
+        res.height = padding_336(new_h);
+
+        if (transposed) std::swap(res.width, res.height);
+        return res;
+    }
+
+        static std::vector<clip_image_u8_ptr> transform(const clip_image_u8 * img, int num_crops, int & out_grid_x, int & out_grid_y) {
+            std::vector<clip_image_u8_ptr> output;
+
+            // 1. HD Transform (Resize + Pad)
+            clip_image_size hd_size = calc_hd_transform_size(img->nx, img->ny, num_crops);
+            clip_image_u8 hd_img;
+            img_tool::resize(*img, hd_img, hd_size, img_tool::RESIZE_ALGO_BICUBIC, true, {255, 255, 255});
+
+            out_grid_x = hd_size.width / 336;
+            out_grid_y = hd_size.height / 336;
+
+            // 2. Slice into 336x336 patches
+            // Iterate Y then X (Row-Major)
+            for (int y = 0; y < hd_size.height; y += 336) {
+                for (int x = 0; x < hd_size.width; x += 336) {
+                    clip_image_u8_ptr slice(clip_image_u8_init());
+
+                    // Logic: Copy 336x336 area at (x,y)
+                    img_tool::crop(hd_img, *slice, x, y, 336, 336);
+                    output.push_back(std::move(slice));
+                }
+            }
+
+            // 3. Global Image (Resize to 336x336)
+            clip_image_u8_ptr global(clip_image_u8_init());
+            // Global uses Bicubic
+            img_tool::resize(*img, *global, {336, 336}, img_tool::RESIZE_ALGO_BICUBIC, true, {255, 255, 255});
+            output.push_back(std::move(global));
+
+            return output;
+        }
+    };
+
 // returns the normalized float tensor for llava-1.5, for spatial_unpad with anyres processing for llava-1.6 it returns the normalized image patch tensors as a vector
 // res_imgs memory is being allocated here, previous allocations will be freed if found
 bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, struct clip_image_f32_batch * res_imgs) {
@@ -4429,7 +4619,21 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     }
                 }
             } break;
+        case PROJECTOR_TYPE_PHI3_V:
+            {
+                int max_crops = ctx->model.hparams.num_crops;
+                int gx, gy;
+                auto imgs = phi3v_hd::transform(img, max_crops, gx, gy);
+                ctx->model.hparams.image_crop_resolution = (gy << 16) | gx;
+                for (auto & crop : imgs) {
+                    clip_image_f32_ptr res(clip_image_f32_init());
+                    normalize_image_u8_to_f32(*crop, *res, ctx->model.hparams.image_mean, ctx->model.hparams.image_std);
+                    res_imgs->entries.push_back(std::move(res));
+                }
 
+                res_imgs->grid_x = gx;
+                res_imgs->grid_y = gy;
+            } break;
         default:
             LOG_ERR("%s: unsupported projector type %d\n", __func__, ctx->proj_type());
             return false;
@@ -4609,6 +4813,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_COGVLM:
             {
                 n_patches += 2; // for BOI and EOI token embeddings
+            } break;
+        case PROJECTOR_TYPE_PHI3_V:
+            {
+                n_patches = ctx->model.hparams.num_img_tokens;
             } break;
         default:
             GGML_ABORT("unsupported projector type");
@@ -4966,6 +5174,13 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_i32("pos_w", pos_data);
             } break;
+        case PROJECTOR_TYPE_PHI3_V:
+            {
+                // do nothing
+                // Phi-3 uses learned position embeddings which are added
+                // inside the graph (build_phi3v -> build_vit),
+                // so no external input tensors are needed.
+            } break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -5056,6 +5271,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];
+        case PROJECTOR_TYPE_PHI3_V:
+            return ctx->model.mm_2_b->ne[0]; // 3072
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -5082,6 +5299,10 @@ bool clip_is_llava(const struct clip_ctx * ctx) {
     return ctx->model.hparams.has_llava_projector;
 }
 
+// [NEW] Phi-3-Vision Helper Implementation
+bool clip_is_phi3v(const struct clip_ctx * ctx) {
+    return ctx->proj_type() == PROJECTOR_TYPE_PHI3_V;
+}
 bool clip_is_gemma3(const struct clip_ctx * ctx) {
     return ctx->proj_type() == PROJECTOR_TYPE_GEMMA3;
 }
@@ -5130,4 +5351,167 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
     batch->entries.push_back(clip_image_f32_ptr(audio));
     batch->is_audio = true;
+}
+
+static void clip_phi3_setup(clip_ctx * ctx) {
+    if (ctx->model.phi3_setup_done) return;
+
+    LOG_INF("%s: pre-computing Phi-3 special tokens...\n", __func__);
+
+    // Setup tiny graph
+    struct ggml_init_params params = { 1024*1024, NULL, true };
+    struct ggml_context * ctx0 = ggml_init(params);
+    struct ggml_cgraph * gf = ggml_new_graph(ctx0);
+
+    // Helper to build MLP graph for a single vector
+    auto build_mlp = [&](ggml_tensor* input) {
+        ggml_tensor* cur = ggml_mul_mat(ctx0, ctx->model.mm_0_w, input);
+        if (ctx->model.mm_0_b) {
+             ggml_tensor* b = ctx->model.mm_0_b;
+             cur = ggml_add(ctx0, cur, b);
+        }
+        cur = ggml_gelu(ctx0, cur);
+        cur = ggml_mul_mat(ctx0, ctx->model.mm_2_w, cur);
+        if (ctx->model.mm_2_b) {
+             ggml_tensor* b = ctx->model.mm_2_b;
+             cur = ggml_add(ctx0, cur, b);
+        }
+        return cur;
+    };
+
+    // 1. Project Global Separator (glb_GN)
+    ggml_tensor* res_glb = nullptr;
+    if (ctx->model.mm_glb_GN) {
+        res_glb = build_mlp(ctx->model.mm_glb_GN);
+        ggml_build_forward_expand(gf, res_glb);
+    }
+
+    // 2. Project Sub/Newline Separator (sub_GN)
+    ggml_tensor* res_sub = nullptr;
+    if (ctx->model.mm_sub_GN) {
+        res_sub = build_mlp(ctx->model.mm_sub_GN);
+        ggml_build_forward_expand(gf, res_sub);
+    }
+
+    ggml_backend_sched_reset(ctx->sched.get());
+    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+    ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
+
+    int dim = clip_n_mmproj_embd(ctx);
+
+    if (res_glb) {
+        ctx->model.phi3_proj_glb_GN.resize(dim);
+        ggml_backend_tensor_get(res_glb, ctx->model.phi3_proj_glb_GN.data(), 0, dim * sizeof(float));
+    }
+
+    if (res_sub) {
+        ctx->model.phi3_proj_sub_GN.resize(dim);
+        ggml_backend_tensor_get(res_sub, ctx->model.phi3_proj_sub_GN.data(), 0, dim * sizeof(float));
+    }
+
+    ggml_free(ctx0);
+    ggml_backend_sched_reset(ctx->sched.get());
+
+    ctx->model.phi3_setup_done = true;
+}
+
+bool clip_image_batch_encode_phi3(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec) {
+    if (!ctx || !imgs || !vec) return false;
+
+    clip_phi3_setup(ctx);
+
+    if (ctx->model.phi3_proj_sub_GN.empty() || ctx->model.phi3_proj_glb_GN.empty()) {
+        fprintf(stderr, "%s: Error - Phi-3 separators not initialized.\n", __func__);
+        return false;
+    }
+
+    const auto & entries = imgs->entries;
+    int n_crops = entries.size();
+
+    if (n_crops < 1) return false;
+
+    int dim = clip_n_mmproj_embd(ctx);
+
+    int w_crop = imgs->grid_x;
+    int h_crop = imgs->grid_y;
+    int n_sub_images = w_crop * h_crop;
+
+    if (n_sub_images > n_crops - 1) {
+        return false;
+    }
+
+    const int sub_crop_tokens = ctx->model.hparams.num_img_tokens;
+    const int grid_side = (int)sqrt(sub_crop_tokens); // Due to the 2 x 2 hd_transform
+
+    std::vector<float> crop_output(sub_crop_tokens * dim);
+
+    std::vector<float> all_local_crops;
+    if (n_sub_images > 0) {
+        all_local_crops.resize(n_sub_images * sub_crop_tokens * dim);
+    }
+
+    float* dest = vec;
+
+    for (int i = 0; i < n_sub_images; ++i) {
+
+        bool ok = clip_image_encode(ctx, n_threads, entries[i].get(), crop_output.data());
+        if (!ok) return false;
+
+        // Copy into the storage buffer linearly
+        memcpy(all_local_crops.data() + (i * sub_crop_tokens * dim),
+               crop_output.data(),
+               sub_crop_tokens * dim * sizeof(float));
+    }
+
+    if (n_sub_images > 0) {
+        for (int row_global = 0; row_global < h_crop * grid_side; ++row_global) {
+            int crop_y = row_global / grid_side;
+            int internal_y = row_global % grid_side;
+            for (int crop_x = 0; crop_x < w_crop; ++crop_x) {
+                int crop_idx = crop_y * w_crop + crop_x;
+
+                float* src = all_local_crops.data() +
+                             (crop_idx * sub_crop_tokens * dim) +
+                             (internal_y * grid_side * dim);
+
+                memcpy(dest, src, grid_side * dim * sizeof(float));
+                dest += (grid_side * dim);
+            }
+
+            if (!ctx->model.phi3_proj_sub_GN.empty()) {
+                memcpy(dest, ctx->model.phi3_proj_sub_GN.data(), dim * sizeof(float));
+            } else {
+                memset(dest, 0, dim * sizeof(float));
+            }
+            dest += dim;
+        }
+    }
+
+    if (!ctx->model.phi3_proj_glb_GN.empty()) {
+        memcpy(dest, ctx->model.phi3_proj_glb_GN.data(), dim * sizeof(float));
+    } else {
+        memset(dest, 0, dim * sizeof(float));
+    }
+    dest += dim;
+
+    {
+        bool ok = clip_image_encode(ctx, n_threads, entries.back().get(), crop_output.data());
+        if (!ok) return false;
+
+        float* src = crop_output.data();
+
+        for (int r = 0; r < grid_side; ++r) {
+            memcpy(dest, src, grid_side * dim * sizeof(float));
+            dest += (grid_side * dim);
+            src += (grid_side * dim);
+
+            if (!ctx->model.phi3_proj_sub_GN.empty()) {
+                memcpy(dest, ctx->model.phi3_proj_sub_GN.data(), dim * sizeof(float));
+            } else {
+                memset(dest, 0, dim * sizeof(float));
+            }
+            dest += dim;
+        }
+    }
+    return true;
 }
