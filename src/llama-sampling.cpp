@@ -1587,7 +1587,7 @@ static void llama_sampler_temp_free(struct llama_sampler * smpl) {
     delete (llama_sampler_temp *) smpl->ctx;
 }
 
-static void temp_sampling(
+static void llama_sampler_backend_temp_sampling(
         struct ggml_context       * ctx,
         struct ggml_cgraph        * gf,
         struct llama_sampler_data * data,
@@ -1597,8 +1597,32 @@ static void temp_sampling(
         struct ggml_tensor * max_idx = ggml_argmax(ctx, data->logits);
         ggml_set_name(max_idx, "temp_max_idx");
 
-        // Set the sampled token to the most probable token.
-        data->sampled = max_idx;
+        // Reshape to 2D and so we can use get_rows.
+        struct ggml_tensor * logits_2d = ggml_reshape_2d(ctx, data->logits, 1, data->logits->ne[0]);
+        ggml_set_name(logits_2d, "temp_logits_2d");
+        struct ggml_tensor * max_logit = ggml_get_rows(ctx, logits_2d, max_idx);
+        ggml_set_name(max_logit, "temp_max_logit");
+
+        // Subtract the max_logit from all logits.
+        struct ggml_tensor * diff = ggml_sub(ctx, data->logits, max_logit);
+        ggml_set_name(diff, "temp_diff");
+
+        // Add small epsilon to make max position strictly positive.
+        struct ggml_tensor * diff_eps = ggml_scale_bias(ctx, diff, 1.0f, 1e-6f);
+        ggml_set_name(diff_eps, "temp_diff_eps");
+
+        // Create the mask for the max logit.
+        struct ggml_tensor * mask = ggml_step(ctx, diff_eps);
+        ggml_set_name(mask, "temp_mask");
+
+        // Create the bias.
+        const float large_val = 1e9f;
+        struct ggml_tensor * bias = ggml_scale_bias(ctx, mask, large_val, -large_val);
+        ggml_set_name(bias, "temp_bias");
+
+        // Add the bias to the logits.
+        data->logits = ggml_add(ctx, data->logits, bias);
+        ggml_build_forward_expand(gf, data->logits);
         return;
     }
 
@@ -1618,7 +1642,7 @@ static void llama_sampler_temp_backend_apply(
         struct ggml_cgraph        * gf,
         struct llama_sampler_data * data) {
     auto * ctx_data = (llama_sampler_temp *) smpl->ctx;
-    temp_sampling(ctx, gf, data, ctx_data->temp);
+    llama_sampler_backend_temp_sampling(ctx, gf, data, ctx_data->temp);
 }
 
 static struct llama_sampler_i llama_sampler_temp_i = {
@@ -1750,7 +1774,7 @@ static void llama_sampler_temp_ext_backend_apply(
 
     // Revert to standard temperature scaling if delta or temp are non-positive.
     if (ctx_data->delta <= 0.0f || ctx_data->temp <= 0.0f) {
-        temp_sampling(ctx, gf, data, ctx_data->temp);
+        llama_sampler_backend_temp_sampling(ctx, gf, data, ctx_data->temp);
         return;
     }
 

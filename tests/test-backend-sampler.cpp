@@ -456,13 +456,17 @@ static void test_backend_temp_sampling(const char * model_path) {
 
         int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
 
-        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
-        GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
-
         float * logits = llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx);
-        GGML_ASSERT(logits == nullptr);
-        int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
-        GGML_ASSERT(n_logits == 0);
+        uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+        GGML_ASSERT(n_logits == (uint32_t) test_ctx.n_vocab);
+
+        std::vector<float> masked_logits;
+        for (size_t i = 0; i < n_logits; ++i) {
+            if (logits[i] <= -1e9f) {
+                masked_logits.push_back(logits[i]);
+            }
+        }
+        GGML_ASSERT(masked_logits.size() == (size_t) test_ctx.n_vocab - 1);
     };
 
     test_argmax_temp(0.0f);
@@ -531,22 +535,27 @@ static void test_backend_temp_ext_sampling(const char * model_path) {
 
         int32_t batch_idx = test_ctx.idx_for_seq(seq_id);
 
-        llama_token token = llama_get_sampled_token_ith(test_ctx.ctx, batch_idx);
+        float * logits = llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx);
+        uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
+        GGML_ASSERT(n_logits == (uint32_t) test_ctx.n_vocab);
 
-        if (temp <= 0.0f) {
-            GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
-            GGML_ASSERT(llama_get_sampled_logits_ith(test_ctx.ctx, batch_idx) == nullptr);
-            GGML_ASSERT(llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx) == 0);
+        std::vector<float> masked_logits;
+        for (size_t i = 0; i < n_logits; ++i) {
+            if (logits[i] <= -1e9f) {
+                masked_logits.push_back(logits[i]);
+            }
+        }
+        if (temp <= 0.0f && delta >= 0.0f) {
+            GGML_ASSERT(masked_logits.size() == (size_t) test_ctx.n_vocab - 1);
         } else {
-            GGML_ASSERT(token == LLAMA_TOKEN_NULL);
-            int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
-            GGML_ASSERT(n_logits == test_ctx.n_vocab);
+            printf("masked logits size: %zu\n", masked_logits.size());
+            GGML_ASSERT(masked_logits.size() == 0);
         }
     };
 
     test_argmax_temp(0.0f,  0.3f, 1.0f); // Greedy (temp=0)
     test_argmax_temp(-1.0f, 0.3f, 2.0f); // Greedy (temp<0)
-    test_argmax_temp(0.8f,  0.0f, 2.0f); // Temperature scaling (should have scaled logits)
+    test_argmax_temp(0.8f,  0.0f, 2.0f); // Temperature scaling
 
     printf("backend temp_ext sampling test PASSED\n");
 
