@@ -791,7 +791,7 @@ static void handle_media(
         SRV_INF("downloading image from '%s'\n", url.c_str());
         auto res = common_remote_get_content(url, params);
         if (200 <= res.first && res.first < 300) {
-            SRV_INF("downloaded %ld bytes\n", res.second.size());
+            SRV_INF("downloaded %zu bytes\n", res.second.size());
             raw_buffer data;
             data.insert(data.end(), res.second.begin(), res.second.end());
             out_files.push_back(data);
@@ -1044,6 +1044,9 @@ json oaicompat_chat_params_parse(
     llama_params["thinking_forced_open"]     = chat_params.thinking_forced_open;
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
+    }
+    if (!chat_params.parser.empty()) {
+        llama_params["chat_parser"] = chat_params.parser;
     }
 
     // Handle "n" field
