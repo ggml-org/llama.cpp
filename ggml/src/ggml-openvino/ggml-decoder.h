@@ -129,8 +129,6 @@ public:
 
     ggml_tensor * get_input_ggml_tensor(const std::string & name) const { return m_inputs.at(name); }
 
-    ggml_tensor * get_output_ggml_tensor(const std::string & name) const { return m_outputs.at(name); }
-
     virtual int get_op_case(int node_idx) const override { return m_node_info_list[node_idx].node_op_case; }
 
     virtual const std::map<std::string, std::shared_ptr<ov::Node>> & get_model_inputs() const override {
