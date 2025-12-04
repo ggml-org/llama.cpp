@@ -804,10 +804,6 @@ int32_t * GgmlOvDecoder::get_input_op_params(int node_idx, const std::string & n
     return m_node_info_list[node_idx].node_inputs.at(name)->op_params;
 }
 
-int32_t * GgmlOvDecoder::get_output_op_params(const std::string & name) const {
-    return m_outputs.at(name)->op_params;
-}
-
 int32_t * GgmlOvDecoder::get_output_op_params(int node_idx) const {
     return m_node_info_list[node_idx].node->op_params;
 }

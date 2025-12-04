@@ -113,8 +113,6 @@ public:
 
     virtual int32_t * get_input_op_params(int node_idx, const std::string & name) const override;
 
-    virtual int32_t * get_output_op_params(const std::string & name) const override;
-
     virtual int32_t * get_output_op_params(int node_idx) const override;
 
     virtual std::vector<std::string> get_output_names(int node_idx) const override;
