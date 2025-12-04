@@ -743,10 +743,6 @@ ov::PartialShape GgmlOvDecoder::get_input_shape(int node_idx, const std::string 
     return ov::PartialShape(get_shape(m_node_info_list[node_idx].node_inputs.at(name)));
 }
 
-std::vector<size_t> GgmlOvDecoder::get_input_stride(const std::string & name) const {
-    return get_stride(m_inputs.at(name));
-}
-
 std::vector<size_t> GgmlOvDecoder::get_input_stride(int node_idx, const std::string & name) const {
     return get_stride(m_node_info_list[node_idx].node_inputs.at(name));
 }

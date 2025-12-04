@@ -18,8 +18,6 @@ public:
 
     virtual PartialShape get_input_shape(int node_idx, const std::string& name) const = 0;
 
-    virtual std::vector<size_t> get_input_stride(const std::string& name) const = 0;
-
     virtual std::vector<size_t> get_input_stride(int node_idx, const std::string& name) const = 0;
 
     virtual element::Type get_input_type(const std::string& name) const = 0;
