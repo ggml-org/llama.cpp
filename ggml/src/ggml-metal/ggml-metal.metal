@@ -2020,8 +2020,6 @@ kernel void kernel_tri(
         device const char * dst,
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
-        ushort  sgitg[[simdgroup_index_in_threadgroup]],
-        ushort  tiisg[[thread_index_in_simdgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
     const int i3 = tgpig.z;
     const int i2 = tgpig.y;
