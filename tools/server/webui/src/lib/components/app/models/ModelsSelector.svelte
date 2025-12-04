@@ -18,11 +18,7 @@
 	import { ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { DialogModelInformation } from '$lib/components/app';
-	import {
-		MENU_MAX_WIDTH,
-		MENU_OFFSET,
-		VIEWPORT_GUTTER
-	} from '$lib/constants/floating-ui-constraints';
+	import { MENU_OFFSET, VIEWPORT_GUTTER } from '$lib/constants/floating-ui-constraints';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -256,7 +252,7 @@
 		}
 	}
 
-	function updateMenuPosition() {
+	async function updateMenuPosition() {
 		if (!isOpen || !triggerButton || !menuRef) return;
 
 		const triggerRect = triggerButton.getBoundingClientRect();
@@ -268,25 +264,15 @@
 		const scrollHeight = menuRef.scrollHeight;
 
 		const availableWidth = Math.max(0, viewportWidth - VIEWPORT_GUTTER * 2);
-		const safeMaxWidth = availableWidth > 0 ? availableWidth : MENU_MAX_WIDTH;
-		const desiredMinWidth = Math.min(160, safeMaxWidth || 160);
+		const safeMaxWidth = availableWidth || viewportWidth;
 
 		if (menuWidth === null) {
 			menuRef.style.width = '';
 			menuRef.style.maxWidth = '';
 
-			const idealWidth = Math.max(
-				triggerRect.width,
-				Math.min(menuRef.scrollWidth, safeMaxWidth),
-				400
-			);
-
-			menuWidth = Math.min(Math.max(idealWidth, desiredMinWidth), safeMaxWidth);
-		} else if (safeMaxWidth && menuWidth > safeMaxWidth) {
-			menuWidth = safeMaxWidth;
+			const idealWidth = Math.max(triggerRect.width, Math.min(menuRef.scrollWidth, safeMaxWidth));
+			menuWidth = Math.min(idealWidth, safeMaxWidth);
 		}
-
-		const width = menuWidth ?? desiredMinWidth;
 
 		const availableBelow = Math.max(
 			0,
@@ -337,14 +323,14 @@
 
 		const availableRight = viewportWidth - VIEWPORT_GUTTER;
 		const rightAligned = Math.min(triggerRect.right, availableRight);
-		let left = rightAligned - width;
-		const maxLeft = viewportWidth - VIEWPORT_GUTTER - width;
+		let left = rightAligned - menuWidth;
+		const maxLeft = viewportWidth - VIEWPORT_GUTTER - menuWidth;
 		left = Math.min(Math.max(left, VIEWPORT_GUTTER), Math.max(maxLeft, VIEWPORT_GUTTER));
 
 		menuPosition = {
 			top: Math.round(metrics.top),
 			left: Math.round(left),
-			width: Math.round(width),
+			width: Math.round(menuWidth),
 			placement: metrics.placement,
 			maxHeight: Math.round(metrics.maxHeight)
 		};
@@ -491,11 +477,11 @@
 					style:width={menuPosition ? `${menuPosition.width}px` : undefined}
 					data-placement={menuPosition?.placement ?? 'bottom'}
 				>
-					<div class="border-b bg-popover px-3 py-2">
+					<div class="px-3 py-2">
 						<label class="sr-only" for="model-search">Search models</label>
 						<input
 							id="model-search"
-							class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm transition focus:border-ring focus:outline-none"
+							class="h-9 w-full rounded-lg bg-muted px-3 text-sm outline-none placeholder:text-muted-foreground"
 							placeholder="Search models"
 							bind:value={searchTerm}
 							bind:this={searchInputRef}
@@ -504,7 +490,6 @@
 							type="search"
 						/>
 					</div>
-
 					<div
 						class="overflow-y-auto py-1"
 						style:max-height={menuPosition && menuPosition.maxHeight > 0
