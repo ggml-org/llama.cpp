@@ -1018,9 +1018,8 @@ static bool llama_sampler_dist_backend_init(
         ggml_tensor * op = ggml_cumsum(ctx, probs);
 
         auto * device = ggml_backend_buft_get_device(buft);
-        GGML_ASSERT(device);
 
-        if (!ggml_backend_dev_supports_op(device, op)) {
+        if (device && !ggml_backend_dev_supports_op(device, op)) {
             res = false;
         }
 
@@ -1099,7 +1098,6 @@ static void llama_sampler_dist_backend_apply(
         ggml_set_name(sampled_token, "dist_sampled_token");
     }
 
-    ggml_set_output(sampled_token);
     data->sampled = sampled_token;
 }
 
@@ -1192,9 +1190,8 @@ static bool llama_sampler_top_k_backend_init(
         ggml_tensor * op = ggml_top_k(ctx, logits, sctx->k);
 
         auto * device = ggml_backend_buft_get_device(buft);
-        GGML_ASSERT(device);
 
-        if (!ggml_backend_dev_supports_op(device, op)) {
+        if (device && !ggml_backend_dev_supports_op(device, op)) {
             res = false;
         }
 
@@ -1410,9 +1407,6 @@ static void llama_sampler_top_p_backend_apply(
 
     data->logits = ggml_add(ctx, sorted_logits, top_p_bias);
     ggml_set_name(data->logits, "top_p_logits");
-
-    ggml_set_output(data->candidates);
-    ggml_set_output(data->logits);
 
     GGML_UNUSED(gf);
 }

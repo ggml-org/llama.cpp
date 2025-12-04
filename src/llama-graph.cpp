@@ -2098,21 +2098,25 @@ void llm_graph_context::build_sampling() const {
         sampler->iface->backend_apply(sampler, ctx0, gf, &data);
 
         if (data.sampled != nullptr) {
+            ggml_set_output(data.sampled);
             res->t_sampled[seq_id] = data.sampled;
             ggml_build_forward_expand(gf, data.sampled);
         }
 
         if (data.probs != nullptr) {
+            ggml_set_output(data.probs);
             res->t_sampled_probs[seq_id] = data.probs;
             ggml_build_forward_expand(gf, data.probs);
         }
 
         if (data.logits != logits_seq) {
+            ggml_set_output(data.logits);
             res->t_sampled_logits[seq_id] = data.logits;
             ggml_build_forward_expand(gf, res->t_sampled_logits[seq_id]);
         }
 
         if (data.candidates != nullptr) {
+            ggml_set_output(data.candidates);
             res->t_candidates[seq_id] = data.candidates;
             ggml_build_forward_expand(gf, data.candidates);
         }
