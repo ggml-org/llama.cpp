@@ -85,29 +85,36 @@ json common_chat_msg::to_json_oaicompat() const
     return message;
 }
 
-std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const common_chat_msg & previous_msg, const common_chat_msg & new_msg) {
+std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const common_chat_msg & msg_prv, const common_chat_msg & msg_new) {
     std::vector<common_chat_msg_diff> diffs;
-    if (previous_msg.reasoning_content != new_msg.reasoning_content) {
-        auto & diff = diffs.emplace_back();
-        diff.reasoning_content_delta = string_diff(previous_msg.reasoning_content, new_msg.reasoning_content);
-    }
-    if (previous_msg.content != new_msg.content) {
-        auto & diff = diffs.emplace_back();
-        diff.content_delta = string_diff(previous_msg.content, new_msg.content);
+    if (msg_new.tool_calls.size() > msg_prv.tool_calls.size()) {
+        diffs.reserve(msg_new.tool_calls.size() - msg_prv.tool_calls.size() + 3);
+    } else {
+        diffs.reserve(3);
     }
 
-    if (new_msg.tool_calls.size() < previous_msg.tool_calls.size()) {
+    // TODO: these can become expensive for long messages - how to optimize?
+    if (msg_prv.reasoning_content != msg_new.reasoning_content) {
+        auto & diff = diffs.emplace_back();
+        diff.reasoning_content_delta = string_diff(msg_prv.reasoning_content, msg_new.reasoning_content);
+    }
+    if (msg_prv.content != msg_new.content) {
+        auto & diff = diffs.emplace_back();
+        diff.content_delta = string_diff(msg_prv.content, msg_new.content);
+    }
+
+    if (msg_new.tool_calls.size() < msg_prv.tool_calls.size()) {
         throw std::runtime_error("Invalid diff: now finding less tool calls!");
     }
 
-    if (!previous_msg.tool_calls.empty()) {
-        auto idx = previous_msg.tool_calls.size() - 1;
-        const auto & pref = previous_msg.tool_calls[idx];
-        const auto & newf = new_msg.tool_calls[idx];
+    if (!msg_prv.tool_calls.empty()) {
+        const auto idx = msg_prv.tool_calls.size() - 1;
+        const auto & pref = msg_prv.tool_calls[idx];
+        const auto & newf = msg_new.tool_calls[idx];
         if (pref.name != newf.name) {
             throw std::runtime_error("Invalid diff: tool call mismatch!");
         }
-        auto args_diff = string_diff(pref.arguments, newf.arguments);
+        const auto args_diff = string_diff(pref.arguments, newf.arguments);
         if (!args_diff.empty() || pref.id != newf.id) {
             auto & diff = diffs.emplace_back();
             diff.tool_call_index = idx;
@@ -118,11 +125,12 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
             diff.tool_call_delta.arguments = args_diff;
         }
     }
-    for (size_t idx = previous_msg.tool_calls.size(); idx < new_msg.tool_calls.size(); ++idx) {
+    for (size_t idx = msg_prv.tool_calls.size(); idx < msg_new.tool_calls.size(); ++idx) {
         auto & diff = diffs.emplace_back();
         diff.tool_call_index = idx;
-        diff.tool_call_delta = new_msg.tool_calls[idx];
+        diff.tool_call_delta = msg_new.tool_calls[idx];
     }
+
     return diffs;
 }
 

@@ -2279,7 +2279,7 @@ extern "C" {
             float                 stop,
             float                 step);
 
-#define GGML_KQ_MASK_PAD 64
+#define GGML_KQ_MASK_PAD 1
 
     // q:    [n_embd_k, n_batch,     n_head,    ne3 ]
     // k:    [n_embd_k, n_kv,        n_head_kv, ne3 ]
