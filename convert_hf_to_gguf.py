@@ -2344,10 +2344,12 @@ class LlamaModel(TextModel):
         local_template_file_path = self.dir_model / "chat_template.jinja"
 
         if self.is_mistral_format and local_template_file_path.exists():
-            # Ministral-3 models come with chat templates.
+            # Ministral-3 and other new Mistral models come with chat templates.
             # ref: https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512/tree/main
             logger.info("Using an existing Mistral local chat template.")
-            template_path = local_template_file_path
+
+            with open(local_template_file_path, "r", encoding="utf-8") as f:
+                template = f.read()
         elif not self.is_mistral_format or not self.disable_mistral_community_chat_template:
             template_dir = Path(__file__).parent / "models/templates/"
 
@@ -2357,15 +2359,12 @@ class LlamaModel(TextModel):
                     "Using a Mistral community chat template. These templates can be subject to errors in early days or weeks after a release. "
                     "Mistral recommends to use `mistral-common` to perform tokenization and detokenization."
                 )
-            template_path = MistralModel.get_community_chat_template_path(vocab, template_dir, self.is_mistral_format)
+            template = MistralModel.get_community_chat_template(vocab, template_dir, self.is_mistral_format)
         else:
             logger.info("Not using a Mistral local or community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
-            template_path = None
+            template = None
 
-        if template_path is not None:
-            with open(template_path, "r", encoding="utf-8") as f:
-                template = f.read()
-
+        if template is not None:
             self.gguf_writer.add_chat_template(template)
 
     def set_vocab(self):
@@ -9885,7 +9884,7 @@ class MistralModel(LlamaModel):
             self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     @staticmethod
-    def get_community_chat_template_path(vocab: MistralVocab, templates_dir: Path, is_mistral_format: bool):
+    def get_community_chat_template(vocab: MistralVocab, templates_dir: Path, is_mistral_format: bool):
         assert TokenizerVersion is not None and Tekkenizer is not None and SentencePieceTokenizer is not None, _mistral_import_error_msg
         assert isinstance(vocab.tokenizer, (Tekkenizer, SentencePieceTokenizer)), (
             f"Expected Tekkenizer or SentencePieceTokenizer, got {type(vocab.tokenizer)}"
@@ -9918,7 +9917,10 @@ class MistralModel(LlamaModel):
         if not template_path.exists():
             raise FileNotFoundError(f"Template file not found: {template_path}")
 
-        return template_path
+        with open(template_path, "r", encoding="utf-8") as f:
+            template = f.read()
+
+        return template
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
