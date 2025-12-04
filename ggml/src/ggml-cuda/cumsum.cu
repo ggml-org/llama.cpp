@@ -6,15 +6,15 @@
 
 #ifdef GGML_CUDA_USE_CUB
 #   include <cub/device/device_scan.cuh>
-#endif
+#endif // GGML_CUDA_USE_CUB
 
 template<typename T, int BLOCK_SIZE>
 static __global__ void cumsum_cub_kernel(
-    const T* __restrict__ src,
-    T* __restrict__ dst,
-    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-    const int64_t nb01, const int64_t nb02, const int64_t nb03,
-    const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
+        const T * __restrict__ src,
+        T * __restrict__ dst,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+        const int64_t nb01, const int64_t nb02, const int64_t nb03,
+        const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
 #ifdef GGML_CUDA_USE_CUB
     using BlockScan = cub::BlockScan<T, BLOCK_SIZE>;
 
@@ -31,8 +31,8 @@ static __global__ void cumsum_cub_kernel(
         return;
     }
 
-    const T* src_row = src + i1 * nb01 + i2 * nb02 + i3 * nb03;
-    T*       dst_row = dst + i1 * nb1  + i2 * nb2  + i3 * nb3;
+    const T * src_row = src + i1 * s01 + i2 * s02 + i3 * s03;
+    T *       dst_row = dst + i1 * s1  + i2 * s2  + i3 * s3;
 
     if (tid == 0) {
         block_carry = 0;
@@ -66,7 +66,7 @@ static __global__ void cumsum_cub_kernel(
     }
 #else
     NO_DEVICE_CODE;
-#endif
+#endif // GGML_CUDA_USE_CUB
 }
 
 // Fallback kernel implementation (original)
@@ -86,10 +86,10 @@ static __global__ void cumsum_kernel(
     const int warps_per_block = blockDim.x / warp_size;
 
     extern __shared__ float smem[];
-    float* s_vals = smem;
-    float* s_warp_sums = smem + blockDim.x;
-    float* s_carry = smem + blockDim.x + warps_per_block;
-    float* s_chunk_total = s_carry + 1;
+    float * s_vals = smem;
+    float * s_warp_sums = smem + blockDim.x;
+    float * s_carry = smem + blockDim.x + warps_per_block;
+    float * s_chunk_total = s_carry + 1;
 
     // Initialize carry
     if (tid == 0) {
@@ -151,11 +151,11 @@ static __global__ void cumsum_kernel(
 
 template<typename T>
 static void cumsum_cuda(
-    const T * src, T * dst,
-    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-    const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
-    const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3,
-    cudaStream_t stream) {
+        const T * src, T * dst,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+        const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
+        const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3,
+        cudaStream_t stream) {
 
     const size_t type_size = sizeof(T);
     bool use_cub = false;

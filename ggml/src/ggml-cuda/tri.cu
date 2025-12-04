@@ -5,10 +5,10 @@
 
 template<typename T, bool prefix_keep, int add_to_split>
 static __global__ void tri_kernel(
-    const T * src, T * dst,
-    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-    const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
-    const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
+        const T * src, T * dst,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+        const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
+        const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
     const int64_t i3 = blockIdx.z;
     const int64_t i2 = blockIdx.y;
     const int64_t i1 = blockIdx.x;
@@ -42,12 +42,12 @@ static __global__ void tri_kernel(
 
 template<typename T>
 static void tri_cuda(
-    const T * src, T * dst,
-    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-    const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
-    const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3,
-    const ggml_tri_type ttype,
-    cudaStream_t stream) {
+        const T * src, T * dst,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+        const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
+        const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3,
+        const ggml_tri_type ttype,
+        cudaStream_t stream) {
 
     dim3 block_dims(CUDA_TRI_BLOCK_SIZE, 1, 1);
     dim3 grid_dims(ne01, ne02, ne03);
