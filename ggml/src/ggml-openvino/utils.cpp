@@ -480,9 +480,9 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
         // This case is added to make test-backend-ops work
         input_shape = ggml_decoder->get_shape(ggml_tensor->view_src);
     } else {
-        input_shape = ggml_decoder->get_input_shape(name).to_shape();
+        input_shape =  ggml_decoder->get_shape(ggml_tensor);
     }
-    auto input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), input_shape, input_data);
+    auto input_tensor = ov::Tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape, input_data);
     return input_tensor;
 }
 }  // namespace
@@ -506,7 +506,7 @@ ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml
         (op->op == GGML_OP_SET_ROWS && op->src[1] == ggml_tensor)) {
         assert(ggml_tensor->ne[0] == 1);
         ov::Shape input_shape = {1, 1, 1, 1};
-        ov::Tensor input_tensor(ggml_decoder->get_input_type(param_name), input_shape);
+        ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
         if (ggml_tensor->type == GGML_TYPE_I32) {
             *input_tensor.data<int32_t>() = *((int32_t *) ggml_tensor->data);
         } else if (ggml_tensor->type == GGML_TYPE_I64) {
@@ -519,7 +519,7 @@ ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml
 
     if (param_name == "inp_out_ids") {
         ov::Shape input_shape = {1, 1, 1, 1};
-        ov::Tensor input_tensor(ggml_decoder->get_input_type(param_name), input_shape);
+        ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
         int32_t inp_out_id = *((int32_t *) ggml_tensor->data);
         assert(ggml_tensor->ne[0] == 1);
         assert(inp_out_id == 0);
@@ -553,7 +553,7 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
     if (param_name == "inp_pos" || param_name == "inp_tokens" ||
         (op->op == GGML_OP_SET_ROWS && op->src[1] == ggml_tensor)) {
         ov::Shape input_shape = {1, 1, 1, chunk_size};
-        ov::Tensor input_tensor(ggml_decoder->get_input_type(param_name), input_shape);
+        ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
         // copy the chunk_index-th chunk from ggml_tensor
         size_t element_size = ggml_type_size(ggml_tensor->type);
         void * input_data = (char *) ggml_tensor->data + chunk_index * chunk_size * element_size;
@@ -581,7 +581,7 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
     if (param_name == "inp_out_ids") {
         size_t output_len = ggml_decoder->get_compute_params().output_len;
         ov::Shape input_shape = {1, 1, 1, output_len};
-        ov::Tensor input_tensor(ggml_decoder->get_input_type(param_name), input_shape);
+        ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
         if (ggml_tensor->ne[0] == 0) {
             *input_tensor.data<int32_t>() = 0;
         } else {

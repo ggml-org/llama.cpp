@@ -747,10 +747,6 @@ std::vector<size_t> GgmlOvDecoder::get_input_stride(int node_idx, const std::str
     return get_stride(m_node_info_list[node_idx].node_inputs.at(name));
 }
 
-ov::element::Type GgmlOvDecoder::get_input_type(const std::string & name) const {
-    return get_ov_type(m_inputs.at(name));
-}
-
 ov::element::Type GgmlOvDecoder::get_input_type(int node_idx, const std::string & name) const {
     return get_ov_type(m_node_info_list[node_idx].node_inputs.at(name));
 }
