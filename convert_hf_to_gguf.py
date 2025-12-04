@@ -88,7 +88,7 @@ class ModelBase:
     is_big_endian: bool
     endianess: gguf.GGUFEndian
     use_temp_file: bool
-    temp_dir: str | None
+    temp_dir: Path | None
     lazy: bool
     dry_run: bool
     hparams: dict[str, Any]
