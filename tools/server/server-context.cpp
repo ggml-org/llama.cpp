@@ -55,6 +55,13 @@ enum server_state {
     SERVER_STATE_READY,          // Server is ready and model is loaded
 };
 
+enum reasoning_state {
+    REASONING_STATE_NONE,
+    REASONING_STATE_REASONING,
+    REASONING_STATE_PENDING_FORCE_CLOSE,
+    REASONING_STATE_FINISHED,
+};
+
 static bool server_task_type_need_embd(server_task_type task_type) {
     switch (task_type) {
         case SERVER_TASK_TYPE_EMBEDDING:
@@ -120,8 +127,7 @@ struct server_slot {
 
     // reasoning budget tracking
     int32_t n_reasoning_tokens    = 0;  // number of tokens generated while in reasoning/thinking mode
-    bool    in_reasoning          = false;  // true if we're currently generating reasoning/thinking content
-    bool    reasoning_close_pending = false; // true while we are injecting a forced closing tag
+    reasoning_state reasoning     = REASONING_STATE_NONE; // are we currently in reasoning mode
     std::string reasoning_end_tag;  // the closing tag to inject when budget is exceeded (e.g., "</think>")
     std::deque<llama_token> forced_tokens;  // tokens we must feed back to the model (e.g., forced </think>)
 
@@ -203,8 +209,7 @@ struct server_slot {
 
         // reset reasoning budget tracking
         n_reasoning_tokens    = 0;
-        in_reasoning          = false;
-        reasoning_close_pending = false;
+        reasoning          = REASONING_STATE_NONE;
         reasoning_end_tag     = "";
         forced_tokens.clear();
 
@@ -1072,11 +1077,10 @@ struct server_context_impl {
 
         // Initialize reasoning tracking
         slot.forced_tokens.clear();
-        slot.reasoning_close_pending = false;
         slot.n_reasoning_tokens = 0;
 
         const bool thinking_forced_open = slot.task->params.oaicompat_chat_syntax.thinking_forced_open;
-        slot.in_reasoning = thinking_forced_open;
+        slot.reasoning = thinking_forced_open ? REASONING_STATE_REASONING : REASONING_STATE_NONE;
 
         if (thinking_forced_open) {
             slot.reasoning_end_tag = kReasoningThinkMarkers.front().second;
@@ -1161,75 +1165,74 @@ struct server_context_impl {
             SLT_DBG(slot, "stopped by limit, n_decoded = %d, n_predict = %d\n", slot.n_decoded, slot.task->params.n_predict);
         }
 
-        const int32_t reasoning_budget = (slot.task && slot.task->params.reasoning_budget_override.has_value())
-            ? slot.task->params.reasoning_budget_override.value()
-            : params_base.reasoning_budget;
+        const int32_t reasoning_budget = (slot.task ? slot.task->params.reasoning_budget : params_base.reasoning_budget);
 
         // check reasoning budget limit
         // Track reasoning tokens when we're inside thinking blocks (<think>...</think> or similar)
         // When the budget is exceeded we enqueue the closing tag tokens so they get sent to the client
         // and fed back into the model before continuing normal generation
-        if (slot.has_next_token && reasoning_budget > 0) {
+        if (slot.has_next_token && reasoning_budget > 0 && slot.reasoning != REASONING_STATE_FINISHED)  {
             // Check if we've entered or exited reasoning mode
-            for (const auto & [start_tag, end_tag] : kReasoningThinkMarkers) {
-                size_t start_pos = slot.generated_text.rfind(start_tag);
-                size_t end_pos   = slot.generated_text.rfind(end_tag);
-
-                if (start_pos == std::string::npos) {
-                    continue;
-                }
-
-                if (end_pos != std::string::npos && end_pos > start_pos) {
-                    // Reasoning block closed (naturally or after we injected the close tag)
-                    if (slot.in_reasoning || slot.reasoning_close_pending) {
-                        slot.in_reasoning           = false;
-                        slot.reasoning_close_pending = false;
-                        slot.reasoning_end_tag.clear();
+            if (slot.reasoning == REASONING_STATE_NONE) {
+                for (const auto & [start_tag, end_tag] : kReasoningThinkMarkers) {
+                    size_t start_pos = slot.generated_text.rfind(start_tag);
+                    if (start_pos != std::string::npos) {
+                        SLT_DBG(slot, "detected reasoning start with '%s'\n", start_tag);
+                        slot.reasoning = REASONING_STATE_REASONING;
+                        slot.reasoning_end_tag = end_tag;
                         slot.n_reasoning_tokens = 0;
+                        break;
                     }
-                } else if (!slot.in_reasoning && !slot.reasoning_close_pending) {
-                    // Start tag without matching end tag -> enter reasoning mode
-                    slot.in_reasoning = true;
-                    slot.reasoning_end_tag = end_tag;
-                    slot.n_reasoning_tokens = 0;
                 }
-            }
+            } else if (slot.reasoning == REASONING_STATE_REASONING) {
+                size_t end_pos = slot.generated_text.rfind(slot.reasoning_end_tag);
+                if (end_pos != std::string::npos) {
+                    SLT_DBG(slot, "detected reasoning end with '%s'\n", slot.reasoning_end_tag.c_str());
+                    slot.reasoning = REASONING_STATE_FINISHED;
+                    slot.n_reasoning_tokens = 0;
+                } else {
+                    // If actively reasoning (and we haven't already scheduled a forced close) count this token
+                    slot.n_reasoning_tokens++;
 
-            // If actively reasoning (and we haven't already scheduled a forced close) count this token
-            if (slot.in_reasoning && !slot.reasoning_close_pending) {
-                slot.n_reasoning_tokens++;
+                    if (slot.n_reasoning_tokens >= reasoning_budget) {
+                            SLT_INF(slot, "reasoning budget exceeded, forcing close with '%s', n_reasoning_tokens = %d, reasoning_budget = %d\n",
+                                slot.reasoning_end_tag.c_str(), slot.n_reasoning_tokens, reasoning_budget);
 
-                if (slot.n_reasoning_tokens >= reasoning_budget) {
-                        SLT_INF(slot, "reasoning budget exceeded, forcing close with '%s', n_reasoning_tokens = %d, reasoning_budget = %d\n",
-                            slot.reasoning_end_tag.c_str(), slot.n_reasoning_tokens, reasoning_budget);
+                        auto fail_close = [&](const char * reason) {
+                            SLT_WRN(slot, "failed to inject reasoning close tag (%s) -> stopping generation\n", reason);
+                            slot.stop           = STOP_TYPE_LIMIT;
+                            slot.has_next_token = false;
+                        };
 
-                    auto fail_close = [&](const char * reason) {
-                        SLT_WRN(slot, "failed to inject reasoning close tag (%s) -> stopping generation\n", reason);
-                        slot.stop           = STOP_TYPE_LIMIT;
-                        slot.has_next_token = false;
-                    };
+                        if (slot.reasoning_end_tag.empty()) {
+                            fail_close("no closing tag detected");
+                        } else {
+                            const std::string forced_injection = kReasoningForcedEndMessage + slot.reasoning_end_tag;
 
-                    if (slot.reasoning_end_tag.empty()) {
-                        fail_close("no closing tag detected");
-                    } else {
-                        const std::string forced_injection = kReasoningForcedEndMessage + slot.reasoning_end_tag;
+                            llama_tokens closing_tokens;
+                            try {
+                                closing_tokens = common_tokenize(ctx, forced_injection, /*add_special=*/false, /*parse_special=*/true);
+                            } catch (const std::exception & err) {
+                                SLT_WRN(slot, "tokenization error while forcing reasoning close: %s\n", err.what());
+                                fail_close("tokenization error");
+                                closing_tokens.clear();
+                            }
 
-                        llama_tokens closing_tokens;
-                        try {
-                            closing_tokens = common_tokenize(ctx, forced_injection, /*add_special=*/false, /*parse_special=*/true);
-                        } catch (const std::exception & err) {
-                            SLT_WRN(slot, "tokenization error while forcing reasoning close: %s\n", err.what());
-                            fail_close("tokenization error");
-                            closing_tokens.clear();
-                        }
-
-                        if (!closing_tokens.empty()) {
-                            slot.forced_tokens.insert(slot.forced_tokens.end(), closing_tokens.begin(), closing_tokens.end());
-                            slot.reasoning_close_pending = true;
-                        } else if (slot.has_next_token) {
-                            fail_close("closing tag produced no tokens");
+                            if (!closing_tokens.empty()) {
+                                slot.forced_tokens.insert(slot.forced_tokens.end(), closing_tokens.begin(), closing_tokens.end());
+                                slot.reasoning = REASONING_STATE_PENDING_FORCE_CLOSE;
+                            } else if (slot.has_next_token) {
+                                fail_close("closing tag produced no tokens");
+                            }
                         }
                     }
+                }
+            } else if (slot.reasoning == REASONING_STATE_PENDING_FORCE_CLOSE) {
+                // We've already scheduled the forced close, wait until it's done
+                if (slot.forced_tokens.empty()) {
+                    SLT_DBG(slot, "completed forced reasoning close with '%s'\n", slot.reasoning_end_tag.c_str());
+                    slot.reasoning = REASONING_STATE_FINISHED;
+                    slot.n_reasoning_tokens = 0;
                 }
             }
         }

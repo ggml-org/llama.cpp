@@ -137,11 +137,8 @@ json task_params::to_json(bool only_metrics) const {
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
         {"lora",                      lora},
+        {"thinking_budget_tokens",     reasoning_budget},
     };
-
-    if (reasoning_budget_override.has_value()) {
-        res["thinking_budget_tokens"] = reasoning_budget_override.value();
-    }
 
     return res;
 }
@@ -185,9 +182,7 @@ task_params server_task::params_from_json_cmpl(
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
     params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
 
-    if (data.contains("thinking_budget_tokens")) {
-        params.reasoning_budget_override = json_value(data, "thinking_budget_tokens", params_base.reasoning_budget);
-    }
+    params.reasoning_budget = json_value(data, "thinking_budget_tokens", params_base.reasoning_budget);
 
     params.sampling.top_k              = json_value(data, "top_k",               defaults.sampling.top_k);
     params.sampling.top_p              = json_value(data, "top_p",               defaults.sampling.top_p);
