@@ -679,7 +679,7 @@ void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor
     }
 }
 
-void print_output_tensor_info(const std::string & name, const ov::Tensor & tensor, void * output_dst) {
+void print_output_tensor_info(const std::string & name, const ov::Tensor & tensor, const void * output_dst) {
     std::cout << "Output name: " << name << ", Output shape: " << tensor.get_shape() << ", Address: " << output_dst
               << std::endl;
 
