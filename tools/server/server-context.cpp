@@ -39,7 +39,7 @@ static const std::vector<std::pair<std::string, std::string>> kReasoningThinkMar
     {"<|START_THINKING|>", "<|END_THINKING|>"},
 };
 
-static const std::string kReasoningForcedEndMessage = "… I now conclude my reasoning and will provide the final answer.";
+static const std::string kReasoningForcedEndMessage = "... I now conclude my reasoning and will provide the final answer.";
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
@@ -1200,8 +1200,8 @@ struct server_context_impl {
                 slot.n_reasoning_tokens++;
 
                 if (slot.n_reasoning_tokens >= reasoning_budget) {
-                    SLT_INF(slot, "reasoning budget exceeded, forcing close with '%s', n_reasoning_tokens = %d, reasoning_budget = %d\n",
-                            (kReasoningForcedEndMessage + slot.reasoning_end_tag).c_str(), slot.n_reasoning_tokens, reasoning_budget);
+                        SLT_INF(slot, "reasoning budget exceeded, forcing close with '%s', n_reasoning_tokens = %d, reasoning_budget = %d\n",
+                            slot.reasoning_end_tag.c_str(), slot.n_reasoning_tokens, reasoning_budget);
 
                     auto fail_close = [&](const char * reason) {
                         SLT_WRN(slot, "failed to inject reasoning close tag (%s) -> stopping generation\n", reason);
@@ -1212,9 +1212,11 @@ struct server_context_impl {
                     if (slot.reasoning_end_tag.empty()) {
                         fail_close("no closing tag detected");
                     } else {
+                        const std::string forced_injection = kReasoningForcedEndMessage + slot.reasoning_end_tag;
+
                         llama_tokens closing_tokens;
                         try {
-                            closing_tokens = common_tokenize(ctx, kReasoningForcedEndMessage + slot.reasoning_end_tag , /*add_special=*/false, /*parse_special=*/true);
+                            closing_tokens = common_tokenize(ctx, forced_injection, /*add_special=*/false, /*parse_special=*/true);
                         } catch (const std::exception & err) {
                             SLT_WRN(slot, "tokenization error while forcing reasoning close: %s\n", err.what());
                             fail_close("tokenization error");
