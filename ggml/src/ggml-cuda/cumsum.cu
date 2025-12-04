@@ -81,7 +81,7 @@ static __global__ void cumsum_kernel(
 
     const int tid = threadIdx.x;
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    const int lane = tid & (warp_size - 1);
+    const int lane = tid % warp_size;
     const int warp = tid / warp_size;
     const int warps_per_block = blockDim.x / warp_size;
 
