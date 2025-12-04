@@ -88,7 +88,7 @@ json task_params::to_json(bool only_metrics) const {
         grammar_triggers.push_back(ct.to_json());
     }
 
-    json res = {
+    return json {
         {"seed",                      sampling.seed},
         {"temperature",               sampling.temp},
         {"dynatemp_range",            sampling.dynatemp_range},
@@ -139,8 +139,6 @@ json task_params::to_json(bool only_metrics) const {
         {"lora",                      lora},
         {"thinking_budget_tokens",     reasoning_budget},
     };
-
-    return res;
 }
 
 //

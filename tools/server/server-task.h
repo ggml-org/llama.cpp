@@ -6,7 +6,6 @@
 #include <string>
 #include <unordered_set>
 #include <list>
-#include <optional>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"

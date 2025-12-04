@@ -1177,7 +1177,7 @@ struct server_context_impl {
                 for (const auto & [start_tag, end_tag] : kReasoningThinkMarkers) {
                     size_t start_pos = slot.generated_text.rfind(start_tag);
                     if (start_pos != std::string::npos) {
-                        SLT_DBG(slot, "detected reasoning start with '%s'\n", start_tag);
+                        SLT_DBG(slot, "detected reasoning start with '%s'\n", start_tag.c_str());
                         slot.reasoning = REASONING_STATE_REASONING;
                         slot.reasoning_end_tag = end_tag;
                         slot.n_reasoning_tokens = 0;
