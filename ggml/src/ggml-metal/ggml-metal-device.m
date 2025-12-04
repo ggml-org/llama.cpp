@@ -1233,6 +1233,8 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
         return NULL;
     }
 
+    [res->queue addResidencySet:res->rset];
+
     //ggml_metal_log_allocated_size(device, size_aligned);
 
     return res;
@@ -1329,10 +1331,14 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
         return NULL;
     }
 
+    [res->queue addResidencySet:res->rset];
+
     return res;
 }
 
 void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
+    [buf->queue removeResidencySet:buf->rset];
+
     for (int i = 0; i < buf->n_buffers; i++) {
         [buf->buffers[i].metal release];
     }
