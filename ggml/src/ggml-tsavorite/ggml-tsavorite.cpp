@@ -24,6 +24,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "ggml.h"
+#include "tsi-rt/TXEDeviceConfig.h"
 #include "HostShimCAPI.h"
 #include "tsi-rt/utils/Profiler.h"
 
@@ -415,6 +416,45 @@ static void _mlir_ciface_txe_mult_test (void *src0, void *src1, void *res)
         n[i] = s0[i]*s1[i];
     return;
 }
+static void _mlir_ciface_txe_add_host_new(void *a, void *b, void *res) {
+    TSI_DeviceIdType deviceId = 0;
+
+    struct VecAddArgs {
+        TSI_SharedMemoryAddr lhsVecShmemHandle;
+        TSI_SharedMemoryAddr rhsVecShmemHandle;
+        TSI_SharedMemoryAddr resultVecShmemHandle;
+    };
+
+    void *loadResult = tsi_load_blob(
+                           ("txe_add").c_str(),
+                           ("/proj/work/akapoor/dec3-llama.cpp/llama.cpp/ggml-tsi-kernel/posix-kernel/build-posix/txe_add/blobs/txe_add").c_str());
+
+    BlobDescriptor *blobDescriptor = static_cast<BlobDescriptor *>(loadResult);
+    // Create the command list for the blob execute command
+    void *commandList = tsi_create_command_list(deviceId);
+
+    // Pack the arguments
+    void *argsShmemPtr = tsi_alloc(sizeof(VecAddArgs));
+    VecAddArgs *args = static_cast<VecAddArgs *>(argsShmemPtr);
+
+    args->lhsVecShmemHandle = tsi_shmem_handle_from_ptr(a);
+    args->rhsVecShmemHandle = tsi_shmem_handle_from_ptr(b);
+    args->resultVecShmemHandle = tsi_shmem_handle_from_ptr(c);
+
+    void *blobExecuteCmd = tsi_launch_blob(blobDescriptor, /*packedArgs*/
+                                     tsi_shmem_handle_from_ptr(argsShmemPtr));
+    auto *blobExecuteCmdPtr = static_cast<Command *>(blobExecuteCmd);
+    tsi_add_command_to_list(commandList, blobExecuteCmd);
+
+    // This enqueues the command into the command list for the device
+    tsi_finalize_command_list(commandList);
+
+    // Wait for the TXE device to finish
+    tsi_wait(commandList);
+
+    tsi_unload_blob(blobDescriptor);
+    return;
+}
 
 static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_type kernel_type) {
   txe_compute_pipeline_state_s kernel_pipeline =
@@ -432,7 +472,7 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           if (ggml_tsavorite_kernel_mode_flag == GGML_TSAVORITE_KERNEL_MODE_CPU)
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_test;
           else {
-              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_host;
+              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] = &_mlir_ciface_txe_add_host_new;
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F16_INDEX] = &_mlir_ciface_txe_add_16_host;
 	  }
           kernel_pipeline->kernel_name = "TXE_ADD";

@@ -10,7 +10,7 @@
 set -e
 
 export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.2
-export TOOLBOX_DIR=${MLIR_SDK_VERSION}/toolbox/build/install
+#export TOOLBOX_DIR=${MLIR_SDK_VERSION}/toolbox/build/install
 pip install --upgrade pip
 pip install torch==2.7.0
 pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
@@ -22,7 +22,7 @@ git submodule update --recursive --init
 cd ggml-tsi-kernel/
 #module load gcc/13.3.0
 echo 'creating python virtual env'
-/proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
+/proj/local/Python-3.11.12/bin/python3 -m venv blob-creation
 source blob-creation/bin/activate
 echo 'installing mlir and python dependencies'
 pip install --upgrade pip
