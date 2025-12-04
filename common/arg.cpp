@@ -3208,5 +3208,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
+    // Phi3-5 Vision num_crops
+    add_opt(common_arg(
+        {"--num-crops"}, "N",
+        string_format("number of crops for Phi-3-Vision image processing (default: loaded from model"),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::runtime_error("num_crops must be positive");
+            }
+            params.num_crops = value;
+        }
+    ));
+
     return ctx_arg;
 }

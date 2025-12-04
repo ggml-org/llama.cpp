@@ -39,10 +39,11 @@
 #define KEY_FEATURE_LAYER       "clip.vision.feature_layer"
 #define KEY_PROJ_SCALE_FACTOR   "clip.vision.projector.scale_factor"
 #define KEY_SPATIAL_MERGE_SIZE  "clip.vision.spatial_merge_size"
-#define KEY_PHI3_HD_ORDER         "clip.vision.hd_transform_order"
-#define KEY_PHI3_NUM_IMG_TOKENS   "clip.vision.num_img_tokens"
-#define KEY_PHI3_USE_HD           "clip.vision.use_hd_transform"
-#define KEY_PHI3_WITH_SEP         "clip.vision.with_learnable_separator"
+#define KEY_PHI3_HD_ORDER       "clip.vision.hd_transform_order"
+#define KEY_PHI3_NUM_IMG_TOKENS "clip.vision.num_img_tokens"
+#define KEY_PHI3_NUM_CROPS      "clip.vision.num_crops"
+#define KEY_PHI3_USE_HD         "clip.vision.use_hd_transform"
+#define KEY_PHI3_WITH_SEP       "clip.vision.with_learnable_separator"
 #define KEY_IS_DEEPSTACK_LAYERS "clip.vision.is_deepstack_layers"
 
 #define KEY_MM_PATCH_MERGE_TYPE   "clip.vision.mm_patch_merge_type"
@@ -92,7 +93,6 @@
 #define TN_IMAGE_NEWLINE   "model.image_newline"
 #define TN_PHI3_GLB_GN      "v.glb_GN" // phi3v
 #define TN_PHI3_SUB_GN      "v.sub_GN" // phi3v
-#define TN_PHI3_PROJ_MLP    "mm.phi3_mlp.%d.%s" // phi3v
 #define TN_MM_INP_NORM     "mm.input_norm.weight"
 #define TN_MM_INP_NORM_B   "mm.input_norm.bias"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3

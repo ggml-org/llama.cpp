@@ -294,6 +294,12 @@ class Keys:
         USE_SILU            = "clip.use_silu"
         N_WA_PATTERN        = "clip.vision.n_wa_pattern" # used by qwen2.5vl
         IS_DEEPSTACK_LAYERS = "clip.vision.is_deepstack_layers"
+        NUM_IMAGE_TOKENS    = "clip.vision.num_img_tokens" # phi3v
+        USE_HD_TRANSFORM    = "clip.vision.use_hd_transform" # phi3v
+        WITH_LEARNABLE_SEPERATOR = "clip.vision.with_learnable_separator" # phi3v
+        HD_TRANSFORM_ORDER  = "clip.vision.hd_transform_order" # phi3v
+        NUM_CROPS           = "clip.vision.num_crops" # phi3v
+        IMAGE_DIM_OUT       = "clip.vision.image_dim_out" # phi3v
 
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
@@ -458,6 +464,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
     GEMMA3    = auto()
     QWEN3VL   = auto()
     COGVLM    = auto()
+    PHI3V     = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -685,6 +692,8 @@ class MODEL_TENSOR(IntEnum):
     V_MM_GATE            = auto() # cogvlm
     V_TOK_BOI            = auto() # cogvlm
     V_TOK_EOI            = auto() # cogvlm
+    V_ENC_GLB_GN         = auto() # phi3v
+    V_ENC_SUB_GN         = auto() # phi3v
     # audio (mtmd)
     A_ENC_EMBD_POS       = auto()
     A_ENC_CONV1D         = auto()
@@ -830,6 +839,7 @@ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
     VISION_PROJECTOR_TYPE.GLM_EDGE:  "adapter",
     VISION_PROJECTOR_TYPE.MERGER:    "qwen2vl_merger",
     VISION_PROJECTOR_TYPE.GEMMA3:    "gemma3",
+    VISION_PROJECTOR_TYPE.PHI3V:     "phi3_v"
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -1057,6 +1067,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
     MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
     MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
+    MODEL_TENSOR.V_ENC_GLB_GN:              "v.glb_GN", # phi3v
+    MODEL_TENSOR.V_ENC_SUB_GN:              "v.sub_GN", # phi3v
     # audio (mtmd)
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
     MODEL_TENSOR.A_ENC_CONV1D:              "a.conv1d.{bid}",
@@ -1135,6 +1147,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MM_GATE,
         MODEL_TENSOR.V_TOK_BOI,
         MODEL_TENSOR.V_TOK_EOI,
+        MODEL_TENSOR.V_ENC_GLB_GN, # Specific to Phi3V
+        MODEL_TENSOR.V_ENC_SUB_GN, # Specific to Phi3V
         # audio
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_CONV1D,
@@ -3327,6 +3341,7 @@ class VisionProjectorType:
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"
+    PHI3V     = "phi3_v"
 
 
 # Items here are (block size, type size)

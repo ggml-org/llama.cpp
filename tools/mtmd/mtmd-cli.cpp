@@ -73,6 +73,7 @@ struct mtmd_cli_context {
     common_sampler    * smpl;
     llama_batch         batch;
     int                 n_batch;
+    int                 n_crops;
 
     mtmd::bitmaps bitmaps;
 
@@ -96,6 +97,7 @@ struct mtmd_cli_context {
         n_threads = params.cpuparams.n_threads;
         batch = llama_batch_init(1, 0, 1); // batch for next token generation
         n_batch = params.n_batch;
+        n_crops = params.num_crops;
 
         if (!model || !lctx) {
             exit(1);
@@ -139,6 +141,7 @@ struct mtmd_cli_context {
         mparams.warmup           = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
+        mparams.num_crops        = params.num_crops;
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);

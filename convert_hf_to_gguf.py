@@ -1603,7 +1603,10 @@ class MmprojModel(ModelBase):
                 self.preprocessor_config = {**self.preprocessor_config, **cfg}
 
     def get_vision_config(self) -> dict[str, Any] | None:
+
         config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
+        if self.hparams.get("architectures")[0] == "Phi3VForCausalLM":
+            config_name = "img_processor"
         return self.global_config.get(config_name)
 
     def get_audio_config(self) -> dict[str, Any] | None:
@@ -4509,7 +4512,7 @@ class Phi2Model(TextModel):
         self.gguf_writer.add_add_bos_token(False)
 
 
-@ModelBase.register("Phi3ForCausalLM")
+@ModelBase.register("Phi3ForCausalLM", "Phi3VForCausalLM")
 class Phi3MiniModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI3
 
@@ -4644,6 +4647,20 @@ class Phi3MiniModel(TextModel):
             sliding_window = 0
         self.gguf_writer.add_sliding_window(sliding_window)
 
+    def modify_tensors(
+            self,
+            data_torch: Tensor,
+            name: str,
+            bid: int | None,
+    ) -> Iterable[tuple[str, Tensor]]:
+
+        VISION_PREFIX = "model.vision_embed_tokens."
+
+        if name.startswith(VISION_PREFIX):
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         n_embd = self.find_hparam(["hidden_size", "n_embd"])
         n_head = self.find_hparam(["num_attention_heads", "n_head"])
@@ -4683,49 +4700,6 @@ class Phi3MiniModel(TextModel):
 
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_LONG), torch.tensor(long_factors, dtype=torch.float32))
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
-
-@ModelBase.register("Phi3VForCausalLM")
-class Phi3VisionModel(Phi3MiniModel):
-    """
-    GGUF converter for Phi-3 Vision (Text Part Only).
-
-    This strips out the vision encoder weights and metadata, creating a
-    standard Phi-3 GGUF file that can be paired with an external mmproj file.
-    """
-
-    # CRITICAL: Use PHI3, not PHI3_VISION.
-    # This tells llama.cpp to treat this as a standard text model.
-    model_arch = gguf.MODEL_ARCH.PHI3
-
-    def set_vocab(self):
-        return super().set_vocab()
-
-    def set_gguf_parameters(self):
-        # Only write standard text model parameters (context length, embedding size, etc.)
-        super().set_gguf_parameters()
-
-    def generate_extra_tensors(self):
-        # This handles the 'su' RoPE scaling factors (long/short) defined in Phi3MiniModel
-        yield from super().generate_extra_tensors()
-
-    def modify_tensors(
-            self,
-            data_torch: Tensor,
-            name: str,
-            bid: int | None,
-    ) -> Iterable[tuple[str, Tensor]]:
-
-        # The prefix for all vision-related weights in Phi-3-Vision
-        VISION_PREFIX = "model.vision_embed_tokens."
-
-        # 1. If it is a vision tensor, SKIP IT completely.
-        # We do not want these weights in the text model file.
-        if name.startswith(VISION_PREFIX):
-            return
-
-        # 2. If it is a text tensor, delegate to the standard Phi-3 logic.
-        # This handles token_embd, layers, output, norms, etc.
-        yield from super().modify_tensors(data_torch, name, bid)
 
 @ModelBase.register("PhiMoEForCausalLM")
 class PhiMoeModel(Phi3MiniModel):
@@ -10047,6 +10021,53 @@ class KimiVLModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
 
         return [] # skip other tensors
+
+@ModelBase.register("Phi3VForCausalLM")
+class Phi3VisionModel(MmprojModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PHI3V)
+        self.gguf_writer.add_clip_has_llava_projector(True)
+
+        num_img_tokens = self.find_vparam(["num_img_tokens"], optional=True) or 144
+        self.gguf_writer.add_uint32("clip.vision.num_img_tokens", num_img_tokens)
+
+        use_hd_tf = self.find_vparam(["use_hd_transform"], optional=True)
+        self.gguf_writer.add_bool("clip.vision.use_hd_transform", use_hd_tf if use_hd_tf is not None else True)
+
+        with_sep = self.find_vparam(["with_learnable_separator"], optional=True)
+        self.gguf_writer.add_bool("clip.vision.with_learnable_separator", with_sep if with_sep is not None else True)
+
+        hd_order = self.find_vparam(["hd_transform_order"], optional=True)
+        self.gguf_writer.add_string("clip.vision.hd_transform_order", hd_order or "sub_glb")
+
+        img_dim_out = self.find_vparam(["image_dim_out", "dim_out"], optional=True) or self.find_vparam(["hidden_size"])
+        self.gguf_writer.add_uint32("clip.vision.image_dim_out", img_dim_out)
+
+        num_crops = self.find_vparam(["num_crops"], optional=True) or self.find_vparam(["num_crops"])
+        self.gguf_writer.add_uint32("clip.vision.num_crops", num_crops)
+
+        num_layers = self.find_vparam(["num_hidden_layers"], optional=True) or self.find_vparam(["num_hidden_layers"])
+        self.gguf_writer.add_uint32("clip.vision.block_count", num_layers - 1) # Dropping the last (24th) layer
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        if not name.startswith("model.vision_embed_tokens."):
+            return []
+
+        #    Phi-3 Vision uses a 24-layer SigLIP but usually drops the 24th layer (index 23).
+        if "img_processor.vision_model.encoder.layers" in name:
+            try:
+                parts = name.split('.')
+                layer_idx = int(parts[parts.index("layers") + 1])
+                if layer_idx == self.block_count - 1:
+                    return []
+            except (ValueError, IndexError):
+                pass
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @ModelBase.register("CogVLMForCausalLM")

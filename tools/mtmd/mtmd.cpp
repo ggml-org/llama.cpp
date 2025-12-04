@@ -4,6 +4,7 @@
 #include "mtmd-audio.h"
 
 #include "llama.h"
+#include <cmath>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -111,6 +112,7 @@ mtmd_context_params mtmd_context_params_default() {
         /* warmup            */ true,
         /* image_min_tokens  */ -1,
         /* image_max_tokens  */ -1,
+        /* num_crops         */ -1,
     };
     return params;
 }
@@ -178,6 +180,7 @@ struct mtmd_context {
             /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
+            /* num_crops         */ ctx_params.num_crops,
             /* warmup            */ ctx_params.warmup,
         };
 
@@ -546,12 +549,15 @@ struct mtmd_tokenizer {
             if (clip_is_phi3v(ctx->ctx_v)) {
                 const int n_col = batch_f32.grid_x;
                 const int n_row = batch_f32.grid_y;
+                const int n_tokens_per_crop = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
+                const int n_token_for_global_crop = (int)std::sqrt((n_tokens_per_crop));
+
                 int n_sub_images = n_col * n_row;
-                size_t local_tokens = ((n_row * n_col) + 1) * 144;
+                size_t local_tokens = (n_sub_images + 1) * n_tokens_per_crop;
 
                 if (n_sub_images == 0) local_tokens = 0;
 
-                size_t global_tokens = (n_row + 1) * 12;
+                size_t global_tokens = (n_row + 1) * n_token_for_global_crop;
                 size_t separator_tokens = 1;
                 size_t n_tokens = local_tokens + separator_tokens + global_tokens;
 
@@ -843,7 +849,7 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     bool ok = false;
 
     if (clip_is_phi3v(ctx_clip)) {
-        // Delegate the entire stitching logic to the optimized C++ function in clip.cpp
+        // Delegate the entire stitching logic to clip.cpp
         ok = clip_image_batch_encode_phi3(
             ctx_clip,
             ctx->n_threads,

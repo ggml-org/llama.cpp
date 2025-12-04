@@ -35,6 +35,7 @@ struct clip_context_params {
     enum clip_flash_attn_type flash_attn_type;
     int image_min_tokens;
     int image_max_tokens;
+    int num_crops;
     bool warmup;
 };
 
@@ -106,11 +107,8 @@ bool clip_is_glm(const struct clip_ctx * ctx);
 bool clip_is_qwen2vl(const struct clip_ctx * ctx);
 bool clip_is_llava(const struct clip_ctx * ctx);
 bool clip_is_gemma3(const struct clip_ctx * ctx);
-
-// [NEW] Added for Phi-3-Vision
 bool clip_is_phi3v(const struct clip_ctx * ctx);
 
-// [NEW] Optimized batch encoding for Phi-3-Vision
 // Handles looping, separator injection, and stitching internally.
 MTMD_API bool clip_image_batch_encode_phi3(
     struct clip_ctx * ctx,

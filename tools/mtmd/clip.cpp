@@ -206,6 +206,13 @@ struct clip_hparams {
     int32_t custom_image_min_tokens = -1;
     int32_t custom_image_max_tokens = -1;
 
+    // phi3v
+    bool use_hd = false;
+    bool with_learnable_separator = false;
+    std::string hd_order = "sub_glb";
+    int32_t num_img_tokens = 144;
+    int32_t num_crops = -1;
+
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
         const int cur_merge = n_merge == 0 ? 1 : n_merge;
         const int patch_area = patch_size * patch_size * cur_merge * cur_merge;
@@ -404,7 +411,7 @@ struct clip_model {
     ggml_tensor * mm_sub_GN = nullptr; // sub-image separator
     bool phi3_setup_done = false;
 
-    // Pre-calculated projected vectors (3072 floats each)
+    // Pre-calculated projected vectors
     std::vector<float> phi3_proj_glb_GN;
     std::vector<float> phi3_proj_sub_GN;
 
@@ -477,6 +484,9 @@ struct clip_ctx {
         }
         if (ctx_params.image_max_tokens > 0) {
             model.hparams.custom_image_max_tokens = ctx_params.image_max_tokens;
+        }
+        if (ctx_params.num_crops > 0) {
+            model.hparams.num_crops = ctx_params.num_crops;
         }
 
         backend_ptrs.push_back(backend_cpu);
@@ -2012,41 +2022,27 @@ struct clip_graph {
         struct ggml_context * ctx,
         struct ggml_tensor * image_features,
         int h_crop,
-        int w_crop
+        int w_crop,
+        int patch_size
     ) {
         int n_images = image_features->ne[3];
-        const int n_channels = 1024;
-        const int size = 24;
-        const int size_half = 12;
+        const int n_channels = image_features->ne[0];;
+        const int patch_size_half = patch_size/2;
 
         struct ggml_tensor * t = image_features;
-        t = ggml_reshape_4d(ctx, t, n_channels, 2, size_half, size * n_images);
-        t = ggml_reshape_4d(ctx, t, n_channels * 2, size_half, 2, size_half * n_images);
+        t = ggml_reshape_4d(ctx, t, n_channels, 2, patch_size_half, patch_size * n_images);
+        t = ggml_reshape_4d(ctx, t, n_channels * 2, patch_size_half, 2, patch_size_half * n_images);
         t = ggml_permute(ctx, t, 0, 2, 1, 3);
         t = ggml_cont(ctx, t);
-
-        if (h_crop == 1 && w_crop == 1) {
-            return t;
-        }
-
-        const int n_channels_new = n_channels * 4;
-        t = ggml_reshape_4d(ctx, t, n_channels_new * size_half, size_half, w_crop, h_crop);
-        t = ggml_permute(ctx, t, 0, 2, 1, 3);
-        t = ggml_cont(ctx, t);
-
-        t = ggml_reshape_4d(ctx, t,
-            n_channels_new,
-            size_half * w_crop,
-            size_half * h_crop,
-            1
-        );
 
         return t;
     }
 
         ggml_cgraph * build_phi3v() {
             ggml_tensor * inp = build_inp();
-            int n_patches_per_crop = 24 * 24;
+            int n_patches_per_crop = inp->ne[1];
+            int patch_size_transformed = sqrt(n_patches_per_crop);
+
             int num_crops = inp->ne[2];
             inp = ggml_reshape_3d(ctx0, inp, n_embd, n_patches_per_crop, num_crops);
 
@@ -2070,11 +2066,11 @@ struct clip_graph {
                                cur->nb[1], cur->nb[2],
                                cur->nb[1]);
 
-            cur = ggml_reshape_4d(ctx0, cur, n_embd, 24, 24, num_crops);
+            cur = ggml_reshape_4d(ctx0, cur, n_embd, patch_size_transformed, patch_size_transformed, num_crops);
             cur = ggml_cont(ctx0, cur);
 
-            cur = ggml_phi3v_hd_merge(ctx0, cur, 1, 1);
-            cur = ggml_reshape_2d(ctx0, cur, 4096, 144 * num_crops);
+            cur = ggml_phi3v_hd_merge(ctx0, cur, 1, 1, patch_size_transformed);
+            cur = ggml_reshape_2d(ctx0, cur, hparams.n_ff, hparams.num_img_tokens * num_crops);
 
             ggml_tensor * final_emb = ggml_mul_mat(ctx0, model.mm_0_w, cur);
             final_emb = ggml_add(ctx0, final_emb, model.mm_0_b);
@@ -2954,22 +2950,21 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_PHI3_V:
                     {
-                        // Verify HD transform settings
-                        bool use_hd = false;
-                        get_bool(KEY_PHI3_USE_HD, use_hd, false);
-                        if (!use_hd) {
+                        get_bool(KEY_PHI3_USE_HD, hparams.use_hd, false);
+                        if (!hparams.use_hd) {
                             LOG_WRN("%s: Phi-3-Vision model missing %s=true, assuming HD transform is required\n", __func__, KEY_PHI3_USE_HD);
                         }
 
-                        std::string hd_order;
-                        get_string(KEY_PHI3_HD_ORDER, hd_order, false);
-                        if (!hd_order.empty() && hd_order != "sub_glb") {
-                            throw std::runtime_error(string_format("%s: unsupported HD transform order: %s (only 'sub_glb' supported)\n", __func__, hd_order.c_str()));
+                        get_string(KEY_PHI3_HD_ORDER, hparams.hd_order, false);
+                        if (hparams.hd_order != "sub_glb") {
+                            throw std::runtime_error(string_format("%s: unsupported HD transform order: %s (only 'sub_glb' supported)\n", __func__, hparams.hd_order.c_str()));
                         }
 
-                        // Set defaults for Phi-3.5-vision if keys missing
-                        hparams.image_size = 336;
-                        hparams.patch_size = 14;
+                        get_u32(KEY_PHI3_NUM_IMG_TOKENS, hparams.num_img_tokens, false);
+                        if (hparams.num_crops == -1) {
+                            get_u32(KEY_PHI3_NUM_CROPS, hparams.num_crops, false);
+                        }
+                        get_bool(KEY_PHI3_WITH_SEP, hparams.with_learnable_separator, false);
                     } break;
                 default:
                     break;
@@ -3360,13 +3355,13 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_PHI3_V:
                 {
-                    // Load MLP weights: mm.phi3_mlp.0.weight / bias
-                    model.mm_0_w = get_tensor(string_format(TN_PHI3_PROJ_MLP, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_PHI3_PROJ_MLP, 0, "bias"));
+                    // Load MLP weights: mm.model.mlp.0.weight / bias
+                    model.mm_0_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "bias"));
 
-                    // Load MLP weights: mm.phi3_mlp.2.weight / bias
-                    model.mm_2_w = get_tensor(string_format(TN_PHI3_PROJ_MLP, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_PHI3_PROJ_MLP, 2, "bias"));
+                    // Load MLP weights: mm.model.mlp.2.weight / bias
+                    model.mm_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "bias"));
 
                     // Load Separators
                     model.mm_glb_GN = get_tensor(TN_PHI3_GLB_GN);
@@ -4332,49 +4327,43 @@ private:
     }
 };
 
-    // -------------------------------------------------------------------------
-    // Phi-3-Vision Preprocessing (HD Transform)
-    // -------------------------------------------------------------------------
+struct phi3v_hd {
+    struct slice_instructions {
+        clip_image_size overview_size;
+        clip_image_size grid_size;
+        std::vector<clip_image_size> crops;
+    };
 
-    struct phi3v_hd {
-        struct slice_instructions {
-            clip_image_size overview_size;
-            clip_image_size grid_size;
-            std::vector<clip_image_size> crops;
-        };
+    static int padding_336(int x) {
+        return (int)(std::ceil((float)x / 336.0f) * 336);
+    }
 
-        static int padding_336(int x) {
-            // Round up to nearest multiple of 336
-            return (int)(std::ceil((float)x / 336.0f) * 336);
+    static clip_image_size calc_hd_transform_size(int width, int height, int hd_num) {
+        bool transposed = false;
+        if (width < height) {
+            std::swap(width, height);
+            transposed = true;
         }
+        float ratio = (float)width / (float)height;
 
-        static clip_image_size calc_hd_transform_size(int width, int height, int hd_num) {
-            bool transposed = false;
-            if (width < height) {
-                std::swap(width, height);
-                transposed = true;
-            }
-            float ratio = (float)width / (float)height;
-
-            // 1. Find the best scale (number of 336-width blocks)
-            int scale = 1;
-            while (scale * std::ceil(scale / ratio) <= hd_num) {
-                scale++;
-            }
-            scale--;
-            if (scale < 1) scale = 1; // Safety
-
-            // 2. Calculate dimensions
-            int new_w = scale * 336;
-            int new_h = (int)((float)new_w / ratio);
-
-            clip_image_size res;
-            res.width = padding_336(new_w);
-            res.height = padding_336(new_h);
-
-            if (transposed) std::swap(res.width, res.height);
-            return res;
+        int scale = 1;
+        while (scale * std::ceil(scale / ratio) <= hd_num) {
+            scale++;
         }
+        scale--;
+        if (scale < 1) scale = 1;
+
+
+        int new_w = scale * 336;
+        int new_h = (int)((float)new_w / ratio);
+
+        clip_image_size res;
+        res.width = padding_336(new_w);
+        res.height = padding_336(new_h);
+
+        if (transposed) std::swap(res.width, res.height);
+        return res;
+    }
 
         static std::vector<clip_image_u8_ptr> transform(const clip_image_u8 * img, int num_crops, int & out_grid_x, int & out_grid_y) {
             std::vector<clip_image_u8_ptr> output;
@@ -4401,7 +4390,7 @@ private:
 
             // 3. Global Image (Resize to 336x336)
             clip_image_u8_ptr global(clip_image_u8_init());
-            // Global uses Bicubic (You already had this correct)
+            // Global uses Bicubic
             img_tool::resize(*img, *global, {336, 336}, img_tool::RESIZE_ALGO_BICUBIC, true, {255, 255, 255});
             output.push_back(std::move(global));
 
@@ -4626,8 +4615,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
             } break;
         case PROJECTOR_TYPE_PHI3_V:
             {
-                int max_crops = 16; // Default for Phi-3.5-vision
-                // TODO: Load from hparams if possible (num_crops)
+                int max_crops = ctx->model.hparams.num_crops;
                 int gx, gy;
                 auto imgs = phi3v_hd::transform(img, max_crops, gx, gy);
                 ctx->model.hparams.image_crop_resolution = (gy << 16) | gx;
@@ -4822,7 +4810,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_PHI3_V:
             {
-                n_patches /= 4;
+                n_patches = ctx->model.hparams.num_img_tokens;
             } break;
         default:
             GGML_ABORT("unsupported projector type");
@@ -5412,6 +5400,8 @@ static void clip_phi3_setup(clip_ctx * ctx) {
 
     ggml_free(ctx0);
     ggml_backend_sched_reset(ctx->sched.get());
+
+    ctx->model.phi3_setup_done = true;
 }
 
 bool clip_image_batch_encode_phi3(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec) {
@@ -5439,9 +5429,8 @@ bool clip_image_batch_encode_phi3(struct clip_ctx * ctx, int n_threads, const st
         return false;
     }
 
-    // Constants for Phi-3 / CLIP ViT-L/14@336 logic
-    const int grid_side = 12; // 12x12 tokens per crop (after 2x2 pooling of 24x24 CLIP output)
-    const int sub_crop_tokens = grid_side * grid_side; // 144 tokens (raw image embeddings)
+    const int sub_crop_tokens = ctx->model.hparams.num_img_tokens;
+    const int grid_side = (int)sqrt(sub_crop_tokens); // Due to the 2 x 2 hd_transform
 
     std::vector<float> crop_output(sub_crop_tokens * dim);
 

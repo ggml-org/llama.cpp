@@ -432,7 +432,7 @@ struct common_params {
     std::vector<std::string> image; // path to image file(s)
     int image_min_tokens = -1;
     int image_max_tokens = -1;
-
+    int32_t num_crops    = -1; // For Phi3-5 Vision, number of max local crops
     // finetune
     struct lr_opt lr;
     enum ggml_opt_optimizer_type optimizer = GGML_OPT_OPTIMIZER_TYPE_ADAMW;
