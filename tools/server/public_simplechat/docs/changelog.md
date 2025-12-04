@@ -312,6 +312,10 @@ Chat Session specific settings
   out. In turn if the tool call times out, one can send the timeout message as the response to the tool call
   or what ever they see fit. Parallely, they can always look into the external ai specific special chat session
   tab to see the ai response live stream and the progress wrt the tool call that timed out.
+* SimpleProxy
+  * add ssl ie https support and restrict it to latest supported ssl/tls version
+  * enable multi threaded ssl and client request handling, so that rogue clients cant mount simple DoS
+    by opening connection and then missing in action.
 
 
 ## ToDo

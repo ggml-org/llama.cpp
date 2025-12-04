@@ -132,7 +132,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_error(400, f"ERRR:ProxyHandler:{e}")
 
-    def do_GET(self):
+    def _do_GET(self):
         """
         Handle GET requests
         """
@@ -155,6 +155,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 print(f"WARN:ProxyHandler:GET:UnknownPath{pr.path}")
                 self.send_error(400, f"WARN:UnknownPath:{pr.path}")
 
+    def do_GET(self):
+        """
+        Catch all / trap any exceptions wrt actual get based request handling.
+        """
+        try:
+            self._do_GET()
+        except:
+            print(f"ERRR:PH:TheGET:{traceback.format_exception_only(sys.exception())}")
+            self.send_error(500, f"ERRR: handling request")
+
     def do_OPTIONS(self):
         """
         Handle OPTIONS for CORS preflights (just in case from browser)
@@ -164,6 +174,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_headers_common()
 
     def handle(self) -> None:
+        """
+        Helps handle ssl setup in the client specific thread, if in https mode
+        """
         print(f"\n\n\nDBUG:ProxyHandler:Handle:RequestFrom:{self.client_address}")
         try:
             if (gMe['sslContext']):
