@@ -1,9 +1,12 @@
 #include <algorithm>
 #include "cumsum.cuh"
 #include "convert.cuh"
+#include "ggml.h"
 
 #ifdef GGML_CUDA_USE_CUB
 #   include <cub/device/device_scan.cuh>
+#endif
+
 
 template<typename T, int BLOCK_SIZE>
 static __global__ void cumsum_cub_kernel(
@@ -11,8 +14,8 @@ static __global__ void cumsum_cub_kernel(
     T* __restrict__ dst,
     const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
     const int64_t nb01, const int64_t nb02, const int64_t nb03,
-    const int64_t nb1,  const int64_t nb2,  const int64_t nb3)
-{
+    const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
+#ifdef GGML_CUDA_USE_CUB
     using BlockScan = cub::BlockScan<T, BLOCK_SIZE>;
 
     __shared__ typename BlockScan::TempStorage temp_storage;
@@ -61,17 +64,10 @@ static __global__ void cumsum_cub_kernel(
 
         __syncthreads();
     }
-}
 #else
-template<typename T, int BLOCK_SIZE>
-static __global__ void cumsum_cub_kernel(
-    const T* __restrict__ src,
-    T* __restrict__ dst,
-    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-    const int64_t nb01, const int64_t nb02, const int64_t nb03,
-    const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {}
-// empty function to avoid triggering compilation errors on non-CUB paths, just in case compiler doesn't optimize away
-#endif // GGML_CUDA_USE_CUB
+    NO_DEVICE_CODE;
+#endif
+}
 
 // Fallback kernel implementation (original)
 template<typename T>
@@ -80,6 +76,8 @@ static __global__ void cumsum_kernel(
     const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
     const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
     const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
+
+    GGML_UNUSED_VARS(nb00, nb0);
 
     const int tid = threadIdx.x;
     const int lane = tid & (WARP_SIZE - 1);
@@ -138,7 +136,7 @@ static __global__ void cumsum_kernel(
         float carry = *s_carry;
         float final_val = s_vals[tid] + s_warp_sums[warp] + carry;
         if (idx < ne00) {
-            dst_row[idx] = static_cast<T>(final_val);
+            dst_row[idx] = ggml_cuda_cast<T, float>(final_val);
         }
         __syncthreads();
 
