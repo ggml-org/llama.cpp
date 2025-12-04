@@ -1,13 +1,8 @@
 #include <algorithm>
 #include "cumsum.cuh"
 #include "convert.cuh"
+#include "ggml-cuda/common.cuh"
 #include "ggml.h"
-
-#if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
-#   define CUMSUM_WARP_SIZE 64
-#else
-#   define CUMSUM_WARP_SIZE 32
-#endif // defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
 
 #ifdef GGML_CUDA_USE_CUB
 #   include <cub/device/device_scan.cuh>
@@ -85,9 +80,10 @@ static __global__ void cumsum_kernel(
     GGML_UNUSED_VARS(nb00, nb0);
 
     const int tid = threadIdx.x;
-    const int lane = tid & (CUMSUM_WARP_SIZE - 1);
-    const int warp = tid / CUMSUM_WARP_SIZE;
-    const int warps_per_block = blockDim.x / CUMSUM_WARP_SIZE;
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int lane = tid & (warp_size - 1);
+    const int warp = tid / warp_size;
+    const int warps_per_block = blockDim.x / warp_size;
 
     extern __shared__ float smem[];
     float* s_vals = smem;
@@ -116,11 +112,11 @@ static __global__ void cumsum_kernel(
         float val = (idx < ne00) ? ggml_cuda_cast<float, T>(src_row[idx]) : 0.0f;
 
         // 1. Warp inclusive scan
-        val = warp_prefix_inclusive_sum(val);
+        val = warp_prefix_inclusive_sum<T, warp_size>(val);
         s_vals[tid] = val;
 
         // Store warp total
-        if (lane == CUMSUM_WARP_SIZE - 1) {
+        if (lane == warp_size - 1) {
             s_warp_sums[warp] = val;
         }
         __syncthreads();
@@ -128,7 +124,7 @@ static __global__ void cumsum_kernel(
         // 2. Exclusive scan of warp sums (warp 0 only)
         if (warp == 0) {
             float w = (tid < warps_per_block) ? s_warp_sums[tid] : 0.0f;
-            float inc = warp_prefix_inclusive_sum(w);
+            float inc = warp_prefix_inclusive_sum<T, warp_size>(w);
             if (tid < warps_per_block) {
                 s_warp_sums[tid] = inc - w;   // exclusive sum
             }
@@ -172,11 +168,12 @@ static void cumsum_cuda(
     }
 #endif // GGML_CUDA_USE_CUB
     dim3 grid_dims(ne01, ne02, ne03);
-    const int num_warps = (ne00 + CUMSUM_WARP_SIZE - 1) / CUMSUM_WARP_SIZE;
-    int block_size = num_warps * CUMSUM_WARP_SIZE;
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size_host();
+    const int num_warps = (ne00 + warp_size - 1) / warp_size;
+    int block_size = num_warps * warp_size;
     block_size = std::min(block_size, CUDA_CUMSUM_BLOCK_SIZE);
     dim3 block_dims(block_size, 1, 1);
-    const int warps_per_block = block_size / CUMSUM_WARP_SIZE;
+    const int warps_per_block = block_size / warp_size;
     const size_t shmem_size = (block_size + warps_per_block + 2) * sizeof(float);
 
     if (use_cub) {
