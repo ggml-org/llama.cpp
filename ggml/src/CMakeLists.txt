@@ -127,10 +127,6 @@ if (NOT MSVC)
     endif()
 endif()
 
-if (MINGW)
-    add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
-endif()
-
 #
 # POSIX conformance
 #
