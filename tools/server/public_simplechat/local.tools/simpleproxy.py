@@ -22,8 +22,10 @@ import sys
 import http.server
 import urllib.parse
 import time
-import urlvalidator as uv
+import ssl
+import traceback
 from typing import Callable
+import urlvalidator as uv
 import pdfmagic as mPdf
 import webmagic as mWeb
 import debug as mDebug
@@ -43,7 +45,9 @@ gConfigType = {
     '--debug': 'bool',
     '--allowed.schemes': 'list',
     '--allowed.domains': 'list',
-    '--bearer.insecure': 'str'
+    '--bearer.insecure': 'str',
+    '--sec.keyfile': 'str',
+    '--sec.certfile': 'str'
 }
 
 gConfigNeeded = [ '--allowed.schemes', '--allowed.domains', '--bearer.insecure' ]
@@ -131,7 +135,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         """
         Handle GET requests
         """
-        print(f"\n\n\nDBUG:ProxyHandler:GET:{self.address_string()}:{self.path}")
+        print(f"DBUG:ProxyHandler:GET:{self.address_string()}:{self.path}")
         print(f"DBUG:PH:Get:Headers:{self.headers}")
         pr = urllib.parse.urlparse(self.path)
         print(f"DBUG:ProxyHandler:GET:{pr}")
@@ -157,6 +161,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         print(f"DBUG:ProxyHandler:OPTIONS:{self.path}")
         self.send_response(200)
         self.send_headers_common()
+
+    def handle(self) -> None:
+        print(f"\n\n\nDBUG:ProxyHandler:Handle:RequestFrom:{self.client_address}")
+        return super().handle()
 
 
 def handle_aum(ph: ProxyHandler, pr: urllib.parse.ParseResult):
@@ -265,12 +273,30 @@ def process_args(args: list[str]):
     uv.validator_setup(gMe['--allowed.schemes'], gMe['--allowed.domains'])
 
 
-
-def run():
+def setup_server():
+    """
+    Helps setup a http/https server
+    """
     try:
         gMe['serverAddr'] = ('', gMe['--port'])
         gMe['server'] = http.server.HTTPServer(gMe['serverAddr'], ProxyHandler)
-        print(f"INFO:Run:Starting on {gMe['serverAddr']}")
+        if gMe.get('--sec.keyfile') and gMe.get('--sec.certfile'):
+            sslCtxt = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            sslCtxt.load_cert_chain(certfile=gMe['--sec.certfile'], keyfile=gMe['--sec.keyfile'])
+            sslCtxt.minimum_version = ssl.TLSVersion.MAXIMUM_SUPPORTED
+            sslCtxt.maximum_version = ssl.TLSVersion.MAXIMUM_SUPPORTED
+            gMe['server'].socket = sslCtxt.wrap_socket(gMe['server'].socket, server_side=True)
+            print(f"INFO:SetupServer:Starting on {gMe['serverAddr']}:Https mode")
+        else:
+            print(f"INFO:SetupServer:Starting on {gMe['serverAddr']}:Http mode")
+    except Exception as exc:
+        print(f"ERRR:SetupServer:{traceback.format_exc()}")
+        raise RuntimeError(f"SetupServer:{exc}") from exc
+
+
+def run():
+    try:
+        setup_server()
         gMe['server'].serve_forever()
     except KeyboardInterrupt:
         print("INFO:Run:Shuting down...")

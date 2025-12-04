@@ -109,6 +109,8 @@ remember to
     * the white list of allowed.domains
       * review and update this to match your needs.
     * the shared bearer token between simpleproxy server and client ui
+    * the public certificate and private key files to enable https mode
+      * sec.certfile and sec.keyfile
 
 * other builtin tool / function calls like datetime, calculator, javascript runner, DataStore,
   external ai dont require the simpleproxy.py helper.
@@ -294,7 +296,7 @@ It is attached to the document object. Some of these can also be updated using t
 
     * proxyAuthInsecure - shared token between simpleproxy.py server and client ui, for accessing service provided by it.
 
-      * Shared token is currently hashed with the current year and inturn handshaked over the network. In future if required one could also include a dynamic token provided by simpleproxy server during /aum handshake and running counter or so into hashed token. ALERT: However do remember that currently the handshake occurs over http and not https, so others can snoop the network and get token. Per client ui running counter and random dynamic token can help mitigate things to some extent, if required in future.
+      * Shared token is currently hashed with the current year and inturn handshaked over the network. In future if required one could also include a dynamic token provided by simpleproxy server during /aum handshake and running counter or so into hashed token. ALERT: However do remember that currently by default handshake occurs over http and not https, so others can snoop the network and get token. Per client ui running counter and random dynamic token can help mitigate things to some extent, if required in future. Remember to enable https mode by specifying a valid public certificate and private key.
 
     * searchUrl - specify the search engine's search url template along with the tag SEARCHWORDS in place where the search words should be substituted at runtime.
 
@@ -569,6 +571,12 @@ The bundled simple proxy
   This should help limit web access to a safe set of sites determined by the end user. There is also
   a provision for shared bearer token to be specified by the end user. One could even control what
   schemes are supported wrt the urls.
+
+* by default runs in http mode. If valid sec.keyfile and sec.certfile options are specified, logic
+  will run in https mode.
+  * Remember to also update tools->proxyUrl wrt the chat session settings.
+    * the new url will be used for subsequent tool handshakes, however remember that the list of
+      tool calls supported wont get updated, till the client web ui is refreshed/reloaded.
 
 * it tries to mimic the client/browser making the request to it by propogating header entries like
   user-agent, accept and accept-language from the got request to the generated request during proxying

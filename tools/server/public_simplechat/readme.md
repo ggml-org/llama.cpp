@@ -31,6 +31,7 @@ cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config
 
 - `--debug True` enables debug mode which captures internet handshake data
 - port defaults to 3128, can be changed from simpleproxy.json, if needed
+- add sec.keyfile and sec.certfile to simpleproxy.json, for https mode
 
 ### Client
 
