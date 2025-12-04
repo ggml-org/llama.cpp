@@ -1,5 +1,6 @@
 #include <algorithm>
 #include "cumsum.cuh"
+#include "convert.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
 #   include <cub/device/device_scan.cuh>
@@ -109,7 +110,7 @@ static __global__ void cumsum_kernel(
 
     for (int64_t start = 0; start < ne00; start += blockDim.x) {
         int64_t idx = start + tid;
-        float val = (idx < ne00) ? static_cast<float>(src_row[idx]) : 0.0f;
+        float val = (idx < ne00) ? ggml_cuda_cast<float, T>(src_row[idx]) : 0.0f;
 
         // 1. Warp inclusive scan
         val = warp_prefix_inclusive_sum(val);

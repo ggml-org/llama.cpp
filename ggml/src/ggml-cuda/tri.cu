@@ -1,4 +1,5 @@
-#include "ggml-cuda/common.cuh"
+#include "common.cuh"
+#include "convert.cuh"
 #include "tri.cuh"
 #include "ggml.h"
 
@@ -25,11 +26,11 @@ static __global__ void tri_kernel(
             dst_row[i0] = src_row[i0];
         }
         for (int64_t i0 = threadIdx.x + split_point; i0 < ne00; i0 += blockDim.x) {
-            dst_row[i0] = T(0);
+            dst_row[i0] = ggml_cuda_cast<T, float>(0.0f);
         }
     } else {
         for (int64_t i0 = threadIdx.x; i0 < split_point; i0 += blockDim.x) {
-            dst_row[i0] = T(0);
+            dst_row[i0] = ggml_cuda_cast<T, float>(0.0f);
         }
         for (int64_t i0 = threadIdx.x + split_point; i0 < ne00; i0 += blockDim.x) {
             dst_row[i0] = src_row[i0];
