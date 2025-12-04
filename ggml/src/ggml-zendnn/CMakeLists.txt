@@ -1,15 +1,14 @@
 ggml_add_backend_library(ggml-zendnn
-                         ggml-zendnn.cpp
-                        )
+                         ggml-zendnn.cpp)
 
 # Get ZenDNN path
-if (NOT DEFINED GGML_ZENDNN_PATH OR GGML_ZENDNN_PATH STREQUAL "")
-    set(GGML_ZENDNN_PATH "$ENV{GGML_ZENDNN_PATH}")
+if (NOT DEFINED ZENDNN_ROOT OR ZENDNN_ROOT STREQUAL "")
+    set(ZENDNN_ROOT "$ENV{ZENDNN_ROOT}")
 endif()
 
 # Check if path is still empty or OFF
-if (NOT GGML_ZENDNN_PATH OR GGML_ZENDNN_PATH STREQUAL "" OR GGML_ZENDNN_PATH STREQUAL "OFF")
-    message(STATUS "GGML_ZENDNN_PATH not set. Automatically downloading and building ZenDNN...")
+if (NOT ZENDNN_ROOT OR ZENDNN_ROOT STREQUAL "" OR ZENDNN_ROOT STREQUAL "OFF")
+    message(STATUS "ZENDNN_ROOT not set. Automatically downloading and building ZenDNN...")
     message(STATUS "This will take several minutes on first build...")
 
     include(ExternalProject)
@@ -33,6 +32,10 @@ if (NOT GGML_ZENDNN_PATH OR GGML_ZENDNN_PATH STREQUAL "" OR GGML_ZENDNN_PATH STR
             -DZENDNNL_BUILD_DOXYGEN=OFF
             -DZENDNNL_BUILD_GTEST=OFF
             -DZENDNNL_BUILD_BENCHDNN=OFF
+            # Enable ALL matmul algorithm backends
+            -DZENDNNL_DEPENDS_AOCLDLP=ON
+            -DZENDNNL_DEPENDS_ONEDNN=ON
+            -DZENDNNL_DEPENDS_LIBXSMM=ON
         BUILD_COMMAND   ${CMAKE_COMMAND} --build ${ZENDNN_BUILD_DIR} --target zendnnl
         INSTALL_COMMAND ${CMAKE_COMMAND} --build ${ZENDNN_BUILD_DIR} --target install
         BUILD_ALWAYS OFF
@@ -45,28 +48,30 @@ if (NOT GGML_ZENDNN_PATH OR GGML_ZENDNN_PATH STREQUAL "" OR GGML_ZENDNN_PATH STR
     # Add dependency so ZenDNN builds before our library
     add_dependencies(ggml-zendnn zendnn)
 
-    # Set GGML_ZENDNN_PATH to the installation directory
-    set(GGML_ZENDNN_PATH ${ZENDNN_INSTALL_DIR})
+    # Set ZENDNN_ROOT to the installation directory
+    set(ZENDNN_ROOT ${ZENDNN_INSTALL_DIR})
 
-    message(STATUS "ZenDNN will be built to: ${GGML_ZENDNN_PATH}")
+    message(STATUS "ZenDNN will be built to: ${ZENDNN_ROOT}")
 else()
-    message(STATUS "Using custom ZenDNN installation at: ${GGML_ZENDNN_PATH}")
+    message(STATUS "Using custom ZenDNN installation at: ${ZENDNN_ROOT}")
 endif()
 
 # ZenDNN headers + libs
 target_include_directories(ggml-zendnn PRIVATE
-    ${GGML_ZENDNN_PATH}/zendnnl/include
-    ${GGML_ZENDNN_PATH}/deps/aocldlp/include
-    ${GGML_ZENDNN_PATH}/deps/aoclutils/include
-    ${GGML_ZENDNN_PATH}/deps/json/include
-    ${GGML_ZENDNN_PATH}/deps/libxsmm/include
+    ${ZENDNN_ROOT}/zendnnl/include
+    ${ZENDNN_ROOT}/deps/aocldlp/include
+    ${ZENDNN_ROOT}/deps/aoclutils/include
+    ${ZENDNN_ROOT}/deps/json/include
+    ${ZENDNN_ROOT}/deps/libxsmm/include
+    ${ZENDNN_ROOT}/deps/onednn/include
 )
 
 target_link_directories(ggml-zendnn PRIVATE
-    ${GGML_ZENDNN_PATH}/zendnnl/lib
-    ${GGML_ZENDNN_PATH}/deps/aocldlp/lib
-    ${GGML_ZENDNN_PATH}/deps/aoclutils/lib
-    ${GGML_ZENDNN_PATH}/deps/libxsmm/lib
+    ${ZENDNN_ROOT}/zendnnl/lib
+    ${ZENDNN_ROOT}/deps/aocldlp/lib
+    ${ZENDNN_ROOT}/deps/aoclutils/lib
+    ${ZENDNN_ROOT}/deps/libxsmm/lib
+    ${ZENDNN_ROOT}/deps/onednn/lib
 )
 
 target_link_libraries(ggml-zendnn PRIVATE
@@ -74,12 +79,12 @@ target_link_libraries(ggml-zendnn PRIVATE
     aocl-dlp           # AOCL libraries
     aoclutils
     au_cpuid
+    dnnl               # OneDNN
     xsmm               # libxsmm small matrix math
     xsmmext
     xsmmnoblas
-    xsmmf
-    m                  # System math
-    pthread            # Threading support
+    m
+    pthread
 )
 
 if (GGML_OPENMP)

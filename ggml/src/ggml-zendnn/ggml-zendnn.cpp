@@ -122,7 +122,7 @@ static void ggml_zendnn_compute_forward_mul_mat(
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    enum ggml_type    const vec_dot_type = ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
+    ggml_type         const vec_dot_type = ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
     ggml_from_float_t const from_float = ggml_get_type_traits_cpu(vec_dot_type)->from_float;
 
     GGML_ASSERT(ne0 == ne01);
@@ -205,7 +205,7 @@ static void ggml_backend_zendnn_free(ggml_backend_t backend) {
     delete backend;
 }
 
-static enum ggml_status ggml_backend_zendnn_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
+static ggml_status ggml_backend_zendnn_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_zendnn_context * ctx = (ggml_backend_zendnn_context *)backend->context;
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -250,7 +250,7 @@ static struct ggml_backend_i ggml_backend_zendnn_i = {
 };
 
 static ggml_guid_t ggml_backend_zendnn_guid(void) {
-    static const char * guid_str = "AMD-ZENDNN-ACCELER";
+    static const char * guid_str = "AMD-ZENDNN-ACCEL";
     return reinterpret_cast<ggml_guid_t>(const_cast<char*>(guid_str));
 }
 
@@ -434,9 +434,6 @@ static ggml_backend_dev_t ggml_backend_zendnn_reg_get_device(ggml_backend_reg_t 
     };
 
     return &ggml_backend_zendnn_device;
-
-    GGML_UNUSED(reg);
-    GGML_UNUSED(index);
 }
 
 static void * ggml_backend_zendnn_get_proc_address(ggml_backend_reg_t reg, const char * name) {

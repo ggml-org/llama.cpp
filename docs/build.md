@@ -513,7 +513,7 @@ ZenDNN provides optimized deep learning primitives for AMD EPYC™ CPUs. It acce
 - Using `CMake` with custom ZenDNN installation:
 
     ```bash
-    cmake -B build -DGGML_ZENDNN=ON -DGGML_ZENDNN_PATH=/path/to/zendnn/install
+    cmake -B build -DGGML_ZENDNN=ON -DZENDNN_ROOT=/path/to/zendnn/install
     cmake --build build --config Release
     ```
 

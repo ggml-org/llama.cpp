@@ -1,5 +1,9 @@
 # llama.cpp for AMD ZenDNN
 
+> **Note:** ZenDNN is **not** the same as zDNN.
+> - **ZenDNN** (this page): AMD's deep learning library for AMD EPYC CPUs
+> - **zDNN**: IBM's library for IBM Z mainframe processors ([see zDNN documentation](zDNN.md))
+
 - [Background](#background)
 - [OS](#os)
 - [Hardware](#hardware)
@@ -115,12 +119,12 @@ Default installation path: `ZenDNN/build/install`
 
 ```sh
 # Using environment variable
-export GGML_ZENDNN_PATH=/path/to/ZenDNN/build/install
+export ZENDNN_ROOT=/path/to/ZenDNN/build/install
 cmake -B build -DGGML_ZENDNN=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j $(nproc)
 
 # OR specify path directly in CMake
-cmake -B build -DGGML_ZENDNN=ON -DGGML_ZENDNN_PATH=/path/to/ZenDNN/build/install -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DGGML_ZENDNN=ON -DZENDNN_ROOT=/path/to/ZenDNN/build/install -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -j $(nproc)
 ```
 
@@ -166,7 +170,7 @@ Access the server at `http://localhost:8080`.
 | Name               | Value                                 | Function                                    |
 |--------------------|---------------------------------------|---------------------------------------------|
 | GGML_ZENDNN        | ON/OFF                                | Enable ZenDNN backend support               |
-| GGML_ZENDNN_PATH   | Path to ZenDNN installation           | Set ZenDNN installation directory           |
+| ZENDNN_ROOT        | Path to ZenDNN installation           | Set ZenDNN installation directory           |
 | GGML_OPENMP        | ON/OFF (recommended: ON)              | Enable OpenMP for multi-threading           |
 
 ### Runtime
