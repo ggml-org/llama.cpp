@@ -72,10 +72,10 @@ static __global__ void cumsum_cub_kernel(
 // Fallback kernel implementation (original)
 template<typename T>
 static __global__ void cumsum_kernel(
-    const T * src, T * dst,
-    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-    const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
-    const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
+        const T * src, T * dst,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+        const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
+        const int64_t nb0,  const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
 
     GGML_UNUSED_VARS(nb00, nb0);
 
