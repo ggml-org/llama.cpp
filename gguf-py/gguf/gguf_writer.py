@@ -84,8 +84,9 @@ class GGUFWriter:
     }
 
     def __init__(
-        self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
-        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False
+        self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, temp_dir: str | None = None,
+        endianess: GGUFEndian = GGUFEndian.LITTLE, split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
+        small_first_shard: bool = False
     ):
         self.fout = None
         self.path = Path(path) if path else None
@@ -93,6 +94,7 @@ class GGUFWriter:
         self.endianess = endianess
         self.data_alignment = GGUF_DEFAULT_ALIGNMENT
         self.use_temp_file = use_temp_file
+        self.temp_dir = temp_dir
         self.temp_file = None
         self.tensors = [{}]
         self.kv_data = [{}]
@@ -381,7 +383,7 @@ class GGUFWriter:
             # Don't byteswap inplace since lazy copies cannot handle it
             tensor = tensor.byteswap(inplace=False)
         if self.use_temp_file and self.temp_file is None:
-            fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024)
+            fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024, dir=str(self.temp_dir))
             fp.seek(0)
             self.temp_file = fp
 

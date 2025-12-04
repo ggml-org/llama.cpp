@@ -88,6 +88,7 @@ class ModelBase:
     is_big_endian: bool
     endianess: gguf.GGUFEndian
     use_temp_file: bool
+    temp_dir: str | None
     lazy: bool
     dry_run: bool
     hparams: dict[str, Any]
@@ -111,7 +112,7 @@ class ModelBase:
     sentence_transformers_dense_modules: bool = False
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
-                 use_temp_file: bool = False, eager: bool = False,
+                 use_temp_file: bool = False, temp_dir: str | None = None, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
@@ -131,6 +132,7 @@ class ModelBase:
         self.is_big_endian = is_big_endian
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = use_temp_file
+        self.temp_dir = temp_dir
         self.lazy = not eager or (remote_hf_model_id is not None)
         self.dry_run = dry_run
         self.remote_hf_model_id = remote_hf_model_id
@@ -155,8 +157,9 @@ class ModelBase:
         self.dequant_model()
 
         # Configure GGUF Writer
-        self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
-                                           split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
+        self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess,
+                                           use_temp_file=self.use_temp_file, temp_dir=self.temp_dir, split_max_tensors=split_max_tensors,
+                                           split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
 
         # Mistral specific
         self.disable_mistral_community_chat_template = disable_mistral_community_chat_template
@@ -5647,7 +5650,8 @@ class XLMRobertaModel(BertModel):
         if self._lora_names:
             for name in self._lora_names:
                 fname = self.add_prefix_to_filename(self.fname_out, f"lora-{name}-")
-                self._lora_files[name] = gguf.GGUFWriter(fname, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file, dry_run=self.dry_run)
+                self._lora_files[name] = gguf.GGUFWriter(fname, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, 
+                                                         use_temp_file=self.use_temp_file, temp_dir=self.temp_dir, dry_run=self.dry_run)
 
         return super().generate_extra_tensors()
 
@@ -10304,6 +10308,10 @@ def parse_args() -> argparse.Namespace:
         help="use the tempfile library while processing (helpful when running out of memory, process killed)",
     )
     parser.add_argument(
+        "--temp-dir", type=Path,
+        help="the directory containing the temp-file used by --use-temp-file",
+    )
+    parser.add_argument(
         "--no-lazy", action="store_true",
         help="use more RAM by computing all outputs before writing (use in case lazy evaluation is broken)",
     )
@@ -10495,7 +10503,7 @@ def main() -> None:
 
         model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
-                                     eager=args.no_lazy,
+                                     temp_dir=args.temp_dir, eager=args.no_lazy,
                                      metadata_override=args.metadata, model_name=args.model_name,
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
