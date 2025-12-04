@@ -105,8 +105,6 @@ public:
 
     virtual std::vector<std::string> get_input_names(int node_idx) const override;
 
-    virtual ov::PartialShape get_output_shape(const std::string & name) const override;
-
     virtual ov::PartialShape get_output_shape(int node_idx) const override;
 
     virtual ov::element::Type get_output_type(const std::string & name) const override;
