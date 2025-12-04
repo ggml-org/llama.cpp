@@ -775,10 +775,6 @@ std::vector<std::string> GgmlOvDecoder::get_input_names(int node_idx) const {
     return m_node_info_list[node_idx].node_inputs_names;
 }
 
-std::vector<size_t> GgmlOvDecoder::get_output_stride(const std::string & name) const {
-    return get_stride(m_outputs.at(name));
-}
-
 ov::PartialShape GgmlOvDecoder::get_output_shape(const std::string & name) const {
     auto * ggml_tensor = m_outputs.at(name);
     return ov::PartialShape(get_shape(ggml_tensor));

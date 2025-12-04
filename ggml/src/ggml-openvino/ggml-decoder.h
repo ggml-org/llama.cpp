@@ -109,8 +109,6 @@ public:
 
     virtual ov::PartialShape get_output_shape(int node_idx) const override;
 
-    virtual std::vector<size_t> get_output_stride(const std::string & name) const override;
-
     virtual ov::element::Type get_output_type(const std::string & name) const override;
 
     virtual int32_t * get_input_op_params(const std::string & name) const override;
