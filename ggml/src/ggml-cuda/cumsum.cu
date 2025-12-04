@@ -13,8 +13,8 @@ static __global__ void cumsum_cub_kernel(
         const T * __restrict__ src,
         T * __restrict__ dst,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-        const int64_t nb01, const int64_t nb02, const int64_t nb03,
-        const int64_t nb1,  const int64_t nb2,  const int64_t nb3) {
+        const int64_t  s01, const int64_t  s02, const int64_t  s03,
+        const int64_t   s1,  const int64_t   s2,  const int64_t   s3) {
 #ifdef GGML_CUDA_USE_CUB
     using BlockScan = cub::BlockScan<T, BLOCK_SIZE>;
 
@@ -168,7 +168,7 @@ static void cumsum_cuda(
     }
 #endif // GGML_CUDA_USE_CUB
     dim3 grid_dims(ne01, ne02, ne03);
-    constexpr int warp_size = ggml_cuda_get_physical_warp_size_host();
+    const int warp_size = ggml_cuda_get_physical_warp_size_host();
     const int num_warps = (ne00 + warp_size - 1) / warp_size;
     int block_size = num_warps * warp_size;
     block_size = std::min(block_size, CUDA_CUMSUM_BLOCK_SIZE);

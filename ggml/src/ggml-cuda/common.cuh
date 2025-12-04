@@ -319,15 +319,6 @@ static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #endif // defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
 }
 
-static constexpr __host__ int ggml_cuda_get_physical_warp_size_host() {
-#if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
-    return 64;
-#else
-    return 32;
-#endif // defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
-}
-
-
 // Maximum number of bytes that can be copied in a single instruction.
 static constexpr __device__ int ggml_cuda_get_max_cpy_bytes() {
 #ifdef GGML_USE_HIP
@@ -470,7 +461,13 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
     return x;
 }
 
-static __device__ __forceinline__ unsigned int get_warp_mask() {
+#ifdef __HIP_PLATFORM_AMD__
+typedef uint64_t ggml_lane_mask_t;
+#else
+typedef uint32_t ggml_lane_mask_t;
+#endif // __HIP_PLATFORM_AMD__
+
+static __device__ __forceinline__ ggml_lane_mask_t get_warp_mask() {
 #ifdef __HIP_PLATFORM_AMD__
     return __ballot(1); // HIP equivalent
 #else
@@ -481,10 +478,9 @@ static __device__ __forceinline__ unsigned int get_warp_mask() {
 template<typename T, int width = WARP_SIZE>
 static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
     const int lane_id = threadIdx.x % width;
-    const auto mask = get_warp_mask();
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const T t = __shfl_up_sync(mask, x, offset, width);
+        const T t = __shfl_up_sync(0xffffffff, x, offset, width);
         if (lane_id >= offset) {
             x += t;
         }
@@ -495,11 +491,10 @@ static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float2 warp_prefix_inclusive_sum(float2 a) {
     const int lane_id = threadIdx.x % width;
-    const auto mask = get_warp_mask();
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const float t_x = __shfl_up_sync(mask, a.x, offset, width);
-        const float t_y = __shfl_up_sync(mask, a.y, offset, width);
+        const float t_x = __shfl_up_sync(0xffffffff, a.x, offset, width);
+        const float t_y = __shfl_up_sync(0xffffffff, a.y, offset, width);
         if (lane_id >= offset) {
             a.x += t_x;
             a.y += t_y;
@@ -512,10 +507,9 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ half2 warp_prefix_inclusive_sum(half2 a) {
 #ifdef FP16_AVAILABLE
     const int lane_id = threadIdx.x % width;
-    const auto mask = get_warp_mask();
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const half2 t = __shfl_up_sync(mask, a, offset, width);
+        const half2 t = __shfl_up_sync(0xffffffff, a, offset, width);
         if (lane_id >= offset) {
             a = __hadd2(a, t);
         }
@@ -950,6 +944,11 @@ const ggml_cuda_device_info & ggml_cuda_info();
 
 void ggml_cuda_set_device(int device);
 int ggml_cuda_get_device();
+
+static __host__ int ggml_cuda_get_physical_warp_size_host() {
+    const auto &info = ggml_cuda_info().devices[ggml_cuda_get_device()];
+    return info.warp_size;
+}
 
 struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
