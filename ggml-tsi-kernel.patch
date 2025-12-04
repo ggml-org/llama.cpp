@@ -1,0 +1,27 @@
+diff --git a/fpga-kernel/CMakeLists.txt b/fpga-kernel/CMakeLists.txt
+index 22182af..c21a83c 100644
+--- a/fpga-kernel/CMakeLists.txt
++++ b/fpga-kernel/CMakeLists.txt
+@@ -9,6 +9,22 @@ include(TSIMLIRCompilerConfig)
+ include(TSIModelBuildUtils)
+ find_package (Python3 ${TSI_COMPILER_PYTHON_VERSION} EXACT REQUIRED COMPONENTS Interpreter)
+ 
++# Get dependencies from `toolbox`
++if (DEFINED ENV{TOOLBOX_DIR})
++	set(TOOLBOX_DIR $ENV{TOOLBOX_DIR})
++else()
++	message(FATAL_ERROR "TOOLBOX_DIR not defined ")
++endif()
++
++if(NOT TOOLBOX_DIR OR NOT EXISTS "${TOOLBOX_DIR}")
++  message(FATAL_ERROR "TOOLBOX_DIR not defined or doesn't exist (must be the toolbox install directory)")
++endif()
++message(STATUS "Using installed toolbox at ${TOOLBOX_DIR}")
++list(APPEND CMAKE_MODULE_PATH
++  "${TOOLBOX_DIR}/lib/cmake/modules"
++  "${TOOLBOX_DIR}/common/lib/cmake/TSICommon"
++)
++find_package(TSICommon REQUIRED CONFIG HINTS ${TOOLBOX_DIR}/common)
+ 
+ set(CMAKE_CURRENT_BINARY_DIR, "${CMAKE_CURRENT_BINARY_DIR}"/build-fpga)
+ set(COMPILER_CONFIG ${CMAKE_CURRENT_SOURCE_DIR}/txe_compiler_config.json)
