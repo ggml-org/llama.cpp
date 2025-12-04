@@ -322,7 +322,6 @@ static void llama_params_fit_impl(
             }
             default:
                 GGML_ABORT("fatal error");
-                return nullptr;
         }
     };
 
