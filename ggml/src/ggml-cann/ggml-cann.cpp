@@ -2207,7 +2207,7 @@ static bool is_matched_graph_in_cache(ggml_cann_graph_lru_cache & graph_cache, g
     // lambda for checking if all nodes of the current graph match some given properties.
     auto nodes_match_properties = [& cgraph](auto & properties) {
         auto n_nodes = cgraph->n_nodes;
-    
+
         // Reject if the list sizes do not match.
         if (properties.size() != static_cast<size_t>(n_nodes)) {
             return false;
