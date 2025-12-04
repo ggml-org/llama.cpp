@@ -151,6 +151,7 @@ struct templates_params {
     common_chat_tool_choice tool_choice;
     json json_schema;
     bool parallel_tool_calls;
+    common_reasoning_format reasoning_format;
     bool stream;
     std::string grammar;
     bool add_generation_prompt = true;
@@ -1031,6 +1032,7 @@ static common_chat_params common_chat_params_init_mistral_3(const common_chat_te
     }
 
     auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
+    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar = true;
 
     data.prompt = apply(tmpl, inputs, /* messages_override = */ adjusted_messages);
@@ -1043,7 +1045,7 @@ static common_chat_params common_chat_params_init_mistral_3(const common_chat_te
     };
 
     auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
-        auto reasoning = p.optional("[THINK]" + p.reasoning(p.until("[/THINK]")) + "[/THINK]");
+        auto reasoning = extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until("[/THINK]")) + "[/THINK]") : p.eps();
 
         // Response format parser
         if (inputs.json_schema.is_object() && !inputs.json_schema.empty()) {
@@ -2453,6 +2455,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     params.messages = common_chat_msgs_to_json_oaicompat<json>(inputs.messages, /* concat_text= */ !tmpl.original_caps().requires_typed_content);
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.tool_choice = inputs.tool_choice;
+    params.reasoning_format = inputs.reasoning_format;
     params.enable_thinking = inputs.enable_thinking;
     params.grammar = inputs.grammar;
     params.now = inputs.now;
