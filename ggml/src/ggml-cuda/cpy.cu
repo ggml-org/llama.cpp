@@ -394,18 +394,18 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
                 ne01n = ne01*ne02;
                 ne02n = 1;
             }
-            ne00 = ne00n ;
+            ne00 = ne00n;
             ne01 = ne01n;
             ne02 = ne02n;
             can_be_transposed = true;
         }
-        if ((nb02 == (int64_t)ggml_element_size(src0) &&
+        if ((nb02 == (int64_t)ggml_element_size(src0) && nb00 <= nb01 &&
             nb01 == ne02 * ne00 * (int64_t)ggml_element_size(src0))) {
-            GGML_ASSERT(nb00 <= nb01);
+            // GGML_ASSERT(nb00 <= nb01);
             ne00n = ne00*ne01;
             ne01n = ne02;
             ne02n = 1; // not used
-            ne00 = ne00n ;
+            ne00 = ne00n;
             ne01 = ne01n;
             ne02 = ne02n;
             can_be_transposed = true;
