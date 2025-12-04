@@ -383,7 +383,13 @@ class GGUFWriter:
             # Don't byteswap inplace since lazy copies cannot handle it
             tensor = tensor.byteswap(inplace=False)
         if self.use_temp_file and self.temp_file is None:
-            fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024, dir=str(self.temp_dir))
+            temp_dir = None
+
+            if self.temp_dir is not None:
+                temp_dir = str(self.temp_dir)
+                os.makedirs(temp_dir)
+
+            fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024, dir=temp_dir)
             fp.seek(0)
             self.temp_file = fp
 
