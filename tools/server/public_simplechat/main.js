@@ -1,7 +1,9 @@
 // @ts-check
-// A simple implementation of GenAi/LLM chat web client ui / front end logic.
-// It handshake with ai server's completions and chat/completions endpoints
-// and helps with basic usage and testing.
+// A simple minded GenAi/LLM chat web client implementation.
+// Handshakes with
+// * ai server's completions and chat/completions endpoints
+// * simpleproxy tool calls provider
+// Helps with basic usage and testing.
 // by Humans for All
 
 

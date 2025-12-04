@@ -346,6 +346,3 @@ their respective functionalities.
 
 Add support for base64 encoded pdf passing to ai models, when the models and llama engine gain that capability
 in turn using openai file - file-data type sub block within content array or so ...
-
-See why the ai streamed response not showing up in TCExternalAi chat session ui, even thou the content is getting
-appended to its DivStream. IE why it is hidden.
