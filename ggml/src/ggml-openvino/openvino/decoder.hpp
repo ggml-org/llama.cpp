@@ -14,8 +14,6 @@ class GgmlDecoder : public DecoderBase {
 public:
     virtual ov::Any get_attribute(const std::string& name) const = 0;
 
-    virtual PartialShape get_input_shape(const std::string& name) const = 0;
-
     virtual PartialShape get_input_shape(int node_idx, const std::string& name) const = 0;
 
     virtual std::vector<size_t> get_input_stride(int node_idx, const std::string& name) const = 0;

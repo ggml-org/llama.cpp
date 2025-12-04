@@ -735,10 +735,6 @@ ov::element::Type GgmlOvDecoder::get_ov_type(const ggml_tensor * tensor) {
     }
 }
 
-ov::PartialShape GgmlOvDecoder::get_input_shape(const std::string & name) const {
-    return ov::PartialShape(get_shape(m_inputs.at(name)));
-}
-
 ov::PartialShape GgmlOvDecoder::get_input_shape(int node_idx, const std::string & name) const {
     return ov::PartialShape(get_shape(m_node_info_list[node_idx].node_inputs.at(name)));
 }

@@ -77,8 +77,6 @@ public:
         GGML_UNUSED(name);
     }
 
-    virtual ov::PartialShape get_input_shape(const std::string & name) const override;
-
     virtual ov::PartialShape get_input_shape(int node_idx, const std::string & name) const override;
 
     virtual std::vector<size_t> get_input_stride(int node_idx, const std::string & name) const override;
