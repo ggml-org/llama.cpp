@@ -1,0 +1,35 @@
+#version 450
+
+#include "types.glsl"
+#include "generic_unary_head.glsl"
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    const uint idx = get_idx();
+    if (idx >= p.ne) {
+        return;
+    }
+
+    const uint i13 = fastdiv(idx, p.ne1_012mp, p.ne1_012L);
+    const uint i13_offset = i13 * p.ne12*p.ne11*p.ne10;
+    const uint i12 = fastdiv(idx - i13_offset, p.ne1_01mp, p.ne1_01L);
+    const uint i12_offset = i12*p.ne11*p.ne10;
+    const uint i11 = fastdiv(idx - i13_offset - i12_offset, p.ne1_0mp, p.ne1_0L);
+    const uint i10 = idx - i13_offset - i12_offset - i11*p.ne10;
+
+    const float kh = float(p.ne11);
+    const float qh = float(p.ne12);
+    const float k_scale = max(qh / kh, 1.0f);
+    const float q_scale = max(kh / qh, 1.0f);
+
+    // Add a small epsilon to avoid floating point precision issues
+    const float epsilon = 0.0001f;
+    const int pos = int(float(i12) * q_scale - float(i11) * k_scale + (kh - 1.0f) * k_scale + epsilon);
+
+    const uint src_idx = pos*p.nb01 + i10*p.nb00;
+    const uint dst_idx = i13*p.nb13 + i12*p.nb12 + i11*p.nb11 + i10*p.nb10;
+
+    data_d[get_doffset() + dst_idx] = D_TYPE(data_a[get_aoffset() + src_idx]);
+}
+
