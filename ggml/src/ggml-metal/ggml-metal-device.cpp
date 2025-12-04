@@ -1718,3 +1718,41 @@ ggml_metal_pipeline_t ggml_metal_library_get_pipeline_opt_step_sgd(ggml_metal_li
 
     return res;
 }
+
+ggml_metal_pipeline_t ggml_metal_library_get_pipeline_diag_mask_inf(ggml_metal_library_t lib, const ggml_tensor *op) {
+    assert(op->op == GGML_OP_DIAG_MASK_INF);
+
+    char base[256];
+    char name[256];
+
+    snprintf(base, sizeof(base), "kernel_op_diag_mask_inf_%s", ggml_type_name(op->src[0]->type));
+    snprintf(name, sizeof(name), "%s", base);
+
+    ggml_metal_pipeline_t res = ggml_metal_library_get_pipeline(lib, name);
+
+    if (res) {
+        return res;
+    }
+    res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+
+    return res;
+}
+
+ggml_metal_pipeline_t ggml_metal_library_get_pipeline_im2col_3d(ggml_metal_library_t lib, const ggml_tensor *op) {
+    assert(op->op == GGML_OP_IM2COL_3D);
+
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_op_im2col_3d_%s", ggml_type_name(op->type));
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_t res = ggml_metal_library_get_pipeline(lib, base);
+    if (res) {
+        return res;
+    }
+
+    res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+
+    return res;
+}

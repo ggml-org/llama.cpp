@@ -4543,8 +4543,8 @@ kernel void kernel_upscale_f32(
 
 kernel void kernel_pad_f32(
     constant ggml_metal_kargs_pad & args,
-    device  const char * src0,
-    device        char * dst,
+    device const char * src0,
+    device char       * dst,
     uint3 tgpig[[threadgroup_position_in_grid]],
     uint3 tpitg[[thread_position_in_threadgroup]],
     uint3   ntg[[threads_per_threadgroup]]) {
@@ -4553,27 +4553,36 @@ kernel void kernel_pad_f32(
     const int64_t i2 = tgpig.y;
     const int64_t i1 = tgpig.x;
 
-    const int64_t i03 = i3;
-    const int64_t i02 = i2;
-    const int64_t i01 = i1;
-
-    device const float * src0_ptr = (device const float *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
-    device       float * dst_ptr  = (device       float *) (dst  +  i3*args.nb3  +  i2*args.nb2  +  i1*args.nb1);
-
-    if (i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
-        for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
-            if (i0 < args.ne00) {
-                dst_ptr[i0] = src0_ptr[i0];
-            } else {
-                dst_ptr[i0] = 0.0f;
-            }
-        }
-
+    if (i1 >= args.ne1 || i2 >= args.ne2 || i3 >= args.ne3) {
         return;
     }
 
+    const int64_t dst_base_bytes = i3 * args.nb3 + i2 * args.nb2 + i1 * args.nb1;
+    device float *dst_ptr = (device float *)((device char *)dst + dst_base_bytes);
+
     for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
-        dst_ptr[i0] = 0.0f;
+        const int src_i0 = i0 - args.lp0;
+        const int src_i1 = i1 - args.lp1;
+        const int src_i2 = i2 - args.lp2;
+        const int src_i3 = i3 - args.lp3;
+
+        if (src_i0 >= 0 && src_i0 < (int)args.ne00 &&
+            src_i1 >= 0 && src_i1 < (int)args.ne01 &&
+            src_i2 >= 0 && src_i2 < (int)args.ne02 &&
+            src_i3 >= 0 && src_i3 < (int)args.ne03) {
+            const int64_t src_offset_bytes =
+                src_i3 * args.nb03 +
+                src_i2 * args.nb02 +
+                src_i1 * args.nb01 +
+                src_i0 * args.nb00;
+
+            const float val =
+                ((const device float *)(src0 + src_offset_bytes))[0];
+
+            dst_ptr[i0] = ((const device float *)(src0 + src_offset_bytes))[0];
+        } else {
+            dst_ptr[i0] = 0.0f;
+        }
     }
 }
 
@@ -9686,4 +9695,142 @@ kernel void kernel_opt_step_sgd_f32(
     }
 
     x[gid] = x[gid] * (1.0f - pars[0] * pars[1]) - pars[0] * g[gid];
+}
+
+kernel void kernel_op_diag_mask_inf_f32(
+    constant ggml_metal_kargs_diag_mask_inf & args,
+    device const float * src0,
+    device float * dst,
+    uint tiitg[[thread_index_in_threadgroup]]
+) {
+    if (tiitg != 0) {
+        return;
+    }
+
+    const uint64_t ne0 = args.ne0;
+    const uint64_t ne1 = args.ne1;
+    const uint64_t ne2 = args.ne2;
+    const uint64_t ne3 = args.ne3;
+    const uint64_t n_past = args.n_past;
+
+    const uint64_t total = ne0 * ne1 * ne2 * ne3;
+
+    for (uint64_t idx = 0; idx < total; ++idx) {
+        uint64_t rem = idx;
+        const uint64_t i = rem % ne0;
+        rem /= ne0;
+        const uint64_t j = rem % ne1;
+
+        float val = src0[idx];
+        if (i > n_past + j) {
+            val = -INFINITY;
+        }
+        dst[idx] = val;
+    }
+}
+
+kernel void kernel_op_im2col_3d_f32(
+    constant ggml_metal_kargs_im2col_3d &args,
+    device const uchar *src1c,
+    device float *dst,
+    uint tpig[[thread_position_in_grid]]
+) {
+    const uint64_t total = args.N * args.OD * args.OH * args.OW;
+    if (tpig >= total)
+      return;
+
+    uint64_t idx = tpig;
+
+    uint64_t iow = idx % args.OW;
+    idx /= args.OW;
+
+    uint64_t ioh = idx % args.OH;
+    idx /= args.OH;
+
+    uint64_t iod = idx % args.OD;
+    idx /= args.OD;
+
+    uint64_t in  = idx;
+
+    uint64_t dst_base_offset = ((in * args.OD + iod) * args.OH + ioh) * args.OW + iow;
+    dst_base_offset *= args.IC_KD_KH_KW;
+
+    for (uint32_t iic = 0; iic < args.IC; ++iic) {
+        const uint64_t src_offset0 = ((in * args.IC) + iic) * args.nb13;
+
+        for (uint32_t ikd = 0; ikd < args.KD; ++ikd) {
+            for (uint32_t ikh = 0; ikh < args.KH; ++ikh) {
+                for (uint32_t ikw = 0; ikw < args.KW; ++ikw) {
+                    const int32_t iiw = iow * args.s0 + ikw * args.d0 - args.p0;
+                    const int32_t iih = ioh * args.s1 + ikh * args.d1 - args.p1;
+                    const int32_t iid = iod * args.s2 + ikd * args.d2 - args.p2;
+
+                    const uint64_t dst_idx = dst_base_offset + iic * args.KD_KH_KW + ikd * args.KH_KW + ikh * args.KW + ikw;
+
+                    float val = 0.0f;
+
+                    if (iid >= 0 && iid < args.ID && iih >= 0 && iih < args.IH && iiw >= 0 && iiw < args.IW) {
+                        const uint64_t src_offset = src_offset0 + iid * args.nb12 + iih * args.nb11 + iiw * args.nb10;
+                        const device const uchar* src_bytes = src1c + src_offset;
+                        val = *reinterpret_cast<const device float*>(src_bytes);
+                    }
+
+                    dst[dst_idx] = val;
+                }
+            }
+        }
+    }
+}
+
+kernel void kernel_op_im2col_3d_f16(
+    constant ggml_metal_kargs_im2col_3d &args,
+    device const uchar *src1c,
+    device half *dst,
+    uint tpig[[thread_position_in_grid]]
+) {
+    const uint64_t total = args.N * args.OD * args.OH * args.OW;
+    if (tpig >= total)
+      return;
+
+    uint64_t idx = tpig;
+
+    uint64_t iow = idx % args.OW;
+    idx /= args.OW;
+
+    uint64_t ioh = idx % args.OH;
+    idx /= args.OH;
+
+    uint64_t iod = idx % args.OD;
+    idx /= args.OD;
+
+    uint64_t in  = idx;
+
+    uint64_t dst_base_offset = ((in * args.OD + iod) * args.OH + ioh) * args.OW + iow;
+    dst_base_offset *= args.IC_KD_KH_KW;
+
+    for (uint32_t iic = 0; iic < args.IC; ++iic) {
+        const uint64_t src_offset0 = ((in * args.IC) + iic) * args.nb13;
+
+        for (uint32_t ikd = 0; ikd < args.KD; ++ikd) {
+            for (uint32_t ikh = 0; ikh < args.KH; ++ikh) {
+                for (uint32_t ikw = 0; ikw < args.KW; ++ikw) {
+                    const int32_t iiw = iow * args.s0 + ikw * args.d0 - args.p0;
+                    const int32_t iih = ioh * args.s1 + ikh * args.d1 - args.p1;
+                    const int32_t iid = iod * args.s2 + ikd * args.d2 - args.p2;
+
+                    const uint64_t dst_idx = dst_base_offset + iic * args.KD_KH_KW + ikd * args.KH_KW + ikh * args.KW + ikw;
+
+                    half val = half(0.0f);
+
+                    if (iid >= 0 && iid < args.ID && iih >= 0 && iih < args.IH && iiw >= 0 && iiw < args.IW) {
+                        const uint64_t src_offset = src_offset0 + iid * args.nb12 + iih * args.nb11 + iiw * args.nb10;
+                        const device const uchar* src_bytes = src1c + src_offset;
+                        val = half(*reinterpret_cast<const device float*>(src_bytes));
+                    }
+
+                    dst[dst_idx] = val;
+                }
+            }
+        }
+    }
 }
