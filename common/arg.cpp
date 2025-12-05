@@ -1533,7 +1533,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.sampling.backend_sampling = true;
         }
-    ).set_sparam());
+    ).set_sparam().set_env("LLAMA_ARG_BACKEND_SAMPLING"));
     add_opt(common_arg(
         {"--pooling"}, "{none,mean,cls,last,rank}",
         "pooling type for embeddings, use model default if unspecified",

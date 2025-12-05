@@ -39,7 +39,7 @@ const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_ty
 
 struct llama_sampler_chain_params llama_sampler_chain_default_params() {
     struct llama_sampler_chain_params result = {
-        /*.no_perf                     =*/ true,
+        /*.no_perf =*/ true,
     };
 
     return result;

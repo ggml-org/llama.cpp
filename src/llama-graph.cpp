@@ -479,11 +479,13 @@ bool llm_graph_input_sampling::can_reuse(const llm_graph_params & params) {
         return true;
     }
 
+    // TODO: this check is incorrect - it has to check against the last set of samplers that were used in the previous graph
     for (const auto & [seq_id, sampler] : params.samplers) {
         if (samplers[seq_id] != sampler) {
-           return false;
+            return false;
         }
     }
+
     return true;
 }
 
@@ -2046,7 +2048,7 @@ void llm_graph_context::build_pooling(
 }
 
 void llm_graph_context::build_sampling() const {
-    if (samplers.empty()) {
+    if (samplers.empty() || !res->t_logits) {
         return;
     }
 
@@ -2080,9 +2082,9 @@ void llm_graph_context::build_sampling() const {
             continue;
         }
 
-        const int32_t row_idx = it->second;
-
         active_samplers[seq_id] = sampler;
+
+        const int32_t row_idx = it->second;
 
         ggml_tensor * logits_seq = ggml_view_1d(ctx0, logits_t, n_vocab, row_idx * logits_t->nb[1]);
         ggml_format_name(logits_seq, "logits_seq_%d", seq_id);
@@ -2109,10 +2111,10 @@ void llm_graph_context::build_sampling() const {
             ggml_build_forward_expand(gf, data.probs);
         }
 
-        if (data.logits != logits_seq) {
+        if (data.logits != nullptr) {
             ggml_set_output(data.logits);
             res->t_sampled_logits[seq_id] = data.logits;
-            ggml_build_forward_expand(gf, res->t_sampled_logits[seq_id]);
+            ggml_build_forward_expand(gf, data.logits);
         }
 
         if (data.candidates != nullptr) {

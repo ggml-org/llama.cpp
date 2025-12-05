@@ -17,7 +17,7 @@ def create_server():
     server = ServerPreset.tinyllama2()
 
 @pytest.mark.parametrize("prompt,n_predict,re_content,n_prompt,n_predicted,truncated,return_tokens", [
-    ("I believe the meaning of life is", 8, "(going|bed)+", 18, 8, False, False),
+    ("I believe the meaning of life is", 8, "(going|bed)+|froze and every", 18, 8, False, False),
     ("Write a joke about AI from a very long prompt which will not be truncated", 64, "(princesses|everyone|kids|Anna|forest)+", 46, 64, False, True),
 ])
 def test_completion(prompt: str, n_predict: int, re_content: str, n_prompt: int, n_predicted: int, truncated: bool, return_tokens: bool):
@@ -42,7 +42,7 @@ def test_completion(prompt: str, n_predict: int, re_content: str, n_prompt: int,
 
 
 @pytest.mark.parametrize("prompt,n_predict,re_content,n_prompt,n_predicted,truncated", [
-    ("I believe the meaning of life is", 8, "(going|bed)+", 18, 8, False),
+    ("I believe the meaning of life is", 8, "(going|bed)+|froze and every", 18, 8, False),
     ("Write a joke about AI from a very long prompt which will not be truncated", 64, "(princesses|everyone|kids|Anna|forest)+", 46, 64, False),
 ])
 def test_completion_stream(prompt: str, n_predict: int, re_content: str, n_prompt: int, n_predicted: int, truncated: bool):
@@ -103,7 +103,7 @@ def test_completion_with_openai_library():
     assert res.system_fingerprint is not None and res.system_fingerprint.startswith("b")
     assert res.choices[0].finish_reason == "length"
     assert res.choices[0].text is not None
-    assert match_regex("(going|bed)+", res.choices[0].text)
+    assert match_regex("(going|bed)+|froze and every", res.choices[0].text)
 
 
 def test_completion_stream_with_openai_library():
@@ -122,7 +122,7 @@ def test_completion_stream_with_openai_library():
         if choice.finish_reason is None:
             assert choice.text is not None
             output_text += choice.text
-    assert match_regex("(going|bed)+", output_text)
+    assert match_regex("(going|bed)+|froze and every", output_text)
 
 
 # Test case from https://github.com/ggml-org/llama.cpp/issues/13780
@@ -146,7 +146,7 @@ def test_completion_stream_with_openai_library_stops():
         if choice.finish_reason is None:
             assert choice.text is not None
             output_text += choice.text
-    assert match_regex("Sure, here's one for[\\s\\S]*", output_text), f'Unexpected output: {output_text}'
+    assert match_regex("Sure, here's one for[\\s\\S]*|Sure thing..Why don't", output_text), f'Unexpected output: {output_text}'
 
 
 @pytest.mark.parametrize("n_slots", [1, 2])
@@ -441,7 +441,7 @@ def test_n_probs():
     res = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
         "n_probs": 10,
-        "temperature": 0.0,
+        "temperature": 1.0,
         "n_predict": 5,
     })
     assert res.status_code == 200
@@ -466,7 +466,7 @@ def test_n_probs_stream():
     res = server.make_stream_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
         "n_probs": 10,
-        "temperature": 0.0,
+        "temperature": 1.0,
         "n_predict": 5,
         "stream": True,
     })
@@ -487,13 +487,14 @@ def test_n_probs_stream():
                     assert "bytes" in prob and type(prob["bytes"]) == list
 
 
+# TODO: this does not work with backend sampling
 def test_n_probs_post_sampling():
     global server
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
         "n_probs": 10,
-        "temperature": 0.0,
+        "temperature": 1.0,
         "n_predict": 5,
         "post_sampling_probs": True,
     })

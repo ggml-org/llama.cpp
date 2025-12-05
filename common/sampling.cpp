@@ -104,8 +104,9 @@ struct ring_buffer {
 struct common_sampler {
     common_params_sampling params;
 
-    struct llama_sampler * grmr;
     struct llama_sampler * chain;
+
+    bool grammar;
 
     ring_buffer<llama_token> prev;
 
@@ -116,7 +117,6 @@ struct common_sampler {
     void reset() {
         prev.clear();
 
-        llama_sampler_reset(grmr);
         llama_sampler_reset(chain);
     }
 
@@ -184,10 +184,15 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
 
     lparams.no_perf = params.no_perf;
 
-    struct llama_sampler * grmr;
+    llama_sampler * chain = llama_sampler_chain_init(lparams);
+
+    bool grammar = false;
+    std::vector<llama_sampler *> samplers;
+
     if (params.grammar.compare(0, 11, "%llguidance") == 0) {
 #ifdef LLAMA_USE_LLGUIDANCE
-        grmr = llama_sampler_init_llg(vocab, "lark", params.grammar.c_str());
+        samplers.push_back(llama_sampler_init_llg(vocab, "lark", params.grammar.c_str()));
+        grammar = true;
 #else
         GGML_ABORT("llguidance (cmake -DLLAMA_LLGUIDANCE=ON) is not enabled");
 #endif // LLAMA_USE_LLGUIDANCE
@@ -234,26 +239,20 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
             trigger_patterns_c.push_back(regex.c_str());
         }
 
-        grmr = params.grammar_lazy
-             ? llama_sampler_init_grammar_lazy_patterns(vocab, params.grammar.c_str(), "root",
-                                                        trigger_patterns_c.data(), trigger_patterns_c.size(),
-                                                        trigger_tokens.data(), trigger_tokens.size())
-             :      llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root");
-        if (!grmr) {
-            return nullptr;
+        if (!params.grammar.empty()) {
+             if (params.grammar_lazy) {
+                 samplers.push_back(
+                         llama_sampler_init_grammar_lazy_patterns(vocab, params.grammar.c_str(), "root",
+                             trigger_patterns_c.data(), trigger_patterns_c.size(),
+                             trigger_tokens.data(),     trigger_tokens.size()));
+             } else {
+                 samplers.push_back(llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root"));
+             }
+
+             grammar = true;
         }
     }
 
-    auto * result = new common_sampler {
-        /* .params = */ params,
-        /* .grmr   = */ grmr,
-        /* .chain  = */ llama_sampler_chain_init(lparams),
-        /* .prev   = */ ring_buffer<llama_token>(std::max(32, params.n_prev)),
-        /* .cur    = */ {},
-        /* .cur_p  = */ {},
-    };
-
-    std::vector<llama_sampler *> samplers;
     if (params.has_logit_bias()) {
         samplers.push_back(llama_sampler_init_logit_bias(llama_vocab_n_tokens(vocab), params.logit_bias.size(), params.logit_bias.data()));
     }
@@ -316,15 +315,23 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     }
 
     for (auto * smpl : samplers) {
-        llama_sampler_chain_add(result->chain, smpl);
+        llama_sampler_chain_add(chain, smpl);
     }
+
+    auto * result = new common_sampler {
+        /* .params  = */ params,
+        /* .chain   = */ chain,
+        /* .grammar = */ grammar,
+        /* .prev    = */ ring_buffer<llama_token>(std::max(32, params.n_prev)),
+        /* .cur     = */ {},
+        /* .cur_p   = */ {},
+    };
 
     return result;
 }
 
 void common_sampler_free(struct common_sampler * gsmpl) {
     if (gsmpl) {
-        llama_sampler_free(gsmpl->grmr);
         llama_sampler_free(gsmpl->chain);
 
         delete gsmpl;
@@ -334,11 +341,24 @@ void common_sampler_free(struct common_sampler * gsmpl) {
 void common_sampler_accept(struct common_sampler * gsmpl, llama_token token, bool accept_grammar) {
     const auto tm = gsmpl->tm();
 
-    if (accept_grammar) {
-        llama_sampler_accept(gsmpl->grmr, token);
-    }
+    if (gsmpl->grammar) {
+        const int n_smpl = llama_sampler_chain_n(gsmpl->chain);
 
-    llama_sampler_accept(gsmpl->chain, token);
+        for (int i = 0; i < n_smpl; i++) {
+            auto * smpl = llama_sampler_chain_get(gsmpl->chain, i);
+
+            // the grammar sampler is always the first one
+            if (i == 0) {
+                if (accept_grammar) {
+                    llama_sampler_accept(smpl, token);
+                }
+            } else {
+                llama_sampler_accept(smpl, token);
+            }
+        }
+    } else {
+        llama_sampler_accept(gsmpl->chain, token);
+    }
 
     gsmpl->prev.push_back(token);
 }
@@ -349,12 +369,12 @@ void common_sampler_reset(struct common_sampler * gsmpl) {
 
 struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
     return new common_sampler {
-        /* .params = */ gsmpl->params,
-        /* .grmr   = */ llama_sampler_clone(gsmpl->grmr),
-        /* .chain  = */ llama_sampler_clone(gsmpl->chain),
-        /* .prev   = */ gsmpl->prev,
-        /* .cur    = */ gsmpl->cur,
-        /* .cur_p  = */ gsmpl->cur_p,
+        /* .params  = */ gsmpl->params,
+        /* .chain   = */ llama_sampler_clone(gsmpl->chain),
+        /* .grammar = */ gsmpl->grammar,
+        /* .prev    = */ gsmpl->prev,
+        /* .cur     = */ gsmpl->cur,
+        /* .cur_p   = */ gsmpl->cur_p,
     };
 }
 
@@ -407,69 +427,41 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
     return gsmpl->chain;
 }
 
-llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
-    // Check if a backend sampler has already sampled a token in which case we
-    // return that token id directly.
-    {
-        const llama_token id = llama_get_sampled_token_ith(ctx, idx);
-
-        if (id != LLAMA_TOKEN_NULL) {
-            LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, id);
-            return id;
-        }
-    }
-
+llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx) {
     llama_synchronize(ctx);
 
     // start measuring sampling time after the llama_context synchronization in order to not measure any ongoing async operations
     const auto tm = gsmpl->tm();
 
+    llama_token id = LLAMA_TOKEN_NULL;
+
+    // Check if a backend sampler has already sampled a token in which case we
+    // return that token id directly.
+    {
+        id = llama_get_sampled_token_ith(ctx, idx);
+
+        if (id != LLAMA_TOKEN_NULL) {
+            LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, id);
+
+            return id;
+        }
+    }
+
     gsmpl->set_logits(ctx, idx);
 
-    auto & grmr  = gsmpl->grmr;
     auto & chain = gsmpl->chain;
     auto & cur_p = gsmpl->cur_p; // initialized by set_logits
-
-    if (grammar_first) {
-        llama_sampler_apply(grmr, &cur_p);
-    }
 
     llama_sampler_apply(chain, &cur_p);
 
     GGML_ASSERT(cur_p.selected != -1 && "no selected token during sampling - check your sampling configuration");
 
-    const llama_token id = cur_p.data[cur_p.selected].id;
+    id = cur_p.data[cur_p.selected].id;
 
-    if (grammar_first) {
-        return id;
-    }
-
-    // check if it the sampled token fits the grammar
-    {
-        llama_token_data       single_token_data       = { id, 1.0f, 0.0f };
-        llama_token_data_array single_token_data_array = { &single_token_data, 1, -1, false };
-
-        llama_sampler_apply(grmr, &single_token_data_array);
-
-        const bool is_valid = single_token_data_array.data[0].logit != -INFINITY;
-        if (is_valid) {
-            return id;
-        }
-    }
-
-    // resampling:
-    // if the token is not valid, sample again, but first apply the grammar sampler and then the sampling chain
-    gsmpl->set_logits(ctx, idx);
-
-    llama_sampler_apply(grmr,  &cur_p);
-    llama_sampler_apply(chain, &cur_p);
-
-    GGML_ASSERT(cur_p.selected != -1 && "no selected token during re-sampling - check your sampling configuration");
-
-    return cur_p.data[cur_p.selected].id;
+    return id;
 }
 
-std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first) {
+std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft) {
     GGML_ASSERT(idxs.size() == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
 
     std::vector<llama_token> result;
@@ -477,7 +469,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
 
     size_t i = 0;
     for (; i < draft.size(); i++) {
-        const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
+        const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i]);
 
         common_sampler_accept(gsmpl, id, true);
 
@@ -489,7 +481,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
     }
 
     if (i == draft.size()) {
-        const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
+        const llama_token id = common_sampler_sample(gsmpl, ctx, idxs[i]);
 
         common_sampler_accept(gsmpl, id, true);
 
@@ -499,13 +491,13 @@ std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sample
     return result;
 }
 
-std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const llama_tokens & draft, bool grammar_first) {
+std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const llama_tokens & draft) {
     std::vector<int> idxs(draft.size() + 1);
     for (size_t i = 0; i < idxs.size(); ++i) {
         idxs[i] = i;
     }
 
-    return common_sampler_sample_and_accept_n(gsmpl, ctx, idxs, draft, grammar_first);
+    return common_sampler_sample_and_accept_n(gsmpl, ctx, idxs, draft);
 }
 
 uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl) {

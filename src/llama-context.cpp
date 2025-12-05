@@ -63,8 +63,6 @@ llama_context::llama_context(
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
     if (params.samplers != nullptr && params.n_samplers > 0) {
-        sampling.samplers.reserve(params.n_samplers);
-
         for (size_t i = 0; i < params.n_samplers; ++i) {
             const auto & config = params.samplers[i];
 
@@ -820,7 +818,7 @@ size_t llama_context::get_sampled_logits_count(int32_t idx) {
     output_reorder();
 
     if (sampling.logits == nullptr) {
-        return 0;
+        return model.vocab.n_tokens();
     }
 
     try {
@@ -930,7 +928,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     }
 
     if (sampler && !can_offload) {
-        LLAMA_LOG_WARN("%s: sampler '%s' cannot be offloaded to the backend\n", __func__, llama_sampler_name(sampler));
+        LLAMA_LOG_WARN("%s: sampler '%s' for seq_id = %d, cannot be offloaded to the backend\n", __func__, llama_sampler_name(sampler), seq_id);
 
         sampling.samplers.erase(seq_id);
 
@@ -2977,14 +2975,15 @@ float * llama_get_logits(llama_context * ctx) {
 float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
-    if (ctx->get_sampled_token_ith(i) != LLAMA_TOKEN_NULL) {
-        return nullptr;
-    }
-    if (ctx->get_sampled_probs_ith(i) != nullptr) {
-        return nullptr;
+    float * res = nullptr;
+
+    res = ctx->get_sampled_logits_ith(i);
+
+    if (!res) {
+        res = ctx->get_logits_ith(i);
     }
 
-    return ctx->get_logits_ith(i);
+    return res;
 }
 
 float * llama_get_embeddings(llama_context * ctx) {

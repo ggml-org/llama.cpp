@@ -1003,7 +1003,12 @@ struct server_context_impl {
                 return false;
             }
 
-            llama_set_sampler(ctx, slot.id, common_sampler_get(slot.smpl.get()));
+            // TODO: tmp until backend sampling is fully implemented
+            if (task.params.sampling.backend_sampling) {
+                llama_set_sampler(ctx, slot.id, common_sampler_get(slot.smpl.get()));
+            } else {
+                llama_set_sampler(ctx, slot.id, nullptr);
+            }
 
             SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
         }
@@ -1156,6 +1161,7 @@ struct server_context_impl {
         return slot.has_next_token; // continue
     }
 
+    // TODO: does not work with backend sampling
     void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) const {
         size_t n_probs = slot.task->params.sampling.n_probs;
         size_t n_vocab = llama_vocab_n_tokens(vocab);
