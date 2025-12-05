@@ -934,6 +934,7 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
 
     // for some reason we need volatile here so that the compiler doesn't try anything funky
     volatile HVX_Vector rsum = Q6_V_vsplat_R(0);
+    const HVX_Vector    kOne = Q6_Vh_vsplat_R(0x3C00);  // 1.0 in fp16
 
     uint32_t i = 0;
 
@@ -941,7 +942,7 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
         HVX_VectorPair yp = vy[i];
 
         HVX_Vector     x  = vx[i];
-        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), Q6_Vh_vsplat_R(0x3C00));  // mul by 1.0
+        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), kOne);  // mul by 1.0
 
         HVX_Vector hi = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(xp)), Q6_V_hi_W(yp));
         HVX_Vector lo = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(xp)), Q6_V_lo_W(yp));
@@ -954,7 +955,7 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
         HVX_VectorPair yp = vy[i];
 
         HVX_Vector     x  = vx[i];
-        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), Q6_Vh_vsplat_R(0x3C00));  // mul by 1.0
+        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), kOne);  // mul by 1.0
 
         if (nv1 >= 32) {
             HVX_Vector hi = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(xp)), Q6_V_hi_W(yp));
