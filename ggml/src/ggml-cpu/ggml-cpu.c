@@ -2833,8 +2833,12 @@ struct ggml_cplan ggml_graph_plan(
                         const int64_t ne11 = node->src[1]->ne[1]; // H
                         const int64_t ne12 = node->src[1]->ne[2]; // Channels In
 
-                        cur += sizeof(ggml_fp16_t)*ne00*ne01*ne02*ne03;
-                        cur += sizeof(ggml_fp16_t)*ne10*ne11*ne12;
+                        GGML_ASSERT(node->src[0]->type == GGML_TYPE_F16 || node->src[0]->type == GGML_TYPE_F32);
+                        GGML_ASSERT(node->src[1]->type == GGML_TYPE_F32);
+
+                        cur += ggml_type_size(node->src[0]->type) * ne00 * ne01 * ne02 * ne03;
+                        cur += ggml_type_size(node->src[0]->type) * ne10 * ne11 * ne12;
+
                     } break;
                 case GGML_OP_TOP_K:
                     {
