@@ -156,6 +156,20 @@ void common_chat_msg_parser::add_reasoning_content(const std::string &reasoning_
     result_.reasoning_content += reasoning_content;
 }
 
+void common_chat_msg_parser::mark_reasoning_active(const std::string & end_tag) {
+    result_.reasoning_status.detected = true;
+    result_.reasoning_status.active   = true;
+    if (!end_tag.empty()) {
+        result_.reasoning_status.end_tag = end_tag;
+    }
+}
+
+void common_chat_msg_parser::mark_reasoning_closed() {
+    if (result_.reasoning_status.detected) {
+        result_.reasoning_status.active = false;
+    }
+}
+
 bool common_chat_msg_parser::add_tool_call(const std::string & name, const std::string & id, const std::string & arguments) {
     if (name.empty()) {
         return false;
@@ -329,11 +343,13 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
     const size_t saved_pos = pos_;
     const size_t saved_content_size = result_.content.size();
     const size_t saved_reasoning_size = result_.reasoning_content.size();
+    const auto   saved_reasoning_status = result_.reasoning_status;
 
     auto restore_state = [&]() {
         move_to(saved_pos);
         result_.content.resize(saved_content_size);
         result_.reasoning_content.resize(saved_reasoning_size);
+        result_.reasoning_status = saved_reasoning_status;
     };
 
     // Allow leading whitespace to be preserved as content when reasoning is present at the start
@@ -370,9 +386,11 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
         if (whitespace_end > pos_) {
             add_content(input_.substr(pos_, whitespace_end - pos_));
         }
+        mark_reasoning_active(end_think);
         set_reasoning_prefix(cursor);
         cursor += start_think.size();
     } else if (syntax_.thinking_forced_open) {
+        mark_reasoning_active(end_think);
         cursor = whitespace_end;
     } else {
         restore_state();
@@ -398,8 +416,10 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
 
         if (end_pos > cursor) {
             handle_reasoning(input_.substr(cursor, end_pos - cursor), /* closed */ true);
+            mark_reasoning_closed();
         } else {
             handle_reasoning("", /* closed */ true);
+            mark_reasoning_closed();
         }
 
         cursor = end_pos + end_think.size();
@@ -420,6 +440,7 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
                 move_to(input_.size());
                 return true;
             }
+            mark_reasoning_active(end_think);
             set_reasoning_prefix(cursor);
             cursor += start_think.size();
             continue;

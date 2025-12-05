@@ -705,6 +705,9 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
 
     // Parse content
     bool reasoning_unclosed = builder.syntax().thinking_forced_open;
+    if (reasoning_unclosed) {
+        builder.mark_reasoning_active(end_think);
+    }
     std::string unclosed_reasoning_content("");
     for (;;) {
         auto tc = try_find_2_literal_splited_by_spaces(builder, form.scope_start, form.tool_start);
@@ -736,6 +739,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
                 continue;
             } else {
                 reasoning_unclosed = false;
+                builder.mark_reasoning_closed();
                 std::string reasoning_content;
                 if (pos == std::string::npos) {
                     reasoning_content = std::move(content);
@@ -772,6 +776,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         bool toolcall_in_think = false;
         for (auto think_start = content.find(start_think); think_start != std::string::npos; think_start = content.find(start_think, think_start)) {
             if (auto think_end = content.find(end_think, think_start + start_think.size()); think_end != std::string::npos) {
+                builder.mark_reasoning_active(end_think);
                 if (builder.syntax().reasoning_format != COMMON_REASONING_FORMAT_NONE && !builder.syntax().reasoning_in_content) {
                     auto reasoning_content = content.substr(think_start + start_think.size(), think_end - think_start - start_think.size());
                     builder.add_reasoning_content(reasoning_content);
@@ -779,11 +784,13 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
                 } else {
                     think_start = think_end + end_think.size() - 1;
                 }
+                builder.mark_reasoning_closed();
             } else {
                 // This <tool_call> start is in thinking block, skip this tool call
                 auto pos = think_start + start_think.size();
                 unclosed_reasoning_content = content.substr(pos) + tool_call_start;
                 reasoning_unclosed = true;
+                builder.mark_reasoning_active(end_think);
                 content.resize(think_start);
                 toolcall_in_think = true;
             }

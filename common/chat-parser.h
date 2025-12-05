@@ -56,6 +56,10 @@ class common_chat_msg_parser {
     // Appends to the result.reasoning_content field
     void add_reasoning_content(const std::string & reasoning_content);
 
+    // Track reasoning status to expose start/end markers to callers
+    void mark_reasoning_active(const std::string & end_tag);
+    void mark_reasoning_closed();
+
     // Adds a tool call to the result. If the tool call is too incomplete (e.g. name empty), it won't add anything.
     bool add_tool_call(const std::string & name, const std::string & id, const std::string & arguments);
 
