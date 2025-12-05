@@ -2341,9 +2341,18 @@ class LlamaModel(TextModel):
         self.gguf_writer.add_add_bos_token(True)
         self.gguf_writer.add_add_eos_token(False)
 
-        template_dir = Path(__file__).parent / "models/templates/"
+        local_template_file_path = self.dir_model / "chat_template.jinja"
 
-        if not self.is_mistral_format or not self.disable_mistral_community_chat_template:
+        if self.is_mistral_format and local_template_file_path.is_file():
+            # Ministral-3 and other new Mistral models come with chat templates.
+            # ref: https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512/tree/main
+            logger.info("Using an existing Mistral local chat template.")
+
+            with open(local_template_file_path, "r", encoding="utf-8") as f:
+                template = f.read()
+        elif not self.is_mistral_format or not self.disable_mistral_community_chat_template:
+            template_dir = Path(__file__).parent / "models/templates/"
+
             # Log only for Mistral format that the official tokenization and detokenization is via `mistral-common`.
             if self.is_mistral_format:
                 logger.info(
@@ -2351,9 +2360,12 @@ class LlamaModel(TextModel):
                     "Mistral recommends to use `mistral-common` to perform tokenization and detokenization."
                 )
             template = MistralModel.get_community_chat_template(vocab, template_dir, self.is_mistral_format)
-            self.gguf_writer.add_chat_template(template)
         else:
-            logger.info("Not using a Mistral community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
+            logger.info("Not using a Mistral local or community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
+            template = None
+
+        if template is not None:
+            self.gguf_writer.add_chat_template(template)
 
     def set_vocab(self):
         if self.is_mistral_format:
