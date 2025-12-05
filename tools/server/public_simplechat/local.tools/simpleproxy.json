@@ -1,10 +1,10 @@
 {
-    "allowed.schemes": [
+    "acl.schemes": [
         "file",
         "http",
         "https"
     ],
-    "allowed.domains": [
+    "acl.domains": [
         ".*\\.wikipedia\\.org$",
         ".*\\.bing\\.com$",
         "^www\\.bing\\.com$",
@@ -51,5 +51,5 @@
         "^github\\.com$",
         ".*\\.github\\.com$"
     ],
-    "bearer.insecure": "NeverSecure"
+    "sec.bearerAuth": "NeverSecure"
 }

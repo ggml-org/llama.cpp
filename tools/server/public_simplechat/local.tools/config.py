@@ -2,7 +2,7 @@
 # by Humans for All
 #
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Optional
 import http.server
 import ssl
@@ -11,11 +11,25 @@ import urlvalidator as mUV
 import debug as mDebug
 
 
-gConfigNeeded = [ 'acl.schemes', 'acl.domains', 'sec.bearer' ]
+gConfigNeeded = [ 'acl.schemes', 'acl.domains', 'sec.bearerAuth' ]
+
+@dataclass
+class DictDataclassMixin(dict):
+    """
+    Mixin to ensure dataclass attributes get mapped as dict keys in __post_init__
+    """
+
+    def __post_init__(self):
+        """
+        Skip if already set using maybe say dict init mechanism or ...
+        """
+        for f in fields(self):
+            if f.name not in self:
+                self[f.name] = getattr(self, f.name)
 
 
-@dataclass(frozen=True)
-class Sec(dict):
+@dataclass
+class Sec(DictDataclassMixin, dict):
     """
     Used to store security related config entries
     """
@@ -24,17 +38,17 @@ class Sec(dict):
     bearerAuth: str = ""
 
 @dataclass
-class ACL(dict):
-    schemes: Optional[list[str]] = None
+class ACL(DictDataclassMixin, dict):
+    schemes: list[str] = field(default_factory=list)
     domains: list[str] = field(default_factory=list)
 
 @dataclass
-class Network(dict):
+class Network(DictDataclassMixin, dict):
     port: int = 3128
     addr: str = ''
 
 @dataclass
-class Op(dict):
+class Op(DictDataclassMixin, dict):
     configFile: str = "/dev/null"
     debug: bool = False
     server: http.server.ThreadingHTTPServer|None = None
@@ -43,7 +57,7 @@ class Op(dict):
     bearerTransformedYear: str = ""
 
 @dataclass
-class Config(dict):
+class Config(DictDataclassMixin, dict):
     op: Op = field(default_factory=Op)
     sec: Sec = field(default_factory=Sec)
     acl: ACL = field(default_factory=ACL)
@@ -104,7 +118,7 @@ class Config(dict):
                         exit(112)
                     self.set_value(cfg, gotValue)
                 except KeyError:
-                    print(f"ERRR:LoadConfig:{cfg}:UnknownCommand")
+                    print(f"ERRR:LoadConfig:{cfg}:UnknownConfig!")
                     exit(113)
 
     def process_args(self, args: list[str]):
@@ -142,7 +156,7 @@ class Config(dict):
                 if cArg == 'op.configFile':
                     self.load_config(aValue)
             except KeyError:
-                print(f"ERRR:ProcessArgs:{iArg}:{cArg}:UnknownCommand:{sys.exception()}")
+                print(f"ERRR:ProcessArgs:{iArg}:{cArg}:UnknownArgCommand!:{sys.exception()}")
                 exit(103)
         print(self)
         self.validate()
