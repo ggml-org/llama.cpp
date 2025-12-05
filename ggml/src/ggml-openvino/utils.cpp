@@ -248,9 +248,11 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
 
         if (cache_hit) {
             std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
-            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static,
-                                                           is_prefill, prefill_chunk_size);
-            decoder_cache[key] = ggml_decoder;
+            ggml_decoder = decoder_cache[key];
+            ggml_decoder->m_is_prefill = is_prefill;
+            ggml_decoder->set_model_params(m_params);
+            ggml_decoder->set_compute_params(c_params);
+            ggml_decoder->add_extra_inputs();
             infer_request = is_prefill ? infer_request_cache_prefill[key] : infer_request_cache[key];
 
             decoder_end_time = ggml_time_us();
