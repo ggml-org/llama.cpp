@@ -51,6 +51,12 @@ enum mtmd_input_chunk_type {
     MTMD_INPUT_CHUNK_TYPE_AUDIO,
 };
 
+enum mtmd_default_marker_placement {
+    MTMD_DEFAULT_MARKER_PLACEMENT_NONE,  // place media marker freely inside the message
+    MTMD_DEFAULT_MARKER_PLACEMENT_BEGIN, // place media marker in the beginning of the message
+    MTMD_DEFAULT_MARKER_PLACEMENT_END,   // place media marker in the end of the message
+};
+
 // opaque types
 struct mtmd_context;
 struct mtmd_bitmap;
@@ -89,7 +95,8 @@ struct mtmd_context_params {
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
 };
 
-MTMD_API const char * mtmd_default_marker(void);
+MTMD_API const char *                  mtmd_default_marker(void);
+MTMD_API mtmd_default_marker_placement mtmd_get_default_marker_placement(mtmd_context * ctx);
 
 MTMD_API struct mtmd_context_params mtmd_context_params_default(void);
 

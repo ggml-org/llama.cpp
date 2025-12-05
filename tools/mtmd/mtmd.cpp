@@ -1105,3 +1105,11 @@ void mtmd_log_set(ggml_log_callback log_callback, void * user_data) {
     g_logger_state.log_callback = log_callback ? log_callback : clip_log_callback_default;
     g_logger_state.log_callback_user_data = user_data;
 }
+
+mtmd_default_marker_placement mtmd_get_default_marker_placement(mtmd_context * ctx) {
+    if (ctx && ctx->ctx_v && clip_get_projector_type(ctx->ctx_v) == PROJECTOR_TYPE_LFM2) {
+        return MTMD_DEFAULT_MARKER_PLACEMENT_BEGIN;
+    }
+
+    return MTMD_DEFAULT_MARKER_PLACEMENT_NONE;
+}
