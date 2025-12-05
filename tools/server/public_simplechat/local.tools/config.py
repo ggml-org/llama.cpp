@@ -61,6 +61,9 @@ class Network(DictyDataclassMixin):
     port: int = 3128
     addr: str = ''
 
+    def server_address(self):
+        return (self.addr, self.port)
+
 
 @dataclass
 class Op(DictyDataclassMixin):

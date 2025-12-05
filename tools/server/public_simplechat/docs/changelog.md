@@ -316,6 +316,7 @@ Chat Session specific settings
   * add ssl ie https support and restrict it to latest supported ssl/tls version
   * enable multi threaded ssl and client request handling, so that rogue clients cant mount simple DoS
     by opening connection and then missing in action.
+  * switch to a Dicty DataClass based Config with better type validation and usage, instead of literal dict++
 
 
 ## ToDo

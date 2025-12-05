@@ -95,7 +95,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return { 'AllOk': False, 'Msg': "Invalid auth line" }
         if authlineA[0] != 'Bearer':
             return { 'AllOk': False, 'Msg': "Invalid auth type" }
-        if authlineA[1] != gMe['--bearer.transformed']:
+        if authlineA[1] != gMe.op.bearerTransformed:
             return { 'AllOk': False, 'Msg': "Invalid auth" }
         return { 'AllOk': True, 'Msg': "Auth Ok" }
 
@@ -159,8 +159,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         """
         print(f"\n\n\nDBUG:ProxyHandler:Handle:RequestFrom:{self.client_address}")
         try:
-            if (gMe['sslContext']):
-                self.request = gMe['sslContext'].wrap_socket(self.request, server_side=True)
+            if (gMe.op.sslContext):
+                self.request = gMe.op.sslContext.wrap_socket(self.request, server_side=True)
                 self.rfile = self.request.makefile('rb', self.rbufsize)
                 self.wfile = self.request.makefile('wb', self.wbufsize)
         except:
@@ -203,17 +203,16 @@ def setup_server():
     Helps setup a http/https server
     """
     try:
-        gMe['serverAddr'] = ('', gMe['--port'])
-        gMe['server'] = http.server.ThreadingHTTPServer(gMe['serverAddr'], ProxyHandler)
-        if gMe.get('--sec.keyfile') and gMe.get('--sec.certfile'):
+        gMe.op.server = http.server.ThreadingHTTPServer(gMe.nw.server_address(), ProxyHandler)
+        if gMe.sec.get('keyFile') and gMe.sec.get('certFile'):
             sslCtxt = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            sslCtxt.load_cert_chain(certfile=gMe['--sec.certfile'], keyfile=gMe['--sec.keyfile'])
+            sslCtxt.load_cert_chain(certfile=gMe.sec.certFile, keyfile=gMe.sec.keyFile)
             sslCtxt.minimum_version = ssl.TLSVersion.MAXIMUM_SUPPORTED
             sslCtxt.maximum_version = ssl.TLSVersion.MAXIMUM_SUPPORTED
-            gMe['sslContext'] = sslCtxt
-            print(f"INFO:SetupServer:Starting on {gMe['serverAddr']}:Https mode")
+            gMe.op.sslContext = sslCtxt
+            print(f"INFO:SetupServer:Starting on {gMe.nw.server_address()}:Https mode")
         else:
-            print(f"INFO:SetupServer:Starting on {gMe['serverAddr']}:Http mode")
+            print(f"INFO:SetupServer:Starting on {gMe.nw.server_address()}:Http mode")
     except Exception as exc:
         print(f"ERRR:SetupServer:{traceback.format_exc()}")
         raise RuntimeError(f"SetupServer:{exc}") from exc
@@ -222,16 +221,18 @@ def setup_server():
 def run():
     try:
         setup_server()
-        gMe['server'].serve_forever()
+        if not gMe.op.server:
+            raise RuntimeError("Server missing!!!")
+        gMe.op.server.serve_forever()
     except KeyboardInterrupt:
         print("INFO:Run:Shuting down...")
-        if (gMe['server']):
-            gMe['server'].server_close()
+        if gMe.op.server:
+            gMe.op.server.server_close()
         sys.exit(0)
     except Exception as exc:
         print(f"ERRR:Run:Exiting:Exception:{exc}")
-        if (gMe['server']):
-            gMe['server'].server_close()
+        if gMe.op.server:
+            gMe.op.server.server_close()
         sys.exit(1)
 
 
