@@ -2,8 +2,8 @@
 # by Humans for All
 #
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Optional
 import http.server
 import ssl
 import sys
@@ -25,8 +25,8 @@ class Sec(dict):
 
 @dataclass
 class ACL(dict):
-    schemes: list[str] = []
-    domains: list[str] = []
+    schemes: Optional[list[str]] = None
+    domains: list[str] = field(default_factory=list)
 
 @dataclass
 class Network(dict):
@@ -44,10 +44,10 @@ class Op(dict):
 
 @dataclass
 class Config(dict):
-    op: Op = Op()
-    sec: Sec = Sec()
-    acl: ACL = ACL()
-    nw: Network = Network()
+    op: Op = field(default_factory=Op)
+    sec: Sec = field(default_factory=Sec)
+    acl: ACL = field(default_factory=ACL)
+    nw: Network = field(default_factory=Network)
 
     def get_type(self, keyTree: str):
         cKeyList = keyTree.split('.')
