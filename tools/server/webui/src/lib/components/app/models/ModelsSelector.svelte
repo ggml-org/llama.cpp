@@ -2,8 +2,8 @@
 	import { onMount, tick } from 'svelte';
 	import { ChevronDown, EyeOff, Loader2, MicOff, Package, Power } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import * as Popover from '$lib/components/ui/popover';
 	import { cn } from '$lib/components/ui/utils';
-	import { portalToBody } from '$lib/utils';
 	import {
 		modelsStore,
 		modelOptions,
@@ -18,7 +18,6 @@
 	import { ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { DialogModelInformation, SearchInput } from '$lib/components/app';
-	import { MENU_OFFSET, VIEWPORT_GUTTER } from '$lib/constants/floating-ui-constraints';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -144,6 +143,7 @@
 
 	let searchTerm = $state('');
 	let searchInputRef = $state<HTMLInputElement | null>(null);
+	let highlightedIndex = $state<number>(-1);
 
 	let filteredOptions: ModelOption[] = $derived(
 		(() => {
@@ -157,19 +157,21 @@
 		})()
 	);
 
+	// Get indices of compatible options for keyboard navigation
+	let compatibleIndices = $derived(
+		filteredOptions
+			.map((option, index) => (isModelCompatible(option) ? index : -1))
+			.filter((i) => i !== -1)
+	);
+
+	// Reset highlighted index when search term changes
+	$effect(() => {
+		void searchTerm;
+		highlightedIndex = -1;
+	});
+
 	let isOpen = $state(false);
 	let showModelDialog = $state(false);
-	let container: HTMLDivElement | null = null;
-	let menuRef = $state<HTMLDivElement | null>(null);
-	let menuWidth = $state<number | null>(null);
-	let triggerButton = $state<HTMLButtonElement | null>(null);
-	let menuPosition = $state<{
-		top: number;
-		left: number;
-		width: number;
-		placement: 'top' | 'bottom';
-		maxHeight: number;
-	} | null>(null);
 
 	onMount(async () => {
 		try {
@@ -179,161 +181,88 @@
 		}
 	});
 
-	function toggleOpen() {
+	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
 
-		if (isRouter) {
-			// Router mode: show dropdown
-			if (isOpen) {
-				closeMenu();
-			} else {
-				openMenu();
+		if (open) {
+			isOpen = true;
+			searchTerm = '';
+			highlightedIndex = -1;
+
+			// Focus search input after popover opens
+			tick().then(() => {
+				requestAnimationFrame(() => searchInputRef?.focus());
+			});
+
+			if (isRouter) {
+				modelsStore.fetchRouterModels().then(() => {
+					modelsStore.fetchModalitiesForLoadedModels();
+				});
 			}
 		} else {
-			// Single model mode: show dialog
-			showModelDialog = true;
+			isOpen = false;
+			searchTerm = '';
+			highlightedIndex = -1;
 		}
 	}
 
-	async function openMenu() {
+	function handleTriggerClick() {
 		if (loading || updating) return;
 
-		isOpen = true;
-		searchTerm = '';
-		menuWidth = null;
-		await tick();
-		updateMenuPosition();
-		requestAnimationFrame(() => updateMenuPosition());
-		requestAnimationFrame(() => searchInputRef?.focus());
-
-		if (isRouter) {
-			modelsStore.fetchRouterModels().then(() => {
-				modelsStore.fetchModalitiesForLoadedModels();
-			});
+		if (!isRouter) {
+			// Single model mode: show dialog instead of popover
+			showModelDialog = true;
 		}
+		// For router mode, the Popover handles open/close
 	}
 
 	export function open() {
 		if (isRouter) {
-			openMenu();
+			handleOpenChange(true);
 		} else {
 			showModelDialog = true;
 		}
 	}
 
 	function closeMenu() {
-		if (!isOpen) return;
-
-		isOpen = false;
-		menuPosition = null;
-		menuWidth = null;
-		searchTerm = '';
+		handleOpenChange(false);
 	}
 
-	function handlePointerDown(event: PointerEvent) {
-		if (!container) return;
+	function handleSearchKeyDown(event: KeyboardEvent) {
+		if (event.isComposing) return;
 
-		const target = event.target as Node | null;
+		if (event.key === 'ArrowDown') {
+			event.preventDefault();
+			if (compatibleIndices.length === 0) return;
 
-		if (target && !container.contains(target) && !(menuRef && menuRef.contains(target))) {
-			closeMenu();
-		}
-	}
-
-	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') {
-			closeMenu();
-		}
-	}
-
-	function handleResize() {
-		if (isOpen) {
-			updateMenuPosition();
-		}
-	}
-
-	async function updateMenuPosition() {
-		if (!isOpen || !triggerButton || !menuRef) return;
-
-		const triggerRect = triggerButton.getBoundingClientRect();
-		const viewportWidth = window.innerWidth;
-		const viewportHeight = window.innerHeight;
-
-		if (viewportWidth === 0 || viewportHeight === 0) return;
-
-		const scrollHeight = menuRef.scrollHeight;
-
-		const availableWidth = Math.max(0, viewportWidth - VIEWPORT_GUTTER * 2);
-		const safeMaxWidth = availableWidth || viewportWidth;
-
-		if (menuWidth === null) {
-			menuRef.style.width = '';
-			menuRef.style.maxWidth = '';
-
-			const idealWidth = Math.max(triggerRect.width, Math.min(menuRef.scrollWidth, safeMaxWidth));
-			menuWidth = Math.min(idealWidth, safeMaxWidth);
-		}
-
-		const availableBelow = Math.max(
-			0,
-			viewportHeight - VIEWPORT_GUTTER - triggerRect.bottom - MENU_OFFSET
-		);
-		const availableAbove = Math.max(0, triggerRect.top - VIEWPORT_GUTTER - MENU_OFFSET);
-		const viewportAllowance = Math.max(0, viewportHeight - VIEWPORT_GUTTER * 2);
-		const fallbackAllowance = Math.max(1, viewportAllowance > 0 ? viewportAllowance : scrollHeight);
-
-		function computePlacement(placement: 'top' | 'bottom') {
-			const available = placement === 'bottom' ? availableBelow : availableAbove;
-			const allowedHeight =
-				available > 0 ? Math.min(available, fallbackAllowance) : fallbackAllowance;
-			const maxHeight = Math.min(scrollHeight, allowedHeight);
-			const height = Math.max(0, maxHeight);
-
-			let top: number;
-			if (placement === 'bottom') {
-				const rawTop = triggerRect.bottom + MENU_OFFSET;
-				const minTop = VIEWPORT_GUTTER;
-				const maxTop = viewportHeight - VIEWPORT_GUTTER - height;
-				if (maxTop < minTop) {
-					top = minTop;
-				} else {
-					top = Math.min(Math.max(rawTop, minTop), maxTop);
-				}
+			const currentPos = compatibleIndices.indexOf(highlightedIndex);
+			if (currentPos === -1 || currentPos === compatibleIndices.length - 1) {
+				highlightedIndex = compatibleIndices[0];
 			} else {
-				const rawTop = triggerRect.top - MENU_OFFSET - height;
-				const minTop = VIEWPORT_GUTTER;
-				const maxTop = viewportHeight - VIEWPORT_GUTTER - height;
-				if (maxTop < minTop) {
-					top = minTop;
-				} else {
-					top = Math.max(Math.min(rawTop, maxTop), minTop);
-				}
+				highlightedIndex = compatibleIndices[currentPos + 1];
 			}
+		} else if (event.key === 'ArrowUp') {
+			event.preventDefault();
+			if (compatibleIndices.length === 0) return;
 
-			return { placement, top, height, maxHeight };
+			const currentPos = compatibleIndices.indexOf(highlightedIndex);
+			if (currentPos === -1 || currentPos === 0) {
+				highlightedIndex = compatibleIndices[compatibleIndices.length - 1];
+			} else {
+				highlightedIndex = compatibleIndices[currentPos - 1];
+			}
+		} else if (event.key === 'Enter') {
+			event.preventDefault();
+			if (highlightedIndex >= 0 && highlightedIndex < filteredOptions.length) {
+				const option = filteredOptions[highlightedIndex];
+				if (isModelCompatible(option)) {
+					handleSelect(option.id);
+				}
+			} else if (compatibleIndices.length > 0) {
+				// No selection - highlight first compatible option
+				highlightedIndex = compatibleIndices[0];
+			}
 		}
-
-		const belowMetrics = computePlacement('bottom');
-		const aboveMetrics = computePlacement('top');
-
-		let metrics = belowMetrics;
-		if (scrollHeight > belowMetrics.maxHeight && aboveMetrics.maxHeight > belowMetrics.maxHeight) {
-			metrics = aboveMetrics;
-		}
-
-		const availableRight = viewportWidth - VIEWPORT_GUTTER;
-		const rightAligned = Math.min(triggerRect.right, availableRight);
-		let left = rightAligned - menuWidth;
-		const maxLeft = viewportWidth - VIEWPORT_GUTTER - menuWidth;
-		left = Math.min(Math.max(left, VIEWPORT_GUTTER), Math.max(maxLeft, VIEWPORT_GUTTER));
-
-		menuPosition = {
-			top: Math.round(metrics.top),
-			left: Math.round(left),
-			width: Math.round(menuWidth),
-			placement: metrics.placement,
-			maxHeight: Math.round(metrics.maxHeight)
-		};
 	}
 
 	async function handleSelect(modelId: string) {
@@ -366,6 +295,14 @@
 
 		if (shouldCloseMenu) {
 			closeMenu();
+
+			// Focus the chat textarea after model selection
+			requestAnimationFrame(() => {
+				const textarea = document.querySelector<HTMLTextAreaElement>(
+					'[data-slot="chat-form"] textarea'
+				);
+				textarea?.focus();
+			});
 		}
 	}
 
@@ -414,10 +351,7 @@
 	}
 </script>
 
-<svelte:window onresize={handleResize} />
-<svelte:document onpointerdown={handlePointerDown} onkeydown={handleKeydown} />
-
-<div class={cn('relative inline-flex flex-col items-end gap-1', className)} bind:this={container}>
+<div class={cn('relative inline-flex flex-col items-end gap-1', className)}>
 	{#if loading && options.length === 0 && isRouter}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
@@ -428,9 +362,8 @@
 	{:else}
 		{@const selectedOption = getDisplayOption()}
 
-		<div class="relative">
-			<button
-				type="button"
+		<Popover.Root bind:open={isOpen} onOpenChange={handleOpenChange}>
+			<Popover.Trigger
 				class={cn(
 					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
 					!isCurrentModelInCache()
@@ -440,15 +373,11 @@
 							: isHighlightedCurrentModelActive
 								? 'text-foreground'
 								: 'text-muted-foreground',
-					isOpen ? 'text-foreground' : '',
-					className
+					isOpen ? 'text-foreground' : ''
 				)}
 				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
-				aria-haspopup={isRouter ? 'listbox' : undefined}
-				aria-expanded={isRouter ? isOpen : undefined}
-				onclick={toggleOpen}
-				bind:this={triggerButton}
-				disabled={disabled || updating}
+				onclick={handleTriggerClick}
+				disabled={disabled || updating || !isRouter}
 			>
 				<Package class="h-3.5 w-3.5" />
 
@@ -461,153 +390,145 @@
 				{:else if isRouter}
 					<ChevronDown class="h-3 w-3.5" />
 				{/if}
-			</button>
+			</Popover.Trigger>
 
-			{#if isOpen && isRouter}
-				<div
-					bind:this={menuRef}
-					use:portalToBody
-					class={cn(
-						'fixed z-[1000] overflow-hidden rounded-md border bg-popover shadow-lg transition-opacity',
-						menuPosition ? 'opacity-100' : 'pointer-events-none opacity-0'
-					)}
-					role="listbox"
-					style:top={menuPosition ? `${menuPosition.top}px` : undefined}
-					style:left={menuPosition ? `${menuPosition.left}px` : undefined}
-					style:width={menuPosition ? `${menuPosition.width}px` : undefined}
-					data-placement={menuPosition?.placement ?? 'bottom'}
-				>
+			<Popover.Content
+				class="w-96 max-w-[calc(100vw-2rem)] p-0"
+				side="top"
+				align="end"
+				sideOffset={8}
+			>
+				<div class="p-4">
 					<SearchInput
 						id="model-search"
-						class="p-4"
 						placeholder="Search models..."
 						bind:value={searchTerm}
 						bind:ref={searchInputRef}
+						onClose={closeMenu}
+						onKeyDown={handleSearchKeyDown}
 					/>
-					<div
-						class="overflow-y-auto py-1"
-						style:max-height={menuPosition && menuPosition.maxHeight > 0
-							? `${menuPosition.maxHeight}px`
-							: undefined}
-					>
-						{#if !isCurrentModelInCache() && currentModel}
-							<!-- Show unavailable model as first option (disabled) -->
-							<button
-								type="button"
-								class="flex w-full cursor-not-allowed items-center bg-red-400/10 px-3 py-2 text-left text-sm text-red-400"
-								role="option"
-								aria-selected="true"
-								aria-disabled="true"
-								disabled
-							>
-								<span class="truncate">{selectedOption?.name || currentModel}</span>
-								<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
-							</button>
-							<div class="my-1 h-px bg-border"></div>
-						{/if}
-						{#if filteredOptions.length === 0}
-							<p class="px-3 py-2 text-sm text-muted-foreground">No models found.</p>
-						{/if}
-						{#each filteredOptions as option (option.id)}
-							{@const status = getModelStatus(option.model)}
-							{@const isLoaded = status === ServerModelStatus.LOADED}
-							{@const isLoading = status === ServerModelStatus.LOADING}
-							{@const isSelected = currentModel === option.model || activeId === option.id}
-							{@const isCompatible = isModelCompatible(option)}
-							{@const missingModalities = getMissingModalities(option)}
-							<div
-								class={cn(
-									'group flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition focus:outline-none',
-									isCompatible
-										? 'cursor-pointer hover:bg-muted focus:bg-muted'
-										: 'cursor-not-allowed opacity-50',
-									isSelected
-										? 'bg-accent text-accent-foreground'
-										: isCompatible
-											? 'hover:bg-accent hover:text-accent-foreground'
-											: '',
-									isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
-								)}
-								role="option"
-								aria-selected={isSelected}
-								aria-disabled={!isCompatible}
-								tabindex={isCompatible ? 0 : -1}
-								onclick={() => isCompatible && handleSelect(option.id)}
-								onkeydown={(e) => {
-									if (isCompatible && (e.key === 'Enter' || e.key === ' ')) {
-										e.preventDefault();
-										handleSelect(option.id);
-									}
-								}}
-							>
-								<span class="min-w-0 flex-1 truncate">{option.model}</span>
-
-								{#if missingModalities}
-									<span class="flex shrink-0 items-center gap-1 text-muted-foreground/70">
-										{#if missingModalities.vision}
-											<Tooltip.Root>
-												<Tooltip.Trigger>
-													<EyeOff class="h-3.5 w-3.5" />
-												</Tooltip.Trigger>
-												<Tooltip.Content class="z-[9999]">
-													<p>No vision support</p>
-												</Tooltip.Content>
-											</Tooltip.Root>
-										{/if}
-										{#if missingModalities.audio}
-											<Tooltip.Root>
-												<Tooltip.Trigger>
-													<MicOff class="h-3.5 w-3.5" />
-												</Tooltip.Trigger>
-												<Tooltip.Content class="z-[9999]">
-													<p>No audio support</p>
-												</Tooltip.Content>
-											</Tooltip.Root>
-										{/if}
-									</span>
-								{/if}
-
-								{#if isLoading}
-									<Tooltip.Root>
-										<Tooltip.Trigger>
-											<Loader2 class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-										</Tooltip.Trigger>
-										<Tooltip.Content class="z-[9999]">
-											<p>Loading model...</p>
-										</Tooltip.Content>
-									</Tooltip.Root>
-								{:else if isLoaded}
-									<Tooltip.Root>
-										<Tooltip.Trigger>
-											<button
-												type="button"
-												class="relative ml-2 flex h-4 w-4 shrink-0 items-center justify-center"
-												onclick={(e) => {
-													e.stopPropagation();
-													modelsStore.unloadModel(option.model);
-												}}
-											>
-												<span
-													class="mr-2 h-2 w-2 rounded-full bg-green-500 transition-opacity group-hover:opacity-0"
-												></span>
-												<Power
-													class="absolute mr-2 h-4 w-4 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-600"
-												/>
-											</button>
-										</Tooltip.Trigger>
-										<Tooltip.Content class="z-[9999]">
-											<p>Unload model</p>
-										</Tooltip.Content>
-									</Tooltip.Root>
-								{:else}
-									<span class="mx-2 h-2 w-2 rounded-full bg-muted-foreground/50"></span>
-								{/if}
-							</div>
-						{/each}
-					</div>
 				</div>
-			{/if}
-		</div>
+				<div class="max-h-80 overflow-y-auto">
+					{#if !isCurrentModelInCache() && currentModel}
+						<!-- Show unavailable model as first option (disabled) -->
+						<button
+							type="button"
+							class="flex w-full cursor-not-allowed items-center bg-red-400/10 px-4 py-2 text-left text-sm text-red-400"
+							role="option"
+							aria-selected="true"
+							aria-disabled="true"
+							disabled
+						>
+							<span class="truncate">{selectedOption?.name || currentModel}</span>
+							<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+						</button>
+						<div class="my-1 h-px bg-border"></div>
+					{/if}
+					{#if filteredOptions.length === 0}
+						<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
+					{/if}
+					{#each filteredOptions as option, index (option.id)}
+						{@const status = getModelStatus(option.model)}
+						{@const isLoaded = status === ServerModelStatus.LOADED}
+						{@const isLoading = status === ServerModelStatus.LOADING}
+						{@const isSelected = currentModel === option.model || activeId === option.id}
+						{@const isCompatible = isModelCompatible(option)}
+						{@const isHighlighted = index === highlightedIndex}
+						{@const missingModalities = getMissingModalities(option)}
+
+						<div
+							class={cn(
+								'group flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition focus:outline-none',
+								isCompatible
+									? 'cursor-pointer hover:bg-muted focus:bg-muted'
+									: 'cursor-not-allowed opacity-50',
+								isSelected || isHighlighted
+									? 'bg-accent text-accent-foreground'
+									: isCompatible
+										? 'hover:bg-accent hover:text-accent-foreground'
+										: '',
+								isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
+							)}
+							role="option"
+							aria-selected={isSelected || isHighlighted}
+							aria-disabled={!isCompatible}
+							tabindex={isCompatible ? 0 : -1}
+							onclick={() => isCompatible && handleSelect(option.id)}
+							onmouseenter={() => (highlightedIndex = index)}
+							onkeydown={(e) => {
+								if (isCompatible && (e.key === 'Enter' || e.key === ' ')) {
+									e.preventDefault();
+									handleSelect(option.id);
+								}
+							}}
+						>
+							<span class="min-w-0 flex-1 truncate">{option.model}</span>
+
+							{#if missingModalities}
+								<span class="flex shrink-0 items-center gap-1 text-muted-foreground/70">
+									{#if missingModalities.vision}
+										<Tooltip.Root>
+											<Tooltip.Trigger>
+												<EyeOff class="h-3.5 w-3.5" />
+											</Tooltip.Trigger>
+											<Tooltip.Content class="z-[9999]">
+												<p>No vision support</p>
+											</Tooltip.Content>
+										</Tooltip.Root>
+									{/if}
+									{#if missingModalities.audio}
+										<Tooltip.Root>
+											<Tooltip.Trigger>
+												<MicOff class="h-3.5 w-3.5" />
+											</Tooltip.Trigger>
+											<Tooltip.Content class="z-[9999]">
+												<p>No audio support</p>
+											</Tooltip.Content>
+										</Tooltip.Root>
+									{/if}
+								</span>
+							{/if}
+
+							{#if isLoading}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										<Loader2 class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+									</Tooltip.Trigger>
+									<Tooltip.Content class="z-[9999]">
+										<p>Loading model...</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{:else if isLoaded}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										<button
+											type="button"
+											class="relative ml-2 flex h-4 w-4 shrink-0 items-center justify-center"
+											onclick={(e) => {
+												e.stopPropagation();
+												modelsStore.unloadModel(option.model);
+											}}
+										>
+											<span
+												class="mr-2 h-2 w-2 rounded-full bg-green-500 transition-opacity group-hover:opacity-0"
+											></span>
+											<Power
+												class="absolute mr-2 h-4 w-4 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-600"
+											/>
+										</button>
+									</Tooltip.Trigger>
+									<Tooltip.Content class="z-[9999]">
+										<p>Unload model</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{:else}
+								<span class="mx-2 h-2 w-2 rounded-full bg-muted-foreground/50"></span>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			</Popover.Content>
+		</Popover.Root>
 	{/if}
 </div>
 
