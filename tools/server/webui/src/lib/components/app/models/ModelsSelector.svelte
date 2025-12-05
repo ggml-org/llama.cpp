@@ -17,7 +17,7 @@
 	import { usedModalities, conversationsStore } from '$lib/stores/conversations.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { DialogModelInformation } from '$lib/components/app';
+	import { DialogModelInformation, SearchInput } from '$lib/components/app';
 	import { MENU_OFFSET, VIEWPORT_GUTTER } from '$lib/constants/floating-ui-constraints';
 	import type { ModelOption } from '$lib/types/models';
 
@@ -477,19 +477,13 @@
 					style:width={menuPosition ? `${menuPosition.width}px` : undefined}
 					data-placement={menuPosition?.placement ?? 'bottom'}
 				>
-					<div class="px-3 py-2">
-						<label class="sr-only" for="model-search">Search models</label>
-						<input
-							id="model-search"
-							class="h-9 w-full rounded-lg bg-muted px-3 text-sm outline-none placeholder:text-muted-foreground"
-							placeholder="Search models"
-							bind:value={searchTerm}
-							bind:this={searchInputRef}
-							aria-label="Search models"
-							autocomplete="off"
-							type="search"
-						/>
-					</div>
+					<SearchInput
+						id="model-search"
+						class="p-4"
+						placeholder="Search models..."
+						bind:value={searchTerm}
+						bind:ref={searchInputRef}
+					/>
 					<div
 						class="overflow-y-auto py-1"
 						style:max-height={menuPosition && menuPosition.maxHeight > 0
