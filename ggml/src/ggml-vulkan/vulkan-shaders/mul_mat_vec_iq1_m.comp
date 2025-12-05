@@ -7,7 +7,6 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
 
-// ------------------ calc_superblock (final optimized version) ------------------
 void calc_superblock(const uint a_offset, const uint b_offset, const uint ib32, const uint i,
                                const uint num_blocks_per_row, const uint first_row, const uint num_rows) {
     // Compute starting index in matrix B for this superblock
@@ -95,39 +94,39 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint ib32, 
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     uint a_offset, b_offset, d_offset;
     get_offsets(a_offset, b_offset, d_offset);
+
     const uint num_blocks_per_row = p.ncols / QUANT_K;
-    const uint blocks_per_wg = gl_WorkGroupSize.x / 8;
+
+    // 8 threads are used to process each block
+    const uint blocks_per_wg = gl_WorkGroupSize.x/8;
     const uint tid = gl_LocalInvocationID.x;
-    const uint itid = tid % 8;
+    const uint itid = tid % 8;  // 0...7
     const uint ix = tid / 8;
 
-    // Initialize temporary storage
-    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j)
-        [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i)
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i) {
             temp[j][i] = FLOAT_TYPE(0);
+        }
+    }
 
-    // Loop over blocks assigned to this thread
     [[unroll]] for (uint i = ix; i < num_blocks_per_row; i += blocks_per_wg)
         calc_superblock(a_offset, b_offset, itid, i, num_blocks_per_row, first_row, num_rows);
 
-    // Reduce results from temporary buffer to output
     reduce_result(temp, d_offset, first_row, num_rows, tid);
 }
 
 void main() {
-    // Compute first row for this workgroup
     const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
 
-    // Initialize shared memory for quantization lookups
     init_iq_shmem(gl_WorkGroupSize);
 
-    // Early exit if out-of-bounds
-    if (first_row >= p.stride_d)
-        return;
-
-    // Number of rows to process for this workgroup
-    const uint rows_to_process = min(NUM_ROWS, p.stride_d - first_row);
-
-    // Compute outputs for assigned rows
-    compute_outputs(first_row, rows_to_process);
+    // do NUM_ROWS at a time, unless there aren't enough remaining rows
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
 }
