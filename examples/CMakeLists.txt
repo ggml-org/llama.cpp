@@ -20,6 +20,7 @@ else()
 
     add_subdirectory(gguf-hash)
     add_subdirectory(gguf)
+    add_subdirectory(idle)
     add_subdirectory(lookahead)
     add_subdirectory(lookup)
     add_subdirectory(parallel)

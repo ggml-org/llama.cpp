@@ -186,6 +186,16 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         int32_t dv,
         int32_t nwg);
 
+// MTLResidencySet wrapper
+
+typedef void * ggml_metal_rset_t;
+
+// a collection of residency sets (non-owning)
+typedef struct ggml_metal_rsets * ggml_metal_rsets_t;
+
+ggml_metal_rsets_t ggml_metal_rsets_init(void);
+void ggml_metal_rsets_free(ggml_metal_rsets_t rsets);
+
 //
 // device
 //
@@ -218,6 +228,11 @@ void * ggml_metal_device_get_obj  (ggml_metal_device_t dev); // id<MTLDevice>
 void * ggml_metal_device_get_queue(ggml_metal_device_t dev); // id<MTLCommandQueue>
 
 ggml_metal_library_t ggml_metal_device_get_library(ggml_metal_device_t dev);
+
+void ggml_metal_device_rsets_add(ggml_metal_device_t dev, ggml_metal_rset_t rset);
+void ggml_metal_device_rsets_rm (ggml_metal_device_t dev, ggml_metal_rset_t rset);
+
+void ggml_metal_device_rsets_keep_alive(ggml_metal_device_t dev);
 
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total);
 bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op);
