@@ -161,8 +161,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         try:
             if (gMe.op.sslContext):
                 self.request = gMe.op.sslContext.wrap_socket(self.request, server_side=True)
-                self.rfile = self.request.makefile('rb', self.rbufsize)
-                self.wfile = self.request.makefile('wb', self.wbufsize)
+                self.setup()
+                #self.rfile = self.request.makefile('rb', self.rbufsize)
+                #self.wfile = self.request.makefile('wb', self.wbufsize)
         except:
             print(f"ERRR:ProxyHandler:SSLHS:{traceback.format_exception_only(sys.exception())}")
             return
