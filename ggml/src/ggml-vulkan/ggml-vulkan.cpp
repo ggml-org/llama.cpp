@@ -4013,7 +4013,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
             uint32_t nary_shmem = 2 * sizeof(int) * BLOCK_SIZE +
                                   sizeof(int) * device->subgroup_size +
                                   2 * sizeof(int) +
-                                  (BLOCK_SIZE / device->subgroup_size) * sizeof(int);
+                                  2 * (BLOCK_SIZE / device->subgroup_size) * sizeof(int);
             if (device->subgroup_arithmetic && device->subgroup_require_full_support && device->subgroup_shuffle && device->subgroup_ballot &&
                 nary_shmem <= device->properties.limits.maxComputeSharedMemorySize) {
                 ggml_vk_create_pipeline2(device, device->pipeline_topk_f32[i], "topk_f32_"+std::to_string(i), topk_nary_search_f32_len, topk_nary_search_f32_data, "main", 2, sizeof(vk_op_topk_push_constants), {BLOCK_SIZE, 1, 1}, {BLOCK_SIZE, device->subgroup_size, device->subgroup_size_log2}, 1, true, true, device->subgroup_size);
