@@ -12,6 +12,7 @@
 /common/build-info.*                    @ggerganov
 /common/chat-peg-parser.*               @aldehir
 /common/common.*                        @ggerganov
+/common/chat.*                          @pwilkin
 /common/console.*                       @ggerganov
 /common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
@@ -84,6 +85,7 @@
 /src/llama-vocab.*                      @CISC
 /src/models/                            @CISC
 /tests/                                 @ggerganov
+/tests/test-chat-.*                     @pwilkin
 /tools/batched-bench/                   @ggerganov
 /tools/main/                            @ggerganov
 /tools/mtmd/                            @ngxson
