@@ -6948,6 +6948,10 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
     // Quantization overhead is not worth it for small k
     switch (device->vendor_id) {
     case VK_VENDOR_ID_NVIDIA:
+        if (src0_type == GGML_TYPE_Q2_K) {
+            return true;
+        }
+
         if (k <= 4096) {
             return false;
         }
