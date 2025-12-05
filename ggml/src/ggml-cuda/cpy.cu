@@ -39,7 +39,7 @@ static __global__ void cpy_scalar(const char * cx, char * cdst, const int ne,
     cpy_1(cx + x_offset, cdst + dst_offset);
 }
 
-template <typename T>
+template <typename T, int swap>
 static __global__ void cpy_scalar_transpose(const char * cx, char * cdst, const int ne,
                                const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
                                const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
@@ -51,10 +51,10 @@ static __global__ void cpy_scalar_transpose(const char * cx, char * cdst, const 
     const int64_t nmat = ne / (ne00 * ne01);
     const int64_t n = ne00 * ne01;
 
-    const int x = blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.x;
-    const int y = blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
-    const int tx = blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.x;  // transpose block offset
-    const int ty = blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
+    const int x = (swap == 0 ? blockIdx.x : blockIdx.y) * CUDA_CPY_TILE_DIM_2D + threadIdx.x;
+    const int y = (swap == 0 ? blockIdx.y : blockIdx.x) * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
+    const int tx = (swap == 0 ? blockIdx.y : blockIdx.x) * CUDA_CPY_TILE_DIM_2D + threadIdx.x;  // transpose block offset
+    const int ty = (swap == 0 ? blockIdx.x : blockIdx.y) * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
 
     __shared__ float tile[CUDA_CPY_TILE_DIM_2D][CUDA_CPY_TILE_DIM_2D+1];
 
@@ -200,13 +200,21 @@ static void ggml_cpy_scalar_cuda(
 
     if (transposed) {
         GGML_ASSERT(ne == ne00*ne01*ne02);  // ne[3] is 1 assumed
-
-        dim3 dimGrid( (ne01 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
-                      (ne00 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
-                      (ne/(ne01*ne00) + CUDA_CPY_BLOCK_NM - 1) / CUDA_CPY_BLOCK_NM);
-        dim3 dimBlock(CUDA_CPY_TILE_DIM_2D, CUDA_CPY_BLOCK_ROWS, 1);
-        cpy_scalar_transpose<dst_t><<<dimGrid, dimBlock, 0, stream>>>
-            (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
+        if(ne01 > ne00) {
+            dim3 dimGrid( (ne01 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
+                          (ne00 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
+                           (ne/(ne01*ne00) + CUDA_CPY_BLOCK_NM - 1) / CUDA_CPY_BLOCK_NM);
+            dim3 dimBlock(CUDA_CPY_TILE_DIM_2D, CUDA_CPY_BLOCK_ROWS, 1);
+            cpy_scalar_transpose<dst_t, 0><<<dimGrid, dimBlock, 0, stream>>>
+                (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
+        } else {
+            dim3 dimGrid( (ne00 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
+                          (ne01 + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
+                           (ne/(ne01*ne00) + CUDA_CPY_BLOCK_NM - 1) / CUDA_CPY_BLOCK_NM);
+            dim3 dimBlock(CUDA_CPY_TILE_DIM_2D, CUDA_CPY_BLOCK_ROWS, 1);
+            cpy_scalar_transpose<dst_t, 1><<<dimGrid, dimBlock, 0, stream>>>
+                (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
+        }
     } else {
         const int num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
         cpy_scalar<cpy_1_scalar<src_t, dst_t>><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
