@@ -180,73 +180,38 @@ __global__ void __launch_bounds__(d_state, 1)
 
         __syncthreads();
 
-//         // parallel accumulation for stateC  
-//         // TODO: simplify
-//         {
-//             static_assert((d_state & -d_state) == d_state, "the state size has to be a power of 2");
-//             static_assert((splitH & -splitH) == splitH, "splitH has to be a power of 2");
-
-//             // reduce until w matches the warp size
-//             // TODO: does this work even when the physical warp size is 64?
-// #pragma unroll
-//             for (int w = d_state; w > WARP_SIZE; w >>= 1) {
-//                 // (assuming there are d_state threads)
-// #pragma unroll
-//                 for (int j = 0; j < ((w >> 1) * splitH + d_state - 1) / d_state; j++) {
-//                     // TODO: check for bank conflicts
-//                     const int k = (threadIdx.x % (w >> 1)) + (d_state * (threadIdx.x / (w >> 1))) + j * d_state * (d_state / (w >> 1));
-//                     stateC[k] += stateC[k + (w >> 1)];
-
-//                 }
-//                 __syncthreads();
-//             }
-
-//             static_assert(splitH >= d_state / WARP_SIZE);
-
-// #pragma unroll
-//             for (int j = 0; j < splitH / (d_state / WARP_SIZE); j++) {
-//                 float y = stateC[(threadIdx.x % WARP_SIZE) + d_state * (threadIdx.x / WARP_SIZE) + j * d_state * (d_state / WARP_SIZE)];
-//                 y = warp_reduce_sum(y);
-
-//                 // store the above accumulations
-//                 if (threadIdx.x % WARP_SIZE == 0) {
-//                     const int k = threadIdx.x / WARP_SIZE + j * (d_state / WARP_SIZE);
-//                     y_block[i * stride_y + k] = y;
-//                 }
-//             }
-//         }
-        // parallel accumulation for stateC using warp shuffles
+        // parallel reduction using warp shuffles
         {
-            constexpr int num_warps = d_state / WARP_SIZE;  // 128/32 = 4 warps
-            __shared__ float warp_sums[splitH][num_warps];  // 16 rows × 4 warp partial sums
+            constexpr int num_warps = d_state / WARP_SIZE;  
+            __shared__ float warp_sums[splitH][num_warps];  
 
-            const int warp_id = threadIdx.x / WARP_SIZE;    // which warp (0-3)
-            const int lane_id = threadIdx.x % WARP_SIZE;    // position within warp (0-31)
+            const int warp_id = threadIdx.x / WARP_SIZE;    
+            const int lane_id = threadIdx.x % WARP_SIZE;   
 
-            // Step 1: Each thread grabs its value from each row, reduces within warp
+        // Each warp reduces its portion of each row 
 #pragma unroll
             for (int j = 0; j < splitH; j++) {
-                float val = stateC[j * d_state + threadIdx.x];  // thread's value in row j
-                val = warp_reduce_sum(val);                      // sum within warp
+                float val = stateC[j * d_state + threadIdx.x];  
+                val = warp_reduce_sum(val);                      
                 if (lane_id == 0) {
-                    warp_sums[j][warp_id] = val;                 // lane 0 stores warp's sum
+                    warp_sums[j][warp_id] = val;                 
                 }
             }
 
             __syncthreads();
 
-            // Step 2: First warp reduces the 4 warp sums for each row
+            // first warp reduces the partial sums 
             if (warp_id == 0) {
 #pragma unroll
                 for (int j = 0; j < splitH; j++) {
                     float val = (lane_id < num_warps) ? warp_sums[j][lane_id] : 0.0f;
                     val = warp_reduce_sum(val);
                     if (lane_id == 0) {
-                        y_block[i * stride_y + j] = val;         // final output
+                        y_block[i * stride_y + j] = val;         
                     }
                 }
             }
-        } // end 
+        } 
     }
 
     // write back the state
@@ -267,7 +232,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
     // NOTE: if you change conditions here, be sure to update the corresponding supports_op condition!
     if (src3_nb1 == sizeof(float)) {
         // Mamba-2
-        if (d_state == 128) {
+        if (d_state == 128) { //Mamba-2 or Falcon-H1
             GGML_ASSERT(d_state % threads == 0);
             // NOTE: can be any power of two between 4 and 64
             const int splitH = 16;
@@ -277,7 +242,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
                     src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok);
-        } else if (d_state == 256) { // Falcon-H1
+        } else if (d_state == 256) { // Falcon-H1 only
             const int threads = 256;
             // NOTE: can be any power of two between 8 and 64
             const int splitH = 16;
