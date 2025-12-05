@@ -3,32 +3,18 @@
 
 import urllib.parse
 import urlvalidator as uv
-from dataclasses import dataclass
 import html.parser
 import debug
 import filemagic as mFile
 import json
 import re
-from typing import TYPE_CHECKING, Any, cast
-
-if TYPE_CHECKING:
-    from simpleproxy import ProxyHandler
-
+import http.client
+from typing import Any, cast
+import toolcall as mTC
 
 
-@dataclass(frozen=True)
-class UrlReqResp:
-    """
-    Used to return result wrt urlreq helper below.
-    """
-    callOk: bool
-    httpStatus: int
-    httpStatusMsg: str = ""
-    contentType: str = ""
-    contentData: str = ""
 
-
-def handle_urlreq(ph: 'ProxyHandler', pr: urllib.parse.ParseResult, tag: str):
+def handle_urlreq(url: str, inHeaders: http.client.HTTPMessage, tag: str):
     """
     Common part of the url request handling used by both urlraw and urltext.
 
@@ -42,17 +28,14 @@ def handle_urlreq(ph: 'ProxyHandler', pr: urllib.parse.ParseResult, tag: str):
     Fetch the requested url.
     """
     tag=f"UrlReq:{tag}"
-    queryParams = urllib.parse.parse_qs(pr.query)
-    url = queryParams['url']
     print(f"DBUG:{tag}:Url:{url}")
-    url = url[0]
     gotVU = uv.validate_url(url, tag)
     if not gotVU.callOk:
-        return UrlReqResp(gotVU.callOk, gotVU.statusCode, gotVU.statusMsg)
+        return mTC.TCOutResponse(gotVU.callOk, gotVU.statusCode, gotVU.statusMsg)
     try:
-        hUA = ph.headers.get('User-Agent', None)
-        hAL = ph.headers.get('Accept-Language', None)
-        hA = ph.headers.get('Accept', None)
+        hUA = inHeaders.get('User-Agent', None)
+        hAL = inHeaders.get('Accept-Language', None)
+        hA = inHeaders.get('Accept', None)
         headers = {
             'User-Agent': hUA,
             'Accept': hA,
@@ -60,27 +43,36 @@ def handle_urlreq(ph: 'ProxyHandler', pr: urllib.parse.ParseResult, tag: str):
         }
         # Get requested url
         gotFile = mFile.get_file(url, tag, "text/html", headers)
-        return UrlReqResp(gotFile.callOk, gotFile.statusCode, gotFile.statusMsg, gotFile.contentType, gotFile.contentData.decode('utf-8'))
+        return mTC.TCOutResponse(gotFile.callOk, gotFile.statusCode, gotFile.statusMsg, gotFile.contentType, gotFile.contentData)
     except Exception as exc:
-        return UrlReqResp(False, 502, f"WARN:{tag}:Failed:{exc}")
+        return mTC.TCOutResponse(False, 502, f"WARN:{tag}:Failed:{exc}")
 
 
-def handle_urlraw(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
-    try:
-        # Get requested url
-        got = handle_urlreq(ph, pr, "HandleUrlRaw")
-        if not got.callOk:
-            ph.send_error(got.httpStatus, got.httpStatusMsg)
-            return
-        # Send back to client
-        ph.send_response(got.httpStatus)
-        ph.send_header('Content-Type', got.contentType)
-        # Add CORS for browser fetch, just in case
-        ph.send_header('Access-Control-Allow-Origin', '*')
-        ph.end_headers()
-        ph.wfile.write(got.contentData.encode('utf-8'))
-    except Exception as exc:
-        ph.send_error(502, f"WARN:UrlRawFailed:{exc}")
+class TCUrlRaw(mTC.ToolCall):
+
+    def tcf_meta(self) -> mTC.TCFunction:
+        return mTC.TCFunction(
+            self.name,
+            "Fetch contents of the requested url (local file path / web based) through a proxy server and return the got content as is, in few seconds. Mainly useful for getting textual non binary contents",
+            mTC.TCInParameters(
+                "object",
+                {
+                    "url": mTC.TCInProperty(
+                        "string",
+                        "url of the local file / web content to fetch"
+                    )
+                },
+                [ "url" ]
+            )
+        )
+
+    def tc_handle(self, args: mTC.TCInArgs, inHeaders: http.client.HTTPMessage) -> mTC.TCOutResponse:
+        try:
+            # Get requested url
+            got = handle_urlreq(args['url'], inHeaders, "HandleTCUrlRaw")
+            return got
+        except Exception as exc:
+            return mTC.TCOutResponse(False, 502, f"WARN:UrlRawFailed:{exc}")
 
 
 class TextHtmlParser(html.parser.HTMLParser):
