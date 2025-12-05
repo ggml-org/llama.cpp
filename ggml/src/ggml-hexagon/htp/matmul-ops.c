@@ -421,6 +421,9 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
     const uint32_t nb   = n / qk;  // num full blocks
     const uint32_t nloe = n % qk;  // num leftover elemements
 
+    const HVX_VectorPred rd_mask = Q6_Q_vsetq_R(VLEN / 2);
+    r1_x_d -= VLEN / 2;  // make sure r1 at the high half of the vector
+
     uint32_t i = 0;
     for (; i < nb; i++) {
         HVX_Vector_x8 vy_q = hvx_vec_load_q8x4x8(y_q + i * y_qblk_size);
@@ -430,12 +433,19 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
         HVX_Vector r0_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_full(r0_q, vy_q));
         HVX_Vector r1_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_full(r1_q, vy_q));
 
-        HVX_Vector vy_d = Q6_Vh_vshuff_Vh(*(const HVX_UVector *) (y_d + i * y_dblk_size));
-        HVX_Vector r0_d = Q6_Vh_vshuff_Vh(*(const HVX_UVector *) (r0_x_d + i * x_dblk_size));
-        HVX_Vector r1_d = Q6_Vh_vshuff_Vh(*(const HVX_UVector *) (r1_x_d + i * x_dblk_size));
+        HVX_Vector vy_d = *(const HVX_UVector *) (y_d + i * y_dblk_size);
+        HVX_Vector r0_d = *(const HVX_UVector *) (r0_x_d + i * x_dblk_size);
+        HVX_Vector r1_d = *(const HVX_UVector *) (r1_x_d + i * x_dblk_size);
 
-        HVX_Vector r0_dd = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(Q6_Wqf32_vmpy_VhfVhf(r0_d, vy_d)));
-        HVX_Vector r1_dd = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(Q6_Wqf32_vmpy_VhfVhf(r1_d, vy_d)));
+        vy_d             = Q6_Vh_vshuff_Vh(vy_d);
+        HVX_Vector r01_d = Q6_V_vmux_QVV(rd_mask, r0_d, r1_d);
+
+        vy_d  = Q6_Vh_vshuffe_VhVh(vy_d, vy_d);
+        r01_d = Q6_Vh_vshuff_Vh(r01_d);
+
+        HVX_VectorPair r01_dd = Q6_Wqf32_vmpy_VhfVhf(r01_d, vy_d);
+        HVX_Vector     r0_dd  = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(r01_dd));
+        HVX_Vector     r1_dd  = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(r01_dd));
 
         HVX_Vector r0_fa = Q6_Vqf32_vmpy_VsfVsf(r0_ia, r0_dd);
         HVX_Vector r1_fa = Q6_Vqf32_vmpy_VsfVsf(r1_ia, r1_dd);
@@ -453,12 +463,19 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
         HVX_Vector r0_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_nloe(r0_q, vy_q, nloe));
         HVX_Vector r1_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_nloe(r1_q, vy_q, nloe));
 
-        HVX_Vector vy_d = Q6_Vh_vshuff_Vh(*(const HVX_UVector *) (y_d + i * y_dblk_size));
-        HVX_Vector r0_d = Q6_Vh_vshuff_Vh(*(const HVX_UVector *) (r0_x_d + i * x_dblk_size));
-        HVX_Vector r1_d = Q6_Vh_vshuff_Vh(*(const HVX_UVector *) (r1_x_d + i * x_dblk_size));
+        HVX_Vector vy_d = *(const HVX_UVector *) (y_d + i * y_dblk_size);
+        HVX_Vector r0_d = *(const HVX_UVector *) (r0_x_d + i * x_dblk_size);
+        HVX_Vector r1_d = *(const HVX_UVector *) (r1_x_d + i * x_dblk_size);
 
-        HVX_Vector r0_dd = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(Q6_Wqf32_vmpy_VhfVhf(r0_d, vy_d)));
-        HVX_Vector r1_dd = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(Q6_Wqf32_vmpy_VhfVhf(r1_d, vy_d)));
+        vy_d             = Q6_Vh_vshuff_Vh(vy_d);
+        HVX_Vector r01_d = Q6_V_vmux_QVV(rd_mask, r0_d, r1_d);
+
+        vy_d  = Q6_Vh_vshuffe_VhVh(vy_d, vy_d);
+        r01_d = Q6_Vh_vshuff_Vh(r01_d);
+
+        HVX_VectorPair r01_dd = Q6_Wqf32_vmpy_VhfVhf(r01_d, vy_d);
+        HVX_Vector     r0_dd  = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(r01_dd));
+        HVX_Vector     r1_dd  = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(r01_dd));
 
         // Zero out unused scales
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe / 8);
