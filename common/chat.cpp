@@ -649,6 +649,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
+        case COMMON_CHAT_FORMAT_GIGACHAT_V3: return "GigaChat V3";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1731,6 +1732,86 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
     }
     return data;
 }
+
+static common_chat_params common_chat_params_init_gigachat_v3(
+        const common_chat_template & tmpl,
+        const templates_params & inputs) {
+
+    common_chat_params data;
+
+    // Apply chat template
+    auto prompt = apply(
+        tmpl,
+        inputs,
+        /* messages_override */ inputs.messages,
+        /* tools_override */ std::nullopt,
+        /* additional_context */ json::object()   // No thinking, no extras
+    );
+
+    data.prompt = prompt;
+    data.format = COMMON_CHAT_FORMAT_GIGACHAT_V3;
+
+    // -------------------------------
+    //  TOOL CALL GRAMMAR (single call)
+    // -------------------------------
+    if (inputs.tools.is_array() && !inputs.tools.empty()) {
+
+        data.grammar_lazy =
+            inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED &&
+            inputs.json_schema.is_null();
+
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+
+            std::vector<std::string> tool_rules;
+
+            foreach_function(inputs.tools, [&](const json & tool) {
+
+                const auto & fn = tool.at("function");
+                std::string name = fn.at("name");
+                auto params = fn.at("parameters");
+
+                builder.resolve_refs(params);
+
+                // The model outputs:
+                //
+                //   name<|role_sep|>
+                //   { "name": "name", "arguments": {...}}
+                //
+                std::string json_schema_rule =
+                    builder.add_schema(name + "-args", params);
+
+                tool_rules.push_back(
+                    builder.add_rule(
+                        name + "-call",
+                        "\"" + name + "<|role_sep|>\" space "
+                        "\"{\" "
+                            "\"\\\"name\\\"\" \":\" \"" + name + "\" \",\" space "
+                            "\"\\\"arguments\\\"\" \":\" " + json_schema_rule + " "
+                        "\"}\""
+                    )
+                );
+            });
+
+            builder.add_rule(
+                "root",
+                "(" + string_join(tool_rules, " | ") + ") space*"
+            );
+
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+                // Trigger if format starts with "function_name<|role_sep|>"
+                "^[a-zA-Z0-9_]+<\\|role_sep\\|>[\\s\\S]*"
+            });
+
+            data.preserved_tokens = {
+                "<|role_sep|>"
+            };
+        });
+    }
+
+    return data;
+}
+
 
 static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
@@ -3159,6 +3240,10 @@ static common_chat_params common_chat_params_init_seed_oss(
     return data;
 }
 
+
+common_chat_params_init_gigachat_v3
+common_chat_params_parse_gigachat_v3
+
 static common_chat_params common_chat_templates_apply_jinja(
     const struct common_chat_templates        * tmpls,
     const struct common_chat_templates_inputs & inputs)
@@ -3306,6 +3391,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<tool_calls>[") != std::string::npos &&
         src.find("]</tool_calls>") != std::string::npos) {
         return common_chat_params_init_apriel_1_5(tmpl, params);
+    }
+
+    // GigaChatV3 format detection
+    if (src.find("<|role_sep|>\n") != std::string::npos && src.find("<|message_sep|>\n\n") != std::string::npos) {
+        return common_chat_params_init_gigachat_v3(tmpl, params);
     }
 
     // Use generic handler when mixing tools + JSON schema.
@@ -3513,6 +3603,8 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO:
             common_chat_parse_xiaomi_mimo(builder);
             break;
+        case COMMON_CHAT_FORMAT_GIGACHAT_V3:
+            common_chat_parse_gigachat_v3(builder);
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
     }
