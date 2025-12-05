@@ -1,8 +1,9 @@
 # llama.cpp for AMD ZenDNN
 
+> [!WARNING]
 > **Note:** ZenDNN is **not** the same as zDNN.
 > - **ZenDNN** (this page): AMD's deep learning library for AMD EPYC CPUs
-> - **zDNN**: IBM's library for IBM Z mainframe processors ([see zDNN documentation](zDNN.md))
+> - **zDNN**: IBM's Deep Neural Network acceleration library for IBM Z & LinuxONE Mainframes ([see zDNN documentation](zDNN.md))
 
 - [Background](#background)
 - [OS](#os)
