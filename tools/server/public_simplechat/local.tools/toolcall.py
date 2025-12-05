@@ -3,6 +3,9 @@
 
 from typing import Any, TypeAlias
 from dataclasses import dataclass
+import http
+import http.client
+import urllib.parse
 
 
 #
@@ -31,6 +34,8 @@ fetchurlraw_meta = {
 #
 # Dataclasses to help with Tool Calls
 #
+
+TCInArgs: TypeAlias = dict[str, Any]
 
 @dataclass
 class TCInProperty():
@@ -63,21 +68,32 @@ class TollCallResponse():
     name: str
     content: str = ""
 
+@dataclass(frozen=True)
+class TCOutResponse:
+    """
+    Used to return result from tool call.
+    """
+    callOk: bool
+    statusCode: int
+    statusMsg: str = ""
+    contentType: str = ""
+    contentData: bytes = b""
 
+
+@dataclass
 class ToolCall():
-
-    name: str = ""
+    name: str
 
     def tcf_meta(self) -> TCFunction|None:
         return None
 
-    def tc_handle(self, args: TCInProperties) -> tuple[bool, str]:
-        return (False, "")
+    def tc_handle(self, args: TCInArgs, inHeaders: http.client.HTTPMessage) -> TCOutResponse:
+        return TCOutResponse(False, 500)
 
     def meta(self) -> ToolCallMeta:
         tcf = self.tcf_meta()
         return ToolCallMeta("function", tcf)
 
-    def handler(self, callId: str, args: Any) -> TollCallResponse:
-        got = self.tc_handle(args)
-        return TollCallResponse(got[0], callId, self.name, got[1])
+    def handler(self, callId: str, args: Any, inHeaders: http.client.HTTPMessage) -> TollCallResponse:
+        got = self.tc_handle(args, inHeaders)
+        return TollCallResponse(got.callOk, callId, self.name, got.contentData.decode('utf-8'))
