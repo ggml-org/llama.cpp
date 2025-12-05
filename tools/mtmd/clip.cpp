@@ -424,10 +424,14 @@ struct clip_ctx {
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_buffer_ptr buf;
+    std::vector<ggml_backend_buffer_ptr> additional_buffers;  // for tensor overrides
 
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
+
+    bool    clip_reduced_vram   = false;
+    int64_t image_encode_timing = 0;
 
     // for debugging
     bool debug_graph = false;
@@ -476,6 +480,8 @@ struct clip_ctx {
         sched.reset(
             ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false, true)
         );
+
+        clip_reduced_vram = ctx_params.clip_reduced_vram;
     }
 
     ~clip_ctx() {
@@ -762,6 +768,24 @@ struct clip_graph {
             inpL = build_norm(inpL, model.pre_ln_w, model.pre_ln_b, norm_t, eps, -1);
         }
 
+        // Check if tiled flash attention is needed to avoid 2GB/INT_MAX ggml_cpy limit in cpy.cu: GGML_ASSERT(ggml_nbytes(src0) <= INT_MAX);
+        bool needs_tiled_fa = false;
+        size_t tiled_fa_q_tile = n_pos;
+        if (use_window_attn && ctx->flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+            // Calculate max q_tile that keeps mask under 2GB during cast/pad operations
+            // am taking worst case mask size = n_kv × qlen × element_bytes (worst case F32 = 4 bytes)
+            const int64_t n_kv = n_pos;
+            const size_t mask_element_bytes = sizeof(float);
+            const int64_t max_qlen = (INT_MAX / (n_kv * (int64_t)mask_element_bytes)) & ~63LL;
+            if ((int64_t)tiled_fa_q_tile > max_qlen && max_qlen >= 64) {
+                tiled_fa_q_tile = (size_t)max_qlen;
+                needs_tiled_fa = true;
+                LOG_INF("%s: will use tiled FA with q_tile=%zu to keep mask under 2GB/INT_MAX (n_pos=%d)\n", __func__, tiled_fa_q_tile, n_pos);
+            }
+        }
+
+        ggml_tensor * window_mask_raw = nullptr;  // unprepared mask for tiled FA path
+
         if (use_window_attn) {
             // handle window attention inputs
             inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
@@ -772,13 +796,19 @@ struct clip_graph {
             ggml_set_name(window_mask, "window_mask");
             ggml_set_input(window_mask);
 
-            // if flash attn is used, we need to pad the mask and cast to f16
+            // if tiling is needed, keep the raw mask and handle padding/casting per-tile, else pad and cast the full mask
             if (ctx->flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
-                int n_pad = GGML_PAD(window_mask->ne[1], GGML_KQ_MASK_PAD) - window_mask->ne[1];
-                if (n_pad > 0) {
-                    window_mask = ggml_pad(ctx0, window_mask, 0, n_pad, 0, 0);
+                if (needs_tiled_fa) {
+                    // Keep raw mask for per-tile processing
+                    window_mask_raw = window_mask;
+                } 
+                else {
+                    int n_pad = GGML_PAD(window_mask->ne[1], GGML_KQ_MASK_PAD) - window_mask->ne[1];
+                    if (n_pad > 0) {
+                        window_mask = ggml_pad(ctx0, window_mask, 0, n_pad, 0, 0);
+                    }
+                    window_mask = ggml_cast(ctx0, window_mask, GGML_TYPE_F16);
                 }
-                window_mask = ggml_cast(ctx0, window_mask, GGML_TYPE_F16);
             }
 
             // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
@@ -829,8 +859,17 @@ struct clip_graph {
 
                 ggml_tensor * attn_mask = full_attn ? nullptr : window_mask;
 
-                cur = build_attn(layer.o_w, layer.o_b,
-                    Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
+                // Use tiled flash attention when needed (calculated before layer loop)
+                const bool use_tiled_fa = needs_tiled_fa && !full_attn;
+
+                if (use_tiled_fa) {
+                    cur = build_flash_attn_tiled(layer.o_w, layer.o_b,
+                        Qcur, Kcur, Vcur, window_mask_raw, kq_scale, tiled_fa_q_tile, il);
+                }
+                else {
+                    cur = build_attn(layer.o_w, layer.o_b,
+                        Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
+                }
                 cb(cur, "attn_out", il);
             }
 
@@ -2370,6 +2409,82 @@ private:
         return cur;
     }
 
+    // Tiled flash attention to avoid 2GB/INT_MAX ggml_cuda_cpy: GGML_ASSERT(ggml_nbytes(src0) <= INT_MAX); 
+    // Tiles the Q tensor into smaller chunks, processes each with flash attention, then concatenates results and applies output projection before returning cur
+    ggml_tensor * build_flash_attn_tiled(ggml_tensor * wo, ggml_tensor * wo_b, ggml_tensor * q_cur, ggml_tensor * k_cur, ggml_tensor * v_cur,
+            ggml_tensor * kq_mask_raw, float kq_scale, size_t q_tile_size, int il) const
+    {
+        const int64_t d_head = q_cur->ne[0];
+        const int64_t n_head = q_cur->ne[1];
+        const int64_t num_positions = q_cur->ne[2];
+        const int64_t batch_size = 1;
+
+        ggml_tensor * k_fa = ggml_permute(ctx0, k_cur, 0, 2, 1, 3);
+        ggml_tensor * v_fa = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
+        if (k_fa->type == GGML_TYPE_F32) {
+            k_fa = ggml_cast(ctx0, k_fa, GGML_TYPE_F16);
+        }
+        if (v_fa->type == GGML_TYPE_F32) {
+            v_fa = ggml_cast(ctx0, v_fa, GGML_TYPE_F16);
+        }
+
+        std::vector<ggml_tensor *> tile_results;  
+        for (int64_t q0 = 0; q0 < num_positions; q0 += (int64_t)q_tile_size) {
+            const int64_t qlen = std::min<int64_t>((int64_t)q_tile_size, num_positions - q0);
+
+            // Create Q tile view matching original layout, then permute for FA
+            // q_cur shape: [d_head, n_head, n_positions] -> view as [d_head, n_head, qlen, 1]
+            const size_t q_off = (size_t)q0 * q_cur->nb[2];
+            ggml_tensor * q_tile = ggml_view_4d(ctx0, q_cur,
+                d_head, n_head, qlen, batch_size,
+                q_cur->nb[1], q_cur->nb[2], 0,
+                q_cur->view_offs + q_off);
+            // Permute to FA layout: [d_head, n_head, qlen, B] -> [d_head, qlen, n_head, B]
+            q_tile = ggml_permute(ctx0, q_tile, 0, 2, 1, 3);
+
+            ggml_tensor * mask_tile = nullptr;
+            if (kq_mask_raw != nullptr) {
+                const size_t m_off = (size_t)q0 * kq_mask_raw->nb[1];
+                mask_tile = ggml_view_2d(ctx0, kq_mask_raw,
+                    kq_mask_raw->ne[0], qlen,
+                    kq_mask_raw->nb[1],
+                    kq_mask_raw->view_offs + m_off);
+
+                // Pad and cast mask tile for flash attention
+                const int64_t padded_qlen = GGML_PAD(qlen, GGML_KQ_MASK_PAD);
+                if (qlen < padded_qlen) {
+                    mask_tile = ggml_pad(ctx0, mask_tile, 0, (int)(padded_qlen - qlen), 0, 0);
+                }
+                mask_tile = ggml_cast(ctx0, mask_tile, GGML_TYPE_F16);
+            }
+
+            ggml_tensor * tile_out = ggml_flash_attn_ext(ctx0, q_tile, k_fa, v_fa, mask_tile, kq_scale, 0.0f, 0.0f);
+            ggml_flash_attn_ext_set_prec(tile_out, GGML_PREC_F32);
+
+            // Reshape to 2D for concatenation: [d_head * n_head, qlen]
+            tile_out = ggml_reshape_2d(ctx0, tile_out, tile_out->ne[0] * tile_out->ne[1], tile_out->ne[2]);
+            tile_results.push_back(tile_out);
+        }
+
+        // Concatenate all tiles along sequence dimension
+        ggml_tensor * cur = tile_results[0];
+        for (size_t i = 1; i < tile_results.size(); i++) {
+            cur = ggml_concat(ctx0, cur, tile_results[i], 1);
+        }
+        cur = ggml_cont(ctx0, cur);
+
+        cb(cur, "kqv_out_tiled", il);
+
+        // Apply output projection
+        if (wo) {
+            cur = ggml_mul_mat(ctx0, wo, cur);
+        }
+        if (wo_b) {
+            cur = ggml_add(ctx0, cur, wo_b);
+        }
+        return cur;
+    }
+
     // implementation of the 2D RoPE without adding a new op in ggml
     // this is not efficient (use double the memory), but works on all backends
     // TODO: there was a more efficient which relies on ggml_view and ggml_rope_ext_inplace, but the rope inplace does not work well with non-contiguous tensors ; we should fix that and revert back to the original implementation in https://github.com/ggml-org/llama.cpp/pull/13065
@@ -3263,8 +3378,67 @@ struct clip_model_loader {
 
             // alloc memory and offload data
             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
-            ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ggml_backend_buffer_type_t cpu_buft = ggml_backend_get_default_buffer_type(ctx_clip.backend_cpu);
+
+            if (ctx_clip.clip_reduced_vram) {
+                LOG_INF("%s: clip_reduced_vram enabled, offloading all clip tensors to CPU\n", __func__);
+                std::map<ggml_backend_buffer_type_t, std::vector<ggml_tensor *>> tensors_by_buft;
+                // Determine buffer type for each tensor
+                for (auto & t : tensors_to_load) {
+                    struct ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                    tensors_by_buft[cpu_buft].push_back(cur);
+                }
+
+                // For each buffer type, create a context and allocate tensors
+                bool first_buffer = true;
+                for (auto & [buft, tensor_list] : tensors_by_buft)
+                {
+                    // Create a temporary context for this buffer type
+                    struct ggml_init_params temp_params = {
+                        /*.mem_size =*/tensor_list.size() * ggml_tensor_overhead(),
+                        /*.mem_buffer =*/NULL,
+                        /*.no_alloc =*/true,
+                    };
+                    ggml_context_ptr temp_ctx(ggml_init(temp_params));
+                    if (!temp_ctx) {
+                        throw std::runtime_error(string_format("%s: failed to create temporary context\n", __func__));
+                    }
+
+                    // Create tensor references in the temporary context
+                    for (auto * orig_tensor : tensor_list) {
+                        ggml_tensor * temp_tensor = ggml_dup_tensor(temp_ctx.get(), orig_tensor);
+                        ggml_set_name(temp_tensor, orig_tensor->name);
+                    }
+
+                    // Allocate buffer for this context
+                    auto buffer = ggml_backend_buffer_ptr(ggml_backend_alloc_ctx_tensors_from_buft(temp_ctx.get(), buft));
+                    if (!buffer) {
+                        throw std::runtime_error(string_format("%s: failed to allocate buffer for %s\n", __func__, ggml_backend_buft_name(buft)));
+                    }
+                    ggml_backend_buffer_set_usage(buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+                    // Copy tensor pointers to original tensors
+                    for (auto * orig_tensor : tensor_list) {
+                        ggml_tensor * temp_tensor = ggml_get_tensor(temp_ctx.get(), orig_tensor->name);
+                        orig_tensor->buffer       = temp_tensor->buffer;
+                        orig_tensor->data         = temp_tensor->data;
+                    }
+
+                    // transfer ownership of the buffer to ctx_clip so it lives as long as the model
+                    if (first_buffer) {
+                        ctx_clip.buf = std::move(buffer);
+                        first_buffer = false;
+                    } else {
+                        ctx_clip.additional_buffers.push_back(std::move(buffer));
+                    }
+                }
+            }
+            else {
+                // Baseline: no overrides are needed
+                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+                ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            }
+
             for (auto & t : tensors_to_load) {
                 ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
                 const size_t offset = tensor_offset[t->name];
@@ -4617,6 +4791,7 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
 }
 
 bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+    int64_t                      t0   = ggml_time_ms();
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
     int batch_size = imgs.entries.size();
 
@@ -4628,9 +4803,23 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     // build the inference graph
     ctx->debug_print_tensors.clear();
-    ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
-    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+
+    // if clip_reduced_vram enabled: use a temporary scheduler to free VRAM right after encode
+    ggml_backend_sched_t   sched_to_use = nullptr;
+    ggml_backend_sched_ptr sched_local;
+    if (ctx->clip_reduced_vram) {
+        sched_local.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(), (int) ctx->backend_ptrs.size(), ctx->max_nodes,
+                                                 /*parallel*/ false, /*op_offload*/ true));
+        ggml_backend_sched_reset(sched_local.get());
+        sched_to_use = sched_local.get();
+    }
+    else {
+        ggml_backend_sched_reset(ctx->sched.get());
+        sched_to_use = ctx->sched.get();
+    }
+
+    ggml_backend_sched_alloc_graph(sched_to_use, gf);
 
     // set inputs
     const auto & model   = ctx->model;
@@ -4965,7 +5154,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         }
     }
 
-    auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
+    auto status = ggml_backend_sched_graph_compute(sched_to_use, gf);
     if (status != GGML_STATUS_SUCCESS) {
         LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
         return false;
@@ -4996,6 +5185,17 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     // copy the embeddings to the location passed by the user
     ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
+
+    // if a temporary scheduler was used, freeing it here releases its compute buffers/VRAM
+    if (ctx->clip_reduced_vram) {
+        // ensure all device work is finished before destroying the temporary scheduler
+        ggml_backend_sched_synchronize(sched_to_use);
+        // explicit scope reset to free underlying resources now
+        sched_local.reset();
+        // synchronize CPU backend for completeness, is it required?
+        ggml_backend_synchronize(ctx->backend_cpu);
+    }
+    ctx->image_encode_timing = ggml_time_ms() - t0;
 
     return true;
 }
@@ -5115,4 +5315,8 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
     batch->entries.push_back(clip_image_f32_ptr(audio));
     batch->is_audio = true;
+}
+
+int64_t clip_get_image_encode_timing(const struct clip_ctx * ctx) {
+    return ctx->image_encode_timing;
 }

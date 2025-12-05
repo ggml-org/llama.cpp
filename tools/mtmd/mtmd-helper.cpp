@@ -333,7 +333,10 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
             if (logits_last && is_last_token) {
                 text_batch.logits[text_batch.n_tokens - 1] = true;
             }
-            ret = llama_decode(lctx, text_batch);
+            {
+                struct llama_context * lctx_eff = mtmd_get_llm_context(ctx) ? mtmd_get_llm_context(ctx) : lctx;
+                ret = llama_decode(lctx_eff, text_batch);
+            }
             if (ret != 0) {
                 LOG_ERR("failed to decode text\n");
                 llama_batch_free(text_batch);
@@ -347,18 +350,30 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         int64_t t0 = ggml_time_ms();
 
         LOG_INF("encoding %s slice...\n", name);
-
-        ret = mtmd_encode_chunk(ctx, chunk);
-        if (ret != 0) {
-            LOG_ERR("failed to encode %s slice\n", name);
-            llama_batch_free(text_batch);
-            return ret;
+        // Skip encode if we have pre-encoded the same image (identified by id)
+        if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE && mtmd_has_preencoded_image(ctx)) {
+            LOG_INF("using pre-encoded image embeddings\n");
+        }
+        else {
+            ret = mtmd_encode_chunk(ctx, chunk);
+            if (ret != 0) {
+                LOG_ERR("failed to encode %s slice\n", name);
+                llama_batch_free(text_batch);
+                return ret;
+            }
         }
 
-        LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
+        if (mtmd_preencode_enabled(ctx)) {
+            LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, mtmd_get_image_encode_timing(ctx, chunk));
+        } else {
+            LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
+        }
 
         float * embd = mtmd_get_output_embd(ctx);
-        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);
+        {
+            struct llama_context * lctx_eff = mtmd_get_llm_context(ctx) ? mtmd_get_llm_context(ctx) : lctx;
+            ret = mtmd_helper_decode_image_chunk(ctx, lctx_eff, chunk, embd, n_past, seq_id, n_batch, new_n_past);
+        }
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             llama_batch_free(text_batch);
@@ -384,6 +399,19 @@ int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
     if (n_chunks == 0) {
         LOG_WRN("no chunks to eval\n");
         return 0;
+    }
+
+    // When clip_reduced_vram is enabled, first pre-encode the IMAGE chunk and then release CLIP VRAM before any llama_decode runs.
+    // This preserves downstream decode order but frees vision VRAM earlier.
+    if (mtmd_preencode_enabled(ctx)) {
+        LOG_INF("pre-encoding image before any text decode...\n");
+        int32_t ret = mtmd_preencode_image(ctx, chunks);
+        if (ret != 0) {
+            LOG_ERR("failed to pre-encode image\n");
+            return ret;
+        }
+        // Invoke JIT LLM initialization callback after CLIP has freed VRAM
+        mtmd_invoke_llm_init_if_needed(ctx);
     }
 
     for (size_t i = 0; i < n_chunks; i++) {

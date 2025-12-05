@@ -1803,6 +1803,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.mmproj_use_gpu = false;
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_NO_MMPROJ_OFFLOAD"));
+    add_opt(common_arg({ "--clip-reduced-vram" },
+        "offload clip weights to CPU and stream at runtime to device (default: false)",
+        [](common_params & params) {
+            params.clip_reduced_vram = true;
+        }
+    ).set_env("LLAMA_ARG_CLIP_REDUCED_VRAM"));
     add_opt(common_arg(
         {"--image", "--audio"}, "FILE",
         "path to an image or audio file. use with multimodal models, can be repeated if you have multiple files\n",

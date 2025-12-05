@@ -34,6 +34,7 @@ struct clip_context_params {
     enum clip_flash_attn_type flash_attn_type;
     int image_min_tokens;
     int image_max_tokens;
+    bool clip_reduced_vram;  // offload clip weights to CPU and stream at runtime to backend device
 };
 
 struct clip_init_result {

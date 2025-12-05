@@ -87,15 +87,114 @@ struct mtmd_cli_context {
 
     int n_threads    = 1;
     llama_pos n_past = 0;
+    common_params saved_params;  // keep a copy for JIT LLM init
+    int32_t saved_n_gpu_layers = 0;
 
-    mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
-        model = llama_init.model.get();
-        lctx = llama_init.context.get();
-        vocab = llama_model_get_vocab(model);
-        smpl = common_sampler_init(model, params.sampling);
-        n_threads = params.cpuparams.n_threads;
-        batch = llama_batch_init(1, 0, 1); // batch for next token generation
-        n_batch = params.n_batch;
+    mtmd_cli_context(common_params & params) {
+        if (params.clip_reduced_vram)
+        {
+            saved_params = params;
+            saved_n_gpu_layers = params.n_gpu_layers;  // save original GPU layers
+            n_threads    = params.cpuparams.n_threads;
+            n_batch      = params.n_batch;
+
+            // Load LLM model with n_gpu_layers=0 (CPU only) initially, will move to n_gpu_layers JIT later
+            params.n_gpu_layers = 0;
+            LOG_INF("%s: clip_reduced_vram enabled - loading LLM model with n_gpu_layers=0\n", __func__);
+
+            // Defer LLM context init; still need model to build chat templates
+            auto mparams = common_model_params_to_llama(params);
+            model        = llama_model_load_from_file(params.model.path.c_str(), mparams);
+            if (!model) {
+                exit(1);
+            }
+            tmpls     = common_chat_templates_init(model, params.chat_template);
+            use_jinja = params.use_jinja;
+            chat_history.clear();
+            LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(tmpls.get(), params.use_jinja, params.default_template_kwargs).c_str());
+
+            init_vision_context(params);
+            mtmd_set_llm_init_callback(
+                ctx_vision.get(),
+                [](void * user_data) {
+                    auto * self = static_cast<mtmd_cli_context *>(user_data);
+                    self->init_llm_context(self->saved_params);
+                    // pass the fresh lctx back into mtmd for helper functions
+                    mtmd_set_llm_context(self->ctx_vision.get(), self->lctx);
+                },
+            this);
+        }
+        else
+        {
+            // Baseline
+            llama_init = common_init_from_params(params);
+            model      = llama_init.model.get();
+            lctx       = llama_init.context.get();
+            vocab      = llama_model_get_vocab(model);
+            smpl       = common_sampler_init(model, params.sampling);
+            n_threads  = params.cpuparams.n_threads;
+            batch      = llama_batch_init(1, 0, 1);  // batch for next token generation
+            n_batch    = params.n_batch;
+
+            if (!model || !lctx) {
+                exit(1);
+            }
+
+            if (!llama_model_chat_template(model, nullptr) && params.chat_template.empty()) {
+                LOG_ERR("Model does not have chat template.\n");
+                LOG_ERR("  For old llava models, you may need to use '--chat-template vicuna'\n");
+                LOG_ERR("  For MobileVLM models, use '--chat-template deepseek'\n");
+                LOG_ERR("  For Mistral Small 3.1, use '--chat-template mistral-v7'\n");
+                exit(1);
+            }
+
+            tmpls     = common_chat_templates_init(model, params.chat_template);
+            use_jinja = params.use_jinja;
+            chat_history.clear();
+            LOG_INF("%s: chat template example:\n%s\n", __func__,
+                    common_chat_format_example(tmpls.get(), params.use_jinja, params.default_template_kwargs).c_str());
+
+            init_vision_context(params);
+
+            // load antiprompt tokens for legacy templates
+            if (params.chat_template == "vicuna") {
+                antiprompt_tokens = common_tokenize(lctx, "ASSISTANT:", false, true);
+            } else if (params.chat_template == "deepseek") {
+                antiprompt_tokens = common_tokenize(lctx, "###", false, true);
+            }
+        }
+    }
+
+    void init_llm_context(common_params& params)
+    {
+        // Free the CPU-loaded model
+        if (model) {
+            llama_model_free(model);
+            model = nullptr;
+        }
+
+        // Reload model with original n_gpu_layers (GPU offloading)
+        params.n_gpu_layers = saved_n_gpu_layers;
+        LOG_INF("%s: reloading LLM model JIT with n_gpu_layers=%d\n", __func__, saved_n_gpu_layers);
+
+        auto mparams = common_model_params_to_llama(params);
+        model = llama_model_load_from_file(params.model.path.c_str(), mparams);
+        if (!model) {
+            LOG_ERR("Failed to reload LLM model JIT\n");
+            exit(1);
+        }
+
+        // Create context from the GPU-loaded model
+        auto init2 = common_init_from_existing_model(params, model);
+        llama_init.model.reset(model);
+        llama_init.context = std::move(init2.context);
+
+        // refresh raw pointers
+        model      = llama_init.model.get();
+        lctx       = llama_init.context.get();
+        vocab      = llama_model_get_vocab(model);
+        smpl       = common_sampler_init(model, params.sampling);
+        batch      = llama_batch_init(1, 0, 1);  // batch for next token generation
 
         if (!model || !lctx) {
             exit(1);
@@ -108,19 +207,17 @@ struct mtmd_cli_context {
             LOG_ERR("  For Mistral Small 3.1, use '--chat-template mistral-v7'\n");
             exit(1);
         }
-
-        tmpls = common_chat_templates_init(model, params.chat_template);
-        use_jinja = params.use_jinja;
-        chat_history.clear();
-        LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(tmpls.get(), params.use_jinja, params.default_template_kwargs).c_str());
-
-        init_vision_context(params);
-
+        
         // load antiprompt tokens for legacy templates
         if (params.chat_template == "vicuna") {
             antiprompt_tokens = common_tokenize(lctx, "ASSISTANT:", false, true);
         } else if (params.chat_template == "deepseek") {
             antiprompt_tokens = common_tokenize(lctx, "###", false, true);
+        }
+
+        if (!ctx_vision.get()) {
+            LOG_ERR("Failed to load vision model from %s\n", params.mmproj.path);
+            exit(1);
         }
     }
 
@@ -132,12 +229,13 @@ struct mtmd_cli_context {
     void init_vision_context(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
-        mparams.use_gpu          = params.mmproj_use_gpu;
-        mparams.print_timings    = true;
-        mparams.n_threads        = params.cpuparams.n_threads;
-        mparams.flash_attn_type  = params.flash_attn_type;
-        mparams.image_min_tokens = params.image_min_tokens;
-        mparams.image_max_tokens = params.image_max_tokens;
+        mparams.use_gpu           = params.mmproj_use_gpu;
+        mparams.print_timings     = true;
+        mparams.n_threads         = params.cpuparams.n_threads;
+        mparams.flash_attn_type   = params.flash_attn_type;
+        mparams.image_min_tokens  = params.image_min_tokens;
+        mparams.image_max_tokens  = params.image_max_tokens;
+        mparams.clip_reduced_vram = params.clip_reduced_vram;
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);

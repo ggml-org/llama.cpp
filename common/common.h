@@ -537,6 +537,8 @@ struct common_params {
     bool has_speculative() const {
         return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
     }
+
+    bool clip_reduced_vram = false;  // keep weights' of vision models offloaded to CPU and stream at runtime to required device
 };
 
 // call once at the start of a program if it uses libcommon
@@ -657,6 +659,8 @@ struct common_init_result {
 };
 
 struct common_init_result     common_init_from_params(common_params & params);
+// Initialize only the context using an already-loaded llama_model*
+struct common_init_result common_init_from_existing_model(common_params & params, struct llama_model * model);
 
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);
