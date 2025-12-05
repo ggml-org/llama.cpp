@@ -551,8 +551,8 @@ ggml_metal_rsets_t ggml_metal_rsets_init(void) {
     res->lock = [[NSLock alloc] init];
     res->data = [[NSMutableArray alloc] init];
 
-    // by default keep the memory wired for half an hour
-    res->keep_alive_s = 30*60;
+    // by default keep the memory wired for 3 minutes
+    res->keep_alive_s = 3*60;
 
     const char * GGML_METAL_RESIDENCY_KEEP_ALIVE_S = getenv("GGML_METAL_RESIDENCY_KEEP_ALIVE_S");
     if (GGML_METAL_RESIDENCY_KEEP_ALIVE_S) {
@@ -560,7 +560,7 @@ ggml_metal_rsets_t ggml_metal_rsets_init(void) {
     }
 
     if (res->keep_alive_s <= 0) {
-        res->keep_alive_s = 30*60;
+        res->keep_alive_s = 3*60;
     }
 
     GGML_LOG_INFO("%s: creating a residency set collection (keep_alive = %d s)\n", __func__, res->keep_alive_s);
