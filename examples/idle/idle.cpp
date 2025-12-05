@@ -59,14 +59,14 @@ int main(int argc, char ** argv) {
 
     llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
 
-    const int n_iters = 10;
+    const int n_iters = 3;
 
     // warm-up
     llama_decode(ctx, batch);
     llama_memory_clear(llama_get_memory(ctx), true);
     llama_synchronize(ctx);
 
-    for (int64_t t_pause_ms = 200; t_pause_ms <= 1800; t_pause_ms += 200) {
+    for (int64_t t_pause_ms = 0; t_pause_ms <= 4000; t_pause_ms += 800) {
         double t_sum_us  = 0.0;
         double t_sum2_us = 0.0;
 
