@@ -428,7 +428,7 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
  */
 template <typename T>
 static void test_parser_with_streaming(const common_chat_msg & expected, const std::string & raw_message, T parse_msg) {
-    constexpr auto utf8_truncate_safe = [](const std::string_view s) -> size_t {
+    constexpr auto utf8_truncate_safe_len = [](const std::string_view s) -> size_t {
         auto len = s.size();
         if (len == 0) return 0;
         auto i = len;
@@ -452,8 +452,8 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
         }
         return len - std::min(len, size_t(3));
     };
-    constexpr auto utf8_truncate_safe_view = [utf8_truncate_safe](const std::string_view s) {
-        return s.substr(0, utf8_truncate_safe(s));
+    constexpr auto utf8_truncate_safe_view = [utf8_truncate_safe_len](const std::string_view s) {
+        return s.substr(0, utf8_truncate_safe_len(s));
     };
 
     auto merged = simple_assist_msg("");
