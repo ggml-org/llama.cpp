@@ -10,9 +10,9 @@
 /common/arg.*                           @ggerganov
 /common/base64.hpp.*                    @ggerganov
 /common/build-info.*                    @ggerganov
+/common/chat.*                          @pwilkin
 /common/chat-peg-parser.*               @aldehir
 /common/common.*                        @ggerganov
-/common/chat.*                          @pwilkin
 /common/console.*                       @ggerganov
 /common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
