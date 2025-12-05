@@ -135,7 +135,6 @@ static __global__ void solve_tri_f32_general(const float * __restrict__ A,
     if (col_idx >= k) {
         return;
     }
-
     const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
     const int64_t i02     = i02_i03.y;
     const int64_t i03     = i02_i03.x;
@@ -153,41 +152,33 @@ static __global__ void solve_tri_f32_general(const float * __restrict__ A,
     for (int tile_start = 0; tile_start < n; tile_start += GENERAL_TILE_SIZE) {
         int tile_end = min(tile_start + GENERAL_TILE_SIZE, n);
         int tile_n = tile_end - tile_start;
-        
         // Load tile of A matrix
         for (int i = tid; i < tile_n * tile_n; i += blockDim.x) {
             int local_row = i / tile_n;
             int local_col = i % tile_n;
             int global_row = tile_start + local_row;
             int global_col = tile_start + local_col;
-            
             if (global_col <= global_row) {
                 sA[local_row * GENERAL_TILE_SIZE + local_col] = A_batch[global_row * n + global_col];
             } else {
                 sA[local_row * GENERAL_TILE_SIZE + local_col] = 0.0f;
             }
         }
-        
         __syncthreads();
-        
         // Load corresponding part of B and initialize X
         if (tid < tile_n) {
             sB[tid] = B_batch[(tile_start + tid) * k + col_idx];
             sX[tid] = sB[tid];
         }
-        
         __syncthreads();
-        
         // Forward substitution for this tile
         for (int row = 0; row < tile_n; ++row) {
             if (tid == row) {
                 float sum = 0.0f;
-                
                 // Sum contributions from previous rows in this tile
                 for (int j = 0; j < row; ++j) {
                     sum += sA[row * GENERAL_TILE_SIZE + j] * sX[j];
                 }
-                
                 // Sum contributions from previous tiles
                 if (tile_start > 0) {
                     int global_row = tile_start + row;
@@ -195,23 +186,19 @@ static __global__ void solve_tri_f32_general(const float * __restrict__ A,
                         sum += A_batch[global_row * n + j] * X_batch[j * k + col_idx];
                     }
                 }
-                
                 const float a_diag = sA[row * GENERAL_TILE_SIZE + row];
                 sX[row] = (sB[row] - sum) / a_diag;
             }
             __syncthreads();
         }
-        
         // Store results back to global memory
         if (tid < tile_n) {
             int global_row = tile_start + tid;
             X_batch[global_row * k + col_idx] = sX[tid];
         }
-        
         __syncthreads();
     }
 }
-
 static void solve_tri_f32_cuda(const float * A,
                                const float * B,
                                float *       X,
@@ -227,7 +214,6 @@ static void solve_tri_f32_cuda(const float * A,
                                size_t        nb3,
                                cudaStream_t  stream) {
     const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
-    
     // Choose kernel based on matrix size
     if (n <= MAX_N_FAST && k <= MAX_K_FAST) {
         // Use fast kernel for small matrices
@@ -287,7 +273,6 @@ static void solve_tri_f32_cuda(const float * A,
         // Use general kernel for larger matrices
         dim3 threads(256, 1);  // 256 threads per block
         dim3 grid(ne02 * ne03, k);  // One block per column
-        
         solve_tri_f32_general<0, 0>
             <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, n, k);
     }
