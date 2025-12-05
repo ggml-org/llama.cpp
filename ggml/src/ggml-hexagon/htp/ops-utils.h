@@ -146,11 +146,4 @@ static inline void htp_dump_f16(char * pref, const __fp16 * x, uint32_t n) {
     }
 }
 
-#define PROFILER_START(name) const uint64_t name##_start_cycles = HAP_perf_get_qtimer_count()
-#define PROFILER_END(name, ...)                                                                                   \
-    do {                                                                                                          \
-        const uint64_t name##_end_cycles = HAP_perf_get_qtimer_count();                                           \
-        FARF(HIGH, __VA_ARGS__, (unsigned) HAP_perf_qtimer_count_to_us(name##_end_cycles - name##_start_cycles)); \
-    } while (0)
-
 #endif /* OPS_UTILS_H */

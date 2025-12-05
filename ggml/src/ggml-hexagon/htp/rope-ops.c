@@ -365,7 +365,8 @@ static void rope_job_f32_per_thread(struct rope_th_ctx * rope_ctx, int nth, int 
         return;
     }
 
-    PROFILER_START(rope_job_f32);
+    uint64_t t1, t2;
+    t1 = HAP_perf_get_qtimer_count();
 
     int is_aligned = 1;
     int opt_path   = 0;
@@ -380,8 +381,10 @@ static void rope_job_f32_per_thread(struct rope_th_ctx * rope_ctx, int nth, int 
 
     rope_hex_f32(rope_ctx, src0_start_row, src0_end_row, nth, ith, opt_path);
 
-    PROFILER_END(rope_job_f32, "rope-f32: %d/%d/%d: (%u:%u) usec %u\n", ith, nth, opt_path, src0_start_row,
-                 src0_end_row);
+    t2 = HAP_perf_get_qtimer_count();
+
+    FARF(HIGH, "rope-f32: %d/%d/%d: (%u:%u) usec %u\n", ith, nth, opt_path, src0_start_row, src0_end_row,
+         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
 static void rope_job_dispatcher_f32(unsigned int n, unsigned int i, void * data) {
