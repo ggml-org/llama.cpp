@@ -666,7 +666,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     std::map<int, std::string> mapped;
     int blk_id = 0;
-    int pruned_attention_w = 0;
 
     // make a list of weights
     std::vector<const llama_model_loader::llama_tensor_weight *> tensors;
@@ -674,11 +673,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     for (const auto & it : ml.weights_map) {
         const std::string remapped_name(remap_layer(it.first, prune_list, mapped, blk_id));
         if (remapped_name.empty()) {
-            if (it.first.find("attn_v.weight") != std::string::npos ||
-                it.first.find("attn_qkv.weight") != std::string::npos ||
-                it.first.find("attn_kv_b.weight") != std::string::npos) {
-                    pruned_attention_w++;
-            }
             LLAMA_LOG_DEBUG("%s: pruning tensor %s\n", __func__, it.first.c_str());
             continue;
         }
@@ -703,7 +697,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         });
     }
 
-    bool is_clip_model = false;
     for (const auto * it : tensors) {
         const struct ggml_tensor * tensor = it->tensor;
 
@@ -717,8 +710,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         } else if (name == LLM_TN(model.arch)(LLM_TENSOR_OUTPUT, "weight")) {
             qs.has_output = true;
         }
-
-        is_clip_model |= name.rfind("mm.", 0) == 0; // check the "mm." prefix
     }
 
     qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)model.hparams.n_layer;
