@@ -733,6 +733,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
+        case COMMON_CHAT_FORMAT_GIGACHAT_V3: return "GigaChat V3";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -3222,6 +3223,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<|tool_response:name|>") != std::string::npos &&
         src.find("<|tool_response:result|>") != std::string::npos) {
         return common_chat_params_init_solar_open(tmpl, params);
+    }
+    
+    // GigaChatV3 format detection
+    if (src.find("<|role_sep|>\n") != std::string::npos && src.find("<|message_sep|>\n\n") != std::string::npos) {
+        return common_chat_params_init_gigachat_v3(tmpl, params);
     }
 
     // Use generic handler when mixing tools + JSON schema.
