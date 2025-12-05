@@ -13,23 +13,29 @@ import debug as mDebug
 
 gConfigNeeded = [ 'acl.schemes', 'acl.domains', 'sec.bearerAuth' ]
 
-@dataclass
-class DictDataclassMixin(dict):
-    """
-    Mixin to ensure dataclass attributes get mapped as dict keys in __post_init__
-    """
-
-    def __post_init__(self):
-        """
-        Skip if already set using maybe say dict init mechanism or ...
-        """
-        for f in fields(self):
-            if f.name not in self:
-                self[f.name] = getattr(self, f.name)
-
 
 @dataclass
-class Sec(DictDataclassMixin, dict):
+class DictyDataclassMixin():
+    """
+    Mixin to ensure dataclass attributes are also accessible through
+    dict's [] style syntax and get helper.
+    """
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        setattr(self, key, value)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except:
+            return default
+
+
+@dataclass
+class Sec(DictyDataclassMixin):
     """
     Used to store security related config entries
     """
@@ -37,18 +43,30 @@ class Sec(DictDataclassMixin, dict):
     keyFile: str = ""
     bearerAuth: str = ""
 
+
 @dataclass
-class ACL(DictDataclassMixin, dict):
+class ACL(DictyDataclassMixin):
+    """
+    Used to store access control related config entries
+    """
     schemes: list[str] = field(default_factory=list)
     domains: list[str] = field(default_factory=list)
 
+
 @dataclass
-class Network(DictDataclassMixin, dict):
+class Network(DictyDataclassMixin):
+    """
+    Used to store network related config entries
+    """
     port: int = 3128
     addr: str = ''
 
+
 @dataclass
-class Op(DictDataclassMixin, dict):
+class Op(DictyDataclassMixin):
+    """
+    Used to store runtime operation related config entries and states
+    """
     configFile: str = "/dev/null"
     debug: bool = False
     server: http.server.ThreadingHTTPServer|None = None
@@ -56,8 +74,9 @@ class Op(DictDataclassMixin, dict):
     bearerTransformed: str = ""
     bearerTransformedYear: str = ""
 
+
 @dataclass
-class Config(DictDataclassMixin, dict):
+class Config(DictyDataclassMixin):
     op: Op = field(default_factory=Op)
     sec: Sec = field(default_factory=Sec)
     acl: ACL = field(default_factory=ACL)
