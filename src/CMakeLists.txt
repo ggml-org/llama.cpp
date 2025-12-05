@@ -133,6 +133,7 @@ add_library(llama
             models/t5-enc.cpp
             models/wavtokenizer-dec.cpp
             models/xverse.cpp
+            models/mistral3.cpp
             models/graph-context-mamba.cpp
             )
 

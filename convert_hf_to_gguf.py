@@ -1584,9 +1584,26 @@ class MmprojModel(ModelBase):
 
         # load preprocessor config
         self.preprocessor_config = {}
-        if not self.is_mistral_format:
-            with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
+
+        # prefer preprocessor_config.json if possible
+        preprocessor_config_path = self.dir_model / "preprocessor_config.json"
+        if preprocessor_config_path.is_file():
+            with open(preprocessor_config_path, "r", encoding="utf-8") as f:
                 self.preprocessor_config = json.load(f)
+
+        # prefer processor_config.json if possible
+        processor_config_path = self.dir_model / "processor_config.json"
+        if processor_config_path.is_file():
+            with open(processor_config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                # move image_processor to root level for compat
+                if "image_processor" in cfg:
+                    cfg = {
+                        **cfg,
+                        **cfg["image_processor"],
+                    }
+                # merge configs
+                self.preprocessor_config = {**self.preprocessor_config, **cfg}
 
     def get_vision_config(self) -> dict[str, Any] | None:
         config_name = "vision_config" if not self.is_mistral_format else "vision_encoder"
@@ -2327,9 +2344,18 @@ class LlamaModel(TextModel):
         self.gguf_writer.add_add_bos_token(True)
         self.gguf_writer.add_add_eos_token(False)
 
-        template_dir = Path(__file__).parent / "models/templates/"
+        local_template_file_path = self.dir_model / "chat_template.jinja"
 
-        if not self.is_mistral_format or not self.disable_mistral_community_chat_template:
+        if self.is_mistral_format and local_template_file_path.is_file():
+            # Ministral-3 and other new Mistral models come with chat templates.
+            # ref: https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512/tree/main
+            logger.info("Using an existing Mistral local chat template.")
+
+            with open(local_template_file_path, "r", encoding="utf-8") as f:
+                template = f.read()
+        elif not self.is_mistral_format or not self.disable_mistral_community_chat_template:
+            template_dir = Path(__file__).parent / "models/templates/"
+
             # Log only for Mistral format that the official tokenization and detokenization is via `mistral-common`.
             if self.is_mistral_format:
                 logger.info(
@@ -2337,9 +2363,12 @@ class LlamaModel(TextModel):
                     "Mistral recommends to use `mistral-common` to perform tokenization and detokenization."
                 )
             template = MistralModel.get_community_chat_template(vocab, template_dir, self.is_mistral_format)
-            self.gguf_writer.add_chat_template(template)
         else:
-            logger.info("Not using a Mistral community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
+            logger.info("Not using a Mistral local or community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
+            template = None
+
+        if template is not None:
+            self.gguf_writer.add_chat_template(template)
 
     def set_vocab(self):
         if self.is_mistral_format:
@@ -2800,9 +2829,38 @@ class Llama4VisionModel(MmprojModel):
 
 @ModelBase.register("Mistral3ForConditionalGeneration")
 class Mistral3Model(LlamaModel):
-    model_arch = gguf.MODEL_ARCH.LLAMA
+    model_arch = gguf.MODEL_ARCH.MISTRAL3
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # for compatibility, we use LLAMA arch for older models
+        # TODO: remove this once everyone has migrated to newer version of llama.cpp
+        if self.hparams.get("model_type") != "ministral3":
+            self.model_arch = gguf.MODEL_ARCH.LLAMA
+            self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
+            self.gguf_writer.add_architecture()
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        rope_params = self.hparams.get("rope_parameters")
+        if self.hparams.get("model_type") == "ministral3":
+            assert rope_params is not None, "ministral3 must have 'rope_parameters' config"
+            assert rope_params["rope_type"] == "yarn", "ministral3 rope_type must be 'yarn'"
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_params["factor"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_fast(rope_params["beta_fast"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_slow(rope_params["beta_slow"])
+            self.gguf_writer.add_rope_scaling_yarn_log_mul(rope_params["mscale_all_dim"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_params["original_max_position_embeddings"])
+            self.gguf_writer.add_rope_freq_base(rope_params["rope_theta"])
+            self.gguf_writer.add_attn_temperature_scale(rope_params["llama_4_scaling_beta"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        # TODO: probably not worth supporting quantized weight, as official BF16 is also available
+        if name.endswith("weight_scale_inv"):
+            raise ValueError("This is a quantized weight, please use BF16 weight instead")
+
         name = name.replace("language_model.", "")
         if "multi_modal_projector" in name or "vision_tower" in name:
             return []
@@ -9852,11 +9910,21 @@ class ApertusModel(LlamaModel):
 
 
 class MistralModel(LlamaModel):
-    model_arch = gguf.MODEL_ARCH.LLAMA
+    model_arch = gguf.MODEL_ARCH.MISTRAL3
     model_name = "Mistral"
     hf_arch = ""
     is_mistral_format = True
     undo_permute = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # for compatibility, we use LLAMA arch for older models
+        # TODO: remove this once everyone migrates to newer version of llama.cpp
+        if "llama_4_scaling" not in self.hparams:
+            self.model_arch = gguf.MODEL_ARCH.LLAMA
+            self.gguf_writer.arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
+            self.gguf_writer.add_architecture()
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     @staticmethod
     def get_community_chat_template(vocab: MistralVocab, templates_dir: Path, is_mistral_format: bool):
@@ -9896,6 +9964,20 @@ class MistralModel(LlamaModel):
             template = f.read()
 
         return template
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if "yarn" in self.hparams:
+            yarn_params = self.hparams["yarn"]
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(yarn_params["factor"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_fast(yarn_params["beta"])
+            self.gguf_writer.add_rope_scaling_yarn_beta_slow(yarn_params["alpha"])
+            self.gguf_writer.add_rope_scaling_yarn_log_mul(1.0) # mscale_all_dim
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(yarn_params["original_max_position_embeddings"])
+
+        if "llama_4_scaling" in self.hparams:
+            self.gguf_writer.add_attn_temperature_scale(self.hparams["llama_4_scaling"]["beta"])
 
 
 class PixtralModel(LlavaVisionModel):
