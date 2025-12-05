@@ -604,6 +604,7 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
         return;
     }
 
+    // note: if you hit this assert, most likely you haven't deallocated all Metal resources before exiting
     GGML_ASSERT([rsets->data count] == 0);
 
     atomic_store_explicit(&rsets->d_stop, true, memory_order_relaxed);
@@ -790,9 +791,6 @@ ggml_metal_device_t ggml_metal_device_init(void) {
             } else {
                 dev->rsets = nil;
             }
-
-
-            // --------------------------------------------------
 
             // print MTL GPU family:
             GGML_LOG_INFO("%s: GPU name:   %s\n", __func__, dev->props.name);
