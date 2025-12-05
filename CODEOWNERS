@@ -10,6 +10,7 @@
 /common/arg.*                           @ggerganov
 /common/base64.hpp.*                    @ggerganov
 /common/build-info.*                    @ggerganov
+/common/chat.*                          @pwilkin
 /common/chat-peg-parser.*               @aldehir
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
@@ -84,6 +85,7 @@
 /src/llama-vocab.*                      @CISC
 /src/models/                            @CISC
 /tests/                                 @ggerganov
+/tests/test-chat-.*                     @pwilkin
 /tools/batched-bench/                   @ggerganov
 /tools/main/                            @ggerganov
 /tools/mtmd/                            @ngxson
