@@ -25,33 +25,13 @@ import time
 import ssl
 import traceback
 from typing import Callable
-import urlvalidator as uv
 import pdfmagic as mPdf
 import webmagic as mWeb
-import debug as mDebug
+import config as mConfig
 
 
-gMe = {
-    '--port': 3128,
-    '--config': '/dev/null',
-    '--debug': False,
-    'bearer.transformed.year': "",
-    'server': None,
-    'sslContext': None,
-}
+gMe = mConfig.Config()
 
-gConfigType = {
-    '--port': 'int',
-    '--config': 'str',
-    '--debug': 'bool',
-    '--allowed.schemes': 'list',
-    '--allowed.domains': 'list',
-    '--bearer.insecure': 'str',
-    '--sec.keyfile': 'str',
-    '--sec.certfile': 'str'
-}
-
-gConfigNeeded = [ '--allowed.schemes', '--allowed.domains', '--bearer.insecure' ]
 
 gAllowedCalls = {
     "xmlfiltered": [],
@@ -68,13 +48,13 @@ def bearer_transform():
     """
     global gMe
     year = str(time.gmtime().tm_year)
-    if gMe['bearer.transformed.year'] == year:
+    if gMe.op.bearerTransformedYear == year:
         return
     import hashlib
     s256 = hashlib.sha256(year.encode('utf-8'))
-    s256.update(gMe['--bearer.insecure'].encode('utf-8'))
-    gMe['--bearer.transformed'] = s256.hexdigest()
-    gMe['bearer.transformed.year'] = year
+    s256.update(gMe.sec.bearerAuth.encode('utf-8'))
+    gMe.op.bearerTransformed = s256.hexdigest()
+    gMe.op.bearerTransformedYear = year
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -218,83 +198,6 @@ def handle_aum(ph: ProxyHandler, pr: urllib.parse.ParseResult):
     ph.end_headers()
 
 
-def load_config():
-    """
-    Allow loading of a json based config file
-
-    The config entries should be named same as their equivalent cmdline argument
-    entries but without the -- prefix. They will be loaded into gMe after adding
-    -- prefix.
-
-    As far as the program is concerned the entries could either come from cmdline
-    or from a json based config file.
-    """
-    global gMe
-    import json
-    with open(gMe['--config']) as f:
-        cfg = json.load(f)
-        for k in cfg:
-            print(f"DBUG:LoadConfig:{k}")
-            try:
-                cArg = f"--{k}"
-                aTypeCheck = gConfigType[cArg]
-                aValue = cfg[k]
-                aType = type(aValue).__name__
-                if aType != aTypeCheck:
-                    print(f"ERRR:LoadConfig:{k}:expected type [{aTypeCheck}] got type [{aType}]")
-                    exit(112)
-                gMe[cArg] = aValue
-            except KeyError:
-                print(f"ERRR:LoadConfig:{k}:UnknownCommand")
-                exit(113)
-
-
-def process_args(args: list[str]):
-    """
-    Helper to process command line arguments.
-
-    Flow setup below such that
-    * location of --config in commandline will decide whether command line or config file will get
-    priority wrt setting program parameters.
-    * str type values in cmdline are picked up directly, without running them through ast.literal_eval,
-    bcas otherwise one will have to ensure throught the cmdline arg mechanism that string quote is
-    retained for literal_eval
-    """
-    import ast
-    import json
-    global gMe
-    iArg = 1
-    while iArg < len(args):
-        cArg = args[iArg]
-        if (not cArg.startswith("--")):
-            print(f"ERRR:ProcessArgs:{iArg}:{cArg}:MalformedCommandOr???")
-            exit(101)
-        print(f"DBUG:ProcessArgs:{iArg}:{cArg}")
-        try:
-            aTypeCheck = gConfigType[cArg]
-            aValue = args[iArg+1]
-            if aTypeCheck != 'str':
-                aValue = ast.literal_eval(aValue)
-                aType = type(aValue).__name__
-                if aType != aTypeCheck:
-                    print(f"ERRR:ProcessArgs:{iArg}:{cArg}:expected type [{aTypeCheck}] got type [{aType}]")
-                    exit(102)
-            gMe[cArg] = aValue
-            iArg += 2
-            if cArg == '--config':
-                load_config()
-        except KeyError:
-            print(f"ERRR:ProcessArgs:{iArg}:{cArg}:UnknownCommand")
-            exit(103)
-    print(json.dumps(gMe, indent=4))
-    for k in gConfigNeeded:
-        if gMe.get(k) == None:
-            print(f"ERRR:ProcessArgs:{k}:missing, did you forget to pass the config file...")
-            exit(104)
-    mDebug.setup(gMe['--debug'])
-    uv.validator_setup(gMe['--allowed.schemes'], gMe['--allowed.domains'])
-
-
 def setup_server():
     """
     Helps setup a http/https server
@@ -333,5 +236,5 @@ def run():
 
 
 if __name__ == "__main__":
-    process_args(sys.argv)
+    gMe.process_args(sys.argv)
     run()
