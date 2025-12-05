@@ -6982,6 +6982,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_conv_transpose_2d({3, 2, 3, 1}, {2, 2, 1, 3}, 1));
     test_cases.emplace_back(new test_conv_transpose_2d({10, 10, 9, 1}, {3, 3, 1, 9}, 2));
+    test_cases.emplace_back(new test_conv_transpose_2d({129, 63, 35, 1}, {3, 3, 48, 35}, 1));
 
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4,  500, 1, 1}));
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, 5000, 1, 1}));
@@ -7897,6 +7898,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         { 58,  3, 64,   32,  8 },
  // A deep layer of a ConvNet, several images in the batch
         { 16,  3, 512,  128, 8 },
+ // High resolution output (large NPQ)
+        {1536, 3, 64,   32,  1 },
     };
 
     for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {

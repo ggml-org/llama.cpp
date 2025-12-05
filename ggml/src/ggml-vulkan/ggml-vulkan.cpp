@@ -353,10 +353,17 @@ enum vk_conv_shapes {
     CONV_SHAPE_COUNT,
 };
 
-uint32_t conv_shapes_wg_denoms[][3] = {
-    { 128, 128, 1 },
-    {  64,  32, 1 },
-    {  32, 256, 1 },
+struct vk_conv_block_size {
+    uint32_t K;
+    uint32_t NPQ;
+    uint32_t CRS;
+};
+
+vk_conv_block_size vk_conv_block_sizes[CONV_SHAPE_COUNT] = {
+    // K   NPQ  CRS
+    { 128, 128, 16 }, // CONV_SHAPE_128x128
+    {  64,  32, 32 }, // CONV_SHAPE_64x32
+    {  32, 256, 16 }, // CONV_SHAPE_32x256
 };
 
 enum dmmv_wg_sizes {
@@ -1344,19 +1351,10 @@ struct vk_op_conv2d_push_constants {
     uint32_t Cin;
     uint32_t N;
 
-    uint32_t KW;
-    uint32_t KH;
     uint32_t W;
     uint32_t H;
     uint32_t OW;
     uint32_t OH;
-
-    uint32_t s0;
-    uint32_t s1;
-    uint32_t p0;
-    uint32_t p1;
-    uint32_t d0;
-    uint32_t d1;
 
     uint32_t nb01;
     uint32_t nb02;
@@ -1376,48 +1374,6 @@ struct vk_op_conv2d_push_constants {
 };
 
 template <> void init_pushconst_fastdiv(vk_op_conv2d_push_constants &p) {
-    // Compute magic values to divide by OW, OW*OH
-    init_fastdiv_values(p.OW,       p.OWmp,    p.OWL);
-    init_fastdiv_values(p.OW*p.OH,  p.OWOHmp,  p.OWOHL);
-}
-
-struct vk_op_conv_transpose_2d_push_constants {
-    uint32_t Cout;
-    uint32_t Cin;
-    uint32_t N;
-
-    uint32_t KW;
-    uint32_t KH;
-    uint32_t W;
-    uint32_t H;
-    uint32_t OW;
-    uint32_t OH;
-
-    uint32_t s0;
-    uint32_t s1;
-    uint32_t p0;
-    uint32_t p1;
-    uint32_t d0;
-    uint32_t d1;
-
-    uint32_t nb01;
-    uint32_t nb02;
-    uint32_t nb03;
-
-    uint32_t nb11;
-    uint32_t nb12;
-    uint32_t nb13;
-
-    uint32_t nb1;
-    uint32_t nb2;
-    uint32_t nb3;
-
-    // init_fastdiv_values constants for dividing by OW, OW*OH
-    uint32_t OWmp;   uint32_t OWL;
-    uint32_t OWOHmp; uint32_t OWOHL;
-};
-
-template <> void init_pushconst_fastdiv(vk_op_conv_transpose_2d_push_constants &p) {
     // Compute magic values to divide by OW, OW*OH
     init_fastdiv_values(p.OW,       p.OWmp,    p.OWL);
     init_fastdiv_values(p.OW*p.OH,  p.OWOHmp,  p.OWOHL);
@@ -4126,12 +4082,10 @@ static void ggml_vk_load_shaders(vk_device& device) {
     // conv2d, conv_transpose_2d
     for (uint32_t s = 0; s < CONV_SHAPE_COUNT; ++s) {
         uint32_t conv2d_WG_SIZE  = 256;
-        uint32_t conv2d_BS_K     = 128;
-        uint32_t conv2d_BS_CRS   = 16;
         uint32_t use_collectives = 0;  // Enables subgroup ops for preventing the re-calculation of indices.
-        uint32_t conv2d_BS_NPQ = 128;
-        uint32_t conv2d_TS_K   = 8;
+        uint32_t conv2d_TS_K     = (s == CONV_SHAPE_64x32) ? 4 : 8;
         uint32_t conv2d_SHMEM_PAD = 4;
+        vk_conv_block_size conv2d_BS = vk_conv_block_sizes[s];
         bool conv2d_UNROLL = true;
 
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
@@ -4145,29 +4099,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
             conv2d_UNROLL = false;
         } else if (device->vendor_id == VK_VENDOR_ID_AMD) {
             conv2d_SHMEM_PAD = device->architecture == vk_device_architecture::AMD_GCN ? 1 : 4;
-        }
-
-        switch (s) {
-        default:
-        case CONV_SHAPE_128x128:
-            conv2d_BS_K = conv_shapes_wg_denoms[CONV_SHAPE_128x128][0];
-            conv2d_BS_NPQ = conv_shapes_wg_denoms[CONV_SHAPE_128x128][1];
-            conv2d_BS_CRS = 16;
-            if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != vk_device_architecture::AMD_GCN) {
+            if (s == CONV_SHAPE_128x128 && device->architecture != vk_device_architecture::AMD_GCN) {
                 conv2d_UNROLL = false;
             }
-            break;
-        case CONV_SHAPE_64x32:
-            conv2d_BS_K = conv_shapes_wg_denoms[CONV_SHAPE_64x32][0];
-            conv2d_BS_NPQ = conv_shapes_wg_denoms[CONV_SHAPE_64x32][1];
-            conv2d_BS_CRS = 32;
-            conv2d_TS_K   = 4;
-            break;
-        case CONV_SHAPE_32x256:
-            conv2d_BS_K = conv_shapes_wg_denoms[CONV_SHAPE_32x256][0];
-            conv2d_BS_NPQ = conv_shapes_wg_denoms[CONV_SHAPE_32x256][1];
-            conv2d_BS_CRS = 16;
-            break;
         }
 
         // Use collectives on pre-Turing NVIDIA GPUs and GCN AMD cards, which had slower integer math.
@@ -4181,22 +4115,22 @@ static void ggml_vk_load_shaders(vk_device& device) {
             allow_collectives_nv &&
             allow_collectives_amd) {
             use_collectives = 1;
-            conv2d_BS_CRS   = std::min(
+            conv2d_BS.CRS   = std::min(
                 device->subgroup_size,
-                conv2d_BS_CRS);  // CRS block size should be capped at subgroup size for correctness when shuffle is used.
+                conv2d_BS.CRS);  // CRS block size should be capped at subgroup size for correctness when shuffle is used.
         }
 
         uint32_t conv2d_shmem_req =
-            (conv2d_BS_K * (conv2d_BS_CRS + conv2d_SHMEM_PAD) + conv2d_BS_CRS * (conv2d_BS_NPQ + conv2d_SHMEM_PAD)) * sizeof(float);
+            (conv2d_BS.K * (conv2d_BS.CRS + conv2d_SHMEM_PAD) + conv2d_BS.CRS * (conv2d_BS.NPQ + conv2d_SHMEM_PAD)) * sizeof(float);
         if (device->properties.limits.maxComputeSharedMemorySize < conv2d_shmem_req) {
-            conv2d_BS_CRS = 8;
+            conv2d_BS.CRS = 8;
             if (use_collectives) {
-                conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
+                conv2d_BS.CRS = std::min(device->subgroup_size, conv2d_BS.CRS);
             }
         }
 
-        std::array<uint32_t, 3> wg_denoms = { conv2d_BS_K, conv2d_BS_NPQ, 1 };
-        std::vector<uint32_t> spec_constants = { conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives, conv2d_SHMEM_PAD };
+        std::array<uint32_t, 3> wg_denoms = { conv2d_BS.K, 1, 1 };
+        std::vector<uint32_t> spec_constants = { conv2d_WG_SIZE, conv2d_BS.K, conv2d_BS.CRS, conv2d_BS.NPQ, conv2d_TS_K, use_collectives, conv2d_SHMEM_PAD };
 
 #define CREATE_CONV(name, type_suffix, spv_suffix) \
         for (auto &c : device->pipeline_##name##type_suffix[s]) { \
@@ -4213,15 +4147,13 @@ static void ggml_vk_load_shaders(vk_device& device) {
             ggml_vk_create_pipeline( \
                 device, c.second, #name #type_suffix, \
                 name##type_suffix##spv_suffix##_len, name##type_suffix##spv_suffix##_data, "main", 3, \
-                sizeof(vk_op_##name##_push_constants), wg_denoms, spec_constants_cpy, 1, true, use_collectives);    \
+                sizeof(vk_op_conv2d_push_constants), wg_denoms, spec_constants_cpy, 1, true, use_collectives);    \
         }
 #define CREATE_CONVS(spv_suffix) \
         CREATE_CONV(conv2d, _f32, spv_suffix) \
         CREATE_CONV(conv2d, _f16_f32, spv_suffix) \
-        if (device->properties.limits.maxPushConstantsSize >= sizeof(vk_op_conv_transpose_2d_push_constants)) { \
-            CREATE_CONV(conv_transpose_2d, _f32, spv_suffix) \
-            CREATE_CONV(conv_transpose_2d, _f16_f32, spv_suffix) \
-        }
+        CREATE_CONV(conv_transpose_2d, _f32, spv_suffix) \
+        CREATE_CONV(conv_transpose_2d, _f16_f32, spv_suffix)
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
         if (device->coopmat2) {
             CREATE_CONVS(_cm2)
@@ -8284,59 +8216,23 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     }
 }
 
-static std::array<uint32_t, 3> ggml_vk_get_conv_elements(const ggml_tensor *dst) {
-    const ggml_tensor *src0 = dst->src[0];
-    const ggml_tensor *src1 = dst->src[1];
-
-    // src0 - kernel:   [KW, KH, Cin, Cout]
-    // src1 - input:    [W, H, Cin, N]
-    // dst - result:    [OW, OH, Cout, N]
-
-    // Copied from ggml.c: int64_t ggml_calc_conv_output_size(int64_t ins, int64_t ks, int s, int p, int d)
-    auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
-        return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
+static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, uint32_t K, uint32_t NPQ) {
+    auto n_tiles = [&](vk_conv_shapes s) {
+        return CEIL_DIV(K, vk_conv_block_sizes[s].K)
+            * CEIL_DIV(NPQ, vk_conv_block_sizes[s].NPQ);
     };
-    // parallelize in {OW/BS_K, OH/BS_NPQ, 1}
-    int64_t W    = src1->ne[0];
-    int64_t H    = src1->ne[1];
-    int64_t KW   = src0->ne[0];
-    int64_t KH   = src0->ne[1];
-    int64_t Cout = src0->ne[3];
-    int64_t N    = src1->ne[3];
-    int64_t OH   = calc_conv_output_size(H, KH, dst->op_params[1], dst->op_params[3], dst->op_params[5]);
-    int64_t OW   = calc_conv_output_size(W, KW, dst->op_params[0], dst->op_params[2], dst->op_params[4]);
-    int64_t NPQ  = N * OW * OH;
 
-    // Tile output matrix to (K/NB_K, NPQ/NB_NPQ, 1) workgroups
-    std::array<uint32_t, 3> elements = { static_cast<uint32_t>(Cout), static_cast<uint32_t>(NPQ), 1 };
-    return elements;
-}
+    // We can't query number of shader cores on Intel, use 32 as a placeholder
+    // so small convolutions will still choose a smaller tile.
+    const uint32_t shader_core_count = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
 
-static std::array<uint32_t, 3> ggml_vk_get_conv_transpose_2d_elements(const ggml_tensor *dst) {
-    const ggml_tensor *src0 = dst->src[0];
-    const ggml_tensor *src1 = dst->src[1];
-
-    // src0 - kernel:   [KW, KH, Cout, Cin]
-    // src1 - input:    [W, H, Cin, N]
-    // dst - result:    [OW, OH, Cout, N]
-
-    auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
-        return (ins - 1) * s - 2 * p + (ks - 1) * d + 1;
-    };
-    // parallelize in {OW/BS_K, OH/BS_NPQ, 1}
-    int64_t W    = src1->ne[0];
-    int64_t H    = src1->ne[1];
-    int64_t KW   = src0->ne[0];
-    int64_t KH   = src0->ne[1];
-    int64_t Cout = src0->ne[2];
-    int64_t N    = src1->ne[3];
-    int64_t OH   = calc_conv_output_size(H, KH, dst->op_params[0], 0, 1);
-    int64_t OW   = calc_conv_output_size(W, KW, dst->op_params[0], 0, 1);
-    int64_t NPQ  = N * OW * OH;
-
-    // Tile output matrix to (K/NB_K, NPQ/NB_NPQ, 1) workgroups
-    std::array<uint32_t, 3> elements = { static_cast<uint32_t>(Cout), static_cast<uint32_t>(NPQ), 1 };
-    return elements;
+    if (K > 64 && n_tiles(CONV_SHAPE_128x128) >= shader_core_count * 2) {
+        return CONV_SHAPE_128x128;
+    } else if (K <= 32 && n_tiles(CONV_SHAPE_32x256) >= shader_core_count * 2) {
+        return CONV_SHAPE_32x256;
+    } else {
+        return CONV_SHAPE_64x32;
+    }
 }
 
 static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * dst, ggml_op op) {
@@ -8799,39 +8695,20 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         return nullptr;
     case GGML_OP_CONV_2D:
     case GGML_OP_CONV_TRANSPOSE_2D:
-        if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-            ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
-            std::array<uint32_t, 3> elements{};
-            if (op == GGML_OP_CONV_2D) elements = ggml_vk_get_conv_elements(dst);
-            else if (op == GGML_OP_CONV_TRANSPOSE_2D) elements = ggml_vk_get_conv_transpose_2d_elements(dst);
-            vk_conv_shapes shape;
+        if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            uint32_t K = dst->ne[2]; // Cout
+            uint32_t NPQ = dst->ne[3] * dst->ne[1] * dst->ne[0]; // N * OH * OW
+            vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, K, NPQ);
 
-            uint32_t tiles[CONV_SHAPE_COUNT];
-            for (uint32_t i = 0; i < CONV_SHAPE_COUNT; ++i) {
-                tiles[i] = CEIL_DIV(elements[0], conv_shapes_wg_denoms[i][0]) * CEIL_DIV(elements[1], conv_shapes_wg_denoms[i][1]);
-            }
-
-            // We can't query number of shader cores on Intel, use 32 as a placeholder
-            // so small convolutions will still choose a smaller tile.
-            const uint32_t shader_core_count = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
-
-            if (elements[0] > 64 && tiles[CONV_SHAPE_128x128] >= shader_core_count * 2) {
-                shape = CONV_SHAPE_128x128;
-            } else if (elements[0] <= 32 && tiles[CONV_SHAPE_32x256] >= shader_core_count * 2) {
-                shape = CONV_SHAPE_32x256;
-            } else {
-                shape = CONV_SHAPE_64x32;
-            }
-
-            uint32_t KW = static_cast<uint32_t>(src0->ne[0]);
-            uint32_t KH = static_cast<uint32_t>(src0->ne[1]);
-            uint32_t s0 = static_cast<uint32_t>(dst->op_params[0]);
-            uint32_t s1 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[1]) : static_cast<uint32_t>(dst->op_params[0]);
-            uint32_t p0 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[2]) : 0;
-            uint32_t p1 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[3]) : 0;
-            uint32_t d0 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[4]) : 1;
-            uint32_t d1 = op == GGML_OP_CONV_2D ? static_cast<uint32_t>(dst->op_params[5]) : 1;
-
+            bool transpose = dst->op == GGML_OP_CONV_TRANSPOSE_2D;
+            uint32_t KW = (uint32_t)src0->ne[0];
+            uint32_t KH = (uint32_t)src0->ne[1];
+            uint32_t s0 = (uint32_t)(ggml_get_op_params_i32(dst, 0));
+            uint32_t s1 = !transpose ? (uint32_t)ggml_get_op_params_i32(dst, 1) : s0;
+            uint32_t p0 = !transpose ? (uint32_t)ggml_get_op_params_i32(dst, 2) : 0;
+            uint32_t p1 = !transpose ? (uint32_t)ggml_get_op_params_i32(dst, 3) : 0;
+            uint32_t d0 = !transpose ? (uint32_t)ggml_get_op_params_i32(dst, 4) : 1;
+            uint32_t d1 = !transpose ? (uint32_t)ggml_get_op_params_i32(dst, 5) : 1;
             vk_conv2d_pipeline_state conv2d_pipeline_state(s0, s1, p0, p1, d0, d1, KW, KH);
 
             std::map<vk_conv2d_pipeline_state, vk_pipeline> *pipelines = nullptr;
@@ -9150,13 +9027,21 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             elements = { N * OC * OH * OW, 1, 1};
         } break;
     case GGML_OP_CONV_2D:
-        {
-            elements = ggml_vk_get_conv_elements(dst);
-        } break;
     case GGML_OP_CONV_TRANSPOSE_2D:
-        {
-            elements = ggml_vk_get_conv_transpose_2d_elements(dst);
-        } break;
+        if constexpr (std::is_same_v<PC, vk_op_conv2d_push_constants>) {
+            const uint32_t NPQ = pc.N * pc.OH * pc.OW;
+            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, pc.Cout, NPQ);
+            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, vk_conv_block_sizes[shape].NPQ);
+
+            elements = { pc.Cout, NPQ_blocks, 1 };
+            if (elements[1] > 512) {
+                elements[2] = CEIL_DIV(elements[1], 512);
+                elements[1] = 512;
+            }
+        } else {
+            GGML_ABORT("invalid push constant type for CONV_2D");
+        }
+        break;
     case GGML_OP_ADD:
     case GGML_OP_SUB:
     case GGML_OP_DIV:
@@ -10707,29 +10592,23 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context & subctx, 
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     GGML_TENSOR_BINARY_OP_LOCALS
-
     GGML_ASSERT(nb00 == sizeof(float) || nb00 == sizeof(ggml_fp16_t));
     GGML_ASSERT(nb10 == sizeof(float));
     GGML_ASSERT(nb0 == sizeof(float));
+
+    bool transpose = dst->op == GGML_OP_CONV_TRANSPOSE_2D;
 
     vk_op_conv2d_push_constants p{};
-    p.Cout = static_cast<uint32_t>(ne03);
-    p.Cin  = static_cast<uint32_t>(ne02);
+    p.Cout = static_cast<uint32_t>(!transpose ? ne03 : ne02);
+    p.Cin  = static_cast<uint32_t>(!transpose ? ne02 : ne03);
     p.N    = static_cast<uint32_t>(ne13);
+    GGML_ASSERT(p.Cout == ne2);
+    GGML_ASSERT(p.Cin == ne12);
 
-    p.KW = static_cast<uint32_t>(ne00);
-    p.KH = static_cast<uint32_t>(ne01);
     p.W  = static_cast<uint32_t>(ne10);
     p.H  = static_cast<uint32_t>(ne11);
     p.OW = static_cast<uint32_t>(ne0);
     p.OH = static_cast<uint32_t>(ne1);
-
-    p.s0 = static_cast<uint32_t>(dst->op_params[0]);
-    p.s1 = static_cast<uint32_t>(dst->op_params[1]);
-    p.p0 = static_cast<uint32_t>(dst->op_params[2]);
-    p.p1 = static_cast<uint32_t>(dst->op_params[3]);
-    p.d0 = static_cast<uint32_t>(dst->op_params[4]);
-    p.d1 = static_cast<uint32_t>(dst->op_params[5]);
 
     p.nb01 = static_cast<uint32_t>(nb01 / nb00);
     p.nb02 = static_cast<uint32_t>(nb02 / nb00);
@@ -10743,59 +10622,7 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context & subctx, 
     p.nb2 = static_cast<uint32_t>(nb2 / nb0);
     p.nb3 = static_cast<uint32_t>(nb3 / nb0);
 
-    GGML_ASSERT(ne03 == ne2);
-    GGML_ASSERT(ne02 == ne12);
-
-    ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_CONV_2D, std::move(p));
-}
-
-static void ggml_vk_conv_transpose_2d(ggml_backend_vk_context * ctx, vk_context & subctx, const ggml_tensor * src0,
-                                      const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-
-    GGML_TENSOR_BINARY_OP_LOCALS
-
-    GGML_ASSERT(nb00 == sizeof(float) || nb00 == sizeof(ggml_fp16_t));
-    GGML_ASSERT(nb10 == sizeof(float));
-    GGML_ASSERT(nb0 == sizeof(float));
-
-    vk_op_conv_transpose_2d_push_constants p{};
-    p.Cout = static_cast<uint32_t>(ne02);
-    p.Cin  = static_cast<uint32_t>(ne03);
-    p.N    = static_cast<uint32_t>(ne13);
-
-    p.KW = static_cast<uint32_t>(ne00);
-    p.KH = static_cast<uint32_t>(ne01);
-    p.W  = static_cast<uint32_t>(ne10);
-    p.H  = static_cast<uint32_t>(ne11);
-    p.OW = static_cast<uint32_t>(ne0);
-    p.OH = static_cast<uint32_t>(ne1);
-
-    p.s0 = static_cast<uint32_t>(dst->op_params[0]);
-    p.s1 = static_cast<uint32_t>(dst->op_params[0]);
-    p.p0 = 0;
-    p.p1 = 0;
-    p.d0 = 1;
-    p.d1 = 1;
-
-    p.nb01 = static_cast<uint32_t>(nb01 / nb00);
-    p.nb02 = static_cast<uint32_t>(nb02 / nb00);
-    p.nb03 = static_cast<uint32_t>(nb03 / nb00);
-
-    p.nb11 = static_cast<uint32_t>(nb11 / nb10);
-    p.nb12 = static_cast<uint32_t>(nb12 / nb10);
-    p.nb13 = static_cast<uint32_t>(nb13 / nb10);
-
-    p.nb1 = static_cast<uint32_t>(nb1 / nb0);
-    p.nb2 = static_cast<uint32_t>(nb2 / nb0);
-    p.nb3 = static_cast<uint32_t>(nb3 / nb0);
-
-    GGML_ASSERT(ne02 == ne2);
-    GGML_ASSERT(ne03 == ne12);
-
-    ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_CONV_TRANSPOSE_2D, std::move(p));
+    ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, dst->op, std::move(p));
 }
 
 static void ggml_vk_conv_2d_dw(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -12166,11 +11993,8 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
 
         break;
     case GGML_OP_CONV_2D:
-        ggml_vk_conv_2d(ctx, compute_ctx, src0, src1, node);
-
-        break;
     case GGML_OP_CONV_TRANSPOSE_2D:
-        ggml_vk_conv_transpose_2d(ctx, compute_ctx, src0, src1, node);
+        ggml_vk_conv_2d(ctx, compute_ctx, src0, src1, node);
 
         break;
     case GGML_OP_CONV_2D_DW:
@@ -14279,13 +14103,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
-                // Op is disabled for Apple because it segfaults at pipeline create time on MoltenVK
-                ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
-                const vk_device& device = ggml_vk_get_device(ctx->device);
-                if (op->op == GGML_OP_CONV_TRANSPOSE_2D &&
-                    device->properties.limits.maxPushConstantsSize < sizeof(vk_op_conv_transpose_2d_push_constants)) {
-                    return false;
-                }
                 // Channel-contiguous format is not supported yet.
                 return ((op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                     op->src[1]->type == GGML_TYPE_F32 &&
