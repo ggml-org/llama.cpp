@@ -184,18 +184,29 @@ class TextHtmlParser(html.parser.HTMLParser):
         return self.textStripped
 
 
+gTagDropsHTMLTextSample = [ { 'tag': 'div', 'id': "header" } ]
+
 class TCHtmlText(mTC.ToolCall):
 
     def tcf_meta(self) -> mTC.TCFunction:
         return mTC.TCFunction(
             self.name,
-            "Fetch html content from given url through a proxy server and return its text content after stripping away the html tags as well as head, script, style, header, footer, nav blocks, in few seconds",
+            "Fetch html content from given url through a proxy server and return its text content after stripping away html tags as well as uneeded blocks like head, script, style, header, footer, nav in few seconds",
             mTC.TCInParameters(
                 "object",
                 {
                     "url": mTC.TCInProperty(
                         "string",
-                        "url of the html page that needs to be fetched and inturn unwanted stuff stripped from its contents to some extent"
+                        "url of the html page that needs to be fetched and inturn unwanted stuff stripped from its contents to an extent"
+                    ),
+                    "tagDrops": mTC.TCInProperty(
+                        "string",
+                        (
+                            "Optionally specify a json stringified list of tag-and-id dicts of tag blocks to drop from html."
+                            "For each tag block that needs to be dropped, one needs to specify the tag type and its associated id attribute."
+                            "where the tag types (ie div, span, p, a ...) are always mentioned in lower case."
+                            f"For example when fetching a search web site, one could use {json.dumps(gTagDropsHTMLTextSample)} and so..."
+                        )
                     )
                 },
                 [ "url" ]
@@ -209,7 +220,7 @@ class TCHtmlText(mTC.ToolCall):
             if not got.callOk:
                 return got
             # Extract Text
-            tagDrops = inHeaders.get('htmltext-tag-drops')
+            tagDrops = args.get('tagDrops')
             if not tagDrops:
                 tagDrops = []
             else:
@@ -284,28 +295,56 @@ class XMLFilterParser(html.parser.HTMLParser):
             self.text += f"{data}"
 
 
-def handle_xmlfiltered(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
-    try:
-        # Get requested url
-        got = handle_urlreq(ph, pr, "HandleXMLFiltered")
-        if not got.callOk:
-            ph.send_error(got.httpStatus, got.httpStatusMsg)
-            return
-        # Extract Text
-        tagDropREs = ph.headers.get('xmlfiltered-tagdrop-res')
-        if not tagDropREs:
-            tagDropREs = []
-        else:
-            tagDropREs = cast(list[str], json.loads(tagDropREs))
-        xmlFiltered = XMLFilterParser(tagDropREs)
-        xmlFiltered.feed(got.contentData)
-        # Send back to client
-        ph.send_response(got.httpStatus)
-        ph.send_header('Content-Type', got.contentType)
-        # Add CORS for browser fetch, just in case
-        ph.send_header('Access-Control-Allow-Origin', '*')
-        ph.end_headers()
-        ph.wfile.write(xmlFiltered.text.encode('utf-8'))
-        debug.dump({ 'XMLFiltered': 'yes' }, { 'RawText': xmlFiltered.text })
-    except Exception as exc:
-        ph.send_error(502, f"WARN:XMLFiltered:Failed:{exc}")
+gRSSTagDropREsDefault = [
+    "^rss:channel:item:guid:.*",
+    "^rss:channel:item:link:.*",
+    "^rss:channel:item:description:.*",
+    ".*:image:.*",
+    ".*:enclosure:.*"
+]
+
+class TCXmlFiltered(mTC.ToolCall):
+
+    def tcf_meta(self) -> mTC.TCFunction:
+        return mTC.TCFunction(
+            self.name,
+            "Fetch requested xml url through a proxy server that can optionally filter out unwanted tags and their contents. Will take few seconds",
+            mTC.TCInParameters(
+                "object",
+                {
+                    "url": mTC.TCInProperty(
+                        "string",
+                        "url of the xml file that will be fetched"
+                    ),
+                    "tagDropREs": mTC.TCInProperty(
+                        "string",
+                        (
+                            "Optionally specify a json stringified list of xml tag heirarchies to drop."
+                            "For each tag that needs to be dropped, one needs to specify regular expression of the heirarchy of tags involved,"
+                            "where the tag names are always mentioned in lower case along with a : as suffix."
+                            f"For example for rss feeds one could use {json.dumps(gRSSTagDropREsDefault)} and so..."
+                        )
+                    )
+                },
+                [ "url" ]
+            )
+        )
+
+    def tc_handle(self, args: mTC.TCInArgs, inHeaders: http.client.HTTPMessage) -> mTC.TCOutResponse:
+        try:
+            # Get requested url
+            got = handle_urlreq(args['url'], inHeaders, "HandleTCXMLFiltered")
+            if not got.callOk:
+                return got
+            # Extract Text
+            tagDropREs = args.get('tagDropREs')
+            if not tagDropREs:
+                tagDropREs = []
+            else:
+                tagDropREs = cast(list[str], json.loads(tagDropREs))
+            xmlFiltered = XMLFilterParser(tagDropREs)
+            xmlFiltered.feed(got.contentData.decode('utf-8'))
+            debug.dump({ 'op': 'MCPWeb.XMLFiltered' }, { 'RawText': xmlFiltered.text })
+            return mTC.TCOutResponse(True, got.statusCode, got.statusMsg, got.contentType, xmlFiltered.text.encode('utf-8'))
+        except Exception as exc:
+            return mTC.TCOutResponse(False, 502, f"WARN:XMLFiltered:Failed:{exc}")
