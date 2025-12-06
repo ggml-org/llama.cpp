@@ -31,7 +31,7 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint ib32, 
         FLOAT_TYPE dl_cache[4];
         uint16_t gvf_cache[4];
         float delta_cache[4];
-        
+
         // Precompute the multiplier and lookup values for 4 sub-blocks
         [[unroll]] for (uint l = 0; l < 4; ++l) {
             dl_cache[l] = FLOAT_TYPE(d * (2 * bitfieldExtract(sc, 3 * int(l / 2), 3) + 1));
@@ -53,12 +53,12 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint ib32, 
             }
 
             FLOAT_TYPE col_sum = FLOAT_TYPE(0.0);
-            
+
             // Loop over sub-blocks
             [[unroll]] for (uint l = 0; l < 4; ++l) {
                 const uint16_t grid = gvf_cache[l];
                 const float dl = dl_cache[l];
-                
+
                 // Decode 8 2-bit fbits from gvf_cache
                 float f0 = float(bitfieldExtract(grid, 0, 2));
                 float f1 = float(bitfieldExtract(grid, 2, 2));
@@ -80,7 +80,7 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint ib32, 
 
                 // Horizontal add to get scalar sum
                 FLOAT_TYPE sum = sum_v.x + sum_v.y + sum_v.z + sum_v.w;
-                
+
                 // Accumulate to column sum
                 col_sum = fma(dl, sum, col_sum);
             }
