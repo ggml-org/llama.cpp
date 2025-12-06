@@ -10110,6 +10110,86 @@ class KimiVLModel(MmprojModel):
 
         return [] # skip other tensors
 
+@ModelBase.register("Glm4vForConditionalGeneration")
+class GLM4VModel(Glm4Model):
+    """Text model from [zai-org/GLM-4.1V-9B-Thinking](https://huggingface.co/zai-org/GLM-4.1V-9B-Thinking)
+
+    ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
+    model_arch = gguf.MODEL_ARCH.GLM4V
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+        # skip vision tensors for the text model
+        if name.startswith("model.visual."):
+            return []
+
+        # the Glm4Model class expects tensor names to start with 'model.',
+        # so we strip the we strip the 'language_model.' part
+        if name.startswith("model.language_model."):
+            name = name.replace("model.language_model.", "model.", 1)
+
+        # let the Glm4Model class handle the tensor mapping
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Glm4vMoeForConditionalGeneration")
+class GLM4VMoEModel(Glm4MoeModel):
+    """Text model from [zai-org/GLM-4.5V](https://huggingface.co/zai-org/GLM-4.5V)
+
+    ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
+    model_arch = gguf.MODEL_ARCH.GLM4V_MOE
+
+    def set_gguf_parameters(self):
+        # parameters specific to GLM-4.5V like rope_theta=10000 and context_length=65536
+        # should be correctly picked up from the text_config by the base classes
+        super().set_gguf_parameters()
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+        # skip vision tensors for the text model
+        if name.startswith("model.visual."):
+            return []
+
+        # the Glm4MoeModel class expects tensor names to start with 'model.',
+        # so we strip the we strip the 'language_model.' part
+        if name.startswith("model.language_model."):
+            name = name.replace("model.language_model.", "model.", 1)
+
+        # let the Glm4MoeModel class handle the MoE logic and tensor mapping
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Glm4vMoeForConditionalGeneration", "Glm4vForConditionalGeneration")
+class GLM4VisionModel(MmprojModel):
+    """Multimodal projector from:
+    - [zai-org/GLM-4.1V-9B-Thinking](https://huggingface.co/zai-org/GLM-4.1V-9B-Thinking)
+    - [zai-org/GLM-4.5V](https://huggingface.co/zai-org/GLM-4.5V)
+
+    ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
+    #
+    # TODO: conversion logic is still WIP!
+    #
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        vparams = self.hparams_vision
+        ln_eps = vparams.get("layer_norm_eps", 1e-5)
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GLM4V)
+        self.gguf_writer.add_vision_attention_layernorm_eps(ln_eps)
+        self.gguf_writer.add_vision_use_silu(True)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid # unused
+        if name.startswith("model.visual."):
+            yield self.map_tensor_name(name), data_torch
+        else:
+            return
 
 @ModelBase.register("CogVLMForCausalLM")
 class CogVLMVisionModel(MmprojModel):
