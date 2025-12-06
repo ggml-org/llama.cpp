@@ -54,10 +54,10 @@ class TCInParameters():
 class TCFunction():
     name: str
     description: str
-    parameters: TCInParameters
+    parameters: TCInParameters ### Delta wrt naming btw OpenAi Tools HS (parameters) and MCP(inputSchema)
 
 @dataclass
-class ToolCallMeta():
+class ToolCallMeta(): ### Delta wrt tree btw OpenAi Tools HS (Needs this wrapper) and MCP (directly use TCFunction)
     type: str = "function"
     function: TCFunction|None = None
 
@@ -112,6 +112,17 @@ class ToolCall():
         return ToolCallMeta("function", tcf)
 
 
+@dataclass
+class MCPTLResult:
+    tools: list[ToolCallMeta]
+
+@dataclass
+class MCPToolsList:
+    id: str
+    result: MCPTLResult
+    jsonrpc: str = "2.0"
+
+
 class ToolManager():
 
     def __init__(self) -> None:
@@ -121,9 +132,10 @@ class ToolManager():
         self.toolcalls[fName] = tc
 
     def meta(self):
-        oMeta = {}
+        lMeta: list[ToolCallMeta]= []
         for tcName in self.toolcalls.keys():
-            oMeta[tcName] = self.toolcalls[tcName].meta()
+            lMeta.append(self.toolcalls[tcName].meta())
+        return lMeta
 
     def tc_handle(self, callId: str, tcName: str, tcArgs: TCInArgs, inHeaders: HttpHeaders) -> ToolCallResponseEx:
         try:

@@ -86,13 +86,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return mTC.TCOutResponse(False, 400, "WARN:Invalid auth")
         return mTC.TCOutResponse(True, 200, "Auth Ok")
 
+    def send_mcp(self, statusCode: int, statusMessage: str, body: Any):
+        self.send_response(statusCode, statusMessage)
+        self.send_header('Content-Type', "application/json")
+        # Add CORS for browser fetch, just in case
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(body).encode('utf-8'))
+
     def mcp_toolscall(self, oRPC: Any):
         """
         If authorisation is ok for the request, run the specified handler.
         """
         try:
             if not gMe.op.toolManager:
-                raise RuntimeError("DBUG:PH:TCRun:ToolManager uninitialised")
+                raise RuntimeError("DBUG:PH:MCPToolsCall:ToolManager uninitialised")
             resp = gMe.op.toolManager.tc_handle(oRPC["id"], oRPC["params"]["name"], oRPC["params"]["arguments"], self.headers)
             if not resp.response.callOk:
                 self.send_error(resp.response.statusCode, resp.response.statusMsg)
@@ -104,24 +112,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     mTC.MCPTCRContentText(resp.response.contentData.decode('utf-8'))
                 ])
             )
-            self.send_response(resp.response.statusCode, resp.response.statusMsg)
-            self.send_header('Content-Type', "application/json")
-            # Add CORS for browser fetch, just in case
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(tcresp).encode('utf-8'))
+            self.send_mcp(resp.response.statusCode, resp.response.statusMsg, tcresp)
         except Exception as e:
             self.send_error(400, f"ERRR:PH:{e}")
 
-    def mcp_toolslist(self):
-
-        pass
+    def mcp_toolslist(self, oRPC: Any):
+        if not gMe.op.toolManager:
+            raise RuntimeError("DBUG:PH:MCPToolsList:ToolManager uninitialised")
+        tcl = mTC.MCPToolsList(oRPC["id"], mTC.MCPTLResult(gMe.op.toolManager.meta()))
+        self.send_mcp(200, "tools/list follows", tcl)
 
     def mcp_run(self, oRPC: Any):
         if oRPC["method"] == "tools/call":
             self.mcp_toolscall(oRPC)
         elif oRPC["method"] == "tools/list":
-            self.mcp_toolslist()
+            self.mcp_toolslist(oRPC)
         else:
             self.send_error(400, f"ERRR:PH:MCP:Unknown")
 
