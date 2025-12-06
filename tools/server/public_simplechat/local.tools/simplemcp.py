@@ -1,20 +1,13 @@
-# A simple proxy server
+# A simple mcp server with a bunch of bundled tool calls
 # by Humans for All
 #
 # Listens on the specified port (defaults to squids 3128)
-# * if a url query is got wrt urlraw path
-#   http://localhost:3128/urlraw?url=http://site.of.interest/path/of/interest
-#   fetches the contents of the specified url and returns the same to the requester
-# * if a url query is got wrt urltext path
-#   http://localhost:3128/urltext?url=http://site.of.interest/path/of/interest
-#   fetches the contents of the specified url and returns the same to the requester
-#   after removing html tags in general as well as contents of tags like style
-#   script, header, footer, nav ...
+# * return the supported tool calls meta data when requested
+# * execute the requested tool call and return the results
 # * any request to aum path is used to respond with a predefined text response
 #   which can help identify this server, in a simple way.
 #
 # Expects a Bearer authorization line in the http header of the requests got.
-# HOWEVER DO KEEP IN MIND THAT ITS A VERY INSECURE IMPLEMENTATION, AT BEST
 #
 
 
@@ -24,9 +17,11 @@ import urllib.parse
 import time
 import ssl
 import traceback
+import json
 from typing import Callable
-import pdfmagic as mPdf
-import webmagic as mWeb
+import tcpdf as mTCPdf
+import tcweb as mTCWeb
+import toolcall as mTC
 import config as mConfig
 
 
@@ -89,60 +84,56 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         bearer_transform()
         authline = self.headers['Authorization']
         if authline == None:
-            return { 'AllOk': False, 'Msg': "No auth line" }
+            return mTC.TCOutResponse(False, 400, "WARN:No auth line")
         authlineA = authline.strip().split(' ')
         if len(authlineA) != 2:
-            return { 'AllOk': False, 'Msg': "Invalid auth line" }
+            return mTC.TCOutResponse(False, 400, "WARN:Invalid auth line")
         if authlineA[0] != 'Bearer':
-            return { 'AllOk': False, 'Msg': "Invalid auth type" }
+            return mTC.TCOutResponse(False, 400, "WARN:Invalid auth type")
         if authlineA[1] != gMe.op.bearerTransformed:
-            return { 'AllOk': False, 'Msg': "Invalid auth" }
-        return { 'AllOk': True, 'Msg': "Auth Ok" }
+            return mTC.TCOutResponse(False, 400, "WARN:Invalid auth")
+        return mTC.TCOutResponse(True, 200, "Auth Ok")
 
     def auth_and_run(self, pr:urllib.parse.ParseResult, handler:Callable[['ProxyHandler', urllib.parse.ParseResult], None]):
         """
         If authorisation is ok for the request, run the specified handler.
         """
         acGot = self.auth_check()
-        if not acGot['AllOk']:
-            self.send_error(400, f"WARN:{acGot['Msg']}")
+        if not acGot.callOk:
+            self.send_error(acGot.statusCode, acGot.statusMsg)
         else:
             try:
                 handler(self, pr)
             except Exception as e:
                 self.send_error(400, f"ERRR:ProxyHandler:{e}")
 
-    def _do_GET(self):
+    def _do_POST(self):
         """
-        Handle GET requests
+        Handle POST requests
         """
-        print(f"DBUG:ProxyHandler:GET:{self.address_string()}:{self.path}")
-        print(f"DBUG:PH:Get:Headers:{self.headers}")
+        print(f"DBUG:PH:Post:{self.address_string()}:{self.path}")
+        print(f"DBUG:PH:Post:Headers:{self.headers}")
+        acGot = self.auth_check()
+        if not acGot.callOk:
+            self.send_error(acGot.statusCode, acGot.statusMsg)
         pr = urllib.parse.urlparse(self.path)
         print(f"DBUG:ProxyHandler:GET:{pr}")
-        match pr.path:
-            case '/urlraw':
-                self.auth_and_run(pr, mWeb.handle_urlraw)
-            case '/htmltext':
-                self.auth_and_run(pr, mWeb.handle_htmltext)
-            case '/xmlfiltered':
-                self.auth_and_run(pr, mWeb.handle_xmlfiltered)
-            case '/pdftext':
-                self.auth_and_run(pr, mPdf.handle_pdftext)
-            case '/aum':
-                handle_aum(self, pr)
-            case _:
-                print(f"WARN:ProxyHandler:GET:UnknownPath{pr.path}")
-                self.send_error(400, f"WARN:UnknownPath:{pr.path}")
+        if pr.path != '/mcp':
+            self.send_error(400, f"WARN:UnknownPath:{pr.path}")
+        body = self.rfile.read(gMe.nw.maxReadBytes)
+        if len(body) == gMe.nw.maxReadBytes:
+            self.send_error(400, f"WARN:RequestOverflow:{pr.path}")
+        oRPC = json.loads(body)
 
-    def do_GET(self):
+
+    def do_POST(self):
         """
-        Catch all / trap any exceptions wrt actual get based request handling.
+        Catch all / trap any exceptions wrt actual post based request handling.
         """
         try:
-            self._do_GET()
+            self._do_POST()
         except:
-            print(f"ERRR:PH:TheGET:{traceback.format_exception_only(sys.exception())}")
+            print(f"ERRR:PH:ThePOST:{traceback.format_exception_only(sys.exception())}")
             self.send_error(500, f"ERRR: handling request")
 
     def do_OPTIONS(self):
@@ -162,8 +153,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if (gMe.op.sslContext):
                 self.request = gMe.op.sslContext.wrap_socket(self.request, server_side=True)
                 self.setup()
-                #self.rfile = self.request.makefile('rb', self.rbufsize)
-                #self.wfile = self.request.makefile('wb', self.wbufsize)
         except:
             print(f"ERRR:ProxyHandler:SSLHS:{traceback.format_exception_only(sys.exception())}")
             return
