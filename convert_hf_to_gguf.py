@@ -1524,6 +1524,79 @@ class TextModel(ModelBase):
         special_vocab._set_special_token("bos", 151643)
         special_vocab.add_to_gguf(self.gguf_writer)
 
+    def _set_vocab_mistral(self):
+        if not _mistral_common_installed:
+            raise ImportError(_mistral_import_error_msg)
+
+        vocab = MistralVocab(self.dir_model)
+        logger.info(
+            f"Converting tokenizer {vocab.tokenizer_type} of size {vocab.vocab_size}."
+        )
+
+        self.gguf_writer.add_tokenizer_model(vocab.gguf_tokenizer_model)
+
+        tokens = []
+        scores = []
+        toktypes = []
+
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            toktypes.append(toktype)
+
+        assert len(tokens) == vocab.vocab_size, (
+            f"token count ({len(tokens)}) != vocab size ({vocab.vocab_size})"
+        )
+
+        if vocab.tokenizer_type == MistralTokenizerType.tekken:
+            self.gguf_writer.add_tokenizer_pre("tekken")
+            self.gguf_writer.add_token_merges(
+                vocab.extract_vocab_merges_from_model()
+            )
+
+        logger.info(
+            f"Setting bos, eos, unk and pad token IDs to {vocab.bos_id}, {vocab.eos_id}, {vocab.unk_id}, {vocab.pad_id}."
+        )
+
+        self.gguf_writer.add_bos_token_id(vocab.bos_id)
+        self.gguf_writer.add_eos_token_id(vocab.eos_id)
+        self.gguf_writer.add_unk_token_id(vocab.unk_id)
+        self.gguf_writer.add_pad_token_id(vocab.pad_id)
+
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+        self.gguf_writer.add_vocab_size(vocab.vocab_size)
+
+        self.gguf_writer.add_add_bos_token(True)
+        self.gguf_writer.add_add_eos_token(False)
+
+        local_template_file_path = self.dir_model / "chat_template.jinja"
+
+        if self.is_mistral_format and local_template_file_path.is_file():
+            # Ministral-3 and other new Mistral models come with chat templates.
+            # ref: https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512/tree/main
+            logger.info("Using an existing Mistral local chat template.")
+
+            with open(local_template_file_path, "r", encoding="utf-8") as f:
+                template = f.read()
+        elif not self.is_mistral_format or not self.disable_mistral_community_chat_template:
+            template_dir = Path(__file__).parent / "models/templates/"
+
+            # Log only for Mistral format that the official tokenization and detokenization is via `mistral-common`.
+            if self.is_mistral_format:
+                logger.info(
+                    "Using a Mistral community chat template. These templates can be subject to errors in early days or weeks after a release. "
+                    "Mistral recommends to use `mistral-common` to perform tokenization and detokenization."
+                )
+            template = MistralModel.get_community_chat_template(vocab, template_dir, self.is_mistral_format)
+        else:
+            logger.info("Not using a Mistral local or community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
+            template = None
+
+        if template is not None:
+            self.gguf_writer.add_chat_template(template)
+
 
 class MmprojModel(ModelBase):
     model_type = ModelType.MMPROJ
@@ -2293,79 +2366,6 @@ class LlamaModel(TextModel):
         # fix for SmolVLM2, missing `num_attention_heads` in config.json
         if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
-
-    def _set_vocab_mistral(self):
-        if not _mistral_common_installed:
-            raise ImportError(_mistral_import_error_msg)
-
-        vocab = MistralVocab(self.dir_model)
-        logger.info(
-            f"Converting tokenizer {vocab.tokenizer_type} of size {vocab.vocab_size}."
-        )
-
-        self.gguf_writer.add_tokenizer_model(vocab.gguf_tokenizer_model)
-
-        tokens = []
-        scores = []
-        toktypes = []
-
-        for text, score, toktype in vocab.all_tokens():
-            tokens.append(text)
-            scores.append(score)
-            toktypes.append(toktype)
-
-        assert len(tokens) == vocab.vocab_size, (
-            f"token count ({len(tokens)}) != vocab size ({vocab.vocab_size})"
-        )
-
-        if vocab.tokenizer_type == MistralTokenizerType.tekken:
-            self.gguf_writer.add_tokenizer_pre("tekken")
-            self.gguf_writer.add_token_merges(
-                vocab.extract_vocab_merges_from_model()
-            )
-
-        logger.info(
-            f"Setting bos, eos, unk and pad token IDs to {vocab.bos_id}, {vocab.eos_id}, {vocab.unk_id}, {vocab.pad_id}."
-        )
-
-        self.gguf_writer.add_bos_token_id(vocab.bos_id)
-        self.gguf_writer.add_eos_token_id(vocab.eos_id)
-        self.gguf_writer.add_unk_token_id(vocab.unk_id)
-        self.gguf_writer.add_pad_token_id(vocab.pad_id)
-
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_scores(scores)
-        self.gguf_writer.add_token_types(toktypes)
-        self.gguf_writer.add_vocab_size(vocab.vocab_size)
-
-        self.gguf_writer.add_add_bos_token(True)
-        self.gguf_writer.add_add_eos_token(False)
-
-        local_template_file_path = self.dir_model / "chat_template.jinja"
-
-        if self.is_mistral_format and local_template_file_path.is_file():
-            # Ministral-3 and other new Mistral models come with chat templates.
-            # ref: https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512/tree/main
-            logger.info("Using an existing Mistral local chat template.")
-
-            with open(local_template_file_path, "r", encoding="utf-8") as f:
-                template = f.read()
-        elif not self.is_mistral_format or not self.disable_mistral_community_chat_template:
-            template_dir = Path(__file__).parent / "models/templates/"
-
-            # Log only for Mistral format that the official tokenization and detokenization is via `mistral-common`.
-            if self.is_mistral_format:
-                logger.info(
-                    "Using a Mistral community chat template. These templates can be subject to errors in early days or weeks after a release. "
-                    "Mistral recommends to use `mistral-common` to perform tokenization and detokenization."
-                )
-            template = MistralModel.get_community_chat_template(vocab, template_dir, self.is_mistral_format)
-        else:
-            logger.info("Not using a Mistral local or community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
-            template = None
-
-        if template is not None:
-            self.gguf_writer.add_chat_template(template)
 
     def set_vocab(self):
         if self.is_mistral_format:
@@ -9924,17 +9924,109 @@ class MistralModel(LlamaModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        if "yarn" in self.hparams:
-            yarn_params = self.hparams["yarn"]
-            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
-            self.gguf_writer.add_rope_scaling_factor(yarn_params["factor"])
-            self.gguf_writer.add_rope_scaling_yarn_beta_fast(yarn_params["beta"])
-            self.gguf_writer.add_rope_scaling_yarn_beta_slow(yarn_params["alpha"])
-            self.gguf_writer.add_rope_scaling_yarn_log_mul(1.0) # mscale_all_dim
-            self.gguf_writer.add_rope_scaling_orig_ctx_len(yarn_params["original_max_position_embeddings"])
+        MistralModel.set_mistral_config(self.gguf_writer, self.hparams)
 
-        if "llama_4_scaling" in self.hparams:
-            self.gguf_writer.add_attn_temperature_scale(self.hparams["llama_4_scaling"]["beta"])
+    @staticmethod
+    def set_mistral_config(gguf_writer: gguf.GGUFWriter, hparams: dict):
+        if "yarn" in hparams:
+            yarn_params = hparams["yarn"]
+            gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            gguf_writer.add_rope_scaling_factor(yarn_params["factor"])
+            gguf_writer.add_rope_scaling_yarn_beta_fast(yarn_params["beta"])
+            gguf_writer.add_rope_scaling_yarn_beta_slow(yarn_params["alpha"])
+            gguf_writer.add_rope_scaling_yarn_log_mul(1.0) # mscale_all_dim
+            gguf_writer.add_rope_scaling_orig_ctx_len(yarn_params["original_max_position_embeddings"])
+
+        if "llama_4_scaling" in hparams:
+            gguf_writer.add_attn_temperature_scale(hparams["llama_4_scaling"]["beta"])
+
+
+class MistralMoeModel(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK2
+    model_name = "Mistral"
+    hf_arch = ""
+    is_mistral_format = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        logger.info("Using MistralMoeModel")
+        # remap hparams from Mistral MoE format to DeepseekV2 format
+        # we do this way to be able to reuse DeepseekV2Model set_gguf_parameters logic
+        # ref: https://github.com/vllm-project/vllm/blob/b294e28db2c5dee61bc25157664edcada8b90b31/vllm/transformers_utils/configs/mistral.py
+        config = self.hparams
+        # Mistral key -> HF key
+        config_mapping = {
+            "dim": "hidden_size",
+            "norm_eps": "rms_norm_eps",
+            "n_kv_heads": "num_key_value_heads",
+            "n_layers": "num_hidden_layers",
+            "n_heads": "num_attention_heads",
+            "hidden_dim": "intermediate_size",
+        }
+        # HF key -> (Mistral key, default value)
+        top_level_mapping_with_default = {
+            "model_type": ("model_type", "transformer"),
+            "hidden_act": ("activation", "silu"),
+            "tie_word_embeddings": ("tied_embeddings", False),
+            "max_seq_len": ("max_seq_len", config.get("max_position_embeddings", 128_000)),
+            "max_position_embeddings": ("max_position_embeddings", 128_000),
+        }
+        # mapping top-level keys
+        for key, new_key in config_mapping.items():
+            if key in config:
+                config[new_key] = config[key]
+        for new_key, (key, default_value) in top_level_mapping_with_default.items():
+            config[new_key] = config.get(key, default_value)
+        # mapping MoE-specific keys
+        moe_config_map = {
+            "route_every_n": "moe_layer_freq",
+            "first_k_dense_replace": "first_k_dense_replace",
+            "num_experts_per_tok": "num_experts_per_tok",
+            "num_experts": "n_routed_experts",
+            "expert_hidden_dim": "moe_intermediate_size",
+            "routed_scale": "routed_scaling_factor",
+            "num_shared_experts": "n_shared_experts",
+            "num_expert_groups": "n_group",
+            "num_expert_groups_per_tok": "topk_group",
+        }
+        moe = config["moe"]
+        for key, new_key in moe_config_map.items():
+            if key in moe:
+                config[new_key] = moe[key]
+        # provide missing values
+        config["topk_method"] = None
+        config["norm_topk_prob"] = True
+        config["scoring_func"] = "softmax"
+
+    def set_vocab(self):
+        self._set_vocab_mistral()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        MistralModel.set_mistral_config(self.gguf_writer, self.hparams)
+        yarn_params = self.hparams["yarn"]
+        self.gguf_writer.add_attn_temperature_length(yarn_params["original_max_position_embeddings"])
+        self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1) # mscale_all_dim * 0.1
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        if name.startswith("vision_") or name.startswith("patch_merger.") or "mm_projector" in name:
+            return []
+
+        # rename certain tensors so that we can reuse DeepseekV2Model modify_tensors logic
+        if name.endswith(".qscale_act"):
+            name = name.replace(".qscale_act", ".input_scale")
+        if name.endswith(".qscale_weight"):
+            name = name.replace(".qscale_weight", ".weight_scale")
+        if ".wkv_b." in name:
+            name = name.replace(".wkv_b.", ".kv_b_proj.")
+        if ".experts." in name:
+            name = name.replace(".experts.", ".mlp.experts.")
+            name = name.replace(".w1.", ".gate_proj.")
+            name = name.replace(".w2.", ".down_proj.")
+            name = name.replace(".w3.", ".up_proj.")
+            name = "model." + name
+
+        return super().modify_tensors(data_torch, name, bid)
 
 
 class PixtralModel(LlavaVisionModel):
@@ -10490,6 +10582,8 @@ def main() -> None:
         elif args.mmproj:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
             model_class = PixtralModel
+        elif "moe" in hparams:
+            model_class = MistralMoeModel
         else:
             model_class = MistralModel
 

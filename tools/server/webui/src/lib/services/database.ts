@@ -167,6 +167,49 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Creates a system prompt message for a conversation.
+	 *
+	 * @param convId - Conversation ID
+	 * @param systemPrompt - The system prompt content (must be non-empty)
+	 * @param parentId - Parent message ID (typically the root message)
+	 * @returns The created system message
+	 * @throws Error if systemPrompt is empty
+	 */
+	static async createSystemMessage(
+		convId: string,
+		systemPrompt: string,
+		parentId: string
+	): Promise<DatabaseMessage> {
+		const trimmedPrompt = systemPrompt.trim();
+		if (!trimmedPrompt) {
+			throw new Error('Cannot create system message with empty content');
+		}
+
+		const systemMessage: DatabaseMessage = {
+			id: uuid(),
+			convId,
+			type: 'system',
+			timestamp: Date.now(),
+			role: 'system',
+			content: trimmedPrompt,
+			parent: parentId,
+			thinking: '',
+			children: []
+		};
+
+		await db.messages.add(systemMessage);
+
+		const parentMessage = await db.messages.get(parentId);
+		if (parentMessage) {
+			await db.messages.update(parentId, {
+				children: [...parentMessage.children, systemMessage.id]
+			});
+		}
+
+		return systemMessage;
+	}
+
+	/**
 	 * Deletes a conversation and all its messages.
 	 *
 	 * @param id - Conversation ID
