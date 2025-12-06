@@ -1737,7 +1737,8 @@ struct markdown_printer : public printer {
         fields.emplace_back("params");
         fields.emplace_back("backend");
         bool is_cpu_backend = test::get_backend().find("CPU") != std::string::npos ||
-                              test::get_backend().find("BLAS") != std::string::npos;
+                              test::get_backend().find("BLAS") != std::string::npos ||
+                              test::get_backend().find("ZenDNN") != std::string::npos;
         if (!is_cpu_backend) {
             fields.emplace_back("n_gpu_layers");
         }
