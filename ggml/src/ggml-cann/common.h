@@ -315,7 +315,7 @@ struct ggml_cann_rope_cache {
         if (theta_scale_exp_host) {
             free(theta_scale_exp_host);
         }
-        if(position_select_index_host) {
+        if (position_select_index_host) {
             free(position_select_index_host);
         }
     }
@@ -340,7 +340,7 @@ struct ggml_cann_rope_cache {
 
     void set(int64_t theta_scale_length,
              int64_t position_length,
-             float    ext_factor,
+             float   ext_factor,
              float   theta_scale,
              float   freq_scale,
              float   attn_factor,
