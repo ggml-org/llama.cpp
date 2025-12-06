@@ -656,6 +656,13 @@ struct common_file_info {
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
 
 //
+// TTY utils
+//
+
+// Auto-detect if colors can be enabled based on terminal and environment
+bool tty_can_use_colors();
+
+//
 // Model utils
 //
 
