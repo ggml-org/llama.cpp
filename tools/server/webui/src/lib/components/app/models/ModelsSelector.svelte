@@ -173,12 +173,10 @@
 	let isOpen = $state(false);
 	let showModelDialog = $state(false);
 
-	onMount(async () => {
-		try {
-			await modelsStore.fetch();
-		} catch (error) {
+	onMount(() => {
+		modelsStore.fetch().catch((error) => {
 			console.error('Unable to load models:', error);
-		}
+		});
 	});
 
 	function handleOpenChange(open: boolean) {
@@ -394,138 +392,140 @@
 
 			<Popover.Content
 				class="w-96 max-w-[calc(100vw-2rem)] p-0"
-				side="top"
 				align="end"
 				sideOffset={8}
+				collisionPadding={16}
 			>
-				<div class="p-4">
-					<SearchInput
-						id="model-search"
-						placeholder="Search models..."
-						bind:value={searchTerm}
-						bind:ref={searchInputRef}
-						onClose={closeMenu}
-						onKeyDown={handleSearchKeyDown}
-					/>
-				</div>
-				<div class="max-h-80 overflow-y-auto">
-					{#if !isCurrentModelInCache() && currentModel}
-						<!-- Show unavailable model as first option (disabled) -->
-						<button
-							type="button"
-							class="flex w-full cursor-not-allowed items-center bg-red-400/10 px-4 py-2 text-left text-sm text-red-400"
-							role="option"
-							aria-selected="true"
-							aria-disabled="true"
-							disabled
-						>
-							<span class="truncate">{selectedOption?.name || currentModel}</span>
-							<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
-						</button>
-						<div class="my-1 h-px bg-border"></div>
-					{/if}
-					{#if filteredOptions.length === 0}
-						<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
-					{/if}
-					{#each filteredOptions as option, index (option.id)}
-						{@const status = getModelStatus(option.model)}
-						{@const isLoaded = status === ServerModelStatus.LOADED}
-						{@const isLoading = status === ServerModelStatus.LOADING}
-						{@const isSelected = currentModel === option.model || activeId === option.id}
-						{@const isCompatible = isModelCompatible(option)}
-						{@const isHighlighted = index === highlightedIndex}
-						{@const missingModalities = getMissingModalities(option)}
+				<div class="flex max-h-[50dvh] flex-col overflow-hidden">
+					<div class="shrink-0 p-4">
+						<SearchInput
+							id="model-search"
+							placeholder="Search models..."
+							bind:value={searchTerm}
+							bind:ref={searchInputRef}
+							onClose={closeMenu}
+							onKeyDown={handleSearchKeyDown}
+						/>
+					</div>
+					<div class="min-h-0 flex-1 overflow-y-auto">
+						{#if !isCurrentModelInCache() && currentModel}
+							<!-- Show unavailable model as first option (disabled) -->
+							<button
+								type="button"
+								class="flex w-full cursor-not-allowed items-center bg-red-400/10 px-4 py-2 text-left text-sm text-red-400"
+								role="option"
+								aria-selected="true"
+								aria-disabled="true"
+								disabled
+							>
+								<span class="truncate">{selectedOption?.name || currentModel}</span>
+								<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+							</button>
+							<div class="my-1 h-px bg-border"></div>
+						{/if}
+						{#if filteredOptions.length === 0}
+							<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
+						{/if}
+						{#each filteredOptions as option, index (option.id)}
+							{@const status = getModelStatus(option.model)}
+							{@const isLoaded = status === ServerModelStatus.LOADED}
+							{@const isLoading = status === ServerModelStatus.LOADING}
+							{@const isSelected = currentModel === option.model || activeId === option.id}
+							{@const isCompatible = isModelCompatible(option)}
+							{@const isHighlighted = index === highlightedIndex}
+							{@const missingModalities = getMissingModalities(option)}
 
-						<div
-							class={cn(
-								'group flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition focus:outline-none',
-								isCompatible
-									? 'cursor-pointer hover:bg-muted focus:bg-muted'
-									: 'cursor-not-allowed opacity-50',
-								isSelected || isHighlighted
-									? 'bg-accent text-accent-foreground'
-									: isCompatible
-										? 'hover:bg-accent hover:text-accent-foreground'
-										: '',
-								isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
-							)}
-							role="option"
-							aria-selected={isSelected || isHighlighted}
-							aria-disabled={!isCompatible}
-							tabindex={isCompatible ? 0 : -1}
-							onclick={() => isCompatible && handleSelect(option.id)}
-							onmouseenter={() => (highlightedIndex = index)}
-							onkeydown={(e) => {
-								if (isCompatible && (e.key === 'Enter' || e.key === ' ')) {
-									e.preventDefault();
-									handleSelect(option.id);
-								}
-							}}
-						>
-							<span class="min-w-0 flex-1 truncate">{option.model}</span>
+							<div
+								class={cn(
+									'group flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition focus:outline-none',
+									isCompatible
+										? 'cursor-pointer hover:bg-muted focus:bg-muted'
+										: 'cursor-not-allowed opacity-50',
+									isSelected || isHighlighted
+										? 'bg-accent text-accent-foreground'
+										: isCompatible
+											? 'hover:bg-accent hover:text-accent-foreground'
+											: '',
+									isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
+								)}
+								role="option"
+								aria-selected={isSelected || isHighlighted}
+								aria-disabled={!isCompatible}
+								tabindex={isCompatible ? 0 : -1}
+								onclick={() => isCompatible && handleSelect(option.id)}
+								onmouseenter={() => (highlightedIndex = index)}
+								onkeydown={(e) => {
+									if (isCompatible && (e.key === 'Enter' || e.key === ' ')) {
+										e.preventDefault();
+										handleSelect(option.id);
+									}
+								}}
+							>
+								<span class="min-w-0 flex-1 truncate">{option.model}</span>
 
-							{#if missingModalities}
-								<span class="flex shrink-0 items-center gap-1 text-muted-foreground/70">
-									{#if missingModalities.vision}
-										<Tooltip.Root>
-											<Tooltip.Trigger>
-												<EyeOff class="h-3.5 w-3.5" />
-											</Tooltip.Trigger>
-											<Tooltip.Content class="z-[9999]">
-												<p>No vision support</p>
-											</Tooltip.Content>
-										</Tooltip.Root>
-									{/if}
-									{#if missingModalities.audio}
-										<Tooltip.Root>
-											<Tooltip.Trigger>
-												<MicOff class="h-3.5 w-3.5" />
-											</Tooltip.Trigger>
-											<Tooltip.Content class="z-[9999]">
-												<p>No audio support</p>
-											</Tooltip.Content>
-										</Tooltip.Root>
-									{/if}
-								</span>
-							{/if}
+								{#if missingModalities}
+									<span class="flex shrink-0 items-center gap-1 text-muted-foreground/70">
+										{#if missingModalities.vision}
+											<Tooltip.Root>
+												<Tooltip.Trigger>
+													<EyeOff class="h-3.5 w-3.5" />
+												</Tooltip.Trigger>
+												<Tooltip.Content class="z-[9999]">
+													<p>No vision support</p>
+												</Tooltip.Content>
+											</Tooltip.Root>
+										{/if}
+										{#if missingModalities.audio}
+											<Tooltip.Root>
+												<Tooltip.Trigger>
+													<MicOff class="h-3.5 w-3.5" />
+												</Tooltip.Trigger>
+												<Tooltip.Content class="z-[9999]">
+													<p>No audio support</p>
+												</Tooltip.Content>
+											</Tooltip.Root>
+										{/if}
+									</span>
+								{/if}
 
-							{#if isLoading}
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										<Loader2 class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-									</Tooltip.Trigger>
-									<Tooltip.Content class="z-[9999]">
-										<p>Loading model...</p>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							{:else if isLoaded}
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										<button
-											type="button"
-											class="relative ml-2 flex h-4 w-4 shrink-0 items-center justify-center"
-											onclick={(e) => {
-												e.stopPropagation();
-												modelsStore.unloadModel(option.model);
-											}}
-										>
-											<span
-												class="mr-2 h-2 w-2 rounded-full bg-green-500 transition-opacity group-hover:opacity-0"
-											></span>
-											<Power
-												class="absolute mr-2 h-4 w-4 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-600"
-											/>
-										</button>
-									</Tooltip.Trigger>
-									<Tooltip.Content class="z-[9999]">
-										<p>Unload model</p>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							{:else}
-								<span class="mx-2 h-2 w-2 rounded-full bg-muted-foreground/50"></span>
-							{/if}
-						</div>
-					{/each}
+								{#if isLoading}
+									<Tooltip.Root>
+										<Tooltip.Trigger>
+											<Loader2 class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+										</Tooltip.Trigger>
+										<Tooltip.Content class="z-[9999]">
+											<p>Loading model...</p>
+										</Tooltip.Content>
+									</Tooltip.Root>
+								{:else if isLoaded}
+									<Tooltip.Root>
+										<Tooltip.Trigger>
+											<button
+												type="button"
+												class="relative ml-2 flex h-4 w-4 shrink-0 items-center justify-center"
+												onclick={(e) => {
+													e.stopPropagation();
+													modelsStore.unloadModel(option.model);
+												}}
+											>
+												<span
+													class="mr-2 h-2 w-2 rounded-full bg-green-500 transition-opacity group-hover:opacity-0"
+												></span>
+												<Power
+													class="absolute mr-2 h-4 w-4 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-600"
+												/>
+											</button>
+										</Tooltip.Trigger>
+										<Tooltip.Content class="z-[9999]">
+											<p>Unload model</p>
+										</Tooltip.Content>
+									</Tooltip.Root>
+								{:else}
+									<span class="mx-2 h-2 w-2 rounded-full bg-muted-foreground/50"></span>
+								{/if}
+							</div>
+						{/each}
+					</div>
 				</div>
 			</Popover.Content>
 		</Popover.Root>
