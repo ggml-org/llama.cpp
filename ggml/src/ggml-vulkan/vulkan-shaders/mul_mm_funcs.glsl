@@ -248,8 +248,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint is_b = (iqs % 16) / 8;           // 0,1
             const uint qhshift = ((iqs % 64) / 16) * 2; // 0,2,4,6
             const uint is = 8 * n + qhshift + is_b;     // 0..15
-            const uint qsi = n * 32 + (iqs % 32);       // 0..63
-            const uint qhi = n * 16 + (iqs % 16);       // 0..31
+            const uint qsi = n * 32 + (iqs % 32);       // 0,4,8..60
+            const uint qhi = n * 16 + (iqs % 16);       // 0,4,8..28
 
             const float dscale = float(data_a[ib].d) * float(data_a[ib].scales[is]);
 
