@@ -5,6 +5,27 @@
 
 
 /**
+ * Insert key-value pairs into passed element object.
+ * @param {HTMLElement} el
+ * @param {string} key
+ * @param {any} value
+ */
+function el_set(el, key, value) {
+    // @ts-ignore
+    el[key] = value
+}
+
+/**
+ * Retrieve the value corresponding to given key from passed element object.
+ * @param {HTMLElement} el
+ * @param {string} key
+ */
+function el_get(el, key) {
+    // @ts-ignore
+    return el[key]
+}
+
+/**
  * Set the class of the children, based on whether it is the idSelected or not.
  * @param {HTMLDivElement} elBase
  * @param {string} idSelected
@@ -23,12 +44,14 @@ export function el_children_config_class(elBase, idSelected, classSelected, clas
 
 /**
  * Create button and set it up.
+ * If innerHTML specified, it takes priority over any innerText specified.
  * @param {string} id
  * @param {(this: HTMLButtonElement, ev: MouseEvent) => any} callback
  * @param {string | undefined} name
  * @param {string | undefined} innerText
+ * @param {string | undefined} innerHTML
  */
-export function el_create_button(id, callback, name=undefined, innerText=undefined) {
+export function el_create_button(id, callback, name=undefined, innerText=undefined, innerHTML=undefined) {
     if (!name) {
         name = id;
     }
@@ -38,7 +61,11 @@ export function el_create_button(id, callback, name=undefined, innerText=undefin
     let btn = document.createElement("button");
     btn.id = id;
     btn.name = name;
-    btn.innerText = innerText;
+    if (innerHTML) {
+        btn.innerHTML = innerHTML;
+    } else {
+        btn.innerText = innerText;
+    }
     btn.addEventListener("click", callback);
     return btn;
 }
@@ -72,16 +99,16 @@ export function el_create_append_p(text, elParent=undefined, id=undefined) {
  */
 export function el_create_boolbutton(id, texts, defaultValue, cb) {
     let el = document.createElement("button");
-    el["xbool"] = defaultValue;
-    el["xtexts"] = structuredClone(texts);
-    el.innerText = el["xtexts"][String(defaultValue)];
+    el_set(el, "xbool", defaultValue)
+    el_set(el, "xtexts", structuredClone(texts))
+    el.innerText = el_get(el, "xtexts")[String(defaultValue)];
     if (id) {
         el.id = id;
     }
     el.addEventListener('click', (ev)=>{
-        el["xbool"] = !el["xbool"];
-        el.innerText = el["xtexts"][String(el["xbool"])];
-        cb(el["xbool"]);
+        el_set(el, "xbool", !el_get(el, "xbool"));
+        el.innerText = el_get(el, "xtexts")[String(el_get(el, "xbool"))];
+        cb(el_get(el, "xbool"));
     })
     return el;
 }
@@ -121,8 +148,8 @@ export function el_creatediv_boolbutton(id, label, texts, defaultValue, cb, clas
  */
 export function el_create_select(id, options, defaultOption, cb) {
     let el = document.createElement("select");
-    el["xselected"] = defaultOption;
-    el["xoptions"] = structuredClone(options);
+    el_set(el, "xselected", defaultOption);
+    el_set(el, "xoptions", structuredClone(options));
     for(let cur of Object.keys(options)) {
         let op = document.createElement("option");
         op.value = cur;
@@ -208,4 +235,199 @@ export function el_creatediv_input(id, label, type, defaultValue, cb, className=
     let el = el_create_input(id, type, defaultValue, cb);
     div.appendChild(el);
     return { div: div, el: el };
+}
+
+/**
+ * Create a div wrapped input of type file,
+ * which hides input and shows a button which chains to underlying file type input.
+ * @param {string} id
+ * @param {string} label
+ * @param {string} labelBtnHtml
+ * @param {any} defaultValue
+ * @param {string} acceptable
+ * @param {(arg0: any) => void} cb
+ * @param {string} className
+ */
+export function el_creatediv_inputfilebtn(id, label, labelBtnHtml, defaultValue, acceptable, cb, className) {
+    let elX = el_creatediv_input(id, label, "file", defaultValue, cb, className)
+    elX.el.hidden = true
+    elX.el.accept = acceptable
+    let idB = `${id}-button`
+    let elB = el_create_button(idB, (mev) => {
+        elX.el.value = ""
+        elX.el.click()
+    }, idB, undefined, labelBtnHtml)
+    return { div: elX.div, el: elX.el, elB: elB };
+}
+
+
+/**
+ * Create a div wrapped input of type file,
+ * which hides input and shows a image button which chains to underlying file type input.
+ * @param {string} id
+ * @param {string} label
+ * @param {any} defaultValue
+ * @param {string} acceptable
+ * @param {(arg0: any) => void} cb
+ * @param {string} className
+ */
+export function el_creatediv_inputfileimgbtn(id, label, defaultValue, acceptable, cb, className) {
+    let elX = el_creatediv_inputfilebtn(id, label, `<p>${label}</p>`, defaultValue, acceptable, cb, className);
+    let elImg = document.createElement('img')
+    elImg.classList.add(`${className}-img`)
+    elX.elB.appendChild(elImg)
+    return { div: elX.div, el: elX.el, elB: elX.elB, elImg: elImg };
+}
+
+
+/**
+ * Auto create ui input elements for specified fields/properties in given object
+ * Currently supports text, number, boolean field types.
+ * Also supports recursing if a object type field is found.
+ *
+ * If for any reason the caller wants to refine the created ui element for a specific prop,
+ * they can define a fRefiner callback, which will be called back with prop name and ui element.
+ * The fRefiner callback even helps work with Obj with-in Obj scenarios.
+ *
+ * For some reason if caller wants to handle certain properties on their own
+ * * specify the prop name of interest along with its prop-tree-hierarchy in lTrapThese
+ *   * always start with : when ever refering to propWithPath,
+ *     as it indirectly signifies root of properties tree
+ *   * remember to seperate the properties tree hierarchy members using :
+ * * fTrapper will be called with the parent ui element
+ *   into which the new ui elements created for editting the prop, if any, should be attached,
+ *   along with the current prop of interest and its full propWithPath representation.
+ * @param {HTMLDivElement|HTMLFieldSetElement} elParent
+ * @param {string} propsTreeRoot
+ * @param {any} oObj
+ * @param {Array<string>} lProps
+ * @param {string} sLegend
+ * @param {((prop:string, elProp: HTMLElement)=>void)| undefined} fRefiner
+ * @param {Array<string> | undefined} lTrapThese
+ * @param {((propWithPath: string, prop: string, elParent: HTMLFieldSetElement)=>void) | undefined} fTrapper
+ */
+export function ui_show_obj_props_edit(elParent, propsTreeRoot, oObj, lProps, sLegend, fRefiner=undefined, lTrapThese=undefined, fTrapper=undefined) {
+    let typeDict = {
+        "string": "text",
+        "number": "number",
+    };
+    let elFS = document.createElement("fieldset");
+    if (propsTreeRoot == "") {
+        elFS.id = `ObjPropsEdit-${sLegend.replaceAll(' ', '')}`
+        elFS.classList.add('ObjPropsEdit')
+    }
+    let elLegend = document.createElement("legend");
+    elLegend.innerText = sLegend;
+    elFS.appendChild(elLegend);
+    elParent.appendChild(elFS);
+    for(const k of lProps) {
+        let propsTreeRootNew = `${propsTreeRoot}:${k}`
+        if (lTrapThese) {
+            if (lTrapThese.indexOf(propsTreeRootNew) != -1) {
+                if (fTrapper) {
+                    fTrapper(propsTreeRootNew, k, elFS)
+                }
+                continue
+            }
+        }
+        let val = oObj[k];
+        let type = typeof(val);
+        let id = `Set${propsTreeRootNew.replaceAll(':','-')}`
+        if (((type == "string") || (type == "number"))) {
+            let inp = el_creatediv_input(`${id}`, k, typeDict[type], oObj[k], (val)=>{
+                if (type == "number") {
+                    val = Number(val);
+                }
+                oObj[k] = val;
+            });
+            if (fRefiner) {
+                fRefiner(k, inp.el)
+            }
+            elFS.appendChild(inp.div);
+        } else if (type == "boolean") {
+            let bbtn = el_creatediv_boolbutton(`${id}`, k, {true: "true", false: "false"}, val, (userVal)=>{
+                oObj[k] = userVal;
+            });
+            if (fRefiner) {
+                fRefiner(k, bbtn.el)
+            }
+            elFS.appendChild(bbtn.div);
+        } else if (type == "object") {
+            ui_show_obj_props_edit(elFS, propsTreeRootNew, val, Object.keys(val), k, (prop, elProp)=>{
+                if (fRefiner) {
+                    let theProp = `${k}:${prop}`
+                    fRefiner(theProp, elProp)
+                }
+            }, lTrapThese, fTrapper)
+        }
+    }
+}
+
+
+/**
+ * Show the specified properties and their values wrt the given object,
+ * with in the elParent provided.
+ * Uses recursion to show embedded objects.
+ *
+ * @param {HTMLDivElement | HTMLElement} elParent
+ * @param {any} oObj
+ * @param {Array<string>} lProps
+ * @param {string} sLegend - the legend/title for the currrent block of properties
+ * @param {string} sOffset - can be used to prefix each of the prop entries
+ * @param {any | undefined} dClassNames - can specify class for toplegend and remaining levels parent and legend
+ */
+export function ui_show_obj_props_info(elParent, oObj, lProps, sLegend, sOffset="", dClassNames=undefined) {
+    if (sOffset.length == 0) {
+        let elDet = document.createElement("details");
+        let elSum = document.createElement("summary")
+        if (dClassNames && dClassNames['toplegend']) {
+            elSum.classList.add(dClassNames['toplegend'])
+        }
+        elSum.appendChild(document.createTextNode(sLegend))
+        sLegend = ""
+        elDet.appendChild(elSum)
+        elDet.classList.add(`DivObjPropsInfoL${sOffset.length}`)
+        elParent.appendChild(elDet)
+        elParent = elDet
+    }
+    let elPLegend = el_create_append_p(sLegend, elParent)
+    if ((dClassNames) && (sOffset.length > 0)) {
+        if (dClassNames['parent']) {
+            elParent.classList.add(dClassNames['parent'])
+        }
+        if (dClassNames['legend']) {
+            elPLegend.classList.add(dClassNames['legend'])
+        }
+    }
+    let elS = document.createElement("section");
+    elS.classList.add(`SectionObjPropsInfoL${sOffset.length}`)
+    elParent.appendChild(elPLegend);
+    elParent.appendChild(elS);
+
+    for (const k of lProps) {
+        let kPrint = `${sOffset}${k}`
+        let val = oObj[k];
+        let vtype = typeof(val)
+        if (vtype != 'object') {
+            el_create_append_p(`${kPrint}: ${oObj[k]}`, elS)
+        } else {
+            ui_show_obj_props_info(elS, val, Object.keys(val), kPrint, `>${sOffset}`, dClassNames)
+            //el_create_append_p(`${k}:${JSON.stringify(oObj[k], null, " - ")}`, elS);
+        }
+    }
+}
+
+
+/**
+ * Remove elements which match specified selectors template
+ * @param {string} sSelectorsTemplate
+ */
+export function remove_els(sSelectorsTemplate) {
+    while (true) {
+        let el = document.querySelector (sSelectorsTemplate)
+        if (!el) {
+            return
+        }
+        el?.remove()
+    }
 }
