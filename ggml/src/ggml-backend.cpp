@@ -21,6 +21,7 @@
 #include <string.h>
 #include <algorithm>
 #include <vector>
+#include <unordered_map>
 
 #ifdef __APPLE__
 #include <sys/types.h>
@@ -284,7 +285,15 @@ void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, siz
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
-    buf->iface.set_tensor(buf, tensor, data, offset, size);
+    // do not synchronize directly after dispatching async tensor copies
+    static bool disable_sync_optimization = (getenv("GGML_CUDA_DISABLE_SYNC_OPTIMIZATION") != nullptr);
+
+    if (!disable_sync_optimization && buf->iface.set_tensor_async != NULL) {
+        buf->iface.set_tensor_async(buf, tensor, data, offset, size);
+    } else {
+        buf->iface.set_tensor(buf, tensor, data, offset, size);
+    }
+
 }
 
 void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -597,15 +606,16 @@ static void ggml_backend_multi_buffer_clear(ggml_backend_buffer_t buffer, uint8_
 }
 
 static const struct ggml_backend_buffer_i ggml_backend_multi_buffer_i = {
-    /* .free_buffer     = */ ggml_backend_multi_buffer_free_buffer,
-    /* .get_base        = */ NULL,
-    /* .init_tensor     = */ NULL,
-    /* .memset_tensor   = */ NULL,
-    /* .set_tensor      = */ NULL,
-    /* .get_tensor      = */ NULL,
-    /* .cpy_tensor      = */ NULL,
-    /* .clear           = */ ggml_backend_multi_buffer_clear,
-    /* .reset           = */ NULL,
+    /* .free_buffer      = */ ggml_backend_multi_buffer_free_buffer,
+    /* .get_base         = */ NULL,
+    /* .init_tensor      = */ NULL,
+    /* .memset_tensor    = */ NULL,
+    /* .set_tensor       = */ NULL,
+    /* .set_tensor_async = */ NULL,
+    /* .get_tensor       = */ NULL,
+    /* .cpy_tensor       = */ NULL,
+    /* .clear            = */ ggml_backend_multi_buffer_clear,
+    /* .reset            = */ NULL,
 };
 
 ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers) {
@@ -1448,6 +1458,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
+        std::unordered_map<ggml_backend_t, bool> backends_to_sync;
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
@@ -1459,7 +1470,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    backends_to_sync[split_backend] = true;
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
@@ -1467,7 +1478,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    backends_to_sync[split_backend] = true;
                 }
 
                 // when offloading MoE weights, we can reduce the amount of data copied by copying only the experts that are used
@@ -1482,7 +1493,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     const int64_t n_expert   = node->op == GGML_OP_MUL_MAT_ID ? input->ne[2] : input->ne[1];
                     const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];
 
-                    ggml_backend_synchronize(input_backend);
+                    backends_to_sync[input_backend] = true;
 
                     // get the ids
                     ggml_tensor * ids_tensor = node->src[2];
@@ -1501,7 +1512,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     if (ids_tensor != prev_ids_tensor) {
                         ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
                         ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
-                        ggml_backend_synchronize(ids_backend);
+                        backends_to_sync[ids_backend] = true;
 
                         // find the used experts
                         used_ids.clear();
@@ -1559,16 +1570,21 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-                        ggml_backend_synchronize(input_backend);
+                        backends_to_sync[input_backend] = true;
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                         } else {
-                            ggml_backend_synchronize(split_backend);
+                            backends_to_sync[split_backend] = true;
                         }
                         ggml_backend_tensor_copy(input, input_cpy);
                     }
                 }
             }
+        }
+
+        // sync in bulk instead of between async copies
+        for (auto& elem : backends_to_sync) {
+            ggml_backend_synchronize(elem.first);
         }
 
         if (!sched->callback_eval) {
@@ -2146,27 +2162,29 @@ static void ggml_backend_cpu_buffer_clear(ggml_backend_buffer_t buffer, uint8_t 
 }
 
 static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
-    /* .free_buffer     = */ ggml_backend_cpu_buffer_free_buffer,
-    /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
-    /* .init_tensor     = */ NULL, // no initialization required
-    /* .memset_tensor   = */ ggml_backend_cpu_buffer_memset_tensor,
-    /* .set_tensor      = */ ggml_backend_cpu_buffer_set_tensor,
-    /* .get_tensor      = */ ggml_backend_cpu_buffer_get_tensor,
-    /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
-    /* .clear           = */ ggml_backend_cpu_buffer_clear,
-    /* .reset           = */ NULL,
+    /* .free_buffer      = */ ggml_backend_cpu_buffer_free_buffer,
+    /* .get_base         = */ ggml_backend_cpu_buffer_get_base,
+    /* .init_tensor      = */ NULL, // no initialization required
+    /* .memset_tensor    = */ ggml_backend_cpu_buffer_memset_tensor,
+    /* .set_tensor       = */ ggml_backend_cpu_buffer_set_tensor,
+    /* .set_tensor_async = */ NULL,
+    /* .get_tensor       = */ ggml_backend_cpu_buffer_get_tensor,
+    /* .cpy_tensor       = */ ggml_backend_cpu_buffer_cpy_tensor,
+    /* .clear            = */ ggml_backend_cpu_buffer_clear,
+    /* .reset            = */ NULL,
 };
 
 static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
-    /* .free_buffer     = */ NULL, // ptr is not owned by the buffer, so it does not need to be freed
-    /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
-    /* .init_tensor     = */ NULL, // no initialization required
-    /* .memset_tensor   = */ ggml_backend_cpu_buffer_memset_tensor,
-    /* .set_tensor      = */ ggml_backend_cpu_buffer_set_tensor,
-    /* .get_tensor      = */ ggml_backend_cpu_buffer_get_tensor,
-    /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
-    /* .clear           = */ ggml_backend_cpu_buffer_clear,
-    /* .reset           = */ NULL,
+    /* .free_buffer      = */ NULL, // ptr is not owned by the buffer, so it does not need to be freed
+    /* .get_base         = */ ggml_backend_cpu_buffer_get_base,
+    /* .init_tensor      = */ NULL, // no initialization required
+    /* .memset_tensor    = */ ggml_backend_cpu_buffer_memset_tensor,
+    /* .set_tensor       = */ ggml_backend_cpu_buffer_set_tensor,
+    /* .set_tensor_async = */ NULL,
+    /* .get_tensor       = */ ggml_backend_cpu_buffer_get_tensor,
+    /* .cpy_tensor       = */ ggml_backend_cpu_buffer_cpy_tensor,
+    /* .clear            = */ ggml_backend_cpu_buffer_clear,
+    /* .reset            = */ NULL,
 };
 
 // CPU backend buffer type

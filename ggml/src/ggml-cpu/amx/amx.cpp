@@ -105,15 +105,16 @@ static void ggml_backend_amx_buffer_clear(ggml_backend_buffer_t buffer, uint8_t 
 }
 
 static ggml_backend_buffer_i ggml_backend_amx_buffer_interface = {
-    /* .free_buffer     = */ ggml_backend_amx_buffer_free_buffer,
-    /* .get_base        = */ ggml_backend_amx_buffer_get_base,
-    /* .init_tensor     = */ ggml_backend_amx_buffer_init_tensor,
-    /* .memset_tensor   = */ ggml_backend_amx_buffer_memset_tensor,
-    /* .set_tensor      = */ ggml_backend_amx_buffer_set_tensor,
-    /* .get_tensor      = */ nullptr,
-    /* .cpy_tensor      = */ nullptr,
-    /* .clear           = */ ggml_backend_amx_buffer_clear,
-    /* .reset           = */ nullptr,
+    /* .free_buffer      = */ ggml_backend_amx_buffer_free_buffer,
+    /* .get_base         = */ ggml_backend_amx_buffer_get_base,
+    /* .init_tensor      = */ ggml_backend_amx_buffer_init_tensor,
+    /* .memset_tensor    = */ ggml_backend_amx_buffer_memset_tensor,
+    /* .set_tensor       = */ ggml_backend_amx_buffer_set_tensor,
+    /* .set_tensor_async = */ nullptr,
+    /* .get_tensor       = */ nullptr,
+    /* .cpy_tensor       = */ nullptr,
+    /* .clear            = */ ggml_backend_amx_buffer_clear,
+    /* .reset            = */ nullptr,
 };
 
 static const char * ggml_backend_amx_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
