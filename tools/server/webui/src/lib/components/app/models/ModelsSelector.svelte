@@ -391,13 +391,15 @@
 			</Popover.Trigger>
 
 			<Popover.Content
-				class="w-96 max-w-[calc(100vw-2rem)] p-0"
+				class="group/popover-content w-96 max-w-[calc(100vw-2rem)] p-0"
 				align="end"
 				sideOffset={8}
 				collisionPadding={16}
 			>
 				<div class="flex max-h-[50dvh] flex-col overflow-hidden">
-					<div class="shrink-0 p-4">
+					<div
+						class="order-1 shrink-0 border-b p-4 group-data-[side=top]/popover-content:order-2 group-data-[side=top]/popover-content:border-t group-data-[side=top]/popover-content:border-b-0"
+					>
 						<SearchInput
 							id="model-search"
 							placeholder="Search models..."
@@ -407,7 +409,9 @@
 							onKeyDown={handleSearchKeyDown}
 						/>
 					</div>
-					<div class="min-h-0 flex-1 overflow-y-auto">
+					<div
+						class="models-list order-2 min-h-0 flex-1 overflow-y-auto group-data-[side=top]/popover-content:order-1"
+					>
 						{#if !isCurrentModelInCache() && currentModel}
 							<!-- Show unavailable model as first option (disabled) -->
 							<button
