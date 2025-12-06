@@ -122,7 +122,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         tcl = mTC.MCPToolsList(oRPC["id"], mTC.MCPTLResult(gMe.op.toolManager.meta()))
         self.send_mcp(200, "tools/list follows", tcl)
 
-    def mcp_run(self, oRPC: Any):
+    def mcp_run(self, body: bytes):
+        oRPC = json.loads(body)
         if oRPC["method"] == "tools/call":
             self.mcp_toolscall(oRPC)
         elif oRPC["method"] == "tools/list":
@@ -140,14 +141,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not acGot.callOk:
             self.send_error(acGot.statusCode, acGot.statusMsg)
         pr = urllib.parse.urlparse(self.path)
-        print(f"DBUG:ProxyHandler:GET:{pr}")
+        print(f"DBUG:PH:Post:{pr}")
         if pr.path != '/mcp':
             self.send_error(400, f"WARN:UnknownPath:{pr.path}")
         body = self.rfile.read(gMe.nw.maxReadBytes)
         if len(body) == gMe.nw.maxReadBytes:
             self.send_error(400, f"WARN:RequestOverflow:{pr.path}")
-        oRPC = json.loads(body)
-        self.mcp_run(oRPC)
+        self.mcp_run(body)
 
     def do_POST(self):
         """
