@@ -244,6 +244,12 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
     const int64_t n_rs = mctx->get_n_rs();
 
     if (s_copy) {
+        //DEBUG
+        if (!s_copy->buffer) {
+            return;
+        }
+        //DEBUG
+
         GGML_ASSERT(ggml_backend_buffer_is_host(s_copy->buffer));
         int32_t * data = (int32_t *) s_copy->data;
 
