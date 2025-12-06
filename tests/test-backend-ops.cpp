@@ -6204,6 +6204,15 @@ struct test_solve_tri : public test_case {
 
     std::string vars() override { return VARS_TO_STR3(type, ne_lhs, ne_rhs); }
 
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        int64_t n = ne_lhs[0];
+        int64_t k = ne_rhs[0];
+        int64_t batch = ne_lhs[2] * ne_lhs[3];
+        // n * (n + 1) / 2 non-zero elements of lhs, 2 flops each, for each col of rhs
+        return n * (n + 1) * k * batch;
+    }
+
     test_solve_tri(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_lhs = { 10, 10, 4, 3 },
             std::array<int64_t, 4> ne_rhs = { 3, 10, 4, 3 }
@@ -7816,6 +7825,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 42, 42, 5, 2 }, { 10, 42, 5, 2 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 2, 2 }, { 10, 64, 2, 2 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 100, 100, 4, 4 }, { 41, 100, 4, 4 }));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 4 }, { 31, 128, 4, 4 }));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 300, 64, 4, 4 }));
 
     for (bool v : {false, true}) {
         test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 1, 0, 1, 0, 0, 0, 0, v));
@@ -8016,6 +8027,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 2 }, { 6, 64, 4, 2 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 1 }, { 8, 128, 4, 1 }));
+    // qwen3next with CHUNK_SIZE 64
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 8, 32 }, { 64, 64, 8, 32 }));
+    // qwen3next with CHUNK_SIZE 128
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 32 }, { 128, 128, 4, 32 }));
 
     test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER, GGML_TYPE_F32, { 256, 256, 4, 4 }));
     test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG, GGML_TYPE_F32, { 1024, 1024, 8, 4 }));
