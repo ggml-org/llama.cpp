@@ -3327,6 +3327,7 @@ class VisionProjectorType:
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"
+    EAGLE2VL = "eagle2vl"
 
 
 # Items here are (block size, type size)
