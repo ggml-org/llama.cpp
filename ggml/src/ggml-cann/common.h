@@ -315,8 +315,11 @@ struct ggml_cann_rope_cache {
         if (theta_scale_exp_host) {
             free(theta_scale_exp_host);
         }
-        if(position_select_index_host) {
+        if (position_select_index_host) {
             free(position_select_index_host);
+        }
+        if (yarn_ramp_cache) {
+            ACL_CHECK(aclrtFree(yarn_ramp_cache));
         }
     }
 
@@ -340,7 +343,7 @@ struct ggml_cann_rope_cache {
 
     void set(int64_t theta_scale_length,
              int64_t position_length,
-             float    ext_factor,
+             float   ext_factor,
              float   theta_scale,
              float   freq_scale,
              float   attn_factor,
@@ -370,6 +373,7 @@ struct ggml_cann_rope_cache {
     float * theta_scale_exp_host       = nullptr;
     int *   position_select_index_host = nullptr;
     void *  position_select_index      = nullptr;
+    void *  yarn_ramp_cache            = nullptr;
     // sin/cos cache, used only to accelerate first layer on each device
     void *  sin_cache                  = nullptr;
     void *  cos_cache                  = nullptr;
