@@ -15,6 +15,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	pdfAsImage: false,
 	disableAutoScroll: false,
 	renderUserContentAsMarkdown: false,
+	alwaysShowSidebarOnDesktop: false,
 	autoMicOnEmpty: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
@@ -96,6 +97,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	disableAutoScroll:
 		'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
 	renderUserContentAsMarkdown: 'Render user messages using markdown formatting in the chat.',
+	alwaysShowSidebarOnDesktop:
+		'Always keep the sidebar visible on desktop instead of auto-hiding it.',
 	autoMicOnEmpty:
 		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
 	pyInterpreterEnabled:

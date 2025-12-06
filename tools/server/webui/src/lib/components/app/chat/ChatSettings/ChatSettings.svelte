@@ -109,6 +109,11 @@
 					key: 'disableAutoScroll',
 					label: 'Disable automatic scroll',
 					type: 'checkbox'
+				},
+				{
+					key: 'alwaysShowSidebarOnDesktop',
+					label: 'Always show sidebar on desktop',
+					type: 'checkbox'
 				}
 			]
 		},
