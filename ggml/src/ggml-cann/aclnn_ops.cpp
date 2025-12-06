@@ -75,6 +75,7 @@
 #include <aclnnop/aclnn_upsample_nearest_2d.h>
 #include <aclnnop/aclnn_weight_quant_batch_matmul_v2.h>
 #include <aclnnop/aclnn_zero.h>
+#include <aclnnop/aclnn_addmm.h>
 #include <float.h>
 
 #include <cmath>
@@ -3483,4 +3484,25 @@ void ggml_cann_out_prod(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
             GGML_ABORT("Unsupport type for GGML_OP_OUT_PROD");
             break;
     }
+}
+
+void ggml_cann_op_add_mul_fused(ggml_backend_cann_context & ctx, ggml_tensor * mul_tensor, ggml_tensor * add_tensor) {
+    ggml_tensor * weight = mul_tensor->src[0];
+    ggml_tensor * input = mul_tensor->src[1];
+    ggml_tensor * add = add_tensor->src[1];
+
+    acl_tensor_ptr acl_input_tensor = ggml_cann_create_tensor(input, input->ne, input->nb, 2, ACL_FORMAT_ND);
+    int64_t        transpose_ne[]   = { weight->ne[1], weight->ne[0], weight->ne[2], weight->ne[3]};
+    size_t         transpose_nb[]   = { weight->nb[1], weight->nb[0], weight->nb[2], weight->nb[3]};
+    
+    acl_tensor_ptr acl_weight_tensor = ggml_cann_create_tensor(weight, transpose_ne, transpose_nb, 2, ACL_FORMAT_ND);
+
+    acl_tensor_ptr acl_add = ggml_cann_create_tensor(add, add->ne, add->nb, 2, ACL_FORMAT_ND);
+    acl_tensor_ptr acl_dst = ggml_cann_create_tensor(add_tensor, add_tensor->ne, add_tensor->nb, 2, ACL_FORMAT_ND);
+
+    float          value = 1.0f;
+    acl_scalar_ptr alpha      = ggml_cann_create_scalar(&value, aclDataType::ACL_FLOAT);
+    acl_scalar_ptr beta       = ggml_cann_create_scalar(&value, aclDataType::ACL_FLOAT);
+
+    GGML_CANN_CALL_ACLNN_OP(ctx, Addmm, acl_add.get(), acl_input_tensor.get(), acl_weight_tensor.get(), beta.get(), alpha.get(), acl_dst.get(), 0);
 }
