@@ -266,7 +266,6 @@ struct test_model_context {
         if (model) {
             llama_model_free(model);
         }
-        llama_backend_free();
 
         ctx   = nullptr;
         model = nullptr;
@@ -754,6 +753,9 @@ static void test_backend_dist_sampling(const char * model_path) {
     token = llama_get_sampled_token_ith(test_ctx.ctx, -1);
     printf("dist sampled id:%d, string:'%s'\n", token, test_ctx.token_to_piece(token, false).c_str());
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
+
+    llama_sampler_free(backend_sampler_chain);
+    printf("backend dist sampling test PASSED\n");
 }
 
 static void test_backend_dist_sampling_and_cpu(const char * model_path) {
@@ -785,6 +787,11 @@ static void test_backend_dist_sampling_and_cpu(const char * model_path) {
     llama_token cpu_token = llama_sampler_sample(chain, test_ctx.ctx, batch_idx);
     printf("dist & cpu sampled id:%d, string:'%s'\n", cpu_token, test_ctx.token_to_piece(cpu_token, false).c_str());
     GGML_ASSERT(backend_token == cpu_token);
+
+    llama_sampler_free(backend_sampler_chain);
+    llama_sampler_free(chain);
+
+    printf("backend dist & cpu sampling test PASSED\n");
 }
 
 static void test_backend_logit_bias_sampling(const char * model_path) {
@@ -832,6 +839,8 @@ static void test_backend_logit_bias_sampling(const char * model_path) {
     const std::string backend_token_str = test_ctx.token_to_piece(backend_token, false);
     printf("logit bias sampled token = %d, string='%s'\n", backend_token, backend_token_str.c_str());
     GGML_ASSERT(backend_token == bias_token);
+
+    llama_sampler_free(backend_sampler_chain);
 }
 
 // This test verifies that it is possible to have two different backend sampler,
@@ -886,6 +895,9 @@ static void test_backend_mixed_sampling(const char * model_path) {
         GGML_ASSERT(n_logits == (size_t) k);
         GGML_ASSERT(llama_get_sampled_token_ith(test_ctx.ctx, batch_idx) == LLAMA_TOKEN_NULL);
     }
+
+    llama_sampler_free(sampler_chain_0);
+    llama_sampler_free(sampler_chain_1);
 
     printf("backend mixed sampling test PASSED\n");
 }
@@ -954,6 +966,12 @@ static void test_backend_set_sampler(const char * model_path) {
     llama_token new_backend_token = llama_get_sampled_token_ith(test_ctx.ctx, test_ctx.idx_for_seq(seq_id));
     const std::string new_backend_token_str = test_ctx.token_to_piece(new_backend_token, false);
     printf("dist sampled token = %d, string='%s'\n", new_backend_token, new_backend_token_str.c_str());
+
+    llama_sampler_free(backend_sampler_chain);
+    llama_sampler_free(chain);
+    llama_sampler_free(new_backend_sampler_chain);
+
+    printf("backend set sampler test PASSED\n");
 }
 
 static void test_backend_cpu_mixed_batch(const char * model_path) {
@@ -1032,7 +1050,7 @@ static void test_backend_cpu_mixed_batch(const char * model_path) {
     // Set a backend sampler so that we can verify that it can be reset
     {
         struct llama_sampler_chain_params chain_params = llama_sampler_chain_default_params();
-        struct llama_sampler * sampler_chain= llama_sampler_chain_init(chain_params);
+        struct llama_sampler * sampler_chain = llama_sampler_chain_init(chain_params);
         llama_sampler_chain_add(sampler_chain, llama_sampler_init_dist(88));
 
         llama_set_sampler(test_ctx.ctx, 0, sampler_chain);
@@ -1046,7 +1064,11 @@ static void test_backend_cpu_mixed_batch(const char * model_path) {
         const std::string token_str = test_ctx.token_to_piece(token, false);
         printf("re-added backend sampled token id=%d, string='%s'\n", token, token_str.c_str());
         GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
+
+        llama_sampler_free(sampler_chain);
     }
+
+    llama_sampler_free(sampler_chain_0);
 
     printf("backend-cpu mixed batch test PASSED\n");
 }
@@ -1089,6 +1111,9 @@ static void test_backend_max_outputs(const char * model_path) {
     GGML_ASSERT(ret != 0 && "llama_decode should not succeed multiple outputs per sequence");
     printf("<<< test_max_outputs expected error end.\n");
     llama_batch_free(batch);
+
+    llama_sampler_free(backend_sampler_chain);
+    printf("backend max outputs test PASSED\n");
 }
 
 struct backend_test_case {
