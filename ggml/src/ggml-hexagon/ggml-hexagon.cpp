@@ -3553,7 +3553,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     if (opt_trace) {
         HEX_VERBOSE("ggml-hex: open itrace\n");
         itrace_open_logger(CPU_DOMAIN_ID, &g_itrace_logger_handle);
-        itrace_open_profiler(g_itrace_logger_handle, CPU_DOMAIN_ID, 0x1000000, &g_itrace_cpu_profiler_handle);
+        itrace_open_profiler(g_itrace_logger_handle, CPU_DOMAIN_ID, 4*1024*1024, &g_itrace_cpu_profiler_handle);
 
         itrace_start_section(g_itrace_cpu_profiler_handle, "open-itrace", NULL);
         itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
