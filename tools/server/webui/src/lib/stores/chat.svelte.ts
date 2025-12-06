@@ -2,7 +2,11 @@ import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
-import { selectedModelName, modelsStore } from '$lib/stores/models.svelte';
+import {
+	selectedModelName,
+	modelsStore,
+	selectedModelContextSize
+} from '$lib/stores/models.svelte';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -261,6 +265,13 @@ class ChatStore {
 			return activeState.contextTotal;
 		}
 
+		if (isRouterMode()) {
+			const modelContextSize = selectedModelContextSize();
+			if (modelContextSize && modelContextSize > 0) {
+				return modelContextSize;
+			}
+		}
+
 		const propsContextSize = contextSize();
 		if (propsContextSize && propsContextSize > 0) {
 			return propsContextSize;
@@ -458,6 +469,14 @@ class ChatStore {
 		onError?: (error: Error) => void,
 		modelOverride?: string | null
 	): Promise<void> {
+		// Ensure model props are cached before streaming (for correct n_ctx in processing info)
+		if (isRouterMode()) {
+			const modelName = modelOverride || selectedModelName();
+			if (modelName && !modelsStore.getModelProps(modelName)) {
+				await modelsStore.fetchModelProps(modelName);
+			}
+		}
+
 		let streamedContent = '';
 		let streamedReasoningContent = '';
 		let streamedToolCallContent = '';
