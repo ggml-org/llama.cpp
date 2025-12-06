@@ -444,7 +444,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_me
         res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
     }
 
-    res.smem = 32*sizeof(float)*nsg;
+    // Shared memory layout:
+    // - sgptg * NW floats for partial sums (nsg * 32)
+    // - sgptg floats for shared_x_dt (nsg)
+    // - sgptg floats for shared_dA (nsg)
+    // Total: nsg * (32 + 2) floats
+    res.smem = (32 + 2)*sizeof(float)*nsg;
 
     return res;
 }
