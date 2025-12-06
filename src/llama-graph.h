@@ -383,6 +383,24 @@ public:
     const llama_memory_hybrid_context * mctx;
 };
 
+class llm_graph_input_sampling : public llm_graph_input_i {
+public:
+    llm_graph_input_sampling(int32_t n_vocab, bool sorted,
+            std::unordered_map<llama_seq_id, llama_sampler *> samplers) :
+        n_vocab(n_vocab), sorted_value(sorted), samplers(std::move(samplers)) { }
+    virtual ~llm_graph_input_sampling() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+    bool can_reuse(const llm_graph_params & params) override;
+
+    int32_t       n_vocab;
+    bool          sorted_value;
+    ggml_tensor * size           = nullptr; // I32 [1]
+    ggml_tensor * sorted         = nullptr; // I32 [1]
+
+    std::unordered_map<llama_seq_id, llama_sampler *> samplers;
+};
+
 //
 // llm_graph_result
 //
@@ -415,6 +433,23 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+
+    std::unordered_map<llama_seq_id, llama_sampler *> samplers;
+
+    static bool samplers_equal(
+          const std::unordered_map<llama_seq_id, llama_sampler *> & lhs,
+          const std::unordered_map<llama_seq_id, llama_sampler *> & rhs) {
+        if (lhs.size() != rhs.size()) {
+            return false;
+        }
+        for (const auto & [seq_id, sampler] : lhs) {
+            auto it = rhs.find(seq_id);
+            if (it == rhs.end() || it->second != sampler) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     uint32_t n_outputs;
 
@@ -463,7 +498,9 @@ struct llm_graph_params {
             cvec      == other.cvec  &&
             loras     == other.loras &&
             cross     == other.cross &&
-            n_outputs == other.n_outputs;
+            n_outputs == other.n_outputs &&
+            samplers_equal(samplers, other.samplers);
+
     }
 };
 
@@ -503,6 +540,11 @@ public:
     ggml_tensor * t_logits      = nullptr;
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
+
+    std::unordered_map<llama_seq_id, ggml_tensor*> t_sampled_logits;
+    std::unordered_map<llama_seq_id, ggml_tensor*> t_candidates;
+    std::unordered_map<llama_seq_id, ggml_tensor*> t_sampled;
+    std::unordered_map<llama_seq_id, ggml_tensor*> t_sampled_probs;
 
     std::vector<llm_graph_input_ptr> inputs;
 
@@ -578,6 +620,8 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+
+    std::unordered_map<llama_seq_id, llama_sampler*> samplers;
 
     const llm_graph_cb & cb_func;
 
@@ -818,6 +862,12 @@ struct llm_graph_context {
             ggml_tensor * cls_b,
             ggml_tensor * cls_out,
             ggml_tensor * cls_out_b) const;
+
+    //
+    // sampling (backend sampling)
+    //
+
+    void build_sampling() const;
 
     //
     // dense (out)

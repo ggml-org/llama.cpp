@@ -18,6 +18,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	autoMicOnEmpty: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
+	backend_sampling: false,
 	temperature: 0.8,
 	dynatemp_range: 0.0,
 	dynatemp_exponent: 1.0,
@@ -52,6 +53,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
 	samplers:
 		'The order at which samplers are applied, in simplified way. Default is "top_k;typ_p;top_p;min_p;temperature": top_k->typ_p->top_p->min_p->temperature',
+	backend_sampling:
+		'Enable backend-based samplers. When enabled, supported samplers run on the accelerator backend for faster sampling.',
 	temperature:
 		'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
 	dynatemp_range:

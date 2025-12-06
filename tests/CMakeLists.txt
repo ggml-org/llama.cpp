@@ -222,6 +222,18 @@ llama_build_and_test(test-backend-ops.cpp)
 llama_build_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_build_and_test(test-autorelease.cpp        LABEL "model")
 
+llama_build_and_test(test-backend-sampler.cpp       LABEL "model")
+target_include_directories(test-backend-sampler PRIVATE ${PROJECT_SOURCE_DIR}/src)
+llama_test(test-backend-sampler NAME test-backend-sampler-greedy       ARGS --test greedy)
+llama_test(test-backend-sampler NAME test-backend-sampler-temp         ARGS --test temp)
+llama_test(test-backend-sampler NAME test-backend-sampler-top_k        ARGS --test top_k)
+llama_test(test-backend-sampler NAME test-backend-sampler-dist         ARGS --test dist)
+llama_test(test-backend-sampler NAME test-backend-sampler-dist-and-cpu ARGS --test dist_and_cpu)
+llama_test(test-backend-sampler NAME test-backend-sampler-logit-bias   ARGS --test logit_bias)
+llama_test(test-backend-sampler NAME test-backend-sampler-mul_seq      ARGS --test multi_sequence)
+llama_test(test-backend-sampler NAME test-backend-sampler-set-sampler  ARGS --test set_sampler)
+
+
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
     llama_build_and_test(test-barrier.cpp)

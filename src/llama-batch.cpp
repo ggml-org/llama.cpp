@@ -28,7 +28,8 @@ bool llama_batch_allocr::init(
         const llama_memory_i * memory,
         uint32_t n_embd,
         uint32_t n_seq_max,
-        bool output_all) {
+        bool output_all,
+        bool sampling) {
     clear();
 
     batch = batch_inp;
@@ -142,6 +143,24 @@ bool llama_batch_allocr::init(
 
             output.resize(batch.n_tokens, true);
             batch.logits = output.data();
+        }
+    }
+
+    if (sampling) {
+        std::vector<int32_t> seq_output_count(n_seq_max, 0);
+
+        for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            if (batch.logits[i] == 0) {
+                continue;
+            }
+            for (int32_t s = 0; s < batch.n_seq_id[i]; ++s) {
+                const llama_seq_id seq_id = batch.seq_id[i][s];
+                seq_output_count[seq_id]++;
+                if (seq_output_count[seq_id] > 1) {
+                    LLAMA_LOG_ERROR("%s: backend sampling requires at most one output token per sequence (%d)\n", __func__, seq_id);
+                    return false;
+                }
+            }
         }
     }
 
