@@ -1050,6 +1050,7 @@ struct vk_op_pad_push_constants {
     uint32_t ne00; uint32_t ne01; uint32_t ne02; uint32_t ne03; uint32_t nb00; uint32_t nb01; uint32_t nb02; uint32_t nb03;
     uint32_t ne10; uint32_t ne11; uint32_t ne12; uint32_t ne13; uint32_t nb10; uint32_t nb11; uint32_t nb12; uint32_t nb13;
     uint32_t misalign_offsets;
+    uint32_t circular;
 
     uint32_t lp0; uint32_t rp0;
     uint32_t lp1; uint32_t rp1;
@@ -1092,6 +1093,7 @@ static vk_op_pad_push_constants vk_op_pad_push_constants_init(const ggml_tensor 
     p.rp2 = dst->op_params[5];
     p.lp3 = dst->op_params[6];
     p.rp3 = dst->op_params[7];
+    p.circular = dst->op_params[8];
 
     return p; // fastdiv values and offsets are initialized later in ggml_vk_op
 }
