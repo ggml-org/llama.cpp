@@ -43,7 +43,7 @@
 		"@tailwindcss/vite": "^4.0.0",
 		"@types/node": "^22",
 		"@vitest/browser": "^3.2.3",
-		"bits-ui": "^2.8.11",
+		"bits-ui": "^2.14.4",
 		"clsx": "^2.1.1",
 		"dexie": "^4.0.11",
 		"eslint": "^9.18.0",
