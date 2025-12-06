@@ -1098,12 +1098,13 @@ struct llama_grammar * llama_grammar_init_impl(
         vocab,
         std::move(vec_rules),
         std::move(stacks),
-        /* .partial_utf8 = */     {},
-        /* .lazy =*/              false,
-        /* .awaiting_trigger = */ false,
-        /* .trigger_buffer = */   "",
-        /* .trigger_tokens   = */ {},
-        /* .trigger_patterns    = */ {},
+        /* .partial_utf8 = */             {},
+        /* .lazy = */                     false,
+        /* .awaiting_trigger = */         false,
+        /* .trigger_buffer = */           "",
+        /* .trigger_buffer_positions = */ {},
+        /* .trigger_tokens = */           {},
+        /* .trigger_patterns = */         {},
     };
 }
 
@@ -1203,10 +1204,11 @@ struct llama_grammar * llama_grammar_init_impl(
         vocab,
         std::move(vec_rules),
         std::move(stacks),
-        /* .partial_utf8 = */     {},
-        /* .lazy = */             lazy,
-        /* .awaiting_trigger = */ lazy,
-        /* .trigger_buffer = */   "",
+        /* .partial_utf8 = */             {},
+        /* .lazy = */                     lazy,
+        /* .awaiting_trigger = */         lazy,
+        /* .trigger_buffer = */           "",
+        /* .trigger_buffer_positions = */ {},
         std::move(vec_trigger_tokens),
         std::move(vec_trigger_patterns),
     };
@@ -1229,6 +1231,7 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
         grammar.lazy,
         grammar.awaiting_trigger,
         grammar.trigger_buffer,
+        grammar.trigger_buffer_positions,
         grammar.trigger_tokens,
         grammar.trigger_patterns,
     };
@@ -1305,6 +1308,8 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
             LLAMA_LOG_DEBUG("Grammar triggered on token %u (`%s`)", token, piece.c_str());
             return;
         } else {
+            auto position = std::make_pair(grammar.trigger_buffer.size(), grammar.trigger_buffer.size() + piece.size());
+            grammar.trigger_buffer_positions.push_back(std::make_pair(token, position));
             grammar.trigger_buffer += piece;
 
             std::smatch match;
@@ -1322,10 +1327,23 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
                     if (start == std::string::npos) {
                         start = match.position(0);
                     }
+
+                    // replay tokens that overlap with [start, end)
+                    for (const auto & [tok, tok_pos] : grammar.trigger_buffer_positions) {
+                        auto [tok_start, tok_end] = tok_pos;
+                        if (tok_end <= start) {
+                            continue;
+                        }
+
+                        size_t piece_start = (tok_start < start) ? start : tok_start; // allow for partial token pieces
+                        size_t piece_len = tok_end - piece_start;
+                        auto tok_piece = grammar.trigger_buffer.substr(piece_start, piece_len);
+                        llama_grammar_accept_token(grammar, tok, tok_piece);
+                    }
+
                     auto constrained_str = grammar.trigger_buffer.substr(start);
-                    // std::string constrained_str(match[1].first, grammar.trigger_buffer.end());
                     grammar.trigger_buffer.clear();
-                    llama_grammar_accept_token(grammar, -1, constrained_str);
+                    grammar.trigger_buffer_positions.clear();
                     LLAMA_LOG_DEBUG("Grammar triggered on regex: '%s'\n", constrained_str.c_str());
                     return;
                 }

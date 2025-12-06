@@ -122,6 +122,9 @@ struct llama_grammar_trigger_pattern {
 };
 
 struct llama_grammar {
+    // maintain a list of llama_tokens and their positions in the trigger_buffer
+    using token_pos = std::pair<llama_token, std::pair<size_t, size_t>>;
+
     // note: allow null vocab for testing (not great)
     const llama_vocab * vocab;
 
@@ -137,6 +140,7 @@ struct llama_grammar {
     bool                     lazy             = false;
     bool                     awaiting_trigger = false; // Initialized to true for lazy grammars only
     std::string              trigger_buffer;           // Output buffered by lazy grammar. Will be cleared once trigger is found.
+    std::vector<token_pos>   trigger_buffer_positions; // Tokens buffered by lazy grammar. Used to replay when a trigger is found.
     std::vector<llama_token> trigger_tokens;           // Tokens that trigger a lazy grammar, or tokens to force printing of (even if special).
     std::vector<llama_grammar_trigger_pattern>
                              trigger_patterns;         // Regular expressions that trigger a lazy grammar. Must be a full match of the entire generated
