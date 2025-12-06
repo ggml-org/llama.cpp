@@ -317,6 +317,12 @@ Chat Session specific settings
   * enable multi threaded ssl and client request handling, so that rogue clients cant mount simple DoS
     by opening connection and then missing in action.
   * switch to a Dicty DataClass based Config with better type validation and usage, instead of literal dict++
+* ToolCall, ToolManager and related classes based flow wrt the tool calls.
+  * all existing tool calls duplicated and updated to support and build on this new flow.
+* Initial skeleton towards SimpleMCP, a post and json based handshake flow, so that the tool calls supported
+  through SimpleProxy can be exposed through a MCP standardish mechanism.
+  * can allow others beyond AnveshikaSallap client to use the corresponding tool calls
+  * can allow AnveshikaSallap client to support other MCP servers and their exposed tool calls in future.
 
 
 ## ToDo

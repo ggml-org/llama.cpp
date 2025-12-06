@@ -78,12 +78,21 @@ class ToolCallResponseEx():
     name: str
     response: TCOutResponse
 
+@dataclass(frozen=True)
+class MCPTCRContentText:
+    text: str
+    type: str = "text"
+
 @dataclass
-class ToolCallResponse():
-    status: bool
-    tcid: str
+class MCPTCRResult:
+    content: list[MCPTCRContentText]
+
+@dataclass
+class MCPToolCallResponse:
+    id: str
     name: str
-    content: str = ""
+    result: MCPTCRResult
+    jsonrpc: str = "2.0"
 
 HttpHeaders: TypeAlias = dict[str, str] | email.message.Message[str, str]
 
@@ -116,7 +125,7 @@ class ToolManager():
         for tcName in self.toolcalls.keys():
             oMeta[tcName] = self.toolcalls[tcName].meta()
 
-    def tc_handle(self, tcName: str, callId: str, tcArgs: TCInArgs, inHeaders: HttpHeaders) -> ToolCallResponseEx:
+    def tc_handle(self, callId: str, tcName: str, tcArgs: TCInArgs, inHeaders: HttpHeaders) -> ToolCallResponseEx:
         try:
             response = self.toolcalls[tcName].tc_handle(tcArgs, inHeaders)
             return ToolCallResponseEx(callId, tcName, response)

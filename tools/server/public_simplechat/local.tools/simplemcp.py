@@ -18,7 +18,7 @@ import time
 import ssl
 import traceback
 import json
-from typing import Callable
+from typing import Any
 import tcpdf as mTCPdf
 import tcweb as mTCWeb
 import toolcall as mTC
@@ -26,14 +26,6 @@ import config as mConfig
 
 
 gMe = mConfig.Config()
-
-
-gAllowedCalls = {
-    "xmlfiltered": [],
-    "htmltext": [],
-    "urlraw": [],
-    "pdftext": [ "pypdf" ]
-    }
 
 
 def bearer_transform():
@@ -94,18 +86,44 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return mTC.TCOutResponse(False, 400, "WARN:Invalid auth")
         return mTC.TCOutResponse(True, 200, "Auth Ok")
 
-    def auth_and_run(self, pr:urllib.parse.ParseResult, handler:Callable[['ProxyHandler', urllib.parse.ParseResult], None]):
+    def mcp_toolscall(self, oRPC: Any):
         """
         If authorisation is ok for the request, run the specified handler.
         """
-        acGot = self.auth_check()
-        if not acGot.callOk:
-            self.send_error(acGot.statusCode, acGot.statusMsg)
+        try:
+            if not gMe.op.toolManager:
+                raise RuntimeError("DBUG:PH:TCRun:ToolManager uninitialised")
+            resp = gMe.op.toolManager.tc_handle(oRPC["id"], oRPC["params"]["name"], oRPC["params"]["arguments"], self.headers)
+            if not resp.response.callOk:
+                self.send_error(resp.response.statusCode, resp.response.statusMsg)
+                return
+            tcresp = mTC.MCPToolCallResponse(
+                resp.tcid,
+                resp.name,
+                mTC.MCPTCRResult([
+                    mTC.MCPTCRContentText(resp.response.contentData.decode('utf-8'))
+                ])
+            )
+            self.send_response(resp.response.statusCode, resp.response.statusMsg)
+            self.send_header('Content-Type', "application/json")
+            # Add CORS for browser fetch, just in case
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(tcresp).encode('utf-8'))
+        except Exception as e:
+            self.send_error(400, f"ERRR:PH:{e}")
+
+    def mcp_toolslist(self):
+
+        pass
+
+    def mcp_run(self, oRPC: Any):
+        if oRPC["method"] == "tools/call":
+            self.mcp_toolscall(oRPC)
+        elif oRPC["method"] == "tools/list":
+            self.mcp_toolslist()
         else:
-            try:
-                handler(self, pr)
-            except Exception as e:
-                self.send_error(400, f"ERRR:ProxyHandler:{e}")
+            self.send_error(400, f"ERRR:PH:MCP:Unknown")
 
     def _do_POST(self):
         """
@@ -124,7 +142,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if len(body) == gMe.nw.maxReadBytes:
             self.send_error(400, f"WARN:RequestOverflow:{pr.path}")
         oRPC = json.loads(body)
-
+        self.mcp_run(oRPC)
 
     def do_POST(self):
         """
@@ -159,33 +177,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         return super().handle()
 
 
-def handle_aum(ph: ProxyHandler, pr: urllib.parse.ParseResult):
+def setup_toolmanager():
     """
     Handle requests to aum path, which is used in a simple way to
     verify that one is communicating with this proxy server
     """
-    import importlib
-    queryParams = urllib.parse.parse_qs(pr.query)
-    url = queryParams['url']
-    print(f"DBUG:HandleAUM:Url:{url}")
-    url = url[0]
-    if (not url) or (len(url) == 0):
-        ph.send_error(400, f"WARN:HandleAUM:MissingUrl/UnknownQuery?!")
-        return
-    urlParts = url.split('.',1)
-    if gAllowedCalls.get(urlParts[0], None) == None:
-        ph.send_error(403, f"WARN:HandleAUM:Forbidden:{urlParts[0]}")
-        return
-    for dep in gAllowedCalls[urlParts[0]]:
-        try:
-            importlib.import_module(dep)
-        except ImportError as exc:
-            ph.send_error(400, f"WARN:HandleAUM:{urlParts[0]}:Support module [{dep}] missing or has issues")
-            return
-    print(f"INFO:HandleAUM:Availability ok for:{urlParts[0]}")
-    ph.send_response_only(200, "bharatavarshe")
-    ph.send_header('Access-Control-Allow-Origin', '*')
-    ph.end_headers()
+    gMe.op.toolManager = mTC.ToolManager()
+    if mTCWeb.ok():
+        gMe.op.toolManager.tc_add("fetch_url_raw", mTCWeb.TCUrlRaw("fetch_url_raw"))
+        gMe.op.toolManager.tc_add("fetch_html_text", mTCWeb.TCHtmlText("fetch_html_text"))
+        gMe.op.toolManager.tc_add("fetch_xml_filtered", mTCWeb.TCXmlFiltered("fetch_xml_filtered"))
+    if mTCPdf.ok():
+        gMe.op.toolManager.tc_add("fetch_pdf_text", mTCPdf.TCPdfText("fetch_pdf_text"))
 
 
 def setup_server():
@@ -228,4 +231,5 @@ def run():
 
 if __name__ == "__main__":
     gMe.process_args(sys.argv)
+    setup_toolmanager()
     run()

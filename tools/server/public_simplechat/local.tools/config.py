@@ -9,6 +9,7 @@ import ssl
 import sys
 import urlvalidator as mUV
 import debug as mDebug
+import toolcall as mTC
 
 
 gConfigNeeded = [ 'acl.schemes', 'acl.domains', 'sec.bearerAuth' ]
@@ -75,6 +76,7 @@ class Op(DictyDataclassMixin):
     debug: bool = False
     server: http.server.ThreadingHTTPServer|None = None
     sslContext: ssl.SSLContext|None = None
+    toolManager: mTC.ToolManager|None = None
     bearerTransformed: str = ""
     bearerTransformedYear: str = ""
 
