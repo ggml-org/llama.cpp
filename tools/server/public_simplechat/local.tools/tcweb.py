@@ -1,20 +1,18 @@
 # Helper to manage web related requests
 # by Humans for All
 
-import urllib.parse
 import urlvalidator as uv
 import html.parser
 import debug
 import filemagic as mFile
 import json
 import re
-import http.client
 from typing import Any, cast
 import toolcall as mTC
 
 
 
-def handle_urlreq(url: str, inHeaders: http.client.HTTPMessage, tag: str):
+def handle_urlreq(url: str, inHeaders: mTC.HttpHeaders, tag: str):
     """
     Common part of the url request handling used by both urlraw and urltext.
 
@@ -33,16 +31,8 @@ def handle_urlreq(url: str, inHeaders: http.client.HTTPMessage, tag: str):
     if not gotVU.callOk:
         return mTC.TCOutResponse(gotVU.callOk, gotVU.statusCode, gotVU.statusMsg)
     try:
-        hUA = inHeaders.get('User-Agent', None)
-        hAL = inHeaders.get('Accept-Language', None)
-        hA = inHeaders.get('Accept', None)
-        headers = {
-            'User-Agent': hUA,
-            'Accept': hA,
-            'Accept-Language': hAL
-        }
         # Get requested url
-        return mFile.get_file(url, tag, "text/html", headers)
+        return mFile.get_file(url, tag, "text/html", inHeaders)
     except Exception as exc:
         return mTC.TCOutResponse(False, 502, f"WARN:{tag}:Failed:{exc}")
 
@@ -65,7 +55,7 @@ class TCUrlRaw(mTC.ToolCall):
             )
         )
 
-    def tc_handle(self, args: mTC.TCInArgs, inHeaders: http.client.HTTPMessage) -> mTC.TCOutResponse:
+    def tc_handle(self, args: mTC.TCInArgs, inHeaders: mTC.HttpHeaders) -> mTC.TCOutResponse:
         try:
             # Get requested url
             got = handle_urlreq(args['url'], inHeaders, "HandleTCUrlRaw")
@@ -212,7 +202,7 @@ class TCHtmlText(mTC.ToolCall):
             )
         )
 
-    def tc_handle(self, args: mTC.TCInArgs, inHeaders: http.client.HTTPMessage) -> mTC.TCOutResponse:
+    def tc_handle(self, args: mTC.TCInArgs, inHeaders: mTC.HttpHeaders) -> mTC.TCOutResponse:
         try:
             # Get requested url
             got = handle_urlreq(args['url'], inHeaders, "HandleTCHtmlText")
@@ -329,7 +319,7 @@ class TCXmlFiltered(mTC.ToolCall):
             )
         )
 
-    def tc_handle(self, args: mTC.TCInArgs, inHeaders: http.client.HTTPMessage) -> mTC.TCOutResponse:
+    def tc_handle(self, args: mTC.TCInArgs, inHeaders: mTC.HttpHeaders) -> mTC.TCOutResponse:
         try:
             # Get requested url
             got = handle_urlreq(args['url'], inHeaders, "HandleTCXMLFiltered")
@@ -347,3 +337,7 @@ class TCXmlFiltered(mTC.ToolCall):
             return mTC.TCOutResponse(True, got.statusCode, got.statusMsg, got.contentType, xmlFiltered.text.encode('utf-8'))
         except Exception as exc:
             return mTC.TCOutResponse(False, 502, f"WARN:XMLFiltered:Failed:{exc}")
+
+
+def ok():
+    return True

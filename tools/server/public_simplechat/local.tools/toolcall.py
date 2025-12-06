@@ -1,11 +1,11 @@
 # Tool Call Base
 # by Humans for All
 
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, TYPE_CHECKING
 from dataclasses import dataclass
-import http
-import http.client
-import urllib.parse
+
+if TYPE_CHECKING:
+    import email.message
 
 
 #
@@ -61,13 +61,6 @@ class ToolCallMeta():
     type: str = "function"
     function: TCFunction|None = None
 
-@dataclass
-class TollCallResponse():
-    status: bool
-    tcid: str
-    name: str
-    content: str = ""
-
 @dataclass(frozen=True)
 class TCOutResponse:
     """
@@ -79,6 +72,21 @@ class TCOutResponse:
     contentType: str = ""
     contentData: bytes = b""
 
+@dataclass
+class ToolCallResponseEx():
+    tcid: str
+    name: str
+    response: TCOutResponse
+
+@dataclass
+class ToolCallResponse():
+    status: bool
+    tcid: str
+    name: str
+    content: str = ""
+
+HttpHeaders: TypeAlias = dict[str, str] | email.message.Message[str, str]
+
 
 @dataclass
 class ToolCall():
@@ -87,13 +95,30 @@ class ToolCall():
     def tcf_meta(self) -> TCFunction|None:
         return None
 
-    def tc_handle(self, args: TCInArgs, inHeaders: http.client.HTTPMessage) -> TCOutResponse:
+    def tc_handle(self, args: TCInArgs, inHeaders: HttpHeaders) -> TCOutResponse:
         return TCOutResponse(False, 500)
 
     def meta(self) -> ToolCallMeta:
         tcf = self.tcf_meta()
         return ToolCallMeta("function", tcf)
 
-    def handler(self, callId: str, args: Any, inHeaders: http.client.HTTPMessage) -> TollCallResponse:
-        got = self.tc_handle(args, inHeaders)
-        return TollCallResponse(got.callOk, callId, self.name, got.contentData.decode('utf-8'))
+
+class ToolManager():
+
+    def __init__(self) -> None:
+        self.toolcalls: dict[str, ToolCall] = {}
+
+    def tc_add(self, fName: str, tc: ToolCall):
+        self.toolcalls[fName] = tc
+
+    def meta(self):
+        oMeta = {}
+        for tcName in self.toolcalls.keys():
+            oMeta[tcName] = self.toolcalls[tcName].meta()
+
+    def tc_handle(self, tcName: str, callId: str, tcArgs: TCInArgs, inHeaders: HttpHeaders) -> ToolCallResponseEx:
+        try:
+            response = self.toolcalls[tcName].tc_handle(tcArgs, inHeaders)
+            return ToolCallResponseEx(callId, tcName, response)
+        except KeyError:
+            return ToolCallResponseEx(callId, tcName, TCOutResponse(False, 400, "Unknown tool call"))

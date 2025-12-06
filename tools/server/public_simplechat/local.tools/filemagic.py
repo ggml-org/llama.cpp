@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 
 
-def get_from_web(url: str, tag: str, inContentType: str, inHeaders: dict[str, str|None]):
+def get_from_web(url: str, tag: str, inContentType: str, inHeaders: mTC.HttpHeaders):
     """
     Get the url specified from web.
 
@@ -58,7 +58,7 @@ def get_from_local(urlParts: urllib.parse.ParseResult, tag: str, inContentType: 
         return mTC.TCOutResponse(False, 502, f"WARN:{tag}:Failed:{exc}")
 
 
-def get_file(url: str, tag: str, inContentType: str, inHeaders: dict[str, str|None]={}):
+def get_file(url: str, tag: str, inContentType: str, inHeaders: mTC.HttpHeaders={}):
     """
     Based on the scheme specified in the passed url,
     either get from local file system or from the web.

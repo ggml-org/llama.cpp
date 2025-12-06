@@ -1,12 +1,10 @@
 # Helper to manage pdf related requests
 # by Humans for All
 
-import urllib.parse
 import urlvalidator as uv
 import filemagic as mFile
 import toolcall as mTC
-import http.client
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 
 PDFOUTLINE_MAXDEPTH=4
@@ -92,7 +90,7 @@ class TCPdfText(mTC.ToolCall):
             )
         )
 
-    def tc_handle(self, args: mTC.TCInArgs, inHeaders: http.client.HTTPMessage) -> mTC.TCOutResponse:
+    def tc_handle(self, args: mTC.TCInArgs, inHeaders: mTC.HttpHeaders) -> mTC.TCOutResponse:
         """
         Handle pdftext request,
         which is used to extract plain text from the specified pdf file.
@@ -105,3 +103,14 @@ class TCPdfText(mTC.ToolCall):
             return process_pdftext(url, startP, endP)
         except Exception as exc:
             return mTC.TCOutResponse(False, 502, f"WARN:HandlePdfText:Failed:{exc}")
+
+
+def ok():
+    import importlib
+    dep = "pypdf"
+    try:
+        importlib.import_module(dep)
+        return True
+    except ImportError as exc:
+        print(f"WARN:TCPdf:{dep} missing or has issues, so not enabling myself")
+        return False
