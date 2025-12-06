@@ -213,6 +213,10 @@ struct llm_build_gemma : public llm_graph_context {
     llm_build_gemma(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_rnj1 : public llm_graph_context {
+    llm_build_rnj1(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_glm4 : public llm_graph_context {
     llm_build_glm4(const llama_model & model, const llm_graph_params & params);
 };
