@@ -48,7 +48,7 @@ static int    opt_arch         = 0;  // autodetect
 static int    opt_etm          = 0;
 static int    opt_verbose      = 0;
 static int    opt_profile      = 0;
-static int    opt_trace        = 1;
+static int    opt_trace        = 0;
 static itrace_logger_handle_t g_itrace_logger_handle = NULL;
 static itrace_profiler_handle_t g_itrace_cpu_profiler_handle = NULL;
 static int    opt_hostbuf      = 1;
@@ -2901,6 +2901,13 @@ static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
 }
 
 static void ggml_backend_hexagon_free(ggml_backend_t backend) {
+    // Flush and close itrace logger if profiling was enabled
+    if (opt_trace) {
+        itrace_flush_logs(g_itrace_logger_handle);
+        itrace_close_logger(g_itrace_logger_handle);
+        HEX_VERBOSE("ggml-hex: close itrace\n");
+    }
+
     // we just need to delete the backend here
     // the sessions are allocated & freed as part of the registry
     delete backend;
@@ -3448,12 +3455,6 @@ ggml_hexagon_registry::~ggml_hexagon_registry() {
         auto sess = static_cast<ggml_hexagon_session *>(devices[i].context);
         delete sess;
     }
-
-    // Flush and close itrace logger if profiling was enabled
-    if (opt_trace) {
-        itrace_flush_logs(g_itrace_logger_handle);
-        itrace_close_logger(g_itrace_logger_handle);
-    }
 }
 
 static const char * ggml_backend_hexagon_reg_get_name(ggml_backend_reg_t reg) {
@@ -3501,11 +3502,16 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_profile      = getenv("GGML_HEXAGON_PROFILE") != nullptr;
     opt_etm          = getenv("GGML_HEXAGON_ETM") != nullptr;
     opt_experimental = getenv("GGML_HEXAGON_EXPERIMENTAL") != nullptr;
+    opt_trace        = getenv("GGML_HEXAGON_TRACE") != nullptr;
 
     // Initialize itrace if profiling is enabled
     if (opt_trace) {
+        HEX_VERBOSE("ggml-hex: open itrace\n");
         itrace_open_logger(CPU_DOMAIN_ID, &g_itrace_logger_handle);
         itrace_open_profiler(g_itrace_logger_handle, CPU_DOMAIN_ID, 0, &g_itrace_cpu_profiler_handle);
+
+        itrace_start_section(g_itrace_cpu_profiler_handle, "open-itrace", NULL);
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
     }
 
     const char * str_opmask = getenv("GGML_HEXAGON_OPMASK");
