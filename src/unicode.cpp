@@ -497,9 +497,15 @@ static std::vector<size_t> unicode_regex_split_custom_llama3(const std::string &
     return bpe_offsets;
 }
 
+#ifdef _MSC_VER
+constexpr auto regex_flags = std::regex_constants::ECMAScript;
+#else
+constexpr auto regex_flags = std::regex_constants::nosubs | std::regex_constants::optimize;
+#endif
+
 // use std::wregex to split the text
 static std::vector<size_t> unicode_regex_split_stl(const std::wstring & wtext, const std::wstring & regex_expr, const std::vector<size_t> & offsets) {
-    std::wregex expr(regex_expr, std::regex_constants::optimize | std::regex_constants::nosubs);
+    std::wregex expr(regex_expr, regex_flags);
     std::vector<size_t> bpe_offsets; // store the offset of each word
     bpe_offsets.reserve(offsets.size()); // Reserve memory for the approximate size
     size_t start = 0;
@@ -529,7 +535,7 @@ static std::vector<size_t> unicode_regex_split_stl(const std::wstring & wtext, c
 
 // use std::regex to split the text
 static std::vector<size_t> unicode_regex_split_stl(const std::string & text, const std::string & regex_expr, const std::vector<size_t> & offsets) {
-    std::regex expr(regex_expr, std::regex_constants::optimize | std::regex_constants::nosubs);
+    std::regex expr(regex_expr, regex_flags);
     std::vector<size_t> bpe_offsets; // store the offset of each word
     bpe_offsets.reserve(offsets.size()); // Reserve memory for the approximate size
     size_t start = 0;
