@@ -642,7 +642,6 @@ to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
         case GGML_TYPE_BF16:
             return convert_unary_sycl<sycl::ext::oneapi::bfloat16>;
 #endif
-            
         default:
             return nullptr;
     }
