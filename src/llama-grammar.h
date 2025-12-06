@@ -40,7 +40,7 @@ enum llama_gretype {
     // terminal element: token (<[token-id]>)
     LLAMA_GRETYPE_TOKEN          = 8,
 
-    // inverse token (<[^token-id]>)
+    // inverse token (!<[token-id]>)
     LLAMA_GRETYPE_TOKEN_NOT      = 9,
 };
 
