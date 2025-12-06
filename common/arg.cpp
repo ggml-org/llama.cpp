@@ -51,6 +51,7 @@ using json = nlohmann::ordered_json;
 static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_MTMD,
     LLAMA_EXAMPLE_SERVER,
+    LLAMA_EXAMPLE_CLI,
 };
 
 static std::string read_file(const std::string & fname) {
@@ -468,6 +469,8 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         ));
     }
 
+    common_log_set_verbosity_thold(params.verbosity);
+
     return true;
 }
 
@@ -788,14 +791,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.display_prompt = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"-co", "--color"},
         string_format("colorise output to distinguish prompt and user input from generations (default: %s)", params.use_color ? "true" : "false"),
         [](common_params & params) {
             params.use_color = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP}));
     add_opt(common_arg(
         {"-t", "--threads"}, "N",
         string_format("number of CPU threads to use during generation (default: %d)", params.cpuparams.n_threads),
@@ -928,7 +931,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"-n", "--predict", "--n-predict"}, "N",
         string_format(
-            ex == LLAMA_EXAMPLE_MAIN
+            ex == LLAMA_EXAMPLE_COMPLETION
                 ? "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)"
                 : "number of tokens to predict (default: %d, -1 = infinity)",
             params.n_predict),
@@ -995,14 +998,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.ctx_shift = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
     add_opt(common_arg(
         {"--context-shift"},
         string_format("enables context shift on infinite text generation (default: %s)", params.ctx_shift ? "enabled" : "disabled"),
         [](common_params & params) {
             params.ctx_shift = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CONTEXT_SHIFT"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CONTEXT_SHIFT"));
     add_opt(common_arg(
         {"--chunks"}, "N",
         string_format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
@@ -1038,7 +1041,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.system_prompt = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_DIFFUSION}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DIFFUSION}));
     add_opt(common_arg(
         {"--no-perf"},
         string_format("disable internal libllama performance timings (default: %s)", params.no_perf ? "true" : "false"),
@@ -1068,7 +1071,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.system_prompt.pop_back();
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_DIFFUSION}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DIFFUSION}));
     add_opt(common_arg(
         {"--in-file"}, "FNAME",
         "an input file (repeat to specify multiple files)",
@@ -1116,42 +1119,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.n_print = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"--prompt-cache"}, "FNAME",
         "file to cache prompt state for faster startup (default: none)",
         [](common_params & params, const std::string & value) {
             params.path_prompt_cache = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"--prompt-cache-all"},
         "if specified, saves user input and generations to cache as well\n",
         [](common_params & params) {
             params.prompt_cache_all = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"--prompt-cache-ro"},
         "if specified, uses the prompt cache but does not update it",
         [](common_params & params) {
             params.prompt_cache_ro = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"-r", "--reverse-prompt"}, "PROMPT",
         "halt generation at PROMPT, return control in interactive mode\n",
         [](common_params & params, const std::string & value) {
             params.antiprompt.emplace_back(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-sp", "--special"},
         string_format("special tokens output enabled (default: %s)", params.special ? "true" : "false"),
         [](common_params & params) {
             params.special = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-cnv", "--conversation"},
         "run in conversation mode:\n"
@@ -1161,14 +1164,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.conversation_mode = COMMON_CONVERSATION_MODE_ENABLED;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"-no-cnv", "--no-conversation"},
         "force disable conversation mode (default: false)",
         [](common_params & params) {
             params.conversation_mode = COMMON_CONVERSATION_MODE_DISABLED;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"-st", "--single-turn"},
         "run conversation for a single turn only, then exit when done\n"
@@ -1177,28 +1180,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.single_turn = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"-i", "--interactive"},
         string_format("run in interactive mode (default: %s)", params.interactive ? "true" : "false"),
         [](common_params & params) {
             params.interactive = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"-if", "--interactive-first"},
         string_format("run in interactive mode and wait for input right away (default: %s)", params.interactive_first ? "true" : "false"),
         [](common_params & params) {
             params.interactive_first = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"-mli", "--multiline-input"},
         "allows you to write or paste multiple lines without ending each in '\\'",
         [](common_params & params) {
             params.multiline_input = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"--in-prefix-bos"},
         "prefix BOS to user inputs, preceding the `--in-prefix` string",
@@ -1206,7 +1209,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.input_prefix_bos = true;
             params.enable_chat_template = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"--in-prefix"}, "STRING",
         "string to prefix user inputs with (default: empty)",
@@ -1214,7 +1217,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.input_prefix = value;
             params.enable_chat_template = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"--in-suffix"}, "STRING",
         "string to suffix after user inputs with (default: empty)",
@@ -1222,14 +1225,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.input_suffix = value;
             params.enable_chat_template = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"--no-warmup"},
         "skip warming up the model with an empty run",
         [](common_params & params) {
             params.warmup = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
@@ -1620,14 +1623,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.grp_attn_n = value;
         }
-    ).set_env("LLAMA_ARG_GRP_ATTN_N").set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_PASSKEY}));
+    ).set_env("LLAMA_ARG_GRP_ATTN_N").set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_PASSKEY}));
     add_opt(common_arg(
         {"-gaw", "--grp-attn-w"}, "N",
         string_format("group-attention width (default: %d)", params.grp_attn_w),
         [](common_params & params, int value) {
             params.grp_attn_w = value;
         }
-    ).set_env("LLAMA_ARG_GRP_ATTN_W").set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_env("LLAMA_ARG_GRP_ATTN_W").set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"-nkvo", "--no-kv-offload"},
         "disable KV offload",
@@ -2541,14 +2544,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.use_jinja = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
     add_opt(common_arg(
         {"--no-jinja"},
         string_format("disable jinja template for chat (default: %s)\n", params.use_jinja ? "enabled" : "disabled"),
         [](common_params & params) {
             params.use_jinja = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_NO_JINJA"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_NO_JINJA"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
@@ -2559,7 +2562,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.reasoning_format = common_reasoning_format_from_name(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK"));
     add_opt(common_arg(
         {"--reasoning-budget"}, "N",
         "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)",
@@ -2567,7 +2570,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (value != 0 && value != -1) { throw std::invalid_argument("invalid value"); }
             params.reasoning_budget = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK_BUDGET"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET"));
     add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
@@ -2579,7 +2582,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
     add_opt(common_arg(
         {"--chat-template-file"}, "JINJA_TEMPLATE_FILE",
         string_format(
@@ -2591,7 +2594,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = read_file(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
     add_opt(common_arg(
         {"--no-prefill-assistant"},
         string_format(
@@ -2622,7 +2625,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.simple_io = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--positive-file"}, "FNAME",
         string_format("positive prompts file, one prompt per line (default: '%s')", params.cvector_positive_file.c_str()),
@@ -2705,7 +2708,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Set verbosity level to infinity (i.e. log all messages, useful for debugging)",
         [](common_params & params) {
             params.verbosity = INT_MAX;
-            common_log_set_verbosity_thold(INT_MAX);
         }
     ));
     add_opt(common_arg(
@@ -2726,7 +2728,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             "(default: %d)\n", params.verbosity),
         [](common_params & params, int value) {
             params.verbosity = value;
-            common_log_set_verbosity_thold(value);
         }
     ).set_env("LLAMA_LOG_VERBOSITY"));
     add_opt(common_arg(

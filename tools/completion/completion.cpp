@@ -86,7 +86,7 @@ static void sigint_handler(int signo) {
 int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MAIN, print_usage)) {
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
 
@@ -520,12 +520,6 @@ int main(int argc, char ** argv) {
 
         is_interacting = params.interactive_first;
     }
-
-    LOG_WRN("*****************************\n");
-    LOG_WRN("IMPORTANT: The current llama-cli will be moved to llama-completion in the near future\n");
-    LOG_WRN("  New llama-cli will have enhanced features and improved user experience\n");
-    LOG_WRN("  More info: https://github.com/ggml-org/llama.cpp/discussions/17618\n");
-    LOG_WRN("*****************************\n");
 
     bool is_antiprompt        = false;
     bool input_echo           = true;

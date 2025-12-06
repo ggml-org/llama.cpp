@@ -137,6 +137,7 @@ struct server_response_reader {
 
     void set_states(std::vector<task_result_state> && states);
     void post_tasks(std::vector<server_task> && tasks);
+    void post_task(server_task && task);
     bool has_next() const;
 
     // return nullptr if should_stop() is true before receiving a result

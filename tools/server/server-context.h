@@ -9,6 +9,13 @@
 
 struct server_context_impl; // private implementation
 
+struct server_context_info {
+    std::string build_info;
+    std::string model_name;
+    bool has_inp_image;
+    bool has_inp_audio;
+};
+
 struct server_context {
     std::unique_ptr<server_context_impl> impl;
 
@@ -34,6 +41,10 @@ struct server_context {
     // get the underlaying queue_tasks and queue_results
     // used by CLI application
     std::pair<server_queue &, server_response &> get_queues();
+
+    // get server info
+    // used by CLI application
+    server_context_info get_info() const;
 };
 
 

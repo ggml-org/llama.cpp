@@ -281,6 +281,12 @@ void server_response_reader::post_tasks(std::vector<server_task> && tasks) {
     queue_tasks.post(std::move(tasks));
 }
 
+void server_response_reader::post_task(server_task && task) {
+    id_tasks = {task.id};
+    queue_results.add_waiting_task_id(task.id);
+    queue_tasks.post(std::move(task));
+}
+
 bool server_response_reader::has_next() const {
     return !cancelled && received_count < id_tasks.size();
 }

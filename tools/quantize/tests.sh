@@ -20,7 +20,7 @@ set -x
 
 SPLIT=$1/llama-gguf-split
 QUANTIZE=$1/llama-quantize
-MAIN=$1/llama-cli
+MAIN=$1/llama-completion
 WORK_PATH=$TMP_DIR/quantize
 ROOT_DIR=$(realpath $(dirname $0)/../../)
 
