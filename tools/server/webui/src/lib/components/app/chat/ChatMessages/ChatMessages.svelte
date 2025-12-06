@@ -2,6 +2,7 @@
 	import { ChatMessage } from '$lib/components/app';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { getMessageSiblings } from '$lib/utils';
 
 	interface Props {
@@ -13,6 +14,7 @@
 	let { class: className, messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
+	const currentConfig = config();
 
 	function refreshAllMessages() {
 		const conversation = activeConversation();
@@ -40,7 +42,12 @@
 			return [];
 		}
 
-		return messages.map((message) => {
+		// Filter out system messages if showSystemMessage is false
+		const filteredMessages = currentConfig.showSystemMessage
+			? messages
+			: messages.filter((msg) => msg.type !== 'system');
+
+		return filteredMessages.map((message) => {
 			const siblingInfo = getMessageSiblings(allConversationMessages, message.id);
 
 			return {

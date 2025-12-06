@@ -145,7 +145,7 @@
 
 		{#if message.content.trim()}
 			<Card
-				class="max-w-[80%] rounded-[1.125rem] bg-primary px-3.75 py-1.5 text-primary-foreground data-[multiline]:py-2.5"
+				class="max-w-[80%] rounded-[1.125rem] border-none bg-primary px-3.75 py-1.5 text-primary-foreground data-[multiline]:py-2.5"
 				data-multiline={isMultiline ? '' : undefined}
 			>
 				{#if currentConfig.renderUserContentAsMarkdown}

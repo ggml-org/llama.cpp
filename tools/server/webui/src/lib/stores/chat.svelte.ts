@@ -624,6 +624,22 @@ class ChatStore {
 		this.clearChatStreaming(currentConv.id);
 
 		try {
+			if (isNewConversation) {
+				const rootId = await DatabaseService.createRootMessage(currentConv.id);
+				const currentConfig = config();
+				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+
+				if (systemPrompt) {
+					const systemMessage = await DatabaseService.createSystemMessage(
+						currentConv.id,
+						systemPrompt,
+						rootId
+					);
+
+					conversationsStore.addMessageToActive(systemMessage);
+				}
+			}
+
 			const userMessage = await this.addMessage('user', content, 'text', '-1', extras);
 			if (!userMessage) throw new Error('Failed to add user message');
 			if (isNewConversation && content)
@@ -999,14 +1015,20 @@ class ChatStore {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isLoading) return;
 
-		const result = this.getMessageByIdWithRole(messageId, 'user');
+		let result = this.getMessageByIdWithRole(messageId, 'user');
+
+		if (!result) {
+			result = this.getMessageByIdWithRole(messageId, 'system');
+		}
+
 		if (!result) return;
 		const { message: msg } = result;
 
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
-			const isFirstUserMessage = rootMessage && msg.parent === rootMessage.id;
+			const isFirstUserMessage =
+				msg.role === 'user' && rootMessage && msg.parent === rootMessage.id;
 
 			const parentId = msg.parent || rootMessage?.id;
 			if (!parentId) return;
@@ -1037,7 +1059,10 @@ class ChatStore {
 				);
 			}
 			await conversationsStore.refreshActiveMessages();
-			await this.generateResponseForMessage(newMessage.id);
+
+			if (msg.role === 'user') {
+				await this.generateResponseForMessage(newMessage.id);
+			}
 		} catch (error) {
 			console.error('Failed to edit message with branching:', error);
 		}

@@ -3,6 +3,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
 	systemMessage: '',
+	showSystemMessage: true,
 	theme: 'system',
 	showThoughtInProgress: false,
 	showToolCalls: false,
@@ -42,8 +43,9 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
-	apiKey: 'Set the API Key if you are using --api-key option for the server.',
+	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
 	systemMessage: 'The starting message that defines how model should behave.',
+	showSystemMessage: 'Display the system message at the top of each conversation.',
 	theme:
 		'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',
 	pasteLongTextToFileLen:

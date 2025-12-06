@@ -36,12 +36,6 @@
 			title: 'General',
 			icon: Settings,
 			fields: [
-				{ key: 'apiKey', label: 'API Key', type: 'input' },
-				{
-					key: 'systemMessage',
-					label: 'System Message (will be disabled if left empty)',
-					type: 'textarea'
-				},
 				{
 					key: 'theme',
 					label: 'Theme',
@@ -51,6 +45,12 @@
 						{ value: 'light', label: 'Light', icon: Sun },
 						{ value: 'dark', label: 'Dark', icon: Moon }
 					]
+				},
+				{ key: 'apiKey', label: 'API Key', type: 'input' },
+				{
+					key: 'systemMessage',
+					label: 'System Message',
+					type: 'textarea'
 				},
 				{
 					key: 'pasteLongTextToFileLen',
