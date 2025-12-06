@@ -4202,7 +4202,7 @@ class Qwen3Model(Qwen2Model):
         return torch.stack([true_row, false_row], dim=0)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if "model.vision_" in name:
+        if "model.vision_" in name or "vision_tower" in name or "multi_modal_projector" in name or "image_newline" in name:
             # skip multimodal tensors
             return []
 
@@ -4284,6 +4284,71 @@ class RND1Model(Qwen2MoeModel):
 
         if (mask_token_id := self.hparams.get("mask_token_id")) is not None:
             self.gguf_writer.add_mask_token_id(mask_token_id)
+
+
+@ModelBase.register("RForConditionalGeneration")
+class RVisionModel(MmprojModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # R model uses a 2-layer MLP projector similar to LFM2, but without patch merging
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.LFM2)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+        # R model doesn't use patch merging, so scale_factor=1
+        self.gguf_writer.add_vision_projector_scale_factor(1)
+        self.gguf_writer.add_vision_use_gelu(True)
+
+        # Add the preprocessor longest edge size
+        preproc_image_size = self.preprocessor_config.get("size", {}).get("longest_edge", self.image_size)
+        self.gguf_writer.add_vision_preproc_image_size(preproc_image_size)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        is_vision_tensor = "vision_tower" in name or "vision_model" in name or "multi_modal_projector" in name or "image_newline" in name
+
+        if is_vision_tensor:
+            # Handle image_newline specifically (before stripping prefix)
+            if "image_newline" in name:
+                return [("model.image_newline", data_torch)]
+
+            # Strip the model. prefix if present
+            if name.startswith("model."):
+                name = name[6:]  # Remove "model."
+
+            # Map R model projector tensors to LFM2 format
+            if "multi_modal_projector" in name:
+                if "pre_norm.weight" in name:
+                    return [("mm.input_norm.weight", data_torch)]
+                elif "pre_norm.bias" in name:
+                    return [("mm.input_norm.bias", data_torch)]
+                elif "linear_1.weight" in name:
+                    return [("mm.1.weight", data_torch)]
+                elif "linear_1.bias" in name:
+                    return [("mm.1.bias", data_torch)]
+                elif "linear_2.weight" in name:
+                    return [("mm.2.weight", data_torch)]
+                elif "linear_2.bias" in name:
+                    return [("mm.2.bias", data_torch)]
+
+            return [(self.map_tensor_name(name), data_torch)]
+
+        return [] # skip other tensors
+
+
+@ModelBase.register("RForConditionalGeneration")
+class RTextModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        # Skip vision tensors - they go in the mmproj file
+        if "vision_tower" in name or "vision_model" in name or "multi_modal_projector" in name or "image_newline" in name:
+            return []
+
+        # Strip model.language_model. prefix if present
+        if name.startswith("model.language_model."):
+            name = name.replace("model.language_model.", "model.")
+
+        # Use Qwen3 handling for text model tensors
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration")

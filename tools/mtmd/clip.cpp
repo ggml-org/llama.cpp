@@ -2444,6 +2444,11 @@ private:
     // aka pixel_shuffle / pixel_unshuffle / patch_merger (Kimi-VL)
     // support dynamic resolution
     ggml_tensor * build_patch_merge_permute(ggml_tensor * cur, int scale_factor) {
+        // If scale_factor is 1, no merging is needed (e.g., for R model)
+        if (scale_factor == 1) {
+            return cur;
+        }
+
         GGML_ASSERT(scale_factor > 1);
 
         const int n_embd = cur->ne[0];
