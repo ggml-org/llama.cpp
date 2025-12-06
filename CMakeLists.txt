@@ -51,7 +51,6 @@ if (GGML_TSAVORITE)
 
     include_directories($ENV{TSAVORITE_SYSROOT_INCLUDE_DIR})
     include_directories(${TSAVORITE_INCLUDE_DIR})
-    #include_directories(${MLIR_COMPILER_DIR}/include/runtime/shim)
     include_directories(${MLIR_COMPILER_DIR}/include/tsi-rt/shim)
     include_directories(${RUNTIME_DIR}/include)
     message("tsavorite backend is enabled")
