@@ -245,7 +245,7 @@ export class ChatService {
 					let capturedTimings: ChatMessageTimings | undefined;
 
 					await orchestrator.run({
-						initialMessages: processedMessages,
+						initialMessages: normalizedMessages,
 						requestTemplate: requestBody,
 						callbacks: {
 							onChunk,
