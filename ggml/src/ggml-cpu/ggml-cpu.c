@@ -2940,7 +2940,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 // check if thread is active
 static inline bool ggml_graph_compute_thread_active(struct ggml_compute_state * state) {
     struct ggml_threadpool * threadpool = state->threadpool;
-    int n_threads = atomic_load_explicit(&threadpool->n_threads_cur, memory_order_relaxed);
+    int n_threads = atomic_load_explicit(&threadpool->n_threads_cur, memory_order_acquire);
     return (state->ith < n_threads);
 }
 
@@ -2951,7 +2951,7 @@ static inline bool ggml_graph_compute_thread_ready(struct ggml_compute_state * s
     if (state->pending || threadpool->stop || threadpool->pause) { return true; }
 
     // check for new graph/work
-    int new_graph = atomic_load_explicit(&threadpool->n_graph, memory_order_relaxed);
+    int new_graph = atomic_load_explicit(&threadpool->n_graph, memory_order_acquire);
     if (new_graph != state->last_graph) {
         state->pending    = ggml_graph_compute_thread_active(state);
         state->last_graph = new_graph;
@@ -3058,7 +3058,7 @@ static void ggml_graph_compute_kickoff(struct ggml_threadpool * threadpool, int 
     GGML_PRINT_DEBUG("threadpool: n_threads_cur %d n_threads %d\n", threadpool->n_threads_cur, n_threads);
 
     // Update the number of active threads
-    atomic_store_explicit(&threadpool->n_threads_cur, n_threads, memory_order_relaxed);
+    atomic_store_explicit(&threadpool->n_threads_cur, n_threads, memory_order_release);
 
     // Indicate the graph is ready to be processed
     // We need the full seq-cst fence here because of the polling threads (used in thread_sync)
