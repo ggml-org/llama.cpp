@@ -117,6 +117,9 @@ MTMD_API bool mtmd_support_audio(mtmd_context * ctx);
 // return -1 if audio is not supported
 MTMD_API int mtmd_get_audio_bitrate(mtmd_context * ctx);
 
+// whether the current model is DeepSeek-OCR
+MTMD_API bool mtmd_is_deepseekocr(mtmd_context * ctx);
+
 // mtmd_bitmap
 //
 // if bitmap is image:
