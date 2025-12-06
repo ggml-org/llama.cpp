@@ -101,7 +101,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         try:
             if not gMe.op.toolManager:
                 raise RuntimeError("DBUG:PH:MCPToolsCall:ToolManager uninitialised")
-            resp = gMe.op.toolManager.tc_handle(oRPC["id"], oRPC["params"]["name"], oRPC["params"]["arguments"], self.headers)
+            inHeaders: Any = self.headers
+            resp = gMe.op.toolManager.tc_handle(oRPC["id"], oRPC["params"]["name"], oRPC["params"]["arguments"], inHeaders)
             if not resp.response.callOk:
                 self.send_error(resp.response.statusCode, resp.response.statusMsg)
                 return
@@ -141,13 +142,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             acGot = self.auth_check()
             if not acGot.callOk:
                 self.send_error(acGot.statusCode, acGot.statusMsg)
+                return
         pr = urllib.parse.urlparse(self.path)
         print(f"DBUG:PH:Post:{pr}")
         if pr.path != '/mcp':
             self.send_error(400, f"WARN:UnknownPath:{pr.path}")
+            return
         body = self.rfile.read(gMe.nw.maxReadBytes)
         if len(body) == gMe.nw.maxReadBytes:
             self.send_error(400, f"WARN:RequestOverflow:{pr.path}")
+            return
         self.mcp_run(body)
 
     def do_POST(self):

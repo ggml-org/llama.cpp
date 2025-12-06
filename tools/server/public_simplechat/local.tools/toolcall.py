@@ -1,11 +1,9 @@
 # Tool Call Base
 # by Humans for All
 
-from typing import Any, TypeAlias, TYPE_CHECKING
-from dataclasses import dataclass
+from typing import Any, TypeAlias
+from dataclasses import dataclass, field
 
-if TYPE_CHECKING:
-    import email.message
 
 
 #
@@ -47,8 +45,8 @@ TCInProperties: TypeAlias = dict[str, TCInProperty]
 @dataclass
 class TCInParameters():
     type: str = "object"
-    properties: TCInProperties = {}
-    required: list[str] = []
+    properties: TCInProperties = field(default_factory=dict)
+    required: list[str] = field(default_factory=list)
 
 @dataclass
 class TCFunction():
@@ -94,7 +92,8 @@ class MCPToolCallResponse:
     result: MCPTCRResult
     jsonrpc: str = "2.0"
 
-HttpHeaders: TypeAlias = dict[str, str] | email.message.Message[str, str]
+#HttpHeaders: TypeAlias = dict[str, str] | email.message.Message[str, str]
+HttpHeaders: TypeAlias = dict[str, str]
 
 
 @dataclass
