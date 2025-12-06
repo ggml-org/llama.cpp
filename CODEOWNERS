@@ -32,7 +32,7 @@
 /examples/export-docs/                  @ggerganov
 /examples/gen-docs/                     @ggerganov
 /examples/gguf/                         @ggerganov
-/examples/llama.android/                @ggerganov
+/examples/llama.android/                @ggerganov @hanyin-arm @naco-siren
 /examples/llama.swiftui/                @ggerganov
 /examples/llama.vim                     @ggerganov
 /examples/lookahead/                    @ggerganov
