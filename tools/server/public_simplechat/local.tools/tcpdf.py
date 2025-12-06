@@ -48,7 +48,7 @@ def process_pdftext(url: str, startPN: int, endPN: int):
         return mTC.TCOutResponse(False, gotVU.statusCode, gotVU.statusMsg)
     gotFile = mFile.get_file(url, "ProcessPdfText", "application/pdf", {})
     if not gotFile.callOk:
-        return mTC.TCOutResponse(False, gotFile.statusCode, gotFile.statusMsg, gotFile.contentType, gotFile.contentData)
+        return gotFile
     tPdf = ""
     oPdf = pypdf.PdfReader(io.BytesIO(gotFile.contentData))
     if (startPN <= 0):

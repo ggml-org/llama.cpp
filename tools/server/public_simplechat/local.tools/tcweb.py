@@ -42,8 +42,7 @@ def handle_urlreq(url: str, inHeaders: http.client.HTTPMessage, tag: str):
             'Accept-Language': hAL
         }
         # Get requested url
-        gotFile = mFile.get_file(url, tag, "text/html", headers)
-        return mTC.TCOutResponse(gotFile.callOk, gotFile.statusCode, gotFile.statusMsg, gotFile.contentType, gotFile.contentData)
+        return mFile.get_file(url, tag, "text/html", headers)
     except Exception as exc:
         return mTC.TCOutResponse(False, 502, f"WARN:{tag}:Failed:{exc}")
 

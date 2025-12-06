@@ -4,19 +4,8 @@
 import urllib.request
 import urllib.parse
 import debug
+import toolcall as mTC
 from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class Response:
-    """
-    Used to return result wrt urlreq helper below.
-    """
-    callOk: bool
-    statusCode: int
-    statusMsg: str = ""
-    contentType: str = ""
-    contentData: bytes = b""
 
 
 
@@ -52,9 +41,9 @@ def get_from_web(url: str, tag: str, inContentType: str, inHeaders: dict[str, st
             contentType = response.getheader('Content-Type') or inContentType
             print(f"DBUG:FM:GFW:Resp:{response.status}:{response.msg}")
             debug.dump({ 'op': 'FileMagic.GetFromWeb', 'url': req.full_url, 'req.headers': req.headers, 'resp.headers': response.headers, 'ctype': contentType }, { 'cdata': contentData })
-        return Response(True, statusCode, statusMsg, contentType, contentData)
+        return mTC.TCOutResponse(True, statusCode, statusMsg, contentType, contentData)
     except Exception as exc:
-        return Response(False, 502, f"WARN:{tag}:Failed:{exc}")
+        return mTC.TCOutResponse(False, 502, f"WARN:{tag}:Failed:{exc}")
 
 
 def get_from_local(urlParts: urllib.parse.ParseResult, tag: str, inContentType: str):
@@ -64,9 +53,9 @@ def get_from_local(urlParts: urllib.parse.ParseResult, tag: str, inContentType: 
     try:
         fPdf = open(urlParts.path, 'rb')
         dPdf = fPdf.read()
-        return Response(True, 200, "", inContentType, dPdf)
+        return mTC.TCOutResponse(True, 200, "", inContentType, dPdf)
     except Exception as exc:
-        return Response(False, 502, f"WARN:{tag}:Failed:{exc}")
+        return mTC.TCOutResponse(False, 502, f"WARN:{tag}:Failed:{exc}")
 
 
 def get_file(url: str, tag: str, inContentType: str, inHeaders: dict[str, str|None]={}):
