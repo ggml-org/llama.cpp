@@ -5,6 +5,8 @@
 
 #include "linenoise.cpp/linenoise.h"
 
+#include <clocale>
+
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
@@ -1377,6 +1379,8 @@ static void ctrl_c_handling() {
 }
 
 int main(int argc, const char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     ctrl_c_handling();
     Opt       opt;
     const int ret = opt.init(argc, argv);

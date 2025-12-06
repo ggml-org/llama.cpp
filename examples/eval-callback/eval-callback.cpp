@@ -4,6 +4,7 @@
 #include "llama.h"
 #include "ggml.h"
 
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -182,6 +183,8 @@ static bool run(llama_context * ctx, const common_params & params) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     callback_data cb_data;
 
     common_params params;
