@@ -777,11 +777,6 @@ struct vk_device_struct {
     std::unique_ptr<vk_memory_logger> memory_logger;
 #endif
 
-    // for GGML_VK_PERF_LOGGER
-    std::unique_ptr<vk_perf_logger> perf_logger;
-    vk::QueryPool query_pool;
-    int32_t num_queries;
-
     ~vk_device_struct() {
         VK_LOG_DEBUG("destroy device " << name);
 
@@ -1523,12 +1518,21 @@ private:
 #define VK_LOG_MEMORY(msg) ((void) 0)
 #endif // GGML_VULKAN_MEMORY_DEBUG
 
+static bool vk_perf_logger_enabled = false;
+// number of calls between perf logger prints
+static uint32_t vk_perf_logger_frequency = 1;
+
 class vk_perf_logger {
   public:
-    void print_timings() {
+    void print_timings(bool force = false) {
         if (timings.empty()) {
             return;
         }
+        print_count++;
+        if ((print_count % vk_perf_logger_frequency) != 0 && !force) {
+            return;
+        }
+        print_count = 0;
         uint64_t total_all_op_times = 0;
         std::cerr << "----------------\nVulkan Timings:" << std::endl;
         for (const auto & t : timings) {
@@ -1565,16 +1569,20 @@ class vk_perf_logger {
         flops.clear();
     }
 
-    void log_timing(const ggml_tensor * node, uint64_t time) {
+    void log_timing(const ggml_tensor * node, const char *fusion_name, uint64_t time) {
+        std::string fusion_str;
+        if (fusion_name) {
+            fusion_str = fusion_name + std::string(" ");
+        }
         if (node->op == GGML_OP_UNARY) {
-            timings[ggml_unary_op_name(ggml_get_unary_op(node))].push_back(time);
+            timings[fusion_str + ggml_unary_op_name(ggml_get_unary_op(node))].push_back(time);
             return;
         }
         if (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) {
-            const uint64_t m     = node->src[0]->ne[1];
-            const uint64_t n     = (node->op == GGML_OP_MUL_MAT) ? node->ne[1] : node->ne[2];
+            const uint64_t m     = node->ne[0];
+            const uint64_t n     = node->ne[1];
             const uint64_t k     = node->src[1]->ne[0];
-            const uint64_t batch = node->src[1]->ne[2] * node->src[1]->ne[3];
+            const uint64_t batch = node->ne[2] * node->ne[3];
             std::string    name  = ggml_op_name(node->op);
             if ((node->op == GGML_OP_MUL_MAT && n <= mul_mat_vec_max_cols) ||
                 (node->op == GGML_OP_MUL_MAT_ID && node->src[2]->ne[1] == 1)) {
@@ -1583,9 +1591,13 @@ class vk_perf_logger {
             name += " ";
             name += ggml_type_name(node->src[0]->type);
             name += " m=" + std::to_string(m) + " n=" + std::to_string(n) + " k=" + std::to_string(k);
+            if (node->op == GGML_OP_MUL_MAT_ID) {
+                name += " n_expert=" + std::to_string(node->src[0]->ne[2]);
+            }
             if (batch > 1) {
                 name += " batch=" + std::to_string(batch);
             }
+            name = fusion_str + name;
             timings[name].push_back(time);
             flops[name].push_back(m * n * (k + (k - 1)) * batch);
             return;
@@ -1607,6 +1619,7 @@ class vk_perf_logger {
             uint64_t      n_flops = size_M * size_N * (size_K + (size_K - 1));
             name += " M=Cout=" + std::to_string(size_M) + ", K=Cin*KW*KH=" + std::to_string(size_K) +
                     ", N=N*OW*OH=" + std::to_string(size_N);
+            name = fusion_str + name;
             flops[name].push_back(n_flops);
             timings[name].push_back(time);
             return;
@@ -1614,6 +1627,7 @@ class vk_perf_logger {
         if (node->op == GGML_OP_RMS_NORM) {
             std::string   name    = ggml_op_name(node->op);
             name += "(" + std::to_string(node->ne[0]) + "," + std::to_string(node->ne[1]) + "," + std::to_string(node->ne[2]) + "," + std::to_string(node->ne[3]) + ")";
+            name = fusion_str + name;
             timings[name].push_back(time);
             return;
         }
@@ -1624,6 +1638,7 @@ class vk_perf_logger {
             const ggml_tensor * v = node->src[2];
             const ggml_tensor * m = node->src[3];
             std::stringstream name;
+            name << fusion_str;
             name << ggml_op_name(node->op) <<
                 " dst(" << dst->ne[0] << "," << dst->ne[1] << "," << dst->ne[2] << "," << dst->ne[3] << "), " <<
                 " q(" << q->ne[0] << "," << q->ne[1] << "," << q->ne[2] << "," << q->ne[3] << "), " <<
@@ -1635,17 +1650,19 @@ class vk_perf_logger {
         }
         if (node->op == GGML_OP_TOP_K) {
             std::stringstream name;
+            name << fusion_str;
             name << ggml_op_name(node->op) <<
                 " K=" << node->ne[0] <<
                 " (" << node->src[0]->ne[0] << "," << node->src[0]->ne[1] << "," << node->src[0]->ne[2] << "," << node->src[0]->ne[3] << ")";
             timings[name.str()].push_back(time);
             return;
         }
-        timings[ggml_op_name(node->op)].push_back(time);
+        timings[fusion_str + ggml_op_name(node->op)].push_back(time);
     }
   private:
     std::map<std::string, std::vector<uint64_t>> timings;
     std::map<std::string, std::vector<uint64_t>> flops;
+    uint32_t print_count {};
 };
 
 struct ggml_backend_vk_context {
@@ -1699,6 +1716,14 @@ struct ggml_backend_vk_context {
     // Bit 'i' means nodes[start_of_fusion + i] writes to memory.
     // If there's no fusion, bit 0 is still set.
     int fused_ops_write_mask {};
+
+    // for GGML_VK_PERF_LOGGER
+    std::unique_ptr<vk_perf_logger> perf_logger;
+    vk::QueryPool query_pool;
+    std::vector<const char *> query_fusion_names;
+    std::vector<ggml_tensor *> query_nodes;
+    int32_t num_queries {};
+    int32_t query_idx {};
 };
 
 static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
@@ -1823,8 +1848,6 @@ struct vk_instance_t {
 
 static bool vk_instance_initialized = false;
 static vk_instance_t vk_instance;
-
-static bool vk_perf_logger_enabled = false;
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
 static size_t vk_skip_checks;
@@ -4205,9 +4228,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #ifdef GGML_VULKAN_MEMORY_DEBUG
         device->memory_logger = std::unique_ptr<vk_memory_logger>(new vk_memory_logger());
 #endif
-        if (vk_perf_logger_enabled) {
-            device->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
-        }
 
         size_t dev_num = vk_instance.device_indices[idx];
 
@@ -5153,6 +5173,11 @@ static void ggml_vk_instance_init() {
     }
 
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
+    const char* GGML_VK_PERF_LOGGER_FREQUENCY = getenv("GGML_VK_PERF_LOGGER_FREQUENCY");
+
+    if (GGML_VK_PERF_LOGGER_FREQUENCY != nullptr) {
+        vk_perf_logger_frequency = std::stoul(GGML_VK_PERF_LOGGER_FREQUENCY);
+    }
 
     // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
     VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_instance.instance);
@@ -5329,6 +5354,10 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
 
     ctx->compute_cmd_pool.init(ctx->device, &ctx->device->compute_queue);
     ctx->transfer_cmd_pool.init(ctx->device, &ctx->device->transfer_queue);
+
+    if (vk_perf_logger_enabled) {
+        ctx->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
+    }
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
     const char* skip_checks = getenv("GGML_VULKAN_SKIP_CHECKS");
@@ -12205,6 +12234,9 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
 
     ctx->compute_cmd_pool.destroy(ctx->device->device);
     ctx->transfer_cmd_pool.destroy(ctx->device->device);
+    if (vk_perf_logger_enabled) {
+        ctx->perf_logger->print_timings(true);
+    }
 }
 
 static int ggml_vk_get_device_count() {
@@ -13003,24 +13035,29 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     vk_context compute_ctx;
     if (vk_perf_logger_enabled) {
         // allocate/resize the query pool
-        if (ctx->device->num_queries < cgraph->n_nodes + 1) {
-            if (ctx->device->query_pool) {
-                ctx->device->device.destroyQueryPool(ctx->device->query_pool);
+        if (ctx->num_queries < cgraph->n_nodes + 1) {
+            if (ctx->query_pool) {
+                ctx->device->device.destroyQueryPool(ctx->query_pool);
             }
             vk::QueryPoolCreateInfo query_create_info;
             query_create_info.queryType = vk::QueryType::eTimestamp;
             query_create_info.queryCount = cgraph->n_nodes + 100;
-            ctx->device->query_pool = ctx->device->device.createQueryPool(query_create_info);
-            ctx->device->num_queries = query_create_info.queryCount;
+            ctx->query_pool = ctx->device->device.createQueryPool(query_create_info);
+            ctx->num_queries = query_create_info.queryCount;
+            ctx->query_fusion_names.resize(ctx->num_queries);
+            ctx->query_nodes.resize(ctx->num_queries);
         }
 
-        ctx->device->device.resetQueryPool(ctx->device->query_pool, 0, cgraph->n_nodes+1);
+        ctx->device->device.resetQueryPool(ctx->query_pool, 0, cgraph->n_nodes+1);
+        std::fill(ctx->query_fusion_names.begin(), ctx->query_fusion_names.end(), nullptr);
+        std::fill(ctx->query_nodes.begin(), ctx->query_nodes.end(), nullptr);
 
         GGML_ASSERT(ctx->compute_ctx.expired());
         compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
         ctx->compute_ctx = compute_ctx;
         ggml_vk_ctx_begin(ctx->device, compute_ctx);
-        compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, 0);
+        ctx->query_idx = 0;
+        compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->query_pool, ctx->query_idx++);
     }
 
     ctx->prealloc_y_last_pipeline_used = nullptr;
@@ -13061,52 +13098,66 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             total_mul_mat_bytes += bytes;
         }
 
+        const char *fusion_string {};
         if (!ctx->device->disable_fusion) {
             uint32_t num_adds = ggml_vk_fuse_multi_add(ctx, cgraph, i);
             if (num_adds) {
                 ctx->num_additional_fused_ops = num_adds - 1;
+                fusion_string = "MULTI_ADD";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD, GGML_OP_ADD })) {
                 ctx->num_additional_fused_ops = 2;
+                fusion_string = "MUL_MAT_ADD_ADD";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
                 ctx->num_additional_fused_ops = 1;
+                fusion_string = "MUL_MAT_ADD";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID, GGML_OP_MUL })) {
                 ctx->num_additional_fused_ops = 2;
+                fusion_string = "MUL_MAT_ID_ADD_ID_MUL";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID })) {
                 ctx->num_additional_fused_ops = 1;
+                fusion_string = "MUL_MAT_ID_ADD_ID";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_MUL })) {
                 ctx->num_additional_fused_ops = 1;
+                fusion_string = "MUL_MAT_ID_MUL";
             } else if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, { i + 4 }) &&
                        ggml_check_edges(cgraph, i, rms_norm_mul_rope_view_set_rows_edges) &&
                        ggml_vk_can_fuse_rms_norm_mul_rope(ctx, cgraph, i) &&
                        ggml_vk_can_fuse_rope_set_rows(ctx, cgraph, i + 2)) {
                 ctx->num_additional_fused_ops = 4;
+                fusion_string = "RMS_NORM_MUL_ROPE_VIEW_SET_ROWS";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE })&&
                        ggml_vk_can_fuse_rms_norm_mul_rope(ctx, cgraph, i)) {
                 ctx->num_additional_fused_ops = 2;
+                fusion_string = "RMS_NORM_MUL_ROPE";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
                 ctx->num_additional_fused_ops = 1;
+                fusion_string = "RMS_NORM_MUL";
             } else if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, { i + 2 }) &&
                        ggml_check_edges(cgraph, i, rope_view_set_rows_edges) &&
                        ggml_vk_can_fuse_rope_set_rows(ctx, cgraph, i)) {
                 ctx->num_additional_fused_ops = 2;
+                fusion_string = "ROPE_VIEW_SET_ROWS";
             } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_early_softmax_norm, { i + 3, i + 9 }) &&
                        ggml_check_edges(cgraph, i, topk_moe_early_softmax_norm_edges) &&
                        ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_EARLY_SOFTMAX_NORM)) {
                 ctx->num_additional_fused_ops = topk_moe_early_softmax_norm.size() - 1;
                 // view of argsort writes to memory
                 ctx->fused_ops_write_mask |= 1 << 3;
+                fusion_string = "TOPK_MOE_EARLY_SOFTMAX_NORM";
             } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_early_softmax, { i + 3, i + 4 }) &&
                        ggml_check_edges(cgraph, i, topk_moe_early_softmax_edges) &&
                        ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_EARLY_SOFTMAX)) {
                 ctx->num_additional_fused_ops = topk_moe_early_softmax.size() - 1;
                 // view of argsort writes to memory
                 ctx->fused_ops_write_mask |= 1 << 3;
+                fusion_string = "TOPK_MOE_EARLY_SOFTMAX";
             } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_late_softmax, { i + 1, i + 5 }) &&
                        ggml_check_edges(cgraph, i, topk_moe_late_softmax_edges) &&
                        ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_LATE_SOFTMAX)) {
                 ctx->num_additional_fused_ops = topk_moe_late_softmax.size() - 1;
                 // view of argsort writes to memory
                 ctx->fused_ops_write_mask |= 1 << 1;
+                fusion_string = "TOPK_MOE_LATE_SOFTMAX";
             }
         }
         ctx->fused_ops_write_mask |= 1 << ctx->num_additional_fused_ops;
@@ -13120,7 +13171,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         bool enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, i + ctx->num_additional_fused_ops >= last_node, almost_ready, submit);
 
-        if (vk_perf_logger_enabled) {
+        if (vk_perf_logger_enabled && enqueued) {
             if (ctx->compute_ctx.expired()) {
                 compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
                 ctx->compute_ctx = compute_ctx;
@@ -13128,10 +13179,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             } else {
                 compute_ctx = ctx->compute_ctx.lock();
             }
-            // If there are fused ops, just write out timestamps for all nodes to keep the accounting simple
-            for (int j = 0; j < ctx->num_additional_fused_ops + 1; ++j) {
-                compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, i+j+1);
-            }
+            ctx->query_nodes[ctx->query_idx] = cgraph->nodes[i];
+            ctx->query_fusion_names[ctx->query_idx] = fusion_string;
+            compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->query_pool, ctx->query_idx++);
         }
 
         if (enqueued) {
@@ -13172,14 +13222,14 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         // Get the results and pass them to the logger
         std::vector<uint64_t> timestamps(cgraph->n_nodes + 1);
-        VK_CHECK(ctx->device->device.getQueryPoolResults(ctx->device->query_pool, 0, cgraph->n_nodes + 1, (cgraph->n_nodes + 1)*sizeof(uint64_t), timestamps.data(), sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait), "get timestamp results");
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            if (!ggml_vk_is_empty(cgraph->nodes[i])) {
-                ctx->device->perf_logger->log_timing(cgraph->nodes[i], uint64_t((timestamps[i+1] - timestamps[i]) * ctx->device->properties.limits.timestampPeriod));
-            }
+        VK_CHECK(ctx->device->device.getQueryPoolResults(ctx->query_pool, 0, ctx->query_idx, (cgraph->n_nodes + 1)*sizeof(uint64_t), timestamps.data(), sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait), "get timestamp results");
+        for (int i = 1; i < ctx->query_idx; i++) {
+            auto node = ctx->query_nodes[i];
+            auto name = ctx->query_fusion_names[i];
+            ctx->perf_logger->log_timing(node, name, uint64_t((timestamps[i] - timestamps[i-1]) * ctx->device->properties.limits.timestampPeriod));
         }
 
-        ctx->device->perf_logger->print_timings();
+        ctx->perf_logger->print_timings();
     }
 
     if (!ctx->device->support_async) {
