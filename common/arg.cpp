@@ -20,6 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cinttypes>
 #include <climits>
 #include <cstdarg>
 #include <fstream>
@@ -452,7 +453,9 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.kv_overrides.back().key[0] = 0;
     }
 
-    if (!params.tensor_buft_overrides.empty()) {
+    // pad tensor_buft_overrides for llama_params_fit:
+    const size_t ntbo = llama_max_tensor_buft_overrides();
+    while (params.tensor_buft_overrides.size() < ntbo) {
         params.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
@@ -2025,6 +2028,34 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_MAIN_GPU"));
+    add_opt(common_arg(
+        { "-fit", "--fit" }, "[on|off]",
+        string_format("whether to adjust unset arguments to fit in device memory ('on' or 'off', default: '%s')", params.fit_params ? "on" : "off"),
+        [](common_params & params, const std::string & value) {
+            if (is_truthy(value)) {
+                params.fit_params = true;
+            } else if (is_falsey(value)) {
+                params.fit_params = false;
+            } else {
+                throw std::runtime_error(
+                    string_format("error: unkown value for --fit: '%s'\n", value.c_str()));
+            }
+        }
+    ).set_env("LLAMA_ARG_FIT"));
+    add_opt(common_arg(
+        { "-fitm", "--fit-margin" }, "MiB",
+        string_format("target margin per device for --fit option, default: %zu", params.fit_params_margin/(1024*1024)),
+        [](common_params & params, int value) {
+            params.fit_params_margin = value * size_t(1024*1024);
+        }
+    ).set_env("LLAMA_ARG_FIT_MARGIN"));
+    add_opt(common_arg(
+        { "-fitc", "--fit-ctx" }, "N",
+        string_format("minimum ctx size that can be set by --fit option, default: %" PRIu32, params.fit_params_min_ctx),
+        [](common_params & params, int value) {
+            params.fit_params_min_ctx = value;
+        }
+    ).set_env("LLAMA_ARG_FIT_CTX"));
     add_opt(common_arg(
         {"--check-tensors"},
         string_format("check model tensor data for invalid values (default: %s)", params.check_tensors ? "true" : "false"),
