@@ -1386,7 +1386,7 @@ void llama_context::output_reorder() {
 // graph
 //
 
-uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) {
+uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     if (model.arch == LLM_ARCH_QWEN3NEXT) {
         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
     }
