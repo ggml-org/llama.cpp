@@ -701,13 +701,17 @@ class ChatStore {
 
 		if (!activeConv) return;
 
-		await this.savePartialResponseIfNeeded(activeConv.id);
+		await this.stopGenerationForChat(activeConv.id);
+	}
+
+	async stopGenerationForChat(convId: string): Promise<void> {
+		await this.savePartialResponseIfNeeded(convId);
 
 		this.stopStreaming();
-		this.abortRequest(activeConv.id);
-		this.setChatLoading(activeConv.id, false);
-		this.clearChatStreaming(activeConv.id);
-		this.clearProcessingState(activeConv.id);
+		this.abortRequest(convId);
+		this.setChatLoading(convId, false);
+		this.clearChatStreaming(convId);
+		this.clearProcessingState(convId);
 	}
 
 	/**
