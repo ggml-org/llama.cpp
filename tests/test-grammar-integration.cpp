@@ -485,17 +485,22 @@ static void test_simple_grammar() {
         "simple grammar with tokens",
         R"""(
             root ::= <[10]> content <[11]>
-            content ::= !<[10]>*)""",
+            content ::= (!<[11]>)*)""",
         // Passing strings
         {
-            token(10) + "content goes here" + token(11),
-            token(10) + "content goes here" + token(12) + ", optionally other tokens too" + token(11),
+            token(10) + "hello world" + token(11),
+            token(10) + "text with " + token(12) + " other tokens " + token(13) + " mixed in" + token(11),
             token(10) + token(11),
+            token(10) + token(12) + token(13) + token(14) + token(15) + token(11),
+            token(10) + "a" + token(11),
         },
         // Failing strings
         {
-            token(10) + "content goes here",
+            token(10) + "missing end token",
             token(10),
+            "missing start token" + token(11),
+            token(10) + token(11) + token(11),  // double end token
+            token(11) + "wrong order" + token(10),
         }
     );
 }
@@ -564,17 +569,27 @@ static void test_complex_grammar() {
     test_grammar(
         "complex grammar with tokens",
         R"""(
-            root ::= reasoning content tool-call
-            reasoning ::= <[10]> !<[10]>* <[11]>
-            content ::= !<[12]>*
-            tool-call ::= <[12]> .*)""",
+            root ::= reasoning+ content tool-call*
+            reasoning ::= <[10]> (!<[11]>)* <[11]>
+            content ::= <[20]> (!<[21]>)* <[21]>
+            tool-call ::= <[12]> name <[13]> args <[14]>
+            name ::= (!<[13]>)+
+            args ::= (!<[14]>)*)""",
         // Passing strings
         {
-            token(10) + "I am thinking" + token(11) + "hello!" + token(12) + "... tool call ...",
+            token(10) + "I am thinking" + token(11) + token(20) + "hello world!" + token(21) + token(12) + "search" + token(13) + "query=test" + token(14),
+            token(10) + "reasoning 1" + token(11) + token(10) + "reasoning 2" + token(11) + token(20) + token(21) + token(12) + "tool" + token(13) + token(14),
+            token(10) + token(11) + token(20) + "content" + token(21),
+            token(10) + "think" + token(12) + " nested" + token(11) + token(20) + token(10) + "more content" + token(21) + token(12) + "fn" + token(13) + "x=1,y=2" + token(14) + token(12) + "fn2" + token(13) + token(14),
+            token(10) + "reasoning" + token(11) + token(10) + "more" + token(11) + token(10) + "even more" + token(11) + token(20) + "text" + token(21) + token(12) + "a" + token(13) + "b" + token(14) + token(12) + "c" + token(13) + "d" + token(14),
         },
         // Failing strings
         {
-            "hello",
+            token(20) + "content only" + token(21),
+            token(10) + "no closing reasoning",
+            token(10) + token(11) + token(20) + "no closing content",
+            token(10) + token(11) + token(20) + token(21) + token(12) + "incomplete tool",
+            token(10) + token(11) + token(11) + token(20) + token(21),
         }
     );
 }
