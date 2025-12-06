@@ -5700,6 +5700,121 @@ struct test_pad_reflect_1d : public test_case {
     }
 };
 
+// GGML_OP_WIN_PART
+struct test_win_part : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne_a;  // [C, W, H, B]
+    const int w;  // window size
+    const bool v; // view (non-contiguous input)
+
+    std::string vars() override {
+        return VARS_TO_STR4(type, ne_a, w, v);
+    }
+
+    test_win_part(ggml_type type = GGML_TYPE_F32,
+                  std::array<int64_t, 4> ne_a = {64, 14, 14, 2},
+                  int w = 7,
+                  bool v = false)
+        : type(type), ne_a(ne_a), w(w), v(v) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a;
+        if (v) {
+            auto ne = ne_a; ne[0] *= 2; ne[1] *= 2;
+            a = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(a, "a");
+
+            a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3],
+                            a->nb[1], a->nb[2], a->nb[3], 0);
+            ggml_set_name(a, "view_of_a");
+        } else {
+            a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+            ggml_set_name(a, "a");
+        }
+
+        ggml_tensor * out = ggml_win_part(ctx, a, w);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
+// GGML_OP_WIN_UNPART
+struct test_win_unpart : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne_a;  // [C, w, w, NPX*NPY*B]
+    const int w0;  // output width
+    const int h0;  // output height
+    const int w;   // window size
+
+    std::string vars() override {
+        return VARS_TO_STR5(type, ne_a, w0, h0, w);
+    }
+
+    test_win_unpart(ggml_type type = GGML_TYPE_F32,
+                    std::array<int64_t, 4> ne_a = {64, 7, 7, 8},
+                    int w0 = 14, int h0 = 14,
+                    int w = 7)
+        : type(type), ne_a(ne_a), w0(w0), h0(h0), w(w) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_win_unpart(ctx, a, w0, h0, w);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
+// GGML_OP_GET_REL_POS
+struct test_get_rel_pos : public test_case {
+    const ggml_type type;
+    const int C;   // channels
+    const int qh;  // query height
+    const int kh;  // key height
+    const bool v;  // view (non-contiguous input)
+
+    std::string vars() override {
+        return VARS_TO_STR5(type, C, qh, kh, v);
+    }
+
+    test_get_rel_pos(ggml_type type = GGML_TYPE_F32,
+                     int C = 64,
+                     int qh = 7,
+                     int kh = 7,
+                     bool v = false)
+        : type(type), C(C), qh(qh), kh(kh), v(v) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // Input tensor has relative position embeddings table
+        // Shape: [C, 2*max(qh,kh)-1, 1, 1]
+        const int64_t ne_a[4] = {C, 2*std::max(qh, kh) - 1, 1, 1};
+
+        ggml_tensor * a;
+        if (v) {
+            // Create larger tensor and view into it (non-contiguous)
+            int64_t ne_large[4] = {C * 2, 2*std::max(qh, kh) - 1, 1, 1};
+            a = ggml_new_tensor(ctx, type, 4, ne_large);
+            ggml_set_name(a, "a");
+
+            a = ggml_view_4d(ctx, a, C, 2*std::max(qh, kh) - 1, 1, 1,
+                            a->nb[1], a->nb[2], a->nb[3], 0);
+            ggml_set_name(a, "view_of_a");
+        } else {
+            a = ggml_new_tensor(ctx, type, 4, ne_a);
+            ggml_set_name(a, "a");
+        }
+
+        // Output shape: [C, kh, qh, 1]
+        ggml_tensor * out = ggml_get_rel_pos(ctx, a, qh, kh);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_ROLL
 struct test_roll : public test_case {
     const int shift0;
@@ -7793,6 +7908,53 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad_ext());
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
+
+    // Window partition tests
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+        for (bool v : {false, true}) {
+            // Exact division: 14x14 -> 2x2 windows of 7x7
+            test_cases.emplace_back(new test_win_part(type, {64, 14, 14, 2}, 7, v));
+            // With padding: 15x15 -> 3x3 windows of 7x7 (padded)
+            test_cases.emplace_back(new test_win_part(type, {64, 15, 15, 2}, 7, v));
+            // Single window: 7x7 -> 1x1 windows of 7x7
+            test_cases.emplace_back(new test_win_part(type, {64, 7, 7, 1}, 7, v));
+            // Larger: 28x28 -> 4x4 windows of 7x7
+            test_cases.emplace_back(new test_win_part(type, {128, 28, 28, 4}, 7, v));
+            // Window size 8: 16x16 -> 2x2 windows of 8x8
+            test_cases.emplace_back(new test_win_part(type, {96, 16, 16, 1}, 8, v));
+        }
+    }
+
+    // Window unpartition tests (inverse of partition)
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+        // Exact division: 2x2 windows of 7x7 -> 14x14
+        test_cases.emplace_back(new test_win_unpart(type, {64, 7, 7, 4}, 14, 14, 7));
+        // With padding: 3x3 windows of 7x7 -> 15x15
+        test_cases.emplace_back(new test_win_unpart(type, {64, 7, 7, 9}, 15, 15, 7));
+        // Single window: 1x1 windows of 7x7 -> 7x7
+        test_cases.emplace_back(new test_win_unpart(type, {64, 7, 7, 1}, 7, 7, 7));
+        // Larger: 4x4 windows of 7x7 -> 28x28
+        test_cases.emplace_back(new test_win_unpart(type, {128, 7, 7, 16}, 28, 28, 7));
+        // Window size 8: 2x2 windows of 8x8 -> 16x16
+        test_cases.emplace_back(new test_win_unpart(type, {96, 8, 8, 4}, 16, 16, 8));
+    }
+
+    // Relative position embedding tests (used in SAM)
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+        for (bool v : {false, true}) {
+            // Square small: 3x3 attention
+            test_cases.emplace_back(new test_get_rel_pos(type, 5, 3, 3, v));
+            // Square medium: 7x7 attention (typical SAM)
+            test_cases.emplace_back(new test_get_rel_pos(type, 13, 7, 7, v));
+            // Square large: 14x14 attention
+            test_cases.emplace_back(new test_get_rel_pos(type, 27, 14, 14, v));
+            // Rectangular: 14x7 attention
+            test_cases.emplace_back(new test_get_rel_pos(type, 27, 14, 7, v));
+            // Edge case: 1x1 attention (minimum)
+            test_cases.emplace_back(new test_get_rel_pos(type, 1, 1, 1, v));
+        }
+    }
+
     test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 0.0f, 1048576.0f, 1.0f));
