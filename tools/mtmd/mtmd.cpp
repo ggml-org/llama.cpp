@@ -152,7 +152,7 @@ struct mtmd_context {
     std::string sli_img_start_tmpl;
 
     // for whisper, we pre-calculate the mel filter bank
-    whisper_preprocessor::whisper_filters w_filters;
+    whisper_preprocessor::whisper_filter_params w_filters;
 
     // TODO @ngxson : add timings
 
@@ -317,24 +317,44 @@ struct mtmd_context {
         GGML_ASSERT(ctx_a != nullptr);
         projector_type proj = clip_get_projector_type(ctx_a);
 
-        if (clip_has_whisper_encoder(ctx_a)) {
-            // TODO @ngxson : check if model n_mel is 128 or 80
-            w_filters = whisper_precalc_filters::get_128_bins();
-        }
+        using whisper_precalc_filters::get_whisper_params;
+
+        switch (proj) {
+            case PROJECTOR_TYPE_ULTRAVOX:
+                {
+                    // [BEGIN_AUDIO] ... (embeddings) ...
+                    aud_beg = "[BEGIN_AUDIO]";
+                    // TODO @ngxson : check if model n_mel is 128 or 80
+                    w_filters = get_whisper_params(128, 400, 400, 160, mtmd_get_audio_bitrate(this));
+                } break;
+            case PROJECTOR_TYPE_QWEN2A:
+                {
+                    // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
+                    aud_beg = "<|audio_bos|>";
+                    aud_end = "<|audio_eos|>";
+                    w_filters = get_whisper_params(128, 400, 400, 160, mtmd_get_audio_bitrate(this));
+                } break;
+            case PROJECTOR_TYPE_VOXTRAL:
+                {
+                    w_filters = get_whisper_params(128, 400, 400, 160, mtmd_get_audio_bitrate(this));
+                } break;
+            case PROJECTOR_TYPE_LFM2A:
+                {
+                    w_filters = get_whisper_params(128, 512, 400, 160, mtmd_get_audio_bitrate(this));
+                    w_filters.preemph = 0.97f;
+                    w_filters.use_natural_log = true;
+                    w_filters.center_padding = true;
+                    w_filters.normalize_per_feature = true;
+                    w_filters.need_chunking = false;
+                } break;
+            default:
+                {
+                    //
+                } break;
+        };
 
         LOG_WRN("%s: audio input is in experimental stage and may have reduced quality:\n"
                 "    https://github.com/ggml-org/llama.cpp/discussions/13759\n", __func__);
-
-        if (proj == PROJECTOR_TYPE_QWEN2A) {
-            // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
-            aud_beg = "<|audio_bos|>";
-            aud_end = "<|audio_eos|>";
-
-        } else if (proj == PROJECTOR_TYPE_ULTRAVOX) {
-            // [BEGIN_AUDIO] ... (embeddings) ...
-            aud_beg = "[BEGIN_AUDIO]";
-
-        }
     }
 
     // get clip ctx based on chunk type

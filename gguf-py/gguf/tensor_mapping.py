@@ -1124,18 +1124,26 @@ class TensorNameMap:
 
         MODEL_TENSOR.CONVNEXT_DW: (
             "backbone.convnext.{bid}.dwconv", # wavtokenizer
+            "conformer.layers.{bid}.conv.depthwise_conv", # lfm2
         ),
 
         MODEL_TENSOR.CONVNEXT_NORM: (
             "backbone.convnext.{bid}.norm", # wavtokenizer
+            "conformer.layers.{bid}.conv.batch_norm", #lfm2
         ),
 
         MODEL_TENSOR.CONVNEXT_PW1: (
             "backbone.convnext.{bid}.pwconv1", # wavtokenizer
+            "conformer.layers.{bid}.conv.pointwise_conv1", # lfm2
         ),
 
         MODEL_TENSOR.CONVNEXT_PW2: (
             "backbone.convnext.{bid}.pwconv2", # wavtokenizer
+            "conformer.layers.{bid}.conv.pointwise_conv2", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_NORM_CONV: (
+            "conformer.layers.{bid}.norm_conv", # lfm2
         ),
 
         MODEL_TENSOR.CONVNEXT_GAMMA: (
@@ -1513,10 +1521,20 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_EMBD_POS: (
             "audio_tower.embed_positions", # ultravox
+            "audio_embedding.embedding", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_EMBD_NORM: (
+            "audio_embedding.embedding_norm", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS: (
+            "audio_embedding.to_logits", # lfm2
         ),
 
         MODEL_TENSOR.A_ENC_CONV1D: (
             "audio_tower.conv{bid}", # ultravox
+            "conformer.pre_encode.conv.{bid}", # lfm2
         ),
 
         MODEL_TENSOR.A_PRE_NORM: (),
@@ -1528,36 +1546,76 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_ATTN_Q: (
             "audio_tower.layers.{bid}.self_attn.q_proj", # ultravox
+            "conformer.layers.{bid}.self_attn.linear_q", # lfm2
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K: (
             "audio_tower.layers.{bid}.self_attn.k_proj", # ultravox
+            "conformer.layers.{bid}.self_attn.linear_k", # lfm2
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_V: (
             "audio_tower.layers.{bid}.self_attn.v_proj", # ultravox
+            "conformer.layers.{bid}.self_attn.linear_v", # lfm2
         ),
 
         MODEL_TENSOR.A_ENC_INPUT_NORM: (
             "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
+            "conformer.layers.{bid}.norm_self_att", # lfm2
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT: (
             "audio_tower.layers.{bid}.self_attn.out_proj", # ultravox
+            "conformer.layers.{bid}.self_attn.linear_out", # lfm2
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
             "audio_tower.layers.{bid}.final_layer_norm", # ultravox
+            "conformer.layers.{bid}.norm_out", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_NORM: (
+            "conformer.layers.{bid}.norm_feed_forward1", # lfm2
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP: (
             "audio_tower.layers.{bid}.fc1", # ultravox
+            "conformer.layers.{bid}.feed_forward1.linear1", # lfm2
         ),
 
         MODEL_TENSOR.A_ENC_FFN_GATE: (),
 
         MODEL_TENSOR.A_ENC_FFN_DOWN: (
             "audio_tower.layers.{bid}.fc2", # ultravox
+            "conformer.layers.{bid}.feed_forward1.linear2", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_UP_1: (
+            "conformer.layers.{bid}.feed_forward2.linear1", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_DOWN_1: (
+            "conformer.layers.{bid}.feed_forward2.linear2", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_NORM_1: (
+            "conformer.layers.{bid}.norm_feed_forward2", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_LINEAR_POS: (
+            "conformer.layers.{bid}.self_attn.linear_pos", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_POS_BIAS_U: (
+            "conformer.layers.{bid}.self_attn.pos_bias_u", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_POS_BIAS_V: (
+            "conformer.layers.{bid}.self_attn.pos_bias_v", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_OUT: (
+            "conformer.pre_encode.out", # lfm2
         ),
 
         # note: some tensors below has "audio." pseudo-prefix, to prevent conflicts with vision tensors
@@ -1565,6 +1623,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_MMPROJ: (
             "audio.multi_modal_projector.linear_{bid}", # ultravox
+            "audio_adapter.model.{bid}" # lfm2
         ),
 
         MODEL_TENSOR.A_MMPROJ_FC: (

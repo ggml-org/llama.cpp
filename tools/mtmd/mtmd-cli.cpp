@@ -210,7 +210,7 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
     return 0;
 }
 
-static std::string chat_add_and_format(mtmd_cli_context & ctx, common_chat_msg & new_msg) {
+static std::string chat_add_and_format(mtmd_cli_context & ctx, const common_chat_msg & new_msg) {
     LOG_DBG("chat_add_and_format: new_msg.role='%s', new_msg.content='%s'\n",
         new_msg.role.c_str(), new_msg.content.c_str());
     auto formatted = common_chat_format_single(ctx.tmpls.get(), ctx.chat_history,
@@ -309,6 +309,15 @@ int main(int argc, char ** argv) {
     }
 
     if (g_is_interrupted) return 130;
+
+    if (!params.system_prompt.empty()) {
+        common_chat_msg msg;
+        msg.role = "system";
+        msg.content = params.system_prompt;
+        if (eval_message(ctx, msg)) {
+            return 1;
+        }
+    }
 
     if (is_single_turn) {
         g_is_generating = true;

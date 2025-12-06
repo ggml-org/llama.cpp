@@ -129,6 +129,17 @@
 #define TN_TOK_BOI         "v.boi"
 #define TN_TOK_EOI         "v.eoi"
 
+// lfm2
+#define TN_PRE_ENCODE_OUT  "a.pre_encode.out.%s"
+#define TN_FFN_NORM        "%s.blk.%d.ffn_norm.%s"
+#define TN_FFN_NORM_1      "%s.blk.%d.ffn_norm_1.%s"
+#define TN_FFN_UP_1        "%s.blk.%d.ffn_up_1.%s"
+#define TN_FFN_DOWN_1      "%s.blk.%d.ffn_down_1.%s"
+#define TN_POS_BIAS_U      "%s.blk.%d.pos_bias_u"
+#define TN_POS_BIAS_V      "%s.blk.%d.pos_bias_v"
+#define TN_NORM_CONV       "%s.blk.%d.norm_conv.%s"
+#define TN_LINEAR_POS      "%s.blk.%d.linear_pos.%s"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
@@ -152,6 +163,7 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
     PROJECTOR_TYPE_VOXTRAL,
     PROJECTOR_TYPE_LFM2,
+    PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_COGVLM,
@@ -178,6 +190,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN25O,   "qwen2.5o"},
     { PROJECTOR_TYPE_VOXTRAL,   "voxtral"},
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
+    { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},

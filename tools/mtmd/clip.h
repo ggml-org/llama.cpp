@@ -56,7 +56,7 @@ int32_t clip_get_hidden_size(const struct clip_ctx * ctx);
 // TODO: should be enum, not string
 const char * clip_patch_merge_type(const struct clip_ctx * ctx);
 
-int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * img);
+int clip_n_output_tokens(const struct clip_ctx * ctx, const struct clip_image_f32 * img);
 
 // for M-RoPE, this will be the number of token positions in X and Y directions
 // for other models, X will be the total number of tokens and Y will be 1
@@ -113,4 +113,3 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
 bool clip_has_vision_encoder(const struct clip_ctx * ctx);
 bool clip_has_audio_encoder(const struct clip_ctx * ctx);
-bool clip_has_whisper_encoder(const struct clip_ctx * ctx);
