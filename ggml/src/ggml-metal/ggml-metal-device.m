@@ -574,22 +574,26 @@ ggml_metal_rsets_t ggml_metal_rsets_init(void) {
     // the requests stop after a certain amount of time (keep_alive_s) of inactivity
     dispatch_queue_t d_queue = dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0);
     dispatch_group_async(res->d_group, d_queue, ^{
-          while (!atomic_load_explicit(&res->d_stop, memory_order_relaxed)) {
-              if (atomic_load_explicit(&res->d_loop, memory_order_relaxed) > 0) {
-                  [res->lock lock];
+#if defined(GGML_METAL_HAS_RESIDENCY_SETS)
+        if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
+              while (!atomic_load_explicit(&res->d_stop, memory_order_relaxed)) {
+                  if (atomic_load_explicit(&res->d_loop, memory_order_relaxed) > 0) {
+                      [res->lock lock];
 
-                  for (int i = 0; i < (int) res->data.count; ++i) {
-                      [res->data[i] requestResidency];
+                      for (int i = 0; i < (int) res->data.count; ++i) {
+                          [res->data[i] requestResidency];
+                      }
+
+                      atomic_fetch_sub_explicit(&res->d_loop, 1, memory_order_relaxed);
+
+                      [res->lock unlock];
                   }
 
-                  atomic_fetch_sub_explicit(&res->d_loop, 1, memory_order_relaxed);
-
-                  [res->lock unlock];
+                  // half a second
+                  usleep(500 * 1000);
               }
-
-              // half a second
-              usleep(500 * 1000);
-          }
+        }
+#endif
     });
 
     return res;
@@ -600,6 +604,7 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
         return;
     }
 
+    // note: if you hit this assert, most likely you haven't deallocated all Metal resources before exiting
     GGML_ASSERT([rsets->data count] == 0);
 
     atomic_store_explicit(&rsets->d_stop, true, memory_order_relaxed);
@@ -786,9 +791,6 @@ ggml_metal_device_t ggml_metal_device_init(void) {
             } else {
                 dev->rsets = nil;
             }
-
-
-            // --------------------------------------------------
 
             // print MTL GPU family:
             GGML_LOG_INFO("%s: GPU name:   %s\n", __func__, dev->props.name);
