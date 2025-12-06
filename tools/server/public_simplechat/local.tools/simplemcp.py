@@ -137,9 +137,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         """
         print(f"DBUG:PH:Post:{self.address_string()}:{self.path}")
         print(f"DBUG:PH:Post:Headers:{self.headers}")
-        acGot = self.auth_check()
-        if not acGot.callOk:
-            self.send_error(acGot.statusCode, acGot.statusMsg)
+        if gMe.op.sslContext or gMe.sec.bAuthAlways:
+            acGot = self.auth_check()
+            if not acGot.callOk:
+                self.send_error(acGot.statusCode, acGot.statusMsg)
         pr = urllib.parse.urlparse(self.path)
         print(f"DBUG:PH:Post:{pr}")
         if pr.path != '/mcp':

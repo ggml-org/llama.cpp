@@ -43,6 +43,7 @@ class Sec(DictyDataclassMixin):
     certFile: str = ""
     keyFile: str = ""
     bearerAuth: str = ""
+    bAuthAlways: bool = True
 
 
 @dataclass
