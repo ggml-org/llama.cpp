@@ -4440,17 +4440,14 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
 
                 // TODO: The configuration below needs more work to be supported with oneDNN
                 if (ggml_is_permuted(a) && !ggml_is_contiguous(a) &&
-                    a->ne[2] > 1 && a->ne[3] > 1 &&
-                    src0_type == GGML_TYPE_F16) {
+                    a->ne[2] > 1 && a->ne[3] > 1 && src0_type == GGML_TYPE_F16) {
                   return false;
                 }
 
-                // With oneMKL: return true (as default)
-                // With oneDNN: return false
                 // TODO: This specific configuration can fail with oneDNN and needs more debugging
                 if (!ggml_is_permuted(a) && ggml_is_permuted(b) && b->ne[2] > 1 && b->ne[3] > 1 &&
                     a->ne[0] > 128 && a->ne[2] == 1 && src0_type == GGML_TYPE_F16) {
-                    return true;
+                    return false;
                 }
                 return true;
             }
