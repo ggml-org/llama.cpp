@@ -4,10 +4,9 @@
 import urllib.parse
 import urlvalidator as uv
 import filemagic as mFile
+import toolcall as mTC
+import http.client
 from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from simpleproxy import ProxyHandler
 
 
 PDFOUTLINE_MAXDEPTH=4
@@ -44,12 +43,12 @@ def process_pdftext(url: str, startPN: int, endPN: int):
     """
     import pypdf
     import io
-    gotVU = uv.validate_url(url, "HandlePdfText")
+    gotVU = uv.validate_url(url, "ProcessPdfText")
     if not gotVU.callOk:
-        return { 'status': gotVU.statusCode, 'msg': gotVU.statusMsg }
+        return mTC.TCOutResponse(False, gotVU.statusCode, gotVU.statusMsg)
     gotFile = mFile.get_file(url, "ProcessPdfText", "application/pdf", {})
     if not gotFile.callOk:
-        return { 'status': gotFile.statusCode, 'msg': gotFile.statusMsg, 'data': gotFile.contentData}
+        return mTC.TCOutResponse(False, gotFile.statusCode, gotFile.statusMsg, gotFile.contentType, gotFile.contentData)
     tPdf = ""
     oPdf = pypdf.PdfReader(io.BytesIO(gotFile.contentData))
     if (startPN <= 0):
@@ -64,31 +63,45 @@ def process_pdftext(url: str, startPN: int, endPN: int):
     for i in range(startPN, endPN+1):
         pd = oPdf.pages[i-1]
         tPdf = tPdf + pd.extract_text()
-    return { 'status': 200, 'msg': "PdfText Response follows", 'data': tPdf }
+    return mTC.TCOutResponse(True, 200, "PdfText Response follows", "text/text", tPdf.encode('utf-8'))
 
 
-def handle_pdftext(ph: 'ProxyHandler', pr: urllib.parse.ParseResult):
-    """
-    Handle requests to pdftext path, which is used to extract plain text
-    from the specified pdf file.
-    """
-    queryParams = urllib.parse.parse_qs(pr.query)
-    url = queryParams['url'][0]
-    startP = queryParams.get('startPageNumber', -1)
-    if isinstance(startP, list):
-        startP = int(startP[0])
-    endP = queryParams.get('endPageNumber', -1)
-    if isinstance(endP, list):
-        endP = int(endP[0])
-    print(f"INFO:HandlePdfText:Processing:{url}:{startP}:{endP}...")
-    gotP2T = process_pdftext(url, startP, endP)
-    if (gotP2T['status'] != 200):
-        ph.send_error(gotP2T['status'], gotP2T['msg'] )
-        return
-    ph.send_response(gotP2T['status'], gotP2T['msg'])
-    ph.send_header('Content-Type', 'text/text')
-    # Add CORS for browser fetch, just in case
-    ph.send_header('Access-Control-Allow-Origin', '*')
-    ph.end_headers()
-    print(f"INFO:HandlePdfText:ExtractedText:{url}...")
-    ph.wfile.write(gotP2T['data'].encode('utf-8'))
+class TCPdfText(mTC.ToolCall):
+
+    def tcf_meta(self) -> mTC.TCFunction:
+        return mTC.TCFunction(
+            self.name,
+            "Fetch pdf from requested local file path / web url through a proxy server and return its text content after converting pdf to text, in few seconds. One is allowed to get a part of the pdf by specifying the starting and ending page numbers",
+            mTC.TCInParameters(
+                "object",
+                {
+                    "url": mTC.TCInProperty(
+                        "string",
+                        "local file path (file://) / web (http/https) based url of the pdf that will be got and inturn converted to text"
+                    ),
+                    "startPageNumber": mTC.TCInProperty(
+                        "integer",
+                        "Specify the starting page number within the pdf, this is optional. If not specified set to first page."
+                    ),
+                    "endPageNumber": mTC.TCInProperty(
+                        "integer",
+                        "Specify the ending page number within the pdf, this is optional. If not specified set to the last page."
+                    )
+                },
+                [ "url" ]
+            )
+        )
+
+    def tc_handle(self, args: mTC.TCInArgs, inHeaders: http.client.HTTPMessage) -> mTC.TCOutResponse:
+        """
+        Handle pdftext request,
+        which is used to extract plain text from the specified pdf file.
+        """
+        try:
+            url = args['url']
+            startP = int(args.get('startPageNumber', -1))
+            endP = int(args.get('endPageNumber', -1))
+            print(f"INFO:HandlePdfText:Processing:{url}:{startP}:{endP}...")
+            return process_pdftext(url, startP, endP)
+        except Exception as exc:
+            return mTC.TCOutResponse(False, 502, f"WARN:HandlePdfText:Failed:{exc}")
