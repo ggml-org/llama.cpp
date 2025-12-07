@@ -6,7 +6,6 @@
 
 
 import * as tjs from './tooljs.mjs'
-import * as tweb from './toolweb.mjs'
 import * as tmcp from './toolmcp.mjs'
 import * as tdb from './tooldb.mjs'
 import * as tai from './toolai.mjs'
@@ -56,7 +55,6 @@ export class ToolsManager {
         tcM.push(tjs.init(me))
         tcM.push(tdb.init(me))
         tcM.push(tai.init(me))
-        tcM.push(tweb.init(me))
         tcM.push(tmcp.init(me))
         return Promise.all(tcM)
     }
@@ -89,12 +87,6 @@ export class ToolsManager {
             }
         })
         await tai.setup(chatId).then((tcs)=>{
-            for (const key in tcs) {
-                this.tc_switchs[chatId][key] = tcs[key]
-                chat.cfg.tools.toolNames.push(key)
-            }
-        })
-        await tweb.setup(chatId).then((tcs)=>{
             for (const key in tcs) {
                 this.tc_switchs[chatId][key] = tcs[key]
                 chat.cfg.tools.toolNames.push(key)
