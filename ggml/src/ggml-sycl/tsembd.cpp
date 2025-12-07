@@ -32,7 +32,8 @@ static void timestep_embedding_f32(
     }
 
     float timestep = timesteps[i];
-    float freq = (float)sycl::native::exp(-(sycl::log((float)max_period)) * j / half);
+    // Use IEEE-compliant exp instead of native::exp for determinism
+    float freq = (float)sycl::exp(-(sycl::log((float)max_period)) * j / half);
     float arg = timestep * freq;
     embed_data[j] = sycl::cos(arg);
     embed_data[j + half] = sycl::sin(arg);

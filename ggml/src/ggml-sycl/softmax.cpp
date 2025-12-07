@@ -130,7 +130,8 @@ static void soft_max_f32(const float *         x,
             break;
         }
 
-        const float val = sycl::native::exp(vals[col] - max_val);
+        // Use IEEE-compliant exp instead of native::exp for determinism
+        const float val = sycl::exp(vals[col] - max_val);
         tmp += val;
         vals[col] = val;
     }
@@ -158,7 +159,8 @@ static void soft_max_f32(const float *         x,
         tmp = warp_reduce_sum(tmp);
     }
     if (sinks) {
-        tmp += sycl::native::exp(sinks[i02] - max_val);
+        // Use IEEE-compliant exp instead of native::exp for determinism
+        tmp += sycl::exp(sinks[i02] - max_val);
     }
     const float inv_sum = 1.0f / tmp;
 

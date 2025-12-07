@@ -55,13 +55,15 @@ static __dpct_inline__ T op_gelu(T x) {
 
 template<typename T>
 static __dpct_inline__ T op_silu(T x) {
-    return x / (static_cast<T>(1.0f) + sycl::native::exp(-x));
+    // Use IEEE-compliant exp instead of native::exp for determinism
+    return x / (static_cast<T>(1.0f) + sycl::exp(-x));
 }
 
 template<typename T>
 static __dpct_inline__ T op_gelu_quick(T x) {
     const T GELU_QUICK_COEF_LOCAL = static_cast<T>(-1.702f);
-    return x * (static_cast<T>(1.0f) / (static_cast<T>(1.0f) + sycl::native::exp(GELU_QUICK_COEF_LOCAL * x)));
+    // Use IEEE-compliant exp instead of native::exp for determinism
+    return x * (static_cast<T>(1.0f) / (static_cast<T>(1.0f) + sycl::exp(GELU_QUICK_COEF_LOCAL * x)));
 }
 
 template<typename T>
@@ -82,7 +84,8 @@ static __dpct_inline__ T op_relu(T x) {
 
 template<typename T>
 static __dpct_inline__ T op_sigmoid(T x) {
-    return static_cast<T>(1.0f) / (static_cast<T>(1.0f) + sycl::native::exp(-x));
+    // Use IEEE-compliant exp instead of native::exp for determinism
+    return static_cast<T>(1.0f) / (static_cast<T>(1.0f) + sycl::exp(-x));
 }
 
 template<typename T>
