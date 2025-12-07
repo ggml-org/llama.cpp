@@ -9,6 +9,7 @@
 #include "fattn-mma.hpp"
 #include "fattn-mma-f16.hpp"
 #include "fattn-xmx-f16.hpp"
+#include "fattn-debug.hpp"
 
 #include <vector>
 #include <cmath>
@@ -654,180 +655,47 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
          GGML_ABORT("Unsupported Q type for SYCL flash attention");
     }
 
-    // Debug: Dump input/output tensor values to compare with non-FA path
-#define FATTN_DUMP_OUTPUT 0
-#define FATTN_DUMP_TO_FILE 0
-#if FATTN_DUMP_OUTPUT
-    {
+    // Debug dumping controlled by GGML_SYCL_FA_DEBUG environment variable
+    // Level 1: Basic inputs/outputs for first few heads
+    // Level 2: Verbose mode with all heads and intermediate values
+    if (fattn_debug_level() > 0) {
         // Wait for kernel to complete
-        ctx.stream()->wait();
+        stream->wait();
 
-        // Static counter for ALL FA calls (including prefill)
-        static int total_fa_calls = 0;
-        total_fa_calls++;
+        // Track call count
+        static int fa_call_count = 0;
+        fa_call_count++;
 
-        // Dump for first N calls to see both prefill and generation
-        const int max_dumps = 50;  // Dump first 50 FA calls
-        if (total_fa_calls <= max_dumps) {
-            const int D = Q->ne[0];
-            const int n_heads = params.ne02;
-            const int n_kv_heads = params.ne12;
-            const int n_kv = params.ne11;
-            const int gqa = n_heads / n_kv_heads;
+        // Only dump first N calls
+        const int max_dumps = 20;
+        if (fa_call_count <= max_dumps) {
+            auto& dbg = get_fattn_debug_ctx();
+            dbg.call_id = fa_call_count;
+            dbg.n_queries = params.ne01;
+            dbg.n_heads = params.ne02;
+            dbg.n_kv_heads = params.ne12;
+            dbg.n_kv = params.ne11;
+            dbg.D = D;
+            dbg.scale = params.scale;
+            dbg.is_fa_on = true;
 
-            // All debug output goes to dump file - no stderr spam
-            fprintf(stderr, "  [FA call %d: dst=%p]\n", total_fa_calls, params.dst);
+            dbg.open_file("on");
 
-            // Calculate total output size
-            const size_t output_size = (size_t)D * params.ne01 * n_heads;
-            std::vector<float> host_dst(output_size);
-            ctx.stream()->memcpy(host_dst.data(), params.dst, output_size * sizeof(float)).wait();
+            int Q_type_size = (Q->type == GGML_TYPE_F32) ? sizeof(float) : sizeof(sycl::half);
+            fattn_debug_dump_Q(stream, params.Q, Q_type_size, D, params.ne01, params.ne02,
+                               params.nb01, params.nb02, params.scale);
+            fattn_debug_dump_K(stream, params.K, D, params.ne11, params.ne12,
+                               params.nb11, params.nb12);
+            fattn_debug_dump_V(stream, params.V, D, params.ne11, params.ne12,
+                               params.nb21, params.nb22);
+            fattn_debug_dump_mask(stream, params.mask, params.ne30, params.ne01,
+                                  params.nb31, params.ne30);
+            fattn_debug_dump_output(stream, params.dst, D, params.ne01, params.ne02);
 
-            // Dump Q input values for ALL heads (if F32)
-            std::vector<float> host_Q;
-            if (Q->type == GGML_TYPE_F32) {
-                const size_t q_size = (size_t)D * params.ne01 * n_heads;
-                host_Q.resize(q_size);
-                for (int h = 0; h < n_heads; h++) {
-                    for (int q = 0; q < params.ne01; q++) {
-                        const float* q_ptr = (const float*)(params.Q + params.nb02 * h + params.nb01 * q);
-                        ctx.stream()->memcpy(&host_Q[(h * params.ne01 + q) * D], q_ptr, D * sizeof(float)).wait();
-                    }
-                }
-            }
+            dbg.close_file();
 
-            // Dump K input values for ALL KV heads (first few KV positions)
-            std::vector<sycl::half> host_K;
-            const int kv_dump_count = std::min(n_kv, 16);  // Dump first 16 KV positions
-            const size_t k_dump_size = (size_t)D * kv_dump_count * n_kv_heads;
-            host_K.resize(k_dump_size);
-            for (int kv_h = 0; kv_h < n_kv_heads; kv_h++) {
-                for (int kv = 0; kv < kv_dump_count; kv++) {
-                    const sycl::half* k_ptr = (const sycl::half*)(params.K + params.nb12 * kv_h + params.nb11 * kv);
-                    ctx.stream()->memcpy(&host_K[(kv_h * kv_dump_count + kv) * D], k_ptr, D * sizeof(sycl::half)).wait();
-                }
-            }
-
-            // Dump V input values similarly
-            std::vector<sycl::half> host_V;
-            host_V.resize(k_dump_size);
-            for (int kv_h = 0; kv_h < n_kv_heads; kv_h++) {
-                for (int kv = 0; kv < kv_dump_count; kv++) {
-                    const sycl::half* v_ptr = (const sycl::half*)(params.V + params.nb22 * kv_h + params.nb21 * kv);
-                    ctx.stream()->memcpy(&host_V[(kv_h * kv_dump_count + kv) * D], v_ptr, D * sizeof(sycl::half)).wait();
-                }
-            }
-
-            // Dump mask values if present
-            std::vector<sycl::half> host_mask;
-            if (params.mask) {
-                const int mask_kv = std::min((int)params.ne30, 64);  // First 64 KV positions
-                host_mask.resize(mask_kv * params.ne01);
-                for (int q = 0; q < params.ne01; q++) {
-                    const sycl::half* mask_ptr = (const sycl::half*)(params.mask + params.nb31 * q);
-                    ctx.stream()->memcpy(&host_mask[q * mask_kv], mask_ptr, mask_kv * sizeof(sycl::half)).wait();
-                }
-            }
-
-#if FATTN_DUMP_TO_FILE
-            // Write full output to file for comparison
-            char filename[256];
-            snprintf(filename, sizeof(filename), "/tmp/fa_debug/fa_dump_call%03d.txt", total_fa_calls);
-            FILE* f = fopen(filename, "w");
-            if (f) {
-                fprintf(f, "# FA call %d: ne01=%d ne02=%d ne12=%d D=%d n_kv=%d gqa=%d scale=%.6f nb13=%zu\n",
-                        total_fa_calls, params.ne01, n_heads, n_kv_heads, D, n_kv, gqa, params.scale, params.nb13);
-                fprintf(f, "# Q strides: nb01=%d nb02=%d nb03=%d\n", params.nb01, params.nb02, params.nb03);
-                fprintf(f, "# Output tensor: [%d queries][%d heads][%d D]\n\n", params.ne01, n_heads, D);
-
-                // Write Q input (all values)
-                fprintf(f, "=== Q INPUT ===\n");
-                if (!host_Q.empty()) {
-                    for (int h = 0; h < n_heads; h++) {
-                        for (int q = 0; q < params.ne01; q++) {
-                            fprintf(f, "Q[h=%d,q=%d]: ", h, q);
-                            for (int d = 0; d < D; d++) {
-                                fprintf(f, "%.6f ", host_Q[(h * params.ne01 + q) * D + d]);
-                            }
-                            fprintf(f, "\n");
-                        }
-                    }
-                }
-
-                // Write K input (first kv_dump_count positions)
-                fprintf(f, "\n=== K INPUT (first %d positions) ===\n", kv_dump_count);
-                for (int kv_h = 0; kv_h < n_kv_heads; kv_h++) {
-                    for (int kv = 0; kv < kv_dump_count; kv++) {
-                        fprintf(f, "K[kv_h=%d,kv=%d]: ", kv_h, kv);
-                        for (int d = 0; d < D; d++) {
-                            fprintf(f, "%.6f ", static_cast<float>(host_K[(kv_h * kv_dump_count + kv) * D + d]));
-                        }
-                        fprintf(f, "\n");
-                    }
-                }
-
-                // Write V input (first kv_dump_count positions)
-                fprintf(f, "\n=== V INPUT (first %d positions) ===\n", kv_dump_count);
-                for (int kv_h = 0; kv_h < n_kv_heads; kv_h++) {
-                    for (int kv = 0; kv < kv_dump_count; kv++) {
-                        fprintf(f, "V[kv_h=%d,kv=%d]: ", kv_h, kv);
-                        for (int d = 0; d < D; d++) {
-                            fprintf(f, "%.6f ", static_cast<float>(host_V[(kv_h * kv_dump_count + kv) * D + d]));
-                        }
-                        fprintf(f, "\n");
-                    }
-                }
-
-                // Write mask if present
-                if (!host_mask.empty()) {
-                    fprintf(f, "\n=== MASK ===\n");
-                    for (int q = 0; q < params.ne01; q++) {
-                        fprintf(f, "mask[q=%d]: ", q);
-                        int mask_kv = std::min((int)params.ne30, 64);
-                        for (int kv = 0; kv < mask_kv; kv++) {
-                            float mv = static_cast<float>(host_mask[q * mask_kv + kv]);
-                            if (mv < -1e10f) {
-                                fprintf(f, "-inf ");
-                            } else {
-                                fprintf(f, "%.1f ", mv);
-                            }
-                        }
-                        fprintf(f, "\n");
-                    }
-                }
-
-                // Write sinks if present
-                if (params.sinks) {
-                    fprintf(f, "\n=== SINKS ===\n");
-                    std::vector<float> host_sinks(n_heads);
-                    ctx.stream()->memcpy(host_sinks.data(), params.sinks, n_heads * sizeof(float)).wait();
-                    fprintf(f, "sinks: ");
-                    for (int h = 0; h < n_heads; h++) {
-                        fprintf(f, "[h=%d]=%.6f ", h, host_sinks[h]);
-                    }
-                    fprintf(f, "\n");
-                }
-
-                // Write ALL output values
-                // New layout: dst[d + D*(head + ne02*(query + ne01*batch))]
-                // For batch=0: dst[d + D*(h + ne02*q)]
-                fprintf(f, "\n=== FA OUTPUT ===\n");
-                for (int h = 0; h < n_heads; h++) {
-                    for (int q = 0; q < params.ne01; q++) {
-                        fprintf(f, "out[h=%d,q=%d]: ", h, q);
-                        for (int d = 0; d < D; d++) {
-                            // New layout: d + D*(h + ne02*q)
-                            fprintf(f, "%.6f ", host_dst[d + D * (h + n_heads * q)]);
-                        }
-                        fprintf(f, "\n");
-                    }
-                }
-
-                fclose(f);
-                fprintf(stderr, "  [Wrote full dump to %s]\n", filename);
-            }
-#endif
+            fprintf(stderr, "[FA-DEBUG] FA_ON call %d: ne01=%d, ne02=%d, ne12=%d, D=%d, n_kv=%d, scale=%.4f\n",
+                    fa_call_count, params.ne01, params.ne02, params.ne12, D, params.ne11, params.scale);
         }
     }
-#endif
 }
