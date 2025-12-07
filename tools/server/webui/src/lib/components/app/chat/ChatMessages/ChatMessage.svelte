@@ -86,8 +86,30 @@
 		editedContent = message.content;
 	}
 
+	function getAttachmentTextContent(attachment: DatabaseMessageExtra | undefined) {
+		if (!attachment) {
+			return null;
+		}
+
+		if ('content' in attachment && typeof attachment.content === 'string') {
+			return attachment.content;
+		}
+
+		return null;
+	}
+
 	async function handleCopy() {
-		await copyToClipboard(message.content, 'Message copied to clipboard');
+		let textToCopy = message.content;
+
+		if (!message.content.trim() && message.extra?.length === 1) {
+			const attachmentText = getAttachmentTextContent(message.extra[0]);
+
+			if (attachmentText?.trim()) {
+				textToCopy = attachmentText;
+			}
+		}
+
+		await copyToClipboard(textToCopy, 'Message copied to clipboard');
 		onCopy?.(message);
 	}
 
