@@ -717,6 +717,12 @@ static void flash_attn_xmx_f16_kernel(
             }
         }
 
+        // CRITICAL BARRIER: Ensure all tile_S writes complete before any thread reads tile_S
+        // Without this barrier, threads reading tile_S for KQ_sum accumulation may see
+        // partially written data from other threads, causing non-deterministic results.
+        // This was the root cause of GPT-OSS 20B (D=64) non-determinism.
+        sycl::group_barrier(item.get_group());
+
         // Accumulate softmax sum (needed for final normalization)
         // First compute sum and store to shared memory
         // Use vectorized sum for better performance

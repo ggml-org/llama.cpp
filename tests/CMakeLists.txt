@@ -252,6 +252,9 @@ add_test(NAME test-kv-block COMMAND $<TARGET_FILE:test-kv-block>)
 # test-fattn-mask: unit tests for Flash Attention mask slope calculation (SYCL unified KV fix)
 llama_build_and_test(test-fattn-mask.cpp)
 
+# test-fattn-determinism: unit tests for Flash Attention determinism (SYCL barrier fix)
+llama_build_and_test(test-fattn-determinism.cpp)
+
 # test-ggml-flash-attn-ext: unit tests for ggml_flash_attn_ext_set_seq_ids() and ggml_flash_attn_ext_set_paged()
 add_executable(test-ggml-flash-attn-ext test-ggml-flash-attn-ext.cpp)
 target_link_libraries(test-ggml-flash-attn-ext PRIVATE ggml)
