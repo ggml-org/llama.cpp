@@ -494,7 +494,7 @@ def test_n_probs_post_sampling():
     res = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
         "n_probs": 10,
-        "temperature": 1.0,
+        "temperature": 0.0,
         "n_predict": 5,
         "post_sampling_probs": True,
     })
