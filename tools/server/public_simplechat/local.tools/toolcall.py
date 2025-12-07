@@ -111,9 +111,11 @@ class ToolCall():
         return ToolCallMeta("function", tcf)
 
 
+MCPTLTools: TypeAlias = list[ToolCallMeta]
+
 @dataclass
 class MCPTLResult:
-    tools: list[ToolCallMeta]
+    tools: MCPTLTools
 
 @dataclass
 class MCPToolsList:
@@ -131,7 +133,7 @@ class ToolManager():
         self.toolcalls[fName] = tc
 
     def meta(self):
-        lMeta: list[ToolCallMeta]= []
+        lMeta: MCPTLTools = []
         for tcName in self.toolcalls.keys():
             lMeta.append(self.toolcalls[tcName].meta())
         return lMeta

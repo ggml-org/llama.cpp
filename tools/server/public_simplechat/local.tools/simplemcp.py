@@ -19,10 +19,12 @@ import ssl
 import traceback
 import json
 from typing import Any
+from dataclasses import asdict
 import tcpdf as mTCPdf
 import tcweb as mTCWeb
 import toolcall as mTC
 import config as mConfig
+
 
 
 gMe = mConfig.Config()
@@ -92,7 +94,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # Add CORS for browser fetch, just in case
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
-        self.wfile.write(json.dumps(body).encode('utf-8'))
+        data = asdict(body)
+        self.wfile.write(json.dumps(data).encode('utf-8'))
 
     def mcp_toolscall(self, oRPC: Any):
         """
