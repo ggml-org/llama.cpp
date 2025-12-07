@@ -56,7 +56,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         Common headers to include in responses from this server
         """
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', '*')
         self.end_headers()
 
@@ -66,6 +66,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         so that the common headers mentioned above can get added to them
         else CORS failure will be triggered by the browser on fetch from browser.
         """
+        if not message:
+            message = ""
         print(f"WARN:PH:SendError:{code}:{message}")
         self.send_response(code, message)
         self.send_headers_common()
@@ -173,6 +175,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except:
             print(f"ERRR:PH:ThePOST:{traceback.format_exception_only(sys.exception())}")
             self.send_error(500, f"ERRR: handling request")
+
+    def do_GET(self):
+        self.send_error(400, "Bad request")
 
     def do_OPTIONS(self):
         """
