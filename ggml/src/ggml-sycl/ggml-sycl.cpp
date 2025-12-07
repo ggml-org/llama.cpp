@@ -57,6 +57,7 @@
 #include "ggml-sycl/mmq.hpp"
 #include "ggml-sycl/mmq_xmx.hpp"
 #include "ggml-sycl/fused-norm-gemm.hpp"
+#include "ggml-sycl/fused-moe-esimd.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded = false;
@@ -3297,6 +3298,55 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
     extra->optimized_feature.reorder = true;  // Used to decode/dequan in next steps and avoid re-reordering
 }
 
+// Pre-reorder all weight tensors that would be reordered during decode.
+// This ensures consistent behavior from the first decode token and fixes
+// non-determinism when llama graph reuse is enabled.
+// Without this, the first decode token uses non-reordered kernels while
+// subsequent tokens use reordered kernels, causing different results.
+static void pre_reorder_all_tensors(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+    if (g_ggml_sycl_disable_optimize || !sycl_ctx->opt_feature.reorder) {
+        return;
+    }
+
+    int reordered_count = 0;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+
+        if (node->op != GGML_OP_MUL_MAT) {
+            continue;
+        }
+
+        ggml_tensor * src0 = node->src[0];  // weight tensor
+
+        if (!src0 || !src0->extra) {
+            continue;
+        }
+
+        ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+
+        if (extra->optimized_feature.reorder) {
+            continue;  // Already reordered
+        }
+
+        // Check if this type supports reordering (any algorithm)
+        if (!ggml_sycl_supports_reorder_mmvq(src0->type) &&
+            !ggml_sycl_supports_reorder_dmmv(src0->type) &&
+            !ggml_sycl_supports_reorder_mul_mat_sycl(src0->type)) {
+            continue;
+        }
+
+        // Reorder the weight tensor
+        reorder_qw(src0, sycl_ctx->stream());
+        extra->optimized_feature.reorder = true;
+        reordered_count++;
+    }
+
+    if (reordered_count > 0) {
+        // Wait for all reordering to complete before proceeding
+        sycl_ctx->stream()->wait();
+    }
+}
 
 static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     return ggml_sycl_supports_dmmv(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
@@ -3636,6 +3686,61 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
             }
         }
     } else {
+        // Try fused MoE kernel for supported quantization types
+        // This eliminates the gather/scatter overhead (96 kernels -> 1 kernel)
+#if SYCL_ESIMD_MOE_AVAILABLE
+        const bool use_fused_moe = true && fused_moe_esimd_available() &&  // Enabled for MXFP4
+                                   (src0->type == GGML_TYPE_MXFP4) &&  // Only MXFP4 - Q8_0 models also use MXFP4 for MoE
+                                   src1->type == GGML_TYPE_F32;
+
+        if (use_fused_moe) {
+            const int64_t num_tokens = ids->ne[1];
+
+            if (src0->type == GGML_TYPE_Q8_0) {
+                launch_fused_moe_q8_0(
+                    src0->data,                    // expert_weights
+                    src1->data,                    // input (F32)
+                    (const int32_t *)ids->data,    // expert_ids (device)
+                    (float *)dst->data,            // output
+                    nb02,                          // stride_expert (bytes between experts)
+                    ne00,                          // ncols (hidden size)
+                    ne01,                          // nrows (output size per expert)
+                    n_ids,                         // n_ids (top_k)
+                    num_tokens,                    // num_tokens
+                    ne11,                          // ne11 (src1 dim 1)
+                    ids->nb[0],                    // ids_nb0
+                    ids->nb[1],                    // ids_nb1
+                    nb11,                          // in_nb11
+                    nb12,                          // in_nb12
+                    nb1,                           // out_nb1
+                    nb2,                           // out_nb2
+                    *stream
+                );
+            } else if (src0->type == GGML_TYPE_MXFP4) {
+                launch_fused_moe_mxfp4(
+                    src0->data,
+                    (const float *)src1->data,
+                    (const int32_t *)ids->data,
+                    (float *)dst->data,
+                    nb02,
+                    ne00,
+                    ne01,
+                    n_ids,
+                    num_tokens,
+                    ne11,
+                    ids->nb[0],
+                    ids->nb[1],
+                    nb11,
+                    nb12,
+                    nb1,
+                    nb2,
+                    *stream
+                );
+            }
+            return;
+        }
+#endif
+
         ggml_sycl_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(src1));
         ggml_sycl_pool_alloc<char>  dst_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
 
@@ -3736,6 +3841,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                 });
             }
         }
+
     }
 }
 catch (sycl::exception const &exc) {
@@ -4863,6 +4969,9 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
 
+    // Pre-reorder disabled for now - Q8_0 doesn't use reordering anyway
+    // pre_reorder_all_tensors(sycl_ctx, cgraph);
+
 #ifdef GGML_SYCL_GRAPH
     bool use_sycl_graph = !g_ggml_sycl_disable_graph && check_graph_compatibility(cgraph);
     if (use_sycl_graph) {
@@ -4880,22 +4989,32 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         model_sycl_graph.end_recording();
 
         const bool graph_update_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_graph);
-        if (!sycl_ctx->exec_graph || !graph_update_support) {
+        // TEMPORARY FIX: Always recreate graph to avoid non-determinism from incorrect updates
+        // The graph update mechanism may not properly handle changes in kernel nd_range (grid sizes)
+        // TODO: Implement proper graph invalidation when kernel parameters change
+        {
             auto exec_graph = graph_update_support ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{}) :
                                                      model_sycl_graph.finalize();
             sycl_ctx->exec_graph = std::make_unique<
                 sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
-        } else {
-            try {
-                sycl_ctx->exec_graph->update(model_sycl_graph);
-                GGML_SYCL_DEBUG("[SYCL-GRAPH] update success\n");
-            } catch (sycl::exception const & e) {
-                GGML_SYCL_DEBUG("[SYCL-GRAPH] Exception when updating graph, %s\n", e.what());
-                auto exec_graph = model_sycl_graph.finalize({sycl_ex::property::graph::updatable{}});
-                sycl_ctx->exec_graph = std::make_unique<
-                    sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
-            }
         }
+        // Original code with update disabled for now:
+        // if (!sycl_ctx->exec_graph || !graph_update_support) {
+        //     auto exec_graph = graph_update_support ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{}) :
+        //                                              model_sycl_graph.finalize();
+        //     sycl_ctx->exec_graph = std::make_unique<
+        //         sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
+        // } else {
+        //     try {
+        //         sycl_ctx->exec_graph->update(model_sycl_graph);
+        //         GGML_SYCL_DEBUG("[SYCL-GRAPH] update success\n");
+        //     } catch (sycl::exception const & e) {
+        //         GGML_SYCL_DEBUG("[SYCL-GRAPH] Exception when updating graph, %s\n", e.what());
+        //         auto exec_graph = model_sycl_graph.finalize({sycl_ex::property::graph::updatable{}});
+        //         sycl_ctx->exec_graph = std::make_unique<
+        //             sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
+        //     }
+        // }
 
         sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
     } else
@@ -5123,8 +5242,8 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                     }
                 }
                 ggml_type src0_type = op->src[0]->type;
-                if (src0_type == GGML_TYPE_BF16 || src0_type == GGML_TYPE_MXFP4) {
-                    // TODO: support MXFP4
+                if (src0_type == GGML_TYPE_BF16) {
+                    // TODO: support BF16
                     // FIXME: keep a list of supported types to avoid breaking the backend when a new type is added
                     return false;
                 }
