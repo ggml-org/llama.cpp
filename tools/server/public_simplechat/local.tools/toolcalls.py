@@ -1,32 +1,9 @@
-# Tool Call Base
+# ToolCalls and MCP related types and bases
 # by Humans for All
 
 from typing import Any, TypeAlias
 from dataclasses import dataclass, field
 
-
-
-#
-# A sample tool call meta
-#
-
-fetchurlraw_meta = {
-        "type": "function",
-        "function": {
-            "name": "fetch_url_raw",
-            "description": "Fetch contents of the requested url (local file path / web based) through a proxy server and return the got content as is, in few seconds. Mainly useful for getting textual non binary contents",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url":{
-                        "type":"string",
-                        "description":"url of the local file / web content to fetch"
-                    }
-                },
-                "required": ["url"]
-            }
-        }
-    }
 
 
 #
@@ -106,10 +83,6 @@ class ToolCall():
     def tc_handle(self, args: TCInArgs, inHeaders: HttpHeaders) -> TCOutResponse:
         return TCOutResponse(False, 500)
 
-    def meta(self) -> ToolCallMeta:
-        tcf = self.tcf_meta()
-        return ToolCallMeta("function", tcf)
-
 
 MCPTLTools: TypeAlias = list[ToolCallMeta]
 
@@ -135,7 +108,8 @@ class ToolManager():
     def meta(self):
         lMeta: MCPTLTools = []
         for tcName in self.toolcalls.keys():
-            lMeta.append(self.toolcalls[tcName].meta())
+            tcfMeta = self.toolcalls[tcName].tcf_meta()
+            lMeta.append(ToolCallMeta("function", tcfMeta))
         return lMeta
 
     def tc_handle(self, callId: str, tcName: str, tcArgs: TCInArgs, inHeaders: HttpHeaders) -> ToolCallResponseEx:

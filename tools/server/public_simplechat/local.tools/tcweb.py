@@ -8,7 +8,7 @@ import filemagic as mFile
 import json
 import re
 from typing import Any, cast
-import toolcall as mTC
+import toolcalls as mTC
 
 
 

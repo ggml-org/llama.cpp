@@ -9,7 +9,7 @@ import ssl
 import sys
 import urlvalidator as mUV
 import debug as mDebug
-import toolcall as mTC
+import toolcalls as mTC
 
 
 gConfigNeeded = [ 'acl.schemes', 'acl.domains', 'sec.bearerAuth' ]

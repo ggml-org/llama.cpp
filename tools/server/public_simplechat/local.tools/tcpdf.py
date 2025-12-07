@@ -3,7 +3,7 @@
 
 import urlvalidator as uv
 import filemagic as mFile
-import toolcall as mTC
+import toolcalls as mTC
 from typing import Any
 
 
