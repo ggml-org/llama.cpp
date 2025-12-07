@@ -14,7 +14,13 @@ def get_from_web(url: str, tag: str, inContentType: str, inHeaders: mTC.HttpHead
     Get the url specified from web.
 
     If passed header doesnt contain certain useful http header entries,
-    some predefined defaults will be used in place.
+    some predefined defaults will be used in place. This includes User-Agent,
+    Accept-Language and Accept.
+
+    One should ideally pass the header got in the request being proxied, so as
+    to help one to try mimic the real client, whose request we are proxying.
+    In case a header is missing in the got request, fallback to using some
+    possibly ok enough defaults.
     """
     try:
         hUA = inHeaders.get('User-Agent', None)

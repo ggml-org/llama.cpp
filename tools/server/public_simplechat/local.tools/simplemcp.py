@@ -204,8 +204,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
 def setup_toolmanager():
     """
-    Handle requests to aum path, which is used in a simple way to
-    verify that one is communicating with this proxy server
+    Setup the ToolCall helpers.
+    Ensure the toolcall module is ok before setting up its tool calls.
     """
     gMe.op.toolManager = mTC.ToolManager()
     if mTCWeb.ok():

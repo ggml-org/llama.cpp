@@ -495,7 +495,7 @@ function usage_note(sRecentUserMsgCnt) {
         <ul class="ul2">
         <li> if ai assistant requests a tool call, verify same before triggering.</li>
         <li> submit tool response placed into user query/response text area</li>
-        <li> for web access inc search/pdf tool calls, run included simpleproxy.py</li>
+        <li> for web access inc search/pdf tool calls, run included simplemcp.py</li>
         </ul>
     <li> ContextWindow = [System, ${sRecentUserMsgCnt} User Query/Resp, Cur Query].</li>
         <ul class="ul2">
@@ -2136,26 +2136,6 @@ class MultiChatUI {
 }
 
 
-/**
- * Few web search engine url template strings.
- * The SEARCHWORDS keyword will get replaced by the actual user specified search words at runtime.
- */
-const SearchURLS = {
-    duckduckgo: {
-        'template': "https://duckduckgo.com/html/?q=SEARCHWORDS",
-        'drop': [ { 'tag': 'div', 'id': "header" } ]
-    },
-    bing: {
-        'template': "https://www.bing.com/search?q=SEARCHWORDS", // doesnt seem to like google chrome clients in particular
-    },
-    brave: {
-        'template': "https://search.brave.com/search?q=SEARCHWORDS",
-    },
-    google: {
-        'template': "https://www.google.com/search?q=SEARCHWORDS", // doesnt seem to like any client in general
-    },
-}
-
 
 export class Config {
 
@@ -2163,10 +2143,8 @@ export class Config {
         this.baseURL = "http://127.0.0.1:8080";
         this.tools = {
             enabled: true,
-            proxyUrl: "http://127.0.0.1:3128",
-            proxyAuthInsecure: "NeverSecure",
-            searchUrl: SearchURLS.duckduckgo.template,
-            searchDrops: SearchURLS.duckduckgo.drop,
+            mcpServerUrl: "http://127.0.0.1:3128/mcp",
+            mcpServerAuth: "NeverSecure",
             toolNames: /** @type {Array<string>} */([]),
             /**
              * Control the length of the tool call result data returned to ai after tool call.

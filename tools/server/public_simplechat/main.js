@@ -2,7 +2,7 @@
 // A simple minded GenAi/LLM chat web client implementation.
 // Handshakes with
 // * ai server's completions and chat/completions endpoints
-// * simpleproxy tool calls provider
+// * simplemcp tool calls provider
 // Helps with basic usage and testing.
 // by Humans for All
 

@@ -328,12 +328,14 @@ Chat Session specific settings
 * Initial skeleton towards ToolMCP, a mcpish client logic
   Mcp command tools/list handshake implemented, need to verify and update this initial go
   Mcp command tools/call handshake implemented, need to verify and update this initial go
+  Minimal cross check wrt tools/list and tools/call.
 * MCPish and not full fledged MCP currently
   * no initialise command handshake
   * use seconds since unix epoch or toolcall id, as the case maybe, as the id wrt json-rpc calls
   * the tools/list response mirrors the openai rest api convention rather than mcp convention
     * uses the additional type: function wrapper wrt tool call meta
     * uses the keyword parameters instead of inputschema or so
+* Retire the previous simpleproxy.py and its related helpers, including ones running in browser env.
 
 
 ## ToDo

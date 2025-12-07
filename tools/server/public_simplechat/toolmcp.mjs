@@ -27,7 +27,7 @@ let gMe = /** @type{mChatMagic.Me} */(/** @type {unknown} */(null));
  * @param {mChatMagic.SimpleChat} chat
  */
 async function bearer_transform(chat) {
-    let data = `${new Date().getUTCFullYear()}${chat.cfg.tools.proxyAuthInsecure}`
+    let data = `${new Date().getUTCFullYear()}${chat.cfg.tools.mcpServerAuth}`
     const ab = await crypto.subtle.digest('sha-256', new TextEncoder().encode(data));
     return Array.from(new Uint8Array(ab)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
@@ -49,7 +49,7 @@ async function mcpserver_toolcall(chatid, toolcallid, toolname, obj) {
         return
     }
     try {
-        let newUrl = `${chat.cfg.tools.proxyUrl}/mcp`
+        let newUrl = `${chat.cfg.tools.mcpServerUrl}`
         let headers = new Headers();
         let btoken = await bearer_transform(chat)
         headers.append('Authorization', `Bearer ${btoken}`)
@@ -111,7 +111,7 @@ async function mcpserver_toolslist(tag, chatId, tcs) {
         let btoken = await bearer_transform(chat)
         headers.append('Authorization', `Bearer ${btoken}`)
         headers.append("Content-Type", "application/json")
-        let resp = await fetch(`${chat.cfg.tools.proxyUrl}/mcp`, {
+        let resp = await fetch(`${chat.cfg.tools.mcpServerUrl}`, {
             method: "POST",
             headers: headers,
             body: JSON.stringify(ibody),

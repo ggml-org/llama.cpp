@@ -20,11 +20,6 @@ def handle_urlreq(url: str, inHeaders: mTC.HttpHeaders, tag: str):
 
     Verify the url being requested is allowed.
 
-    Include User-Agent, Accept-Language and Accept in the generated request using
-    equivalent values got in the request being proxied, so as to try mimic the
-    real client, whose request we are proxying. In case a header is missing in the
-    got request, fallback to using some possibly ok enough defaults.
-
     Fetch the requested url.
     """
     tag=f"UrlReq:{tag}"

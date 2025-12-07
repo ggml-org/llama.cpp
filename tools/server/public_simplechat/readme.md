@@ -2,7 +2,7 @@
 
 by Humans for All.
 
-A lightweight simple minded ai chat client with a web front-end that supports multiple chat sessions, vision, reasoning and tool calling.
+A lightweight simple minded ai chat client, which runs in a browser environment, with a web front-end that supports multiple chat sessions, vision models, reasoning and tool calling (including bundled tool calls - some browser native and some bundled simplemcp based).
 
 
 ## Quickstart
@@ -26,12 +26,13 @@ build/bin/llama-server -m <path/to/model.gguf> \
 If one needs web related access / tool calls dont forget to run
 
 ```bash
-cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config simpleproxy.json
+cd tools/server/public_simplechat/local.tools; python3 ./simplemcp.py --config simplemcp.json
 ```
 
 - `--debug True` enables debug mode which captures internet handshake data
-- port defaults to 3128, can be changed from simpleproxy.json, if needed
-- add sec.keyfile and sec.certfile to simpleproxy.json, for https mode
+- port defaults to 3128, can be changed from simplemcp.json, if needed
+- add sec.keyFile and sec.certFile to simplemcp.json, for https mode;
+  - also dont forget to change mcpServerUrl to mention https scheme
 
 ### Client
 
@@ -41,6 +42,7 @@ cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config
 2. Select / Create a chat session
    - set a suitable system prompt, if needed
    - modify **settings**, if needed
+     - modifying mcpServerUrl wont reload supported tool calls list, till next app page refresh
    - **Restore** loads last autosaved session with same name
 
 3. Enter query/response into user input area at the bottom, press **Enter**
@@ -53,7 +55,7 @@ cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config
    - verify / edit the tool call details before triggering the same
      - one can even ask ai to rethink on the tool call requested,
        by sending a appropriate user response instead of a tool call response
-   - tool call is executed using Browser's web worker or included SimpleProxy.py
+   - tool call is executed using Browser's web worker or included SimpleMCP.py
    - tool call response is placed in user input area
      - the user input area is color coded to distinguish between user and tool responses
    - verify / edit the tool call response, before submit same back to ai
@@ -68,7 +70,7 @@ cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config
 
 ## Overview
 
-A lightweight simple minded ai chat client with a web front-end that supports multiple chat sessions, vision, reasoning and tool calling.
+A lightweight simple minded ai chat client, which runs in a browser environment, with a web front-end that supports multiple chat sessions, vision models, reasoning and tool calling (including bundled tool calls - some browser native and some bundled simplemcp based).
 
 - Supports multiple independent chat sessions with
   - One‑shot or Streamed (default) responses
@@ -97,16 +99,18 @@ A lightweight simple minded ai chat client with a web front-end that supports mu
     - except for external_ai, these are run from within a web worker context to isolate main context from them
     - data_store brings in browser IndexedDB based persistant key/value storage across sessions
 
-  - in collaboration with included python based simpleproxy.py, these additional tool calls are supported
+  - in collaboration with included python based simplemcp.py, these additional tool calls are supported
     - `search_web_text`, `fetch_url_raw`, `fetch_html_text`, `fetch_pdf_as_text`, `fetch_xml_filtered`
-      - these built‑in tool calls (via SimpleProxy) help fetch PDFs, HTML, XML or perform web search
+      - these built‑in tool calls (via SimpleMCP) help fetch PDFs, HTML, XML or perform web search
       - PDF tool also returns an outline with numbering, if available
       - result is truncated to `iResultMaxDataLength` (default 128 kB)
     - helps isolate core of these functionality into a separate vm running locally or otherwise, if needed
-    - supports whitelisting of `allowed.schemes` and `allowed.domains` through `simpleproxy.json`
+    - supports whitelisting of `acl.schemes` and `acl.domains` through `simplemcp.json`
     - supports a bearer token shared between server and client for auth
-      - needs https support, for better security wrt this flow, avoided now given mostly local use
-        and need for user to setup corresponding pki key pairs.
+      - needs https mode to be enabled, for better security wrt this flow
+      - by default simplemcp.py runs in http mode,
+        however if sec.keyFile and sec.certFile are specified, the logic switches to https mode
+    - this handshake is loosely based on MCP standard, doesnt stick to the standard fully
 
   - follows a safety first design and lets the user
     - verify and optionally edit the tool call requests, before executing the same
@@ -143,7 +147,7 @@ A lightweight simple minded ai chat client with a web front-end that supports mu
 - built using plain html + css + javascript and python
   - no additional dependencies that one needs to worry about and inturn keep track of
     - except for pypdf, if pdf support needed. automaticaly drops pdf tool call support, if pypdf missing
-  - fits within ~50KB compressed source or ~284KB in uncompressed source form (both including simpleproxy.py)
+  - fits within ~50KB compressed source or ~300KB in uncompressed source form (both including simplemcp.py)
   - easily extend with additional tool calls using either javascript or python, for additional functionality
     as you see fit
 
@@ -159,7 +163,7 @@ One can modify the session configuration using Settings UI. All the settings and
 | Group | Purpose |
 |---------|---------|
 | `chatProps` | ApiEndpoint, streaming, sliding window, markdown, ... |
-| `tools` | `enabled`, `proxyUrl`, `proxyAuthInsecure`, search URL/template & drop rules, max data length, timeouts |
+| `tools` | `enabled`, `mcpServerUrl`, `mcpServerAuth`, search URL/template & drop rules, max data length, timeouts |
 | `apiRequestOptions` | `temperature`, `max_tokens`, `frequency_penalty`, `presence_penalty`, `cache_prompt`, ... |
 | `headers` | `Content-Type`, `Authorization`, ... |
 
@@ -168,8 +172,8 @@ One can modify the session configuration using Settings UI. All the settings and
 - **Ai Server** (`baseURL`)
   - ai server (llama-server) address
   - default is `http://127.0.0.1:8080`
-- **SimpleProxy Server** (`proxyUrl`)
-  - the simpleproxy.py server address
+- **SimpleMCP Server** (`mcpServerUrl`)
+  - the simplemcp.py server address
   - default is `http://127.0.0.1:3128`
 - **Stream** (`stream`)
   - `true` for live streaming, `false` for oneshot

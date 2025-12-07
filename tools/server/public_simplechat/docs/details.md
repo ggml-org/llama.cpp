@@ -40,7 +40,7 @@ to have independent chat sessions with different instances of llama-server and o
 For GenAi/LLM models supporting tool / function calling, allows one to interact with them and explore use of
 ai driven augmenting of the knowledge used for generating answers as well as for cross checking ai generated
 answers logically / programatically and by checking with other sources and lot more by making using of the
-simple yet useful predefined tools / functions provided by this client web ui. The end user is provided full
+simple yet useful predefined tools / functions provided by this chat client. The end user is provided full
 control over tool calling and response submitting.
 
 For GenAi/LLM models which support reasoning, the thinking of the model will be shown to the end user as the
@@ -92,28 +92,28 @@ remember to
 * use a GenAi/LLM model which supports tool calling.
 
 * if fetch web page, web search, pdf-to-text, ... tool call is needed remember to run bundled
-  local.tools/simpleproxy.py
+  local.tools/simplemcp.py
   helper along with its config file, before using/loading this client ui through a browser
 
-  * cd tools/server/public_simplechat/local.tools; python3 ./simpleproxy.py --config simpleproxy.json
+  * cd tools/server/public_simplechat/local.tools; python3 ./simplemcp.py --config simplemcp.json
 
-  * remember that this is a relatively minimal dumb proxy logic which can fetch html or pdf content and
-  inturn optionally provide plain text version of the content by stripping off non textual/core contents.
+  * remember that this is a relatively minimal dumb mcp(ish) server logic with few builtin tool calls
+  related to fetching raw html or stripped plain text equivalent or pdf text content.
   Be careful when accessing web through this and use it only with known safe sites.
 
-  * look into local.tools/simpleproxy.json for specifying
+  * look into local.tools/simplemcp.json for specifying
 
-    * the white list of allowed.schemes
+    * the white list of acl.schemes
       * you may want to use this to disable local file access and or disable http access,
         and inturn retaining only https based urls or so.
-    * the white list of allowed.domains
+    * the white list of acl.domains
       * review and update this to match your needs.
-    * the shared bearer token between simpleproxy server and client ui
+    * the shared bearer token between simplemcp server and chat client
     * the public certificate and private key files to enable https mode
-      * sec.certfile and sec.keyfile
+      * sec.certFile and sec.keyFile
 
 * other builtin tool / function calls like datetime, calculator, javascript runner, DataStore,
-  external ai dont require the simpleproxy.py helper.
+  external ai dont require this bundled simplemcp.py helper.
 
 ### for vision models
 
@@ -204,11 +204,11 @@ Once inside
   * use the clear button to clear the currently active chat session.
   * just refresh the page, to reset wrt the chat history and system prompts across chat sessions
     and start afresh.
-    * This also helps if you had forgotten to start the bundled simpleproxy.py server before hand.
-      Start the simpleproxy.py server and refresh the client ui page, to get access to web access
+    * This also helps if you had forgotten to start the bundled simplemcp.py server before hand.
+      Start the simplemcp.py server and refresh the client ui page, to get access to web access
       related tool calls.
-      * starting new chat session, after starting simpleproxy, will also give access to tool calls
-        exposed by simpleproxy, in that new chat session.
+      * starting new chat session, after starting simplemcp, will also give access to tool calls
+        exposed by simplemcp, in that new chat session.
   * if you refreshed/cleared unknowingly, you can use the Restore feature to try load previous chat
     session and resume that session. This uses a basic local auto save logic that is in there.
 
@@ -292,17 +292,11 @@ It is attached to the document object. Some of these can also be updated using t
 
       * remember to enable this only for GenAi/LLM models which support tool/function calling.
 
-    * proxyUrl - specify the address for the running instance of bundled local.tools/simpleproxy.py
+    * mcpServerUrl - specify the address for the running instance of bundled local.tools/simplemcp.py
 
-    * proxyAuthInsecure - shared token between simpleproxy.py server and client ui, for accessing service provided by it.
+    * mcpServerAuth - shared token between simplemcp.py server and client ui, for accessing service provided by it.
 
-      * Shared token is currently hashed with the current year and inturn handshaked over the network. In future if required one could also include a dynamic token provided by simpleproxy server during /aum handshake and running counter or so into hashed token. ALERT: However do remember that currently by default handshake occurs over http and not https, so others can snoop the network and get token. Per client ui running counter and random dynamic token can help mitigate things to some extent, if required in future. Remember to enable https mode by specifying a valid public certificate and private key.
-
-    * searchUrl - specify the search engine's search url template along with the tag SEARCHWORDS in place where the search words should be substituted at runtime.
-
-    * searchDrops - allows one to drop contents of html tags with specified id from the plain text search result.
-
-      * specify a list of dicts, where each dict should contain a 'tag' entry specifying the tag to filter like div or p or ... and also a 'id' entry which specifies the id of interest.
+      * Shared token is currently hashed with the current year and inturn handshaked over the network. In future if required one could also include a dynamic token provided by simplemcp server during say a special /aum handshake and running counter or so into hashed token. ALERT: However do remember that currently by default handshake occurs over http and not https, so others can snoop the network and get token. Per client ui running counter and random dynamic token can help mitigate things to some extent, if required in future. Remember to enable https mode by specifying a valid public certificate and private key.
 
     * iResultMaxDataLength - specify what amount of any tool call result should be sent back to the ai engine server.
 
@@ -316,8 +310,8 @@ It is attached to the document object. Some of these can also be updated using t
 
       * setting this value to 0 (default), disables auto logic, so that end user can review the tool calls requested by ai and if needed even modify them, before triggering/executing them as well as review and modify results generated by the tool call, before submitting them back to the ai.
 
-      * this is specified in seconds, so that users by default will normally not overload any website through the proxy server.
-
+      * this is specified in seconds, so that users by default will normally not overload any website through the bundled mcp server.
+ 
     1. the builtin tools' meta data is sent to the ai model in the requests sent to it.
 
     2. inturn if the ai model requests a tool call to be made, the same will be done and the response sent back to the ai model, under user control, by default.
@@ -423,7 +417,7 @@ host / router, tools etal, for basic useful tools/functions like calculator, cod
 
 Additionally if users want to work with web content or pdf content as part of their ai chat
 session, Few functions related to web access as well as pdf access which work with a included
-python based simple proxy server have been implemented.
+python based simple mcp server (rather mcp-ish) have been implemented.
 
 This can allow end users to use some basic yet useful tool calls to enhance their ai chat
 sessions to some extent. It also provides for a simple minded exploration of tool calling
@@ -514,16 +508,24 @@ shared web worker scope isnt isolated.
 
 Either way always remember to cross check tool requests and generated responses when using tool calling.
 
-##### using bundled simpleproxy.py (helps bypass browser cors restriction, ...)
+##### using bundled simplemcp.py (helps bypass browser cors restriction, ...)
 
-* fetch_url_raw - fetch contents of the requested url through a proxy server
+* fetch_url_raw - fetch contents of the requested url through/using mcp server
 
-* fetch_html_text - fetch text parts of the html content from the requested url through a proxy server.
+* fetch_html_text - fetch text parts of the html content from the requested url through a mcp server.
   Related logic tries to strip html response of html tags and also head, script, style, header,footer,
-  nav, ... blocks.
+  nav, ... blocks (which are usually not needed).
 
 * search_web_text - search for the specified words using the configured search engine and return the
   plain textual content from the search result page.
+
+  From the bundled simplemcp.py one can control the search engine details like
+
+    * template - specify the search engine's search url template along with the tag SEARCHWORDS in place where the search words should be substituted at runtime.
+
+    * drops - allows one to drop contents of html tags with specified id from the final plain text search result.
+
+      * specify a list of dicts, where each dict should contain a 'tag' entry specifying the tag to filter like div or p or ... and also a 'id' entry which specifies the id of interest.
 
 * fetch_pdf_as_text - fetch/read specified pdf file and extract its textual content
   * this depends on the pypdf python based open source library
@@ -539,33 +541,29 @@ Either way always remember to cross check tool requests and generated responses 
       * .*:tagname:.*
       * rather the tool call meta data passed to ai model explains the same and provides a sample.
 
-the above set of web related tool calls work by handshaking with a bundled simple local web proxy
-(/caching in future) server logic, this helps bypass the CORS restrictions applied if trying to
+the above set of web related tool calls work by handshaking with a bundled simple local mcp (may be
+add caching in future) server logic, this helps bypass the CORS restrictions applied if trying to
 directly fetch from the browser js runtime environment.
 
 Local file access is also enabled for web fetch and pdf tool calls, if one uses the file:/// scheme
-in the url, so be careful as to where and under which user id the simple proxy will be run.
+in the url, so be careful as to where and under which user id the simple mcp will be run.
 
-* one can always disable local file access by removing 'file' from the list of allowed.schemes in
-simpleproxy.json config file.
+* one can always disable local file access by removing 'file' from the list of acl.schemes in
+simplemcp.json config file.
 
-Implementing some of the tool calls through the simpleproxy.py server and not directly in the browser
+Implementing some of the tool calls through the simplemcp.py server and not directly in the browser
 js env, allows one to isolate the core of these logic within a discardable VM or so and also if required
-in a different region or so, by running the simpleproxy.py in such a vm.
+in a different region or so, by running the simplemcp.py in such a vm.
 
-Depending on the path specified wrt the proxy server, it executes the corresponding logic. Like if
-htmltext path is used (and not urlraw), the logic in addition to fetching content from given url, it
-tries to convert html content into equivalent plain text content to some extent in a simple minded
-manner by dropping head block as well as all scripts/styles/footers/headers/nav blocks and inturn
-also dropping the html tags. Similarly for pdftext.
+Depending on path and method specified using json-rpc wrt the mcp server, it executes corresponding logic.
 
-The client ui logic does a simple check to see if the bundled simpleproxy is running at specified
-proxyUrl before enabling these web and related tool calls.
+This chat client logic does a simple check to see if bundled simplemcp is running at specified
+mcpServerUrl and in turn the provided tool calls like those related to web / pdf etal.
 
-The bundled simple proxy
+The bundled simple mcp
 
 * can be found at
-  * tools/server/public_simplechat/local.tools/simpleproxy.py
+  * tools/server/public_simplechat/local.tools/simplemcp.py
 
 * it provides for a basic white list of allowed domains to access, to be specified by the end user.
   This should help limit web access to a safe set of sites determined by the end user. There is also
@@ -574,14 +572,14 @@ The bundled simple proxy
 
 * by default runs in http mode. If valid sec.keyfile and sec.certfile options are specified, logic
   will run in https mode.
-  * Remember to also update tools->proxyUrl wrt the chat session settings.
+  * Remember to also update tools->mcpServerUrl wrt the chat session settings.
     * the new url will be used for subsequent tool handshakes, however remember that the list of
-      tool calls supported wont get updated, till the client web ui is refreshed/reloaded.
+      tool calls supported wont get updated, till this chat client web ui is refreshed/reloaded.
 
 * it tries to mimic the client/browser making the request to it by propogating header entries like
-  user-agent, accept and accept-language from the got request to the generated request during proxying
-  so that websites will hopefully respect the request rather than blindly rejecting it as coming from
-  a non-browser entity.
+  user-agent, accept and accept-language from the got request to the generated request during this
+  mcp based proxying, so that websites will hopefully respect the request rather than blindly
+  rejecting it as coming from a non-browser entity.
 
 * allows getting specified local or web based pdf files and extract their text content for ai to use
 
@@ -615,7 +613,7 @@ Update the tc_switch to include a object entry for the tool, which inturn includ
 * the result key (was used previously, may use in future, but for now left as is)
 
 Look into tooljs.mjs, toolai.mjs and tooldb.mjs for javascript and inturn browser web worker based
-tool calls and toolweb.mjs for the simpleproxy.py based tool calls.
+tool calls and toolweb.mjs for the simplemcp.py based tool calls.
 
 #### OLD: Mapping tool calls and responses to normal assistant - user chat flow
 
