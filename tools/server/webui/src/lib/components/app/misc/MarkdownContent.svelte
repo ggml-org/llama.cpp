@@ -7,8 +7,8 @@
 	import remarkRehype from 'remark-rehype';
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
-	import { copyCodeToClipboard } from '$lib/utils/copy';
-	import { preprocessLaTeX } from '$lib/utils/latex-protection';
+	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
+	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
 	import { browser } from '$app/environment';
 	import '$styles/katex-custom.scss';
 
@@ -60,6 +60,7 @@
 			.use(remarkRehype) // Convert Markdown AST to rehype
 			.use(rehypeKatex) // Render math using KaTeX
 			.use(rehypeHighlight) // Add syntax highlighting
+			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeStringify); // Convert to HTML string
 	});
 
@@ -336,19 +337,23 @@
 		line-height: 1.75;
 	}
 
+	div :global(:is(h1, h2, h3, h4, h5, h6):first-child) {
+		margin-top: 0;
+	}
+
 	/* Headers with consistent spacing */
 	div :global(h1) {
 		font-size: 1.875rem;
 		font-weight: 700;
-		margin: 1.5rem 0 0.75rem 0;
 		line-height: 1.2;
+		margin: 1.5rem 0 0.75rem 0;
 	}
 
 	div :global(h2) {
 		font-size: 1.5rem;
 		font-weight: 600;
-		margin: 1.25rem 0 0.5rem 0;
 		line-height: 1.3;
+		margin: 1.25rem 0 0.5rem 0;
 	}
 
 	div :global(h3) {

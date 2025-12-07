@@ -2,14 +2,24 @@ set(TARGET llama-server)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
-if (MINGW)
-    # fix: https://github.com/ggml-org/llama.cpp/actions/runs/9651004652/job/26617901362?pr=8006
-    add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
+if (NOT LLAMA_HTTPLIB)
+    message(FATAL_ERROR "LLAMA_HTTPLIB is OFF, cannot build llama-server. Hint: to skip building server, set -DLLAMA_BUILD_SERVER=OFF")
 endif()
 
 set(TARGET_SRCS
     server.cpp
-    utils.hpp
+    server-http.cpp
+    server-http.h
+    server-models.cpp
+    server-models.h
+    server-task.cpp
+    server-task.h
+    server-queue.cpp
+    server-queue.h
+    server-common.cpp
+    server-common.h
+    server-context.cpp
+    server-context.h
 )
 set(PUBLIC_ASSETS
     index.html.gz
@@ -33,7 +43,7 @@ install(TARGETS ${TARGET} RUNTIME)
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PRIVATE common mtmd ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PRIVATE common mtmd cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
 if (WIN32)
     TARGET_LINK_LIBRARIES(${TARGET} PRIVATE ws2_32)

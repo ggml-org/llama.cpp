@@ -1,0 +1,112 @@
+{%- macro render_content(msg) -%}
+    {%- set c = msg.get('content') -%}
+    {%- if c is string -%}
+      {{ c }}
+    {%- elif c is not none -%}
+      {% for content in c -%}
+        {% if content['type'] == 'image' or 'image' in content or 'image_url' in content -%}
+          <|media_start|>image<|media_content|><|media_pad|><|media_end|>
+        {% else -%}
+          {{ content['text'] }}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+{%- endmacro -%}
+
+{% macro set_roles(message) -%}
+  {%- set role_name =  message.get('name') or  message['role'] -%}
+  {%- if message['role'] == 'user' -%}
+    <|im_user|>{{role_name}}<|im_middle|>
+  {%- elif message['role'] == 'assistant' -%}
+    <|im_assistant|>{{role_name}}<|im_middle|>
+  {%- else -%}
+    <|im_system|>{{role_name}}<|im_middle|>
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- set tool_response_queue = namespace(ids=[]) -%}
+{%- set tool_call_counter = namespace(value=1) -%}
+
+{%- macro render_toolcalls(message) -%}
+  <|tool_calls_section_begin|>
+  {%- for tool_call in message['tool_calls'] -%}
+    {%- if tool_call['id'] is defined -%}
+      {%- set formatted_id = tool_call['id'] -%}
+    {%- else -%}
+      {%- set formatted_id = 'functions.' + tool_call['function']['name'] + ':' + (tool_call_counter.value | string) -%}
+      {%- set tool_call_counter.value = tool_call_counter.value + 1 -%}
+    {%- endif -%}
+    {%- set _ = tool_response_queue.ids.append(formatted_id) -%}
+    <|tool_call_begin|>{{ formatted_id }}<|tool_call_argument_begin|>{% if tool_call['function']['arguments'] is string %}{{ tool_call['function']['arguments'] }}{% else %}{{ tool_call['function']['arguments'] | tojson }}{% endif %}<|tool_call_end|>
+  {%- endfor -%}
+  <|tool_calls_section_end|>
+{%- endmacro -%}
+
+
+{# Find last non-tool-call assisitant message #}
+{%- set ns = namespace(last_non_tool_call_assistant_msg=-1) -%}
+{%- for idx in range(messages|length-1, -1, -1) -%}
+    {%- if messages[idx]['role'] == 'assistant' and not messages[idx].get('tool_calls') -%}
+        {%- set ns.last_non_tool_call_assistant_msg = idx -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{# split all messages into history & suffix, reasoning_content in suffix should be reserved.#}
+{%- set hist_msgs = messages[:ns.last_non_tool_call_assistant_msg+1] -%}
+{%- set suffix_msgs = messages[ns.last_non_tool_call_assistant_msg+1:] -%}
+
+{%- if tools -%}
+  <|im_system|>tool_declare<|im_middle|>{{ tools | tojson }}<|im_end|>
+{%- endif -%}
+
+{%- if messages|length == 0 or messages[0]['role'] != 'system' -%}
+  <|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|>
+{%- endif -%}
+
+{%- for message in hist_msgs -%}
+  {{set_roles(message)}}
+  {%- if message['role'] == 'assistant' -%}
+    <think></think>{{render_content(message)}}
+    {%- if message.get('tool_calls') -%}
+      {{render_toolcalls(message)}}
+    {%- endif -%}
+  {%- elif message['role'] == 'tool' -%}
+    {%- if tool_response_queue.ids -%}
+      {%- set tool_call_id = tool_response_queue.ids.pop(0) -%}
+    {%- else -%}
+      {%- set tool_call_id = 'functions.' + message.get('name', 'unknown') + ':' + (tool_call_counter.value | string) -%}
+    {%- endif -%}
+    ## Return of {{ tool_call_id }}
+{{render_content(message)}}
+  {%- elif message['content'] is not none -%}
+    {{render_content(message)}}
+  {%- endif -%}
+  <|im_end|>
+{%- endfor -%}
+
+{%- for message in suffix_msgs -%}
+  {{set_roles(message)}}
+  {%- if message['role'] == 'assistant' -%}
+    {%- set rc = message.get('reasoning_content', '') -%}
+    <think>{{rc}}</think>{{render_content(message)}}
+    {%- if message.get('tool_calls') -%}
+     {{render_toolcalls(message)}}
+    {%- endif -%}
+  {%- elif message['role'] == 'tool' -%}
+    {%- if tool_response_queue.ids -%}
+      {%- set tool_call_id = tool_response_queue.ids.pop(0) -%}
+    {%- else -%}
+      {%- set tool_call_id = 'functions.' + message.get('name', 'unknown') + ':' + (tool_call_counter.value | string) -%}
+    {%- endif -%}
+    ## Return of {{ tool_call_id }}
+{{render_content(message)}}
+  {%- elif message['content'] is not none -%}
+    {{render_content(message)}}
+  {%- endif -%}
+  <|im_end|>
+{%- endfor -%}
+
+
+{%- if add_generation_prompt -%}
+  <|im_assistant|>assistant<|im_middle|>
+{%- endif -%}

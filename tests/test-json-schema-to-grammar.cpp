@@ -1339,6 +1339,32 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
+
+    test({
+        SUCCESS,
+        "literal string with escapes",
+        R"""({
+            "properties": {
+                "code": {
+                    "const": " \r \n \" \\ ",
+                    "description": "Generated code",
+                    "title": "Code",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "code"
+            ],
+            "title": "DecoderResponse",
+            "type": "object"
+        })""",
+        R"""(
+            code ::= "\" \\r \\n \\\" \\\\ \"" space
+            code-kv ::= "\"code\"" space ":" space code
+            root ::= "{" space code-kv "}" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
 }
 
 int main() {
@@ -1349,7 +1375,7 @@ int main() {
         try {
             tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
             tc.verify_status(SUCCESS);
-        } catch (const std::runtime_error & ex) {
+        } catch (const std::invalid_argument & ex) {
             fprintf(stderr, "Error: %s\n", ex.what());
             tc.verify_status(FAILURE);
         }

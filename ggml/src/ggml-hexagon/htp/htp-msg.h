@@ -119,10 +119,10 @@ static const char * htp_type_name(uint32_t t) {
 #define HTP_MAX_DIMS 4
 
 struct htp_tensor {
-    uint32_t data;              // Buffer offset in the messages, and data pointer on the NSP
-    uint32_t type;              // Data type
-    uint32_t ne[HTP_MAX_DIMS];  // Number of elements
-    uint32_t nb[HTP_MAX_DIMS];  // Stride in bytes (see ggml.h ggml_tensor)
+    uint32_t data;                // Buffer offset in the messages, and data pointer on the NSP
+    uint32_t type;                // Data type
+    uint32_t ne[HTP_MAX_DIMS];    // Number of elements
+    uint32_t nb[HTP_MAX_DIMS];    // Stride in bytes (see ggml.h ggml_tensor)
 };
 
 #define HTP_MAX_OP_PARAMS 64

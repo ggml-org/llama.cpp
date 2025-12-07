@@ -1,14 +1,15 @@
 <script lang="ts">
-	import { getDeletionInfo } from '$lib/stores/chat.svelte';
-	import { copyToClipboard } from '$lib/utils/copy';
-	import { isIMEComposing } from '$lib/utils/is-ime-composing';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { copyToClipboard, isIMEComposing } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
+	import ChatMessageSystem from './ChatMessageSystem.svelte';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
 		onCopy?: (message: DatabaseMessage) => void;
+		onContinueAssistantMessage?: (message: DatabaseMessage) => void;
 		onDelete?: (message: DatabaseMessage) => void;
 		onEditWithBranching?: (message: DatabaseMessage, newContent: string) => void;
 		onEditWithReplacement?: (
@@ -16,8 +17,9 @@
 			newContent: string,
 			shouldBranch: boolean
 		) => void;
+		onEditUserMessagePreserveResponses?: (message: DatabaseMessage, newContent: string) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
-		onRegenerateWithBranching?: (message: DatabaseMessage) => void;
+		onRegenerateWithBranching?: (message: DatabaseMessage, modelOverride?: string) => void;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
 
@@ -25,9 +27,11 @@
 		class: className = '',
 		message,
 		onCopy,
+		onContinueAssistantMessage,
 		onDelete,
 		onEditWithBranching,
 		onEditWithReplacement,
+		onEditUserMessagePreserveResponses,
 		onNavigateToSibling,
 		onRegenerateWithBranching,
 		siblingInfo = null
@@ -54,6 +58,29 @@
 		return null;
 	});
 
+	let toolCallContent = $derived.by((): ApiChatCompletionToolCall[] | string | null => {
+		if (message.role === 'assistant') {
+			const trimmedToolCalls = message.toolCalls?.trim();
+
+			if (!trimmedToolCalls) {
+				return null;
+			}
+
+			try {
+				const parsed = JSON.parse(trimmedToolCalls);
+
+				if (Array.isArray(parsed)) {
+					return parsed as ApiChatCompletionToolCall[];
+				}
+			} catch {
+				// Harmony-only path: fall back to the raw string so issues surface visibly.
+			}
+
+			return trimmedToolCalls;
+		}
+		return null;
+	});
+
 	function handleCancelEdit() {
 		isEditing = false;
 		editedContent = message.content;
@@ -70,7 +97,7 @@
 	}
 
 	async function handleDelete() {
-		deletionInfo = await getDeletionInfo(message.id);
+		deletionInfo = await chatStore.getDeletionInfo(message.id);
 		showDeleteDialog = true;
 	}
 
@@ -105,19 +132,34 @@
 		}
 	}
 
-	function handleRegenerate() {
-		onRegenerateWithBranching?.(message);
+	function handleRegenerate(modelOverride?: string) {
+		onRegenerateWithBranching?.(message, modelOverride);
+	}
+
+	function handleContinue() {
+		onContinueAssistantMessage?.(message);
 	}
 
 	function handleSaveEdit() {
-		if (message.role === 'user') {
+		if (message.role === 'user' || message.role === 'system') {
 			onEditWithBranching?.(message, editedContent.trim());
 		} else {
-			onEditWithReplacement?.(message, editedContent.trim(), shouldBranchAfterEdit);
+			// For assistant messages, preserve exact content including trailing whitespace
+			// This is important for the Continue feature to work properly
+			onEditWithReplacement?.(message, editedContent, shouldBranchAfterEdit);
 		}
 
 		isEditing = false;
 		shouldBranchAfterEdit = false;
+	}
+
+	function handleSaveEditOnly() {
+		if (message.role === 'user') {
+			// For user messages, trim to avoid accidental whitespace
+			onEditUserMessagePreserveResponses?.(message, editedContent.trim());
+		}
+
+		isEditing = false;
 	}
 
 	function handleShowDeleteDialogChange(show: boolean) {
@@ -125,8 +167,8 @@
 	}
 </script>
 
-{#if message.role === 'user'}
-	<ChatMessageUser
+{#if message.role === 'system'}
+	<ChatMessageSystem
 		bind:textareaElement
 		class={className}
 		{deletionInfo}
@@ -146,6 +188,28 @@
 		{showDeleteDialog}
 		{siblingInfo}
 	/>
+{:else if message.role === 'user'}
+	<ChatMessageUser
+		bind:textareaElement
+		class={className}
+		{deletionInfo}
+		{editedContent}
+		{isEditing}
+		{message}
+		onCancelEdit={handleCancelEdit}
+		onConfirmDelete={handleConfirmDelete}
+		onCopy={handleCopy}
+		onDelete={handleDelete}
+		onEdit={handleEdit}
+		onEditKeydown={handleEditKeydown}
+		onEditedContentChange={handleEditedContentChange}
+		{onNavigateToSibling}
+		onSaveEdit={handleSaveEdit}
+		onSaveEditOnly={handleSaveEditOnly}
+		onShowDeleteDialogChange={handleShowDeleteDialogChange}
+		{showDeleteDialog}
+		{siblingInfo}
+	/>
 {:else}
 	<ChatMessageAssistant
 		bind:textareaElement
@@ -157,6 +221,7 @@
 		messageContent={message.content}
 		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
+		onContinue={handleContinue}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
@@ -171,5 +236,6 @@
 		{showDeleteDialog}
 		{siblingInfo}
 		{thinkingContent}
+		{toolCallContent}
 	/>
 {/if}

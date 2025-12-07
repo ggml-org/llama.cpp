@@ -42,6 +42,9 @@ The following releases are verified and recommended:
 
 ## News
 
+- 2025.11
+  - Support malloc memory on device more than 4GB.
+
 - 2025.2
   - Optimize MUL_MAT Q4_0 on Intel GPU for all dGPUs and built-in GPUs since MTL. Increase the performance of LLM (llama-2-7b.Q4_0.gguf) 21%-87% on Intel GPUs (MTL, ARL-H, Arc, Flex, PVC).
     |GPU|Base tokens/s|Increased tokens/s|Percent|
@@ -789,6 +792,8 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because graph performance isn't yet better than non-graph performance. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
+| UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
+
 
 
 ## Known Issues
@@ -834,6 +839,14 @@ use 1 SYCL GPUs: [0] with Max compute units:512
   |-|-|
   | The default context is too big. It leads to excessive memory usage.|Set `-c 8192` or a smaller value.|
   | The model is too big and requires more memory than what is available.|Choose a smaller model or change to a smaller quantization, like Q5 -> Q4;<br>Alternatively, use more than one device to load model.|
+
+- `ggml_backend_sycl_buffer_type_alloc_buffer: can't allocate 5000000000 Bytes of memory on device`
+
+  You need to enable to support 4GB memory malloc by:
+  ```
+    export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
+    set UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
+  ```
 
 ### **GitHub contribution**:
 Please add the `SYCL :` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.

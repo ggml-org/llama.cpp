@@ -1787,6 +1787,7 @@ static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
     const sycl::range<3> block_dims(1, 1, nth);
     const sycl::range<3> block_nums(1, nrows, 1);
     const size_t shared_mem = ncols_pad * sizeof(int);
+    GGML_ASSERT(shared_mem<=ggml_sycl_info().devices[device].smpbo);
 
     if (order == GGML_SORT_ORDER_ASC) {
         stream->submit([&](sycl::handler &cgh) {
@@ -3933,6 +3934,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             break;
         case GGML_OP_SSM_CONV:
             ggml_sycl_ssm_conv(ctx, dst);
+            break;
         case GGML_OP_ROLL:
             ggml_sycl_roll(ctx, dst);
             break;
@@ -4347,6 +4349,9 @@ static ggml_backend_buffer_t ggml_backend_sycl_device_buffer_from_host_ptr(ggml_
 }
 
 static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    ggml_backend_sycl_device_context *sycl_ctx =
+        (ggml_backend_sycl_device_context *)dev->context;
+    int device = sycl_ctx->device;
     switch (op->op) {
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
@@ -4359,21 +4364,22 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             }
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
+                case GGML_UNARY_OP_SGN:
+                case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_STEP:
+                case GGML_UNARY_OP_RELU:
+                case GGML_UNARY_OP_HARDSIGMOID:
+                case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_GELU:
                 case GGML_UNARY_OP_SILU:
-                case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_SIGMOID:
-                case GGML_UNARY_OP_HARDSIGMOID:
                 case GGML_UNARY_OP_HARDSWISH:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_GELU_ERF:
-                case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
-                case GGML_UNARY_OP_SGN:
-                case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_ELU:
+                    return true;
                 case GGML_UNARY_OP_FLOOR:
                 case GGML_UNARY_OP_CEIL:
                 case GGML_UNARY_OP_ROUND:
@@ -4595,16 +4601,22 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_IM2COL:
             return true;
         case GGML_OP_UPSCALE:
-            return op->src[0]->type == GGML_TYPE_F32 && op->op_params[0] == GGML_SCALE_MODE_NEAREST;
+            return op->src[0]->type == GGML_TYPE_F32 && op->op_params[0] == GGML_SCALE_MODE_NEAREST && !(op->op_params[0] & GGML_SCALE_FLAG_ANTIALIAS);
         case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
-        case GGML_OP_ARGSORT:
             return ggml_is_contiguous(op->src[0]);
+        case GGML_OP_ARGSORT:
+            return op->src[0]->ne[0] * sizeof(int) <=
+                   ggml_sycl_info().devices[device].smpbo;
         case GGML_OP_POOL_2D:
         case GGML_OP_ACC:
             return true;
         case GGML_OP_PAD:
+            // TODO: add circular padding support for syscl, see https://github.com/ggml-org/llama.cpp/pull/16985
+            if (ggml_get_op_params_i32(op, 8) != 0) {
+                return false;
+            }
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_LEAKY_RELU:
         case GGML_OP_TIMESTEP_EMBEDDING:

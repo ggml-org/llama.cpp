@@ -20,10 +20,11 @@
 #if defined(LLAMA_USE_CURL)
 #include <curl/curl.h>
 #include <curl/easy.h>
-#else
+#elif defined(LLAMA_USE_HTTPLIB)
 #include "http.h"
 #endif
 
+#ifndef __EMSCRIPTEN__
 #ifdef __linux__
 #include <linux/limits.h>
 #elif defined(_WIN32)
@@ -35,6 +36,8 @@
 #else
 #include <sys/syslimits.h>
 #endif
+#endif
+
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
 // isatty
@@ -49,6 +52,22 @@ using json = nlohmann::ordered_json;
 //
 // downloader
 //
+
+// validate repo name format: owner/repo
+static bool validate_repo_name(const std::string & repo) {
+    static const std::regex repo_regex(R"(^[A-Za-z0-9_.\-]+\/[A-Za-z0-9_.\-]+$)");
+    return std::regex_match(repo, repo_regex);
+}
+
+static std::string get_manifest_path(const std::string & repo, const std::string & tag) {
+    // we use "=" to avoid clashing with other component, while still being allowed on windows
+    std::string fname = "manifest=" + repo + "=" + tag + ".json";
+    if (!validate_repo_name(repo)) {
+        throw std::runtime_error("error: repo name must be in the format 'owner/repo'");
+    }
+    string_replace_all(fname, "/", "=");
+    return fs_get_cache_file(fname);
+}
 
 static std::string read_file(const std::string & fname) {
     std::ifstream file(fname);
@@ -414,7 +433,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 0L);
     typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
     auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
         auto data_vec = static_cast<std::vector<char> *>(data);
@@ -451,7 +470,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
     return { res_code, std::move(res_buffer) };
 }
 
-#else
+#elif defined(LLAMA_USE_HTTPLIB)
 
 static bool is_output_a_tty() {
 #if defined(_WIN32)
@@ -501,16 +520,18 @@ static bool common_pull_file(httplib::Client & cli,
         headers.emplace("Range", "bytes=" + std::to_string(existing_size) + "-");
     }
 
-    std::atomic<size_t> downloaded{existing_size};
+    const char * func = __func__; // avoid __func__ inside a lambda
+    size_t downloaded = existing_size;
+    size_t progress_step = 0;
 
     auto res = cli.Get(resolve_path, headers,
         [&](const httplib::Response &response) {
             if (existing_size > 0 && response.status != 206) {
-                LOG_WRN("%s: server did not respond with 206 Partial Content for a resume request. Status: %d\n", __func__, response.status);
+                LOG_WRN("%s: server did not respond with 206 Partial Content for a resume request. Status: %d\n", func, response.status);
                 return false;
             }
             if (existing_size == 0 && response.status != 200) {
-                LOG_WRN("%s: download received non-successful status code: %d\n", __func__, response.status);
+                LOG_WRN("%s: download received non-successful status code: %d\n", func, response.status);
                 return false;
             }
             if (total_size == 0 && response.has_header("Content-Length")) {
@@ -518,7 +539,7 @@ static bool common_pull_file(httplib::Client & cli,
                     size_t content_length = std::stoull(response.get_header_value("Content-Length"));
                     total_size = existing_size + content_length;
                 } catch (const std::exception &e) {
-                    LOG_WRN("%s: invalid Content-Length header: %s\n", __func__, e.what());
+                    LOG_WRN("%s: invalid Content-Length header: %s\n", func, e.what());
                 }
             }
             return true;
@@ -526,11 +547,16 @@ static bool common_pull_file(httplib::Client & cli,
         [&](const char *data, size_t len) {
             ofs.write(data, len);
             if (!ofs) {
-                LOG_ERR("%s: error writing to file: %s\n", __func__, path_tmp.c_str());
+                LOG_ERR("%s: error writing to file: %s\n", func, path_tmp.c_str());
                 return false;
             }
             downloaded += len;
-            print_progress(downloaded, total_size);
+            progress_step += len;
+
+            if (progress_step >= total_size / 1000 || downloaded == total_size) {
+                print_progress(downloaded, total_size);
+                progress_step = 0;
+            }
             return true;
         },
         nullptr
@@ -697,6 +723,8 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
 
 #endif // LLAMA_USE_CURL
 
+#if defined(LLAMA_USE_CURL) || defined(LLAMA_USE_HTTPLIB)
+
 static bool common_download_file_single(const std::string & url,
                                         const std::string & path,
                                         const std::string & bearer_token,
@@ -829,17 +857,13 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag, cons
     // Important: the User-Agent must be "llama-cpp" to get the "ggufFile" field in the response
     // User-Agent header is already set in common_remote_get_content, no need to set it here
 
-    // we use "=" to avoid clashing with other component, while still being allowed on windows
-    std::string cached_response_fname = "manifest=" + hf_repo + "=" + tag + ".json";
-    string_replace_all(cached_response_fname, "/", "_");
-    std::string cached_response_path = fs_get_cache_file(cached_response_fname);
-
     // make the request
     common_remote_params params;
     params.headers = headers;
     long res_code = 0;
     std::string res_str;
     bool use_cache = false;
+    std::string cached_response_path = get_manifest_path(hf_repo, tag);
     if (!offline) {
         try {
             auto res = common_remote_get_content(url, params);
@@ -959,6 +983,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string token = common_docker_get_token(repo);  // Get authentication token
 
         // Get manifest
+        // TODO: cache the manifest response so that it appears in the model list
         const std::string    url_prefix = "https://registry-1.docker.io/v2/" + repo;
         std::string          manifest_url = url_prefix + "/manifests/" + tag;
         common_remote_params manifest_params;
@@ -1011,4 +1036,47 @@ std::string common_docker_resolve_model(const std::string & docker) {
         LOG_ERR("%s: Docker Model download failed: %s\n", __func__, e.what());
         throw;
     }
+}
+
+#else
+
+common_hf_file_res common_get_hf_file(const std::string &, const std::string &, bool) {
+    throw std::runtime_error("download functionality is not enabled in this build");
+}
+
+bool common_download_model(const common_params_model &, const std::string &, bool) {
+    throw std::runtime_error("download functionality is not enabled in this build");
+}
+
+std::string common_docker_resolve_model(const std::string &) {
+    throw std::runtime_error("download functionality is not enabled in this build");
+}
+
+#endif // LLAMA_USE_CURL || LLAMA_USE_HTTPLIB
+
+std::vector<common_cached_model_info> common_list_cached_models() {
+    std::vector<common_cached_model_info> models;
+    const std::string cache_dir = fs_get_cache_directory();
+    const std::vector<common_file_info> files = fs_list(cache_dir, false);
+    for (const auto & file : files) {
+        if (string_starts_with(file.name, "manifest=") && string_ends_with(file.name, ".json")) {
+            common_cached_model_info model_info;
+            model_info.manifest_path = file.path;
+            std::string fname = file.name;
+            string_replace_all(fname, ".json", ""); // remove extension
+            auto parts = string_split<std::string>(fname, '=');
+            if (parts.size() == 4) {
+                // expect format: manifest=<user>=<model>=<tag>=<other>
+                model_info.user  = parts[1];
+                model_info.model = parts[2];
+                model_info.tag   = parts[3];
+            } else {
+                // invalid format
+                continue;
+            }
+            model_info.size = 0; // TODO: get GGUF size, not manifest size
+            models.push_back(model_info);
+        }
+    }
+    return models;
 }
