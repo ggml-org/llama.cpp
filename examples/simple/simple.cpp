@@ -75,10 +75,12 @@ int main(int argc, char ** argv) {
     }
 
     // load dynamic backends
+    // 加载全部可用的后端实现（CPU、CUDA、Metal 等），确保后续模型推理能自动选择合适的设备
 
     ggml_backend_load_all();
 
     // initialize the model
+    // 创建模型参数并设置需要下放到 GPU 的层数；数值越大，更多层在 GPU 上执行，推理更快但显存消耗更高
 
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = ngl;
@@ -92,11 +94,10 @@ int main(int argc, char ** argv) {
     }
 
     // tokenize the prompt
-
-    // find the number of tokens in the prompt
+    // 先计算提示词的 token 数量（传入 NULL 仅做计数，返回值取负号获得长度）
     const int n_prompt = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, true, true);
 
-    // allocate space for the tokens and tokenize the prompt
+    // 根据长度分配 token 数组并真正执行分词；若返回负值表示分词失败
     std::vector<llama_token> prompt_tokens(n_prompt);
     if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), true, true) < 0) {
         fprintf(stderr, "%s: error: failed to tokenize the prompt\n", __func__);
@@ -107,10 +108,13 @@ int main(int argc, char ** argv) {
 
     llama_context_params ctx_params = llama_context_default_params();
     // n_ctx is the context size
+    // 设置上下文窗口长度：提示词 token 数 + 需要生成的 token 数，减 1 因为最后一个位置将被新 token 占用
     ctx_params.n_ctx = n_prompt + n_predict - 1;
     // n_batch is the maximum number of tokens that can be processed in a single call to llama_decode
+    // 单次 llama_decode 处理的最大批大小，此处等于提示词长度，保证一次性把提示词送入模型
     ctx_params.n_batch = n_prompt;
     // enable performance counters
+    // 打开性能统计，便于后面打印吞吐与耗时
     ctx_params.no_perf = false;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
@@ -126,6 +130,7 @@ int main(int argc, char ** argv) {
     sparams.no_perf = false;
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
 
+    // 此示例使用贪心采样（每步选择概率最高的 token）；可替换为 top-k、top-p 等更随机的策略
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
     // print the prompt token-by-token
@@ -147,6 +152,7 @@ int main(int argc, char ** argv) {
 
     // main loop
 
+    // 记录生成开始时间，便于后面统计吞吐
     const auto t_main_start = ggml_time_us();
     int n_decode = 0;
     llama_token new_token_id;
@@ -154,6 +160,7 @@ int main(int argc, char ** argv) {
     for (int n_pos = 0; n_pos + batch.n_tokens < n_prompt + n_predict; ) {
         // evaluate the current batch with the transformer model
         if (llama_decode(ctx, batch)) {
+            // 模型前向计算失败时直接退出
             fprintf(stderr, "%s : failed to eval, return code %d\n", __func__, 1);
             return 1;
         }
@@ -166,6 +173,7 @@ int main(int argc, char ** argv) {
 
             // is it an end of generation?
             if (llama_vocab_is_eog(vocab, new_token_id)) {
+                // 命中结束符则停止生成
                 break;
             }
 
@@ -190,14 +198,17 @@ int main(int argc, char ** argv) {
 
     const auto t_main_end = ggml_time_us();
 
+    // 打印本次生成的耗时与吞吐（tokens per second）
     fprintf(stderr, "%s: decoded %d tokens in %.2f s, speed: %.2f t/s\n",
             __func__, n_decode, (t_main_end - t_main_start) / 1000000.0f, n_decode / ((t_main_end - t_main_start) / 1000000.0f));
 
     fprintf(stderr, "\n");
+    // 打印采样器与上下文的性能统计
     llama_perf_sampler_print(smpl);
     llama_perf_context_print(ctx);
     fprintf(stderr, "\n");
 
+    // 释放资源，确保内存、显存和文件句柄被正确回收
     llama_sampler_free(smpl);
     llama_free(ctx);
     llama_model_free(model);

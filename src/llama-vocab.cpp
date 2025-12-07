@@ -1329,23 +1329,64 @@ private:
     const llama_vocab & vocab;
 };
 
+/**
+ * 从模型文件中加载词汇表（vocabulary）和分词器配置
+ * 
+ * 这个函数是词汇表初始化的核心函数，主要完成以下任务：
+ * 
+ * 1. 确定分词器类型：
+ *    - 从模型元数据中读取分词器类型（llama/bert/gpt2/t5/rwkv等）
+ *    - 根据类型设置相应的词汇表类型（SPM/WPM/BPE/UGM/RWKV）
+ *    - 为每种类型设置默认的特殊标记ID（BOS/EOS/UNK/SEP/PAD等）
+ * 
+ * 2. 配置预处理参数：
+ *    - 根据分词器类型和预处理类型（llama3/gpt2/deepseek等）设置预处理标志
+ *    - 包括：是否添加空格前缀、是否清理空格、是否添加BOS/EOS等
+ * 
+ * 3. 加载词汇表数据：
+ *    - 从GGUF文件中读取词汇表列表（token列表）
+ *    - 读取每个token的分数（scores）和类型（token types）
+ *    - 建立双向映射：token_to_id（文本到ID）和id_to_token（ID到文本）
+ * 
+ * 4. 处理特殊标记：
+ *    - 从元数据中读取特殊标记ID（BOS/EOS/EOT/EOM/UNK/SEP/PAD/MASK等）
+ *    - 自动检测FIM（Fill-in-the-Middle）相关标记
+ *    - 构建结束生成标记集合（special_eog_ids）
+ * 
+ * 5. 初始化分词器：
+ *    - 根据词汇表类型初始化相应的分词器实例
+ *    - 确定换行符token ID
+ * 
+ * 6. 构建缓存：
+ *    - 构建特殊标记缓存（按长度排序，便于匹配）
+ *    - 构建token到piece的缓存（用于快速解码）
+ * 
+ * 7. 设置token属性：
+ *    - 根据模型名称和分词器类型设置特定token的属性
+ *    - 包括：LSTRIP（左去除空格）、RSTRIP（右去除空格）等
+ * 
+ * @param ml 模型加载器，用于从GGUF文件中读取数据
+ * @param kv 键值对映射，用于获取元数据键名
+ */
 void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     struct gguf_context * ctx = ml.meta.get();
 
-    // determine vocab type
+    // 确定词汇表类型
     {
-        std::string tokenizer_model;
-        std::string tokenizer_pre;
+        std::string tokenizer_model; // 分词器模型类型
+        std::string tokenizer_pre;   // 分词器预处理类型
 
+        // 从模型元数据中读取分词器相关信息
         ml.get_key(LLM_KV_TOKENIZER_MODEL, tokenizer_model);
         ml.get_key(LLM_KV_TOKENIZER_PRE,   tokenizer_pre, false);
 
         ml.get_key(LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT, n_token_types, false);
 
+        // 根据分词器模型类型设置词汇表类型和默认特殊标记
         if (tokenizer_model == "no_vocab" || tokenizer_model == "none") {
             type = LLAMA_VOCAB_TYPE_NONE;
 
-            // default special tokens
+            // 默认特殊标记设为无效值
             special_bos_id  = LLAMA_TOKEN_NULL;
             special_eos_id  = LLAMA_TOKEN_NULL;
             special_unk_id  = LLAMA_TOKEN_NULL;
@@ -1354,7 +1395,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_mask_id = LLAMA_TOKEN_NULL;
             linefeed_id     = LLAMA_TOKEN_NULL;
 
-            // read vocab size from metadata
+            // 从元数据中读取词汇表大小
             uint32_t n_tokens = 0;
             if (!ml.get_key(LLM_KV_VOCAB_SIZE, n_tokens, false)) {
                 LLAMA_LOG_WARN("%s: there is no vocab_size in metadata\n", __func__);
@@ -1363,10 +1404,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             return;
         }
 
+        // 设置不同分词器类型的默认特殊标记
         if (tokenizer_model == "llama") {
-            type = LLAMA_VOCAB_TYPE_SPM;
+            type = LLAMA_VOCAB_TYPE_SPM; // SentencePiece 分词器
 
-            // default special tokens
+            // 默认特殊标记
             special_bos_id  = 1;
             special_eos_id  = 2;
             special_unk_id  = 0;
@@ -1374,9 +1416,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_pad_id  = LLAMA_TOKEN_NULL;
             special_mask_id = LLAMA_TOKEN_NULL;
         } else if (tokenizer_model == "bert") {
-            type = LLAMA_VOCAB_TYPE_WPM;
+            type = LLAMA_VOCAB_TYPE_WPM; // WordPiece 分词器
 
-            // default special tokens
+            // 默认特殊标记
             special_bos_id  = 101;
             special_eos_id  = LLAMA_TOKEN_NULL;
             special_unk_id  = 100;
@@ -1384,9 +1426,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_pad_id  = 0;
             special_mask_id = 103;
         } else if (tokenizer_model == "gpt2") {
-            type = LLAMA_VOCAB_TYPE_BPE;
+            type = LLAMA_VOCAB_TYPE_BPE; // Byte Pair Encoding 分词器
 
-            // read bpe merges and populate bpe ranks
+            // 读取 BPE 合并规则并填充 bpe_ranks 映射
             const int merges_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_MERGES).c_str());
             if (merges_keyidx == -1) {
                 throw std::runtime_error("cannot find tokenizer merges in model file\n");
@@ -1410,7 +1452,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 bpe_ranks.emplace(std::make_pair(first, second), i);
             }
 
-            // default special tokens
+            // 默认特殊标记
             special_bos_id  = 11;
             special_eos_id  = 11;
             special_unk_id  = LLAMA_TOKEN_NULL;
@@ -1418,9 +1460,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_pad_id  = LLAMA_TOKEN_NULL;
             special_mask_id = LLAMA_TOKEN_NULL;
         } else if (tokenizer_model == "t5") {
-            type = LLAMA_VOCAB_TYPE_UGM;
+            type = LLAMA_VOCAB_TYPE_UGM; // Unigram 分词器
 
-            // default special tokens
+            // 默认特殊标记
             special_bos_id  = LLAMA_TOKEN_NULL;
             special_eos_id  = 1;
             special_unk_id  = 2;
@@ -1428,6 +1470,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_pad_id  = 0;
             special_mask_id = LLAMA_TOKEN_NULL;
 
+            // 读取预编译的字符映射表
             const int precompiled_charsmap_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str());
             if (precompiled_charsmap_keyidx != -1) {
                 size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
@@ -1446,9 +1489,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 #endif
             }
         } else if (tokenizer_model == "rwkv") {
-            type = LLAMA_VOCAB_TYPE_RWKV;
+            type = LLAMA_VOCAB_TYPE_RWKV; // RWKV 分词器
 
-            // default special tokens
+            // 默认特殊标记
             special_bos_id = LLAMA_TOKEN_NULL;
             special_eos_id = LLAMA_TOKEN_NULL;
             special_unk_id = LLAMA_TOKEN_NULL;
@@ -1458,7 +1501,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             throw std::runtime_error(format("unknown tokenizer: '%s'", tokenizer_model.c_str()));
         }
 
-        // for now, only BPE models have pre-tokenizers
+        // 根据词汇表类型设置预处理类型和分词器标志
+        // 目前只有 BPE 模型具有预处理器
         if (type == LLAMA_VOCAB_TYPE_BPE) {
             add_space_prefix = false;
             clean_spaces = true;
@@ -1614,45 +1658,56 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
         }
 
+        // 从元数据中读取分词器标志
         ml.get_key(LLM_KV_TOKENIZER_ADD_PREFIX,      add_space_prefix,         false);
         ml.get_key(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS, remove_extra_whitespaces, false);
     }
 
+    // 从模型元数据中读取词汇表列表
     const int token_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_LIST).c_str());
     if (token_idx == -1) {
         throw std::runtime_error("cannot find tokenizer vocab in model file\n");
     }
 
+    // 从模型元数据中读取词汇表分数（如果存在）
     const float * scores = nullptr;
     const int score_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SCORES).c_str());
     if (score_idx != -1) {
         scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
     }
 
+    // 从模型元数据中读取词汇表类型（如果存在）
     const int * toktypes = nullptr;
     const int toktype_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_TOKEN_TYPE).c_str());
     if (toktype_idx != -1) {
         toktypes = (const int * ) gguf_get_arr_data(ctx, toktype_idx);
     }
 
+    // 获取词汇表大小并调整 id_to_token 向量大小
     uint32_t n_tokens = gguf_get_arr_n(ctx, token_idx);
     id_to_token.resize(n_tokens);
 
+    // 遍历词汇表，填充 token_to_id 映射、id_to_token 向量和相关属性
     for (uint32_t i = 0; i < n_tokens; i++) {
         std::string word = gguf_get_arr_str(ctx, token_idx, i);
+        // 处理空标记
         if (word.empty()) {
             LLAMA_LOG_WARN("%s: empty token at index %u\n", __func__, i);
             word = "[EMPTY_" + std::to_string(i) + "]";
         }
 
+        // 建立文本到 ID 的映射
         token_to_id[word] = i;
+        // 更新最大标记长度
         max_token_len = std::max(max_token_len, (int) word.size());
 
+        // 填充 id_to_token 向量
         auto & token_data = id_to_token[i];
         token_data.text  = std::move(word);
         token_data.score = scores ? scores[i] : 0.0f;
         token_data.attr  = LLAMA_TOKEN_ATTR_NORMAL;
 
+        // 如果存在标记类型信息，则设置标记属性
         if (toktypes) {  //TODO: remove, required until per token attributes are available from GGUF file
             switch(toktypes[i]) {
                 case LLAMA_TOKEN_TYPE_UNKNOWN:      token_data.attr = LLAMA_TOKEN_ATTR_UNKNOWN;      break;
@@ -1666,29 +1721,38 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
     }
+    // 确保 token_to_id 和 id_to_token 大小一致
     GGML_ASSERT(id_to_token.size() == token_to_id.size());
 
+    // 根据词汇表类型初始化分词器
     init_tokenizer(type);
 
-    // determine the newline token: LLaMA "<0x0A>" == 10 == '\n', Falcon 193 == '\n'
+    // 确定换行符token ID：LLaMA使用"<0x0A>"（即10，也就是'\n'），Falcon使用193表示'\n'
+    // 根据不同的词汇表类型，采用不同的方式查找换行符token
     if (type == LLAMA_VOCAB_TYPE_SPM) {
+        // SPM类型：通过字节到token的映射查找换行符
         try {
             linefeed_id = vocab.byte_to_token('\n');
         } catch (const std::exception & e) {
+            // 如果找不到换行符token，使用PAD token作为替代
             LLAMA_LOG_WARN("%s: SPM vocabulary, but newline token not found: %s! Using special_pad_id instead.", __func__, e.what());
             linefeed_id = special_pad_id;
         }
     } else if (type == LLAMA_VOCAB_TYPE_WPM) {
+        // WPM类型：直接使用PAD token作为换行符
         linefeed_id = special_pad_id;
     } else if (type == LLAMA_VOCAB_TYPE_RWKV) {
+        // RWKV类型：通过分词"\n"来查找换行符token
         const std::vector<int> ids = tokenize("\n", false);
         GGML_ASSERT(!ids.empty() && "model vocab missing newline token");
         linefeed_id = ids[0];
     } else {
+        // 其他类型（如BPE）：尝试使用Unicode字符U+010A（带点的拉丁大写字母C）来查找换行符token
         const std::vector<int> ids = tokenize("\xC4\x8A", false); // U+010A
 
         //GGML_ASSERT(!ids.empty() && "model vocab missing newline token");
         if (ids.empty()) {
+            // 如果找不到换行符token，使用PAD token作为替代并发出警告
             LLAMA_LOG_WARN("%s: model vocab missing newline token, using special_pad_id instead\n", __func__);
             linefeed_id = special_pad_id;
         } else {
@@ -1696,75 +1760,90 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         }
     }
 
-    // special tokens
+    // 处理特殊标记（special tokens）
+    // 特殊标记包括：BOS（开始）、EOS（结束）、EOT（结束对话）、EOM（结束消息）、
+    // UNK（未知）、SEP（分隔符）、PAD（填充）、MASK（掩码）以及FIM相关标记等
     {
+        // 定义所有特殊标记类型及其对应的元数据键名和成员变量引用
+        // 包括：BOS（开始）、EOS（结束）、EOT（结束对话）、EOM（结束消息）、
+        // UNK（未知）、SEP（分隔符）、PAD（填充）、MASK（掩码）以及FIM相关标记
         const std::vector<std::pair<enum llm_kv, int32_t &>> special_token_types = {
-            { LLM_KV_TOKENIZER_BOS_ID,     special_bos_id     },
-            { LLM_KV_TOKENIZER_EOS_ID,     special_eos_id     },
-            { LLM_KV_TOKENIZER_EOT_ID,     special_eot_id     },
-            { LLM_KV_TOKENIZER_EOM_ID,     special_eom_id     },
-            { LLM_KV_TOKENIZER_UNK_ID,     special_unk_id     },
-            { LLM_KV_TOKENIZER_SEP_ID,     special_sep_id     },
-            { LLM_KV_TOKENIZER_PAD_ID,     special_pad_id     },
-            { LLM_KV_TOKENIZER_MASK_ID,    special_mask_id    },
-            { LLM_KV_TOKENIZER_FIM_PRE_ID, special_fim_pre_id },
-            { LLM_KV_TOKENIZER_FIM_SUF_ID, special_fim_suf_id },
-            { LLM_KV_TOKENIZER_FIM_MID_ID, special_fim_mid_id },
-            { LLM_KV_TOKENIZER_FIM_PAD_ID, special_fim_pad_id },
-            { LLM_KV_TOKENIZER_FIM_REP_ID, special_fim_rep_id },
-            { LLM_KV_TOKENIZER_FIM_SEP_ID, special_fim_sep_id },
+            { LLM_KV_TOKENIZER_BOS_ID,     special_bos_id     },  // 开始标记
+            { LLM_KV_TOKENIZER_EOS_ID,     special_eos_id     },  // 结束标记
+            { LLM_KV_TOKENIZER_EOT_ID,     special_eot_id     },  // 结束对话标记
+            { LLM_KV_TOKENIZER_EOM_ID,     special_eom_id     },  // 结束消息标记
+            { LLM_KV_TOKENIZER_UNK_ID,     special_unk_id     },  // 未知词标记
+            { LLM_KV_TOKENIZER_SEP_ID,     special_sep_id     },  // 分隔符标记
+            { LLM_KV_TOKENIZER_PAD_ID,     special_pad_id     },  // 填充标记
+            { LLM_KV_TOKENIZER_MASK_ID,    special_mask_id    },  // 掩码标记
+            { LLM_KV_TOKENIZER_FIM_PRE_ID, special_fim_pre_id },  // FIM前缀标记
+            { LLM_KV_TOKENIZER_FIM_SUF_ID, special_fim_suf_id },  // FIM后缀标记
+            { LLM_KV_TOKENIZER_FIM_MID_ID, special_fim_mid_id },  // FIM中间标记
+            { LLM_KV_TOKENIZER_FIM_PAD_ID, special_fim_pad_id },  // FIM填充标记
+            { LLM_KV_TOKENIZER_FIM_REP_ID, special_fim_rep_id },  // FIM仓库标记
+            { LLM_KV_TOKENIZER_FIM_SEP_ID, special_fim_sep_id },  // FIM分隔标记
 
-            // deprecated
-            { LLM_KV_TOKENIZER_PREFIX_ID, special_fim_pre_id },
-            { LLM_KV_TOKENIZER_SUFFIX_ID, special_fim_suf_id },
-            { LLM_KV_TOKENIZER_MIDDLE_ID, special_fim_mid_id },
+            // 已弃用的标记（为了向后兼容保留）
+            { LLM_KV_TOKENIZER_PREFIX_ID, special_fim_pre_id },  // 前缀（已弃用，使用FIM_PRE）
+            { LLM_KV_TOKENIZER_SUFFIX_ID, special_fim_suf_id },  // 后缀（已弃用，使用FIM_SUF）
+            { LLM_KV_TOKENIZER_MIDDLE_ID, special_fim_mid_id },  // 中间（已弃用，使用FIM_MID）
         };
 
+        // 从模型元数据中读取每个特殊标记的ID
         for (const auto & it : special_token_types) {
-            const std::string & key = kv(std::get<0>(it));
-            int32_t & id = std::get<1>(it);
+            const std::string & key = kv(std::get<0>(it));  // 获取键名（用于日志）
+            int32_t & id = std::get<1>(it);                 // 获取成员变量的引用
 
             uint32_t new_id;
+            // 尝试从元数据中读取特殊标记ID（如果不存在则跳过，使用默认值）
             if (!ml.get_key(std::get<0>(it), new_id, false)) {
                 continue;
             }
+            // 验证ID是否有效（必须在词汇表范围内）
             if (new_id >= id_to_token.size()) {
+                // ID超出范围，使用默认值并发出警告
                 LLAMA_LOG_WARN("%s: bad special token: '%s' = %ud, using default id %d\n",
                     __func__, key.c_str(), new_id, id);
             } else {
+                // ID有效，更新为从元数据读取的值
                 id = new_id;
             }
         }
 
-        // Handle add_bos and add_eos
+        // 处理是否自动添加BOS（开始标记）和EOS（结束标记）的配置
         {
             bool temp = true;
 
+            // 从元数据中读取是否自动添加BOS标记的配置
             if (ml.get_key(LLM_KV_TOKENIZER_ADD_BOS, temp, false)) {
                 add_bos = temp;
             }
+            // 从元数据中读取是否自动添加EOS标记的配置
             if (ml.get_key(LLM_KV_TOKENIZER_ADD_EOS, temp, false)) {
                 add_eos = temp;
             }
         }
 
-        // auto-detect special tokens by text
-        // TODO: convert scripts should provide these tokens through the KV metadata LLM_KV_TOKENIZER_...
-        //       for now, we apply this workaround to find the tokens based on their text
+        // 自动检测特殊标记（通过token文本内容）
+        // TODO: 转换脚本应该通过KV元数据LLM_KV_TOKENIZER_...提供这些标记
+        //       目前我们使用这个变通方法来根据token文本查找标记
+        // 遍历所有token，尝试通过文本匹配来识别特殊标记
 
         for (const auto & t : token_to_id) {
-            // find EOT token: "<|eot_id|>", "<|im_end|>", "<end_of_turn>", etc.
+            // 查找EOT（End of Turn，结束对话）标记：支持多种变体格式
             if (special_eot_id == LLAMA_TOKEN_NULL) {
+                // 匹配多种EOT标记的文本格式
                 if (false
-                        || t.first == "<|eot_id|>"
-                        || t.first == "<|im_end|>"
-                        || t.first == "<|end|>"
-                        || t.first == "<end_of_turn>"
-                        || t.first == "<|endoftext|>"
-                        || t.first == "<EOT>"
-                        || t.first == "<｜end▁of▁sentence｜>" // DeepSeek
+                        || t.first == "<|eot_id|>"                          // 标准格式
+                        || t.first == "<|im_end|>"                          // 指令结束格式
+                        || t.first == "<|end|>"                             // 简单结束格式
+                        || t.first == "<end_of_turn>"                       // 下划线格式
+                        || t.first == "<|endoftext|>"                       // 文本结束格式
+                        || t.first == "<EOT>"                               // 大写格式
+                        || t.first == "<｜end▁of▁sentence｜>"        // DeepSeek格式
                    ) {
                     special_eot_id = t.second;
+                    // 确保EOT标记被标记为控制类型（如果不是则修正并警告）
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
@@ -1773,12 +1852,14 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 }
             }
 
-            // find EOM token: "<|eom_id|>"
+            // 查找EOM（End of Message，结束消息）标记
             if (special_eom_id == LLAMA_TOKEN_NULL) {
+                // 匹配EOM标记的文本格式
                 if (false
-                        || t.first == "<|eom_id|>"
+                        || t.first == "<|eom_id|>"                          // 标准格式
                         ) {
                     special_eom_id = t.second;
+                    // 确保EOM标记被标记为控制类型
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
@@ -1787,15 +1868,17 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 }
             }
 
-            // find FIM_PRE token: "<|fim_prefix|>", "<fim-prefix>", "<PRE>", etc.
+            // 查找FIM_PRE（Fill-in-the-Middle前缀）标记：用于代码补全等场景
             if (special_fim_pre_id == LLAMA_TOKEN_NULL) {
+                // 匹配FIM前缀标记的多种文本格式
                 if (false
-                        || t.first == "<|fim_prefix|>"  // Qwen
-                        || t.first == "<fim-prefix>"
-                        || t.first == "<｜fim▁begin｜>" // DeepSeek
-                        || t.first == "<PRE>"
+                        || t.first == "<|fim_prefix|>"                      // Qwen格式
+                        || t.first == "<fim-prefix>"                        // 下划线格式
+                        || t.first == "<｜fim▁begin｜>"              // DeepSeek格式
+                        || t.first == "<PRE>"                               // 简短格式
                         ) {
                     special_fim_pre_id = t.second;
+                    // 确保FIM_PRE标记被标记为控制类型
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
@@ -1804,15 +1887,17 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 }
             }
 
-            // find FIM_SUF token: "<|fim_suffix|>", "<fim-suffix>", "<SUF>", etc.
+            // 查找FIM_SUF（Fill-in-the-Middle后缀）标记
             if (special_fim_suf_id == LLAMA_TOKEN_NULL) {
+                // 匹配FIM后缀标记的多种文本格式
                 if (false
-                        || t.first == "<|fim_suffix|>" // Qwen
-                        || t.first == "<fim-suffix>"
-                        || t.first == "<｜fim▁hole｜>" // DeepSeek
-                        || t.first == "<SUF>"
+                        || t.first == "<|fim_suffix|>"                      // Qwen格式
+                        || t.first == "<fim-suffix>"                        // 下划线格式
+                        || t.first == "<｜fim▁hole｜>"               // DeepSeek格式
+                        || t.first == "<SUF>"                               // 简短格式
                         ) {
                     special_fim_suf_id = t.second;
+                    // 确保FIM_SUF标记被标记为控制类型
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
@@ -1821,15 +1906,17 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 }
             }
 
-            // find FIM_MID token: "<|fim_middle|>", "<fim-middle>", "<MID>", etc.
+            // 查找FIM_MID（Fill-in-the-Middle中间）标记
             if (special_fim_mid_id == LLAMA_TOKEN_NULL) {
+                // 匹配FIM中间标记的多种文本格式
                 if (false
-                        || t.first == "<|fim_middle|>" // Qwen
-                        || t.first == "<fim-middle>"
-                        || t.first == "<｜fim▁end｜>"  // DeepSeek
-                        || t.first == "<MID>"
+                        || t.first == "<|fim_middle|>"                      // Qwen格式
+                        || t.first == "<fim-middle>"                        // 下划线格式
+                        || t.first == "<｜fim▁end｜>"                // DeepSeek格式
+                        || t.first == "<MID>"                               // 简短格式
                         ) {
                     special_fim_mid_id = t.second;
+                    // 确保FIM_MID标记被标记为控制类型
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
@@ -1838,14 +1925,16 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 }
             }
 
-            // find FIM_PAD token: "<|fim_pad|>", "<fim-pad>", "<PAD>", etc.
+            // 查找FIM_PAD（Fill-in-the-Middle填充）标记
             if (special_fim_pad_id == LLAMA_TOKEN_NULL) {
+                // 匹配FIM填充标记的多种文本格式
                 if (false
-                        || t.first == "<|fim_pad|>" // Qwen
-                        || t.first == "<fim-pad>"
-                        || t.first == "<PAD>"
+                        || t.first == "<|fim_pad|>"                          // Qwen格式
+                        || t.first == "<fim-pad>"                           // 下划线格式
+                        || t.first == "<PAD>"                               // 简短格式
                         ) {
                     special_fim_pad_id = t.second;
+                    // 确保FIM_PAD标记被标记为控制类型
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
@@ -1854,15 +1943,17 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 }
             }
 
-            // find FIM_REP token: "<|fim_repo|>", "<fim-repo>", "<REP>", etc.
+            // 查找FIM_REP（Fill-in-the-Middle仓库）标记：用于代码仓库相关的FIM场景
             if (special_fim_rep_id == LLAMA_TOKEN_NULL) {
+                // 匹配FIM仓库标记的多种文本格式
                 if (false
-                        || t.first == "<|fim_repo|>"  // Qwen
-                        || t.first == "<|repo_name|>"
-                        || t.first == "<fim-repo>"
-                        || t.first == "<REPO>"
+                        || t.first == "<|fim_repo|>"                         // Qwen格式
+                        || t.first == "<|repo_name|>"                        // 仓库名称格式
+                        || t.first == "<fim-repo>"                          // 下划线格式
+                        || t.first == "<REPO>"                              // 简短格式
                         ) {
                     special_fim_rep_id = t.second;
+                    // 确保FIM_REP标记被标记为控制类型
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
@@ -1871,12 +1962,14 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 }
             }
 
-            // find FIM_SEP token: "<|file_sep|>"
+            // 查找FIM_SEP（Fill-in-the-Middle分隔符）标记：用于文件分隔
             if (special_fim_sep_id == LLAMA_TOKEN_NULL) {
+                // 匹配FIM分隔符标记的文本格式
                 if (false
-                        || t.first == "<|file_sep|>" // Qwen
+                        || t.first == "<|file_sep|>"                         // Qwen格式
                         ) {
                     special_fim_sep_id = t.second;
+                    // 确保FIM_SEP标记被标记为控制类型
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
@@ -1886,11 +1979,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // maintain a list of tokens that cause end-of-generation
-        // this is currently determined based on the token text, which is obviously not ideal
-        // ref: https://github.com/ggerganov/llama.cpp/issues/9606
+        // 维护一个导致生成结束的标记列表（End-of-Generation tokens）
+        // 注意：目前基于token文本内容来确定，这显然不是理想的方式
+        // 参考：https://github.com/ggerganov/llama.cpp/issues/9606
         special_eog_ids.clear();
 
+        // 将FIM相关标记添加到结束生成标记集合中（如果它们存在）
         if (special_fim_pad_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_fim_pad_id) == 0) {
             special_eog_ids.insert(special_fim_pad_id);
         }
@@ -1903,24 +1997,27 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_eog_ids.insert(special_fim_sep_id);
         }
 
+        // 遍历所有token，查找其他可能导致生成结束的标记
         for (const auto & t : token_to_id) {
+            // 匹配各种结束标记的文本格式
             if (false
-                    || t.first == "<|eot_id|>"
-                    || t.first == "<|im_end|>"
-                    || t.first == "<|end|>"
-                    || t.first == "<end_of_turn>"
-                    || t.first == "<|endoftext|>"
-                    || t.first == "<|eom_id|>"
-                    || t.first == "<EOT>"
+                    || t.first == "<|eot_id|>"                              // 结束对话标记
+                    || t.first == "<|im_end|>"                              // 指令结束标记
+                    || t.first == "<|end|>"                                 // 简单结束标记
+                    || t.first == "<end_of_turn>"                           // 轮次结束标记
+                    || t.first == "<|endoftext|>"                           // 文本结束标记
+                    || t.first == "<|eom_id|>"                             // 消息结束标记
+                    || t.first == "<EOT>"                                   // 大写结束标记
                ) {
                 special_eog_ids.insert(t.second);
+                // 确保这些标记被标记为控制类型
                 if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                     LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                             __func__, t.second, t.first.c_str());
                     id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
                 }
             } else {
-                // token is control, but not marked as EOG -> print a debug log
+                // token是控制类型，但未标记为EOG -> 打印调试日志
                 if (id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL && special_eog_ids.count(t.second) == 0) {
                     LLAMA_LOG_DEBUG("%s: control token: %6d '%s' is not marked as EOG\n",
                             __func__, t.second, t.first.c_str());
@@ -1928,31 +2025,37 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // sanity checks
+        // 完整性检查：确保重要的结束标记都在EOG集合中
+        // 如果EOS标记存在但不在EOG集合中，添加它并警告
         if (special_eos_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eos_id) == 0) {
             special_eog_ids.insert(special_eos_id);
             LLAMA_LOG_WARN("%s: special_eos_id is not in special_eog_ids - the tokenizer config may be incorrect\n", __func__);
         }
 
+        // 如果EOT标记存在但不在EOG集合中，添加它并警告
         if (special_eot_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eot_id) == 0) {
             special_eog_ids.insert(special_eot_id);
             LLAMA_LOG_WARN("%s: special_eot_id is not in special_eog_ids - the tokenizer config may be incorrect\n", __func__);
         }
 
+        // 如果EOM标记存在但不在EOG集合中，添加它并警告
         if (special_eom_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eom_id) == 0) {
             special_eog_ids.insert(special_eom_id);
             LLAMA_LOG_WARN("%s: special_eom_id is not in special_eog_ids - the tokenizer config may be incorrect\n", __func__);
         }
     }
 
-    // build special tokens cache
+    // 构建特殊标记缓存：用于快速查找特殊标记
+    // 缓存中包含所有控制类型、用户定义和未知类型的标记
     {
+        // 遍历所有token，收集特殊标记
         for (llama_token id = 0; id < (llama_token) n_tokens; ++id) {
             if (id_to_token[id].attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED | LLAMA_TOKEN_ATTR_UNKNOWN)) {
                 cache_special_tokens.push_back(id);
             }
         }
 
+        // 按token文本长度降序排序（长token优先匹配，避免部分匹配问题）
         std::sort(cache_special_tokens.begin(), cache_special_tokens.end(),
             [&] (const llama_token a, const llama_token b) {
                 return id_to_token[a].text.size() > id_to_token[b].text.size();
@@ -1962,28 +2065,32 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         LLAMA_LOG_INFO("%s: special tokens cache size = %u\n", __func__, (uint32_t) cache_special_tokens.size());
     }
 
-    // build token to piece cache
+    // 构建token到piece的缓存：用于快速将token ID转换为对应的文本片段
+    // 这个缓存在解码（detokenize）时非常有用，可以避免重复计算
     {
         size_t size_cache = 0;
 
         std::vector<std::string> cache(n_tokens);
 
+        // 为每个token预计算其对应的piece文本
         for (uint32_t id = 0; id < n_tokens; ++id) {
             cache[id] = token_to_piece_for_cache(id, true);
 
             size_cache += cache[id].size();
         }
 
+        // 将计算好的缓存替换到成员变量中
         std::swap(cache_token_to_piece, cache);
 
         LLAMA_LOG_INFO("%s: token to piece cache size = %.4f MB\n", __func__, size_cache / 1024.0 / 1024.0);
     }
 
-    // Handle per token attributes
-    //NOTE: Each model customizes per token attributes.
-    //NOTE: Per token attributes are missing from the GGUF file.
-    //TODO: Extract attributes from GGUF file.
+    // 处理每个token的属性设置
+    // 注意：每个模型都会自定义token的属性
+    // 注意：token属性信息在GGUF文件中缺失
+    // TODO: 从GGUF文件中提取属性信息
     {
+        // 辅助函数：检查字符串是否包含任何给定的子字符串
         auto _contains_any = [] (const std::string & str, const std::vector<std::string> & substrs) -> bool {
             for (const auto & substr : substrs) {
                 if (str.find(substr) < std::string::npos) {
@@ -1993,12 +2100,15 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             return false;
         };
 
+        // 辅助函数：通过token ID设置token属性
         auto _set_tokenid_attr = [&] (const llama_token id, llama_token_attr attr, bool value) {
             uint32_t current = id_to_token.at(id).attr;
+            // 使用位运算设置或清除属性标志
             current = value ? (current | attr) : (current & ~attr);
             id_to_token[id].attr = (llama_token_attr) current;
         };
 
+        // 辅助函数：通过token文本设置token属性
         auto _set_token_attr = [&] (const std::string & token, llama_token_attr attr, bool value) {
             _set_tokenid_attr(token_to_id.at(token), attr, value);
         };
@@ -2006,26 +2116,31 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         std::string model_name;
         std::string tokenizer_pre;
 
+        // 从模型元数据中读取模型名称和分词器预处理类型
         ml.get_key(LLM_KV_GENERAL_NAME,  model_name,    false);
         ml.get_key(LLM_KV_TOKENIZER_PRE, tokenizer_pre, false);
 
-        // model name to lowercase
+        // 将模型名称转换为小写，便于后续匹配
         std::transform(model_name.begin(), model_name.end(), model_name.begin(),
             [] (const std::string::value_type x) {
                 return std::tolower(x);
             }
         );
 
-        // set attributes by model/tokenizer name
+        // 根据模型名称或分词器类型设置特定的token属性
+        // Jina v2系列：为<mask>标记设置左去除空格属性
         if (_contains_any(tokenizer_pre, {"jina-v2-de", "jina-v2-es", "jina-v2-code"})) {
             _set_token_attr("<mask>", LLAMA_TOKEN_ATTR_LSTRIP, true);
         } else if (_contains_any(model_name, {"phi-3", "phi3"})) {
+            // Phi-3模型：为所有特殊标记设置右去除空格属性
             for (auto id : cache_special_tokens) {
                 _set_tokenid_attr(id, LLAMA_TOKEN_ATTR_RSTRIP, true);
             }
+            // 确保</s>标记也有右去除空格属性
             for (const auto * token : {"</s>"}) {
                 _set_token_attr(token, LLAMA_TOKEN_ATTR_RSTRIP, true);
             }
+            // 某些特定token不需要右去除空格属性
             for (const auto * token : {"<unk>", "<s>", "<|endoftext|>"}) {
                 _set_token_attr(token, LLAMA_TOKEN_ATTR_RSTRIP, false);
             }
@@ -3242,4 +3357,3 @@ int32_t llama_detokenize(
                         bool   unparse_special) {
     return vocab->detokenize(tokens, n_tokens, text, text_len_max, remove_special, unparse_special);
 }
-

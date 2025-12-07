@@ -1254,226 +1254,321 @@ void llama_model::load_vocab(llama_model_loader & ml) {
 }
 
 bool llama_model::load_tensors(llama_model_loader & ml) {
+    // 从参数中获取分割模式（用于多GPU时的张量分割方式）
     const auto & split_mode   = params.split_mode;
+    // 获取要加载到GPU的层数
     const auto & n_gpu_layers = params.n_gpu_layers;
+    // 获取是否使用mlock（内存锁定）标志
     const auto & use_mlock    = params.use_mlock;
+    // 获取张量分割配置（用于指定每个GPU设备分配的张量比例）
     const auto & tensor_split = params.tensor_split;
 
+    // 获取模型的层数
     const int n_layer = hparams.n_layer;
 
+    // 设置使用内存映射缓冲区标志为true
     const bool use_mmap_buffer = true;
 
-    // build a list of buffer types for the CPU and GPU devices
+    // 构建CPU和GPU设备的缓冲区类型列表
+    // 为CPU设备创建缓冲区类型列表
     pimpl->cpu_buft_list = make_cpu_buft_list(devices);
+    // 遍历每个GPU设备
     for (auto * dev : devices) {
+        // 为当前GPU设备创建缓冲区类型列表（根据分割模式和tensor_split配置）
         buft_list_t buft_list = make_gpu_buft_list(dev, split_mode, tensor_split);
-        // add CPU buffer types as a fallback
+        // 将CPU缓冲区类型作为后备选项添加到列表中
         buft_list.insert(buft_list.end(), pimpl->cpu_buft_list.begin(), pimpl->cpu_buft_list.end());
+        // 将GPU设备的缓冲区类型列表存储到映射中
         pimpl->gpu_buft_list.emplace(dev, std::move(buft_list));
     }
 
-    // calculate the split points
+    // 计算分割点（用于在多GPU之间分配层）
+    // 检查tensor_split是否为空或全为0（表示使用默认分割）
     bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + n_devices(), [](float x) { return x == 0.0f; });
+    // 创建分割比例向量，大小为设备数量
     std::vector<float> splits(n_devices());
     if (all_zero) {
-        // default split, by free memory
+        // 默认分割方式：根据每个设备的空闲内存来分配
         for (size_t i = 0; i < n_devices(); ++i) {
+            // 获取第i个设备
             ggml_backend_dev_t dev = devices[i];
-            size_t total;
-            size_t free;
+            size_t total;  // 总内存
+            size_t free;   // 空闲内存
+            // 获取设备的内存信息
             ggml_backend_dev_memory(dev, &free, &total);
+            // 使用空闲内存作为该设备的分割比例
             splits[i] = free;
         }
     } else {
+        // 如果指定了tensor_split，则直接复制用户配置的分割比例
         std::copy(tensor_split, tensor_split + n_devices(), splits.begin());
     }
 
-    // sum and normalize the splits to get the split points
+    // 对分割比例求和并归一化，得到累积分割点
     float split_sum = 0.0f;
+    // 计算累积和
     for (size_t i = 0; i < n_devices(); ++i) {
         split_sum += splits[i];
-        splits[i] = split_sum;
+        splits[i] = split_sum;  // 存储累积值
     }
+    // 归一化：将累积值除以总和，得到0到1之间的累积比例
     for (size_t i = 0; i < n_devices(); ++i) {
         splits[i] /= split_sum;
     }
 
+    // 获取CPU设备句柄
     ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    // 计算GPU层开始的索引（从后往前数n_gpu_layers层）
     const int i_gpu_start = std::max((int) hparams.n_layer - n_gpu_layers, (int) 0);
+    // 计算实际要加载到GPU的层数（如果设备为空则为0，否则取n_gpu_layers和n_layer+1的最小值）
     const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, (int)n_layer + 1);
+    // 定义lambda函数：根据层索引返回该层应该使用的设备和缓冲区类型列表
     auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
+        // 如果层索引小于GPU起始索引，或者超出实际GPU层范围，则使用CPU
         if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers) {
             return {cpu_dev, &pimpl->cpu_buft_list};
         }
+        // 计算该层应该分配到哪个GPU设备（使用upper_bound二分查找）
         const int layer_gpu = std::upper_bound(splits.begin(), splits.begin() + n_devices(), float(il - i_gpu_start)/act_gpu_layers) - splits.begin();
+        // 获取对应的GPU设备
         auto * dev = devices.at(layer_gpu);
+        // 返回该GPU设备的缓冲区类型列表
         return {dev, &pimpl->gpu_buft_list.at(dev)};
     };
 
-    // assign the input layer
-    // there is very little benefit to offloading the input layer, so always keep it on the CPU
+    // 分配输入层
+    // 将输入层卸载到GPU的收益很小，所以始终保持在CPU上
     pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
 
-    // assign the repeating layers to the devices according to the splits
+    // 根据分割点将重复层分配到各个设备
+    // 调整dev_layer向量大小为层数
     pimpl->dev_layer.resize(n_layer);
+    // 遍历每一层，分配其对应的设备和缓冲区类型列表
     for (int il = 0; il < n_layer; ++il) {
         pimpl->dev_layer[il] = get_layer_buft_list(il);
     }
 
-    // assign the output layer
+    // 分配输出层
     pimpl->dev_output = get_layer_buft_list(n_layer);
 
-    // one ggml context per buffer type
+    // 每个缓冲区类型对应一个ggml context
+    // 获取模型中的张量数量
     int max_n_tensors = ml.n_tensors;
-    max_n_tensors += 1;         // duplicated output tensor
-    max_n_tensors += n_layer*2; // duplicated rope freq tensors
+    max_n_tensors += 1;         // 加上重复的输出张量
+    max_n_tensors += n_layer*2; // 加上重复的rope频率张量（每层2个）
+    // 计算context所需的内存大小（每个张量的开销乘以最大张量数）
     const size_t ctx_size = ggml_tensor_overhead()*max_n_tensors;
 
+    // 创建缓冲区类型到context的映射
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
+    // 定义lambda函数：根据缓冲区类型获取或创建对应的ggml context
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
+        // 查找是否已经存在该缓冲区类型的context
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
+            // 如果不存在，创建新的context初始化参数
             ggml_init_params params = {
-                /*.mem_size   =*/ ctx_size,
-                /*.mem_buffer =*/ NULL,
-                /*.no_alloc   =*/ true,
+                /*.mem_size   =*/ ctx_size,  // 内存大小
+                /*.mem_buffer =*/ NULL,       // 内存缓冲区指针（NULL表示自动分配）
+                /*.no_alloc   =*/ true,       // 不自动分配内存（由后端缓冲区管理）
             };
 
+            // 初始化ggml context
             ggml_context * ctx = ggml_init(params);
             if (!ctx) {
+                // 如果创建失败，抛出异常
                 throw std::runtime_error(format("failed to create ggml context"));
             }
 
+            // 将新创建的context存储到映射中
             ctx_map[buft] = ctx;
+            // 将context添加到pimpl的context列表中（用于后续管理）
             pimpl->ctxs.emplace_back(ctx);
 
             return ctx;
         }
+        // 如果已存在，直接返回
         return it->second;
     };
 
+    // 定义张量标志常量：表示张量是重复的（多个层共享同一个张量）
     const auto TENSOR_DUPLICATED   = llama_model_loader::TENSOR_DUPLICATED;
+    // 定义张量标志常量：表示张量不是必需的（可选）
     const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
 
-    // create tensors for the weights
+    // 为权重创建张量
     {
-        // note: cast to int64_t since we will use these for the tensor dimensions
+        // 注意：转换为int64_t类型，因为我们将这些值用于张量维度
+        // 获取注意力头数
         const int64_t n_head        = hparams.n_head();
+        // 获取键值注意力头数
         const int64_t n_head_kv     = hparams.n_head_kv();
+        // 获取嵌入维度
         const int64_t n_embd        = hparams.n_embd;
+        // 获取键的GQA（分组查询注意力）嵌入维度
         const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa();
+        // 获取值的GQA嵌入维度
         const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa();
+        // 获取每个键头的嵌入维度
         const int64_t n_embd_head_k = hparams.n_embd_head_k;
+        // 获取每个值头的嵌入维度
         const int64_t n_embd_head_v = hparams.n_embd_head_v;
+        // 获取前馈网络的维度
         const int64_t n_ff          = hparams.n_ff();
+        // GQA嵌入维度等于值的GQA嵌入维度
         const int64_t n_embd_gqa    = n_embd_v_gqa;
+        // 获取词汇表大小（token数量）
         const int64_t n_vocab       = vocab.n_tokens();
+        // 获取token类型数量
         const int64_t n_token_types = vocab.n_token_types();
+        // 获取旋转位置编码的维度
         const int64_t n_rot         = hparams.n_rot;
+        // 获取专家数量（用于MoE模型）
         const int64_t n_expert      = hparams.n_expert;
+        // 获取实际使用的专家数量
         const int64_t n_expert_used = hparams.n_expert_used;
+        // 获取训练时的上下文长度
         const int64_t n_ctx_train   = hparams.n_ctx_train;
 
+        // 检查：如果模型有专家层但未使用任何专家，则抛出错误
         if (n_expert > 0 && hparams.n_expert_used == 0) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
         }
 
+        // 记录被移动的张量数量（当张量无法使用首选缓冲区类型时）
         int n_moved_tensors = 0;
+        // 记录第一个被移动的张量（用于日志输出）
         ggml_tensor * first_moved_tensor = nullptr;
+        // 记录第一个被移动张量的原始缓冲区类型
         ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
+        // 记录第一个被移动张量的目标缓冲区类型
         ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
+        // 定义lambda函数：创建张量
+        // 参数：tn - 张量名称信息，ne - 张量维度列表，flags - 张量标志
         auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
+            // 从模型加载器中获取张量的元数据
             ggml_tensor * t_meta = ml.get_tensor_meta(tn.str().c_str());
 
+            // 如果张量元数据不存在
             if (!t_meta) {
+                // 如果张量标记为不是必需的，返回nullptr
                 if (flags & TENSOR_NOT_REQUIRED) {
                     return nullptr;
                 }
+                // 否则抛出异常，表示缺少必需的张量
                 throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
             }
 
-            // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
-            // the tensor is duplicated
-            // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
+            // 某些模型使用token嵌入张量作为输出，但由于这些张量在不同层中使用且使用不同的操作
+            // 张量需要被复制
+            // 为了处理这种情况，我们检查张量是否被标记为重复，如果是，我们假设它正在作为输出张量加载
             llm_tensor tn_tensor = tn.tensor;
+            // 如果是token嵌入张量且标记为重复，则将其视为输出张量
             if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && flags & TENSOR_DUPLICATED) {
                 tn_tensor = LLM_TENSOR_OUTPUT;
             }
 
+            // 获取张量信息
             llm_tensor_info info;
             try {
+                // 根据张量类型获取张量信息（包含层类型、操作类型等）
                 info = llm_tensor_info_for(tn_tensor);
             } catch (const std::out_of_range & e) {
+                // 如果找不到张量信息映射，抛出异常
                 throw std::runtime_error(format("missing tensor info mapping for %s", tn.str().c_str()));
             }
 
-            // tensors with "bias" suffix are always used with GGML_OP_ADD
+            // 带有"bias"后缀的张量总是与GGML_OP_ADD操作一起使用
             ggml_op op;
+            // 检查张量名称是否有"bias"后缀
             bool bias = tn.suffix != nullptr && strcmp(tn.suffix, "bias") == 0;
             if (bias) {
+                // 如果是bias张量，使用ADD操作
                 op = GGML_OP_ADD;
             } else {
+                // 否则使用张量信息中定义的操作
                 op = info.op;
             }
 
-            // sanity checks
+            // 合理性检查
+            // 如果张量属于输入层或输出层
             if (info.layer == LLM_TENSOR_LAYER_INPUT || info.layer == LLM_TENSOR_LAYER_OUTPUT) {
+                // 输入/输出层张量不应该有层编号（bid应该为-1）
                 if (tn.bid != -1) {
                     GGML_ABORT("input/output layer tensor %s used with a layer number", tn.str().c_str());
                 }
             } else {
+                // 重复层张量必须有层编号（bid不能为-1）
                 if (tn.bid == -1) {
                     GGML_ABORT("repeating layer tensor %s used without a layer number", tn.str().c_str());
                 }
             }
 
-            // select the buffer type for this tensor
+            // 为这个张量选择缓冲区类型
             buft_list_t * buft_list;
+            // 根据张量所属的层类型选择对应的缓冲区类型列表
             switch (info.layer) {
                 case LLM_TENSOR_LAYER_INPUT:
+                    // 输入层使用输入层的缓冲区类型列表
                     buft_list = pimpl->dev_input.buft_list;
                     break;
                 case LLM_TENSOR_LAYER_OUTPUT:
+                    // 输出层使用输出层的缓冲区类型列表
                     buft_list = pimpl->dev_output.buft_list;
                     break;
                 case LLM_TENSOR_LAYER_REPEATING:
+                    // 重复层使用对应层的缓冲区类型列表（根据层编号bid）
                     buft_list = pimpl->dev_layer.at(tn.bid).buft_list;
                     break;
                 default:
+                    // 无效的层类型，终止程序
                     GGML_ABORT("invalid layer %d for tensor %s", info.layer, tn.str().c_str());
             }
 
+            // 从缓冲区类型列表中选择适合该权重的缓冲区类型（根据超参数、张量元数据、操作类型）
             ggml_backend_buffer_type_t buft = select_weight_buft(hparams, t_meta, op, *buft_list);
+            // 如果找不到兼容的缓冲区类型，抛出异常
             if (!buft) {
                 throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
             }
 
-            // avoid using a host buffer when using mmap
+            // 使用mmap时避免使用host缓冲区
+            // 获取缓冲区类型对应的设备
             auto * buft_dev = ggml_backend_buft_get_device(buft);
+            // 如果使用mmap且设备存在，且缓冲区类型是设备的host缓冲区类型
             if (ml.use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
+                // 获取CPU设备
                 auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+                // 使用CPU设备的默认缓冲区类型
                 buft = ggml_backend_dev_buffer_type(cpu_dev);
             }
 
+            // 如果选择的缓冲区类型与首选缓冲区类型不同，记录移动信息
             if (buft != buft_list->front().second) {
+                // 增加被移动张量的计数
                 n_moved_tensors++;
+                // 如果是第一个被移动的张量，记录其信息（用于后续日志输出）
                 if (!first_moved_tensor) {
                     first_moved_tensor = t_meta;
-                    first_moved_from_buft = buft_list->front().second;
-                    first_moved_to_buft   = buft;
+                    first_moved_from_buft = buft_list->front().second;  // 原始缓冲区类型
+                    first_moved_to_buft   = buft;                        // 目标缓冲区类型
                 }
             }
 
+            // 获取或创建该缓冲区类型对应的ggml context
             ggml_context * ctx = ctx_for_buft(buft);
 
-            // if duplicated, check if the original tensor was allocated in the same buffer type context and avoid creating a new one
+            // 如果张量标记为重复，检查原始张量是否已在相同缓冲区类型的context中分配，避免重复创建
             if (flags & TENSOR_DUPLICATED) {
+                // 尝试从context中获取已存在的同名张量
                 ggml_tensor * t = ggml_get_tensor(ctx, tn.str().c_str());
                 if (t) {
+                    // 如果已存在，直接返回（避免重复创建）
                     return t;
                 }
             }
+            // 在指定的context中创建张量（通过模型加载器）
             return ml.create_tensor(ctx, tn, ne, flags);
         };
 
@@ -3352,6 +3447,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 throw std::runtime_error("unknown architecture");
         }
 
+        // 如果有张量被移动（无法使用首选缓冲区类型），输出调试日志
         if (n_moved_tensors > 0) {
             LLAMA_LOG_DEBUG("%s: tensor '%s' (%s) (and %d others) cannot be used with preferred buffer type %s, using %s instead\n",
                 __func__, first_moved_tensor->name, ggml_type_name(first_moved_tensor->type), n_moved_tensors - 1,
@@ -3359,133 +3455,180 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // 通知模型加载器已完成获取张量元数据
     ml.done_getting_tensors();
 
+    // 初始化内存映射（如果使用mlock，则传入mlock映射指针）
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+    // 为映射预留空间
     pimpl->mappings.reserve(ml.mappings.size());
 
-    // create the backend buffers
+    // 创建后端缓冲区
+    // 创建context和缓冲区映射的向量（每个context对应一个缓冲区映射）
     std::vector<std::pair<ggml_context *, llama_buf_map>> ctx_bufs;
+    // 预留空间（大小为context映射的数量）
     ctx_bufs.reserve(ctx_map.size());
 
-    // Ensure we have enough capacity for the maximum backend buffer we will potentially create
+    // 确保我们有足够的容量来创建最大可能的后端缓冲区
+    // 计算最大后端缓冲区数量（context数量乘以文件数量）
     const size_t n_max_backend_buffer = ctx_map.size() * ml.files.size();
+    // 为缓冲区列表预留空间
     pimpl->bufs.reserve(n_max_backend_buffer);
 
+    // 遍历每个context映射
     for (auto & it : ctx_map) {
+        // 获取缓冲区类型
         ggml_backend_buffer_type_t buft = it.first;
+        // 获取对应的context
         ggml_context * ctx              = it.second;
 
-        // skip contexts without tensors
+        // 跳过没有张量的context
         if (ggml_get_first_tensor(ctx) == nullptr) {
             continue;
         }
 
+        // 创建缓冲区映射（文件索引到缓冲区的映射）
         llama_buf_map buf_map;
         buf_map.reserve(n_max_backend_buffer);
 
-        // check if it is possible to use buffer_from_host_ptr with this buffer type
+        // 检查是否可以使用buffer_from_host_ptr（从主机指针创建缓冲区）
+        // 获取缓冲区类型对应的设备
         ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
         if (!dev) {
-            // FIXME: workaround for CPU backend buft having a NULL device
+            // FIXME: CPU后端缓冲区的设备可能为NULL的临时解决方案
             dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
         }
+        // 获取设备属性
         ggml_backend_dev_props props;
         ggml_backend_dev_get_props(dev, &props);
+        // 检查设备是否支持从主机指针创建缓冲区
         bool buffer_from_host_ptr_supported = props.caps.buffer_from_host_ptr;
+        // 检查是否是设备的默认缓冲区类型
         bool is_default_buft = buft == ggml_backend_dev_buffer_type(dev);
 
+        // 如果使用mmap且支持从主机指针创建缓冲区且是默认缓冲区类型
         if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+            // 遍历每个文件
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
-                // only the mmap region containing the tensors in the model is mapped to the backend buffer
-                // this is important for metal with apple silicon: if the entire model could be mapped to a metal buffer, then we could just use metal for all layers
-                // this allows using partial offloading when the model size exceeds the metal buffer size, but not the RAM size
+                // 只有包含模型中张量的mmap区域被映射到后端缓冲区
+                // 这对于Apple Silicon的Metal很重要：如果整个模型可以映射到metal缓冲区，那么我们可以对所有层使用metal
+                // 这允许在模型大小超过metal缓冲区大小但不超过RAM大小时使用部分卸载
                 void * addr = nullptr;
                 size_t first, last; // NOLINT
+                // 获取该文件在context中的映射范围
                 ml.get_mapping_range(&first, &last, &addr, idx, ctx);
+                // 如果范围无效，跳过
                 if (first >= last) {
                     continue;
                 }
+                // 获取context中最大张量的大小
                 const size_t max_size = ggml_get_max_tensor_size(ctx);
+                // 从主机指针创建后端缓冲区（使用mmap的内存区域）
                 ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, (char *) addr + first, last - first, max_size);
                 if (buf == nullptr) {
                     throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
                 }
+                // 将缓冲区添加到缓冲区列表
                 pimpl->bufs.emplace_back(buf);
+                // 将文件索引和缓冲区添加到映射中
                 buf_map.emplace(idx, buf);
             }
         }
         else {
+            // 如果不使用mmap或设备不支持，则从缓冲区类型分配context中的所有张量
             ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
             if (buf == nullptr) {
                 throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
             }
+            // 将缓冲区添加到缓冲区列表
             pimpl->bufs.emplace_back(buf);
+            // 如果使用mlock且缓冲区是主机缓冲区，则锁定内存
             if (use_mlock && ggml_backend_buffer_is_host(buf)) {
+                // 创建mlock对象
                 pimpl->mlock_bufs.emplace_back(new llama_mlock);
                 auto & mlock_buf = pimpl->mlock_bufs.back();
+                // 初始化mlock（锁定缓冲区基地址）
                 mlock_buf->init   (ggml_backend_buffer_get_base(buf));
+                // 扩展到缓冲区大小
                 mlock_buf->grow_to(ggml_backend_buffer_get_size(buf));
             }
+            // 为每个文件创建映射（都指向同一个缓冲区）
             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
                 buf_map.emplace(idx, buf);
             }
         }
 
+        // 检查是否成功分配了缓冲区
         if (pimpl->bufs.empty()) {
             throw std::runtime_error("failed to allocate buffer");
         }
 
+        // 为每个缓冲区设置使用标志
         for (auto & buf : buf_map) {
-            // indicate that this buffer contains weights
-            // this is used by ggml_backend_sched to improve op scheduling: ops that use a weight are preferably scheduled to the backend that contains the weight
+            // 指示该缓冲区包含权重
+            // 这用于ggml_backend_sched改进操作调度：使用权重的操作优先调度到包含该权重的后端
             ggml_backend_buffer_set_usage(buf.second, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         }
 
+        // 将context和缓冲区映射添加到列表中
         ctx_bufs.emplace_back(ctx, buf_map);
     }
 
+    // 如果支持GPU卸载，输出卸载信息
     if (llama_supports_gpu_offload()) {
+        // 计算实际卸载到GPU的层数（取n_gpu_layers和总层数的最小值）
         const int n_gpu = std::min(n_gpu_layers, int(hparams.n_layer));
 
+        // 输出卸载的重复层数量
         LLAMA_LOG_INFO("%s: offloading %d repeating layers to GPU\n", __func__, n_gpu);
+        // 如果n_gpu_layers大于总层数，说明输出层也被卸载
         if (n_gpu_layers > (int) hparams.n_layer) {
             LLAMA_LOG_INFO("%s: offloading output layer to GPU\n", __func__);
         }
 
+        // 计算后端支持的最大层数和可卸载的最大层数
         const int max_backend_supported_layers = hparams.n_layer + 1;
         const int max_offloadable_layers       = hparams.n_layer + 1;
 
+        // 输出实际卸载的层数信息
         LLAMA_LOG_INFO("%s: offloaded %d/%d layers to GPU\n", __func__, std::min(n_gpu_layers, max_offloadable_layers), max_backend_supported_layers);
     }
 
-    // print memory requirements per buffer type
+    // 按缓冲区类型打印内存需求
     for (auto & buf : pimpl->bufs) {
         LLAMA_LOG_INFO("%s: %12s model buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf.get()), ggml_backend_buffer_get_size(buf.get()) / 1024.0 / 1024.0);
     }
 
-    // populate tensors_by_name
+    // 填充tensors_by_name映射（用于通过名称查找张量）
     for (auto & ctx : pimpl->ctxs) {
+        // 遍历context中的所有张量
         for (auto * cur = ggml_get_first_tensor(ctx.get()); cur != NULL; cur = ggml_get_next_tensor(ctx.get(), cur)) {
+            // 将张量名称和张量指针添加到映射中
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
     }
 
-    // load tensor data
+    // 加载张量数据
     for (auto & it : ctx_bufs) {
+        // 获取context
         ggml_context * ctx = it.first;
+        // 获取对应的缓冲区映射
         auto & bufs = it.second;
+        // 从文件加载所有张量数据到缓冲区（如果使用mlock则传入mlock映射）
         if (!ml.load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+            // 如果加载失败，返回false
             return false;
         }
     }
 
+    // 如果使用mmap缓冲区，保存映射信息
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
             pimpl->mappings.emplace_back(std::move(mapping));
         }
     }
 
+    // 所有张量加载成功，返回true
     return true;
 }
 
