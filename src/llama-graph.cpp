@@ -537,6 +537,38 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_result::set_outputs() {
+    if (t_logits != nullptr) {
+        ggml_set_output(t_logits);
+    }
+    if (t_embd != nullptr) {
+        ggml_set_output(t_embd);
+    }
+    if (t_embd_pooled != nullptr) {
+        ggml_set_output(t_embd_pooled);
+    }
+    for (auto & [seq_id, t] : t_sampled) {
+        if (t != nullptr) {
+            ggml_set_output(t);
+        }
+    }
+    for (auto & [seq_id, t] : t_sampled_probs) {
+        if (t != nullptr) {
+            ggml_set_output(t);
+        }
+    }
+    for (auto & [seq_id, t] : t_sampled_logits) {
+        if (t != nullptr) {
+            ggml_set_output(t);
+        }
+    }
+    for (auto & [seq_id, t] : t_candidates) {
+        if (t != nullptr) {
+            ggml_set_output(t);
+        }
+    }
+}
+
 bool llm_graph_result::can_reuse(const llm_graph_params & params) {
     if (!this->params.allow_reuse(params)) {
         if (debug > 1) {
@@ -2100,25 +2132,21 @@ void llm_graph_context::build_sampling() const {
         sampler->iface->backend_apply(sampler, ctx0, gf, &data);
 
         if (data.sampled != nullptr) {
-            ggml_set_output(data.sampled);
             res->t_sampled[seq_id] = data.sampled;
             ggml_build_forward_expand(gf, data.sampled);
         }
 
         if (data.probs != nullptr) {
-            ggml_set_output(data.probs);
             res->t_sampled_probs[seq_id] = data.probs;
             ggml_build_forward_expand(gf, data.probs);
         }
 
         if (data.logits != nullptr) {
-            ggml_set_output(data.logits);
             res->t_sampled_logits[seq_id] = data.logits;
             ggml_build_forward_expand(gf, data.logits);
         }
 
         if (data.candidates != nullptr) {
-            ggml_set_output(data.candidates);
             res->t_candidates[seq_id] = data.candidates;
             ggml_build_forward_expand(gf, data.candidates);
         }

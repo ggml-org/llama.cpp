@@ -1367,7 +1367,7 @@ static void llama_sampler_top_p_backend_apply(
         struct llama_sampler_data * data) {
     auto * sctx = (llama_sampler_top_p *) smpl->ctx;
 
-    auto ggml_sort = [& ctx](struct ggml_tensor * a, struct ggml_tensor * b) {
+    auto ggml_sort = [ctx](struct ggml_tensor * a, struct ggml_tensor * b) {
         GGML_ASSERT(ggml_nrows(a) == 1);
         struct ggml_tensor * a_reshaped = ggml_reshape_2d(ctx, a, 1, a->ne[0]);
         struct ggml_tensor * a_sorted   = ggml_get_rows(ctx, a_reshaped, b);
@@ -1386,7 +1386,7 @@ static void llama_sampler_top_p_backend_apply(
     ggml_set_name(softmax, "top_p_softmax");
 
     // If candidates are provided, sort them as well. Otherwise, set sorted indices as candidates.
-    if (data->candidates != nullptr) {
+    if (data->candidates) {
         data->candidates = ggml_sort(data->candidates, sorted_idx);
     } else {
         data->candidates = sorted_idx;
@@ -1412,8 +1412,9 @@ static void llama_sampler_top_p_backend_apply(
     // Make top-p inclusive (i.e. return all values such that cum_sum/cdf >= p)
     struct ggml_tensor * mask_reshaped = ggml_reshape_2d(ctx, mask, 1, mask->ne[0]);
     // construct ones tensor to set the value in the mask
-    struct ggml_tensor * ones = ggml_dup_tensor(ctx, mask_reshaped);
-    ones = ggml_clamp(ctx, ones, 1.0f, 1.0f);
+    struct ggml_tensor * ones = ggml_clamp(ctx, mask_reshaped, 1.0f, 1.0f);
+    ggml_set_name(ones, "top_p_ones");
+
     mask_reshaped = ggml_set_rows(ctx, mask_reshaped, ones, ggml_cast(ctx, ggml_repeat(ctx, idxf, mask), GGML_TYPE_I32));
     mask = ggml_reshape_1d(ctx, mask_reshaped, mask->ne[0]);
 
@@ -1780,12 +1781,7 @@ static void llama_sampler_backend_temp_sampling(
         return;
     }
 
-    struct ggml_tensor * scaled = ggml_scale(ctx, data->logits, 1.0f / temp);
-    ggml_set_name(scaled, "temp_scaled");
-
-    // Make sure the scaled tensor is contiguous for subsequent operations
-    data->logits = ggml_cont(ctx, scaled);
-    ggml_set_name(data->logits, "temp_scaled_logits");
+    data->logits = ggml_scale(ctx, data->logits, 1.0f / temp);
 
     GGML_UNUSED(gf);
 }
@@ -3278,7 +3274,7 @@ static void llama_sampler_logit_bias_backend_apply(
     }
 
     // Add the sparse logit logit_bias to the logits
-    struct ggml_tensor * logit_biased = ggml_add_inplace(ctx, data->logits, sctx->inp_logit_bias);
+    struct ggml_tensor * logit_biased = ggml_add(ctx, data->logits, sctx->inp_logit_bias);
     data->logits = logit_biased;
 }
 

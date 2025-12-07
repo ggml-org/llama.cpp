@@ -523,6 +523,7 @@ public:
     void reset();
 
     void set_inputs(const llama_ubatch * ubatch);
+    void set_outputs();
 
     // try to update the existing graph result using the new graph parameters in order to reuse it
     // this can only be done if we determine that the resulting graph using the new graph parameters

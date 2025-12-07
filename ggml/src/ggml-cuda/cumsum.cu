@@ -149,6 +149,7 @@ static __global__ void cumsum_kernel(
     }
 }
 
+#ifdef GGML_CUDA_USE_CUB
 template <typename T>
 static void cumsum_cub(ggml_cuda_pool & pool,
                        const T *        src,
@@ -171,6 +172,7 @@ static void cumsum_cub(ggml_cuda_pool & pool,
     // Perform the inclusive scan
     cub::DeviceScan::InclusiveSum((void *) tmp_alloc.get(), tmp_size, src, dst, ne, stream);
 }
+#endif // GGML_CUDA_USE_CUB
 
 template<typename T>
 static void cumsum_cuda(
@@ -188,7 +190,7 @@ static void cumsum_cuda(
 
     if (is_contiguous) {
         use_cub = true;
-        int64_t nrows = ne01 * ne02 * ne03; 
+        int64_t nrows = ne01 * ne02 * ne03;
         // TODO: Compare with DeviceSegmentedScan::InclusiveSegmentedSum for nrows > 1 once InclusiveSegmentedSum is released
         // Heuristics were determined as part of https://github.com/ggml-org/llama.cpp/pull/17004
         if (((nrows == 1) && (ne00 > 1024)) || (ne00 / nrows > 4096)) {
