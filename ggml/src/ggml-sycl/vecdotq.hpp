@@ -1300,4 +1300,36 @@ vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
 #endif
 }
 
+#define VDR_MXFP4_Q8_1_MMVQ 2
+
+static __dpct_inline__ float
+vec_dot_mxfp4_q8_1(const void *__restrict__ vbq,
+                   const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
+
+    const block_mxfp4 * bq4 = (const block_mxfp4 *) vbq;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    // kvalues_mxfp4 is int8_t but get_int_from_table_16 expects uint8_t
+    // Values are: {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
+    // Treating as uint8_t is fine since we're just indexing by nibble value 0-15
+    const uint8_t * values = (const uint8_t *) kvalues_mxfp4;
+
+    int sumi = 0;
+
+#pragma unroll
+    for (int l = 0; l < VDR_MXFP4_Q8_1_MMVQ; ++l) {
+        const int aux_q4 = get_int_from_uint8(bq4->qs, iqs + l);
+
+        int v1, v2;
+        get_int_from_table_16(aux_q4, values, v1, v2);
+
+        sumi = dpct::dp4a(v1, q8[l + 0], sumi);
+        sumi = dpct::dp4a(v2, q8[l + 4], sumi);
+    }
+
+    const float d = sycl_e8m0_to_fp32_half(bq4->e) * bq8_1->ds[0];
+    return d * sumi;
+}
+
 #endif // GGML_SYCL_VECDOTQ_HPP

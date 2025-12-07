@@ -115,6 +115,25 @@ enum ggml_sycl_backend_gpu_mode {
 
 static_assert(sizeof(sycl::half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
+// SYCL-compatible E8M0 to FP32 conversion (halved for MXFP4)
+// E8M0 is an 8-bit exponent-only format used in MX (Microscaling) formats
+static __dpct_inline__ float sycl_e8m0_to_fp32_half(uint8_t e) {
+    // For e < 2: use precomputed denormal patterns
+    // For e >= 2: exponent - 1 gives FP32 exponent (halving = divide by 2)
+    uint32_t bits;
+    if (e < 2) {
+        // Denormal handling: e=0 -> 0.0, e=1 -> very small denormal
+        static const uint32_t denorm_table[2] = {0x00000000, 0x33800000};
+        bits = denorm_table[e];
+    } else {
+        // Normal case: FP32 exponent = e - 1 (bias 127, so -1 gives halving)
+        bits = ((uint32_t)(e - 1)) << 23;
+    }
+    float result;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
 static void crash() {
   int* ptr = NULL;
   *ptr = 0;
