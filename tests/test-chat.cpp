@@ -150,7 +150,6 @@ static std::string renormalize_json(const std::string & json_str) {
         return json_str;
     }
 }
-
 static void assert_msg_equals(const common_chat_msg & expected, const common_chat_msg & actual, bool ignore_whitespace_differences = false) {
     assert_equals(expected.role, actual.role);
     if (ignore_whitespace_differences) {
