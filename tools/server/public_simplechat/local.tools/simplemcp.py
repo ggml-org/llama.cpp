@@ -148,9 +148,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if pr.path != '/mcp':
             self.send_error(400, f"WARN:UnknownPath:{pr.path}")
             return
-        body = self.rfile.read(gMe.nw.maxReadBytes)
-        if len(body) == gMe.nw.maxReadBytes:
+        bytesToRead = min(int(self.headers.get('Content-Length', -1)), gMe.nw.maxReadBytes)
+        if bytesToRead <= -1:
+            self.send_error(400, f"WARN:ContentLength missing:{pr.path}")
+            return
+        if bytesToRead == gMe.nw.maxReadBytes:
             self.send_error(400, f"WARN:RequestOverflow:{pr.path}")
+            return
+        body = self.rfile.read(bytesToRead)
+        if len(body) != bytesToRead:
+            self.send_error(400, f"WARN:ContentLength mismatch:{pr.path}")
             return
         self.mcp_run(body)
 
