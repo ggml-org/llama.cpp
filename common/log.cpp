@@ -1,3 +1,4 @@
+#include "common.h"
 #include "log.h"
 
 #include <chrono>
@@ -24,30 +25,6 @@ int common_log_verbosity_thold = LOG_DEFAULT_LLAMA;
 
 void common_log_set_verbosity_thold(int verbosity) {
     common_log_verbosity_thold = verbosity;
-}
-
-// Auto-detect if colors should be enabled based on terminal and environment
-static bool common_log_should_use_colors_auto() {
-    // Check NO_COLOR environment variable (https://no-color.org/)
-    if (const char * no_color = std::getenv("NO_COLOR")) {
-        if (no_color[0] != '\0') {
-            return false;
-        }
-    }
-
-    // Check TERM environment variable
-    if (const char * term = std::getenv("TERM")) {
-        if (std::strcmp(term, "dumb") == 0) {
-            return false;
-        }
-    }
-
-    // Check if stdout and stderr are connected to a terminal
-    // We check both because log messages can go to either
-    bool stdout_is_tty = isatty(fileno(stdout));
-    bool stderr_is_tty = isatty(fileno(stderr));
-
-    return stdout_is_tty || stderr_is_tty;
 }
 
 static int64_t t_us() {
@@ -391,7 +368,7 @@ struct common_log * common_log_main() {
     static std::once_flag    init_flag;
     std::call_once(init_flag, [&]() {
         // Set default to auto-detect colors
-        log.set_colors(common_log_should_use_colors_auto());
+        log.set_colors(tty_can_use_colors());
     });
 
     return &log;
@@ -422,7 +399,7 @@ void common_log_set_file(struct common_log * log, const char * file) {
 
 void common_log_set_colors(struct common_log * log, log_colors colors) {
     if (colors == LOG_COLORS_AUTO) {
-        log->set_colors(common_log_should_use_colors_auto());
+        log->set_colors(tty_can_use_colors());
         return;
     }
 
