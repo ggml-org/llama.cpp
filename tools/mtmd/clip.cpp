@@ -1113,7 +1113,7 @@ struct clip_graph {
             }
         }
 
-        // 2-layer MLP projector: mm.0 -> GELU -> mm.2
+        // 2-layer MLP projector: LayerNorm (mlp1.0) -> mm.0 -> GELU -> mm.2
         ggml_tensor * embeddings = cur;
 
         GGML_ASSERT(model.mm_0_w != nullptr);
@@ -1122,6 +1122,17 @@ struct clip_graph {
         // ensure projector input is a packed 2D matrix [n_in, n_tokens]
         embeddings = ggml_reshape_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
         embeddings = ggml_cont_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
+
+        // Apply projector input LayerNorm (mlp1.0) with default eps = 1e-5
+        if (model.mm_input_norm_w || model.mm_input_norm_b) {
+            embeddings = build_norm(
+                embeddings,
+                model.mm_input_norm_w,
+                model.mm_input_norm_b,
+                NORM_TYPE_NORMAL,
+                1e-5f,
+                /*il=*/-1);
+        }
 
         // Use shared FFN helper: Linear(mm.0) -> GELU -> Linear(mm.2)
         embeddings = build_ffn(
@@ -3121,7 +3132,10 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_EAGLE2VL:
                 {
-                    // 2-layer MLP projector using mm.0 and mm.2 (normalized at conversion time)
+                    // projector input LayerNorm (mlp1.0.{weight,bias})
+                    model.mm_input_norm_w = get_tensor("mm_input_norm_w", false);
+                    model.mm_input_norm_b = get_tensor("mm_input_norm_b", false);
+                    // 2-layer MLP projector using mm.0 and mm.2
                     model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"),   false);
                     model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
