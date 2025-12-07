@@ -3912,13 +3912,22 @@ class Eagle2VLVisionModel(MmprojModel):
         if ".head." in name:
             return []
 
-        # 3) Projector MLP remap: mlp1 -> mm indices (match 'mlp1.' anywhere, not just at start)
+        # 3) Projector MLP remap: map Eagle2-VL mlp1.* -> mm_input_norm/mm.0/mm.2
         mlp_pos = name.find("mlp1.")
         if mlp_pos != -1:
             mlp_suffix = name[mlp_pos + len("mlp1."):]
-            # Skip LayerNorm (mlp1.0.*)
+            # Map Eagle2-VL projector LayerNorm:
+            # mlp1.0.{weight,bias} correspond to the input LayerNorm of the projector
+            # (structure: LayerNorm → Linear → GELU → Linear).
+            # The C++ runtime applies ggml_norm + scale/shift, so we store γ/β as mm_input_norm_w/b.
             if mlp_suffix.startswith("0."):
+                if mlp_suffix.endswith("weight"):
+                    return [("mm_input_norm_w", data_torch)]
+                if mlp_suffix.endswith("bias"):
+                    return [("mm_input_norm_b", data_torch)]
+                # any other subfield under mlp1.0.* (rare) -> skip
                 return []
+            
             # Map first Linear (mlp1.1.*) -> mm.0.*
             if mlp_suffix.startswith("1."):
                 new_name = "mm.0." + mlp_suffix[2:]
