@@ -86,28 +86,23 @@
 		editedContent = message.content;
 	}
 
-	function getAttachmentTextContent(attachment: DatabaseMessageExtra | undefined) {
-		if (!attachment) {
-			return null;
-		}
-
-		if ('content' in attachment && typeof attachment.content === 'string') {
-			return attachment.content;
-		}
-
-		return null;
-	}
-
 	async function handleCopy() {
-		let textToCopy = message.content;
+		const promptContent = message.content.trim();
+		const attachmentTexts = message.extra
+			?.map((attachment) => {
+				if ('content' in attachment && typeof attachment.content === 'string') {
+					return attachment.content;
+				}
 
-		if (!message.content.trim() && message.extra?.length === 1) {
-			const attachmentText = getAttachmentTextContent(message.extra[0]);
+				return null;
+			})
+			.filter((content): content is string => Boolean(content?.trim()));
 
-			if (attachmentText?.trim()) {
-				textToCopy = attachmentText;
-			}
-		}
+		const partsToCopy = [promptContent ? message.content : null, ...(attachmentTexts ?? [])].filter(
+			Boolean
+		) as string[];
+
+		const textToCopy = partsToCopy.length ? partsToCopy.join('\n\n') : message.content;
 
 		await copyToClipboard(textToCopy, 'Message copied to clipboard');
 		onCopy?.(message);
