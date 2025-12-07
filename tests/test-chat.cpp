@@ -151,21 +151,6 @@ static std::string renormalize_json(const std::string & json_str) {
     }
 }
 
-// Use for PEG parser implementations
-struct make_peg_parser {
-    common_chat_params params_;
-    common_peg_arena arena_;
-
-    make_peg_parser(common_chat_templates * tmpls, const common_chat_templates_inputs & inputs) {
-        params_ = common_chat_templates_apply(tmpls, inputs);
-        arena_.load(params_.parser);
-    }
-
-    common_chat_msg operator()(const std::string & msg, bool is_partial) {
-        return common_chat_peg_parse(arena_, msg, is_partial, /* syntax = */ {params_.format});
-    }
-};
-
 static void assert_msg_equals(const common_chat_msg & expected, const common_chat_msg & actual, bool ignore_whitespace_differences = false) {
     assert_equals(expected.role, actual.role);
     if (ignore_whitespace_differences) {
@@ -537,6 +522,40 @@ const common_chat_msg message_assist_call_python                 = simple_assist
 const common_chat_msg message_assist_call_python_lines           = simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')\"}");
 const common_chat_msg message_assist_call_python_lines_unclosed  = simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')");
 const common_chat_msg message_assist_call_code_interpreter       = simple_assist_msg("", "", "code_interpreter", "{\"code\":\"print('hey')\"}");
+
+// Use for PEG parser implementations
+struct peg_test_case {
+    common_chat_templates_inputs params;
+    std::string input;
+    common_chat_msg expect;
+};
+
+struct make_peg_parser {
+    common_chat_params params_;
+    common_peg_arena arena_;
+
+    make_peg_parser(common_chat_templates * tmpls, const common_chat_templates_inputs & inputs) {
+        params_ = common_chat_templates_apply(tmpls, inputs);
+        arena_.load(params_.parser);
+    }
+
+    common_chat_msg operator()(const std::string & msg, bool is_partial) {
+        return common_chat_peg_parse(arena_, msg, is_partial, /* syntax = */ {params_.format});
+    }
+};
+
+static void test_peg_parser(common_chat_templates * tmpls, const std::function<void(peg_test_case &)> & init) {
+    peg_test_case tc;
+    init(tc);
+    if (tc.params.messages.empty()) {
+        tc.params.messages = {message_user};
+    }
+    if (tc.expect.role.empty()) {
+        tc.expect.role = "assistant";
+    }
+    auto parser = make_peg_parser(tmpls, tc.params);
+    test_parser_with_streaming(tc.expect, tc.input, parser);
+}
 
 static void test_msgs_oaicompat_json_conversion() {
     printf("[%s]\n", __func__);
@@ -3328,152 +3347,94 @@ Hey there!<|im_end|>
         auto grammar = build_grammar(params.grammar);
         GGML_ASSERT(grammar && "Failed to build Qwen3-Coder grammar with union types");
     }
+}
+
+static void test_template_output_peg_parsers() {
+    printf("[%s]\n", __func__);
+
+    // JSON schemas
+    const char * invoice_schema = R"({
+        "type": "object",
+        "properties": {
+            "amount": {"type": "number"},
+            "date": {"type": "string"}
+        }
+    })";
 
     {
         // Ministral-3-14B-Reasoning-2512
         auto tmpls = read_templates("models/templates/unsloth-mistral-Ministral-3-14B-Reasoning-2512.jinja");
-        common_chat_msg msg;
-        msg.role = "user";
-        msg.content = "hello";
 
-        {
-            // Test basic message
-            common_chat_msg expected;
-            expected.role = "assistant";
-            expected.content = "Hello world";
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](peg_test_case & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
 
-            common_chat_templates_inputs inputs;
-            inputs.messages = {msg};
+        // Test basic message and reasoning with reasoning_format = none
+        test_peg_parser(tmpls.get(), [&](peg_test_case & t) {
+            t.input = "[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?";
+            t.expect.content = "[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?";
+        });
 
-            test_parser_with_streaming(expected,
-                "Hello world",
-                make_peg_parser(tmpls.get(), inputs)
-            );
-        }
-        {
-            // Test basic message and reasoning with reasoning_format = none
-            common_chat_msg expected;
-            expected.role = "assistant";
-            expected.content = "[THINK]I am thinking[/THINK]Hello world";
+        // Test basic message and reasoning with reasoning_format = auto
+        test_peg_parser(tmpls.get(), [&](peg_test_case & t) {
+            t.input = "[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
 
-            common_chat_templates_inputs inputs;
-            inputs.messages = {msg};
+            t.expect = message_assist_thoughts;
+        });
 
-            test_parser_with_streaming(expected,
-                "[THINK]I am thinking[/THINK]Hello world",
-                make_peg_parser(tmpls.get(), inputs)
-            );
-        }
-        {
-            // Test basic message and reasoning with reasoning_format = auto
-            common_chat_msg expected;
-            expected.role = "assistant";
-            expected.content = "Hello world";
-            expected.reasoning_content = "I am thinking";
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](peg_test_case & t) {
+            t.input = R"([TOOL_CALLS]special_function[ARGS]{"arg1":1})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
 
-            common_chat_templates_inputs inputs;
-            inputs.messages = {msg};
-            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.expect = message_assist_call;
+        });
 
-            test_parser_with_streaming(expected,
-                "[THINK]I am thinking[/THINK]Hello world",
-                make_peg_parser(tmpls.get(), inputs)
-            );
-        }
-        {
-            // Test basic tool call
-            common_chat_msg expected;
-            expected.role = "assistant";
-            expected.reasoning_content = "I need to get the weather in New York City";
-            expected.tool_calls = {{
-                /* .name = */      "get_weather",
-                /* .arguments = */ R"({"location": "New York City, NY"})",
-                /* .id = */        {},
-            }};
+        // Test tool call with reasoning
+        test_peg_parser(tmpls.get(), [&](peg_test_case & t) {
+            t.input = "[THINK]I'm\nthinking[/THINK]"
+                      R"([TOOL_CALLS]special_function[ARGS]{"arg1":1})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
 
-            common_chat_templates_inputs inputs;
-            inputs.messages = {msg};
-            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-            inputs.tools = {{
-                /* .name = */        "get_weather",
-                /* .description = */ "get the weather",
-                /* .parameters  = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    }
-                })"
-            }};
+            t.expect = message_assist_call_thoughts;
+        });
 
-            test_parser_with_streaming(expected,
-                "[THINK]I need to get the weather in New York City[/THINK]"
-                R"([TOOL_CALLS]get_weather[ARGS]{"location": "New York City, NY"})",
-                make_peg_parser(tmpls.get(), inputs)
-            );
-        }
-        {
-            // Test basic tool call with parallel_tool_calls = true
-            common_chat_msg expected;
-            expected.role = "assistant";
-            expected.reasoning_content = "I need to get the weather in New York City and Los Angeles";
-            expected.tool_calls = {{
-                /* .name = */      "get_weather",
-                /* .arguments = */ R"({"location": "New York City, NY"})",
+        // Test parallel tool calls
+        test_peg_parser(tmpls.get(), [&](peg_test_case & t) {
+            t.input = R"([TOOL_CALLS]special_function[ARGS]{"arg1": 1})"
+                      R"([TOOL_CALLS]special_function_with_opt[ARGS]{"arg1": 1, "arg2": 2})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
                 /* .id = */        {},
             }, {
-                /* .name = */      "get_weather",
-                /* .arguments = */ R"({"location": "Los Angeles, CA"})",
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
                 /* .id = */        {},
             }};
+        });
 
-            common_chat_templates_inputs inputs;
-            inputs.messages = {msg};
-            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-            inputs.parallel_tool_calls = true;
-            inputs.tools = {{
-                /* .name = */        "get_weather",
-                /* .description = */ "get the weather",
-                /* .parameters  = */ R"({
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    }
-                })"
-            }};
+        // Test response format
+        test_peg_parser(tmpls.get(), [&](peg_test_case & t) {
+            t.input = "[THINK]I need to output the invoice details in JSON[/THINK]"
+                      "```json\n"
+                      R"({"amount": 123.45, "date": "2025-12-03"})"
+                      "\n```";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.json_schema = invoice_schema;
 
-            test_parser_with_streaming(expected,
-                "[THINK]I need to get the weather in New York City and Los Angeles[/THINK]"
-                R"([TOOL_CALLS]get_weather[ARGS]{"location": "New York City, NY"})"
-                R"([TOOL_CALLS]get_weather[ARGS]{"location": "Los Angeles, CA"})",
-                make_peg_parser(tmpls.get(), inputs)
-            );
-        }
-        {
-            // Test response format
-            common_chat_msg expected;
-            expected.role = "assistant";
-            expected.reasoning_content = "I need to output the invoice details in JSON";
-            expected.content = R"({"amount": 123.45, "date": "2025-12-03"})";
-
-            common_chat_templates_inputs inputs;
-            inputs.messages = {msg};
-            inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-            inputs.json_schema = R"({
-                "type": "object",
-                "properties": {
-                    "amount": {"type": "number"},
-                    "date": {"type": "string"}
-                }
-            })";
-
-            test_parser_with_streaming(expected,
-                "[THINK]I need to output the invoice details in JSON[/THINK]"
-                "```json\n"
-                R"({"amount": 123.45, "date": "2025-12-03"})"
-                "\n```",
-                make_peg_parser(tmpls.get(), inputs)
-            );
-        }
+            t.expect.reasoning_content = "I need to output the invoice details in JSON";
+            t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
     }
 }
 
@@ -3600,6 +3561,7 @@ int main(int argc, char ** argv) {
             test_msgs_oaicompat_json_conversion();
             test_tools_oaicompat_json_conversion();
             test_template_output_parsers();
+            test_template_output_peg_parsers();
             std::cout << "\n[chat] All tests passed!" << '\n';
         }
         return 0;
