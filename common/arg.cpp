@@ -405,6 +405,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
+    // Both cannot be specified at the same time
+    if (!params.model.hf_repo.empty() && !params.model.docker_repo.empty()) {
+        throw std::invalid_argument("error: cannot specify both -hf and -dr options\n");
+    }
+
     // handle model and download
     {
         auto res = common_params_handle_model(params.model, params.hf_token, params.offline);
@@ -753,6 +758,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
             fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            fprintf(stderr, "model cache path: %s\n", fs_get_cache_directory().c_str());
             exit(0);
         }
     ));
