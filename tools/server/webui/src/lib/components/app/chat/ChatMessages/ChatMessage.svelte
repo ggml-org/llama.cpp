@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { copyToClipboard, isIMEComposing } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
@@ -89,14 +90,14 @@
 	async function handleCopy() {
 		const promptContent = message.content.trim();
 		const attachmentTexts = message.extra
-			?.map((attachment) => {
+			?.map((attachment: DatabaseMessageExtra) => {
 				if ('content' in attachment && typeof attachment.content === 'string') {
 					return attachment.content;
 				}
 
 				return null;
 			})
-			.filter((content): content is string => Boolean(content?.trim()));
+			.filter((content: string | null): content is string => Boolean(content?.trim()));
 
 		const partsToCopy = [promptContent ? message.content : null, ...(attachmentTexts ?? [])].filter(
 			Boolean
