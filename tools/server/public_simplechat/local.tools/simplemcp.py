@@ -207,6 +207,7 @@ def setup_toolmanager():
         gMe.op.toolManager.tc_add("fetch_url_raw", mTCWeb.TCUrlRaw("fetch_url_raw"))
         gMe.op.toolManager.tc_add("fetch_html_text", mTCWeb.TCHtmlText("fetch_html_text"))
         gMe.op.toolManager.tc_add("fetch_xml_filtered", mTCWeb.TCXmlFiltered("fetch_xml_filtered"))
+        gMe.op.toolManager.tc_add("search_web_text", mTCWeb.TCSearchWeb("search_web_text"))
     if mTCPdf.ok():
         gMe.op.toolManager.tc_add("fetch_pdf_text", mTCPdf.TCPdfText("fetch_pdf_text"))
 

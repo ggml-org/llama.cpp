@@ -7,7 +7,9 @@ import debug
 import filemagic as mFile
 import json
 import re
-from typing import Any, cast
+import urllib.parse
+from typing import Any, cast, Optional
+from dataclasses import dataclass
 import toolcalls as mTC
 
 
@@ -220,6 +222,77 @@ class TCHtmlText(mTC.ToolCall):
             return mTC.TCOutResponse(True, got.statusCode, got.statusMsg, got.contentType, textHtml.get_stripped_text().encode('utf-8'))
         except Exception as exc:
             return mTC.TCOutResponse(False, 502, f"WARN:HtmlText:Failed:{exc}")
+
+
+
+@dataclass(frozen=True)
+class SearchEngine:
+    template: str
+    drop: Optional[list[dict[str, str]]] = None
+
+#Few web search engine url template strings.
+#The SEARCHWORDS keyword will get replaced by the actual user specified search words at runtime.
+gSearchEngines: dict[str, SearchEngine] = {
+    "duckduckgo": SearchEngine(
+        "https://duckduckgo.com/html/?q=SEARCHWORDS",
+        [ { 'tag': 'div', 'id': "header" } ]
+    ),
+    "_bing": SearchEngine(
+        "https://www.bing.com/search?q=SEARCHWORDS"  # doesnt seem to like google chrome clients in particular
+    ),
+    "brave": SearchEngine(
+        "https://search.brave.com/search?q=SEARCHWORDS",
+    ),
+    "_google": SearchEngine(
+        "https://www.google.com/search?q=SEARCHWORDS", # doesnt seem to like any client in general
+    ),
+}
+
+class TCSearchWeb(mTC.ToolCall):
+
+    def tcf_meta(self) -> mTC.TCFunction:
+        return mTC.TCFunction(
+            self.name,
+            "Search web for given words and return plain text content after stripping html tags as well as head, script, style, header, footer, nav blocks from got html result page, in few seconds",
+            mTC.TCInParameters(
+                "object",
+                {
+                    "words": mTC.TCInProperty (
+                        "string",
+                        "The words to search for on the web"
+                    ),
+                    "searchEngine": mTC.TCInProperty(
+                        "string",
+                        f"Name of the search engine to use. The supported search engines are {list(gSearchEngines.keys())}. The engine names prefixed with _ may not work many a times"
+                    )
+                },
+                [ "words", "searchEngine" ]
+            )
+        )
+
+    def tc_handle(self, args: mTC.TCInArgs, inHeaders: mTC.HttpHeaders) -> mTC.TCOutResponse:
+        try:
+            words = args['words']
+            engineName = args['searchEngine']
+            if not engineName:
+                engineName = list(gSearchEngines.keys())[0]
+            searchEngine = gSearchEngines[engineName]
+            searchUrl = searchEngine.template.replace("SEARCHWORDS", urllib.parse.quote(words, safe=''))
+            # Get requested url
+            got = handle_urlreq(searchUrl, inHeaders, "HandleTCSearchWeb")
+            if not got.callOk:
+                return got
+            # Extract Text
+            tagDrops = searchEngine.drop
+            if not tagDrops:
+                tagDrops = []
+            textHtml = TextHtmlParser(tagDrops)
+            textHtml.feed(got.contentData.decode('utf-8'))
+            debug.dump({ 'op': 'MCPWeb.SearchWeb', 'RawText': 'yes', 'StrippedText': 'yes' }, { 'RawText': textHtml.text, 'StrippedText': textHtml.get_stripped_text() })
+            return mTC.TCOutResponse(True, got.statusCode, got.statusMsg, got.contentType, textHtml.get_stripped_text().encode('utf-8'))
+        except Exception as exc:
+            return mTC.TCOutResponse(False, 502, f"WARN:SearchWeb:Failed:{exc}")
+
 
 
 class XMLFilterParser(html.parser.HTMLParser):
