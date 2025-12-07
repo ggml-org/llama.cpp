@@ -1095,13 +1095,12 @@ struct clip_graph {
 
         // Vision encoder: use RMS norm per metadata (eps), FFN op per hparams
         ggml_tensor * cur = build_vit(
-                                inp, n_pos,
-                                NORM_TYPE_RMS,
-                                hparams.ffn_op,
-                                learned_pos_embd,
-                                nullptr);
-
-    // keep runtime quiet in normal runs; shapes are correct by construction
+            inp, n_pos,
+            NORM_TYPE_RMS,
+            hparams.ffn_op,
+            learned_pos_embd,
+            nullptr);
+        // keep runtime quiet in normal runs; shapes are correct by construction
 
         // Apply spatial patch merge (e.g., 2x2) before projector if requested
         {
@@ -1114,11 +1113,11 @@ struct clip_graph {
             }
         }
 
-    // 2-layer MLP projector: mm.0 -> GELU -> mm.2
+        // 2-layer MLP projector: mm.0 -> GELU -> mm.2
         ggml_tensor * embeddings = cur;
 
-    // projector matmuls assume canonical [n_in, n_out] weights; no runtime transposes
-    GGML_ASSERT(model.mm_0_w != nullptr);
+        // projector matmuls assume canonical [n_in, n_out] weights; no runtime transposes
+        GGML_ASSERT(model.mm_0_w != nullptr);
         // ensure projector input is a packed 2D matrix [n_in, n_tokens]
         embeddings = ggml_reshape_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
         embeddings = ggml_cont_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
