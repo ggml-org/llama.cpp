@@ -117,7 +117,7 @@ async function mcpserver_toolslist(tag, chatId, tcs) {
             body: JSON.stringify(ibody),
         });
         if (resp.status != 200) {
-            console.log`WARN:${tag}:ToolsList:MCP server says:${resp.status}:${resp.statusText}`
+            console.log(`WARN:${tag}:ToolsList:MCP server says:${resp.status}:${resp.statusText}`)
             return
         }
         let obody = await resp.json()
@@ -126,7 +126,7 @@ async function mcpserver_toolslist(tag, chatId, tcs) {
                 if (!tcmeta.function) {
                     continue
                 }
-                console.log`INFO:${tag}:ToolsList:${tcmeta.function.name}`
+                console.log(`INFO:${tag}:ToolsList:${tcmeta.function.name}`)
                 tcs[tcmeta.function.name] = {
                     "handler": mcpserver_toolcall,
                     "meta": tcmeta,

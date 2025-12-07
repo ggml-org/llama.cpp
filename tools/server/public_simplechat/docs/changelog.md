@@ -319,12 +319,21 @@ Chat Session specific settings
   * switch to a Dicty DataClass based Config with better type validation and usage, instead of literal dict++
 * ToolCall, ToolManager and related classes based flow wrt the tool calls.
   * all existing tool calls duplicated and updated to support and build on this new flow.
-* Initial skeleton towards SimpleMCP, a post and json rpcish based handshake flow, so that tool calls supported
-  through SimpleProxy can be exposed through a MCP standardish mechanism.
+* Initial skeleton towards SimpleMCP, a mcpish server, which uses post and json rpcish based handshake flow,
+  so that tool calls supported through SimpleProxy can be exposed through a MCP standardish mechanism.
   * can allow others beyond AnveshikaSallap client to use the corresponding tool calls
   * can allow AnveshikaSallap client to support other MCP servers and their exposed tool calls in future.
   Mcp command tools/list implemented and verified at a basic level
   Mcp command tools/call implemented, need to verify and update the initial go version
+* Initial skeleton towards ToolMCP, a mcpish client logic
+  Mcp command tools/list handshake implemented, need to verify and update this initial go
+  Mcp command tools/call handshake implemented, need to verify and update this initial go
+* MCPish and not full fledged MCP currently
+  * no initialise command handshake
+  * use seconds since unix epoch or toolcall id, as the case maybe, as the id wrt json-rpc calls
+  * the tools/list response mirrors the openai rest api convention rather than mcp convention
+    * uses the additional type: function wrapper wrt tool call meta
+    * uses the keyword parameters instead of inputschema or so
 
 
 ## ToDo
