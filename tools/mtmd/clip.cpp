@@ -1116,29 +1116,22 @@ struct clip_graph {
         // 2-layer MLP projector: mm.0 -> GELU -> mm.2
         ggml_tensor * embeddings = cur;
 
-        // projector matmuls assume canonical [n_in, n_out] weights; no runtime transposes
         GGML_ASSERT(model.mm_0_w != nullptr);
+        GGML_ASSERT(model.mm_2_w != nullptr);
+
         // ensure projector input is a packed 2D matrix [n_in, n_tokens]
         embeddings = ggml_reshape_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
         embeddings = ggml_cont_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
-        // embeddings are packed [n_in, n_tokens]
-        // Weights are canonicalized at conversion time to [n_in, n_out]; multiply directly.
-        embeddings = ggml_mul_mat(ctx0, model.mm_0_w, embeddings);
-        if (model.mm_0_b) {
-            embeddings = ggml_add(ctx0, embeddings, model.mm_0_b);
-        }
 
-        embeddings = ggml_gelu(ctx0, embeddings);
-
-        GGML_ASSERT(model.mm_2_w != nullptr);
-        // keep [n_in, n_tokens] layout for the second matmul as well
-        embeddings = ggml_reshape_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
-        embeddings = ggml_cont_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
-        // Weights are canonicalized at conversion time to [n_in, n_out]; multiply directly.
-        embeddings = ggml_mul_mat(ctx0, model.mm_2_w, embeddings);
-        if (model.mm_2_b) {
-            embeddings = ggml_add(ctx0, embeddings, model.mm_2_b);
-        }
+        // Use shared FFN helper: Linear(mm.0) -> GELU -> Linear(mm.2)
+        embeddings = build_ffn(
+            embeddings,
+            model.mm_0_w, model.mm_0_b,
+            /*gate=*/nullptr, /*gate_b=*/nullptr,
+            model.mm_2_w, model.mm_2_b,
+            FFN_GELU,
+            /*il=*/0
+        );
 
         // build the graph
         ggml_build_forward_expand(gf, embeddings);
