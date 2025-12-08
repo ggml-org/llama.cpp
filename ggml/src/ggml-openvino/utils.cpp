@@ -614,8 +614,8 @@ ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, con
     auto output_type = ggml_decoder->get_ov_type(ggml_tensor);
     auto output_shape = ggml_decoder->get_shape(ggml_tensor);
 
-    if (ggml_decoder->is_static() && result_name == "result_output") {
-        output_shape[1] = 1;
+    if (ggml_decoder->is_static() && result_name == "result_output" && output_shape[2] == 0) {
+        output_shape[2] = 1;
     }
     ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
     return output_tensor;
