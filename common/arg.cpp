@@ -64,6 +64,26 @@ static std::string read_file(const std::string & fname) {
     return content;
 }
 
+static const std::vector<common_arg> & get_common_arg_defs() {
+    static const std::vector<common_arg> options = [] {
+        common_params params;
+        auto ctx = common_params_parser_init(params, LLAMA_EXAMPLE_SERVER, nullptr);
+        return ctx.options;
+    }();
+    return options;
+}
+
+std::string common_arg_get_env_name(const std::string & flag) {
+    for (const auto & arg : get_common_arg_defs()) {
+        for (const auto & arg_flag : arg.args) {
+            if (arg_flag == flag) {
+                return arg.env ? arg.env : "";
+            }
+        }
+    }
+    return "";
+}
+
 common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> examples) {
     this->examples = examples;
     return *this;

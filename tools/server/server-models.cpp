@@ -1,5 +1,6 @@
 #include "server-common.h"
 #include "server-models.h"
+#include "server-config.h"
 
 #include "download.h"
 
@@ -11,7 +12,9 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <cctype>
 #include <cstring>
+#include <limits>
 #include <atomic>
 #include <chrono>
 #include <queue>
@@ -75,23 +78,53 @@ static std::filesystem::path get_server_exec_path() {
 #endif
 }
 
-struct local_model {
-    std::string name;
-    std::string path;
-    std::string path_mmproj;
-};
+static std::string to_upper_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return (char) std::toupper(c); });
+    return value;
+}
 
-static std::vector<local_model> list_local_models(const std::string & dir) {
+static std::string pick_preferred_mmproj(const std::vector<std::filesystem::path> & paths) {
+    if (paths.empty()) {
+        return "";
+    }
+
+    auto score = [](const std::string & path) {
+        const auto upper = to_upper_copy(path);
+        if (upper.find("BF16") != std::string::npos) {
+            return 3;
+        }
+        if (upper.find("F16") != std::string::npos) {
+            return 2;
+        }
+        if (upper.find("F32") != std::string::npos) {
+            return 1;
+        }
+        return 0;
+    };
+
+    const auto * best = &paths.front();
+    int best_score = score(best->string());
+    for (const auto & candidate : paths) {
+        const int candidate_score = score(candidate.string());
+        if (candidate_score > best_score) {
+            best = &candidate;
+            best_score = candidate_score;
+        }
+    }
+
+    return best->string();
+}
+
+static std::vector<server_local_model> list_local_models(const std::string & dir) {
     if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
         throw std::runtime_error(string_format("error: '%s' does not exist or is not a directory\n", dir.c_str()));
     }
 
-    std::vector<local_model> models;
+    std::vector<server_local_model> models;
 
     struct dir_model_files {
-        common_file_info model_file;
-        common_file_info first_shard_file;
-        common_file_info mmproj_file;
+        std::vector<std::filesystem::path> model_files;
+        std::vector<std::filesystem::path> mmproj_files;
     };
 
     std::map<std::filesystem::path, dir_model_files> model_directories;
@@ -110,39 +143,85 @@ static std::vector<local_model> list_local_models(const std::string & dir) {
         auto & files = model_directories[path.parent_path()];
         const auto filename = path.filename().string();
         if (filename.find("mmproj") != std::string::npos) {
-            files.mmproj_file = {path.string(), filename, 0, false};
-        } else if (filename.find("-00001-of-") != std::string::npos) {
-            files.first_shard_file = {path.string(), filename, 0, false};
-        } else {
-            files.model_file = {path.string(), filename, 0, false};
-        }
-    }
-
-    for (const auto & [parent_path, files] : model_directories) {
-        std::string model_path = files.first_shard_file.path.empty() ? files.model_file.path : files.first_shard_file.path;
-        if (model_path.empty()) {
+            files.mmproj_files.push_back(path);
             continue;
         }
 
-        std::string name;
+        if (filename.find("-00001-of-") != std::string::npos) {
+            files.model_files.push_back(path);
+            continue;
+        }
+
+        // skip shards that aren't the first chunk
+        if (filename.find("-000") != std::string::npos && filename.find("-of-") != std::string::npos) {
+            continue;
+        }
+
+        files.model_files.push_back(path);
+    }
+
+    for (const auto & [parent_path, files] : model_directories) {
+        if (files.model_files.empty()) {
+            continue;
+        }
+
+        std::string preferred_mmproj = pick_preferred_mmproj(files.mmproj_files);
+
+        const auto * best_model = &files.model_files.front();
+        std::uintmax_t best_size = std::numeric_limits<std::uintmax_t>::max();
+        for (const auto & candidate : files.model_files) {
+            std::error_code size_ec;
+            const auto size = std::filesystem::file_size(candidate, size_ec);
+            if (size_ec) {
+                continue;
+            }
+            if (best_size == std::numeric_limits<std::uintmax_t>::max() || size < best_size) {
+                best_model = &candidate;
+                best_size = size;
+            }
+        }
+
         std::error_code ec;
         auto rel_parent = std::filesystem::relative(parent_path, dir, ec);
+        std::string name;
         if (!ec && !rel_parent.empty() && rel_parent.string() != ".") {
             name = rel_parent.generic_string();
         } else {
-            std::filesystem::path model_file_path(model_path);
-            name = model_file_path.stem().string();
+            name = parent_path.filename().generic_string();
         }
 
-        local_model model{
+        server_local_model model{
             /* name        */ name,
-            /* path        */ model_path,
-            /* path_mmproj */ files.mmproj_file.path
+            /* path        */ std::filesystem::absolute(*best_model).string(),
+            /* path_mmproj */ preferred_mmproj.empty() ? "" : std::filesystem::absolute(preferred_mmproj).string()
         };
         models.push_back(model);
     }
 
     return models;
+}
+
+static bool is_option(const std::string & arg) {
+    return !arg.empty() && arg[0] == '-';
+}
+
+static std::vector<std::string> strip_router_control_args(const std::vector<std::string> & args) {
+    std::vector<std::string> filtered;
+    filtered.reserve(args.size());
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        const auto & arg = args[i];
+        if (is_router_control_arg(arg)) {
+            if (i + 1 < args.size() && !is_option(args[i + 1])) {
+                ++i;
+            }
+            continue;
+        }
+
+        filtered.push_back(arg);
+    }
+
+    return filtered;
 }
 
 //
@@ -153,10 +232,12 @@ server_models::server_models(
         const common_params & params,
         int argc,
         char ** argv,
-        char ** envp) : base_params(params) {
+        char ** envp) : base_params(params), server_config(params.models_dir) {
     for (int i = 0; i < argc; i++) {
         base_args.push_back(std::string(argv[i]));
     }
+
+    base_args = strip_router_control_args(base_args);
     for (char ** env = envp; *env != nullptr; env++) {
         base_env.push_back(std::string(*env));
     }
@@ -192,6 +273,7 @@ server_models::server_models(
     // add local models specificed via --models-dir
     if (!params.models_dir.empty()) {
         auto local_models = list_local_models(params.models_dir);
+        server_config.sync(local_models, base_args);
         for (const auto & model : local_models) {
             if (mapping.find(model.name) != mapping.end()) {
                 // already exists in cached models, skip
@@ -349,15 +431,21 @@ void server_models::unload_lru() {
 }
 
 static void add_or_replace_arg(std::vector<std::string> & args, const std::string & key, const std::string & value) {
-    for (size_t i = 0; i < args.size(); i++) {
-        if (args[i] == key && i + 1 < args.size()) {
-            args[i + 1] = value;
-            return;
+    for (size_t i = 0; i < args.size();) {
+        if (args[i] == key) {
+            args.erase(args.begin() + i);
+            if (i < args.size() && !is_option(args[i])) {
+                args.erase(args.begin() + i);
+            }
+        } else {
+            ++i;
         }
     }
-    // not found, append
+
     args.push_back(key);
-    args.push_back(value);
+    if (!value.empty()) {
+        args.push_back(value);
+    }
 }
 
 void server_models::load(const std::string & name, bool auto_load) {
@@ -391,7 +479,7 @@ void server_models::load(const std::string & name, bool auto_load) {
 
         std::vector<std::string> child_args;
         if (auto_load && !meta.args.empty()) {
-            child_args = meta.args; // copy previous args
+            child_args = strip_router_control_args(meta.args); // copy previous args minus router-only flags
         } else {
             child_args = base_args; // copy
             if (inst.meta.in_cache) {
@@ -409,6 +497,18 @@ void server_models::load(const std::string & name, bool auto_load) {
         add_or_replace_arg(child_args, "--alias", inst.meta.name);
 
         std::vector<std::string> child_env = base_env; // copy
+        auto config_env = server_config.env_for(inst.meta.name);
+        for (const auto & [key, value] : config_env) {
+            if (value == "false") {
+                continue;
+            }
+
+            if (value == "true" || value.empty()) {
+                child_env.push_back(key + "=");
+            } else {
+                child_env.push_back(key + "=" + value);
+            }
+        }
         child_env.push_back("LLAMA_SERVER_ROUTER_PORT=" + std::to_string(base_params.port));
 
         SRV_INF("%s", "spawning server instance with args:\n");
