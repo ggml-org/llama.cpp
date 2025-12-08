@@ -85,6 +85,7 @@ option(GGML_CCACHE "ggml: use ccache if available"                   ON)
 option(GGML_ALL_WARNINGS           "ggml: enable all compiler warnings"                   ON)
 option(GGML_ALL_WARNINGS_3RD_PARTY "ggml: enable all compiler warnings in 3rd party libs" OFF)
 option(GGML_GPROF                  "ggml: enable gprof"                                   OFF)
+option(GGML_IFAIRY_ARM_LUT         "ggml: enable iFairy 3-weight LUT (ARM skeleton)"      ON)
 
 # build
 option(GGML_FATAL_WARNINGS    "ggml: enable -Werror flag"    OFF)

@@ -206,11 +206,19 @@ add_library(ggml-base
             ggml-threading.h
             ggml-quants.c
             ggml-quants.h
+            ggml-ifairy-lut.cpp
             gguf.cpp)
 
 target_include_directories(ggml-base PRIVATE .)
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
+endif()
+
+if (GGML_IFAIRY_ARM_LUT)
+    target_compile_definitions(ggml-base PUBLIC GGML_IFAIRY_ARM_LUT)
+    if (GGML_SYSTEM_ARCH STREQUAL "ARM")
+        target_sources(ggml-base PRIVATE ggml-cpu/arch/arm/ifairy-lut.cpp)
+    endif()
 endif()
 
 add_library(ggml
