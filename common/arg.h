@@ -6,6 +6,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <cstring>
 
 //
 // CLI argument parsing
