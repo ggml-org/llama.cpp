@@ -107,8 +107,13 @@ private:
     // unload least recently used models if the limit is reached
     void unload_lru();
 
+    // not thread-safe, caller must hold mutex
+    void add_model(server_model_meta && meta);
+
 public:
     server_models(const common_params & params, int argc, char ** argv, char ** envp);
+
+    void load_models();
 
     // check if a model instance exists
     bool has_model(const std::string & name);
