@@ -175,6 +175,7 @@ task_params server_task::params_from_json_cmpl(
     params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
+    params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
     params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
@@ -453,6 +454,10 @@ task_params server_task::params_from_json_cmpl(
         }
     }
 
+    if (params.n_cmpl > params_base.n_parallel) {
+        throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
+    }
+
     return params;
 }
 
@@ -664,7 +669,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
 
     json choice {
         {"finish_reason", finish_reason},
-        {"index", 0},
+        {"index", index},
         {"message", msg.to_json_oaicompat<json>()},
     };
 
@@ -1064,7 +1069,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
             {"choices", json::array({
                 json {
                     {"finish_reason", nullptr},
-                    {"index", 0},
+                    {"index", index},
                     {"delta", delta},
                 },
             })},

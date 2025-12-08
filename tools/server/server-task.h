@@ -53,6 +53,7 @@ struct task_params {
     int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
     int32_t n_predict = -1; // new tokens to predict
     int32_t n_indent  =  0; // minimum line indentation for the generated text in number of whitespace characters
+    int32_t n_cmpl    =  1; // number of completions to generate from this prompt
 
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
@@ -88,6 +89,10 @@ struct server_task {
     // used by SERVER_TASK_TYPE_CANCEL
     int id_target = -1;
     int id_slot   = -1;
+
+    // used by parallel sampling (multiple completions from same prompt)
+    size_t n_children =  0; // number of tasks reusing this prompt
+    int    id_parent  = -1;
 
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
@@ -129,6 +134,17 @@ struct server_task {
             ids.insert(tasks[i].id);
         }
         return ids;
+    }
+
+    server_task create_child(int id_parent, int id_child, int idx) const {
+        server_task copy;
+        copy.id        = id_child;
+        copy.index     = idx;
+        copy.id_parent = id_parent;
+        copy.params    = params;
+        copy.type      = type;
+        copy.tokens    = tokens.clone();
+        return copy;
     }
 };
 
@@ -465,6 +481,14 @@ struct server_prompt {
 
     int n_tokens() const {
         return tokens.size();
+    }
+
+    server_prompt clone() const {
+        return server_prompt {
+            tokens.clone(),
+            data,
+            checkpoints
+        };
     }
 };
 
