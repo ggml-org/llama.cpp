@@ -481,20 +481,25 @@ void server_models::load(const std::string & name, bool auto_load) {
         if (auto_load && !meta.args.empty()) {
             child_args = strip_router_control_args(meta.args); // copy previous args minus router-only flags
         } else {
-            child_args = base_args; // copy
+            child_args.push_back(base_args[0]);
             if (inst.meta.in_cache) {
-                add_or_replace_arg(child_args, "-hf", inst.meta.name);
+                child_args.push_back("-hf");
+                child_args.push_back(inst.meta.name);
             } else {
-                add_or_replace_arg(child_args, "-m", inst.meta.path);
+                child_args.push_back("-m");
+                child_args.push_back(inst.meta.path);
                 if (!inst.meta.path_mmproj.empty()) {
-                    add_or_replace_arg(child_args, "--mmproj", inst.meta.path_mmproj);
+                    child_args.push_back("--mmproj");
+                    child_args.push_back(inst.meta.path_mmproj);
                 }
             }
-        }
 
-        // set model args
-        add_or_replace_arg(child_args, "--port", std::to_string(inst.meta.port));
-        add_or_replace_arg(child_args, "--alias", inst.meta.name);
+            child_args.push_back("--port");
+            child_args.push_back(std::to_string(inst.meta.port));
+
+            child_args.push_back("--alias");
+            child_args.push_back(inst.meta.name);
+        }
 
         std::vector<std::string> child_env = base_env; // copy
         auto config_env = server_config.env_for(inst.meta.name);
