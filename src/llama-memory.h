@@ -20,6 +20,13 @@ struct llama_memory_params {
 
     // use full-size SWA cache
     bool swa_full;
+
+    // tensor parallelism: world size (1 = no TP)
+    // when > 1, KV cache is sharded by heads: n_embd_gqa / tp_world_size
+    int tp_world_size;
+
+    // use 4D paged KV cache layout for Paged Attention V2
+    bool paged_layout;
 };
 
 enum llama_memory_status {

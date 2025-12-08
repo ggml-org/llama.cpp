@@ -189,9 +189,11 @@ extern "C" {
     LLAMA_API const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_type);
 
     enum llama_split_mode {
-        LLAMA_SPLIT_MODE_NONE  = 0, // single GPU
-        LLAMA_SPLIT_MODE_LAYER = 1, // split layers and KV across GPUs
-        LLAMA_SPLIT_MODE_ROW   = 2, // split layers and KV across GPUs, use tensor parallelism if supported
+        LLAMA_SPLIT_MODE_NONE             = 0, // single GPU
+        LLAMA_SPLIT_MODE_LAYER            = 1, // split layers and KV across GPUs
+        LLAMA_SPLIT_MODE_ROW              = 2, // split layers and KV across GPUs, use tensor parallelism if supported
+        LLAMA_SPLIT_MODE_TENSOR_PARALLEL  = 3, // Megatron-style tensor parallelism (column/row parallel with all-reduce)
+        LLAMA_SPLIT_MODE_PIPELINE         = 4, // pipeline parallelism (1F1B schedule)
     };
 
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
@@ -365,6 +367,8 @@ extern "C" {
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
         bool paged_attn;    // [EXPERIMENTAL] use PagedAttention with block-based KV addressing (vLLM-style)
                             // requires flash_attn to be enabled
+        bool paged_layout;  // [EXPERIMENTAL] use 4D paged KV cache layout for long sequences
+                            // enables Paged Attention V2 kernel, requires paged_attn to be enabled
         bool prefix_cache;  // [EXPERIMENTAL] enable prefix caching for paged attention
                             // requires paged_attn to be enabled
     };
@@ -498,8 +502,7 @@ extern "C" {
 
     LLAMA_API const struct llama_model * llama_get_model   (const struct llama_context * ctx);
     LLAMA_API           llama_memory_t   llama_get_memory  (const struct llama_context * ctx);
-    LLAMA_API  enum llama_pooling_type   llama_pooling_type(const struct llama_context * ctx); // TODO: rename to llama_get_pooling_type
-
+            LLAMA_API enum llama_pooling_type   llama_pooling_type(const struct llama_context * ctx); // TODO: rename to llama_get_pooling_type
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
 

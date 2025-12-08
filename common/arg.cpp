@@ -280,6 +280,7 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_F32,
     GGML_TYPE_F16,
     GGML_TYPE_BF16,
+    GGML_TYPE_F8_E4M3,  // FP8 E4M3 - 2x memory reduction vs F16
     GGML_TYPE_Q8_0,
     GGML_TYPE_Q4_0,
     GGML_TYPE_Q4_1,
@@ -1054,6 +1055,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                                    string_format("error: unknown value for --flash-attn: '%s'\n", value.c_str()));
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
+    add_opt(common_arg(
+        {"--paged-layout"},
+        "use paged KV cache layout for long sequences (requires --flash-attn, enables Paged Attention V2)",
+        [](common_params & params) {
+            params.paged_layout = true;
+        }
+    ).set_env("LLAMA_ARG_PAGED_LAYOUT"));
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
@@ -1996,11 +2004,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
     add_opt(common_arg(
-        {"-sm", "--split-mode"}, "{none,layer,row}",
+        {"-sm", "--split-mode"}, "{none,layer,row,tp,pipeline}",
         "how to split the model across multiple GPUs, one of:\n"
         "- none: use one GPU only\n"
         "- layer (default): split layers and KV across GPUs\n"
-        "- row: split rows across GPUs",
+        "- row: split rows across GPUs\n"
+        "- tp: Megatron-style tensor parallelism (column/row parallel with all-reduce)\n"
+        "- pipeline: pipeline parallelism (1F1B schedule)",
         [](common_params & params, const std::string & value) {
             std::string arg_next = value;
             if (arg_next == "none") {
@@ -2009,6 +2019,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.split_mode = LLAMA_SPLIT_MODE_LAYER;
             } else if (arg_next == "row") {
                 params.split_mode = LLAMA_SPLIT_MODE_ROW;
+            } else if (arg_next == "tp") {
+                params.split_mode = LLAMA_SPLIT_MODE_TENSOR_PARALLEL;
+            } else if (arg_next == "pipeline") {
+                params.split_mode = LLAMA_SPLIT_MODE_PIPELINE;
             } else {
                 throw std::invalid_argument("invalid value");
             }

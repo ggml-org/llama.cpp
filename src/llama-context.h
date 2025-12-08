@@ -309,4 +309,12 @@ private:
     mutable int32_t n_eval   = 0; // number of eval calls
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
+
+    // Tensor Parallelism configuration
+    // When enabled, certain operations are executed across multiple backends in parallel
+    struct {
+        bool enabled = false;
+        int  world_size = 1;
+        std::vector<ggml_backend_t> backends;  // Backends in TP group (subset of this->backends)
+    } tp;
 };

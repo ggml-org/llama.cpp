@@ -12,6 +12,10 @@
 
 #include "ggml-cpp.h"
 
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"
+#endif
+
 #include "models/models.h"
 
 #include <algorithm>
@@ -397,6 +401,27 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
                 throw std::runtime_error(format("device %s not found in its backend reg", ggml_backend_dev_name(dev)));
             }();
             auto * buft = ggml_backend_split_buffer_type_fn(dev_index, tensor_split);
+            if (buft != nullptr) {
+                buft_list.emplace_back(dev, buft);
+            }
+        }
+    }
+
+    // add the tensor parallel buffer type if requested and available
+    if (split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        auto ggml_backend_tp_buffer_type_fn = (ggml_backend_tp_buffer_type_t)
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_tp_buffer_type");
+        if (ggml_backend_tp_buffer_type_fn) {
+            // Use first 2 devices for tensor parallelism
+            // This ensures proper alignment for quantized tensors (block size 32)
+            // TODO: Allow user to specify device list via --tensor-split or --tp-devices
+            size_t n_devices = std::min(size_t(2), ggml_backend_reg_dev_count(reg));
+            std::vector<int> device_ids(n_devices);
+            for (size_t i = 0; i < n_devices; ++i) {
+                device_ids[i] = static_cast<int>(i);
+            }
+            auto * buft = ggml_backend_tp_buffer_type_fn(static_cast<int>(n_devices), device_ids.data());
             if (buft != nullptr) {
                 buft_list.emplace_back(dev, buft);
             }
@@ -2371,8 +2396,18 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     };
 
     // assign the input layer
-    // there is very little benefit to offloading the input layer, so always keep it on the CPU
-    pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
+    // For tensor parallelism, input tensors MUST be on GPU because:
+    // 1. Intel Arc GPUs don't support efficient P2P memory access
+    // 2. Host memory is 30-50x slower for kernel access than device memory
+    // 3. The embedding table needs to be replicated on all TP devices
+    if (split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL && !devices.empty()) {
+        auto * dev = devices.at(0);  // Main TP device
+        LLAMA_LOG_DEBUG("load_tensors: input layer assigned to GPU for tensor parallelism\n");
+        pimpl->dev_input = {dev, &pimpl->gpu_buft_list.at(dev)};
+    } else {
+        // there is very little benefit to offloading the input layer, so always keep it on the CPU
+        pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
+    }
 
     // assign the repeating layers to the devices according to the splits
     pimpl->dev_layer.resize(n_layer);
@@ -2440,6 +2475,32 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         const int64_t n_expert      = hparams.n_expert;
         const int64_t n_expert_used = hparams.n_expert_used;
         const int64_t n_ctx_train   = hparams.n_ctx_train;
+
+        // Tensor parallelism: get world size and compute sharded dimensions
+        // Column-parallel layers (wq, wk, wv, ffn_gate, ffn_up): output dim / world_size
+        // Row-parallel layers (wo, ffn_down): input dim / world_size
+        int64_t tp_world_size = 1;
+#ifdef GGML_USE_SYCL
+        tp_world_size = ggml_backend_sycl_get_tp_world_size();
+#endif
+        const int64_t tp_n_head        = n_head / tp_world_size;
+        const int64_t tp_n_head_kv     = n_head_kv / tp_world_size;
+        const int64_t tp_n_embd_k_gqa  = n_embd_k_gqa / tp_world_size;
+        const int64_t tp_n_embd_v_gqa  = n_embd_v_gqa / tp_world_size;
+        const int64_t tp_n_embd_gqa    = n_embd_gqa / tp_world_size;
+        const int64_t tp_n_ff          = n_ff / tp_world_size;
+        // TP-sharded attention output dimension
+        const int64_t tp_n_embd_head_k_x_n_head = n_embd_head_k * tp_n_head;
+        GGML_UNUSED(tp_n_head_kv);  // Used by some models but not all
+        // TP flags: only set when actual sharding is needed (world_size > 1)
+        const int TP_COL = tp_world_size > 1 ? llama_model_loader::TENSOR_TP_COL_PARALLEL : 0;
+        const int TP_ROW = tp_world_size > 1 ? llama_model_loader::TENSOR_TP_ROW_PARALLEL : 0;
+
+        // Debug: print TP dimensions during model loading
+        LLAMA_LOG_INFO("[TP MODEL] tp_world_size=%lld, n_head=%u, n_head_kv=%u, n_embd_head_k=%u, n_embd_k_gqa=%lld\n",
+                       (long long)tp_world_size, n_head, n_head_kv, n_embd_head_k, (long long)n_embd_k_gqa);
+        LLAMA_LOG_INFO("[TP MODEL] tp_n_head=%lld, tp_n_embd_k_gqa=%lld, tp_n_embd_head_k_x_n_head=%lld\n",
+                       (long long)tp_n_head, (long long)tp_n_embd_k_gqa, (long long)tp_n_embd_head_k_x_n_head);
 
         if (n_expert > 0 && hparams.n_expert_used == 0) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
@@ -2616,15 +2677,25 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
-                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
-                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
-                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+                        // TP: wq, wk, wv are column-parallel (output dim sharded)
+                        // TP: wo is row-parallel (input dim sharded)
+                        if (i == 0) {
+                            LLAMA_LOG_INFO("[TP CREATE] layer 0: creating wq with dims {%lld, %lld}, TP_COL=%d\n",
+                                          (long long)n_embd, (long long)tp_n_embd_head_k_x_n_head, TP_COL);
+                        }
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, tp_n_embd_head_k_x_n_head}, TP_COL);
+                        if (i == 0 && layer.wq) {
+                            LLAMA_LOG_INFO("[TP CREATE] layer 0: wq @ %p created with actual dims [%lld, %lld]\n",
+                                          (void*)layer.wq, (long long)layer.wq->ne[0], (long long)layer.wq->ne[1]);
+                        }
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, tp_n_embd_k_gqa}, TP_COL);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, tp_n_embd_v_gqa}, TP_COL);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {tp_n_embd_head_k_x_n_head, n_embd}, TP_ROW);
 
-                        // optional bias tensors
-                        layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd},     TENSOR_NOT_REQUIRED);
-                        layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_embd_gqa}, TENSOR_NOT_REQUIRED);
-                        layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_embd_gqa}, TENSOR_NOT_REQUIRED);
+                        // optional bias tensors (also TP-sharded for Q/K/V)
+                        layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "bias", i), {tp_n_embd_head_k_x_n_head}, TENSOR_NOT_REQUIRED | TP_COL);
+                        layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "bias", i), {tp_n_embd_gqa}, TENSOR_NOT_REQUIRED | TP_COL);
+                        layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i), {tp_n_embd_gqa}, TENSOR_NOT_REQUIRED | TP_COL);
                         layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd},     TENSOR_NOT_REQUIRED);
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
@@ -2638,14 +2709,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         }
 
                         if (n_expert == 0) {
-                            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
-                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
-                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                            // TP: ffn_gate and ffn_up are column-parallel (output dim sharded)
+                            // TP: ffn_down is row-parallel (input dim sharded)
+                            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   tp_n_ff}, TP_COL);
+                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {tp_n_ff, n_embd}, TP_ROW);
+                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   tp_n_ff}, TP_COL);
 
-                            // optional MLP bias
-                            layer.ffn_gate_b = create_tensor(tn(LLM_TENSOR_FFN_GATE, "bias", i), {n_ff}, TENSOR_NOT_REQUIRED);
+                            // optional MLP bias (TP-sharded for gate/up)
+                            layer.ffn_gate_b = create_tensor(tn(LLM_TENSOR_FFN_GATE, "bias", i), {tp_n_ff}, TENSOR_NOT_REQUIRED | TP_COL);
                             layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
-                            layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {n_ff}, TENSOR_NOT_REQUIRED);
+                            layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {tp_n_ff}, TENSOR_NOT_REQUIRED | TP_COL);
                         } else {
                             layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
                             layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff, n_expert}, TENSOR_NOT_REQUIRED);
@@ -7124,7 +7197,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 hparams.n_swa,
                                 hparams.swa_type,
                                 nullptr,
-                                nullptr);
+                                nullptr,
+                                params.tp_world_size,
+                                params.paged_layout);
                     }
                 }
             }

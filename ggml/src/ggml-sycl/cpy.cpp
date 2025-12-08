@@ -668,12 +668,76 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
 
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     queue_ptr main_stream = ctx.stream();
+    const int device = ctx.device;
+    // Debug: check if stream is using TP context
+    sycl::queue * tp_queue = ggml_sycl_get_tp_queue(device);
+    GGML_SYCL_DEBUG("[CPY] device=%d main_stream=%p tp_queue=%p (match=%d)\n",
+            device, (void*)main_stream, (void*)tp_queue, main_stream == tp_queue);
 
-    char * src0_ddc = (char *) src0->data;
-    char * src1_ddc = (char *) src1->data;
+    // Use device-specific pointers for TP mode (KV cache is allocated per-device)
+    char * src0_ddc = (char *) ggml_sycl_get_data_ptr(src0, device);
+    char * src1_ddc = (char *) ggml_sycl_get_data_ptr(src1, device);
+
+    // Check memory types - use shared context in TP mode since staging allocates there
+    sycl::context * tp_ctx = ggml_sycl_get_tp_context();
+    const sycl::context & query_ctx = (tp_ctx != nullptr) ? *tp_ctx : main_stream->get_context();
+    GGML_SYCL_DEBUG("[CPY] tp_ctx=%p (%s)\n", (void*)tp_ctx, tp_ctx ? "TP shared" : "stream");
+    sycl::usm::alloc src0_type = sycl::get_pointer_type(src0_ddc, query_ctx);
+    sycl::usm::alloc src1_type = sycl::get_pointer_type(src1_ddc, query_ctx);
+    GGML_SYCL_DEBUG("[CPY DEBUG] device=%d src0=%s(%p, usm=%d) -> src1=%s(%p, usm=%d) size=%zu\n",
+            device,
+            src0->name ? src0->name : "?", (void*)src0_ddc, (int)src0_type,
+            src1->name ? src1->name : "?", (void*)src1_ddc, (int)src1_type,
+            ggml_nbytes(src0));
+
+    // Handle non-USM source memory (regular CPU memory that device can't access directly)
+    // This can happen with graph input tensors in TP mode
+    // In TP mode with shared-context queues, tensors using tensor->data directly
+    // (mmap'd/CPU memory) can't be accessed - they need staging through USM memory.
+    // The pointer type check is unreliable because Level Zero may report mmap'd memory
+    // as "host" type. Instead, check if the source came from tensor->data (not extra->data_device).
+    char * staged_src = nullptr;
+    bool dst_is_device = (src1_type == sycl::usm::alloc::device);
+
+    // Source needs staging if:
+    // 1. We're in TP mode with shared-context queues
+    // 2. Source is using tensor->data (not GPU-specific extra->data_device)
+    // 3. Destination is device memory
+    bool src_is_from_tensor_data = (src0_ddc == (char*)src0->data);
+    bool needs_staging = (src_is_from_tensor_data && dst_is_device &&
+                          g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1);
+    GGML_SYCL_DEBUG("[CPY STAGING CHECK] device=%d needs_staging=%d src0_type=%d dst_is_device=%d\n",
+            device, needs_staging, (int)src0_type, dst_is_device);
+    if (needs_staging) {
+        // Source is not USM, destination is USM - stage through shared USM memory
+        // Use malloc_host in the shared TP context so all devices can access it
+        size_t nbytes = ggml_nbytes(src0);
+        GGML_SYCL_DEBUG("[CPY] Staging %zu bytes for device %d\n", nbytes, device);
+
+        try {
+            // Allocate host memory in the shared TP context (if available)
+            // This is accessible from all TP devices
+            if (tp_ctx != nullptr) {
+                staged_src = (char*)sycl::malloc_host(nbytes, *tp_ctx);
+            } else {
+                staged_src = (char*)sycl::malloc_shared(nbytes, *main_stream);
+            }
+            GGML_SYCL_DEBUG("[CPY] Allocated staging buffer at %p for device %d\n", (void*)staged_src, device);
+            // Copy from CPU memory to USM memory
+            std::memcpy(staged_src, src0_ddc, nbytes);
+            GGML_SYCL_DEBUG("[CPY] memcpy to staging buffer completed\n");
+            // Use staged buffer as source for the rest of the copy
+            src0_ddc = staged_src;
+        } catch (const sycl::exception& e) {
+            GGML_LOG_ERROR("[CPY] Failed to allocate staging buffer: %s\n", e.what());
+            return;
+        }
+    }
+
     if ((src0->type == src1->type) && (ggml_is_contiguous(src0) && ggml_is_contiguous(src1))) {
-        GGML_SYCL_DEBUG("%s: memcpy path\n", __func__);
+        GGML_SYCL_DEBUG("[CPY device=%d] memcpy path: %p -> %p (%zu bytes)\n", device, (void*)src0_ddc, (void*)src1_ddc, ggml_nbytes(src0));
         main_stream->memcpy(src1_ddc, src0_ddc, ggml_nbytes(src0));
+        GGML_SYCL_DEBUG("[CPY device=%d] memcpy submitted\n", device);
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
         ggml_cpy_f32_f32_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
                               nb11, nb12, nb13, main_stream);
@@ -760,6 +824,12 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
         GGML_LOG_ERROR("%s: unsupported type combination (%s to %s)\n", __func__, ggml_type_name(src0->type),
                        ggml_type_name(src1->type));
         GGML_ABORT("fatal error");
+    }
+
+    // Free staging buffer if used (need to wait for kernel to complete first)
+    if (staged_src != nullptr) {
+        main_stream->wait();
+        sycl::free(staged_src, query_ctx);
     }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;

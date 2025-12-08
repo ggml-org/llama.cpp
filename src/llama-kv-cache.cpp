@@ -34,11 +34,24 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+                      int   tp_world_size,
+                     bool   paged_layout) :
     model(model), hparams(model.hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), tp_world_size(tp_world_size), n_swa(n_swa), swa_type(swa_type),
+    use_paged_layout(paged_layout) {
 
     GGML_ASSERT(kv_size % n_pad == 0);
+
+    if (use_paged_layout) {
+        // NOTE: Currently paged_layout only enables the Paged Attention V2 dispatch path
+        // in the flash attention kernel (via GGML_SYCL_PAGED_V2 env var).
+        // Physical memory layout remains contiguous 3D. True 4D paged memory layout is future work.
+        const uint32_t block_size = LLAMA_KV_BLOCK_SIZE;
+        const uint32_t num_blocks = (kv_size + block_size - 1) / block_size;
+        LLAMA_LOG_INFO("%s: paged attention mode enabled (enables V2 dispatch, block_size=%u, logical_blocks=%u)\n",
+                       __func__, block_size, num_blocks);
+    }
 
     const uint32_t n_layer_kv = hparams.n_layer_kv();
 
@@ -113,18 +126,33 @@ llama_kv_cache::llama_kv_cache(
         }
 
         // [TAG_V_CACHE_VARIABLE]
-        const uint32_t n_embd_k_gqa =            hparams.n_embd_k_gqa(il);
-        const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max();
+        // In TP mode, KV cache is sharded by heads: each device stores n_head_kv / world_size heads
+        const uint32_t n_embd_k_gqa =            hparams.n_embd_k_gqa(il) / tp_world_size;
+        const uint32_t n_embd_v_gqa = (!v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max()) / tp_world_size;
 
         const char * dev_name = "CPU";
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
         if (offload) {
+#ifdef GGML_USE_SYCL
+            // In TP mode, use TP buffer type for KV cache so each device has its own memory
+            // Each device stores KV for its attention head shard
+            if (tp_world_size > 1) {
+                buft = ggml_backend_sycl_tp_buffer_type(tp_world_size, nullptr);
+                dev_name = "SYCL_TP";
+                LLAMA_LOG_DEBUG("%s: layer %3d: using TP buffer type for KV cache\n", __func__, il);
+            } else {
+                auto * dev = model.dev_layer(il);
+                buft = ggml_backend_dev_buffer_type(dev);
+                dev_name = ggml_backend_dev_name(dev);
+            }
+#else
             auto * dev = model.dev_layer(il);
             buft = ggml_backend_dev_buffer_type(dev);
 
             dev_name = ggml_backend_dev_name(dev);
+#endif
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
@@ -134,14 +162,29 @@ llama_kv_cache::llama_kv_cache(
             throw std::runtime_error("failed to create ggml context for kv cache");
         }
 
-        ggml_tensor * k = ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream);
-        ggml_tensor * v = ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream);
-
-        ggml_format_name(k, "cache_k_l%d", il);
-        ggml_format_name(v, "cache_v_l%d", il);
+        ggml_tensor * k;
+        ggml_tensor * v;
 
         std::vector<ggml_tensor *> k_stream;
         std::vector<ggml_tensor *> v_stream;
+
+        // NOTE: True 4D paged layout [D, block_size, n_heads, num_blocks] requires
+        // significant changes to the graph code (build_attn_mha) which expects specific
+        // tensor shapes for permute operations. For now, we always use 3D contiguous layout.
+        // The use_paged_layout flag only enables the V2 dispatch path in fattn.cpp,
+        // which can use block tables for logical addressing on contiguous memory.
+        //
+        // TODO: Implement true 4D paged layout by modifying:
+        // - llm_graph_context::build_attn_mha() to handle 4D KV tensors
+        // - get_k()/get_v() to return proper views for 4D layout
+        // - cpy_k()/cpy_v() to use GGML_OP_SET_ROWS_PAGED for block-addressed writes
+
+        // Standard contiguous layout: [n_embd_k_gqa, kv_size, n_stream]
+        k = ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream);
+        v = ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream);
+
+        ggml_format_name(k, "cache_k_l%d", il);
+        ggml_format_name(v, "cache_v_l%d", il);
 
         for (uint32_t s = 0; s < n_stream; ++s) {
             k_stream.push_back(ggml_view_2d(ctx, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]));
@@ -1101,6 +1144,17 @@ void llama_kv_cache::enable_paged_attn() {
     use_paged_attn = true;
 }
 
+void llama_kv_cache::enable_paged_layout() {
+    if (use_paged_layout) {
+        return;  // Already enabled at construction time
+    }
+
+    // Paged layout must be enabled at construction time via the paged_layout parameter
+    // because tensor allocation happens during construction
+    LLAMA_LOG_ERROR("%s: paged layout must be enabled at construction time via paged_layout=true\n", __func__);
+    LLAMA_LOG_ERROR("%s: cannot enable paged layout after KV cache is already allocated\n", __func__);
+}
+
 void llama_kv_cache::enable_prefix_cache() {
     if (!use_paged_attn || !paged_cache) {
         LLAMA_LOG_WARN("%s: prefix caching requires paged attention to be enabled first\n", __func__);
@@ -1220,15 +1274,23 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 
     auto * k = layers[ikv].k;
 
+    // Use local (sharded) n_head_kv in TP mode
+    const uint32_t local_n_head_kv = hparams.n_head_kv(il) / tp_world_size;
+
+    // NOTE: With use_paged_layout=true, we still use standard 3D tensor layout.
+    // The paged attention mode works via block tables for logical addressing,
+    // while tensor layout remains [n_embd_k_gqa, kv_size, n_stream].
+
     const uint64_t kv_size      = get_size();
     const uint64_t n_embd_k_gqa = k->ne[0];
 
-    assert(n_embd_k_gqa == hparams.n_embd_k_gqa(il));
+    // In TP mode, n_embd_k_gqa is sharded (divided by tp_world_size)
+    assert(n_embd_k_gqa == hparams.n_embd_k_gqa(il) / tp_world_size);
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
     return ggml_view_4d(ctx, k,
-            hparams.n_embd_head_k, hparams.n_head_kv(il), n_kv, ns,
+            hparams.n_embd_head_k, local_n_head_kv, n_kv, ns,
             ggml_row_size(k->type, hparams.n_embd_head_k),
             ggml_row_size(k->type, n_embd_k_gqa),
             ggml_row_size(k->type, n_embd_k_gqa*kv_size),
@@ -1240,18 +1302,26 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
 
     auto * v = layers[ikv].v;
 
+    // Use local (sharded) n_head_kv in TP mode
+    const uint32_t local_n_head_kv = hparams.n_head_kv(il) / tp_world_size;
+
+    // NOTE: With use_paged_layout=true, we still use standard 3D tensor layout.
+    // The paged attention mode works via block tables for logical addressing,
+    // while tensor layout remains [n_embd_v_gqa, kv_size, n_stream].
+
     const uint64_t kv_size      = get_size();
     const uint64_t n_embd_v_gqa = v->ne[0];
 
     // [TAG_V_CACHE_VARIABLE]
-    assert(n_embd_v_gqa >= hparams.n_embd_v_gqa(il));
+    // In TP mode, n_embd_v_gqa is sharded (divided by tp_world_size)
+    assert(n_embd_v_gqa >= hparams.n_embd_v_gqa(il) / tp_world_size);
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
     if (!v_trans) {
         // note: v->nb[1] <= v->nb[2]
         return ggml_view_4d(ctx, v,
-                hparams.n_embd_head_v, hparams.n_head_kv(il), n_kv, ns,
+                hparams.n_embd_head_v, local_n_head_kv, n_kv, ns,
                 ggml_row_size(v->type, hparams.n_embd_head_v),          // v->nb[1]
                 ggml_row_size(v->type, n_embd_v_gqa),                   // v->nb[2]
                 ggml_row_size(v->type, n_embd_v_gqa*kv_size),           // v->nb[3]
@@ -1260,7 +1330,7 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
 
     // note: v->nb[1] > v->nb[2]
     return ggml_view_4d(ctx, v,
-            n_kv, hparams.n_head_kv(il), hparams.n_embd_head_v, ns,
+            n_kv, local_n_head_kv, hparams.n_embd_head_v, ns,
             ggml_row_size(v->type, kv_size*hparams.n_embd_head_v),  // v->nb[1]
             ggml_row_size(v->type, kv_size),                        // v->nb[2]
             ggml_row_size(v->type, kv_size*n_embd_v_gqa),           // v->nb[3]
@@ -1271,21 +1341,22 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     GGML_UNUSED(sinfo);
 
     const int32_t ikv = map_layer_ids.at(il);
-
     ggml_tensor * k = layers[ikv].k;
 
     const int64_t n_embd_head = k_cur->ne[0];
     const int64_t n_head      = k_cur->ne[1];
     const int64_t n_tokens    = k_cur->ne[2];
-
     const int64_t n_embd_gqa = n_embd_head*n_head;
 
     // we can merge dims 0 and 1
-    // TODO: add ggml helper function for this?
     GGML_ASSERT(ggml_row_size(k_cur->type, n_embd_head) == k_cur->nb[1]);
-
     k_cur = ggml_view_2d(ctx, k_cur, n_embd_gqa, n_tokens, k_cur->nb[2], 0);
 
+    // NOTE: True paged layout with GGML_OP_SET_ROWS_PAGED requires 4D KV tensors.
+    // Currently we always use 3D contiguous layout, so use standard ggml_set_rows.
+    // See allocation code for TODO on implementing true 4D paged layout.
+
+    // Standard contiguous layout
     const int64_t n_stream = k->ne[2];
 
     if (n_stream > 1) {
@@ -1306,17 +1377,19 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
     GGML_UNUSED(sinfo);
 
     const int32_t ikv = map_layer_ids.at(il);
-
     auto * v = layers[ikv].v;
 
     const int64_t n_embd_head = v_cur->ne[0];
     const int64_t n_head      = v_cur->ne[1];
     const int64_t n_tokens    = v_cur->ne[2];
-
     const int64_t n_embd_gqa = n_embd_head*n_head;
 
     // we can merge dims 0 and 1
     GGML_ASSERT(ggml_row_size(v_cur->type, n_embd_head) == v_cur->nb[1]);
+
+    // NOTE: True paged layout with GGML_OP_SET_ROWS_PAGED requires 4D KV tensors.
+    // Currently we always use 3D contiguous layout, so use standard ggml_set_rows.
+    // See allocation code for TODO on implementing true 4D paged layout.
 
     const int64_t n_stream = v->ne[2];
 
@@ -1662,9 +1735,9 @@ void llama_kv_cache::set_input_block_table(ggml_tensor * block_table, ggml_tenso
     const int n_seqs = seq_lens->ne[0];
     const int max_blocks = block_table->ne[0];
 
-    // F32 tensors (will be cast to I32 for the kernel)
-    float * block_data = (float *) block_table->data;
-    float * seq_data   = (float *) seq_lens->data;
+    // I32 tensors for SYCL backend compatibility (no ggml_cast support)
+    int32_t * block_data = (int32_t *) block_table->data;
+    int32_t * seq_data   = (int32_t *) seq_lens->data;
 
     // Check if we're using dynamic paged attention
     if (use_paged_attn && paged_cache) {
@@ -1689,9 +1762,9 @@ void llama_kv_cache::set_input_block_table(ggml_tensor * block_table, ggml_tenso
                     LLAMA_LOG_WARN("%s: failed to allocate blocks for seq %d, using identity mapping\n",
                                    __func__, seq_id);
                     for (int b = 0; b < max_blocks; ++b) {
-                        block_data[s * max_blocks + b] = (float)b;
+                        block_data[s * max_blocks + b] = b;
                     }
-                    seq_data[s] = (float)n_kv;
+                    seq_data[s] = (int32_t)n_kv;
                     continue;
                 }
             }
@@ -1703,23 +1776,26 @@ void llama_kv_cache::set_input_block_table(ggml_tensor * block_table, ggml_tenso
                 const uint32_t seq_len = paged_cache->get_sequence_length(seq_id);
 
                 // Fill in block table with actual physical block IDs
+                // IMPORTANT: Use identity mapping for blocks beyond allocated ones
+                // because FA kernel accesses all KV positions up to n_kv, not just
+                // allocated ones. Using -1 causes negative indices (memory corruption).
                 for (int b = 0; b < max_blocks; ++b) {
                     if (b < (int)block_ids.size()) {
-                        block_data[s * max_blocks + b] = (float)block_ids[b];
+                        block_data[s * max_blocks + b] = (int32_t)block_ids[b];
                     } else {
-                        // Pad with -1 for unused blocks
-                        block_data[s * max_blocks + b] = -1.0f;
+                        // Identity mapping for unallocated blocks (safe with contiguous KV)
+                        block_data[s * max_blocks + b] = b;
                     }
                 }
 
                 // Use actual sequence length
-                seq_data[s] = (float)std::min(seq_len, n_kv);
+                seq_data[s] = (int32_t)std::min(seq_len, n_kv);
             } else {
                 // Fallback to identity mapping
                 for (int b = 0; b < max_blocks; ++b) {
-                    block_data[s * max_blocks + b] = (float)b;
+                    block_data[s * max_blocks + b] = b;
                 }
-                seq_data[s] = (float)n_kv;
+                seq_data[s] = (int32_t)n_kv;
             }
         }
 
@@ -1736,14 +1812,14 @@ void llama_kv_cache::set_input_block_table(ggml_tensor * block_table, ggml_tenso
         for (int s = 0; s < n_seqs; ++s) {
             for (int b = 0; b < max_blocks; ++b) {
                 // Physical block index = b (identity: logical block b maps to physical block b)
-                block_data[s * max_blocks + b] = (float)b;
+                block_data[s * max_blocks + b] = b;
             }
         }
 
         // Sequence lengths: all sequences use full n_kv for now
         // (proper per-sequence lengths would come from the scheduler)
         for (int s = 0; s < n_seqs; ++s) {
-            seq_data[s] = (float)n_kv;
+            seq_data[s] = (int32_t)n_kv;
         }
 
         static bool logged = false;

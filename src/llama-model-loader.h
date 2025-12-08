@@ -58,9 +58,14 @@ struct llama_model_loader {
         }
     };
 
-    static const int TENSOR_NOT_REQUIRED = 1 << 0;
-    static const int TENSOR_DUPLICATED   = 1 << 1;
-    static const int TENSOR_SKIP         = 1 << 2;
+    static const int TENSOR_NOT_REQUIRED  = 1 << 0;
+    static const int TENSOR_DUPLICATED    = 1 << 1;
+    static const int TENSOR_SKIP          = 1 << 2;
+    // Tensor parallelism flags:
+    // TP_COL_PARALLEL: output dimension (ne[1]) is sharded (wq, wk, wv, ffn_gate, ffn_up)
+    // TP_ROW_PARALLEL: input dimension (ne[0]) is sharded (wo, ffn_down)
+    static const int TENSOR_TP_COL_PARALLEL = 1 << 3;
+    static const int TENSOR_TP_ROW_PARALLEL = 1 << 4;
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -141,7 +146,7 @@ struct llama_model_loader {
 
     struct ggml_tensor * require_tensor_meta(const std::string & name) const;
 
-    const struct ggml_tensor * check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required) const;
+    const struct ggml_tensor * check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required, int flags = 0) const;
 
     struct ggml_tensor * create_tensor(struct ggml_context * ctx, const std::string & name, const std::initializer_list<int64_t> & ne, int flags = 0);
 

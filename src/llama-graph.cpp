@@ -9,6 +9,10 @@
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
 
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"
+#endif
+
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -571,6 +575,58 @@ void llm_graph_result::set_params(const llm_graph_params & params) {
 // llm_graph_context
 //
 
+// Helper to get TP world size from scheduler or backend
+static int tp_get_world_size([[maybe_unused]] const llm_graph_params & params) {
+    // First try the scheduler
+    if (params.sched && ggml_backend_sched_tp_enabled(params.sched)) {
+        int ws = ggml_backend_sched_get_tp_world_size(params.sched);
+        if (ws > 1) {
+            return ws;
+        }
+    }
+    // Fallback: query SYCL backend directly (for when TP buffer handles multi-device)
+#ifdef GGML_USE_SYCL
+    int sycl_ws = ggml_backend_sycl_get_tp_world_size();
+    if (sycl_ws > 1) {
+        return sycl_ws;
+    }
+#endif
+    return 1;
+}
+
+// Helper to compute TP-aware head count
+static int64_t tp_local_n_head(const llm_graph_params & params) {
+    int ws = tp_get_world_size(params);
+    if (ws > 1) {
+        return params.hparams.n_head() / ws;
+    }
+    return params.hparams.n_head();
+}
+
+static int64_t tp_local_n_head_kv(const llm_graph_params & params) {
+    int ws = tp_get_world_size(params);
+    if (ws > 1) {
+        return params.hparams.n_head_kv() / ws;
+    }
+    return params.hparams.n_head_kv();
+}
+
+static int64_t tp_local_n_embd_k_gqa(const llm_graph_params & params) {
+    int ws = tp_get_world_size(params);
+    if (ws > 1) {
+        return (params.hparams.n_head_kv() / ws) * params.hparams.n_embd_head_k;
+    }
+    return params.hparams.n_embd_k_gqa();
+}
+
+static int64_t tp_local_n_embd_v_gqa(const llm_graph_params & params) {
+    int ws = tp_get_world_size(params);
+    if (ws > 1) {
+        return (params.hparams.n_head_kv() / ws) * params.hparams.n_embd_head_v;
+    }
+    return params.hparams.n_embd_v_gqa();
+}
+
 llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     arch             (params.arch),
     hparams          (params.hparams),
@@ -580,12 +636,15 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     n_layer          (hparams.n_layer),
     n_rot            (hparams.n_rot),
     n_ctx            (cparams.n_ctx),
+    // Keep n_head and n_head_kv at their full model values
+    // tp_n_head() and tp_n_head_kv() provide sharded counts when needed
     n_head           (hparams.n_head()),
     n_head_kv        (hparams.n_head_kv()),
     n_embd_head_k    (hparams.n_embd_head_k),
-    n_embd_k_gqa     (hparams.n_embd_k_gqa()),
+    // Use TP-sharded GQA dimensions for KV cache sizing
+    n_embd_k_gqa     (tp_local_n_embd_k_gqa(params)),
     n_embd_head_v    (hparams.n_embd_head_v),
-    n_embd_v_gqa     (hparams.n_embd_v_gqa()),
+    n_embd_v_gqa     (tp_local_n_embd_v_gqa(params)),
     n_expert         (hparams.n_expert),
     n_expert_used    (cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
     freq_base        (cparams.rope_freq_base),
@@ -618,6 +677,128 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {
         cb_func(ubatch, cur, name, il);
     }
+}
+
+bool llm_graph_context::tp_enabled() const {
+    return sched && ggml_backend_sched_tp_enabled(sched);
+}
+
+bool llm_graph_context::is_row_parallel_weight(const ggml_tensor * w) const {
+    if (w == nullptr || w->name[0] == '\0') {
+        return false;
+    }
+
+    const char * name = w->name;
+
+    // Row-parallel layers (need all-reduce after matmul):
+    // These are the "output" projections that reduce hidden dimensions
+    // attn_output/attn_out/wo.weight (attention output projection)
+    // ffn_down/w2.weight (FFN down projection)
+    if (strstr(name, "attn_output") != nullptr ||
+        strstr(name, "attn_out") != nullptr ||
+        strstr(name, "ffn_down") != nullptr ||
+        strstr(name, "wo.weight") != nullptr ||
+        strstr(name, "w2.weight") != nullptr) {
+        return true;
+    }
+
+    return false;
+}
+
+ggml_tensor * llm_graph_context::maybe_all_reduce(ggml_tensor * cur, const ggml_tensor * w) const {
+    // Only insert all-reduce if TP is enabled and weight is row-parallel
+    if (!tp_enabled() || !is_row_parallel_weight(w)) {
+        return cur;
+    }
+
+    // Insert all-reduce sum to combine partial results from all TP devices
+    ggml_tensor * reduced = ggml_all_reduce_sum(ctx0, cur);
+    return reduced;
+}
+
+int llm_graph_context::tp_world_size() const {
+    // First try the scheduler
+    if (sched) {
+        int ws = ggml_backend_sched_get_tp_world_size(sched);
+        if (ws > 1) return ws;
+    }
+    // Fallback: query SYCL backend directly (for when TP buffer handles multi-device)
+#ifdef GGML_USE_SYCL
+    int sycl_ws = ggml_backend_sycl_get_tp_world_size();
+    if (sycl_ws > 1) return sycl_ws;
+#endif
+    return 1;
+}
+
+int llm_graph_context::tp_rank() const {
+    // TODO: When building per-device graphs, this should return the rank
+    // For now, return 0 as we build a single graph and handle sharding at compute time
+    return 0;
+}
+
+bool llm_graph_context::is_column_parallel_weight(const ggml_tensor * w) const {
+    if (w == nullptr || w->name[0] == '\0') {
+        return false;
+    }
+
+    const char * name = w->name;
+
+    // Column-parallel layers (output dimension sharded):
+    // These are the "input" projections that expand to hidden dimensions
+    // Q, K, V projections (expand hidden -> head_dim * n_head)
+    // FFN gate/up projections (expand hidden -> ffn_dim)
+    if (strstr(name, "attn_q") != nullptr ||
+        strstr(name, "attn_k") != nullptr ||
+        strstr(name, "attn_v") != nullptr ||
+        strstr(name, "attn_qkv") != nullptr ||   // fused QKV
+        strstr(name, "wq.weight") != nullptr ||
+        strstr(name, "wk.weight") != nullptr ||
+        strstr(name, "wv.weight") != nullptr ||
+        strstr(name, "ffn_gate") != nullptr ||
+        strstr(name, "ffn_up") != nullptr ||
+        strstr(name, "w1.weight") != nullptr ||
+        strstr(name, "w3.weight") != nullptr) {
+        return true;
+    }
+
+    return false;
+}
+
+void llm_graph_context::tp_get_weight_dims(const ggml_tensor * w, int64_t * local_ne0, int64_t * local_ne1) const {
+    if (w == nullptr) {
+        *local_ne0 = 0;
+        *local_ne1 = 0;
+        return;
+    }
+
+    // Default: use original dimensions
+    *local_ne0 = w->ne[0];
+    *local_ne1 = w->ne[1];
+
+    if (!tp_enabled()) {
+        return;
+    }
+
+    int ws = tp_world_size();
+    if (ws <= 1) {
+        return;
+    }
+
+    // Column-parallel: output dimension (ne[1]) is sharded
+    // Each device has [ne[0], ne[1]/world_size]
+    if (is_column_parallel_weight(w)) {
+        *local_ne1 = w->ne[1] / ws;
+        return;
+    }
+
+    // Row-parallel: input dimension (ne[0]) is sharded
+    // Each device has [ne[0]/world_size, ne[1]]
+    if (is_row_parallel_weight(w)) {
+        *local_ne0 = w->ne[0] / ws;
+        return;
+    }
+
+    // Not a sharded weight - use original dimensions
 }
 
 ggml_tensor * llm_graph_context::build_cvec(
@@ -841,6 +1022,8 @@ ggml_tensor * llm_graph_context::build_ffn(
             // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
+        // For tensor parallelism: insert all-reduce after row-parallel matmul
+        cur = maybe_all_reduce(cur, down);
     }
 
     if (down_b) {
@@ -1409,6 +1592,12 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             ggml_flash_attn_ext_set_paged(cur, block_table, seq_lens);
         }
 
+        // Mark if using paged KV layout (4D format: [D, block_size, n_heads, num_blocks])
+        // This is required for V2 dispatch to read from blocked memory correctly
+        if (cparams.paged_layout) {
+            ggml_flash_attn_ext_set_paged_layout(cur, true);
+        }
+
         if (v_mla) {
 #if 0
             // v_mla can be applied as a matrix-vector multiplication with broadcasting across dimension 3 == n_tokens.
@@ -1557,6 +1746,8 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (wo) {
         cur = build_lora_mm(wo, cur);
+        // For tensor parallelism: insert all-reduce after row-parallel matmul
+        cur = maybe_all_reduce(cur, wo);
     }
 
     if (wo_b) {
@@ -1615,7 +1806,8 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         // - block_table: [max_blocks, n_seqs] maps logical blocks to physical blocks
         // - seq_lens: [n_seqs] number of valid KV tokens per sequence
         // - Block size is fixed at 16 tokens (matches XMX tile size and vLLM default)
-        if (cparams.flash_attn && cparams.paged_attn) {
+        // Create block tables when either paged_attn or paged_layout is enabled (V2 needs them)
+        if (cparams.flash_attn && (cparams.paged_attn || cparams.paged_layout)) {
             const int block_size = 16;
             const int n_seqs = ubatch.n_seqs_unq;
             const int max_blocks = (n_kv + block_size - 1) / block_size;
@@ -1625,6 +1817,10 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
             inp->self_seq_lens    = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_seqs);
             ggml_set_input(inp->self_block_table);
             ggml_set_input(inp->self_seq_lens);
+
+            // Device pointers same as input tensors (scheduler handles copy)
+            inp->self_block_table_dev = inp->self_block_table;
+            inp->self_seq_lens_dev    = inp->self_seq_lens;
         }
     }
 
@@ -1693,6 +1889,8 @@ ggml_tensor * llm_graph_context::build_attn(
             // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
+        // For tensor parallelism: insert all-reduce after row-parallel matmul
+        cur = maybe_all_reduce(cur, wo);
     }
 
     if (wo_b) {
@@ -1756,6 +1954,8 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (wo) {
         cur = build_lora_mm(wo, cur);
+        // For tensor parallelism: insert all-reduce after row-parallel matmul
+        cur = maybe_all_reduce(cur, wo);
     }
 
     if (wo_b) {
@@ -1811,6 +2011,8 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (wo) {
         cur = build_lora_mm(wo, cur);
+        // For tensor parallelism: insert all-reduce after row-parallel matmul
+        cur = maybe_all_reduce(cur, wo);
     }
 
     if (wo_b) {

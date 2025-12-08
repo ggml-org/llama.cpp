@@ -267,6 +267,18 @@ static struct llama_model * llama_model_load_from_file_impl(
         }
     }
 
+    // For tensor parallelism, keep ALL devices visible to the scheduler
+    // The scheduler needs to see all TP devices for proper buffer allocation
+    // and the context needs world_size > 1 to enable TP operations
+    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
+        if (!model->devices.empty()) {
+            ggml_backend_dev_t main_gpu = model->devices[0];
+            LLAMA_LOG_INFO("%s: tensor parallelism mode - main device %s, %zu TP devices\n",
+                    __func__, ggml_backend_dev_name(main_gpu), model->devices.size());
+            // Keep all devices - don't clear the list
+        }
+    }
+
     for (auto * dev : model->devices) {
         ggml_backend_dev_props props;
         ggml_backend_dev_get_props(dev, &props);

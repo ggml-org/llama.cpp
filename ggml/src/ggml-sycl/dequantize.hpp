@@ -819,5 +819,50 @@ dequantize_block_iq4_xs(const void *__restrict__ vx, dst_t *__restrict__ yy,
     }
 }
 
+// MXFP4 dequantization for 2 values at a time
+// Note: sycl_e8m0_to_fp32_half is defined in common.hpp
+static __dpct_inline__ void dequantize_mxfp4(const void *vx, const int64_t ib,
+                                              const int iqs, dfloat2 &v) {
+    const block_mxfp4 * x = (const block_mxfp4 *) vx;
+
+    const float d = sycl_e8m0_to_fp32_half(x[ib].e);
+    const uint8_t q = x[ib].qs[iqs];
+
+    // kvalues_mxfp4 is defined in ggml-common.h
+    // Values are doubled E2M1: {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
+    // Multiply by 0.5 to get actual values
+    v.x() = d * kvalues_mxfp4[q & 0xF] * 0.5f;
+    v.y() = d * kvalues_mxfp4[q >> 4] * 0.5f;
+}
+
+// Block dequantization kernel for MXFP4
+template<typename dst_t>
+static void dequantize_block_mxfp4(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
+                                    const sycl::nd_item<3> &item_ct1) {
+    const int64_t i = item_ct1.get_group(2);
+
+    // assume 32 threads
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int64_t il  = tid/8;
+    const int64_t ir  = tid%8;
+    const int64_t ib = 8*i + ir;
+    if (ib >= nb32) {
+        return;
+    }
+
+    dst_t * y = yy + 256*i + 32*ir + 4*il;
+
+    const block_mxfp4 * x = (const block_mxfp4 *)vx + ib;
+    const float d = sycl_e8m0_to_fp32_half(x->e);
+
+    const uint8_t * q = x->qs + 4*il;
+
+    // kvalues_mxfp4 values are doubled, so multiply by 0.5
+    for (int l = 0; l < 4; ++l) {
+        y[l+ 0] = d * kvalues_mxfp4[q[l] & 0xF] * 0.5f;
+        y[l+16] = d * kvalues_mxfp4[q[l] >>  4] * 0.5f;
+    }
+}
+
 
 #endif // GGML_SYCL_DEQUANTIZE_HPP

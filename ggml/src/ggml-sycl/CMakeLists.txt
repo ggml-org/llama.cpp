@@ -28,6 +28,7 @@ option(GGML_SYCL_MMQ_XMX "Enable experimental XMX MMQ kernels for SYCL backend" 
 
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 list(FILTER GGML_SOURCES_SYCL EXCLUDE REGEX "test_joint_matrix.*\\.cpp$")
+list(FILTER GGML_SOURCES_SYCL EXCLUDE REGEX "test_tensor_parallel\\.cpp$")
 
 if (GGML_SYCL_MMQ_XMX)
     message(STATUS "Compiling with experimental GGML_SYCL_MMQ_XMX kernels.")
@@ -93,6 +94,23 @@ else()
     message(STATUS "oneDNN support disabled by the user")
 endif()
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
+
+# Link against oneCCL for tensor parallelism collective operations
+set(GGML_SYCL_CCL 0)
+option(GGML_SYCL_ONECCL "Enable oneCCL for tensor parallelism collectives" ON)
+if(GGML_SYCL_ONECCL)
+    find_package(oneCCL QUIET)
+    if(oneCCL_FOUND)
+        target_link_libraries(ggml-sycl PRIVATE ccl)
+        set(GGML_SYCL_CCL 1)
+        message(STATUS "Found oneCCL: enabled for tensor parallelism")
+    else()
+        message(STATUS "oneCCL not found, tensor parallelism will use manual ALL_REDUCE")
+    endif()
+else()
+    message(STATUS "oneCCL support disabled by the user")
+endif()
+target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_CCL=${GGML_SYCL_CCL})
 
 if (GGML_SYCL_F16)
     if (GGML_SYCL_TARGET STREQUAL "AMD")

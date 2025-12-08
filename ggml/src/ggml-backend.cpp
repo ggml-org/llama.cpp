@@ -729,7 +729,23 @@ struct ggml_backend_sched {
     int debug_realloc;
     int debug_graph_size;
     int debug_prev_graph_size;
+
+    // Tensor Parallelism support
+    bool tp_enabled;
+    int tp_world_size;
+    ggml_backend_t tp_backends[GGML_SCHED_MAX_BACKENDS];
+
+    // Pipeline profiling
+    bool do_profile_pipeline;
+    int64_t t_split_start;
+    std::vector<int64_t> t_compute_splits;
+    std::vector<int64_t> t_copy_inputs;
+    std::vector<int64_t> t_wait_inputs; // Time waiting for inputs in sync/event wait
+    std::vector<int64_t> t_sync_pre_copy; // Time spent synchronizing before input copy
 };
+
+// Forward declarations for TP functions
+static bool is_tp_eligible_node(ggml_backend_sched_t sched, const struct ggml_tensor * node);
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
 #define tensor_backend_id(tensor) sched->hv_tensor_backend_ids[hash_id(tensor)]
@@ -1047,6 +1063,48 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 cur_backend_id = *node_backend_id;
             } else if (cur_backend_id != -1) {
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
+            }
+        }
+    }
+
+    // TP pass: Force non-TP-eligible nodes to run on primary TP backend (device 0)
+    // In tensor parallelism, non-sharded ops (RMS_NORM, ADD, SOFTMAX, etc.) should run on
+    // the primary device to avoid CPU fallback for layers assigned to secondary devices.
+    if (sched->tp_enabled && sched->tp_world_size > 1) {
+        // Find the primary TP backend index
+        int primary_tp_backend_id = -1;
+        for (int i = 0; i < sched->n_backends; i++) {
+            if (sched->backends[i] == sched->tp_backends[0]) {
+                primary_tp_backend_id = i;
+                break;
+            }
+        }
+
+        if (primary_tp_backend_id != -1) {
+            for (int i = 0; i < graph->n_nodes; i++) {
+                struct ggml_tensor * node = graph->nodes[i];
+                if (ggml_is_view_op(node->op)) {
+                    continue;
+                }
+                int * node_backend_id = &tensor_backend_id(node);
+
+                // Skip TP-eligible nodes (MUL_MAT with sharded weights) - they use TP dispatch
+                if (is_tp_eligible_node(sched, node)) {
+                    continue;
+                }
+
+                // Skip ALL_REDUCE_SUM - it needs special handling
+                if (node->op == GGML_OP_ALL_REDUCE_SUM) {
+                    continue;
+                }
+
+                // For non-TP-eligible nodes assigned to a non-primary backend,
+                // try to reassign to primary backend if it supports the op
+                if (*node_backend_id != primary_tp_backend_id &&
+                    ggml_backend_supports_op(sched->backends[primary_tp_backend_id], node)) {
+                    *node_backend_id = primary_tp_backend_id;
+                    SET_CAUSE(node, "TP.pri");
+                }
             }
         }
     }
@@ -1435,6 +1493,67 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
+// Check if a split contains nodes that require TP execution
+// Returns true if the split contains ALL_REDUCE_SUM nodes
+static bool ggml_backend_sched_split_has_tp_nodes(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split) {
+    if (!sched->tp_enabled || sched->tp_world_size <= 1) {
+        return false;
+    }
+
+    for (int i = 0; i < split->graph.n_nodes; i++) {
+        struct ggml_tensor * node = split->graph.nodes[i];
+        if (node->op == GGML_OP_ALL_REDUCE_SUM) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Execute a split that contains TP nodes
+// This handles parallel execution across all TP backends
+//
+// For true tensor parallelism:
+// 1. Each TP backend has a shard of the weight tensors
+// 2. MUL_MAT on each device produces partial results
+// 3. ALL_REDUCE_SUM combines partial results across devices
+//
+// Current implementation:
+// - Executes graph on all TP backends in parallel
+// - Each backend uses its local weight shards (already allocated)
+// - ALL_REDUCE_SUM handler in SYCL backend combines results
+static enum ggml_status ggml_backend_sched_compute_tp_split(
+    ggml_backend_sched_t sched,
+    struct ggml_backend_sched_split * split,
+    int split_backend_id) {
+
+    // In Megatron-style TP, ONLY the main device (tp_backends[0]) executes the graph.
+    // Secondary devices only participate in parallel matmul execution, which is
+    // handled inside the main device's matmul handlers (they dispatch work to
+    // secondary devices and perform ALL_REDUCE to sum results).
+    //
+    // Previous approach (calling all backends) caused issues:
+    // - Both devices tried to write to the same compute buffers
+    // - Secondary device skipped non-TP ops but still incremented pass counters
+    // - This caused buffer aliasing and NaN propagation
+    //
+    // New approach: main device runs the full graph, secondary devices only help
+    // with TP matmul shards (called explicitly from matmul handlers).
+
+    ggml_backend_t main_backend = sched->tp_backends[0];
+    enum ggml_status ec = ggml_backend_graph_compute_async(main_backend, &split->graph);
+    if (ec != GGML_STATUS_SUCCESS) {
+        ggml_backend_synchronize(main_backend);
+        return ec;
+    }
+
+    ggml_backend_synchronize(main_backend);
+
+    GGML_UNUSED(split_backend_id);
+    return GGML_STATUS_SUCCESS;
+}
+
+
+
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
@@ -1446,6 +1565,20 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
+
+        // In TP mode, force ALL splits to run on the main TP device (device 0)
+        // This prevents memory access issues since compute buffers are device-local
+        // Device 1 only participates in parallel matmul execution inside the SYCL backend
+        if (sched->tp_enabled && sched->tp_world_size > 1 && sched->tp_backends[0] != nullptr) {
+            // Find the backend ID for the main TP device
+            for (int b = 0; b < sched->n_backends; b++) {
+                if (sched->backends[b] == sched->tp_backends[0]) {
+                    split_backend_id = b;
+                    break;
+                }
+            }
+        }
+
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
         // copy the input tensors to the split backend
@@ -1456,19 +1589,29 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
             if (input->flags & GGML_TENSOR_FLAG_INPUT) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
+                int64_t t_wait_start = 0;
+                if (sched->do_profile_pipeline) { t_wait_start = ggml_time_us(); }
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
+                if (sched->do_profile_pipeline) { sched->t_wait_inputs.push_back(ggml_time_us() - t_wait_start); }
+
+                int64_t t_copy_start = 0;
+                if (sched->do_profile_pipeline) { t_copy_start = ggml_time_us(); }
                 ggml_backend_tensor_copy(input, input_cpy);
+                if (sched->do_profile_pipeline) { sched->t_copy_inputs.push_back(ggml_time_us() - t_copy_start); }
             } else {
                 // wait for the split backend to finish using the input before overwriting it
+                int64_t t_wait_start = 0;
+                if (sched->do_profile_pipeline) { t_wait_start = ggml_time_us(); }
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
+                if (sched->do_profile_pipeline) { sched->t_wait_inputs.push_back(ggml_time_us() - t_wait_start); }
 
                 // when offloading MoE weights, we can reduce the amount of data copied by copying only the experts that are used
                 ggml_tensor * node = split->graph.nodes[0];
@@ -1518,6 +1661,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
 
                     // group consecutive experts and copy them together
+                    int64_t t_copy_start = 0;
+                    if (sched->do_profile_pipeline) { t_copy_start = ggml_time_us(); }
                     auto copy_experts = [&](int32_t first_id, int32_t last_id) {
                         const size_t expert_offset = first_id * expert_size;
                         const size_t expert_size_copy =  (last_id - first_id + 1) * expert_size;
@@ -1555,23 +1700,42 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         last_id = id;
                     }
                     copy_experts(first_id, last_id);
+                    if (sched->do_profile_pipeline) { sched->t_copy_inputs.push_back(ggml_time_us() - t_copy_start); }
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
+                    int64_t t_copy_start = 0;
+                    if (sched->do_profile_pipeline) { t_copy_start = ggml_time_us(); }
                     if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                        int64_t t_sync_pre_copy_start = 0;
+                        if (sched->do_profile_pipeline) { t_sync_pre_copy_start = ggml_time_us(); }
                         ggml_backend_synchronize(input_backend);
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                         } else {
                             ggml_backend_synchronize(split_backend);
                         }
+                        if (sched->do_profile_pipeline) { sched->t_sync_pre_copy.push_back(ggml_time_us() - t_sync_pre_copy_start); }
                         ggml_backend_tensor_copy(input, input_cpy);
                     }
+                    if (sched->do_profile_pipeline) { sched->t_copy_inputs.push_back(ggml_time_us() - t_copy_start); }
                 }
             }
         }
 
-        if (!sched->callback_eval) {
+        // Check if this split should use tensor parallelism execution
+        bool use_tp = ggml_backend_sched_split_has_tp_nodes(sched, split);
+
+        int64_t t_compute_start = 0;
+        if (sched->do_profile_pipeline) { t_compute_start = ggml_time_us(); }
+
+        if (use_tp) {
+            // TP execution path - handles ALL_REDUCE_SUM and parallel matmul
+            enum ggml_status ec = ggml_backend_sched_compute_tp_split(sched, split, split_backend_id);
+            if (ec != GGML_STATUS_SUCCESS) {
+                return ec;
+            }
+        } else if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
@@ -1609,6 +1773,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 j0 = j1;
             }
         }
+        if (sched->do_profile_pipeline) { sched->t_compute_splits.push_back(ggml_time_us() - t_compute_start); }
 
         // record the event of this copy
         if (split->n_inputs > 0) {
@@ -1621,6 +1786,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     return GGML_STATUS_SUCCESS;
 }
 
+
 ggml_backend_sched_t ggml_backend_sched_new(
         ggml_backend_t * backends,
         ggml_backend_buffer_type_t * bufts,
@@ -1632,7 +1798,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS);
     GGML_ASSERT(ggml_backend_dev_type(ggml_backend_get_device(backends[n_backends - 1])) == GGML_BACKEND_DEVICE_TYPE_CPU);
 
-    struct ggml_backend_sched * sched = (ggml_backend_sched *) calloc(1, sizeof(struct ggml_backend_sched));
+    ggml_backend_sched_t sched = (ggml_backend_sched *) calloc(1, sizeof(struct ggml_backend_sched));
 
     const char * GGML_SCHED_DEBUG = getenv("GGML_SCHED_DEBUG");
     sched->debug = GGML_SCHED_DEBUG ? atoi(GGML_SCHED_DEBUG) : 0;
@@ -1646,6 +1812,17 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->n_backends = n_backends;
     sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : 1;
+
+    // Pipeline profiling setup
+    const char * GGML_SCHED_PROFILE_PIPELINE_ENV = getenv("GGML_SCHED_PROFILE_PIPELINE");
+    sched->do_profile_pipeline = GGML_SCHED_PROFILE_PIPELINE_ENV ? atoi(GGML_SCHED_PROFILE_PIPELINE_ENV) : 0;
+    sched->t_split_start = 0;
+    if (sched->do_profile_pipeline) {
+        sched->t_compute_splits.reserve(graph_size);
+        sched->t_copy_inputs.reserve(graph_size);
+        sched->t_wait_inputs.reserve(graph_size);
+        sched->t_sync_pre_copy.reserve(graph_size);
+    }
 
     // initialize hash table
     // FIXME: needs to be size*2 to account for leafs (do it in graph_split instead)
@@ -1722,6 +1899,12 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
         ggml_hash_set_reset(&sched->hash_set);
         memset(sched->hv_tensor_backend_ids, -1, sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
         memset(sched->hv_tensor_copies,       0, sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
+        if (sched->do_profile_pipeline) {
+            sched->t_compute_splits.clear();
+            sched->t_copy_inputs.clear();
+            sched->t_wait_inputs.clear();
+            sched->t_sync_pre_copy.clear();
+        }
         sched->is_reset = true;
     }
     sched->is_alloc = false;
@@ -1802,6 +1985,160 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
     sched->callback_eval = callback;
     sched->callback_eval_user_data = user_data;
 }
+
+// Tensor Parallelism support functions
+
+void ggml_backend_sched_set_tp_group(ggml_backend_sched_t sched, ggml_backend_t * backends, int n_backends) {
+    GGML_ASSERT(sched);
+
+    // In multi-process TP mode, each process may have only 1 backend but world_size > 1
+    // If world_size was already set (by set_tp_world_size), keep it; otherwise disable
+    if (n_backends <= 0 || backends == NULL) {
+        // Disable TP entirely
+        sched->tp_enabled = false;
+        sched->tp_world_size = 0;
+        return;
+    }
+
+    // Always enable TP when we have backends (even if n_backends=1 for multi-process mode)
+    sched->tp_enabled = true;
+
+    // If world_size not yet set by set_tp_world_size, use n_backends
+    if (sched->tp_world_size <= 0) {
+        sched->tp_world_size = n_backends;
+    }
+
+    GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS);
+
+    for (int i = 0; i < n_backends; i++) {
+        sched->tp_backends[i] = backends[i];
+    }
+
+    GGML_LOG_INFO("%s: tensor parallelism enabled with %d local backends (world_size=%d)\n",
+                  __func__, n_backends, sched->tp_world_size);
+}
+
+void ggml_backend_sched_set_tp_world_size(ggml_backend_sched_t sched, int world_size) {
+    GGML_ASSERT(sched);
+    sched->tp_world_size = world_size;
+    if (world_size > 1) {
+        sched->tp_enabled = true;
+    }
+}
+
+bool ggml_backend_sched_tp_enabled(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    return sched->tp_enabled;
+}
+
+int ggml_backend_sched_get_tp_world_size(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    return sched->tp_world_size;
+}
+
+int ggml_backend_sched_get_tp_rank(ggml_backend_sched_t sched, ggml_backend_t backend) {
+    GGML_ASSERT(sched);
+
+    if (!sched->tp_enabled) {
+        return -1;
+    }
+
+    for (int i = 0; i < sched->tp_world_size; i++) {
+        if (sched->tp_backends[i] == backend) {
+            return i;
+        }
+    }
+
+    return -1;  // Not in TP group
+}
+
+// Check if a tensor is a TP collective operation (ALL_REDUCE_SUM, etc.)
+// These ops require special handling when TP is enabled
+static bool is_tp_collective_op(const struct ggml_tensor * tensor) {
+    return tensor->op == GGML_OP_ALL_REDUCE_SUM;
+}
+
+// Check if a tensor's weight is a TP-sharded weight (row or column parallel)
+// This is determined by the tensor name matching known TP layer patterns
+// Note: This is a heuristic based on common LLM architecture naming conventions
+static bool is_tp_sharded_weight(const struct ggml_tensor * tensor) {
+    if (tensor == NULL || tensor->name[0] == '\0') {
+        return false;
+    }
+
+    const char * name = tensor->name;
+
+    // Row-parallel layers (need all-reduce after matmul):
+    // attn_output/attn_out/wo.weight (attention output projection)
+    // ffn_down/w2.weight (FFN down projection)
+    if (strstr(name, "attn_output") != NULL ||
+        strstr(name, "attn_out") != NULL ||
+        strstr(name, "ffn_down") != NULL ||
+        strstr(name, "wo.weight") != NULL ||
+        strstr(name, "w2.weight") != NULL) {
+        return true;
+    }
+
+    // Column-parallel layers (no all-reduce needed):
+    // attn_q/attn_k/attn_v/attn_qkv (attention projections)
+    // ffn_gate/ffn_up/w1.weight/w3.weight (FFN up projections)
+    if (strstr(name, "attn_q") != NULL ||
+        strstr(name, "attn_k") != NULL ||
+        strstr(name, "attn_v") != NULL ||
+        strstr(name, "attn_qkv") != NULL ||
+        strstr(name, "ffn_gate") != NULL ||
+        strstr(name, "ffn_up") != NULL ||
+        strstr(name, "wq.weight") != NULL ||
+        strstr(name, "wk.weight") != NULL ||
+        strstr(name, "wv.weight") != NULL ||
+        strstr(name, "w1.weight") != NULL ||
+        strstr(name, "w3.weight") != NULL) {
+        return true;
+    }
+
+    return false;
+}
+
+
+
+// Check if a MUL_MAT node is TP-eligible (has a sharded weight as input)
+static bool is_tp_eligible_node(ggml_backend_sched_t sched, const struct ggml_tensor * node) {
+    if (!sched->tp_enabled) {
+        return false;
+    }
+
+    // Only MUL_MAT ops with sharded weights are TP-eligible
+    if (node->op != GGML_OP_MUL_MAT) {
+        return false;
+    }
+
+    // Check if the weight tensor (src[0] for MUL_MAT) is a TP-sharded weight
+    struct ggml_tensor * weight = node->src[0];
+    return is_tp_sharded_weight(weight);
+}
+
+/*
+ * Tensor Parallelism Execution Path:
+ *
+ * When TP is enabled and the graph contains TP-eligible nodes:
+ *
+ * 1. For MUL_MAT nodes with TP-sharded weights:
+ *    - Each TP backend has a shard of the weight tensor
+ *    - The matmul is executed on all backends in parallel (future)
+ *    - Currently: executed on primary backend only
+ *
+ * 2. For ALL_REDUCE_SUM nodes (inserted after row-parallel matmuls):
+ *    - The backend's implementation performs the actual all-reduce
+ *    - For SYCL: ggml_sycl_all_reduce_sum() in tensor-parallel.cpp
+ *    - Single-device mode: just copies input to output
+ *    - Multi-device mode: sums results from all TP backends
+ *
+ * Future enhancements needed for true parallel execution:
+ * - Modify graph splitting to dispatch TP nodes to all backends
+ * - Add parallel execution infrastructure (thread pool, async launch)
+ * - Handle input broadcasting to all TP devices
+ * - Synchronization after parallel execution
+ */
 
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
@@ -2246,3 +2583,96 @@ ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) 
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
     return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
 }
+
+void ggml_backend_sched_print_pipeline_stats(ggml_backend_sched_t sched) {
+    if (!sched->do_profile_pipeline) {
+        GGML_LOG_INFO("%s: Pipeline profiling not enabled.\n", __func__);
+        return;
+    }
+
+    GGML_LOG_INFO("\n%s: Pipeline Profiling Stats (microseconds):\n", __func__);
+    GGML_LOG_INFO("%s: ==========================================================\n", __func__);
+
+    if (sched->n_splits == 0) {
+        GGML_LOG_INFO("%s: No splits recorded.\n", __func__);
+        return;
+    }
+
+    // Number of full pipeline runs (tokens generated)
+    int n_runs = sched->t_compute_splits.empty() ? 0 : (int)(sched->t_compute_splits.size() / sched->n_splits);
+    if (n_runs == 0) {
+        GGML_LOG_INFO("%s: No full pipeline runs recorded.\n", __func__);
+        return;
+    }
+
+    GGML_LOG_INFO("%s: Total pipeline runs (tokens generated): %d\n", __func__, n_runs);
+    GGML_LOG_INFO("%s: Number of splits per run: %d\n", __func__, sched->n_splits);
+    GGML_LOG_INFO("%s: ==========================================================\n", __func__);
+
+    for (int split_idx = 0; split_idx < sched->n_splits; ++split_idx) {
+        int64_t total_compute = 0;
+        int64_t total_copy_in = 0;
+        int64_t total_wait = 0;
+        int64_t total_sync_pre_copy = 0;
+
+        // Accumulate for this split_idx
+        for (int i = 0; i < n_runs; ++i) {
+            int current_compute_idx = i * sched->n_splits + split_idx;
+            if (current_compute_idx < sched->t_compute_splits.size()) {
+                total_compute += sched->t_compute_splits[current_compute_idx];
+            }
+        }
+        
+        GGML_LOG_INFO("%s: Split %d:\n", __func__, split_idx);
+        if (n_runs > 0) {
+            GGML_LOG_INFO("%s:   Avg Compute Time:        %8.2f us\n", __func__, (double)total_compute / n_runs);
+        } else {
+            GGML_LOG_INFO("%s:   Avg Compute Time:        N/A\n", __func__);
+        }
+        // Split-specific input copy/wait/sync averages are complex due to dynamic `n_inputs`.
+        // For now, we will print global averages at the end.
+        GGML_LOG_INFO("%s: ----------------------------------------------------------\n", __func__);
+    }
+
+    // Accumulate total times for overall averages
+    int64_t total_overall_compute = 0;
+    for (size_t i = 0; i < sched->t_compute_splits.size(); ++i) { total_overall_compute += sched->t_compute_splits[i]; }
+    int64_t total_overall_copy_in = 0;
+    for (size_t i = 0; i < sched->t_copy_inputs.size(); ++i) { total_overall_copy_in += sched->t_copy_inputs[i]; }
+    int64_t total_overall_wait = 0;
+    for (size_t i = 0; i < sched->t_wait_inputs.size(); ++i) { total_overall_wait += sched->t_wait_inputs[i]; }
+    int64_t total_overall_sync_pre_copy = 0;
+    for (size_t i = 0; i < sched->t_sync_pre_copy.size(); ++i) { total_overall_sync_pre_copy += sched->t_sync_pre_copy[i]; }
+
+    GGML_LOG_INFO("%s: Overall Averages (per split operation, for all runs combined):\n", __func__);
+    if (!sched->t_compute_splits.empty()) {
+        GGML_LOG_INFO("%s:   Avg Compute Time:        %8.2f us\n", __func__, (double)total_overall_compute / sched->t_compute_splits.size());
+    } else {
+        GGML_LOG_INFO("%s:   Avg Compute Time:        N/A\n", __func__);
+    }
+    if (!sched->t_copy_inputs.empty()) {
+        GGML_LOG_INFO("%s:   Avg Copy Input Time:     %8.2f us\n", __func__, (double)total_overall_copy_in / sched->t_copy_inputs.size());
+    } else {
+        GGML_LOG_INFO("%s:   Avg Copy Input Time:     N/A\n", __func__);
+    }
+    if (!sched->t_wait_inputs.empty()) {
+        GGML_LOG_INFO("%s:   Avg Wait Input Time:     %8.2f us\n", __func__, (double)total_overall_wait / sched->t_wait_inputs.size());
+    } else {
+        GGML_LOG_INFO("%s:   Avg Wait Input Time:     N/A\n", __func__);
+    }
+    if (!sched->t_sync_pre_copy.empty()) {
+        GGML_LOG_INFO("%s:   Avg Sync Pre-Copy Time:  %8.2f us\n", __func__, (double)total_overall_sync_pre_copy / sched->t_sync_pre_copy.size());
+    } else {
+        GGML_LOG_INFO("%s:   Avg Sync Pre-Copy Time:  N/A\n", __func__);
+    }
+    GGML_LOG_INFO("%s: ==========================================================\n", __func__);
+}
+
+bool ggml_backend_sched_is_profiling_enabled(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    return sched->do_profile_pipeline;
+}
+
+
+
+

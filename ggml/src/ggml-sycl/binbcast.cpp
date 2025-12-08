@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
+#include <vector>
 #include <sycl/sycl.hpp>
 
 #include "ggml.h"
@@ -265,25 +267,42 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
     dpct::queue_ptr main_stream = ctx.stream();
     GGML_TENSOR_BINARY_OP_LOCALS
 
+    // Use device-specific data pointers for TP support
+    const int device = ctx.device;
+    void * src0_d = ggml_sycl_get_data_ptr(src0, device);
+    void * src1_d = ggml_sycl_get_data_ptr(src1, device);
+    void * dst_d  = ggml_sycl_get_data_ptr(dst, device);
+
+    // DEBUG: Check ADD values for ffn_inp (attention + residual) at layer 0
+    static int add_dbg = 0;
+    if (g_ggml_sycl_tp_debug && add_dbg++ < 5 && dst->name && strstr(dst->name, "ffn_inp") && strstr(dst->name, "-0")) {
+        float src0_vals[4], src1_vals[4];
+        main_stream->memcpy(src0_vals, src0_d, 4*sizeof(float)).wait();
+        main_stream->memcpy(src1_vals, src1_d, 4*sizeof(float)).wait();
+        fprintf(stderr, "TP DEBUG ADD %s: src0[0..3]=[%f,%f,%f,%f], src1[0..3]=[%f,%f,%f,%f]\n",
+                dst->name, src0_vals[0], src0_vals[1], src0_vals[2], src0_vals[3],
+                src1_vals[0], src1_vals[1], src1_vals[2], src1_vals[3]);
+    }
+
     if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-        op()((const float *) src0->data, (const float *) src1->data, (float *) dst->data, ne00, ne01, ne02, ne03, ne10,
+        op()((const float *) src0_d, (const float *) src1_d, (float *) dst_d, ne00, ne01, ne02, ne03, ne10,
              ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2, nb3,
              ggml_is_contiguous(src0), ggml_is_contiguous(src1), ggml_is_contiguous(dst), main_stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
-        op()((const sycl::half *) src0->data, (const sycl::half *) src1->data, (sycl::half *) dst->data, ne00, ne01,
+        op()((const sycl::half *) src0_d, (const sycl::half *) src1_d, (sycl::half *) dst_d, ne00, ne01,
              ne02, ne03, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13,
              nb0, nb1, nb2, nb3, ggml_is_contiguous(src0), ggml_is_contiguous(src1), ggml_is_contiguous(dst),
              main_stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
-        op()((const sycl::half *) src0->data, (const float *) src1->data, (sycl::half *) dst->data, ne00, ne01, ne02,
+        op()((const sycl::half *) src0_d, (const float *) src1_d, (sycl::half *) dst_d, ne00, ne01, ne02,
              ne03, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1,
              nb2, nb3, ggml_is_contiguous(src0), ggml_is_contiguous(src1), ggml_is_contiguous(dst), main_stream);
     } else if (src0->type == GGML_TYPE_I32 && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_I32) {
-        op()((const int32_t *) src0->data, (const int32_t *) src1->data, (int32_t *) dst->data, ne00, ne01, ne02, ne03,
+        op()((const int32_t *) src0_d, (const int32_t *) src1_d, (int32_t *) dst_d, ne00, ne01, ne02, ne03,
              ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2,
              nb3, ggml_is_contiguous(src0), ggml_is_contiguous(src1), ggml_is_contiguous(dst), main_stream);
     } else if (src0->type == GGML_TYPE_I16 && src1->type == GGML_TYPE_I16 && dst->type == GGML_TYPE_I16) {
-        op()((const int16_t *) src0->data, (const int16_t *) src1->data, (int16_t *) dst->data, ne00, ne01, ne02, ne03,
+        op()((const int16_t *) src0_d, (const int16_t *) src1_d, (int16_t *) dst_d, ne00, ne01, ne02, ne03,
              ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2,
              nb3, ggml_is_contiguous(src0), ggml_is_contiguous(src1), ggml_is_contiguous(dst), main_stream);
     } else {
@@ -330,7 +349,27 @@ void ggml_sycl_sub(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
 void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+
     ggml_sycl_op_mul(ctx, dst);
+
+    // Cache FFN norm output for TP: the GGML scheduler may reuse this buffer
+    // before device 1 can access it. Cache immediately after MUL completes.
+    if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1 &&
+        strncmp(dst->name, "ffn_norm-", 9) == 0) {
+        int layer = atoi(dst->name + 9);
+        size_t size = ggml_nbytes(dst);
+        // DEBUG: Check if MUL runs for batch=1
+        static int mul_b1_dbg = 0;
+        if (g_ggml_sycl_tp_debug && dst->ne[1] == 1 && layer == 0 && mul_b1_dbg++ < 5) {
+            ctx.stream()->wait();
+            float check[4];
+            ctx.stream()->memcpy(check, dst->data, 4*sizeof(float)).wait();
+            fprintf(stderr, "TP DEBUG MUL ffn_norm-0 batch=1: caching dst[0..3]=[%f,%f,%f,%f]\n",
+                    check[0], check[1], check[2], check[3]);
+        }
+        ggml_sycl_tp_cache_ffn_norm(layer, dst->data, dst->ne[0], dst->ne[1],
+                                     size, ctx.stream());
+    }
 }
 
 void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -341,5 +380,93 @@ void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_repeat(ctx, dst);
+}
+
+// Fused MUL + ADD kernel: dst = x * scale + bias
+// Optimized for the common scale+bias pattern in normalization
+template<typename T>
+static void k_mul_add_fused(
+    const T * __restrict__ x,
+    const T * __restrict__ scale,
+    const T * __restrict__ bias,
+    T * __restrict__ dst,
+    const int64_t ne0,
+    const int64_t ne1,
+    const int64_t ne_scale0,
+    const int64_t ne_bias0,
+    const sycl::nd_item<3> & item) {
+
+    const int64_t i0 = item.get_global_id(2);
+    const int64_t i1 = item.get_global_id(1);
+
+    if (i0 >= ne0 || i1 >= ne1) {
+        return;
+    }
+
+    const int64_t idx = i1 * ne0 + i0;
+    const int64_t scale_idx = i0 % ne_scale0;
+    const int64_t bias_idx = i0 % ne_bias0;
+
+    dst[idx] = x[idx] * scale[scale_idx] + bias[bias_idx];
+}
+
+// Fused MUL + ADD operation
+// Pattern: mul_node = x * scale, add_node = mul_node + bias
+// Fused: dst = x * scale + bias
+void ggml_sycl_op_mul_add_fused(ggml_backend_sycl_context & ctx,
+                                 ggml_tensor * mul_node,
+                                 ggml_tensor * add_node) {
+    GGML_ASSERT(mul_node->op == GGML_OP_MUL);
+    GGML_ASSERT(add_node->op == GGML_OP_ADD);
+
+    // Get input tensors
+    // MUL: src[0] = x, src[1] = scale
+    // ADD: src[0] = mul_result, src[1] = bias
+    ggml_tensor * x = mul_node->src[0];
+    ggml_tensor * scale = mul_node->src[1];
+    ggml_tensor * bias = add_node->src[1];
+
+    // Handle case where scale/bias might be swapped
+    if (ggml_nelements(x) < ggml_nelements(scale)) {
+        std::swap(x, scale);
+    }
+    if (add_node->src[0] != mul_node && add_node->src[1] == mul_node) {
+        // ADD has form: bias + mul_result, swap to get mul_result + bias
+        bias = add_node->src[0];
+    }
+
+    // Verify types
+    GGML_ASSERT(x->type == GGML_TYPE_F32);
+    GGML_ASSERT(scale->type == GGML_TYPE_F32);
+    GGML_ASSERT(bias->type == GGML_TYPE_F32);
+    GGML_ASSERT(add_node->type == GGML_TYPE_F32);
+
+    // Get data pointers
+    const int device = ctx.device;
+    const float * x_d = (const float *) ggml_sycl_get_data_ptr(x, device);
+    const float * scale_d = (const float *) ggml_sycl_get_data_ptr(scale, device);
+    const float * bias_d = (const float *) ggml_sycl_get_data_ptr(bias, device);
+    float * dst_d = (float *) ggml_sycl_get_data_ptr(add_node, device);
+
+    dpct::queue_ptr stream = ctx.stream();
+
+    const int64_t ne0 = x->ne[0];
+    const int64_t ne1 = ggml_nrows(x);
+    const int64_t ne_scale0 = scale->ne[0];
+    const int64_t ne_bias0 = bias->ne[0];
+
+    // Launch kernel
+    const int block_size = 256;
+    const int grid_x = (ne0 + block_size - 1) / block_size;
+    const int grid_y = ne1;
+
+    sycl::range<3> block_dims(1, 1, block_size);
+    sycl::range<3> grid_dims(1, grid_y, grid_x * block_size);
+
+    stream->parallel_for(
+        sycl::nd_range<3>(grid_dims, block_dims),
+        [=](sycl::nd_item<3> item) {
+            k_mul_add_fused(x_d, scale_d, bias_d, dst_d, ne0, ne1, ne_scale0, ne_bias0, item);
+        });
 }
 

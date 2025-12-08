@@ -438,6 +438,811 @@ void mul_mat_q4_0_q8_1_xmx_doublebuf_kernel(
 }
 
 // =============================================================================
+// Q4_0 x Q8_1 XMX GEMM Kernel - Multi-Tile Version
+// Uses 4 sub-groups per work-group to process 4 tiles (8×64 output)
+// Key optimization: A tile loaded once, shared across all sub-groups
+// =============================================================================
+
+// Multi-tile configuration - VERTICAL tiling (multiple rows)
+// Each work-group processes 4 row tiles × all columns (32 rows × 16 columns)
+// 4 tiles is optimal - more tiles causes diminishing returns due to sub-group overhead
+constexpr int MT_TILES_M = 4;                    // 4 tiles vertically per work-group
+constexpr int MT_SG_COUNT = MT_TILES_M;          // 4 sub-groups per work-group
+constexpr int MT_WG_SIZE = MT_SG_COUNT * XMX_SG_SIZE;  // 64 threads per work-group
+constexpr int MT_OUTPUT_ROWS = MT_TILES_M * XMX_M;     // 32 rows per work-group
+
+// Multi-tile SLM sizes - each sub-group has its own A tile (different rows)
+constexpr int MT_SLM_A_SIZE = XMX_M * XMX_K * MT_TILES_M;     // 8×32×4 = 1024 (per sub-group, different rows)
+constexpr int MT_SLM_B_SIZE = XMX_K * XMX_N;                  // 32×16 = 512 (shared B tile)
+constexpr int MT_SLM_C_SIZE = XMX_M * XMX_N;                  // 8×16 = 128 (per sub-group)
+constexpr int MT_SLM_SCALES_A_SIZE = XMX_M * MT_TILES_M;      // 8×4 = 32 (per sub-group)
+constexpr int MT_SLM_SCALES_B_SIZE = XMX_N;                   // 16 (shared)
+constexpr int MT_SLM_SUMS_B_SIZE = XMX_N;                     // 16 (shared)
+
+void mul_mat_q4_0_q8_1_xmx_multitile_kernel(
+    const void* __restrict__ vx,      // Q4_0 weights [nrows_x, ncols_x/32 blocks]
+    const void* __restrict__ vy,      // Q8_1 activations [ncols_y, ncols_x/32 blocks]
+    float* __restrict__ dst,          // Output [nrows_x, ncols_y]
+    const int ncols_x,                // K dimension (must be multiple of 32)
+    const int nrows_x,                // M dimension
+    const int ncols_y,                // N dimension (batch size)
+    const int nrows_dst,              // Output row stride
+    int8_t* __restrict__ slm_A,       // SLM for A tiles [2 × 8 × 32] - per sub-group
+    int8_t* __restrict__ slm_B,       // SLM for shared B tile [32 × 16]
+    int32_t* __restrict__ slm_C,      // SLM for C tiles [2 × 8 × 16]
+    float* __restrict__ slm_scales_A, // SLM for A scales [2 × 8]
+    float* __restrict__ slm_scales_B, // SLM for shared B scales [16]
+    float* __restrict__ slm_sums_B,   // SLM for shared B sums [16]
+    sycl::nd_item<2> item
+) {
+    const auto sg = item.get_sub_group();
+    const int sg_id = sg.get_group_id()[0];       // Which sub-group (0 or 1)
+    const int lane_id = sg.get_local_id()[0];     // Lane within sub-group (0-15)
+
+    // Work-group position - vertical tiling (2 row tiles per work-group)
+    const int row_base = item.get_group(0) * MT_OUTPUT_ROWS + sg_id * XMX_M;  // Each sub-group handles different rows
+    const int col_base = item.get_group(1) * XMX_N;  // 16 cols per work-group (single column tile)
+
+    if (row_base >= nrows_x) return;
+
+    const int num_k_blocks = ncols_x / XMX_K;
+
+    // Block pointers
+    const char* src0 = (const char*)vx;
+    const char* src1 = (const char*)vy;
+    constexpr int Q4_0_BLOCK_SIZE = 18;
+    constexpr int Q8_1_BLOCK_SIZE = 36;
+
+    // Per-sub-group SLM pointers for A (each sub-group has different rows)
+    int8_t* my_slm_A = slm_A + sg_id * (XMX_M * XMX_K);
+    int32_t* my_slm_C = slm_C + sg_id * (XMX_M * XMX_N);
+    float* my_slm_scales_A = slm_scales_A + sg_id * XMX_M;
+    // B is shared across both sub-groups (same columns)
+
+    // Private accumulator
+    float acc[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    // Process each K block
+    for (int k_block = 0; k_block < num_k_blocks; k_block++) {
+
+        // ============== Phase 1: Load A tiles (each sub-group loads different rows) ==============
+        if (lane_id < XMX_M) {
+            int row = row_base + lane_id;
+            if (row < nrows_x) {
+                const char* block_ptr = src0 + (row * num_k_blocks + k_block) * Q4_0_BLOCK_SIZE;
+
+                // Load scale
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                my_slm_scales_A[lane_id] = float(d);
+
+                // Unpack 16 bytes → 32 int8 values
+                const uint8_t* nibbles = reinterpret_cast<const uint8_t*>(block_ptr + 2);
+                int base_idx = lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < 16; j++) {
+                    uint8_t packed = nibbles[j];
+                    my_slm_A[base_idx + j]      = (int8_t)(packed & 0x0F);
+                    my_slm_A[base_idx + j + 16] = (int8_t)(packed >> 4);
+                }
+            } else {
+                my_slm_scales_A[lane_id] = 0.0f;
+                int base_idx = lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < XMX_K; j++) {
+                    my_slm_A[base_idx + j] = 0;
+                }
+            }
+        }
+
+        // ============== Phase 2: Load shared B tile (sub-group 0 loads, both use) ==============
+        if (sg_id == 0) {
+            int col = col_base + lane_id;
+            if (col < ncols_y) {
+                const char* block_ptr = src1 + (col * num_k_blocks + k_block) * Q8_1_BLOCK_SIZE;
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                sycl::half s = *reinterpret_cast<const sycl::half*>(block_ptr + 2);
+                const int8_t* qs = reinterpret_cast<const int8_t*>(block_ptr + 4);
+
+                slm_scales_B[lane_id] = float(d);
+                slm_sums_B[lane_id] = float(s);
+
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    slm_B[k + lane_id * XMX_K] = qs[k];
+                }
+            } else {
+                slm_scales_B[lane_id] = 0.0f;
+                slm_sums_B[lane_id] = 0.0f;
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    slm_B[k + lane_id * XMX_K] = 0;
+                }
+            }
+        }
+
+        // Barrier to ensure all data is loaded
+        item.barrier(sycl::access::fence_space::local_space);
+
+        // ============== Phase 3: XMX Compute (each sub-group uses own A, shared B) ==============
+        sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::a, XMX_M, XMX_K, sycl_xmx::layout::row_major> matA;
+        sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::b, XMX_K, XMX_N, sycl_xmx::layout::col_major> matB;
+        sycl_xmx::joint_matrix<sycl::sub_group, int32_t, sycl_xmx::use::accumulator, XMX_M, XMX_N> matC;
+
+        auto A_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(my_slm_A);
+        auto B_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(slm_B);  // Shared
+        auto C_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(my_slm_C);
+
+        sycl_xmx::joint_matrix_load(sg, matA, A_ptr, XMX_K);
+        sycl_xmx::joint_matrix_load(sg, matB, B_ptr, XMX_K);  // Both sub-groups read same B
+        sycl_xmx::joint_matrix_fill(sg, matC, 0);
+        sycl_xmx::joint_matrix_mad(sg, matC, matA, matB, matC);
+        sycl_xmx::joint_matrix_store(sg, matC, C_ptr, XMX_N, sycl_xmx::layout::row_major);
+
+        // Apply scales with sum correction
+        #pragma unroll
+        for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+            int i = idx / XMX_N;
+            int j = idx % XMX_N;
+            float d_A = my_slm_scales_A[i];
+            float d_B = slm_scales_B[j];  // Shared
+            float s_B = slm_sums_B[j];    // Shared
+            float C_ij = float(my_slm_C[idx]);
+            acc[acc_idx] += d_A * (C_ij * d_B - 8.0f * s_B);
+        }
+
+        // Barrier before next K block
+        item.barrier(sycl::access::fence_space::local_space);
+    }
+
+    // ============== Write output ==============
+    #pragma unroll
+    for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+        int i = idx / XMX_N;
+        int j = idx % XMX_N;
+        int row = row_base + i;
+        int col = col_base + j;
+        if (row < nrows_x && col < ncols_y) {
+            dst[col * nrows_dst + row] = acc[acc_idx];
+        }
+    }
+}
+
+// =============================================================================
+// Q4_0 x Q8_1 XMX GEMM Kernel - Multi-Tile Double-Buffered Version
+// Overlaps memory loads with computation using ping-pong buffers
+// This reduces barrier overhead by 50% and hides memory latency
+// =============================================================================
+
+// Double-buffer SLM sizes for multi-tile kernel
+constexpr int MT_DB_SLM_A_SIZE = XMX_M * XMX_K * MT_TILES_M * 2;     // 2× for ping-pong
+constexpr int MT_DB_SLM_B_SIZE = XMX_K * XMX_N * 2;                  // 2× for ping-pong
+constexpr int MT_DB_SLM_SCALES_A_SIZE = XMX_M * MT_TILES_M * 2;      // 2× for ping-pong
+constexpr int MT_DB_SLM_SCALES_B_SIZE = XMX_N * 2;                   // 2× for ping-pong
+constexpr int MT_DB_SLM_SUMS_B_SIZE = XMX_N * 2;                     // 2× for ping-pong
+
+void mul_mat_q4_0_q8_1_xmx_multitile_db_kernel(
+    const void* __restrict__ vx,      // Q4_0 weights
+    const void* __restrict__ vy,      // Q8_1 activations
+    float* __restrict__ dst,          // Output
+    const int ncols_x,                // K dimension
+    const int nrows_x,                // M dimension
+    const int ncols_y,                // N dimension (batch size)
+    const int nrows_dst,              // Output row stride
+    int8_t* __restrict__ slm_A,       // SLM for A tiles [2 × 4 × 8 × 32]
+    int8_t* __restrict__ slm_B,       // SLM for B tiles [2 × 32 × 16]
+    int32_t* __restrict__ slm_C,      // SLM for C tiles [4 × 8 × 16]
+    float* __restrict__ slm_scales_A, // SLM for A scales [2 × 4 × 8]
+    float* __restrict__ slm_scales_B, // SLM for B scales [2 × 16]
+    float* __restrict__ slm_sums_B,   // SLM for B sums [2 × 16]
+    sycl::nd_item<2> item
+) {
+    const auto sg = item.get_sub_group();
+    const int sg_id = sg.get_group_id()[0];
+    const int lane_id = sg.get_local_id()[0];
+
+    const int row_base = item.get_group(0) * MT_OUTPUT_ROWS + sg_id * XMX_M;
+    const int col_base = item.get_group(1) * XMX_N;
+
+    if (row_base >= nrows_x) return;
+
+    const int num_k_blocks = ncols_x / XMX_K;
+
+    const char* src0 = (const char*)vx;
+    const char* src1 = (const char*)vy;
+    constexpr int Q4_0_BLOCK_SIZE = 18;
+    constexpr int Q8_1_BLOCK_SIZE = 36;
+
+    // Per-sub-group C tile (not double-buffered, used for intermediate results)
+    int32_t* my_slm_C = slm_C + sg_id * (XMX_M * XMX_N);
+
+    // Private accumulator
+    float acc[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    // Lambda to load A tile into specified buffer
+    auto load_A = [&](int k_block, int buf) {
+        int8_t* buf_A = slm_A + buf * (XMX_M * XMX_K * MT_TILES_M) + sg_id * (XMX_M * XMX_K);
+        float* buf_scales_A = slm_scales_A + buf * (XMX_M * MT_TILES_M) + sg_id * XMX_M;
+
+        if (lane_id < XMX_M) {
+            int row = row_base + lane_id;
+            if (row < nrows_x) {
+                const char* block_ptr = src0 + (row * num_k_blocks + k_block) * Q4_0_BLOCK_SIZE;
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                buf_scales_A[lane_id] = float(d);
+
+                const uint8_t* nibbles = reinterpret_cast<const uint8_t*>(block_ptr + 2);
+                int base_idx = lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < 16; j++) {
+                    uint8_t packed = nibbles[j];
+                    buf_A[base_idx + j]      = (int8_t)(packed & 0x0F);
+                    buf_A[base_idx + j + 16] = (int8_t)(packed >> 4);
+                }
+            } else {
+                buf_scales_A[lane_id] = 0.0f;
+                int base_idx = lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < XMX_K; j++) {
+                    buf_A[base_idx + j] = 0;
+                }
+            }
+        }
+    };
+
+    // Lambda to load B tile into specified buffer (only sub-group 0)
+    auto load_B = [&](int k_block, int buf) {
+        if (sg_id == 0) {
+            int8_t* buf_B = slm_B + buf * (XMX_K * XMX_N);
+            float* buf_scales_B = slm_scales_B + buf * XMX_N;
+            float* buf_sums_B = slm_sums_B + buf * XMX_N;
+
+            int col = col_base + lane_id;
+            if (col < ncols_y) {
+                const char* block_ptr = src1 + (col * num_k_blocks + k_block) * Q8_1_BLOCK_SIZE;
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                sycl::half s = *reinterpret_cast<const sycl::half*>(block_ptr + 2);
+                const int8_t* qs = reinterpret_cast<const int8_t*>(block_ptr + 4);
+
+                buf_scales_B[lane_id] = float(d);
+                buf_sums_B[lane_id] = float(s);
+
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    buf_B[k + lane_id * XMX_K] = qs[k];
+                }
+            } else {
+                buf_scales_B[lane_id] = 0.0f;
+                buf_sums_B[lane_id] = 0.0f;
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    buf_B[k + lane_id * XMX_K] = 0;
+                }
+            }
+        }
+    };
+
+    // Lambda to compute using specified buffer
+    auto compute = [&](int buf) {
+        int8_t* buf_A = slm_A + buf * (XMX_M * XMX_K * MT_TILES_M) + sg_id * (XMX_M * XMX_K);
+        int8_t* buf_B = slm_B + buf * (XMX_K * XMX_N);
+        float* buf_scales_A = slm_scales_A + buf * (XMX_M * MT_TILES_M) + sg_id * XMX_M;
+        float* buf_scales_B = slm_scales_B + buf * XMX_N;
+        float* buf_sums_B = slm_sums_B + buf * XMX_N;
+
+        sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::a, XMX_M, XMX_K, sycl_xmx::layout::row_major> matA;
+        sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::b, XMX_K, XMX_N, sycl_xmx::layout::col_major> matB;
+        sycl_xmx::joint_matrix<sycl::sub_group, int32_t, sycl_xmx::use::accumulator, XMX_M, XMX_N> matC;
+
+        auto A_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(buf_A);
+        auto B_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(buf_B);
+        auto C_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(my_slm_C);
+
+        sycl_xmx::joint_matrix_load(sg, matA, A_ptr, XMX_K);
+        sycl_xmx::joint_matrix_load(sg, matB, B_ptr, XMX_K);
+        sycl_xmx::joint_matrix_fill(sg, matC, 0);
+        sycl_xmx::joint_matrix_mad(sg, matC, matA, matB, matC);
+        sycl_xmx::joint_matrix_store(sg, matC, C_ptr, XMX_N, sycl_xmx::layout::row_major);
+
+        #pragma unroll
+        for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+            int i = idx / XMX_N;
+            int j = idx % XMX_N;
+            float d_A = buf_scales_A[i];
+            float d_B = buf_scales_B[j];
+            float s_B = buf_sums_B[j];
+            float C_ij = float(my_slm_C[idx]);
+            acc[acc_idx] += d_A * (C_ij * d_B - 8.0f * s_B);
+        }
+    };
+
+    // Prefetch first K block into buffer 0
+    load_A(0, 0);
+    load_B(0, 0);
+    item.barrier(sycl::access::fence_space::local_space);
+
+    // Main loop with double buffering
+    for (int k_block = 0; k_block < num_k_blocks; k_block++) {
+        int cur_buf = k_block & 1;
+        int next_buf = (k_block + 1) & 1;
+
+        // Start loading next K block (if not last iteration)
+        if (k_block + 1 < num_k_blocks) {
+            load_A(k_block + 1, next_buf);
+            load_B(k_block + 1, next_buf);
+        }
+
+        // Compute current K block
+        compute(cur_buf);
+
+        // Single barrier (loads and compute must finish before next iteration)
+        item.barrier(sycl::access::fence_space::local_space);
+    }
+
+    // Write output
+    #pragma unroll
+    for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+        int i = idx / XMX_N;
+        int j = idx % XMX_N;
+        int row = row_base + i;
+        int col = col_base + j;
+        if (row < nrows_x && col < ncols_y) {
+            dst[col * nrows_dst + row] = acc[acc_idx];
+        }
+    }
+}
+
+// =============================================================================
+// Q4_0 x Q8_1 XMX GEMM Kernel - Wide Tile Version
+// Key optimization: Process 2 column tiles with 2 sub-groups in PARALLEL
+// Each sub-group processes 8 rows × 16 cols, sharing the same loaded A tile
+// This halves memory traffic for A while maintaining XMX parallelism
+// =============================================================================
+
+// Configuration for wide-tile kernel
+// Process 2 column tiles (32 columns) per work-group with 2 parallel sub-groups
+constexpr int CF_MAX_COL_TILES = 2;  // Process 2 column tiles (32 columns) per work-group
+constexpr int CF_SG_COUNT = 2;       // 2 sub-groups for parallel compute
+
+void mul_mat_q4_0_q8_1_xmx_colfused_kernel(
+    const void* __restrict__ vx,      // Q4_0 weights
+    const void* __restrict__ vy,      // Q8_1 activations
+    float* __restrict__ dst,          // Output
+    const int ncols_x,                // K dimension
+    const int nrows_x,                // M dimension
+    const int ncols_y,                // N dimension (batch size)
+    const int nrows_dst,              // Output row stride
+    int8_t* __restrict__ slm_A,       // SLM for A tile [8 × 32] - SHARED
+    int8_t* __restrict__ slm_B,       // SLM for B tiles [2 × 32 × 16]
+    int32_t* __restrict__ slm_C,      // SLM for C tiles [2 × 8 × 16]
+    float* __restrict__ slm_scales_A, // SLM for A scales [8] - SHARED
+    float* __restrict__ slm_scales_B, // SLM for B scales [2 × 16]
+    float* __restrict__ slm_sums_B,   // SLM for B sums [2 × 16]
+    sycl::nd_item<2> item
+) {
+    const auto sg = item.get_sub_group();
+    const int sg_id = item.get_local_id(0);    // Which sub-group (0-1)
+    const int lane_id = sg.get_local_id()[0];  // Lane within sub-group (0-15)
+
+    // Each work-group processes one row tile (8 rows) × 2 column tiles (32 cols)
+    // Work-groups are tiled over row and column dimensions
+    // Sub-group 0: column tile 0, Sub-group 1: column tile 1 within this work-group
+    const int row_base = item.get_group(0) * XMX_M;
+    const int col_group = item.get_group(1);  // Which 32-column group
+    const int col_base = col_group * (CF_MAX_COL_TILES * XMX_N) + sg_id * XMX_N;
+
+    if (row_base >= nrows_x) return;
+
+    const int num_k_blocks = ncols_x / XMX_K;
+    const bool active_sg = (col_base < ncols_y);
+
+    const char* src0 = (const char*)vx;
+    const char* src1 = (const char*)vy;
+    constexpr int Q4_0_BLOCK_SIZE = 18;
+    constexpr int Q8_1_BLOCK_SIZE = 36;
+
+    // Private accumulator for this sub-group's column tile
+    float acc[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    // Pointers to this sub-group's B tile and C tile in SLM
+    int8_t* my_B_tile = slm_B + sg_id * (XMX_K * XMX_N);
+    int32_t* my_C_tile = slm_C + sg_id * (XMX_M * XMX_N);
+    float* my_scales_B = slm_scales_B + sg_id * XMX_N;
+    float* my_sums_B = slm_sums_B + sg_id * XMX_N;
+
+    // Process each K block
+    for (int k_block = 0; k_block < num_k_blocks; k_block++) {
+
+        // === COOPERATIVE LOAD PHASE ===
+        // Sub-group 0 loads A tile (8 rows × 32 elements)
+        // Both sub-groups load their own B tiles in parallel
+
+        if (sg_id == 0 && lane_id < XMX_M) {
+            int row = row_base + lane_id;
+            if (row < nrows_x) {
+                const char* block_ptr = src0 + (row * num_k_blocks + k_block) * Q4_0_BLOCK_SIZE;
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                slm_scales_A[lane_id] = float(d);
+
+                const uint8_t* nibbles = reinterpret_cast<const uint8_t*>(block_ptr + 2);
+                int base_idx = lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < 16; j++) {
+                    uint8_t packed = nibbles[j];
+                    slm_A[base_idx + j]      = (int8_t)(packed & 0x0F);
+                    slm_A[base_idx + j + 16] = (int8_t)(packed >> 4);
+                }
+            } else {
+                slm_scales_A[lane_id] = 0.0f;
+                int base_idx = lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < XMX_K; j++) {
+                    slm_A[base_idx + j] = 0;
+                }
+            }
+        }
+
+        // Each sub-group loads its own B tile
+        if (active_sg) {
+            int col = col_base + lane_id;
+            if (col < ncols_y) {
+                const char* block_ptr = src1 + (col * num_k_blocks + k_block) * Q8_1_BLOCK_SIZE;
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                sycl::half s = *reinterpret_cast<const sycl::half*>(block_ptr + 2);
+                const int8_t* qs = reinterpret_cast<const int8_t*>(block_ptr + 4);
+
+                my_scales_B[lane_id] = float(d);
+                my_sums_B[lane_id] = float(s);
+
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    my_B_tile[k + lane_id * XMX_K] = qs[k];
+                }
+            } else {
+                my_scales_B[lane_id] = 0.0f;
+                my_sums_B[lane_id] = 0.0f;
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    my_B_tile[k + lane_id * XMX_K] = 0;
+                }
+            }
+        }
+
+        item.barrier(sycl::access::fence_space::local_space);
+
+        // === PARALLEL COMPUTE PHASE ===
+        // Both sub-groups compute their column tiles using SHARED A
+        if (active_sg) {
+            auto A_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(slm_A);
+            auto B_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(my_B_tile);
+            auto C_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(my_C_tile);
+
+            sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::a, XMX_M, XMX_K, sycl_xmx::layout::row_major> matA;
+            sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::b, XMX_K, XMX_N, sycl_xmx::layout::col_major> matB;
+            sycl_xmx::joint_matrix<sycl::sub_group, int32_t, sycl_xmx::use::accumulator, XMX_M, XMX_N> matC;
+
+            sycl_xmx::joint_matrix_load(sg, matA, A_ptr, XMX_K);
+            sycl_xmx::joint_matrix_load(sg, matB, B_ptr, XMX_K);
+            sycl_xmx::joint_matrix_fill(sg, matC, 0);
+            sycl_xmx::joint_matrix_mad(sg, matC, matA, matB, matC);
+            sycl_xmx::joint_matrix_store(sg, matC, C_ptr, XMX_N, sycl_xmx::layout::row_major);
+
+            // Accumulate with scale correction
+            #pragma unroll
+            for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+                int i = idx / XMX_N;
+                int j = idx % XMX_N;
+                float d_A = slm_scales_A[i];
+                float d_B = my_scales_B[j];
+                float s_B = my_sums_B[j];
+                float C_ij = float(my_C_tile[idx]);
+                acc[acc_idx] += d_A * (C_ij * d_B - 8.0f * s_B);
+            }
+        }
+
+        item.barrier(sycl::access::fence_space::local_space);
+    }
+
+    // Write outputs - each sub-group writes its column tile
+    if (active_sg) {
+        #pragma unroll
+        for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+            int i = idx / XMX_N;
+            int j = idx % XMX_N;
+            int row = row_base + i;
+            int col = col_base + j;
+
+            if (row < nrows_x && col < ncols_y) {
+                dst[col * nrows_dst + row] = acc[acc_idx];
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Column-Fused Kernel Launcher
+// Uses 2 sub-groups for parallel compute, each handling one column tile
+// Both sub-groups share the same A tile to reduce cache misses
+// =============================================================================
+static void ggml_mul_mat_q4_0_q8_1_xmx_colfused_sycl(
+    const void* vx, const void* vy, float* dst,
+    const int ncols_x, const int nrows_x,
+    const int ncols_y, const int nrows_dst,
+    dpct::queue_ptr stream) {
+
+    // Grid: work-groups for row tiles × column tile groups
+    // Each work-group handles 8 rows × 32 columns (2 sub-groups × 16 cols each)
+    const int num_row_tiles = (nrows_x + XMX_M - 1) / XMX_M;
+    const int cols_per_wg = CF_MAX_COL_TILES * XMX_N;  // 32 columns per work-group
+    const int num_col_groups = (ncols_y + cols_per_wg - 1) / cols_per_wg;
+
+    // 2D block: (2 sub-groups, 16 threads per sub-group) = 32 threads
+    sycl::range<2> grid(num_row_tiles, num_col_groups);
+    sycl::range<2> block(CF_SG_COUNT, XMX_SG_SIZE);  // 2 × 16 = 32 threads
+
+    GGML_SYCL_DEBUG("[XMX-CF] Launching column-fused kernel: grid=(%d,%d), block=(%d,%d), M=%d, N=%d, K=%d\n",
+                    num_row_tiles, num_col_groups, CF_SG_COUNT, XMX_SG_SIZE, nrows_x, ncols_y, ncols_x);
+
+    // SLM layout for column-fused kernel (2 sub-groups, each with own B/C tiles, sharing A):
+    // - A tile: 8×32 = 256 bytes (SHARED between sub-groups)
+    // - B tiles: 2×32×16 = 1024 bytes (one per sub-group)
+    // - C tiles: 2×8×16×4 = 1024 bytes (one per sub-group)
+    // - A scales: 8×4 = 32 bytes (SHARED)
+    // - B scales: 2×16×4 = 128 bytes
+    // - B sums: 2×16×4 = 128 bytes
+    constexpr int CF_SLM_A_SIZE = XMX_M * XMX_K;                           // 256 bytes
+    constexpr int CF_SLM_B_SIZE = CF_MAX_COL_TILES * XMX_K * XMX_N;        // 1024 bytes
+    constexpr int CF_SLM_C_SIZE = CF_MAX_COL_TILES * XMX_M * XMX_N * 4;    // 1024 bytes
+    constexpr int CF_SLM_SCALES_A_SIZE = XMX_M * 4;                        // 32 bytes
+    constexpr int CF_SLM_SCALES_B_SIZE = CF_MAX_COL_TILES * XMX_N * 4;     // 128 bytes
+    constexpr int CF_SLM_SUMS_B_SIZE = CF_MAX_COL_TILES * XMX_N * 4;       // 128 bytes
+    constexpr int CF_TOTAL_SLM_SIZE = CF_SLM_A_SIZE + CF_SLM_B_SIZE + CF_SLM_C_SIZE +
+                                       CF_SLM_SCALES_A_SIZE + CF_SLM_SCALES_B_SIZE +
+                                       CF_SLM_SUMS_B_SIZE;  // ~2.6KB
+
+    stream->submit([&](sycl::handler& h) {
+        sycl::local_accessor<char, 1> shared_acc(sycl::range<1>(CF_TOTAL_SLM_SIZE), h);
+
+        h.parallel_for(
+            sycl::nd_range<2>(grid * block, block),
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(XMX_SG_SIZE)]] {
+                char* shared = shared_acc.get_multi_ptr<sycl::access::decorated::no>().get();
+
+                int offset = 0;
+                int8_t* slm_A = reinterpret_cast<int8_t*>(shared + offset);
+                offset += CF_SLM_A_SIZE;
+                int8_t* slm_B = reinterpret_cast<int8_t*>(shared + offset);
+                offset += CF_SLM_B_SIZE;
+                int32_t* slm_C = reinterpret_cast<int32_t*>(shared + offset);
+                offset += CF_SLM_C_SIZE;
+                float* slm_scales_A = reinterpret_cast<float*>(shared + offset);
+                offset += CF_SLM_SCALES_A_SIZE;
+                float* slm_scales_B = reinterpret_cast<float*>(shared + offset);
+                offset += CF_SLM_SCALES_B_SIZE;
+                float* slm_sums_B = reinterpret_cast<float*>(shared + offset);
+
+                mul_mat_q4_0_q8_1_xmx_colfused_kernel(
+                    vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_dst,
+                    slm_A, slm_B, slm_C, slm_scales_A, slm_scales_B, slm_sums_B, item);
+            });
+    });
+}
+
+// =============================================================================
+// Column-Fused 4-Tile Sequential Kernel
+// Single sub-group processes 4 column tiles sequentially, maximizing A tile reuse
+// Better for batch 33-64 where 2-tile parallel has poor efficiency
+// =============================================================================
+constexpr int CF4_MAX_COL_TILES = 4;  // Process 4 column tiles (64 columns) per work-group
+
+void mul_mat_q4_0_q8_1_xmx_colfused_4tile_kernel(
+    const void* __restrict__ vx,
+    const void* __restrict__ vy,
+    float* __restrict__ dst,
+    const int ncols_x,
+    const int nrows_x,
+    const int ncols_y,
+    const int nrows_dst,
+    int8_t* __restrict__ slm_A,
+    int8_t* __restrict__ slm_B,
+    int32_t* __restrict__ slm_C,
+    float* __restrict__ slm_scales_A,
+    float* __restrict__ slm_scales_B,
+    float* __restrict__ slm_sums_B,
+    sycl::nd_item<2> item
+) {
+    const auto sg = item.get_sub_group();
+    const int lane_id = sg.get_local_id()[0];
+
+    const int row_base = item.get_group(0) * XMX_M;
+    const int col_group = item.get_group(1);
+    const int col_group_base = col_group * (CF4_MAX_COL_TILES * XMX_N);
+
+    if (row_base >= nrows_x) return;
+
+    const int num_k_blocks = ncols_x / XMX_K;
+    const int num_col_tiles_this_group = sycl::min(CF4_MAX_COL_TILES,
+                                                    (ncols_y - col_group_base + XMX_N - 1) / XMX_N);
+
+    const char* src0 = (const char*)vx;
+    const char* src1 = (const char*)vy;
+    constexpr int Q4_0_BLOCK_SIZE = 18;
+    constexpr int Q8_1_BLOCK_SIZE = 36;
+
+    // Private accumulators for all column tiles
+    float acc[CF4_MAX_COL_TILES][8];
+    #pragma unroll
+    for (int t = 0; t < CF4_MAX_COL_TILES; t++) {
+        #pragma unroll
+        for (int i = 0; i < 8; i++) {
+            acc[t][i] = 0.0f;
+        }
+    }
+
+    for (int k_block = 0; k_block < num_k_blocks; k_block++) {
+        // Load A tile (shared across all column tiles)
+        if (lane_id < XMX_M) {
+            int row = row_base + lane_id;
+            if (row < nrows_x) {
+                const char* block_ptr = src0 + (row * num_k_blocks + k_block) * Q4_0_BLOCK_SIZE;
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                slm_scales_A[lane_id] = float(d);
+
+                const uint8_t* nibbles = reinterpret_cast<const uint8_t*>(block_ptr + 2);
+                int base_idx = lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < 16; j++) {
+                    uint8_t packed = nibbles[j];
+                    slm_A[base_idx + j]      = (int8_t)(packed & 0x0F);
+                    slm_A[base_idx + j + 16] = (int8_t)(packed >> 4);
+                }
+            } else {
+                slm_scales_A[lane_id] = 0.0f;
+                int base_idx = lane_id * XMX_K;
+                #pragma unroll
+                for (int j = 0; j < XMX_K; j++) {
+                    slm_A[base_idx + j] = 0;
+                }
+            }
+        }
+
+        sycl::group_barrier(sg);
+
+        // Process all column tiles sequentially
+        for (int col_tile = 0; col_tile < num_col_tiles_this_group; col_tile++) {
+            int col_base = col_group_base + col_tile * XMX_N;
+            int col = col_base + lane_id;
+
+            // Load B tile
+            if (col < ncols_y) {
+                const char* block_ptr = src1 + (col * num_k_blocks + k_block) * Q8_1_BLOCK_SIZE;
+                sycl::half d = *reinterpret_cast<const sycl::half*>(block_ptr);
+                sycl::half s = *reinterpret_cast<const sycl::half*>(block_ptr + 2);
+                const int8_t* qs = reinterpret_cast<const int8_t*>(block_ptr + 4);
+
+                slm_scales_B[lane_id] = float(d);
+                slm_sums_B[lane_id] = float(s);
+
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    slm_B[k + lane_id * XMX_K] = qs[k];
+                }
+            } else {
+                slm_scales_B[lane_id] = 0.0f;
+                slm_sums_B[lane_id] = 0.0f;
+                #pragma unroll
+                for (int k = 0; k < XMX_K; k++) {
+                    slm_B[k + lane_id * XMX_K] = 0;
+                }
+            }
+
+            sycl::group_barrier(sg);
+
+            // XMX compute
+            auto A_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(slm_A);
+            auto B_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(slm_B);
+            auto C_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(slm_C);
+
+            sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::a, XMX_M, XMX_K, sycl_xmx::layout::row_major> matA;
+            sycl_xmx::joint_matrix<sycl::sub_group, int8_t, sycl_xmx::use::b, XMX_K, XMX_N, sycl_xmx::layout::col_major> matB;
+            sycl_xmx::joint_matrix<sycl::sub_group, int32_t, sycl_xmx::use::accumulator, XMX_M, XMX_N> matC;
+
+            sycl_xmx::joint_matrix_load(sg, matA, A_ptr, XMX_K);
+            sycl_xmx::joint_matrix_load(sg, matB, B_ptr, XMX_K);
+            sycl_xmx::joint_matrix_fill(sg, matC, 0);
+            sycl_xmx::joint_matrix_mad(sg, matC, matA, matB, matC);
+            sycl_xmx::joint_matrix_store(sg, matC, C_ptr, XMX_N, sycl_xmx::layout::row_major);
+
+            // Accumulate with scale correction
+            #pragma unroll
+            for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+                int i = idx / XMX_N;
+                int j = idx % XMX_N;
+                float d_A = slm_scales_A[i];
+                float d_B = slm_scales_B[j];
+                float s_B = slm_sums_B[j];
+                float C_ij = float(slm_C[idx]);
+                acc[col_tile][acc_idx] += d_A * (C_ij * d_B - 8.0f * s_B);
+            }
+        }
+
+        sycl::group_barrier(sg);
+    }
+
+    // Write outputs for all column tiles
+    for (int col_tile = 0; col_tile < num_col_tiles_this_group; col_tile++) {
+        int col_base = col_group_base + col_tile * XMX_N;
+
+        #pragma unroll
+        for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+            int i = idx / XMX_N;
+            int j = idx % XMX_N;
+            int row = row_base + i;
+            int col = col_base + j;
+
+            if (row < nrows_x && col < ncols_y) {
+                dst[col * nrows_dst + row] = acc[col_tile][acc_idx];
+            }
+        }
+    }
+}
+
+// 4-tile sequential launcher
+static void ggml_mul_mat_q4_0_q8_1_xmx_colfused_4tile_sycl(
+    const void* vx, const void* vy, float* dst,
+    const int ncols_x, const int nrows_x,
+    const int ncols_y, const int nrows_dst,
+    dpct::queue_ptr stream) {
+
+    const int num_row_tiles = (nrows_x + XMX_M - 1) / XMX_M;
+    const int cols_per_wg = CF4_MAX_COL_TILES * XMX_N;  // 64 columns per work-group
+    const int num_col_groups = (ncols_y + cols_per_wg - 1) / cols_per_wg;
+
+    sycl::range<2> grid(num_row_tiles, num_col_groups);
+    sycl::range<2> block(1, XMX_SG_SIZE);  // Single sub-group
+
+    GGML_SYCL_DEBUG("[XMX-CF4] Launching 4-tile sequential kernel: grid=(%d,%d), block=(1,%d), M=%d, N=%d, K=%d\n",
+                    num_row_tiles, num_col_groups, XMX_SG_SIZE, nrows_x, ncols_y, ncols_x);
+
+    // SLM for single-tile processing (tiles reused sequentially)
+    constexpr int CF4_SLM_A_SIZE = XMX_M * XMX_K;       // 256 bytes
+    constexpr int CF4_SLM_B_SIZE = XMX_K * XMX_N;       // 512 bytes
+    constexpr int CF4_SLM_C_SIZE = XMX_M * XMX_N * 4;   // 512 bytes
+    constexpr int CF4_SLM_SCALES_A_SIZE = XMX_M * 4;    // 32 bytes
+    constexpr int CF4_SLM_SCALES_B_SIZE = XMX_N * 4;    // 64 bytes
+    constexpr int CF4_SLM_SUMS_B_SIZE = XMX_N * 4;      // 64 bytes
+    constexpr int CF4_TOTAL_SLM_SIZE = CF4_SLM_A_SIZE + CF4_SLM_B_SIZE + CF4_SLM_C_SIZE +
+                                        CF4_SLM_SCALES_A_SIZE + CF4_SLM_SCALES_B_SIZE +
+                                        CF4_SLM_SUMS_B_SIZE;
+
+    stream->submit([&](sycl::handler& h) {
+        sycl::local_accessor<char, 1> shared_acc(sycl::range<1>(CF4_TOTAL_SLM_SIZE), h);
+
+        h.parallel_for(
+            sycl::nd_range<2>(grid * block, block),
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(XMX_SG_SIZE)]] {
+                char* shared = shared_acc.get_multi_ptr<sycl::access::decorated::no>().get();
+
+                int offset = 0;
+                int8_t* slm_A = reinterpret_cast<int8_t*>(shared + offset);
+                offset += CF4_SLM_A_SIZE;
+                int8_t* slm_B = reinterpret_cast<int8_t*>(shared + offset);
+                offset += CF4_SLM_B_SIZE;
+                int32_t* slm_C = reinterpret_cast<int32_t*>(shared + offset);
+                offset += CF4_SLM_C_SIZE;
+                float* slm_scales_A = reinterpret_cast<float*>(shared + offset);
+                offset += CF4_SLM_SCALES_A_SIZE;
+                float* slm_scales_B = reinterpret_cast<float*>(shared + offset);
+                offset += CF4_SLM_SCALES_B_SIZE;
+                float* slm_sums_B = reinterpret_cast<float*>(shared + offset);
+
+                mul_mat_q4_0_q8_1_xmx_colfused_4tile_kernel(
+                    vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_dst,
+                    slm_A, slm_B, slm_C, slm_scales_A, slm_scales_B, slm_sums_B, item);
+            });
+    });
+}
+
+// =============================================================================
 // Q8_0 x Q8_1 XMX GEMM Kernel - Single-Tile
 // Simpler than Q4_0: int8 values stored directly, no unpacking needed
 // =============================================================================
@@ -2329,11 +3134,95 @@ static void ggml_mul_mat_q8_0_q8_1_xmx_sycl(
 // Launcher for Q4_0 x Q8_1 XMX GEMM (Double-Buffered Version)
 // Uses ping-pong buffers to overlap memory loads with computation
 // =============================================================================
+// Multi-tile launcher - VERTICAL tiling (16 rows × 16 cols per work-group)
+static void ggml_mul_mat_q4_0_q8_1_xmx_multitile_sycl(
+    const void* vx, const void* vy, float* dst,
+    const int ncols_x, const int ncols_x_padded, const int nrows_x,
+    const int ncols_y, const int nrows_dst,
+    dpct::queue_ptr stream) {
+
+    // Grid: one work-group per 16×16 output tile (2 vertical XMX tiles)
+    const int num_row_tiles = (nrows_x + MT_OUTPUT_ROWS - 1) / MT_OUTPUT_ROWS;  // 16 rows per work-group
+    const int num_col_tiles = (ncols_y + XMX_N - 1) / XMX_N;  // 16 cols per work-group
+
+    sycl::range<2> grid(num_row_tiles, num_col_tiles);
+    sycl::range<2> block(MT_SG_COUNT, XMX_SG_SIZE);  // 2 sub-groups × 16 threads = 32
+
+    GGML_SYCL_DEBUG("[XMX-MT-DB] Launching double-buffered vertical multi-tile kernel: grid=(%d,%d), block=(%d,%d), M=%d, N=%d, K=%d\n",
+                    num_row_tiles, num_col_tiles, MT_SG_COUNT, XMX_SG_SIZE, nrows_x, ncols_y, ncols_x);
+
+    // SLM layout for double-buffered vertical multi-tile:
+    // - Per-sub-group A tiles: 2 buffers × 4 subgroups × 8×32 int8 = 2048 bytes
+    // - Shared B tile: 2 buffers × 32×16 int8 = 1024 bytes
+    // - Per-sub-group C tiles: 4 subgroups × 8×16 int32 = 2048 bytes (not double-buffered)
+    // - Per-sub-group A scales: 2 buffers × 4 subgroups × 8 floats = 256 bytes
+    // - Shared B scales: 2 buffers × 16 floats = 128 bytes
+    // - Shared B sums: 2 buffers × 16 floats = 128 bytes
+    constexpr int MT_DB_TOTAL_SLM_SIZE = MT_DB_SLM_A_SIZE +                    // 2048
+                                          MT_DB_SLM_B_SIZE +                    // 1024
+                                          MT_SLM_C_SIZE * MT_TILES_M * 4 +      // 2048
+                                          MT_DB_SLM_SCALES_A_SIZE * 4 +         // 256
+                                          MT_DB_SLM_SCALES_B_SIZE * 4 +         // 128
+                                          MT_DB_SLM_SUMS_B_SIZE * 4;            // 128
+                                          // Total: ~5.6KB
+
+    stream->submit([&](sycl::handler& h) {
+        sycl::local_accessor<char, 1> shared_acc(sycl::range<1>(MT_DB_TOTAL_SLM_SIZE), h);
+
+        h.parallel_for(
+            sycl::nd_range<2>(grid * block, block),
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(XMX_SG_SIZE)]] {
+                char* shared = shared_acc.get_multi_ptr<sycl::access::decorated::no>().get();
+
+                int offset = 0;
+                int8_t* slm_A = reinterpret_cast<int8_t*>(shared + offset);
+                offset += MT_DB_SLM_A_SIZE;
+                int8_t* slm_B = reinterpret_cast<int8_t*>(shared + offset);
+                offset += MT_DB_SLM_B_SIZE;
+                int32_t* slm_C = reinterpret_cast<int32_t*>(shared + offset);
+                offset += MT_SLM_C_SIZE * MT_TILES_M * 4;
+                float* slm_scales_A = reinterpret_cast<float*>(shared + offset);
+                offset += MT_DB_SLM_SCALES_A_SIZE * 4;
+                float* slm_scales_B = reinterpret_cast<float*>(shared + offset);
+                offset += MT_DB_SLM_SCALES_B_SIZE * 4;
+                float* slm_sums_B = reinterpret_cast<float*>(shared + offset);
+
+                mul_mat_q4_0_q8_1_xmx_multitile_db_kernel(
+                    vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_dst,
+                    slm_A, slm_B, slm_C, slm_scales_A, slm_scales_B, slm_sums_B, item);
+            });
+    });
+}
+
+// Single-tile launcher for small batch sizes (batch <= 16)
 static void ggml_mul_mat_q4_0_q8_1_xmx_sycl(
     const void* vx, const void* vy, float* dst,
     const int ncols_x, const int ncols_x_padded, const int nrows_x,
     const int ncols_y, const int nrows_dst,
     dpct::queue_ptr stream) {
+
+    // Adaptive dispatch based on batch size for optimal performance:
+    // - batch > 64: multi-tile (many work-groups)
+    // - batch 33-64: 4-tile sequential (better A tile reuse, efficient for 3-4 column tiles)
+    // - batch 17-32: 2-tile parallel (2 sub-groups sharing A tile)
+    // - batch <= 16: single-tile double-buffered
+    if (ncols_y > 64) {
+        ggml_mul_mat_q4_0_q8_1_xmx_multitile_sycl(
+            vx, vy, dst, ncols_x, ncols_x_padded, nrows_x, ncols_y, nrows_dst, stream);
+        return;
+    }
+    if (ncols_y > 32) {
+        // 4-tile sequential is better for batch 33-64 (handles 3-4 column tiles efficiently)
+        ggml_mul_mat_q4_0_q8_1_xmx_colfused_4tile_sycl(
+            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_dst, stream);
+        return;
+    }
+    if (ncols_y > 16) {
+        // 2-tile parallel is better for batch 17-32 (exactly 2 column tiles)
+        ggml_mul_mat_q4_0_q8_1_xmx_colfused_sycl(
+            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_dst, stream);
+        return;
+    }
 
     // Grid: one work-group per 8×16 output tile
     const int num_row_tiles = (nrows_x + XMX_M - 1) / XMX_M;

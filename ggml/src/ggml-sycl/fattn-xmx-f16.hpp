@@ -24,6 +24,46 @@
 namespace sycl_xmx = sycl::ext::oneapi::experimental::matrix;
 
 // =============================================================================
+// FP8 E4M3 Dequantization for KV Cache
+// =============================================================================
+// Converts FP8 E4M3 (1 sign, 4 exponent, 3 mantissa, bias=7) to FP16
+// This enables 2x memory savings for KV cache with on-the-fly dequantization
+
+inline sycl::half fp8_e4m3_to_half(uint8_t bits) {
+    uint32_t sign = (bits >> 7) & 0x1;
+    uint32_t exp = (bits >> 3) & 0xF;
+    uint32_t mant = bits & 0x7;
+
+    float result;
+
+    if (exp == 0) {
+        if (mant == 0) {
+            // Zero
+            result = sign ? -0.0f : 0.0f;
+        } else {
+            // Subnormal: value = (-1)^sign * 2^(-6) * (0.mant)
+            // = (-1)^sign * mant * 2^(-9)
+            result = (sign ? -1.0f : 1.0f) * (float)mant * (1.0f / 512.0f);  // 2^-9
+        }
+    } else if (exp == 15 && mant == 7) {
+        // NaN in E4M3
+        result = sycl::nan(0u);
+    } else {
+        // Normal: value = (-1)^sign * 2^(exp-7) * (1.mant)
+        // Rebias: E4M3 bias=7, FP32 bias=127
+        int32_t fp32_exp = (int32_t)exp - 7 + 127;
+        uint32_t fp32_mant = mant << 20;  // 3 bits -> 23 bits
+        uint32_t fp32_bits = (sign << 31) | (fp32_exp << 23) | fp32_mant;
+        // Use union for type punning (SYCL-safe)
+        union { uint32_t u; float f; } pun;
+        pun.u = fp32_bits;
+        result = pun.f;
+    }
+
+    return sycl::half(result);
+}
+
+// =============================================================================
 // PagedAttention Helper Functions
 // =============================================================================
 // These functions translate logical KV positions to physical memory addresses
@@ -83,8 +123,14 @@ constexpr int XMX_PAD = 0;
 // =============================================================================
 // Flash Attention XMX Kernel - With Double Buffering for K
 // =============================================================================
+// Template parameters:
+//   D: head dimension (64, 80, 96, 128, 256)
+//   ncols: number of query columns processed per work-group
+//   use_logit_softcap: enable logit softcapping
+//   Q_type: query tensor type (float or sycl::half)
+//   kv_is_fp8: if true, K/V are FP8 E4M3 and need on-the-fly dequantization
 
-template <int D, int ncols, bool use_logit_softcap, typename Q_type>
+template <int D, int ncols, bool use_logit_softcap, typename Q_type, bool kv_is_fp8 = false>
 static void flash_attn_xmx_f16_kernel(
     const char * __restrict__ Q,
     const char * __restrict__ K,
@@ -343,21 +389,26 @@ static void flash_attn_xmx_f16_kernel(
         const int d = idx % D;
         const int kv_pos = kv_loop_start + k;
 
-        const sycl::half * K_row;
+        const char * K_row_base;
         if (use_paged_attn && block_table != nullptr) {
-            // PagedAttention: use block table for indirect addressing
-            // Maps logical kv_pos to physical position via block table
             const int logical_block = kv_pos / block_size;
             const int offset_in_block = kv_pos % block_size;
             const int physical_block = block_table[sequence * max_blocks_per_seq + logical_block];
-            // Use nb11 stride (same as contiguous) - works for identity mapping with contiguous storage
             const int token_pos = physical_block * block_size + offset_in_block;
-            K_row = reinterpret_cast<const sycl::half*>(K_base + nb11 * token_pos);
+            K_row_base = K_base + nb11 * token_pos;
         } else {
-            // Contiguous mode: standard stride-based access
-            K_row = reinterpret_cast<const sycl::half*>(K_base + nb11 * kv_pos);
+            K_row_base = K_base + nb11 * kv_pos;
         }
-        tile_KT[0][d * KT_STRIDE + k] = K_row[d];
+
+        if constexpr (kv_is_fp8) {
+            // FP8 E4M3: dequantize on-the-fly
+            const uint8_t * K_row_fp8 = reinterpret_cast<const uint8_t*>(K_row_base);
+            tile_KT[0][d * KT_STRIDE + k] = fp8_e4m3_to_half(K_row_fp8[d]);
+        } else {
+            // FP16: direct load
+            const sycl::half * K_row = reinterpret_cast<const sycl::half*>(K_row_base);
+            tile_KT[0][d * KT_STRIDE + k] = K_row[d];
+        }
     }
     // Zero-pad if first batch is partial
     if (kv_count_prefetch < XMX_BATCH_KV) {
@@ -549,50 +600,70 @@ static void flash_attn_xmx_f16_kernel(
         }
 
         // Load V tile for current batch (with stride padding for XMX)
-        // Phase 6.4: Vectorized V loading with half4 for better memory bandwidth
-        // Process 4 elements at a time within each row (D dimension)
-        constexpr int V_VEC_SIZE = 4;
-        const int v_total_vecs = (kv_count * D) / V_VEC_SIZE;
+        if constexpr (kv_is_fp8) {
+            // FP8 E4M3: element-by-element dequantization (can't vectorize)
+            for (int idx = tid; idx < kv_count * D; idx += XMX_NTHREADS) {
+                const int k = idx / D;
+                const int d = idx % D;
+                const int kv_pos = kv_start + k;
 
-        for (int vec_idx = tid; vec_idx < v_total_vecs; vec_idx += XMX_NTHREADS) {
-            const int elem_idx = vec_idx * V_VEC_SIZE;
-            const int k = elem_idx / D;
-            const int d = elem_idx % D;
-            const int kv_pos = kv_start + k;
-
-            const sycl::half * V_row;
-            if (use_paged_attn && block_table != nullptr) {
-                const int logical_block = kv_pos / block_size;
-                const int offset_in_block = kv_pos % block_size;
-                const int physical_block = block_table[sequence * max_blocks_per_seq + logical_block];
-                const int token_pos = physical_block * block_size + offset_in_block;
-                V_row = reinterpret_cast<const sycl::half*>(V_base + nb21 * token_pos);
-            } else {
-                V_row = reinterpret_cast<const sycl::half*>(V_base + nb21 * kv_pos);
+                const char * V_row_base;
+                if (use_paged_attn && block_table != nullptr) {
+                    const int logical_block = kv_pos / block_size;
+                    const int offset_in_block = kv_pos % block_size;
+                    const int physical_block = block_table[sequence * max_blocks_per_seq + logical_block];
+                    const int token_pos = physical_block * block_size + offset_in_block;
+                    V_row_base = V_base + nb21 * token_pos;
+                } else {
+                    V_row_base = V_base + nb21 * kv_pos;
+                }
+                const uint8_t * V_row_fp8 = reinterpret_cast<const uint8_t*>(V_row_base);
+                tile_V[k * V_STRIDE + d] = fp8_e4m3_to_half(V_row_fp8[d]);
             }
-            // Vectorized load and store
-            sycl::half4 v_vec = *reinterpret_cast<const sycl::half4*>(&V_row[d]);
-            *reinterpret_cast<sycl::half4*>(&tile_V[k * V_STRIDE + d]) = v_vec;
-        }
-        // Handle remainder (if kv_count * D not divisible by 4)
-        const int v_remainder_start = v_total_vecs * V_VEC_SIZE;
-        for (int idx = tid; idx < (kv_count * D) - v_remainder_start; idx += XMX_NTHREADS) {
-            const int elem_idx = v_remainder_start + idx;
-            const int k = elem_idx / D;
-            const int d = elem_idx % D;
-            const int kv_pos = kv_start + k;
+        } else {
+            // FP16: Vectorized V loading with half4 for better memory bandwidth
+            constexpr int V_VEC_SIZE = 4;
+            const int v_total_vecs = (kv_count * D) / V_VEC_SIZE;
 
-            const sycl::half * V_row;
-            if (use_paged_attn && block_table != nullptr) {
-                const int logical_block = kv_pos / block_size;
-                const int offset_in_block = kv_pos % block_size;
-                const int physical_block = block_table[sequence * max_blocks_per_seq + logical_block];
-                const int token_pos = physical_block * block_size + offset_in_block;
-                V_row = reinterpret_cast<const sycl::half*>(V_base + nb21 * token_pos);
-            } else {
-                V_row = reinterpret_cast<const sycl::half*>(V_base + nb21 * kv_pos);
+            for (int vec_idx = tid; vec_idx < v_total_vecs; vec_idx += XMX_NTHREADS) {
+                const int elem_idx = vec_idx * V_VEC_SIZE;
+                const int k = elem_idx / D;
+                const int d = elem_idx % D;
+                const int kv_pos = kv_start + k;
+
+                const sycl::half * V_row;
+                if (use_paged_attn && block_table != nullptr) {
+                    const int logical_block = kv_pos / block_size;
+                    const int offset_in_block = kv_pos % block_size;
+                    const int physical_block = block_table[sequence * max_blocks_per_seq + logical_block];
+                    const int token_pos = physical_block * block_size + offset_in_block;
+                    V_row = reinterpret_cast<const sycl::half*>(V_base + nb21 * token_pos);
+                } else {
+                    V_row = reinterpret_cast<const sycl::half*>(V_base + nb21 * kv_pos);
+                }
+                sycl::half4 v_vec = *reinterpret_cast<const sycl::half4*>(&V_row[d]);
+                *reinterpret_cast<sycl::half4*>(&tile_V[k * V_STRIDE + d]) = v_vec;
             }
-            tile_V[k * V_STRIDE + d] = V_row[d];
+            // Handle remainder (if kv_count * D not divisible by 4)
+            const int v_remainder_start = v_total_vecs * V_VEC_SIZE;
+            for (int idx = tid; idx < (kv_count * D) - v_remainder_start; idx += XMX_NTHREADS) {
+                const int elem_idx = v_remainder_start + idx;
+                const int k = elem_idx / D;
+                const int d = elem_idx % D;
+                const int kv_pos = kv_start + k;
+
+                const sycl::half * V_row;
+                if (use_paged_attn && block_table != nullptr) {
+                    const int logical_block = kv_pos / block_size;
+                    const int offset_in_block = kv_pos % block_size;
+                    const int physical_block = block_table[sequence * max_blocks_per_seq + logical_block];
+                    const int token_pos = physical_block * block_size + offset_in_block;
+                    V_row = reinterpret_cast<const sycl::half*>(V_base + nb21 * token_pos);
+                } else {
+                    V_row = reinterpret_cast<const sycl::half*>(V_base + nb21 * kv_pos);
+                }
+                tile_V[k * V_STRIDE + d] = V_row[d];
+            }
         }
         // Zero-pad V stride padding (XMX_PAD is 0 now, but keep for safety)
         if (XMX_PAD > 0) {
@@ -610,20 +681,24 @@ static void flash_attn_xmx_f16_kernel(
                 const int d = idx % D;
                 const int kv_pos = next_kv_start + k;
 
-                const sycl::half * K_row;
+                const char * K_row_base;
                 if (use_paged_attn && block_table != nullptr) {
-                    // PagedAttention: use block table for indirect addressing
                     const int logical_block = kv_pos / block_size;
                     const int offset_in_block = kv_pos % block_size;
                     const int physical_block = block_table[sequence * max_blocks_per_seq + logical_block];
-                    // Use nb11 stride (same as contiguous) - works for identity mapping with contiguous storage
                     const int token_pos = physical_block * block_size + offset_in_block;
-                    K_row = reinterpret_cast<const sycl::half*>(K_base + nb11 * token_pos);
+                    K_row_base = K_base + nb11 * token_pos;
                 } else {
-                    // Contiguous mode: standard stride-based access
-                    K_row = reinterpret_cast<const sycl::half*>(K_base + nb11 * kv_pos);
+                    K_row_base = K_base + nb11 * kv_pos;
                 }
-                tile_KT_next[d * KT_STRIDE + k] = K_row[d];
+
+                if constexpr (kv_is_fp8) {
+                    const uint8_t * K_row_fp8 = reinterpret_cast<const uint8_t*>(K_row_base);
+                    tile_KT_next[d * KT_STRIDE + k] = fp8_e4m3_to_half(K_row_fp8[d]);
+                } else {
+                    const sycl::half * K_row = reinterpret_cast<const sycl::half*>(K_row_base);
+                    tile_KT_next[d * KT_STRIDE + k] = K_row[d];
+                }
             }
             // Zero-pad if next batch is partial
             if (next_kv_count < XMX_BATCH_KV) {
@@ -703,6 +778,18 @@ static void flash_attn_xmx_f16_kernel(
             const float kq_val = QK_acc[j * XMX_BATCH_KV + k];
             const float w = sycl::native::exp(kq_val - KQ_max[j]);
             tile_S[j * S_STRIDE + k] = sycl::half(w);
+        }
+        // Zero-pad S for positions beyond kv_count in each query row
+        // This is critical for partial batches (kv_count < XMX_BATCH_KV)
+        // Without this, XMX S@V reads uninitialized shared memory
+        if (kv_count < XMX_BATCH_KV) {
+            const int pad_start = kv_count;
+            const int pad_count = XMX_BATCH_KV - kv_count;
+            for (int idx = tid; idx < ncols * pad_count; idx += XMX_NTHREADS) {
+                const int j = idx / pad_count;
+                const int k = pad_start + (idx % pad_count);
+                tile_S[j * S_STRIDE + k] = sycl::half(0.0f);
+            }
         }
         // Zero-pad S stride padding
         for (int idx = tid; idx < ncols_padded * XMX_PAD; idx += XMX_NTHREADS) {
@@ -982,24 +1069,46 @@ void launch_fattn_xmx_f16(
         const int32_t * pa_block_table = params.block_table;
         const int32_t * pa_seq_lens = params.seq_lens;
 
+        // Capture kv_is_fp8 flag for runtime dispatch
+        const bool kv_fp8 = params.kv_is_fp8;
+
         cgh.parallel_for(
             sycl::nd_range<3>(grid * block, block),
             [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(XMX_SG)]] {
                 sycl::half * shared = shared_acc.get_multi_ptr<sycl::access::decorated::no>().get();
-                flash_attn_xmx_f16_kernel<D, ncols, use_logit_softcap, Q_type>(
-                    Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, dst_ptr,
-                    scale_val, max_bias_val, m0_val, m1_val, n_head_log2_val, logit_softcap_val,
-                    ne00, ne01, ne02, ne03,
-                    nb01, nb02, nb03,
-                    ne10, ne11, ne12, ne13,
-                    nb11, nb12, nb13,
-                    nb21, nb22, nb23,
-                    ne30, ne31, ne32, ne33,
-                    nb31, nb32, nb33,
-                    n_seqs, seq_q_offsets, seq_kv_offsets,
-                    q_seq_ids, kv_seq_ids,
-                    use_paged_attn, pa_block_size, pa_max_blocks, pa_block_table, pa_seq_lens,
-                    item, shared);
+                // Runtime dispatch: select kernel based on KV cache type
+                // Note: both kernels are instantiated, but only one path is taken at runtime
+                if (kv_fp8) {
+                    flash_attn_xmx_f16_kernel<D, ncols, use_logit_softcap, Q_type, true>(
+                        Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, dst_ptr,
+                        scale_val, max_bias_val, m0_val, m1_val, n_head_log2_val, logit_softcap_val,
+                        ne00, ne01, ne02, ne03,
+                        nb01, nb02, nb03,
+                        ne10, ne11, ne12, ne13,
+                        nb11, nb12, nb13,
+                        nb21, nb22, nb23,
+                        ne30, ne31, ne32, ne33,
+                        nb31, nb32, nb33,
+                        n_seqs, seq_q_offsets, seq_kv_offsets,
+                        q_seq_ids, kv_seq_ids,
+                        use_paged_attn, pa_block_size, pa_max_blocks, pa_block_table, pa_seq_lens,
+                        item, shared);
+                } else {
+                    flash_attn_xmx_f16_kernel<D, ncols, use_logit_softcap, Q_type, false>(
+                        Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, dst_ptr,
+                        scale_val, max_bias_val, m0_val, m1_val, n_head_log2_val, logit_softcap_val,
+                        ne00, ne01, ne02, ne03,
+                        nb01, nb02, nb03,
+                        ne10, ne11, ne12, ne13,
+                        nb11, nb12, nb13,
+                        nb21, nb22, nb23,
+                        ne30, ne31, ne32, ne33,
+                        nb31, nb32, nb33,
+                        n_seqs, seq_q_offsets, seq_kv_offsets,
+                        q_seq_ids, kv_seq_ids,
+                        use_paged_attn, pa_block_size, pa_max_blocks, pa_block_table, pa_seq_lens,
+                        item, shared);
+                }
             });
     });
 #else

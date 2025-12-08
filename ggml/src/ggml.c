@@ -469,6 +469,100 @@ void ggml_fp32_to_bf16_row(const float * x, ggml_bf16_t * y, int64_t n) {
     }
 }
 
+// FP8 E4M3 conversion functions
+// E4M3 format: 1 sign bit, 4 exponent bits, 3 mantissa bits
+// Bias: 7, range: ±448, no infinity (all exponent bits = 1 is NaN with mantissa != 0, max value otherwise)
+ggml_fp8_e4m3_t ggml_fp32_to_fp8_e4m3(float x) {
+    ggml_fp8_e4m3_t result;
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+
+    uint32_t sign = (bits >> 31) & 0x1;
+    int32_t exp = ((bits >> 23) & 0xFF) - 127;  // unbias FP32 exponent
+    uint32_t mant = bits & 0x7FFFFF;
+
+    // Handle special cases
+    if (exp == 128) {  // NaN or Inf in FP32
+        result.bits = 0x7F | (sign << 7);  // E4M3 NaN (max value with sign)
+        return result;
+    }
+
+    if (exp < -9) {  // Too small, underflow to zero
+        result.bits = sign << 7;
+        return result;
+    }
+
+    // Rebias for E4M3 (bias = 7)
+    exp += 7;
+
+    if (exp <= 0) {  // Subnormal in E4M3
+        // Shift mantissa to create subnormal
+        mant = (mant | 0x800000) >> (1 - exp);
+        exp = 0;
+    } else if (exp >= 15) {  // Overflow to max value (no inf in E4M3)
+        result.bits = 0x7E | (sign << 7);  // Max normal value (exp=14, mant=7)
+        return result;
+    }
+
+    // Round to nearest even for mantissa (23 bits -> 3 bits)
+    uint32_t mant3 = (mant + 0x100000) >> 20;  // Round and shift
+    if (mant3 > 7) {
+        mant3 = 0;
+        exp++;
+        if (exp >= 15) {
+            result.bits = 0x7E | (sign << 7);  // Max normal value
+            return result;
+        }
+    }
+
+    result.bits = (sign << 7) | (exp << 3) | mant3;
+    return result;
+}
+
+float ggml_fp8_e4m3_to_fp32(ggml_fp8_e4m3_t x) {
+    uint8_t bits = x.bits;
+    uint32_t sign = (bits >> 7) & 0x1;
+    uint32_t exp = (bits >> 3) & 0xF;
+    uint32_t mant = bits & 0x7;
+
+    float result;
+
+    if (exp == 0) {
+        if (mant == 0) {
+            // Zero
+            uint32_t fp32_bits = sign << 31;
+            memcpy(&result, &fp32_bits, sizeof(result));
+        } else {
+            // Subnormal
+            result = (sign ? -1.0f : 1.0f) * ldexpf((float)mant, -9);  // 2^(-6-3) = 2^-9
+        }
+    } else if (exp == 15 && mant == 7) {
+        // NaN (in E4M3, exp=15 mant=7 is NaN)
+        uint32_t fp32_bits = 0x7FC00000 | (sign << 31);  // Quiet NaN
+        memcpy(&result, &fp32_bits, sizeof(result));
+    } else {
+        // Normal number
+        int32_t fp32_exp = (int32_t)exp - 7 + 127;  // Rebias: E4M3 bias=7, FP32 bias=127
+        uint32_t fp32_mant = mant << 20;  // 3 bits -> 23 bits (shift left 20)
+        uint32_t fp32_bits = (sign << 31) | (fp32_exp << 23) | fp32_mant;
+        memcpy(&result, &fp32_bits, sizeof(result));
+    }
+
+    return result;
+}
+
+void ggml_fp8_e4m3_to_fp32_row(const ggml_fp8_e4m3_t * x, float * y, int64_t n) {
+    for (int64_t i = 0; i < n; i++) {
+        y[i] = ggml_fp8_e4m3_to_fp32(x[i]);
+    }
+}
+
+void ggml_fp32_to_fp8_e4m3_row(const float * x, ggml_fp8_e4m3_t * y, int64_t n) {
+    for (int64_t i = 0; i < n; i++) {
+        y[i] = ggml_fp32_to_fp8_e4m3(x[i]);
+    }
+}
+
 bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b) {
     return memcmp(guid_a, guid_b, sizeof(ggml_guid)) == 0;
 }
@@ -821,6 +915,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) ggml_bf16_to_fp32_row,
         .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_bf16_row_ref,
     },
+    [GGML_TYPE_F8_E4M3] = {
+        .type_name                = "f8_e4m3",
+        .blck_size                = 1,
+        .type_size                = sizeof(ggml_fp8_e4m3_t),
+        .is_quantized             = false,
+        .to_float                 = (ggml_to_float_t) ggml_fp8_e4m3_to_fp32_row,
+        .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_fp8_e4m3_row,
+    },
     [31] = { // GGML_TYPE_Q4_0_4_4
         .type_name                = "TYPE_Q4_0_4_4 REMOVED, use Q4_0 with runtime repacking",
         .blck_size                = 0,
@@ -964,6 +1066,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GET_ROWS",
     "GET_ROWS_BACK",
     "SET_ROWS",
+    "SET_ROWS_PAGED",
     "DIAG",
     "DIAG_MASK_INF",
     "DIAG_MASK_ZERO",
@@ -1022,9 +1125,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+
+    "ALL_REDUCE_SUM",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1073,6 +1178,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "get_rows(x)",
     "get_rows_back(x)",
     "set_rows(x)",
+    "set_rows_paged(x)",
     "diag(x)",
     "diag_mask_inf(x)",
     "diag_mask_zero(x)",
@@ -1131,9 +1237,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+
+    "all_reduce_sum(x)",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3826,6 +3934,62 @@ struct ggml_tensor * ggml_set_rows(
     return result;
 }
 
+// ggml_set_rows_paged
+// Block-addressed write for Paged Attention V2
+// Writes src rows to dst at positions specified by indices,
+// using block_table to map logical blocks to physical blocks
+
+struct ggml_tensor * ggml_set_rows_paged(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * dst,         // [D, block_size, n_heads, num_blocks]
+        struct ggml_tensor  * src,         // [D * n_heads, n_tokens]
+        struct ggml_tensor  * indices,     // [n_tokens] logical positions
+        struct ggml_tensor  * block_table, // [max_blocks, n_seqs]
+        int32_t               block_size,
+        int32_t               seq_idx) {
+    // Validate tensor shapes using ggml_n_dims()
+    GGML_ASSERT(ggml_n_dims(dst) == 4);          // [D, block_size, n_heads, num_blocks]
+    // src is [D * n_heads, n_tokens] - when n_tokens=1, ggml_n_dims returns 1
+    GGML_ASSERT(ggml_n_dims(src) >= 1 && ggml_n_dims(src) <= 2);
+    GGML_ASSERT(ggml_n_dims(indices) == 1);      // [n_tokens]
+    // block_table is [max_blocks, n_seqs], but n_seqs=1 makes it effectively 1D
+    GGML_ASSERT(ggml_n_dims(block_table) >= 1 && ggml_n_dims(block_table) <= 2);
+
+    // D from dst must match the packed D in src
+    const int64_t D = dst->ne[0];
+    const int64_t n_heads = dst->ne[2];
+    GGML_ASSERT(src->ne[0] == D * n_heads);
+
+    // Number of tokens
+    const int64_t n_tokens = src->ne[1];
+    GGML_ASSERT(indices->ne[0] == n_tokens);
+
+    // Validate indices and block_table types
+    // indices can be I32 or I64 (KV cache uses I64)
+    GGML_ASSERT(indices->type == GGML_TYPE_I32 || indices->type == GGML_TYPE_I64);
+    GGML_ASSERT(block_table->type == GGML_TYPE_I32);
+
+    // seq_idx must be valid
+    GGML_ASSERT(seq_idx >= 0 && seq_idx < block_table->ne[1]);
+
+    // Create result as a view of dst (in-place operation)
+    struct ggml_tensor * result = ggml_view_tensor(ctx, dst);
+
+    result->op     = GGML_OP_SET_ROWS_PAGED;
+    result->src[0] = src;
+    result->src[1] = indices;
+    result->src[2] = block_table;
+    result->src[3] = dst;  // Original destination
+
+    // Store block_size, seq_idx, and use_identity flag in op_params
+    // use_identity=1 means use physical_block = logical_block (no block_table lookup)
+    ((int32_t *) result->op_params)[0] = block_size;
+    ((int32_t *) result->op_params)[1] = seq_idx;
+    ((int32_t *) result->op_params)[2] = 1;  // Always use identity mapping for now
+
+    return result;
+}
+
 // ggml_diag
 
 struct ggml_tensor * ggml_diag(
@@ -5384,6 +5548,33 @@ void ggml_flash_attn_ext_set_paged(
     fattn->src[8] = seq_lens;
 }
 
+void ggml_flash_attn_ext_set_paged_layout(
+        struct ggml_tensor * a,
+        bool use_paged_layout) {
+    // Traverse through view/reshape operations to find the actual flash attention tensor
+    struct ggml_tensor * fattn = a;
+    while (fattn && fattn->op != GGML_OP_FLASH_ATTN_EXT) {
+        if (fattn->op == GGML_OP_VIEW ||
+            fattn->op == GGML_OP_RESHAPE ||
+            fattn->op == GGML_OP_PERMUTE ||
+            fattn->op == GGML_OP_CONT ||
+            fattn->op == GGML_OP_TRANSPOSE) {
+            fattn = fattn->src[0];
+        } else {
+            fattn = NULL;
+            break;
+        }
+    }
+
+    if (!fattn) {
+        return;
+    }
+
+    // Store use_paged_layout in op_params[4] (as int32)
+    // op_params: [0-2]=float scale/max_bias/logit_softcap, [3]=prec, [4]=use_paged_layout
+    ggml_set_op_params_i32(fattn, 4, use_paged_layout ? 1 : 0);
+}
+
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(
@@ -6117,6 +6308,24 @@ struct ggml_tensor * ggml_opt_step_sgd(
     result->src[0] = a;
     result->src[1] = grad;
     result->src[2] = params;
+
+    return result;
+}
+
+// ggml_all_reduce_sum
+
+struct ggml_tensor * ggml_all_reduce_sum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    // All-reduce sum for tensor parallelism
+    // The output has the same shape as the input
+    // Each device has a partial result, all-reduce sums them and replicates to all devices
+    // The actual communication is performed by the backend during graph execution
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, a->ne);
+
+    result->op     = GGML_OP_ALL_REDUCE_SUM;
+    result->src[0] = a;
 
     return result;
 }

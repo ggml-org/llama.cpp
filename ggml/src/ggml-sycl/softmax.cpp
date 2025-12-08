@@ -330,10 +330,12 @@ void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * src2 = dst->src[2];
 
-    const float * src0_d = (const float *) src0->data;
-    const void  * src1_d = src1 ? (const void *) src1->data : nullptr;
-    const void  * src2_d = src2 ? (const void *) src2->data : nullptr;
-    float       *  dst_d = (float *) dst->data;
+    // Use device-specific data pointers for TP support
+    const int device = ctx.device;
+    const float * src0_d = (const float *) ggml_sycl_get_data_ptr(src0, device);
+    const void  * src1_d = src1 ? (const void *) ggml_sycl_get_data_ptr(src1, device) : nullptr;
+    const void  * src2_d = src2 ? (const void *) ggml_sycl_get_data_ptr(src2, device) : nullptr;
+    float       *  dst_d = (float *) ggml_sycl_get_data_ptr(dst, device);
 
     dpct::queue_ptr stream = ctx.stream();
 
@@ -405,9 +407,11 @@ void ggml_sycl_op_soft_max_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
     const ggml_tensor * src0 = dst->src[0]; // grad
     const ggml_tensor * src1 = dst->src[1]; // forward pass output
 
-    const float * src0_d = (const float *) src0->data;
-    const float * src1_d = (const float *) src1->data;
-    float       * dst_d  = (float       *) dst->data;
+    // Use device-specific data pointers for TP support
+    const int device = ctx.device;
+    const float * src0_d = (const float *) ggml_sycl_get_data_ptr(src0, device);
+    const float * src1_d = (const float *) ggml_sycl_get_data_ptr(src1, device);
+    float       * dst_d  = (float       *) ggml_sycl_get_data_ptr(dst, device);
 
     dpct::queue_ptr stream = ctx.stream();
 

@@ -13,10 +13,17 @@
 #ifndef GGML_SYCL_COMMON_HPP
 #define GGML_SYCL_COMMON_HPP
 
+#include <atomic>
+#include <condition_variable>
 #include <cstddef>
+#include <cstring>
 #include <fstream>
 #include <iostream>
+#include <mutex>
+#include <queue>
 #include <string>
+#include <thread>
+#include <unordered_map>
 
 #include "dpct/helper.hpp"
 #include "ggml-sycl.h"
@@ -41,12 +48,25 @@
 void* ggml_sycl_host_malloc(size_t size);
 void ggml_sycl_host_free(void* ptr);
 
+// Get shared-context queue for TP mode (returns nullptr if not in TP mode)
+sycl::queue * ggml_sycl_get_tp_queue(int device);
+
+// Get shared context for TP mode (returns nullptr if not in TP mode)
+sycl::context * ggml_sycl_get_tp_context();
+
+// TP staging cache: stages mmap'd data to USM memory for shared-context access
+// Per-device staging: each device gets its own device-local copy
+void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device);
+void * ggml_sycl_get_staged_ptr(const void * src, size_t size);  // Legacy: returns device 0's pointer
+void ggml_sycl_clear_staging_cache();
+
 // Internal getters for seq_ids host pointers (set by llama layer, used by fattn)
 const int32_t * ggml_sycl_get_seq_ids_host_q(size_t * count);
 const int32_t * ggml_sycl_get_seq_ids_host_kv(size_t * count);
 
 
 extern int g_ggml_sycl_debug;
+extern int g_ggml_sycl_tp_debug;  // Tensor Parallelism debug output
 extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
 
@@ -63,6 +83,13 @@ extern int g_ggml_sycl_prioritize_dmmv;
     do {                                  \
         if (UNLIKELY(g_ggml_sycl_debug))  \
             fprintf(stderr, __VA_ARGS__); \
+    } while (0)
+
+// Tensor Parallelism debug output - controlled by GGML_SYCL_TP_DEBUG env var
+#define GGML_SYCL_TP_DEBUG(...)              \
+    do {                                     \
+        if (UNLIKELY(g_ggml_sycl_tp_debug))  \
+            fprintf(stderr, __VA_ARGS__);    \
     } while (0)
 
 #define CHECK_TRY_ERROR(expr)                                            \
@@ -242,6 +269,250 @@ struct ggml_sycl_device_info {
 
 const ggml_sycl_device_info & ggml_sycl_info();
 
+// Tensor Parallelism configuration
+// Implements Megatron-LM style column/row parallel for multi-GPU inference
+enum class tp_layer_type {
+    TP_NONE,           // No tensor parallelism
+    TP_COLUMN_PARALLEL, // Split output features: Q, K, V, gate, up projections
+    TP_ROW_PARALLEL,    // Split input features: out_proj, down projections (needs all-reduce)
+};
+
+struct ggml_sycl_tp_config {
+    bool enabled = false;         // Whether tensor parallelism is active
+    int world_size = 1;           // Number of GPUs in TP group
+    int rank = 0;                 // This GPU's rank (0 to world_size-1)
+    int devices[GGML_SYCL_MAX_DEVICES] = {0}; // Device IDs in TP group
+
+    // Buffers for all-reduce operations (allocated lazily)
+    void* allreduce_buffer[GGML_SYCL_MAX_DEVICES] = {nullptr};
+    size_t allreduce_buffer_size = 0;
+
+    // Multi-process mode (one GPU per process, coordinated via MPI/CCL)
+    bool is_multiprocess = false; // True if running with mpirun
+    int mpi_rank = -1;            // MPI rank (process ID)
+    int mpi_world_size = 0;       // MPI world size (number of processes)
+};
+
+// Global TP config (set during init)
+extern ggml_sycl_tp_config g_sycl_tp_config;
+
+// Initialize tensor parallelism with specified devices
+void ggml_sycl_tp_init(const int* device_ids, int num_devices);
+
+// Clean up tensor parallelism resources
+void ggml_sycl_tp_free();
+
+// Perform all-reduce sum across TP group
+// buf must be device memory on the calling device
+void ggml_sycl_tp_allreduce_sum(float* buf, size_t count, int device, queue_ptr stream);
+
+// Perform all-reduce sum with explicit buffers for each device
+void ggml_sycl_tp_allreduce_sum_multi(float** buf_per_device, size_t count,
+                                       queue_ptr* streams, int num_devices);
+
+// Get/ensure shared buffer for optimized ALL_REDUCE (malloc_shared for zero-copy)
+float* ggml_sycl_tp_ensure_shared_reduce_buffer(size_t bytes);
+
+// Get the TP rank for a given device
+int ggml_sycl_tp_get_rank(int device);
+
+// Check if TP is enabled
+bool ggml_sycl_tp_enabled();
+
+// Get TP world size (for graph building)
+// In multi-process mode, returns 1 to build full graph
+int ggml_sycl_tp_world_size();
+
+// Get actual TP world size (internal use, for ALL_REDUCE)
+// Returns true world_size even in multi-process mode
+int ggml_sycl_tp_world_size_internal();
+
+// Calculate the slice of a tensor for a given TP rank
+void ggml_sycl_tp_get_slice(int64_t total_size, int rank, int world_size,
+                             int64_t* offset, int64_t* size);
+
+// Get TP layer type for a tensor (uses cached value if available)
+// First call does string matching, subsequent calls just return cached enum
+tp_layer_type ggml_sycl_tp_get_layer_type(const ggml_tensor* tensor);
+
+// Check if a tensor requires all-reduce after matmul
+bool ggml_sycl_tp_needs_allreduce(const ggml_tensor* tensor);
+
+// Weight sharding functions for tensor parallelism
+// Get the sharded dimensions for a TP tensor
+void ggml_sycl_tp_get_sharded_dims(const ggml_tensor* tensor, int rank, int world_size,
+                                    int64_t* local_ne0, int64_t* local_ne1,
+                                    int64_t* offset_ne0, int64_t* offset_ne1);
+
+// Check if a tensor should be sharded for TP
+bool ggml_sycl_tp_should_shard(const ggml_tensor* tensor);
+
+// Copy sharded weight data from host to device
+void ggml_sycl_tp_copy_weight_shard(void* dst_device, const void* src_host,
+                                     const ggml_tensor* tensor, int rank,
+                                     int world_size, queue_ptr stream);
+
+// Get the size in bytes of a sharded tensor for this rank
+size_t ggml_sycl_tp_get_shard_size(const ggml_tensor* tensor, int rank, int world_size);
+
+// FFN norm cache for TP: stores FFN norm output immediately after MUL to prevent buffer aliasing
+// The GGML scheduler may reuse the FFN norm buffer before TP can use it on device 1
+struct ffn_norm_cache_entry {
+    void* data;           // Cached FFN norm output on main device (device 0)
+    void* data_dev1;      // Copy on device 1 for its computation
+    int64_t ne0, ne1;     // Dimensions
+    size_t size;          // Buffer size in bytes
+    int pass_id;          // Which compute pass this cache is for (to detect staleness)
+};
+
+// Global FFN norm cache indexed by layer number
+extern std::unordered_map<int, ffn_norm_cache_entry> g_tp_ffn_norm_cache;
+extern std::mutex g_tp_ffn_norm_cache_mutex;
+extern int g_tp_current_pass_id;  // Incremented each forward pass
+extern bool g_tp_enabled;  // Whether TP mode is enabled
+
+// Store FFN norm output for TP (call after MUL that creates ffn_norm)
+void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64_t ne1,
+                                  size_t size, queue_ptr stream);
+
+// Get cached FFN norm for a layer (returns nullptr if not cached or stale)
+void* ggml_sycl_tp_get_cached_ffn_norm(int layer, int device);
+
+// Clear FFN norm cache for a layer
+void ggml_sycl_tp_clear_ffn_norm_cache(int layer);
+
+// Increment pass ID (call at start of each forward pass)
+void ggml_sycl_tp_new_pass();
+
+// FFN input storage: stores the input to FFN column-parallel layers on device 1
+// This is needed so that row-parallel (ffn_down) can compute device 1's contribution
+struct ffn_input_storage {
+    void * data;          // Buffer on device 1
+    int64_t ne0, ne1;     // Dimensions
+    size_t size;          // Buffer size
+};
+extern std::unordered_map<int, ffn_input_storage> g_tp_ffn_inputs;  // Key: layer number
+extern std::mutex g_tp_ffn_input_mutex;
+
+// FFN weight storage: stores references to FFN weight tensors for device 1 computation
+struct ffn_weight_refs {
+    const ggml_tensor * gate;  // ffn_gate weight tensor
+    const ggml_tensor * up;    // ffn_up weight tensor
+    const ggml_tensor * down;  // ffn_down weight tensor
+};
+extern std::unordered_map<int, ffn_weight_refs> g_tp_ffn_weights;  // Key: layer number
+extern std::mutex g_tp_ffn_weight_mutex;
+
+// Attention input storage: stores the input to attention column-parallel layers on device 1
+struct attn_input_storage {
+    void * data;          // Buffer on device 1
+    int64_t ne0, ne1;     // Dimensions
+    size_t size;          // Buffer size
+};
+extern std::unordered_map<int, attn_input_storage> g_tp_attn_inputs;  // Key: layer number
+extern std::mutex g_tp_attn_input_mutex;
+
+// Attention weight storage: stores references to attention weight tensors
+struct attn_weight_refs {
+    const ggml_tensor * q;     // attn_q weight tensor
+    const ggml_tensor * k;     // attn_k weight tensor
+    const ggml_tensor * v;     // attn_v weight tensor
+    const ggml_tensor * o;     // attn_output weight tensor
+};
+extern std::unordered_map<int, attn_weight_refs> g_tp_attn_weights;  // Key: layer number
+extern std::mutex g_tp_attn_weight_mutex;
+
+// Async FFN job structure: tracks an in-flight FFN computation on device 1
+// This allows device 1 to compute while device 0 continues with other work
+struct tp_async_ffn_job {
+    int layer;                      // Layer number
+    sycl::event completion_event;   // Event signaling computation complete
+    float * result_buf;             // Result buffer (in pinned host memory)
+    int64_t ne0, ne1;               // Output dimensions [N_out, batch]
+    size_t result_size;             // Result buffer size in bytes
+    bool valid;                     // Job is valid and pending
+};
+extern std::unordered_map<int, tp_async_ffn_job> g_tp_async_ffn_jobs;  // Key: layer number
+extern std::mutex g_tp_async_ffn_mutex;
+
+// Async attention job structure: tracks an in-flight attention computation on device 1
+struct tp_async_attn_job {
+    int layer;                      // Layer number
+    sycl::event completion_event;   // Event signaling computation complete
+    float * result_buf;             // Result buffer (in pinned host memory)
+    int64_t ne0, ne1;               // Output dimensions
+    size_t result_size;             // Result buffer size in bytes
+    bool valid;                     // Job is valid and pending
+};
+extern std::unordered_map<int, tp_async_attn_job> g_tp_async_attn_jobs;  // Key: layer number
+extern std::mutex g_tp_async_attn_mutex;
+
+// Extract layer number from tensor name (e.g., "blk.0.ffn_gate" -> 0)
+int ggml_sycl_tp_extract_layer_number(const char * name);
+
+// =============================================================================
+// Thread-based pipelining for device 1 FFN computation
+// Uses a dedicated worker thread instead of SYCL async events (which don't work
+// with in-order queues that have multiple wait() calls).
+// =============================================================================
+
+// FFN work item: describes an FFN computation to be performed on device 1
+struct tp_ffn_work_item {
+    int layer;                          // Layer number
+    float * input_dev1;                 // Input pointer on device 1 (already copied)
+    int64_t K_full;                     // Input dimension
+    int64_t batch;                      // Batch size
+    ffn_weight_refs weights;            // Weight tensor references
+
+    // Output info (filled in by caller for result allocation)
+    int64_t N_out;                      // Output dimension
+    size_t result_size;                 // Expected result size in bytes
+};
+
+// FFN result: result of a completed FFN computation
+struct tp_ffn_result {
+    int layer;                          // Layer number
+    float * result_buf;                 // Result buffer (host-pinned memory)
+    int64_t ne0, ne1;                   // Output dimensions
+    size_t result_size;                 // Result size in bytes
+    bool valid;                         // Result is valid and ready to consume
+};
+
+// Device 1 worker thread: processes FFN jobs independently from main thread
+struct tp_device1_worker {
+    std::thread worker_thread;
+
+    // Work queue: main thread submits, worker thread processes
+    std::queue<tp_ffn_work_item> work_queue;
+    std::mutex work_mutex;
+    std::condition_variable work_cv;
+
+    // Results: worker thread produces, main thread consumes
+    std::unordered_map<int, tp_ffn_result> results;  // Key: layer number
+    std::mutex result_mutex;
+    std::condition_variable result_cv;
+
+    // Control
+    std::atomic<bool> shutdown{false};
+    std::atomic<bool> initialized{false};
+
+    // Context pointer (set during init)
+    void * ctx;  // ggml_backend_sycl_context *
+};
+
+// Global worker instance
+extern tp_device1_worker g_tp_device1_worker;
+
+// Global flag to enable/disable thread-based pipelining
+extern int g_ggml_sycl_tp_threaded_ffn;  // 0 = disabled, 1 = enabled
+
+// Thread-based pipelining functions
+void ggml_sycl_tp_worker_init(void * ctx);   // Initialize worker thread
+void ggml_sycl_tp_worker_shutdown();          // Shutdown worker thread
+void ggml_sycl_tp_submit_ffn_work(const tp_ffn_work_item & work);  // Submit work to queue
+tp_ffn_result * ggml_sycl_tp_get_ffn_result(int layer, bool wait);  // Get result (optional wait)
+void ggml_sycl_tp_release_ffn_result(int layer);  // Release result memory
+
 struct ggml_sycl_pool {
     virtual ~ggml_sycl_pool() = default;
 
@@ -308,9 +579,71 @@ struct ggml_tensor_extra_gpu {
   dpct::event_ptr events[GGML_SYCL_MAX_DEVICES]
                         [GGML_SYCL_MAX_STREAMS]; // events for synchronizing multiple GPUs
   optimize_feature optimized_feature;
+  tp_layer_type tp_type = tp_layer_type::TP_NONE;  // Cached TP type (set once, avoids string compare)
+  bool tp_type_cached = false;  // Whether tp_type has been computed
+
+  // Tensor Parallelism sharding info
+  // When TP is enabled, this tensor may hold only a shard of the full weight
+  bool tp_sharded = false;        // True if this tensor holds a shard
+  bool tp_usm_host = false;       // True if allocated with malloc_host (cross-device accessible)
+  int64_t tp_original_ne[4] = {0}; // Original (full) dimensions before sharding
+  int64_t tp_local_ne[4] = {0};   // Local dimensions of the shard
+  int64_t tp_offset_ne[4] = {0};  // Offset into the original tensor
+  int tp_rank = 0;                // Which rank this shard belongs to
+  int tp_world_size = 1;          // Total number of ranks
 };
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
+
+// Get the correct data pointer for a tensor on a specific device
+// For TP buffers, returns device-specific pointer; otherwise returns tensor->data
+// In TP mode, if returning tensor->data, stages it to USM memory first
+inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
+    if (tensor == nullptr) {
+        return nullptr;
+    }
+    if (tensor->extra != nullptr) {
+        const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(tensor->extra);
+        if (extra->data_device[device] != nullptr) {
+            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using extra->data_device[%d]=%p\n",
+                            tensor->name, device, device, extra->data_device[device]);
+            return extra->data_device[device];
+        }
+    }
+
+    // In TP mode, tensor->data might be mmap'd memory that can't be accessed by shared-context queues.
+    // Stage it to device-local USM memory for each device (since Intel Arc lacks P2P).
+    // BUT: If tensor->data is already HOST or SHARED USM memory, use it directly (no staging needed).
+    if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1 && tensor->data != nullptr) {
+        // Check if the pointer is already HOST or SHARED USM - these are device-accessible
+        sycl::context * tp_ctx = ggml_sycl_get_tp_context();
+        if (tp_ctx != nullptr) {
+            sycl::usm::alloc ptr_type = sycl::get_pointer_type(tensor->data, *tp_ctx);
+            if (ptr_type == sycl::usm::alloc::host || ptr_type == sycl::usm::alloc::shared) {
+                // HOST or SHARED USM - directly accessible from device, no staging needed
+                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using HOST/SHARED USM tensor->data=%p (type=%d)\n",
+                                tensor->name, device, tensor->data, (int)ptr_type);
+                return tensor->data;
+            }
+        }
+
+        // Not HOST/SHARED USM - need to stage to device-local memory
+        size_t nbytes = ggml_nbytes(tensor);
+        void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
+        if (staged != nullptr) {
+            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged %p -> %p (%zu bytes)\n",
+                            tensor->name, device, tensor->data, staged, nbytes);
+            return staged;
+        }
+        // Staging failed - fall through and return original pointer (will likely fail)
+        GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED, using tensor->data=%p\n",
+                        tensor->name, device, tensor->data);
+    } else {
+        GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using tensor->data=%p\n",
+                        tensor->name, device, tensor->data);
+    }
+    return tensor->data;
+}
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;
 struct ggml_backend_sycl_context {
@@ -327,6 +660,18 @@ struct ggml_backend_sycl_context {
     }
 
     queue_ptr stream(int device, int stream) {
+        // In TP mode, ALWAYS use the shared-context queue so all devices can access
+        // memory allocated in the shared context. Check every time since TP may be
+        // enabled after queues were first accessed.
+        sycl::queue * tp_queue = ggml_sycl_get_tp_queue(device);
+        if (tp_queue != nullptr) {
+            if (qptrs[device][stream] != tp_queue) {
+                qptrs[device][stream] = tp_queue;
+                GGML_SYCL_DEBUG("Using shared-context queue for device %d stream %d\n", device, stream);
+            }
+            return tp_queue;
+        }
+        // Non-TP mode: use default queue (cached)
         if (qptrs[device][stream] == nullptr) {
             qptrs[device][stream] = &(dpct::get_device(device).default_queue());
         }
@@ -424,6 +769,7 @@ struct ggml_backend_sycl_context {
 
 #ifdef GGML_SYCL_GRAPH
     std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    int exec_graph_n_nodes = 0;  // Track graph size for cache invalidation
 #endif
 
     ggml_sycl_pool & host_pool(int device) {
@@ -435,6 +781,38 @@ struct ggml_backend_sycl_context {
 
     ggml_sycl_pool & host_pool() { return host_pool(device); }
 };
+
+// GGML_OP_ALL_REDUCE_SUM handler for SYCL backend
+// For single-device execution, this is a copy operation
+// For multi-device TP, this will perform actual all-reduce across devices
+void ggml_sycl_all_reduce_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+// Async FFN computation for Tensor Parallelism pipelining
+// Launches FFN computation on device 1 asynchronously (returns immediately)
+void ggml_sycl_tp_launch_async_ffn(
+    ggml_backend_sycl_context & ctx,
+    int layer,
+    const float * input_dev1,       // Input on device 1
+    int64_t K_full,                 // Full model dimension
+    int64_t batch,                  // Batch size
+    const ffn_weight_refs & weights // Weight tensor references
+);
+
+// Wait for and retrieve async FFN result (blocks until done)
+float * ggml_sycl_tp_wait_async_ffn(int layer, int64_t * out_ne0, int64_t * out_ne1, size_t * out_size);
+
+// Async attention computation for Tensor Parallelism pipelining
+void ggml_sycl_tp_launch_async_attn(
+    ggml_backend_sycl_context & ctx,
+    int layer,
+    const float * input_dev1,       // Input on device 1
+    int64_t K_full,                 // Full model dimension
+    int64_t batch,                  // Batch size
+    const attn_weight_refs & weights // Weight tensor references
+);
+
+// Wait for and retrieve async attention result
+float * ggml_sycl_tp_wait_async_attn(int layer, int64_t * out_ne0, int64_t * out_ne1, size_t * out_size);
 
 // common device functions
 

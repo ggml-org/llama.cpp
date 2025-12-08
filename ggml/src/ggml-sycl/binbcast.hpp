@@ -34,6 +34,12 @@ void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
+// Fused MUL + ADD: dst = x * scale + bias
+// Eliminates intermediate tensor for scale+bias pattern
+void ggml_sycl_op_mul_add_fused(ggml_backend_sycl_context & ctx,
+                                 ggml_tensor * mul_node,
+                                 ggml_tensor * add_node);
+
 
 #endif //GGML_SYCL_BINBCAST_HPP
 

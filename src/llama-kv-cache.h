@@ -91,7 +91,9 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+                          int   tp_world_size = 1,  // tensor parallelism: divide heads by this
+                         bool   paged_layout  = false);  // use 4D blocked layout for Paged Attention V2
 
     ~llama_kv_cache() = default;
 
@@ -141,6 +143,12 @@ public:
     // Should be called after construction if paged attention is desired
     void enable_paged_attn();
     bool get_use_paged_attn() const { return use_paged_attn; }
+
+    // Paged Layout: enable 4D blocked tensor layout for KV cache
+    // Required for Paged Attention V2 (partition-based algorithm for 40K+ sequences)
+    // Layout: [D, block_size, n_kv_heads, num_blocks] instead of [D*n_kv_heads, kv_size, n_stream]
+    void enable_paged_layout();
+    bool get_use_paged_layout() const { return use_paged_layout; }
 
     // Prefix caching: enable content-addressable block sharing
     // Should be called after enable_paged_attn() if prefix caching is desired
@@ -243,6 +251,10 @@ private:
     // required padding
     const uint32_t n_pad = 1;
 
+    // tensor parallelism: KV cache is sharded by heads
+    // n_embd_gqa is divided by this value
+    const int tp_world_size = 1;
+
     // SWA
     const uint32_t n_swa = 0;
 
@@ -274,6 +286,10 @@ private:
     // mutable because block allocation can happen lazily during const operations
     mutable std::unique_ptr<llama_kv_cache_paged> paged_cache;
     bool use_paged_attn = false;
+
+    // Paged Layout: true when KV tensors are allocated in 4D blocked format
+    // [D, block_size, n_kv_heads, num_blocks] for Paged Attention V2
+    bool use_paged_layout = false;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;

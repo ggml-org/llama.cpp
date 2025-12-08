@@ -1,6 +1,8 @@
 #include "norm.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/presets.hpp"
+#include <vector>
+#include <cmath>
 
 static void norm_f32(const float* x, float* dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps, const sycl::nd_item<3>& item_ct1, sycl::float2* s_sum, int block_size) {
@@ -1091,8 +1093,9 @@ void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_TENSOR_UNARY_OP_LOCALS
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    // Use device-specific data pointers for TP support
+    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(dst->src[0], ctx.device));
+    float *       dst_dd  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -1115,8 +1118,9 @@ void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    // Use device-specific data pointers for TP support
+    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(dst->src[0], ctx.device));
+    float *       dst_dd  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
     float eps;
     memcpy(&eps, dst->op_params + 1, sizeof(float));
@@ -1134,8 +1138,14 @@ void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
+    // Debug: verify we're using the TP queue
+    GGML_SYCL_DEBUG("[RMS_NORM] device=%d, stream=%p, stream_device=%s\n",
+                    ctx.device, (void*)main_stream,
+                    main_stream->get_device().get_info<sycl::info::device::name>().c_str());
+
+    // Use device-specific data pointers for TP support
+    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(dst->src[0], ctx.device));
+    float *       dst_dd  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -1146,7 +1156,44 @@ void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t s01 = nb01 / ts0;
     const int64_t s02 = nb02 / ts0;
     const int64_t s03 = nb03 / ts0;
+
+    // DEBUG: Check hidden state at result_norm (final layer before lm_head)
+    bool is_result_norm = dst->name && strstr(dst->name, "result_norm");
+    static int result_norm_dbg = 0;
+    if (is_result_norm && result_norm_dbg++ < 3) {
+        std::vector<float> input_host(8);
+        main_stream->memcpy(input_host.data(), src0_dd, 8*sizeof(float)).wait();
+        float sum = 0, sum_sq = 0;
+        for (int i = 0; i < 8; i++) {
+            sum += input_host[i];
+            sum_sq += input_host[i] * input_host[i];
+        }
+        bool has_nan = std::isnan(sum) || std::isnan(sum_sq);
+        bool all_zero = (sum == 0 && sum_sq == 0);
+        fprintf(stderr, "TP DEBUG result_norm INPUT[0..7]: [%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f] sum=%.4f nan=%d zero=%d ne01=%lld\n",
+                input_host[0], input_host[1], input_host[2], input_host[3],
+                input_host[4], input_host[5], input_host[6], input_host[7],
+                sum, has_nan, all_zero, (long long)ne01);
+    }
+
     rms_norm_f32_sycl(src0_dd, dst_dd, ne00, ne01, ne02, ne03, s01, s02, s03, eps, main_stream, ctx.device);
+
+    // DEBUG: Check output after result_norm
+    if (is_result_norm && result_norm_dbg <= 3) {
+        main_stream->wait();
+        std::vector<float> output_host(8);
+        main_stream->memcpy(output_host.data(), dst_dd, 8*sizeof(float)).wait();
+        float sum = 0;
+        bool has_nan = false;
+        for (int i = 0; i < 8; i++) {
+            sum += output_host[i];
+            if (std::isnan(output_host[i])) has_nan = true;
+        }
+        fprintf(stderr, "TP DEBUG result_norm OUTPUT[0..7]: [%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f] sum=%.4f nan=%d\n",
+                output_host[0], output_host[1], output_host[2], output_host[3],
+                output_host[4], output_host[5], output_host[6], output_host[7],
+                sum, has_nan);
+    }
 }
 
 // Fused RMS norm + element-wise multiply dispatch function

@@ -1,4 +1,5 @@
 #include "models.h"
+#include "llama-impl.h"  // For LLAMA_LOG_DEBUG
 
 llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -53,9 +54,10 @@ llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_para
                 Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                 cb(Vcur, "Vcur", il);
             }
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            // Use TP-aware head counts for proper sharding
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, tp_n_head(),    n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, tp_n_head_kv(), n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, tp_n_head_kv(), n_tokens);
 
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, rope_factors,

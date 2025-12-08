@@ -9,6 +9,10 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"
+#endif
+
 #include <cinttypes>
 #include <cstring>
 #include <limits>
@@ -107,6 +111,7 @@ llama_context::llama_context(
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
     cparams.paged_attn = params.paged_attn;
+    cparams.paged_layout = params.paged_layout;
     cparams.prefix_cache = params.prefix_cache;
 
     {
@@ -146,6 +151,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: flash_attn    = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
     LLAMA_LOG_INFO("%s: kv_unified    = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
     LLAMA_LOG_INFO("%s: paged_attn    = %s\n",   __func__, cparams.paged_attn ? "true" : "false");
+    LLAMA_LOG_INFO("%s: paged_layout  = %s\n",   __func__, cparams.paged_layout ? "true" : "false");
     LLAMA_LOG_INFO("%s: prefix_cache  = %s\n",   __func__, cparams.prefix_cache ? "true" : "false");
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
@@ -162,6 +168,10 @@ llama_context::llama_context(
 
     if (!hparams.vocab_only) {
         // GPU backends
+        // Note: For tensor parallelism (LLAMA_SPLIT_MODE_TENSOR_PARALLEL), the SYCL_TP
+        // buffer type handles multi-device coordination internally. We still only
+        // create one backend per model.device since the TP buffer is tied to the
+        // main device, and multi-device dispatch happens within the SYCL backend.
         for (auto * dev : model.devices) {
             ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
             if (backend == nullptr) {
@@ -218,10 +228,39 @@ llama_context::llama_context(
 
     // init the memory module
     if (!hparams.vocab_only) {
+        // Determine TP world size for KV cache sharding
+        // In TP mode, KV cache is sharded by heads: each device stores n_head_kv/world_size heads
+        int tp_ws = 1;
+        if (model.params.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
+            // Get TP world size from the backend (initialized during model loading)
+            // This is backend-specific; for SYCL, the TP config was set when the TP buffer type was created
+#ifdef GGML_USE_SYCL
+            tp_ws = ggml_backend_sycl_get_tp_world_size();
+            if (tp_ws < 1) tp_ws = 1;
+            LLAMA_LOG_DEBUG("%s: TP world_size from SYCL backend: %d\n", __func__, tp_ws);
+#else
+            // For other backends, count GPU devices
+            for (auto * dev : model.devices) {
+                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    tp_ws++;
+                }
+            }
+            tp_ws = 0; // Reset
+            for (auto * dev : model.devices) {
+                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    tp_ws++;
+                }
+            }
+            if (tp_ws < 1) tp_ws = 1;
+#endif
+        }
+
         llama_memory_params params_mem = {
-            /*.type_k   =*/ params.type_k,
-            /*.type_v   =*/ params.type_v,
-            /*.swa_full =*/ params.swa_full,
+            /*.type_k       =*/ params.type_k,
+            /*.type_v       =*/ params.type_v,
+            /*.swa_full     =*/ params.swa_full,
+            /*.tp_world_size=*/ tp_ws,
+            /*.paged_layout =*/ params.paged_layout,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -249,6 +288,10 @@ llama_context::llama_context(
         backend_buft.clear();
         backend_ptrs.clear();
 
+        // Check if tensor parallelism will be enabled (need this info to choose buffer types)
+        const bool tp_enabled = (model.params.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL);
+
+        int gpu_idx = 0;
         for (auto & backend : backends) {
             auto * buft = ggml_backend_get_default_buffer_type(backend.get());
             auto backend_type = ggml_backend_dev_type(ggml_backend_get_device(backend.get()));
@@ -260,6 +303,19 @@ llama_context::llama_context(
                 if (host_buft) {
                     buft = host_buft;
                 }
+            }
+#ifdef GGML_USE_SYCL
+            else if (backend_type == GGML_BACKEND_DEVICE_TYPE_GPU && tp_enabled) {
+                // For TP mode, use host compute buffer type for all GPU backends.
+                // All devices run ALL operations (replicated non-sharded ops, sharded matmuls).
+                // Host memory allows the same graph tensors to be accessed by all devices.
+                // Weights are duplicated on each device for fast kernel access.
+                buft = ggml_backend_sycl_host_compute_buffer_type(gpu_idx);
+                LLAMA_LOG_DEBUG("%s: using host compute buffer type for GPU %d in TP mode\n", __func__, gpu_idx);
+            }
+#endif
+            if (backend_type == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                gpu_idx++;
             }
 
             backend_buft.push_back(buft);
@@ -279,10 +335,14 @@ llama_context::llama_context(
         // enabling pipeline parallelism in the scheduler increases memory usage, so it is only done when necessary
         bool pipeline_parallel =
             model.n_devices() > 1 &&
-            model.params.n_gpu_layers > (int) model.hparams.n_layer &&
-            model.params.split_mode == LLAMA_SPLIT_MODE_LAYER &&
             cparams.offload_kqv &&
-            !model.has_tensor_overrides();
+            !model.has_tensor_overrides() &&
+            (
+                (model.params.split_mode == LLAMA_SPLIT_MODE_LAYER &&
+                 model.params.n_gpu_layers > (int) model.hparams.n_layer)
+                ||
+                (model.params.split_mode == LLAMA_SPLIT_MODE_PIPELINE)
+            );
 
         // pipeline parallelism requires support for async compute and events in all devices
         if (pipeline_parallel) {
@@ -307,6 +367,41 @@ llama_context::llama_context(
 
         if (pipeline_parallel) {
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(sched.get()));
+        }
+
+        // Configure tensor parallelism if enabled
+        if (model.params.split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL) {
+            // Collect GPU backends (exclude CPU)
+            std::vector<ggml_backend_t> tp_backends_vec;
+            for (auto & backend : backends) {
+                auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backend.get()));
+                if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    tp_backends_vec.push_back(backend.get());
+                }
+            }
+
+            if (tp_backends_vec.size() >= 1) {
+                // In multi-process TP mode, each process only sees one backend but world_size is the MPI world size
+                // Query the backend for the true TP world size FIRST, then set the TP group
+#ifdef GGML_USE_SYCL
+                tp.world_size = ggml_backend_sycl_get_tp_world_size();
+                if (tp.world_size < 1) tp.world_size = (int)tp_backends_vec.size();
+#else
+                tp.world_size = (int)tp_backends_vec.size();
+#endif
+                // Set world_size BEFORE set_tp_group (for multi-process TP where n_backends=1 but world_size>1)
+                ggml_backend_sched_set_tp_world_size(sched.get(), tp.world_size);
+                ggml_backend_sched_set_tp_group(sched.get(), tp_backends_vec.data(), (int)tp_backends_vec.size());
+                tp.enabled = true;
+                tp.backends = tp_backends_vec;
+                LLAMA_LOG_INFO("%s: tensor parallelism enabled (world_size=%d, local_backends=%zu)\n",
+                              __func__, tp.world_size, tp_backends_vec.size());
+                // Note: For TP mode, compute buffers use SYCL host memory (set above when populating backend_buft)
+                // This allows all TP devices to access the same intermediate results without P2P
+            } else {
+                LLAMA_LOG_WARN("%s: tensor parallelism requires multiple GPUs, but only %zu GPU(s) found\n",
+                              __func__, tp_backends_vec.size());
+            }
         }
 
         llama_memory_context_ptr mctx;
@@ -2344,6 +2439,7 @@ llama_context_params llama_context_default_params() {
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
         /*.paged_attn                  =*/ false,
+        /*.paged_layout                =*/ false,
         /*.prefix_cache                =*/ false,
     };
 
@@ -2448,8 +2544,16 @@ const llama_model * llama_get_model(const llama_context * ctx) {
     return &ctx->get_model();
 }
 
-enum llama_pooling_type llama_pooling_type(const llama_context * ctx) {
-    return ctx->pooling_type();
+LLAMA_API enum llama_pooling_type llama_pooling_type(const struct llama_context * ctx_opaque) {
+    const llama_context * ctx = (const llama_context *)ctx_opaque;
+    return ctx->get_cparams().pooling_type;
+}
+
+LLAMA_API void llama_print_pipeline_stats(struct llama_context * ctx_opaque) {
+    llama_context * ctx = (llama_context *)ctx_opaque;
+    if (ctx && ctx->get_sched()) { // Access through public getter
+        ggml_backend_sched_print_pipeline_stats(ctx->get_sched());
+    }
 }
 
 void llama_attach_threadpool(

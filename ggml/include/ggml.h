@@ -376,6 +376,13 @@ extern "C" {
     GGML_API void        ggml_fp32_to_bf16_row_ref(const float *, ggml_bf16_t *, int64_t);
     GGML_API void        ggml_fp32_to_bf16_row(const float *, ggml_bf16_t *, int64_t);
 
+    // FP8 E4M3 (4-bit exponent, 3-bit mantissa, range: ±448, no inf)
+    typedef struct { uint8_t bits; } ggml_fp8_e4m3_t;
+    GGML_API ggml_fp8_e4m3_t ggml_fp32_to_fp8_e4m3(float);
+    GGML_API float           ggml_fp8_e4m3_to_fp32(ggml_fp8_e4m3_t);
+    GGML_API void            ggml_fp8_e4m3_to_fp32_row(const ggml_fp8_e4m3_t *, float *, int64_t);
+    GGML_API void            ggml_fp32_to_fp8_e4m3_row(const float *, ggml_fp8_e4m3_t *, int64_t);
+
     struct ggml_object;
     struct ggml_context;
     struct ggml_cgraph;
@@ -422,7 +429,8 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_4_8 = 37,
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
-        GGML_TYPE_COUNT   = 40,
+        GGML_TYPE_F8_E4M3 = 40, // FP8 E4M3 (4-bit exponent, 3-bit mantissa)
+        GGML_TYPE_COUNT   = 41,
     };
 
     // precision
@@ -508,6 +516,7 @@ extern "C" {
         GGML_OP_GET_ROWS,
         GGML_OP_GET_ROWS_BACK,
         GGML_OP_SET_ROWS,
+        GGML_OP_SET_ROWS_PAGED,  // block-addressed KV write for Paged Attention
         GGML_OP_DIAG,
         GGML_OP_DIAG_MASK_INF,
         GGML_OP_DIAG_MASK_ZERO,
@@ -566,6 +575,9 @@ extern "C" {
         GGML_OP_OPT_STEP_SGD,
 
         GGML_OP_GLU,
+
+        // Tensor Parallelism collective operations
+        GGML_OP_ALL_REDUCE_SUM,  // Sum partial results across TP device group
 
         GGML_OP_COUNT,
     };
@@ -643,6 +655,28 @@ extern "C" {
         size_t mem_size;   // bytes
         void * mem_buffer; // if NULL, memory will be allocated internally
         bool   no_alloc;   // don't allocate memory for the tensor data
+    };
+
+    //
+    // Tensor Parallelism Info
+    //
+    // Metadata for tensors that participate in tensor parallelism.
+    // This information is used by backends and schedulers to:
+    // - Know if a weight tensor is sharded across multiple devices
+    // - Track the sharding dimension and world size
+    // - Store original (global) dimensions before sharding
+    //
+    // Note: This struct is typically stored in backend-specific extra data.
+    // It's defined here for use by any backend implementing tensor parallelism.
+    //
+    struct ggml_tensor_tp_info {
+        bool    is_tp_sharded;              // True if tensor is sharded across TP group
+        int     tp_world_size;              // Number of devices in TP group (0 if not set)
+        int     tp_dim;                     // Dimension along which tensor is sharded:
+                                            //   0 = row-parallel (split input/reduction dim)
+                                            //   1 = column-parallel (split output dim)
+        int64_t global_ne[GGML_MAX_DIMS];   // Original full dimensions before sharding
+                                            // For sharded tensors, tensor->ne contains LOCAL dimensions
     };
 
     // n-dimensional tensor
@@ -1660,6 +1694,23 @@ extern "C" {
             struct ggml_tensor  * b,  // source
             struct ggml_tensor  * c); // row indices
 
+    // Block-addressed write for Paged Attention V2
+    // Writes src rows to dst at positions specified by indices,
+    // using block_table to map logical blocks to physical blocks
+    // dst: 4D tensor [D, block_size, n_heads, num_blocks]
+    // src: 2D tensor [D * n_heads, n_tokens]
+    // indices: 1D tensor [n_tokens] - logical positions
+    // block_table: 2D tensor [max_blocks, n_seqs] - block table
+    // op_params[0] = block_size, op_params[1] = seq_idx
+    GGML_API struct ggml_tensor * ggml_set_rows_paged(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * dst,         // [D, block_size, n_heads, num_blocks]
+            struct ggml_tensor  * src,         // [D * n_heads, n_tokens]
+            struct ggml_tensor  * indices,     // [n_tokens] logical positions
+            struct ggml_tensor  * block_table, // [max_blocks, n_seqs]
+            int32_t               block_size,
+            int32_t               seq_idx);
+
     GGML_API struct ggml_tensor * ggml_diag(
         struct ggml_context     * ctx,
         struct ggml_tensor      * a);
@@ -2358,6 +2409,13 @@ extern "C" {
             struct ggml_tensor * block_table,
             struct ggml_tensor * seq_lens);
 
+    // Mark flash attention to use paged KV cache layout
+    // When enabled, K/V are in 4D paged format: [D, block_size, n_heads, num_blocks]
+    // This enables V2 dispatch for efficient access to blocked memory
+    GGML_API void ggml_flash_attn_ext_set_paged_layout(
+            struct ggml_tensor * a,
+            bool use_paged_layout);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,
@@ -2592,6 +2650,19 @@ extern "C" {
         struct ggml_tensor *  a,
         struct ggml_tensor *  grad,
         struct ggml_tensor *  sgd_params); // alpha, weight decay
+
+    //
+    // Tensor Parallelism collective operations
+    //
+
+    // All-reduce sum across tensor parallel device group
+    // Creates a node that sums partial results from multiple devices
+    // The actual all-reduce is performed by the backend during graph execution
+    // Input: partial result tensor from local device
+    // Output: sum of partial results from all TP devices (replicated on each device)
+    GGML_API struct ggml_tensor * ggml_all_reduce_sum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a);
 
     //
     // automatic differentiation

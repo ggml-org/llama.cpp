@@ -24,4 +24,11 @@ void ggml_sycl_op_mul_mat_vec_q(
     const int64_t src1_ncols, const int64_t src1_padded_row_size,
     const dpct::queue_ptr &stream);
 
+// MoE-aware MUL_MAT_ID dispatch: GPU-side expert routing without host sync
+// This is compatible with SYCL command graph recording
+// Returns true if the operation was handled, false to fall back to host-side routing
+bool ggml_sycl_mul_mat_id_vec_q(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor *src0, const ggml_tensor *src1, const ggml_tensor *ids, ggml_tensor *dst);
+
 #endif // GGML_SYCL_MMVQ_HPP

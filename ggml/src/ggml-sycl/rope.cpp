@@ -404,40 +404,114 @@ inline void ggml_sycl_op_rope(ggml_backend_sycl_context & ctx, ggml_tensor *dst)
         GGML_ASSERT(n_dims == ne00/2);
     }
 
-    const int32_t * pos = (const int32_t *) dst->src[1]->data;
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+    // Use device-specific data pointers for TP support
+    const int device = ctx.device;
+    void * src0_d = ggml_sycl_get_data_ptr(dst->src[0], device);
+    void * dst_d  = ggml_sycl_get_data_ptr(dst, device);
+    const int32_t * pos = (const int32_t *) ggml_sycl_get_data_ptr(dst->src[1], device);
 
     const float * freq_factors = nullptr;
     if (dst->src[2] != nullptr) {
-        freq_factors = (const float *) dst->src[2]->data;
+        freq_factors = (const float *) ggml_sycl_get_data_ptr(dst->src[2], device);
     }
 
     rope_corr_dims corr_dims;
     ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims.v);
 
-    dpct::queue_ptr main_stream = ctx.stream();
-    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    // DEBUG: In multi-process TP mode, capture position values and Q values for layer 0
+    static int mp_rope_dbg = 0;
+    static int mp_rope_name_dbg = 0;
+    if (g_ggml_sycl_tp_debug && g_sycl_tp_config.is_multiprocess && mp_rope_name_dbg++ < 5) {
+        const char * name = dst->src[0]->name ? dst->src[0]->name : "(null)";
+        fprintf(stderr, "[RANK %d] RoPE tensor: name='%s' is_multiprocess=%d\n",
+                g_sycl_tp_config.rank, name, g_sycl_tp_config.is_multiprocess);
+    }
+    if (g_ggml_sycl_tp_debug && g_sycl_tp_config.is_multiprocess && mp_rope_dbg < 4) {
+        // Check if this is Qcur for layer 0 (Qcur-0)
+        const char * name = dst->src[0]->name;
+        if (name && strstr(name, "Qcur-0")) {
+            mp_rope_dbg++;
+            // Read position values
+            int32_t pos_sample[4];
+            main_stream->memcpy(pos_sample, pos, 4*sizeof(int32_t)).wait();
+            // Read Q values before RoPE
+            float q_sample[8];
+            main_stream->memcpy(q_sample, src0_d, 8*sizeof(float)).wait();
+            fprintf(stderr, "[RANK %d] Qcur-0 BEFORE_ROPE: [%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f] pos=[%d,%d]\n",
+                    g_sycl_tp_config.rank,
+                    q_sample[0], q_sample[1], q_sample[2], q_sample[3],
+                    q_sample[4], q_sample[5], q_sample[6], q_sample[7],
+                    pos_sample[0], pos_sample[1]);
+        }
+    }
+
+    // DEBUG: Log RoPE path for TP debugging
+    static int rope_path_dbg = 0;
+    if (g_ggml_sycl_tp_debug && g_sycl_tp_config.enabled && rope_path_dbg++ < 6) {
+        const char * name = dst->src[0]->name ? dst->src[0]->name : "";
+        if (strstr(name, "Qcur-0")) {
+            int32_t pos_sample[4] = {-1, -1, -1, -1};
+            main_stream->memcpy(pos_sample, pos, 4*sizeof(int32_t)).wait();
+            fprintf(stderr, "[RANK %d] RoPE path: is_neox=%d mode=%d type=%d pos[0..3]=[%d,%d,%d,%d]\n",
+                    g_sycl_tp_config.rank, is_neox, mode, dst->src[0]->type,
+                    pos_sample[0], pos_sample[1], pos_sample[2], pos_sample[3]);
+        }
+    }
 
     // compute
     if (is_neox) {
         GGML_SYCL_DEBUG("%s: neox path\n", __func__);
         if (dst->src[0]->type == GGML_TYPE_F32) {
-            rope_neox_sycl((const float *) dst->src[0]->data, (float *) dst->data, ne00, ne01, s01, s02, n_dims, nr,
+            rope_neox_sycl((const float *) src0_d, (float *) dst_d, ne00, ne01, s01, s02, n_dims, nr,
                            pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors, main_stream);
+
+            // DEBUG: Capture Q values AFTER RoPE for both modes
+            static int post_rope_dbg = 0;
+            if (g_ggml_sycl_tp_debug && g_sycl_tp_config.enabled && post_rope_dbg < 4) {
+                const char * name = dst->src[0]->name ? dst->src[0]->name : "";
+                if (strstr(name, "Qcur-0")) {
+                    post_rope_dbg++;
+                    float q_after[8];
+                    main_stream->memcpy(q_after, dst_d, 8*sizeof(float)).wait();
+                    fprintf(stderr, "[RANK %d] Q_AFTER_ROPE Qcur-0: [%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f]\n",
+                            g_sycl_tp_config.rank,
+                            q_after[0], q_after[1], q_after[2], q_after[3],
+                            q_after[4], q_after[5], q_after[6], q_after[7]);
+                }
+            }
         } else if (dst->src[0]->type == GGML_TYPE_F16) {
-            rope_neox_sycl((const sycl::half *) dst->src[0]->data, (sycl::half *) dst->data, ne00, ne01, s01, s02,
+            rope_neox_sycl((const sycl::half *) src0_d, (sycl::half *) dst_d, ne00, ne01, s01, s02,
                            n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors,
                            main_stream);
+
+            // DEBUG: Capture Q values AFTER RoPE for F16
+            static int post_rope_f16_dbg = 0;
+            if (g_ggml_sycl_tp_debug && g_sycl_tp_config.enabled && post_rope_f16_dbg < 4) {
+                const char * name = dst->src[0]->name ? dst->src[0]->name : "";
+                if (strstr(name, "Qcur-0")) {
+                    post_rope_f16_dbg++;
+                    sycl::half q_half[8];
+                    main_stream->memcpy(q_half, dst_d, 8*sizeof(sycl::half)).wait();
+                    fprintf(stderr, "[RANK %d] Q_AFTER_ROPE_F16 Qcur-0: [%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f]\n",
+                            g_sycl_tp_config.rank,
+                            (float)q_half[0], (float)q_half[1], (float)q_half[2], (float)q_half[3],
+                            (float)q_half[4], (float)q_half[5], (float)q_half[6], (float)q_half[7]);
+                }
+            }
         } else {
             GGML_ABORT("fatal error");
         }
     } else if (is_mrope && !is_vision) {
         GGML_SYCL_DEBUG("%s: mrope path\n", __func__);
         if (dst->src[0]->type == GGML_TYPE_F16) {
-            rope_multi_sycl((const sycl::half *)dst->src[0]->data, (sycl::half *)dst->data, ne00, ne01, ne02, s01,
+            rope_multi_sycl((const sycl::half *) src0_d, (sycl::half *) dst_d, ne00, ne01, ne02, s01,
                 s02, n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims,
                 freq_factors, sections, is_imrope, main_stream);
         } else if (dst->src[0]->type == GGML_TYPE_F32) {
-            rope_multi_sycl((const float *) dst->src[0]->data, (float *) dst->data, ne00, ne01, ne02, s01, s02, n_dims,
+            rope_multi_sycl((const float *) src0_d, (float *) dst_d, ne00, ne01, ne02, s01, s02, n_dims,
                              nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections,
                              is_imrope, main_stream);
         } else {
@@ -446,11 +520,11 @@ inline void ggml_sycl_op_rope(ggml_backend_sycl_context & ctx, ggml_tensor *dst)
     } else if (is_vision) {
         GGML_SYCL_DEBUG("%s: vision path\n", __func__);
         if (dst->src[0]->type == GGML_TYPE_F16) {
-            rope_vision_sycl((const sycl::half *) dst->src[0]->data, (sycl::half *) dst->data, ne00, ne01, ne02, s01,
+            rope_vision_sycl((const sycl::half *) src0_d, (sycl::half *) dst_d, ne00, ne01, ne02, s01,
                              s02, n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims,
                              freq_factors, sections, main_stream);
         } else if (dst->src[0]->type == GGML_TYPE_F32) {
-            rope_vision_sycl((const float *) dst->src[0]->data, (float *) dst->data, ne00, ne01, ne02, s01, s02, n_dims,
+            rope_vision_sycl((const float *) src0_d, (float *) dst_d, ne00, ne01, ne02, s01, s02, n_dims,
                              nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections,
                              main_stream);
         } else {
@@ -459,10 +533,25 @@ inline void ggml_sycl_op_rope(ggml_backend_sycl_context & ctx, ggml_tensor *dst)
     } else {
         GGML_SYCL_DEBUG("%s: norm path\n", __func__);
         if (dst->src[0]->type == GGML_TYPE_F32) {
-            rope_norm_sycl((const float *) dst->src[0]->data, (float *) dst->data, ne00, ne01, s01, s02, n_dims, nr,
+            rope_norm_sycl((const float *) src0_d, (float *) dst_d, ne00, ne01, s01, s02, n_dims, nr,
                            pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors, main_stream);
+
+            // DEBUG: Capture Q values AFTER RoPE for norm path (used by multi-process)
+            static int post_rope_norm_dbg = 0;
+            if (g_ggml_sycl_tp_debug && g_sycl_tp_config.enabled && post_rope_norm_dbg < 4) {
+                const char * name = dst->src[0]->name ? dst->src[0]->name : "";
+                if (strstr(name, "Qcur-0")) {
+                    post_rope_norm_dbg++;
+                    float q_after[8];
+                    main_stream->memcpy(q_after, dst_d, 8*sizeof(float)).wait();
+                    fprintf(stderr, "[RANK %d] Q_AFTER_ROPE_NORM Qcur-0: [%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f]\n",
+                            g_sycl_tp_config.rank,
+                            q_after[0], q_after[1], q_after[2], q_after[3],
+                            q_after[4], q_after[5], q_after[6], q_after[7]);
+                }
+            }
         } else if (dst->src[0]->type == GGML_TYPE_F16) {
-            rope_norm_sycl((const sycl::half *) dst->src[0]->data, (sycl::half *) dst->data, ne00, ne01, s01, s02,
+            rope_norm_sycl((const sycl::half *) src0_d, (sycl::half *) dst_d, ne00, ne01, s01, s02,
                            n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor, corr_dims, freq_factors,
                            main_stream);
         } else {

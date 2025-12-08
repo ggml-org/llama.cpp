@@ -1,11 +1,67 @@
 #include "set_rows.hpp"
 #include "cpy.hpp"
+#include "common.hpp"
 
 namespace utils {
 template<typename T>
 static constexpr bool is_arithmetic_v() {
     return std::is_arithmetic_v<T> || std::is_same_v<T, sycl::half> || std::is_same_v<T, sycl::ext::oneapi::bfloat16>;
 }
+}
+
+// FP8 E4M3 type for SYCL (matches ggml_fp8_e4m3_t)
+struct fp8_e4m3_t {
+    uint8_t bits;
+};
+
+// Device-side FP32 to FP8 E4M3 conversion
+// E4M3 format: 1 sign bit, 4 exponent bits, 3 mantissa bits
+// Bias: 7, range: ±448, no infinity
+inline fp8_e4m3_t fp32_to_fp8_e4m3(float x) {
+    fp8_e4m3_t result;
+    union { float f; uint32_t u; } bits;
+    bits.f = x;
+
+    uint32_t sign = (bits.u >> 31) & 0x1;
+    int32_t exp = ((bits.u >> 23) & 0xFF) - 127;  // unbias FP32 exponent
+    uint32_t mant = bits.u & 0x7FFFFF;
+
+    // Handle special cases
+    if (exp == 128) {  // NaN or Inf in FP32
+        result.bits = 0x7F | (sign << 7);  // E4M3 NaN (max value with sign)
+        return result;
+    }
+
+    if (exp < -9) {  // Too small, underflow to zero
+        result.bits = sign << 7;
+        return result;
+    }
+
+    // Rebias for E4M3 (bias = 7)
+    exp += 7;
+
+    if (exp <= 0) {  // Subnormal in E4M3
+        // Shift mantissa to create subnormal
+        mant = (mant | 0x800000) >> (1 - exp);
+        exp = 0;
+    } else if (exp >= 15) {  // Overflow to max value (no inf in E4M3)
+        result.bits = 0x7E | (sign << 7);  // Max normal value (exp=14, mant=7)
+        return result;
+    }
+
+    // Round to nearest even for mantissa (23 bits -> 3 bits)
+    uint32_t mant3 = (mant + 0x100000) >> 20;  // Round and shift
+    if (mant3 > 7) {
+        mant3 = 0;
+        exp++;
+        if (exp >= 15) {
+            result.bits = 0x7E | (sign << 7);  // Max normal value
+            return result;
+        }
+    }
+
+    result.bits = (sign << 7) | (exp << 3) | mant3;
+    return result;
 }
 
 template<typename TIn, typename TOut>
@@ -147,10 +203,122 @@ static void set_rows_sycl(
     );
 }
 
+// FP8 E4M3 specific kernel (can't use templated convert with non-SYCL type)
+template<typename TIdx>
+static void k_set_rows_fp8(
+        const char * __restrict__ src0, const TIdx * __restrict__ src1, fp8_e4m3_t * __restrict__ dst,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02,
+        const int64_t ne11, const int64_t ne12,
+        const size_t nb01, const size_t nb02, const size_t nb03,
+        const size_t nb10, const size_t nb11, const size_t nb12,
+        const size_t nb1, const size_t nb2, const size_t nb3,
+        const int64_t total_elements,
+        const sycl::nd_item<1> & item_ct1) {
+
+    const int64_t i = item_ct1.get_global_linear_id();
+    if (i >= total_elements) {
+        return;
+    }
+
+    const int64_t i03 = i / (ne00 * ne01 * ne02);
+    const int64_t i02 = (i - i03 * ne00 * ne01 * ne02) / (ne00 * ne01);
+    const int64_t i01 = (i - i03 * ne00 * ne01 * ne02 - i02 * ne00 * ne01) / ne00;
+    const int64_t i00 = i - i03 * ne00 * ne01 * ne02 - i02 * ne00 * ne01 - i01 * ne00;
+
+    const int64_t i12 = i03 % ne12;
+    const int64_t i11 = i02 % ne11;
+    const int64_t i10 = i01;
+
+    const int64_t dst_row = *(const TIdx *)((const char *)src1 + calculate_offset<3>({nb10, nb11, nb12}, {i10, i11, i12}));
+
+    const char * src0_row = src0 + calculate_offset<3>({nb01, nb02, nb03}, {i01, i02, i03});
+    const float * src_elem = (const float *)(src0_row + i00 * sizeof(float));
+
+    // Calculate destination offset (nb1/nb2/nb3 are in bytes)
+    fp8_e4m3_t * dst_row_ptr = (fp8_e4m3_t *)((char *)dst + dst_row*nb1 + i02*nb2 + i03*nb3);
+    dst_row_ptr[i00] = fp32_to_fp8_e4m3(*src_elem);
+}
+
+template<typename TIdx>
+static void set_rows_sycl_fp8(
+        const char * src0_d, const TIdx * src1_d, fp8_e4m3_t * dst_d,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+        const int64_t ne11, const int64_t ne12, const size_t nb01, const size_t nb02, const size_t nb03,
+        const size_t nb10, const size_t nb11, const size_t nb12,
+        const size_t nb1, const size_t nb2, const size_t nb3,
+        queue_ptr stream) {
+
+    const int64_t total_elements = ne00 * ne01 * ne02 * ne03;
+
+    constexpr int block_size = 64;
+    const int64_t grid_size = ceil_div(total_elements, block_size);
+
+    stream->parallel_for(
+        sycl::nd_range<1>(grid_size * block_size, block_size),
+        [=](sycl::nd_item<1> item_ct1) {
+            k_set_rows_fp8<TIdx>(
+                src0_d, src1_d, dst_d,
+                ne00, ne01, ne02,
+                ne11, ne12,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                total_elements,
+                item_ct1
+            );
+        }
+    );
+}
+
 template<typename TIn, typename TIdx>
 static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    const char * src0_d = (const char *)src0->data;
-    const TIdx * src1_d = (const TIdx *)src1->data;
+    // Use device-specific pointers for TP mode (KV cache is allocated per-device)
+    const int device = ctx.device;
+    const char * src0_d = (const char *)ggml_sycl_get_data_ptr(src0, device);
+    const TIdx * src1_d = (const TIdx *)ggml_sycl_get_data_ptr(src1, device);
+    char * dst_d = (char *)ggml_sycl_get_data_ptr(dst, device);
+
+    // Debug: Check set_rows in TP mode
+    static int set_rows_debug = 0;
+    if (g_ggml_sycl_tp_debug && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1 && set_rows_debug < 6) {
+        fprintf(stderr, "SYCL TP SET_ROWS[%d] dev=%d dst=%s type=%d\n",
+                set_rows_debug, device, dst->name ? dst->name : "(null)", (int)dst->type);
+        fprintf(stderr, "  src0=%p->%p (ne=[%ld,%ld,%ld,%ld])\n",
+                (void*)src0->data, (void*)src0_d, (long)src0->ne[0], (long)src0->ne[1], (long)src0->ne[2], (long)src0->ne[3]);
+        fprintf(stderr, "  dst=%p->%p (ne=[%ld,%ld,%ld,%ld])\n",
+                (void*)dst->data, (void*)dst_d, (long)dst->ne[0], (long)dst->ne[1], (long)dst->ne[2], (long)dst->ne[3]);
+
+        // Check if dst is a view and trace to parent
+        if (dst->view_src != nullptr) {
+            fprintf(stderr, "  dst is VIEW of parent=%s data=%p\n", dst->view_src->name, dst->view_src->data);
+            if (dst->view_src->extra) {
+                const auto * parent_extra = static_cast<const ggml_tensor_extra_gpu *>(dst->view_src->extra);
+                fprintf(stderr, "  parent extra: data_device[0]=%p data_device[1]=%p\n",
+                        parent_extra->data_device[0], parent_extra->data_device[1]);
+            } else {
+                fprintf(stderr, "  parent extra: NULL\n");
+            }
+        } else {
+            fprintf(stderr, "  dst is NOT a view (view_src=NULL)\n");
+        }
+        if (dst->extra) {
+            const auto * dst_extra = static_cast<const ggml_tensor_extra_gpu *>(dst->extra);
+            fprintf(stderr, "  dst extra: data_device[0]=%p data_device[1]=%p\n",
+                    dst_extra->data_device[0], dst_extra->data_device[1]);
+        } else {
+            fprintf(stderr, "  dst extra: NULL\n");
+        }
+
+        // Check src0 first values
+        float * check_buf = (float *)sycl::malloc_host(32 * sizeof(float), *ctx.stream());
+        ctx.stream()->memcpy(check_buf, src0_d, 32 * sizeof(float)).wait();
+        int zeros = 0;
+        for (int i = 0; i < 32; i++) if (check_buf[i] == 0.0f) zeros++;
+        fprintf(stderr, "  src0 data[0..4]=%.4f,%.4f,%.4f,%.4f,%.4f zeros=%d/32\n",
+                check_buf[0], check_buf[1], check_buf[2], check_buf[3], check_buf[4], zeros);
+        sycl::free(check_buf, *ctx.stream());
+        set_rows_debug++;
+    }
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -158,7 +326,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
     switch (dst->type) {
         case GGML_TYPE_F32:
             set_rows_sycl<TIn, TIdx, float>(
-                src0_d, src1_d, (char *)dst->data,
+                src0_d, src1_d, dst_d,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
                 nb01, nb02, nb03,
@@ -171,7 +339,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
         case GGML_TYPE_F16:
             dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
             set_rows_sycl<TIn, TIdx, sycl::half>(
-                src0_d, src1_d, (char *)dst->data,
+                src0_d, src1_d, dst_d,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
                 nb01, nb02, nb03,
@@ -183,7 +351,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             break;
         case GGML_TYPE_BF16:
             set_rows_sycl<TIn, TIdx, sycl::ext::oneapi::bfloat16>(
-                src0_d, src1_d, (char *)dst->data,
+                src0_d, src1_d, dst_d,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
                 nb01, nb02, nb03,
@@ -193,23 +361,34 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
                 stream
             );
             break;
+        case GGML_TYPE_F8_E4M3:
+            set_rows_sycl_fp8<TIdx>(
+                src0_d, src1_d, (fp8_e4m3_t *)dst_d,
+                ne00, ne01, ne02, ne03,
+                ne11, ne12,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                stream
+            );
+            break;
         case GGML_TYPE_Q8_0:
-            set_rows_sycl_q<TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(src0_d, src1_d, (block_q8_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(src0_d, src1_d, (block_q8_0 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q5_1:
-            set_rows_sycl_q<TIdx, block_q5_1, QK5_1, cpy_blck_f32_q5_1>(src0_d, src1_d, (block_q5_1 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<TIdx, block_q5_1, QK5_1, cpy_blck_f32_q5_1>(src0_d, src1_d, (block_q5_1 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q5_0:
-            set_rows_sycl_q<TIdx, block_q5_0, QK5_0, cpy_blck_f32_q5_0>(src0_d, src1_d, (block_q5_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<TIdx, block_q5_0, QK5_0, cpy_blck_f32_q5_0>(src0_d, src1_d, (block_q5_0 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q4_1:
-            set_rows_sycl_q<TIdx, block_q4_1, QK4_1, cpy_blck_f32_q4_1>(src0_d, src1_d, (block_q4_1 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<TIdx, block_q4_1, QK4_1, cpy_blck_f32_q4_1>(src0_d, src1_d, (block_q4_1 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q4_0:
-            set_rows_sycl_q<TIdx, block_q4_0, QK4_0, cpy_blck_f32_q4_0>(src0_d, src1_d, (block_q4_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<TIdx, block_q4_0, QK4_0, cpy_blck_f32_q4_0>(src0_d, src1_d, (block_q4_0 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_IQ4_NL:
-            set_rows_sycl_q<TIdx, block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>(src0_d, src1_d, (block_iq4_nl *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            set_rows_sycl_q<TIdx, block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>(src0_d, src1_d, (block_iq4_nl *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
 
         default:

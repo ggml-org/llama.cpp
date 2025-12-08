@@ -1310,10 +1310,11 @@ vec_dot_mxfp4_q8_1(const void *__restrict__ vbq,
 
     const int * q8 = (const int *) bq8_1->qs + iqs;
 
-    // kvalues_mxfp4 is int8_t but get_int_from_table_16 expects uint8_t
-    // Values are: {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
-    // Treating as uint8_t is fine since we're just indexing by nibble value 0-15
-    const uint8_t * values = (const uint8_t *) kvalues_mxfp4;
+    // Inline table to ensure it's accessible from device code
+    // kvalues_mxfp4 = {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
+    // Cast to uint8_t: {0, 1, 2, 3, 4, 6, 8, 12, 0, 255, 254, 253, 252, 250, 248, 244}
+    static constexpr uint8_t local_kvalues[16] = {0, 1, 2, 3, 4, 6, 8, 12, 0, 255, 254, 253, 252, 250, 248, 244};
+    const uint8_t * values = local_kvalues;
 
     int sumi = 0;
 
@@ -1328,6 +1329,8 @@ vec_dot_mxfp4_q8_1(const void *__restrict__ vbq,
         sumi = dpct::dp4a(v2, q8[l + 4], sumi);
     }
 
+    // sycl_e8m0_to_fp32_half already includes 0.5f factor (via e-1 in exponent)
+    // This matches CUDA's ggml_cuda_e8m0_to_fp32() * 0.5f
     const float d = sycl_e8m0_to_fp32_half(bq4->e) * bq8_1->ds[0];
     return d * sumi;
 }

@@ -615,6 +615,74 @@ struct llm_graph_context {
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 
+    // Check if tensor parallelism is enabled for this context
+    bool tp_enabled() const;
+
+    // Check if a weight tensor is row-parallel (requires all-reduce after matmul)
+    // Row-parallel layers: attn_output (wo), ffn_down
+    bool is_row_parallel_weight(const ggml_tensor * w) const;
+
+    // Insert all-reduce if TP is enabled and weight is row-parallel
+    // Returns the input tensor unchanged if no all-reduce needed
+    ggml_tensor * maybe_all_reduce(ggml_tensor * cur, const ggml_tensor * w) const;
+
+    // Get TP world size (number of devices in tensor parallel group)
+    int tp_world_size() const;
+
+    // Get TP rank for this context (which device shard we're building for)
+    int tp_rank() const;
+
+    //
+    // TP Dimension Helpers - return LOCAL dimensions accounting for sharding
+    //
+    // In TP mode, attention heads are distributed across devices:
+    //   - n_head / world_size query heads per device
+    //   - n_head_kv / world_size KV heads per device
+    //   - head_dim (n_embd_head_k, n_embd_head_v) unchanged
+    //
+
+    // Number of LOCAL query heads (n_head / world_size in TP mode)
+    int64_t tp_n_head() const {
+        if (!tp_enabled()) return n_head;
+        return n_head / tp_world_size();
+    }
+
+    // Number of LOCAL KV heads (n_head_kv / world_size in TP mode)
+    int64_t tp_n_head_kv() const {
+        if (!tp_enabled()) return n_head_kv;
+        return n_head_kv / tp_world_size();
+    }
+
+    // Head dimension for keys - unchanged by TP
+    int64_t tp_n_embd_head_k() const {
+        return n_embd_head_k;
+    }
+
+    // Head dimension for values - unchanged by TP
+    int64_t tp_n_embd_head_v() const {
+        return n_embd_head_v;
+    }
+
+    // Total key embedding for LOCAL heads: tp_n_head_kv() * n_embd_head_k
+    int64_t tp_n_embd_k_gqa() const {
+        return tp_n_head_kv() * n_embd_head_k;
+    }
+
+    // Total value embedding for LOCAL heads: tp_n_head_kv() * n_embd_head_v
+    int64_t tp_n_embd_v_gqa() const {
+        return tp_n_head_kv() * n_embd_head_v;
+    }
+
+    // Check if a weight tensor is column-parallel (Q, K, V, gate, up)
+    // Column-parallel: output dimension (ne[1]) is sharded
+    bool is_column_parallel_weight(const ggml_tensor * w) const;
+
+    // Get the local (sharded) dimensions for a weight tensor
+    // Column-parallel (Q, K, V, gate, up): ne[1] is divided by world_size
+    // Row-parallel (wo, down): ne[0] is divided by world_size
+    // Returns original dimensions if not TP or not a sharded weight
+    void tp_get_weight_dims(const ggml_tensor * w, int64_t * local_ne0, int64_t * local_ne1) const;
+
     //
     // common
     //

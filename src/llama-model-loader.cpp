@@ -1,6 +1,11 @@
 #include "llama-model-loader.h"
 
 #include "ggml.h"
+#include "gguf.h"
+
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"
+#endif
 
 #include <array>
 #include <cinttypes>
@@ -759,7 +764,7 @@ struct ggml_tensor * llama_model_loader::require_tensor_meta(const std::string &
     return tensor;
 }
 
-const struct ggml_tensor * llama_model_loader::check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required) const {
+const struct ggml_tensor * llama_model_loader::check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required, int flags) const {
     const struct ggml_tensor * cur = get_tensor_meta(name.c_str());
 
     if (cur == NULL) {
@@ -773,8 +778,22 @@ const struct ggml_tensor * llama_model_loader::check_tensor_dims(const std::stri
         bool is_ok = true;
         for (size_t i = 0; i < GGML_MAX_DIMS; ++i) {
             if ((i < ne.size() && ne[i] != cur->ne[i]) || (i >= ne.size() && cur->ne[i] != 1)) {
-                is_ok = false;
-                break;
+                // For TP-sharded tensors, allow dimensions that are factors of the file dimensions
+                bool is_tp_sharded = false;
+                if (i < ne.size()) {
+                    // Column-parallel: output dimension (ne[1]) is sharded
+                    if ((flags & TENSOR_TP_COL_PARALLEL) && i == 1 && cur->ne[i] % ne[i] == 0) {
+                        is_tp_sharded = true;
+                    }
+                    // Row-parallel: input dimension (ne[0]) is sharded
+                    if ((flags & TENSOR_TP_ROW_PARALLEL) && i == 0 && cur->ne[i] % ne[i] == 0) {
+                        is_tp_sharded = true;
+                    }
+                }
+                if (!is_tp_sharded) {
+                    is_ok = false;
+                    break;
+                }
             }
         }
         if (!is_ok) {
@@ -791,15 +810,24 @@ const struct ggml_tensor * llama_model_loader::check_tensor_dims(const std::stri
 
 struct ggml_tensor * llama_model_loader::create_tensor(struct ggml_context * ctx, const std::string & name, const std::initializer_list<int64_t> & ne, int flags) {
     LLAMA_LOG_DEBUG("%s: loading tensor %s\n", __func__, name.c_str());
-    const struct ggml_tensor * cur = check_tensor_dims(name, ne, !(flags & TENSOR_NOT_REQUIRED));
+    const struct ggml_tensor * cur = check_tensor_dims(name, ne, !(flags & TENSOR_NOT_REQUIRED), flags);
 
     if (cur == NULL) {
         return NULL;
     }
 
     bool duplicated = flags & TENSOR_DUPLICATED;
+    bool is_tp_sharded = (flags & TENSOR_TP_COL_PARALLEL) || (flags & TENSOR_TP_ROW_PARALLEL);
 
-    struct ggml_tensor * tensor = ggml_dup_tensor(ctx, cur);
+    struct ggml_tensor * tensor;
+    if (is_tp_sharded) {
+        // For TP-sharded tensors, create tensor with requested (sharded) dimensions
+        std::vector<int64_t> ne_vec(ne);
+        tensor = ggml_new_tensor(ctx, cur->type, ne_vec.size(), ne_vec.data());
+    } else {
+        // Normal case: create tensor with same dimensions as GGUF file
+        tensor = ggml_dup_tensor(ctx, cur);
+    }
     ggml_set_name(tensor, ggml_get_name(cur));
 
     if (duplicated) {
@@ -919,6 +947,143 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     }
 }
 
+#ifdef GGML_USE_SYCL
+// Check if tensor is row-parallel (needs strided loading)
+static bool is_row_parallel_tensor(const char * tensor_name) {
+    if (!tensor_name) return false;
+    return (strstr(tensor_name, "attn_output.weight") != nullptr ||
+            strstr(tensor_name, "ffn_down.weight") != nullptr);
+}
+
+// Perform strided copy for row-parallel tensor loading
+// Copies the rank's portion from memory-mapped data with proper striding
+static void copy_row_parallel_data(
+    uint8_t * dst,
+    const uint8_t * src,
+    const struct ggml_tensor * tensor,
+    const struct gguf_context * gguf_ctx) {
+
+    int world_size = ggml_backend_sycl_get_tp_world_size();
+    int rank = ggml_backend_sycl_get_tp_rank();
+
+    // Get tensor info from GGUF to determine original dimensions
+    const int tensor_idx = gguf_find_tensor(gguf_ctx, ggml_get_name(tensor));
+    if (tensor_idx < 0) {
+        // Tensor not found, shouldn't happen
+        LLAMA_LOG_ERROR("[TP] Row-parallel tensor '%s' not found in GGUF\n", ggml_get_name(tensor));
+        return;
+    }
+
+    ggml_type tensor_type = gguf_get_tensor_type(gguf_ctx, tensor_idx);
+
+    // Current (sharded) dimensions
+    int64_t ne0 = tensor->ne[0];  // Sharded input dimension
+    int64_t ne1 = tensor->ne[1];  // Full output dimension
+
+    // Original dimensions
+    int64_t orig_ne0 = ne0 * world_size;
+
+    // For quantized types, calculate in blocks
+    int64_t block_size = ggml_blck_size(tensor_type);
+    size_t type_size = ggml_type_size(tensor_type);
+
+    // Row size in bytes (original full row)
+    size_t orig_row_size = ggml_row_size(tensor_type, orig_ne0);
+
+    // Sharded row size
+    size_t shard_row_size = ggml_row_size(tensor_type, ne0);
+
+    // Offset within each row for this rank's shard
+    size_t row_offset = rank * shard_row_size;
+
+    LLAMA_LOG_INFO("[TP LOAD] Row-parallel strided copy: tensor='%s' rank=%d ne0=%lld orig_ne0=%lld row_offset=%zu orig_row_size=%zu shard_row_size=%zu\n",
+                   ggml_get_name(tensor), rank, (long long)ne0, (long long)orig_ne0, row_offset, orig_row_size, shard_row_size);
+
+    // Copy each row's shard
+    for (int64_t row = 0; row < ne1; row++) {
+        const uint8_t * src_row = src + row * orig_row_size + row_offset;
+        uint8_t * dst_row = dst + row * shard_row_size;
+        memcpy(dst_row, src_row, shard_row_size);
+    }
+
+    // Debug: print source and destination bytes for first two columns
+    if (ne1 > 1 && strstr(ggml_get_name(tensor), "blk.0.attn_output")) {
+        // Column 0 (row 0 in loop)
+        const uint8_t * src_col0 = src + 0 * orig_row_size + row_offset;
+        const uint8_t * src_col1 = src + 1 * orig_row_size + row_offset;
+        LLAMA_LOG_INFO("[TP LOAD DEBUG] tensor='%s' rank=%d\n", ggml_get_name(tensor), rank);
+        LLAMA_LOG_INFO("[TP LOAD DEBUG]   src_col0 @ offset=%zu: [%02x,%02x,%02x,%02x,...]\n",
+                       (size_t)(0 * orig_row_size + row_offset), src_col0[0], src_col0[1], src_col0[2], src_col0[3]);
+        LLAMA_LOG_INFO("[TP LOAD DEBUG]   src_col1 @ offset=%zu: [%02x,%02x,%02x,%02x,...]\n",
+                       (size_t)(1 * orig_row_size + row_offset), src_col1[0], src_col1[1], src_col1[2], src_col1[3]);
+        LLAMA_LOG_INFO("[TP LOAD DEBUG]   dst_col0: [%02x,%02x,%02x,%02x,...]\n",
+                       dst[0], dst[1], dst[2], dst[3]);
+        LLAMA_LOG_INFO("[TP LOAD DEBUG]   dst_col1 @ offset=%zu: [%02x,%02x,%02x,%02x,...]\n",
+                       shard_row_size, dst[shard_row_size], dst[shard_row_size+1], dst[shard_row_size+2], dst[shard_row_size+3]);
+    }
+}
+
+// Helper function to get TP data offset for multi-process TP mode
+// Returns the byte offset within the tensor for this rank's shard
+// This uses GGUF metadata to get original tensor dimensions
+static size_t get_tp_data_offset_from_gguf(
+    const struct gguf_context * gguf_ctx,
+    const struct ggml_tensor * tensor) {
+
+    if (!ggml_backend_sycl_is_multiprocess_tp()) {
+        return 0;
+    }
+
+    // Find tensor in GGUF to get original dimensions
+    const int tensor_idx = gguf_find_tensor(gguf_ctx, ggml_get_name(tensor));
+    if (tensor_idx < 0) {
+        return 0;  // Tensor not found, no offset
+    }
+
+    // Get original tensor size from GGUF
+    size_t orig_size = gguf_get_tensor_size(gguf_ctx, tensor_idx);
+    ggml_type tensor_type = gguf_get_tensor_type(gguf_ctx, tensor_idx);
+
+    // Infer original dimensions from size
+    // For 2D tensors: orig_size = ggml_row_size(type, ne0) * ne1
+    // We need to reverse-engineer ne0 and ne1 from the current tensor
+    // knowing that only one dimension is sharded
+
+    // Get current (possibly sharded) dimensions
+    int64_t cur_ne0 = tensor->ne[0];
+    int64_t cur_ne1 = tensor->ne[1];
+    size_t cur_size = ggml_nbytes(tensor);
+
+    // Calculate original dimensions based on which dimension was sharded
+    int world_size = ggml_backend_sycl_get_tp_world_size();
+    int64_t orig_ne[4] = {cur_ne0, cur_ne1, tensor->ne[2], tensor->ne[3]};
+
+    // If current size * world_size roughly equals original size,
+    // we can determine the original dimensions
+    if (world_size > 1 && cur_size > 0) {
+        // Check if ne[1] was sharded (column-parallel)
+        size_t col_parallel_orig_size = ggml_row_size(tensor_type, cur_ne0) * cur_ne1 * world_size;
+        if (col_parallel_orig_size == orig_size) {
+            // Column-parallel: ne[1] was divided
+            orig_ne[1] = cur_ne1 * world_size;
+        }
+        // Check if ne[0] was sharded (row-parallel)
+        else {
+            size_t row_parallel_orig_size = ggml_row_size(tensor_type, cur_ne0 * world_size) * cur_ne1;
+            if (row_parallel_orig_size == orig_size) {
+                // Row-parallel: ne[0] was divided
+                orig_ne[0] = cur_ne0 * world_size;
+            }
+        }
+    }
+
+    return ggml_backend_sycl_get_tp_data_offset(
+        ggml_get_name(tensor),
+        orig_ne,
+        tensor_type);
+}
+#endif
+
 bool llama_model_loader::load_all_data(
         struct ggml_context * ctx,
         llama_buf_map & bufs,
@@ -1034,38 +1199,117 @@ bool llama_model_loader::load_all_data(
 
         size_t n_size = ggml_nbytes(cur);
 
-        if (use_mmap) {
+        // Calculate TP data offset for multi-process tensor parallelism
+        // This allows each rank to read only its portion of sharded weights
+        size_t tp_offset = 0;
+        bool needs_row_parallel_copy = false;
+#ifdef GGML_USE_SYCL
+        if (ggml_backend_sycl_is_multiprocess_tp() && ggml_backend_sycl_get_tp_world_size() > 1) {
+            if (is_row_parallel_tensor(ggml_get_name(cur))) {
+                // Row-parallel tensors need strided copy, not simple offset
+                needs_row_parallel_copy = true;
+            } else {
+                tp_offset = get_tp_data_offset_from_gguf(meta.get(), cur);
+                if (tp_offset > 0) {
+                    LLAMA_LOG_INFO("[TP LOAD] tensor '%s' rank=%d offset=%zu (+%zu)\n",
+                                  ggml_get_name(cur), ggml_backend_sycl_get_tp_rank(),
+                                  weight->offs + tp_offset, tp_offset);
+                }
+            }
+        }
+#endif
+        size_t read_offs = weight->offs + tp_offset;
+
+        // For row-parallel tensors in TP mode, skip mmap and use file-based loading
+        // because mmap is read-only and we need to do strided copies
+        bool use_mmap_for_this_tensor = use_mmap;
+#ifdef GGML_USE_SYCL
+        if (needs_row_parallel_copy && use_mmap) {
+            use_mmap_for_this_tensor = false;
+            LLAMA_LOG_DEBUG("[TP LOAD] Skipping mmap for row-parallel tensor '%s'\n", ggml_get_name(cur));
+        }
+#endif
+
+        if (use_mmap_for_this_tensor) {
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
             if (bufs.count(weight->idx)) {
                 buf_mmap = bufs.at(weight->idx);
             }
-            uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
+            uint8_t * data = (uint8_t *) mapping->addr() + read_offs;
 
-            if (check_tensors) {
-                validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {
-                    return std::make_pair(cur, ggml_validate_row_data(cur->type, data, n_size));
-                }));
-            }
-
-            GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
-            if (buf_mmap && cur->data == nullptr) {
-                ggml_backend_tensor_alloc(buf_mmap, cur, data);
-                if (lmlocks) {
-                    const auto & lmlock = lmlocks->at(weight->idx);
-                    lmlock->grow_to(weight->offs + n_size);
+            {
+                if (check_tensors) {
+                    validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {
+                        return std::make_pair(cur, ggml_validate_row_data(cur->type, data, n_size));
+                    }));
                 }
 
-                auto & mmap_used = mmaps_used[weight->idx];
-                mmap_used.first  = std::min(mmap_used.first,  weight->offs);
-                mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
-            } else {
-                ggml_backend_tensor_set(cur, data, 0, n_size);
+                GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
+                if (buf_mmap && cur->data == nullptr) {
+                    ggml_backend_tensor_alloc(buf_mmap, cur, data);
+                    if (lmlocks) {
+                        const auto & lmlock = lmlocks->at(weight->idx);
+                        lmlock->grow_to(read_offs + n_size);
+                    }
+
+                    auto & mmap_used = mmaps_used[weight->idx];
+                    mmap_used.first  = std::min(mmap_used.first,  read_offs);
+                    mmap_used.second = std::max(mmap_used.second, read_offs + n_size);
+                } else {
+                    ggml_backend_tensor_set(cur, data, 0, n_size);
+                }
             }
         } else {
             const auto & file = files.at(weight->idx);
+#ifdef GGML_USE_SYCL
+            if (needs_row_parallel_copy) {
+                // Row-parallel: need strided file reads
+                int world_size = ggml_backend_sycl_get_tp_world_size();
+                int rank = ggml_backend_sycl_get_tp_rank();
+
+                int64_t ne0 = cur->ne[0];  // Sharded
+                int64_t ne1 = cur->ne[1];  // Full
+
+                ggml_type tensor_type = cur->type;
+                size_t orig_row_size = ggml_row_size(tensor_type, ne0 * world_size);
+                size_t shard_row_size = ggml_row_size(tensor_type, ne0);
+                size_t row_offset = rank * shard_row_size;
+
+                LLAMA_LOG_INFO("[TP LOAD] Row-parallel file read: tensor='%s' rank=%d ne0=%lld row_offset=%zu\n",
+                              ggml_get_name(cur), rank, (long long)ne0, row_offset);
+
+                // Read each row's shard
+                read_buf.resize(n_size);
+                for (int64_t row = 0; row < ne1; row++) {
+                    size_t file_pos = weight->offs + row * orig_row_size + row_offset;
+                    file->seek(file_pos, SEEK_SET);
+                    file->read_raw(read_buf.data() + row * shard_row_size, shard_row_size);
+                }
+
+                // Debug: print first bytes of first two columns for blk.0.attn_output
+                if (strstr(ggml_get_name(cur), "blk.0.attn_output")) {
+                    LLAMA_LOG_INFO("[TP LOAD DEBUG FILE] tensor='%s' rank=%d col0=[%02x,%02x,%02x,%02x] col1=[%02x,%02x,%02x,%02x]\n",
+                                   ggml_get_name(cur), rank,
+                                   read_buf[0], read_buf[1], read_buf[2], read_buf[3],
+                                   read_buf[shard_row_size], read_buf[shard_row_size+1],
+                                   read_buf[shard_row_size+2], read_buf[shard_row_size+3]);
+                }
+
+                bool is_host_buf = ggml_backend_buffer_is_host(cur->buffer);
+                if (strstr(ggml_get_name(cur), "blk.0.attn_output")) {
+                    LLAMA_LOG_INFO("[TP LOAD DEBUG] tensor='%s' rank=%d is_host=%d buffer=%p data=%p n_size=%zu\n",
+                                   ggml_get_name(cur), rank, is_host_buf, (void*)cur->buffer, cur->data, n_size);
+                }
+                if (is_host_buf) {
+                    memcpy(cur->data, read_buf.data(), n_size);
+                } else {
+                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+                }
+            } else
+#endif
             if (ggml_backend_buffer_is_host(cur->buffer)) {
-                file->seek(weight->offs, SEEK_SET);
+                file->seek(read_offs, SEEK_SET);
                 file->read_raw(cur->data, n_size);
                 if (check_tensors) {
                     validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
@@ -1075,7 +1319,7 @@ bool llama_model_loader::load_all_data(
             } else {
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
                 if (upload_backend) {
-                    file->seek(weight->offs, SEEK_SET);
+                    file->seek(read_offs, SEEK_SET);
 
                     size_t bytes_read = 0;
 
@@ -1093,7 +1337,7 @@ bool llama_model_loader::load_all_data(
                     }
                 } else {
                     read_buf.resize(n_size);
-                    file->seek(weight->offs, SEEK_SET);
+                    file->seek(read_offs, SEEK_SET);
                     file->read_raw(read_buf.data(), n_size);
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
                     if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {

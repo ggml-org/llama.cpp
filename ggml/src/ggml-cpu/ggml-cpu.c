@@ -1815,6 +1815,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_set_rows(params, tensor);
             } break;
+        case GGML_OP_SET_ROWS_PAGED:
+            {
+                // Paged attention is GPU-only
+                GGML_ABORT("GGML_OP_SET_ROWS_PAGED is not supported on CPU");
+            } break;
         case GGML_OP_DIAG:
             {
                 ggml_compute_forward_diag(params, tensor);
@@ -2032,6 +2037,13 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_OPT_STEP_SGD:
             {
                 ggml_compute_forward_opt_step_sgd(params, tensor);
+            }
+            break;
+        case GGML_OP_ALL_REDUCE_SUM:
+            {
+                // For single-device CPU execution, all-reduce is a no-op copy
+                // The actual multi-device all-reduce is handled by the scheduler/backend
+                ggml_compute_forward_dup(params, tensor);
             }
             break;
         case GGML_OP_NONE:
@@ -2255,6 +2267,11 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 //n_tasks = n_threads;
                 n_tasks = 1;
             } break;
+        case GGML_OP_SET_ROWS_PAGED:
+            {
+                // GPU-only operation
+                n_tasks = 1;
+            } break;
         case GGML_OP_SCALE:
         case GGML_OP_SET:
         case GGML_OP_RESHAPE:
@@ -2370,6 +2387,11 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_OPT_STEP_SGD:
             {
                 n_tasks = n_threads;
+            } break;
+        case GGML_OP_ALL_REDUCE_SUM:
+            {
+                // Single-threaded copy for all-reduce fallback
+                n_tasks = 1;
             } break;
         case GGML_OP_NONE:
             {

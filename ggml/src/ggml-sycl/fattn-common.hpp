@@ -111,10 +111,16 @@ struct fattn_params {
     // Block layout: K/V stored as [n_embd, block_size, n_blocks] instead of [n_embd, n_kv]
     // Block table: [batch_size, max_blocks_per_seq] maps logical blocks to physical blocks
     bool use_paged_attn;              // Enable paged attention mode
+    bool use_paged_layout;            // True when KV tensors are in 4D paged layout [D, block_size, n_heads, num_blocks]
     int32_t block_size;               // Number of tokens per block (typically 16, matches XMX tile size)
     int32_t max_blocks_per_seq;       // Maximum number of blocks per sequence
     const int32_t * block_table;      // [batch_size, max_blocks_per_seq] - maps logical->physical blocks
     const int32_t * seq_lens;         // [batch_size] - number of valid KV tokens per sequence
+
+    // FP8 KV cache support (2x memory savings with on-the-fly dequantization)
+    // When kv_is_fp8 is true, K and V are stored as FP8 E4M3 (1 byte per element) instead of FP16
+    // The kernel will dequantize to FP16 during K/V loading
+    bool kv_is_fp8;                   // True when K/V cache uses FP8 E4M3 format
 };
 
 #endif // GGML_SYCL_FATTN_COMMON_HPP

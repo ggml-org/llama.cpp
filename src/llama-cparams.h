@@ -35,6 +35,7 @@ struct llama_cparams {
     bool op_offload;
     bool kv_unified;
     bool paged_attn;    // PagedAttention: use block-based K/V addressing (vLLM-style)
+    bool paged_layout;  // Paged KV layout: 4D format [D, block_size, n_heads, num_blocks] for V2 dispatch
     bool prefix_cache;  // Prefix caching: share KV blocks with identical content (requires paged_attn)
 
     enum llama_pooling_type pooling_type;

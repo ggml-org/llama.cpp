@@ -342,6 +342,7 @@ struct common_params {
     enum llama_pooling_type      pooling_type      = LLAMA_POOLING_TYPE_UNSPECIFIED; // pooling type for embeddings
     enum llama_attention_type    attention_type    = LLAMA_ATTENTION_TYPE_UNSPECIFIED; // attention type for embeddings
     enum llama_flash_attn_type   flash_attn_type   = LLAMA_FLASH_ATTN_TYPE_AUTO; // whether to use Flash Attention
+    bool paged_layout = false; // use paged KV cache layout for long sequences (enables Paged Attention V2)
 
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;

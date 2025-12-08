@@ -1339,6 +1339,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.swa_full          = params.swa_full;
     cparams.kv_unified        = params.kv_unified;
     cparams.paged_attn        = params.paged_attn;
+    cparams.paged_layout      = params.paged_layout;
     cparams.prefix_cache      = params.prefix_cache;
 
     cparams.type_k = params.cache_type_k;

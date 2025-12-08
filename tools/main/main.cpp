@@ -5,6 +5,8 @@
 #include "sampling.h"
 #include "llama.h"
 #include "chat.h"
+#include "../src/llama-context.h" // For full definition of llama_context C++ class
+#include "ggml-backend.h"     // For ggml_backend_sched_t and API functions
 
 #include <cstdio>
 #include <cstring>
@@ -994,6 +996,12 @@ int main(int argc, char ** argv) {
 
     LOG("\n\n");
     common_perf_print(ctx, smpl);
+
+    // Check if pipeline profiling is enabled and print stats
+    ggml_backend_sched_t sched = ctx->get_sched(); // Use the class method
+    if (sched && ggml_backend_sched_is_profiling_enabled(sched)) {
+        ggml_backend_sched_print_pipeline_stats(sched);
+    }
 
     common_sampler_free(smpl);
 

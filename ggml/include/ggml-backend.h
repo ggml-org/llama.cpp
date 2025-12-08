@@ -198,6 +198,8 @@ extern "C" {
 
     // Split buffer type for tensor parallelism
     typedef ggml_backend_buffer_type_t   (*ggml_backend_split_buffer_type_t)(int main_device, const float * tensor_split);
+    // Tensor parallel buffer type (Megatron-style column/row parallel with all-reduce)
+    typedef ggml_backend_buffer_type_t   (*ggml_backend_tp_buffer_type_t)(int n_devices, const int * device_ids);
     // Set the number of threads for the backend
     typedef void                         (*ggml_backend_set_n_threads_t)(ggml_backend_t backend, int n_threads);
     // Get additional buffer types provided by the device (returns a NULL-terminated array)
@@ -338,6 +340,40 @@ extern "C" {
 
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
+
+    //
+    // Tensor Parallelism Support
+    //
+    // These functions enable tensor parallelism (TP) mode in the scheduler.
+    // When TP is enabled, certain operations (like matrix multiplications with
+    // sharded weights) can be executed in parallel across multiple backends.
+    //
+
+    // Set the tensor parallelism group for the scheduler
+    // backends: array of backends that form the TP group
+    // n_backends: number of backends in the TP group
+    // When set, TP-eligible nodes will be executed across all backends in parallel
+    GGML_API void ggml_backend_sched_set_tp_group(
+            ggml_backend_sched_t   sched,
+            ggml_backend_t       * backends,
+            int                    n_backends);
+
+    // Check if tensor parallelism is enabled for the scheduler
+    GGML_API bool ggml_backend_sched_tp_enabled(ggml_backend_sched_t sched);
+
+    // Set the TP world size explicitly (for multi-process TP mode)
+    // Call BEFORE set_tp_group if using multi-process TP
+    GGML_API void ggml_backend_sched_set_tp_world_size(ggml_backend_sched_t sched, int world_size);
+
+    // Get the number of backends in the TP group
+    GGML_API int ggml_backend_sched_get_tp_world_size(ggml_backend_sched_t sched);
+
+    // Get the TP rank for a specific backend (0-based index in TP group)
+    // Returns -1 if the backend is not in the TP group
+    GGML_API int ggml_backend_sched_get_tp_rank(ggml_backend_sched_t sched, ggml_backend_t backend);
+// Pipeline profiling
+GGML_API void ggml_backend_sched_print_pipeline_stats(ggml_backend_sched_t sched);
+GGML_API bool ggml_backend_sched_is_profiling_enabled(ggml_backend_sched_t sched);
 
     //
     // Utils
