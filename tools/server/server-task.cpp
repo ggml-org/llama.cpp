@@ -175,6 +175,7 @@ task_params server_task::params_from_json_cmpl(
     params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
+    params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
     params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
@@ -453,6 +454,10 @@ task_params server_task::params_from_json_cmpl(
         }
     }
 
+    if (params.n_cmpl > params_base.n_parallel) {
+        throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
+    }
+
     return params;
 }
 
@@ -565,6 +570,7 @@ std::vector<unsigned char> completion_token_output::str_to_bytes(const std::stri
 // server_task_result_cmpl_final
 //
 json server_task_result_cmpl_final::to_json() {
+    GGML_ASSERT(is_updated && "update() must be called before to_json()");
     switch (res_type) {
         case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();
@@ -582,8 +588,8 @@ json server_task_result_cmpl_final::to_json() {
 json server_task_result_cmpl_final::to_json_non_oaicompat() {
     json res = json {
         {"index",               index},
-        {"content",             stream ? "" : content}, // in stream mode, content is already in last partial chunk
-        {"tokens",              stream ? llama_tokens {} : tokens},
+        {"content",             content},
+        {"tokens",              tokens},
         {"id_slot",             id_slot},
         {"stop",                true},
         {"model",               oaicompat_model},
@@ -619,7 +625,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
     json res = json {
         {"choices",            json::array({
             json{
-                {"text",          stream ? "" : content}, // in stream mode, content is already in last partial chunk
+                {"text",          content},
                 {"index",         index},
                 {"logprobs",      logprobs},
                 {"finish_reason", finish_reason},
@@ -663,7 +669,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
 
     json choice {
         {"finish_reason", finish_reason},
-        {"index", 0},
+        {"index", index},
         {"message", msg.to_json_oaicompat<json>()},
     };
 
@@ -698,6 +704,25 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     }
 
     return res;
+}
+
+common_chat_msg task_result_state::update_chat_msg(
+        const std::string & text_added,
+        bool is_partial,
+        std::vector<common_chat_msg_diff> & diffs) {
+    generated_text += text_added;
+    auto msg_prv_copy = chat_msg;
+    SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
+    auto new_msg = common_chat_parse(
+        generated_text,
+        is_partial,
+        oaicompat_chat_syntax);
+    if (!new_msg.empty()) {
+        new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
+        chat_msg = new_msg;
+        diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, new_msg.empty() ? msg_prv_copy : new_msg);
+    }
+    return chat_msg;
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
@@ -956,6 +981,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 // server_task_result_cmpl_partial
 //
 json server_task_result_cmpl_partial::to_json() {
+    GGML_ASSERT(is_updated && "update() must be called before to_json()");
     switch (res_type) {
         case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();
@@ -1043,7 +1069,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
             {"choices", json::array({
                 json {
                     {"finish_reason", nullptr},
-                    {"index", 0},
+                    {"index", index},
                     {"delta", delta},
                 },
             })},

@@ -53,6 +53,7 @@ struct task_params {
     int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
     int32_t n_predict = -1; // new tokens to predict
     int32_t n_indent  =  0; // minimum line indentation for the generated text in number of whitespace characters
+    int32_t n_cmpl    =  1; // number of completions to generate from this prompt
 
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
@@ -88,6 +89,10 @@ struct server_task {
     // used by SERVER_TASK_TYPE_CANCEL
     int id_target = -1;
     int id_slot   = -1;
+
+    // used by parallel sampling (multiple completions from same prompt)
+    size_t n_children =  0; // number of tasks reusing this prompt
+    int    id_parent  = -1;
 
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
@@ -130,6 +135,17 @@ struct server_task {
         }
         return ids;
     }
+
+    server_task create_child(int id_parent, int id_child, int idx) const {
+        server_task copy;
+        copy.id        = id_child;
+        copy.index     = idx;
+        copy.id_parent = id_parent;
+        copy.params    = params;
+        copy.type      = type;
+        copy.tokens    = tokens.clone();
+        return copy;
+    }
 };
 
 struct result_timings {
@@ -161,6 +177,25 @@ struct result_prompt_progress {
     json to_json() const;
 };
 
+// struct for tracking the state of a task (e.g., for streaming)
+struct task_result_state {
+    // tracking diffs for partial tool calls
+    std::vector<common_chat_msg_diff> diffs;
+    common_chat_syntax oaicompat_chat_syntax;
+    common_chat_msg chat_msg;
+    std::string generated_text; // append new chunks of generated text here
+    std::vector<std::string> generated_tool_call_ids;
+
+    task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
+        : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
+
+    // parse partial tool calls and update the internal state
+    common_chat_msg update_chat_msg(
+        const std::string & text_added,
+        bool is_partial,
+        std::vector<common_chat_msg_diff> & diffs);
+};
+
 struct server_task_result {
     int id           = -1;
     int id_slot      = -1;
@@ -174,6 +209,9 @@ struct server_task_result {
     }
     virtual int get_index() {
         return -1;
+    }
+    virtual void update(task_result_state &) {
+        // only used by server_task_result_cmpl_*
     }
     virtual json to_json() = 0;
     virtual ~server_task_result() = default;
@@ -233,9 +271,10 @@ struct server_task_result_cmpl_final : server_task_result {
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
-    common_chat_msg    oaicompat_msg;
+    common_chat_msg    oaicompat_msg; // to be populated by update()
 
-    std::vector<common_chat_msg_diff> oaicompat_msg_diffs;
+    std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
+    bool is_updated = false;
 
     virtual int get_index() override {
         return index;
@@ -246,6 +285,11 @@ struct server_task_result_cmpl_final : server_task_result {
     }
 
     virtual json to_json() override;
+
+    virtual void update(task_result_state & state) override {
+        is_updated = true;
+        oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
+    }
 
     json to_json_non_oaicompat();
 
@@ -280,7 +324,8 @@ struct server_task_result_cmpl_partial : server_task_result {
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
-    std::vector<common_chat_msg_diff> oaicompat_msg_diffs;
+    std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
+    bool is_updated = false;
 
     virtual int get_index() override {
         return index;
@@ -291,6 +336,11 @@ struct server_task_result_cmpl_partial : server_task_result {
     }
 
     virtual json to_json() override;
+
+    virtual void update(task_result_state & state) override {
+        is_updated = true;
+        state.update_chat_msg(content, true, oaicompat_msg_diffs);
+    }
 
     json to_json_non_oaicompat();
 
@@ -431,6 +481,14 @@ struct server_prompt {
 
     int n_tokens() const {
         return tokens.size();
+    }
+
+    server_prompt clone() const {
+        return server_prompt {
+            tokens.clone(),
+            data,
+            checkpoints
+        };
     }
 };
 
