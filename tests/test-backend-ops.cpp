@@ -7588,6 +7588,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         exponent <<= 1;
     }
 #endif
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {200000, 1, 1, 1}, false,  false,  GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {200000, 4, 1, 1}, false,  false,  GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {643251, 3, 1, 1}, false,  false,  GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     for (bool mask : {false, true}) {
         for (bool sinks : {false, true}) {
             for (float max_bias : {0.0f, 8.0f}) {
@@ -7638,7 +7641,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
-
     for (bool fw : {true, false}) { // fw == forward
         bool all = true;
 
