@@ -423,15 +423,15 @@ extern "C" MTMD_API void mtmd_set_llm_context(mtmd_context * ctx, struct llama_c
     ctx->llm_lctx = lctx;
 }
 
-extern "C" MTMD_API struct llama_context * mtmd_get_llm_context(mtmd_context * ctx) {
+extern "C" struct llama_context * mtmd_get_llm_context(mtmd_context * ctx) {
     return ctx->llm_lctx;
 }
 
-extern "C" MTMD_API bool mtmd_preencode_enabled(mtmd_context * ctx) {
+extern "C" bool mtmd_preencode_enabled(mtmd_context * ctx) {
     return ctx->clip_reduced_vram;
 }
 
-extern "C" MTMD_API int32_t mtmd_preencode_image(mtmd_context * ctx, const mtmd_input_chunks * chunks) {
+extern "C" int32_t mtmd_preencode_image(mtmd_context * ctx, const mtmd_input_chunks * chunks) {
     const size_t n = chunks ? chunks->entries.size() : 0;
     for (size_t i = 0; i < n; ++i) {
         const mtmd_input_chunk & c = chunks->entries[i];
@@ -446,18 +446,18 @@ extern "C" MTMD_API int32_t mtmd_preencode_image(mtmd_context * ctx, const mtmd_
     return 0; // no image, nothing to do
 }
 
-extern "C" MTMD_API void mtmd_invoke_llm_init_if_needed(mtmd_context * ctx) {
+extern "C" void mtmd_invoke_llm_init_if_needed(mtmd_context * ctx) {
     if (!ctx->llm_context_initialized && ctx->llm_init_cb) {
         ctx->llm_init_cb(ctx->llm_init_user_data);
         ctx->llm_context_initialized = true;
     }
 }
 
-extern "C" MTMD_API bool mtmd_has_preencoded_image(mtmd_context * ctx) {
+extern "C" bool mtmd_has_preencoded_image(mtmd_context * ctx) {
     return ctx->has_pre_encoded_image;
 }
 
-extern "C" MTMD_API int64_t mtmd_get_image_encode_timing(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
+extern "C" int64_t mtmd_get_image_encode_timing(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     if (!ctx || !chunk) {
         return 0;
     }

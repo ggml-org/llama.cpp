@@ -85,6 +85,12 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 int32_t n_batch,
                                                 llama_pos * new_n_past);
 
+// Register a JIT initializer for the LLM context; intended to be invoked after image encode
+MTMD_API void mtmd_set_llm_init_callback(mtmd_context * ctx, mtmd_llm_init_cb cb, void * user_data);
+
+// Provide the initialized llama context back to mtmd for use in other methods
+MTMD_API void mtmd_set_llm_context(mtmd_context * ctx, struct llama_context * lctx);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

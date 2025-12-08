@@ -104,30 +104,6 @@ MTMD_API mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
 
 MTMD_API void mtmd_free(mtmd_context * ctx);
 
-// Register a JIT initializer for the LLM context; intended to be invoked after image encode
-MTMD_API void mtmd_set_llm_init_callback(mtmd_context * ctx, mtmd_llm_init_cb cb, void * user_data);
-
-// Provide the initialized llama context back to mtmd for use in other methods
-MTMD_API void mtmd_set_llm_context(mtmd_context * ctx, struct llama_context * lctx);
-
-// Retrieve the JIT-initialized llama context if available (NULL if not set)
-MTMD_API struct llama_context * mtmd_get_llm_context(mtmd_context * ctx);
-
-// Whether pre-encode/JIT-llm flow is enabled
-MTMD_API bool mtmd_preencode_enabled(mtmd_context * ctx);
-
-// Pre-encode the image chunk; returns 0 on success, or encode error
-MTMD_API int32_t mtmd_preencode_image(mtmd_context * ctx, const mtmd_input_chunks * chunks);
-
-// Invoke the registered JIT LLM init callback if not already invoked
-MTMD_API void mtmd_invoke_llm_init_if_needed(mtmd_context * ctx);
-
-// Query pre-encoded image state and identity
-MTMD_API bool mtmd_has_preencoded_image(mtmd_context * ctx);
-
-// Retrieve the encode timing (ms) for the media chunk's underlying encoder, returns 0 if unavailable
-MTMD_API int64_t mtmd_get_image_encode_timing(mtmd_context * ctx, const mtmd_input_chunk * chunk);
-
 // whether we need to set non-causal mask before llama_decode
 MTMD_API bool mtmd_decode_use_non_causal(mtmd_context * ctx);
 
