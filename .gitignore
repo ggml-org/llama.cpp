@@ -134,3 +134,6 @@ poetry.toml
 # IDE
 /*.code-workspace
 /.windsurf/
+
+# Test output data
+data/
