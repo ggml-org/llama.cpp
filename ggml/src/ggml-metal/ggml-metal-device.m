@@ -769,8 +769,13 @@ ggml_metal_device_t ggml_metal_device_init(void) {
 #endif
 
             dev->props.use_shared_buffers = dev->props.has_unified_memory;
+            // In case of eGPU, shared memory may be preferable.
+            dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
             if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
                 dev->props.use_shared_buffers = false;
+            }
+            if (getenv("GGML_METAL_SHARED_BUFFERS_ENABLE") != NULL) {
+                dev->props.use_shared_buffers = true;
             }
 
             dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
