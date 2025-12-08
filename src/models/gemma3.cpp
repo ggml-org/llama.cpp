@@ -1,11 +1,7 @@
 #include "models.h"
-#include "../llama-impl.h"
 
-// Based off Gemma3 implementation.  The main differences are:
-// - all layers are global
-// - use YaRN for long-context
-
-llm_build_rnj1::llm_build_rnj1(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+template <bool iswa>
+llm_build_gemma3<iswa>::llm_build_gemma3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_k;
 
     ggml_tensor * cur;
@@ -21,11 +17,30 @@ llm_build_rnj1::llm_build_rnj1(const llama_model & model, const llm_graph_params
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn = build_attn_inp_kv();
+    // TODO: is causal == true correct? might need some changes
+    using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
+    inp_attn_type * inp_attn = nullptr;
+
+    if constexpr (iswa) {
+        inp_attn = build_attn_inp_kv_iswa();
+    } else {
+        inp_attn = build_attn_inp_kv();
+    }
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        float freq_base_l  = 0.0f;
+        float freq_scale_l = 0.0f;
+
+        if constexpr (iswa) {
+            freq_base_l  = model.get_rope_freq_base (cparams, il);
+            freq_scale_l = model.get_rope_freq_scale(cparams, il);
+        } else {
+            freq_base_l  = freq_base;
+            freq_scale_l = freq_scale;
+        }
+
         // norm
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
@@ -51,7 +66,7 @@ llm_build_rnj1::llm_build_rnj1(const llama_model & model, const llm_graph_params
 
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                    n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                     ext_factor, attn_factor, beta_fast, beta_slow);
 
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
@@ -59,7 +74,7 @@ llm_build_rnj1::llm_build_rnj1(const llama_model & model, const llm_graph_params
 
             Kcur = ggml_rope_ext(
                     ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                    n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                     ext_factor, attn_factor, beta_fast, beta_slow);
 
             cb(Qcur, "Qcur", il);
@@ -125,8 +140,17 @@ llm_build_rnj1::llm_build_rnj1(const llama_model & model, const llm_graph_params
     // lm_head
     cur = build_lora_mm(model.output, cur);
 
+    if constexpr (!iswa) {
+        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
+        cur = ggml_tanh(ctx0, cur);
+        cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
+    }
+
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);
 }
+
+template struct llm_build_gemma3<false>;
+template struct llm_build_gemma3<true>;
