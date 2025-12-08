@@ -81,6 +81,7 @@ For detailed instructions, see the [test documentation](./tests/README.md).
 - Separation of HTTP logic into dedicated files: https://github.com/ggml-org/llama.cpp/pull/17216
 - Large-scale code base split into smaller files: https://github.com/ggml-org/llama.cpp/pull/17362
 - Introduction of router mode: https://github.com/ggml-org/llama.cpp/pull/17470
+- Speculative decoding: https://github.com/ggml-org/llama.cpp/pull/17808 and rework in https://github.com/ggml-org/llama.cpp/pull/17808
 
 
 
