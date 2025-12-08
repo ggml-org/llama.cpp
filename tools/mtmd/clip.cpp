@@ -578,11 +578,8 @@ struct clip_graph {
 
     // Helper function for 2D RMSNorm used in MobileNetV5
     ggml_tensor * rms_norm_2d(ggml_tensor * inp, ggml_tensor * weight) {
-        // RMSNorm: norm = x / sqrt(mean(x^2) + eps) * weight
-        ggml_tensor * sq = ggml_sqr(ctx0, inp);
-        ggml_tensor * mean = ggml_mean(ctx0, sq);
-        ggml_tensor * rms = ggml_sqrt(ctx0, ggml_add1(ctx0, mean, eps));
-        ggml_tensor * normed = ggml_div(ctx0, inp, rms);
+        // Use ggml_rms_norm which handles the normalization
+        ggml_tensor * normed = ggml_rms_norm(ctx0, inp, eps);
         if (weight) {
             normed = ggml_mul(ctx0, normed, weight);
         }
@@ -638,7 +635,7 @@ struct clip_graph {
             // Depthwise conv with padding
             int kernel_size = block.dw_conv_w->ne[0];
             int padding = kernel_size / 2;
-            cur = ggml_conv_depthwise_2d(ctx0, block.dw_conv_w, cur, stride, stride, padding, padding, 1, 1);
+            cur = ggml_conv_2d_dw(ctx0, block.dw_conv_w, cur, stride, stride, padding, padding, 1, 1);
             if (block.dw_norm_w) {
                 cur = rms_norm_2d(cur, block.dw_norm_w);
             }
@@ -713,7 +710,8 @@ struct clip_graph {
             for (auto feat : intermediate_features) {
                 if (feat->ne[0] != target_w || feat->ne[1] != target_h) {
                     // Bilinear interpolation to resize
-                    feat = ggml_upscale(ctx0, feat, target_w / feat->ne[0]);
+                    int scale_factor = target_w / feat->ne[0];
+                    feat = ggml_upscale(ctx0, feat, scale_factor, GGML_SCALE_MODE_BILINEAR);
                 }
                 resized_features.push_back(feat);
             }
@@ -734,10 +732,6 @@ struct clip_graph {
         // Gemma3n-specific projection (same as Gemma3)
         if (ctx->proj_type() == PROJECTOR_TYPE_GEMMA3N) {
             // Reshape for processing
-            const int batch_size = 1;
-            int feat_h = cur->ne[1];
-            int feat_w = cur->ne[0];
-
             cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 1, 0, 2, 3));
 
             // Apply RMS normalization
