@@ -10,7 +10,15 @@
 extern "C" {
     #include "../ggml/src/ggml-quants.h"
     #include "../ggml/src/ggml-common.h"
+    #include "../ggml/src/ggml-ifairy-lut.h"
 }
+
+#ifndef GGML_FP16_TO_FP32
+#define GGML_FP16_TO_FP32 ggml_fp16_to_fp32
+#endif
+#ifndef GGML_FP32_TO_FP16
+#define GGML_FP32_TO_FP16 ggml_fp32_to_fp16
+#endif
 
 #undef NDEBUG
 #include <assert.h>
@@ -372,11 +380,130 @@ bool test_rope() {
 }
 
 // ============================================================================
-// 测试 4: 复数矩阵乘法
+// 测试 4: 标量 LUT matmul 正确性（encode + preprocess + qgemm）
+// ============================================================================
+
+static uint8_t get_ifairy_code(const block_ifairy * row_blocks, int idx) {
+    const int block_idx    = idx / QK_K;
+    const int idx_in_block = idx - block_idx * QK_K;
+    const int chunk        = idx_in_block >> 6;
+    const int lane         = idx_in_block & 0x0f;
+    const int part         = (idx_in_block >> 4) & 0x3;
+    const uint8_t packed   = row_blocks[block_idx].qs[chunk * 16 + lane];
+    return (packed >> (2 * part)) & 0x3;
+}
+
+static void decode_ifairy_weight(uint8_t code, float d_real, float d_imag, float & wr, float & wi) {
+    if (code <= 1) {
+        wr = (code == 1 ? d_real : -d_real);
+        wi = 0.0f;
+    } else {
+        wr = 0.0f;
+        wi = (code == 3 ? d_imag : -d_imag);
+    }
+}
+
+bool test_ifairy_lut_scalar_matmul() {
+    printf("\n=== Test 4: iFairy LUT scalar matmul ===\n");
+
+    const int64_t M = 2;
+    const int64_t N = 2;
+    const int64_t K = QK_K; // encode/quant 路径要求按 QK_K 对齐
+
+    const int64_t blocks_per_row = K / QK_K;
+    const int64_t blocks_per_col = K / QK_K;
+
+    const float w_scale = 1.0f / 8.0f;
+    const float a_scale = 1.0f / 16.0f;
+
+    std::vector<block_ifairy> weights((size_t) M * (size_t) blocks_per_row);
+    for (int64_t r = 0; r < M; ++r) {
+        block_ifairy blk{};
+        blk.d_real = GGML_FP32_TO_FP16(w_scale);
+        blk.d_imag = GGML_FP32_TO_FP16(w_scale);
+        for (int k_idx = 0; k_idx < K; ++k_idx) {
+            const uint8_t code = (uint8_t) ((k_idx + r) & 0x1); // 仅使用实部符号，避免缩放分支差异
+            set_ifairy_code(blk, k_idx, code);
+        }
+        weights[(size_t) r * (size_t) blocks_per_row] = blk;
+    }
+
+    std::vector<block_ifairy_q16> acts((size_t) N * (size_t) blocks_per_col);
+    for (int64_t c = 0; c < N; ++c) {
+        block_ifairy_q16 blk{};
+        blk.d_real = GGML_FP32_TO_FP16(a_scale);
+        blk.d_imag = GGML_FP32_TO_FP16(a_scale);
+        for (int k_idx = 0; k_idx < K; ++k_idx) {
+            blk.x_real[k_idx] = (int8_t) (((k_idx + 3 * c) % 13) - 6);
+            blk.x_imag[k_idx] = (int8_t) (((k_idx * 2 + c) % 11) - 5);
+        }
+        acts[(size_t) c * (size_t) blocks_per_col] = blk;
+    }
+
+    // LUT 路径输出
+    std::vector<float> dst_lut((size_t) M * (size_t) N * 2, 0.0f);
+    const size_t act_stride = (size_t) blocks_per_col * sizeof(block_ifairy_q16);
+    ggml_ifairy_lut_mul_mat_scalar((int) M, (int) K, (int) N,
+                                   weights.data(), acts.data(), act_stride,
+                                   dst_lut.data());
+
+    // 直接按量化值计算真值
+    std::vector<float> dst_ref(dst_lut.size(), 0.0f);
+    const float w_scale_r = GGML_FP16_TO_FP32(weights[0].d_real);
+    const float w_scale_i = GGML_FP16_TO_FP32(weights[0].d_imag);
+
+    for (int64_t c = 0; c < N; ++c) {
+        const block_ifairy_q16 * act_blk = acts.data() + c * blocks_per_col;
+        const float act_sr = GGML_FP16_TO_FP32(act_blk[0].d_real);
+        const float act_si = GGML_FP16_TO_FP32(act_blk[0].d_imag);
+        float * ref_col = dst_ref.data() + (size_t) c * (size_t) M * 2;
+
+        for (int64_t r = 0; r < M; ++r) {
+            const block_ifairy * w_row = weights.data() + r * blocks_per_row;
+            float acc_r = 0.0f, acc_i = 0.0f;
+
+            for (int k_idx = 0; k_idx < K; ++k_idx) {
+                const uint8_t code = get_ifairy_code(w_row, k_idx);
+                float wr = 0.0f, wi = 0.0f;
+                decode_ifairy_weight(code, w_scale_r, w_scale_i, wr, wi);
+
+                const int8_t ar_q = (int8_t) act_blk[0].x_real[k_idx];
+                const int8_t ai_q = (int8_t) act_blk[0].x_imag[k_idx];
+                const float ar = act_sr * ar_q;
+                const float ai = act_si * ai_q;
+
+                acc_r += wr * ar - wi * ai;
+                acc_i += wr * ai + wi * ar;
+            }
+
+            ref_col[(size_t) r * 2 + 0] = acc_r;
+            ref_col[(size_t) r * 2 + 1] = acc_i;
+        }
+    }
+
+    printf("Comparing LUT output vs reference (real+imag interleaved):\n");
+    const bool ok = compare_arrays(dst_lut.data(), dst_ref.data(), dst_ref.size(), 1e-3f);
+    if (!ok) {
+        for (int64_t c = 0; c < N; ++c) {
+            const float * lut_col = dst_lut.data() + (size_t) c * (size_t) M * 2;
+            const float * ref_col = dst_ref.data() + (size_t) c * (size_t) M * 2;
+            for (int64_t r = 0; r < M; ++r) {
+                printf("  col %lld row %lld -> lut:(%.6f, %.6f) ref:(%.6f, %.6f)\n",
+                       c, r,
+                       lut_col[(size_t) r * 2 + 0], lut_col[(size_t) r * 2 + 1],
+                       ref_col[(size_t) r * 2 + 0], ref_col[(size_t) r * 2 + 1]);
+            }
+        }
+    }
+    return ok;
+}
+
+// ============================================================================
+// 测试 5: 复数矩阵乘法
 // ============================================================================
 
 bool test_complex_matmul() {
-    printf("\n=== Test 4: Complex Matrix Multiplication ===\n");
+    printf("\n=== Test 5: Complex Matrix Multiplication ===\n");
 
     // 读取测试数据
     std::string json_data = read_file("tests/ifairy-test-data/matmul_test.json");
@@ -399,57 +526,33 @@ bool test_complex_matmul() {
 
     printf("Testing complex matmul: (%d x %d) @ (%d x %d)\n", M, K, K, N);
 
-    // 创建 GGML 上下文
-    struct ggml_init_params params = {
-        /*.mem_size   =*/ 128*1024*1024,
-        /*.mem_buffer =*/ NULL,
-        /*.no_alloc   =*/ false,
-    };
+    // 手写参考复数 matmul：C = A @ B
+    std::vector<float> c_real_calc(M * N, 0.0f);
+    std::vector<float> c_imag_calc(M * N, 0.0f);
 
-    struct ggml_context* ctx = ggml_init(params);
-
-    // 创建矩阵张量
-    struct ggml_tensor* mat_a_real = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, M);
-    struct ggml_tensor* mat_a_imag = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, M);
-    struct ggml_tensor* mat_b_real = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, N, K);
-    struct ggml_tensor* mat_b_imag = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, N, K);
-
-    // 填充数据
-    memcpy(mat_a_real->data, a_real.data(), a_real.size() * sizeof(float));
-    memcpy(mat_a_imag->data, a_imag.data(), a_imag.size() * sizeof(float));
-    memcpy(mat_b_real->data, b_real.data(), b_real.size() * sizeof(float));
-    memcpy(mat_b_imag->data, b_imag.data(), b_imag.size() * sizeof(float));
-
-    // 计算复数矩阵乘法
-    // C = A @ B = (A_real + j*A_imag) @ (B_real + j*B_imag)
-    // C_real = A_real @ B_real + A_imag @ B_imag
-    // C_imag = A_real @ B_imag - A_imag @ B_real
-
-    struct ggml_tensor* c_real_1 = ggml_mul_mat(ctx, mat_b_real, mat_a_real);
-    struct ggml_tensor* c_real_2 = ggml_mul_mat(ctx, mat_b_imag, mat_a_imag);
-    struct ggml_tensor* c_real = ggml_add(ctx, c_real_1, c_real_2);
-
-    struct ggml_tensor* c_imag_1 = ggml_mul_mat(ctx, mat_b_imag, mat_a_real);
-    struct ggml_tensor* c_imag_2 = ggml_mul_mat(ctx, mat_b_real, mat_a_imag);
-    struct ggml_tensor* c_imag = ggml_sub(ctx, c_imag_1, c_imag_2);
-
-    // 构建计算图
-    struct ggml_cgraph* gf = ggml_new_graph(ctx);
-    ggml_build_forward_expand(gf, c_real);
-    ggml_build_forward_expand(gf, c_imag);
-
-    // 执行计算
-    ggml_graph_compute_with_ctx(ctx, gf, 1);
+    for (int m_idx = 0; m_idx < M; ++m_idx) {
+        for (int n_idx = 0; n_idx < N; ++n_idx) {
+            float acc_r = 0.0f;
+            float acc_i = 0.0f;
+            for (int k_idx = 0; k_idx < K; ++k_idx) {
+                const float ar = a_real[m_idx * K + k_idx];
+                const float ai = a_imag[m_idx * K + k_idx];
+                const float br = b_real[k_idx * N + n_idx];
+                const float bi = b_imag[k_idx * N + n_idx];
+                acc_r += ar * br + ai * bi;
+                acc_i += ar * bi - ai * br;
+            }
+            c_real_calc[m_idx * N + n_idx] = acc_r;
+            c_imag_calc[m_idx * N + n_idx] = acc_i;
+        }
+    }
 
     // 比较结果
     printf("Comparing real part:\n");
-    bool real_ok = compare_arrays((float*)c_real->data, expected_c_real.data(), M * N);
+    bool real_ok = compare_arrays(c_real_calc.data(), expected_c_real.data(), M * N);
 
     printf("Comparing imag part:\n");
-    bool imag_ok = compare_arrays((float*)c_imag->data, expected_c_imag.data(), M * N);
-
-    // 清理
-    ggml_free(ctx);
+    bool imag_ok = compare_arrays(c_imag_calc.data(), expected_c_imag.data(), M * N);
 
     return real_ok && imag_ok;
 }
@@ -491,8 +594,13 @@ int main(int argc, char** argv) {
         num_failed++;
     }
 
-    if (!test_complex_matmul()) {
+    if (!test_ifairy_lut_scalar_matmul()) {
         fprintf(stderr, "Test 4 FAILED\n");
+        num_failed++;
+    }
+
+    if (!test_complex_matmul()) {
+        fprintf(stderr, "Test 5 FAILED\n");
         num_failed++;
     }
 

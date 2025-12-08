@@ -14,6 +14,9 @@
 #include "vec.h"
 #include "ops.h"
 #include "ggml.h"
+#ifdef GGML_IFAIRY_ARM_LUT
+#include "ggml-ifairy-lut.h"
+#endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -1244,6 +1247,22 @@ void ggml_compute_forward_mul_mat(
 
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
+
+#if defined(GGML_IFAIRY_ARM_LUT)
+    if (ggml_ifairy_lut_can_mul_mat(src0, src1, dst)) {
+        if (nth != 1) {
+            if (ith == 0) {
+                GGML_LOG_WARN("ifairy_lut: nth=%d not supported, falling back to default mul_mat\n", nth);
+            }
+        } else if (ith == 0) {
+            ggml_ifairy_lut_mul_mat_scalar((int) ne01, (int) ne00, (int) ne11,
+                                           src0->data, src1->data, nb11, dst->data);
+            return;
+        } else {
+            return;
+        }
+    }
+#endif
 
     // TODO: extract to "extra_op"
 #if GGML_USE_LLAMAFILE

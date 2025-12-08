@@ -943,6 +943,8 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 真值来源于「原始 2‑bit 权重 + 浮点激活」的逐元素复数乘累加（不经过 LUT），标量 LUT 结果应在量化误差范围内逼近该真值；
   - NEON 内核则应与标量 LUT 结果在整数域一致（仅允许浮点收尾时 1 LSB 级别差异）。
 
+> 当前进展：`ggml/src/ggml-ifairy-lut.cpp` 提供标量参考预处理与 qgemm：\n> - 预处理：读取 ifairy_q16 激活，按 K3 分组与 16 个规范模式构建 `lut_real/lut_imag`，int8 饱和；激活缩放填充为第一块的 fp16 缩放。 \n> - qgemm：按索引 opcode（swap/neg）应用 LUT，int32 累加后乘激活缩放与权重缩放（取第一块权重的 d_real/d_imag）输出 float。 \n> - 仍未接入路由，scale 复用 per-tensor 方案，后续与真实缩放/权重路径对齐。***
+
 ### 10.5 步骤五：NEON 内核与优化
 
 - 在 NEON + DOTPROD 平台上实现 3‑weight LUT 内核：
@@ -960,6 +962,7 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 3‑weight LUT vs 逐元素点积；
   - 标量 LUT vs NEON LUT；
   - 多种矩阵形状与随机种子覆盖。
+  - 当前：`tests/test-ifairy.cpp::test_ifairy_lut_scalar_matmul` 覆盖标量 encode + preprocess + qgemm，针对 K=QK_K、N=2 的场景，将 LUT 输出与按量化值解码的直接复数点积逐元素比对，阈值 1e‑3。
 - 性能测试：
   - 记录典型模型与形状下的 token/s 或 ms/token；
   - 对比：非 LUT 标准vecdot实现；
