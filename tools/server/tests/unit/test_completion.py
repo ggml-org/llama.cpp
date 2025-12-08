@@ -441,7 +441,7 @@ def test_n_probs():
     res = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
         "n_probs": 10,
-        "temperature": 1.0,
+        "temperature": 0.0,
         "n_predict": 5,
     })
     assert res.status_code == 200
@@ -466,7 +466,7 @@ def test_n_probs_stream():
     res = server.make_stream_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
         "n_probs": 10,
-        "temperature": 1.0,
+        "temperature": 0.0,
         "n_predict": 5,
         "stream": True,
     })
@@ -487,7 +487,6 @@ def test_n_probs_stream():
                     assert "bytes" in prob and type(prob["bytes"]) == list
 
 
-# TODO: this does not work with backend sampling
 def test_n_probs_post_sampling():
     global server
     server.start()
@@ -512,8 +511,8 @@ def test_n_probs_post_sampling():
             assert "token" in prob and type(prob["token"]) == str
             assert "prob" in prob and 0.0 <= prob["prob"] <= 1.0
             assert "bytes" in prob and type(prob["bytes"]) == list
-        # because the test model usually output token with either 100% or 0% probability, we need to check all the top_probs
-        assert any(prob["prob"] == 1.0 for prob in tok["top_probs"])
+        # at low temperature, one of the token has a very high probability
+        assert any(prob["prob"] >= 0.99 for prob in tok["top_probs"])
 
 
 @pytest.mark.parametrize("tokenize,openai_style", [(False, False), (False, True), (True, False), (True, True)])

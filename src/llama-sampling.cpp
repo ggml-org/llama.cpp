@@ -1106,15 +1106,14 @@ static void llama_sampler_dist_backend_apply(
     // Map back to original vocab ids if a candidates tensor is available.
     struct ggml_tensor * sampled_token = idx;
     if (data->candidates != nullptr) {
-        struct ggml_tensor * candidates = data->candidates;
-        struct ggml_tensor * candidates_reshaped = ggml_view_2d(ctx, candidates, 1, ggml_nelements(candidates),
-                ggml_type_size(candidates->type), 0);
+        struct ggml_tensor * candidates = ggml_reshape_2d(ctx, data->candidates, 1, ggml_nelements(data->candidates));
 
-        sampled_token = ggml_get_rows(ctx, candidates_reshaped, idx);
+        sampled_token = ggml_get_rows(ctx, candidates, idx);
         ggml_set_name(sampled_token, "dist_sampled_token");
     }
 
     data->sampled = sampled_token;
+    data->probs = probs;
 }
 
 static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {

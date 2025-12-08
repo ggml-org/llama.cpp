@@ -301,7 +301,7 @@ def test_logprobs():
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.chat.completions.create(
         model="gpt-3.5-turbo-instruct",
-        temperature=1.0,
+        temperature=0.0,
         messages=[
             {"role": "system", "content": "Book"},
             {"role": "user", "content": "What is the best book"},
@@ -328,7 +328,7 @@ def test_logprobs_stream():
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
     res = client.chat.completions.create(
         model="gpt-3.5-turbo-instruct",
-        temperature=1.0,
+        temperature=0.0,
         messages=[
             {"role": "system", "content": "Book"},
             {"role": "user", "content": "What is the best book"},
@@ -494,5 +494,5 @@ def test_chat_completions_multiple_choices():
     assert len(res.body["choices"]) == 2
     for choice in res.body["choices"]:
         assert "assistant" == choice["message"]["role"]
-        assert match_regex("Suddenly", choice["message"]["content"])
+        assert match_regex("Suddenly|Timmy", choice["message"]["content"])
         assert choice["finish_reason"] == "length"

@@ -1056,8 +1056,11 @@ struct server_context_impl {
                 return false;
             }
 
+            // TODO: getting post/pre sampling logits is not yet supported with backend sampling
+            const bool need_logits = task.params.sampling.n_probs > 0;
+
             // TODO: tmp until backend sampling is fully implemented
-            if (task.params.sampling.backend_sampling) {
+            if (task.params.sampling.backend_sampling && !need_logits) {
                 llama_set_sampler(ctx, slot.id, common_sampler_get(slot.smpl.get()));
             } else {
                 llama_set_sampler(ctx, slot.id, nullptr);
@@ -1216,10 +1219,8 @@ struct server_context_impl {
         return slot.has_next_token; // continue
     }
 
-    // TODO: does not work with backend sampling
     void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) const {
-        size_t n_probs = slot.task->params.sampling.n_probs;
-        size_t n_vocab = llama_vocab_n_tokens(vocab);
+        const size_t n_probs = slot.task->params.sampling.n_probs;
 
         if (post_sampling) {
             const auto * cur_p = common_sampler_get_candidates(slot.smpl.get(), true);
@@ -1247,7 +1248,7 @@ struct server_context_impl {
             std::vector<llama_token_data> cur = get_token_probabilities(ctx, idx);
 
             // set probability for sampled token
-            for (size_t i = 0; i < n_vocab; i++) {
+            for (size_t i = 0; i < cur.size(); i++) {
                 // set probability for sampled token
                 if (cur[i].id == result.tok) {
                     result.prob = cur[i].p;
@@ -1257,7 +1258,7 @@ struct server_context_impl {
 
             // set probability for top n_probs tokens
             result.probs.reserve(n_probs);
-            for (size_t i = 0; i < std::min(n_vocab, n_probs); i++) {
+            for (size_t i = 0; i < std::min(cur.size(), n_probs); i++) {
                 result.probs.push_back({
                     cur[i].id,
                     common_token_to_piece(ctx, cur[i].id, special),

@@ -435,6 +435,9 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     llama_token id = LLAMA_TOKEN_NULL;
 
+    auto & chain = gsmpl->chain;
+    auto & cur_p = gsmpl->cur_p; // initialized by set_logits
+
     // Check if a backend sampler has already sampled a token in which case we
     // return that token id directly.
     {
@@ -443,14 +446,16 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
         if (id != LLAMA_TOKEN_NULL) {
             LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, id);
 
+            // TODO: simplify
+            gsmpl->cur.resize(1);
+            gsmpl->cur[0] = { id, 0.0f, 1.0f };
+            cur_p = { gsmpl->cur.data(), gsmpl->cur.size(), 0, true };
+
             return id;
         }
     }
 
     gsmpl->set_logits(ctx, idx);
-
-    auto & chain = gsmpl->chain;
-    auto & cur_p = gsmpl->cur_p; // initialized by set_logits
 
     llama_sampler_apply(chain, &cur_p);
 
