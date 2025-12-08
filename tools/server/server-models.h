@@ -75,8 +75,9 @@ struct server_presets {
     common_params_context ctx_params;
     std::map<common_arg, std::string> base_args;
     std::map<std::string, common_arg> control_args; // args reserved for server control
+    std::string models_dir;
 
-    server_presets(int argc, char ** argv, common_params & base_params, const std::string & models_dir);
+    server_presets(int argc, char ** argv, common_params & base_params, const std::string & presets_path, const std::string & models_dir);
     common_preset get_preset(const std::string & name);
     void render_args(server_model_meta & meta);
 };
@@ -99,6 +100,7 @@ private:
     common_params base_params;
     std::vector<std::string> base_args;
     std::vector<std::string> base_env;
+    std::string server_binary_path;
 
     server_presets presets;
 
