@@ -5,6 +5,7 @@
 #include "input_model.hpp"
 #include "pass/eliminate_zp.hpp"
 #include "pass/mark_decompression_convert_constant_folding.hpp"
+#include "pass/squeeze_matmul.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -231,9 +232,10 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         //     manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
         // }
 
-        // if (ggml_model_decoder->is_static()) {
-        manager.register_pass<pass::EliminateZeroPoints>();
-        // }
+        if (ggml_model_decoder->is_static()) {
+            manager.register_pass<pass::EliminateZeroPoints>();
+            manager.register_pass<pass::SqueezeMatmul>();
+        }
         manager.run_passes(model);
     }
     return model;
