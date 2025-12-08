@@ -108,6 +108,11 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
             // Reshape input: {d_inner, n_tokens} -> {d_inner, n_seq_tokens, n_seqs}
             ggml_tensor * q_3d = ggml_reshape_3d(ctx0, q_proj, d_inner, n_seq_tokens, n_seqs);
             
+            // Debug: dump conv states before processing
+            cb(conv_state_q, "kda_conv_state_q", il);
+            cb(conv_state_k, "kda_conv_state_k", il);
+            cb(conv_state_v, "kda_conv_state_v", il);
+            
             // Concat Q conv state and current input: {d_conv-1 + n_seq_tokens, d_inner, n_seqs}
             ggml_tensor * conv_q = ggml_concat(ctx0, conv_state_q, ggml_transpose(ctx0, q_3d), 0);
             
@@ -149,6 +154,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
                     Qcur = ggml_add(ctx0, Qcur, layer.ssm_q_conv_b);
                 }
                 Qcur = ggml_silu(ctx0, Qcur);
+                cb(Qcur, "kda_q_conv", il);  // Debug: Q after conv1d + SiLU
             } else {
                 GGML_ABORT("KDA layer missing Q conv weight");
             }
@@ -178,6 +184,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
                     Kcur = ggml_add(ctx0, Kcur, layer.ssm_k_conv_b);
                 }
                 Kcur = ggml_silu(ctx0, Kcur);
+                cb(Kcur, "kda_k_conv", il);  // Debug: K after conv1d + SiLU
             } else {
                 GGML_ABORT("KDA layer missing K conv weight");
             }
@@ -207,6 +214,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
                     Vcur = ggml_add(ctx0, Vcur, layer.ssm_v_conv_b);
                 }
                 Vcur = ggml_silu(ctx0, Vcur);
+                cb(Vcur, "kda_v_conv", il);  // Debug: V after conv1d + SiLU
             } else {
                 GGML_ABORT("KDA layer missing V conv weight");
             }
@@ -249,6 +257,9 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
             // Step 6: Get SSM state and compute KDA recurrence using ggml_kda_scan
             ggml_tensor * ssm_states_all = mctx_cur->get_s_l(il);
             
+            // Debug: dump SSM state before KDA scan
+            cb(ssm_states_all, "kda_state_before", il);
+            
             // Use build_rs with lambda pattern (like Mamba SSM scan)
             auto get_kda_rows = [&](ggml_context * ctx, ggml_tensor * states, ggml_tensor * ids) {
                 ggml_tensor * h_state = ggml_reshape_4d(ctx, states, head_dim, head_dim, n_head, mctx_cur->get_size());
@@ -263,6 +274,12 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
             // y_kda contains: [attention_output (head_dim * n_head * n_seq_tokens * n_seqs), new_state (head_dim * head_dim * n_head * n_seqs)]
             const int64_t attn_out_size = head_dim * n_head * n_seq_tokens * n_seqs;
             const int64_t state_size = head_dim * head_dim * n_head;
+            
+            // Debug: dump SSM state after KDA scan (new state from y_kda)
+            ggml_tensor * state_after = ggml_view_1d(ctx0, y_kda, state_size * n_seqs, attn_out_size * ggml_element_size(y_kda));
+            state_after = ggml_reshape_4d(ctx0, state_after, head_dim, head_dim, n_head, n_seqs);
+            cb(state_after, "kda_state_after", il);
+            
             ggml_build_forward_expand(gf, 
                 ggml_cpy(ctx0, 
                     ggml_view_1d(ctx0, y_kda, state_size * n_seqs, attn_out_size * ggml_element_size(y_kda)),
@@ -278,6 +295,7 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
             ggml_tensor * g_a = ggml_mul_mat(ctx0, layer.ssm_g_a, cur_2d);
             ggml_tensor * g2 = ggml_mul_mat(ctx0, layer.ssm_g_b, g_a);
             g2 = ggml_reshape_3d(ctx0, g2, head_dim, n_head, n_seq_tokens * n_seqs);
+            cb(g2, "kda_g2", il);  // Debug: output gate
             
             // Step 8: Apply o_norm with sigmoid gating
             // Note: Kimi model uses sigmoid gating, not SiLU (despite FusedRMSNormGated default being swish)
@@ -298,18 +316,33 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
         } else if (is_mla) {
             // === MLA Layer (Multi-head Latent Attention) without KV Cache ===
             // Reference: vLLM mla.py
+            // Requirements: 3.1, 3.2, 3.3, 10.2
             // TODO: Implement proper KV caching for MLA (requires custom cache format)
+            //
+            // MLA Debug Dump Points (matching vLLM kimi_debug_layers.py):
+            // | Step | Tensor Name    | vLLM Name   | Description                           |
+            // |------|----------------|-------------|---------------------------------------|
+            // | 1    | mla_Q          | q_proj      | Q projection output                   |
+            // | 2    | mla_kv_lora    | kv_lora     | KV compression (kv_a_proj_with_mqa)   |
+            // | 3    | mla_kv_c       | kv_c        | Compressed KV (before norm)           |
+            // | 4    | mla_kv_c_norm  | kv_c_norm   | Compressed KV (after RMSNorm)         |
+            // | 5    | mla_kv         | kv          | Decompressed KV (kv_b_proj output)    |
+            // | 6    | mla_k_nope     | k_nope      | K without RoPE                        |
+            // | 7    | mla_V          | v           | Value tensor                          |
+            // | 8    | kqv_out        | attn_out    | Attention output (before o_proj)      |
+            // | 9    | mla_out        | output      | Final layer output (after o_proj)     |
             
             // Step 1: Q projection and reshape
             // vLLM Kimi: q = q_proj(hidden_states), then view as [n_tokens, n_head, qk_head_dim]
             // Note: Kimi MLA does NOT use RoPE (rotary_emb=None in vLLM)
             ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.wq, cur);
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k_mla, n_head, n_tokens);
-            cb(Qcur, "mla_Q", il);
+            cb(Qcur, "mla_Q", il);  // Debug: q_proj - Q projection output
             
             // Step 2: KV compression
             // kv_lora = kv_a_proj_with_mqa(hidden_states) -> [kv_lora_rank + qk_rope_head_dim, n_tokens]
             ggml_tensor * kv_lora = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
+            cb(kv_lora, "mla_kv_lora", il);  // Debug: kv_lora - KV compression output
             
             // Split: kv_c = kv_lora[:kv_lora_rank], k_pe = kv_lora[kv_lora_rank:]
             ggml_tensor * kv_c = ggml_view_2d(ctx0, kv_lora, kv_lora_rank, n_tokens,
@@ -318,18 +351,22 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
                 ggml_row_size(kv_lora->type, kv_lora_rank + n_embd_head_qk_rope),
                 ggml_row_size(kv_lora->type, kv_lora_rank + n_embd_head_qk_rope),
                 ggml_row_size(kv_lora->type, kv_lora_rank));
+            cb(kv_c, "mla_kv_c", il);  // Debug: kv_c - compressed KV (before norm)
             
             // Note: Kimi MLA does NOT apply RoPE (rotary_emb=None in vLLM)
             // k_pe is used directly without RoPE
             
-            // Normalize kv_c
+            // Step 3: Normalize kv_c (Requirements: 3.2)
             kv_c = build_norm(kv_c, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
+            cb(kv_c, "mla_kv_c_norm", il);  // Debug: kv_c_norm - normalized compressed KV
             
-            // KV decompression: kv = kv_b_proj(kv_c_normed)
+            // Step 4: KV decompression (Requirements: 3.3)
+            // kv = kv_b_proj(kv_c_normed)
             ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_b, kv_c);
+            cb(kv, "mla_kv", il);  // Debug: kv - decompressed KV
             const int64_t kv_per_head = n_embd_head_qk_nope + n_embd_head_v_mla;
             
-            // Split kv into k_nope and v
+            // Step 5: Split kv into k_nope and v
             ggml_tensor * k_nope = ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head, n_tokens,
                 ggml_row_size(kv->type, kv_per_head),
                 ggml_row_size(kv->type, kv_per_head * n_head), 0);
@@ -339,8 +376,10 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
                 ggml_row_size(kv->type, n_embd_head_qk_nope));
             k_nope = ggml_cont(ctx0, k_nope);
             Vcur = ggml_cont(ctx0, Vcur);
+            cb(k_nope, "mla_k_nope", il);  // Debug: k_nope - K without RoPE
+            cb(Vcur, "mla_V", il);  // Debug: v - Value tensor
             
-            // Concatenate k_nope + k_pe (broadcast k_pe to all heads)
+            // Step 6: Concatenate k_nope + k_pe (broadcast k_pe to all heads)
             // K = [k_nope, k_pe] where k_nope is [qk_nope_head_dim, n_head, n_tokens]
             // and k_pe is [qk_rope_head_dim, 1, n_tokens] broadcast to all heads
             k_pe = ggml_cont(ctx0, k_pe);
@@ -348,13 +387,14 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
             ggml_tensor * k_pe_target = ggml_new_tensor_3d(ctx0, k_pe->type, n_embd_head_qk_rope, n_head, n_tokens);
             ggml_tensor * k_pe_repeated = ggml_repeat(ctx0, k_pe, k_pe_target);
             ggml_tensor * Kcur = ggml_concat(ctx0, k_nope, k_pe_repeated, 0);
-            cb(Kcur, "mla_K", il);
-            cb(Vcur, "mla_V", il);
+            cb(Kcur, "mla_K", il);  // Debug: K - Final key (k_nope + k_pe)
             
-            // Direct softmax attention (without KV cache)
+            // Step 7: Direct softmax attention (without KV cache)
             // Use build_attn with inp_no_cache for proper mask handling
+            // Note: build_attn internally dumps "kqv_out" which corresponds to vLLM's "attn_out"
+            // (attention output before o_proj)
             cur = build_attn(inp_no_cache, layer.wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale_mla, il);
-            cb(cur, "mla_out", il);
+            cb(cur, "mla_out", il);  // Debug: output - Final layer output (after o_proj)
             
         } else {
             // Unknown layer type - this should not happen
