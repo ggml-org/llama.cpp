@@ -1471,7 +1471,13 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
         /*.nb0          =*/ nb0,
     };
 
-    auto pipeline = ggml_metal_library_get_pipeline_ssm_scan(lib, op);
+    auto pipeline = (n_seq_tokens > 1)
+        ? ggml_metal_library_get_pipeline_ssm_scan_ssd(lib, op)
+        : ggml_metal_library_get_pipeline_ssm_scan(lib, op);
+
+    // // Use sequential scan for now - the SSD kernel needs further optimization
+    // // to be competitive with the efficient sequential implementation
+    // auto pipeline = ggml_metal_library_get_pipeline_ssm_scan(lib, op);
 
     GGML_ASSERT(d_state <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 

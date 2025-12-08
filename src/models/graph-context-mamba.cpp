@@ -247,8 +247,10 @@ ggml_tensor * llm_graph_context_mamba::build_mamba2_layer(llm_graph_input_rs * i
         auto get_ssm_rows = [&](ggml_context * ctx, ggml_tensor * states, ggml_tensor * ids) {
             ggml_tensor * ssm = ggml_reshape_4d(ctx, states, d_state, head_dim, n_head, mctx_cur->get_size());
 
-            if (n_seq_tokens == 1) {
-            // if (true) {
+            // Use SSM_SCAN op for all cases - the Metal kernel handles both
+            // single-token (sequential scan) and multi-token (SSD formulation) internally
+            if (true) {
+            // if (n_seq_tokens == 1) {
                 //DEBUG
                 LLAMA_LOG_DEBUG("build_mamba2_layer(layer %d): single-token update\n", il);
                 // If single-token, use ssm_scan op
