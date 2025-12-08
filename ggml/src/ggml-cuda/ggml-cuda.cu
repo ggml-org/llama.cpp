@@ -56,6 +56,7 @@
 #include "ggml-cuda/solve_tri.cuh"
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/cumsum.cuh"
+#include "ggml-cuda/fill.cuh"
 #include "ggml.h"
 
 #include <algorithm>
