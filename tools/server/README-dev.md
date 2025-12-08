@@ -42,7 +42,15 @@ graph TD
     server_response --> server_routes
 ```
 
-TODO: mention about how batching is handled by `server_slot`
+### Batching
+
+The server context maintains a single batch shared across all slots. When `update_slots()` is invoked, the system iterates through all active slots to populate this batch. For each slot, either a generated token from the previous decoding step or available prompt tokens are added to the batch.
+
+Batching constraints apply: slots can only be batched together if they share compatible configurations. For instance, slots using a specific LoRA adapter can be batched with each other, but not with slots using a different LoRA adapter or no adapter at all.
+
+Once the batch reaches capacity or all slots have been processed, `llama_decode` is called to execute the inference. This operation represents the primary computational bottleneck in `update_slots()`.
+
+Following decoding, the system either retrieves embeddings or samples the next token using `common_sampler_sample`. If a slot has remaining prompt tokens to process, it yields until the next `update_slots()` iteration.
 
 ### Thread Management
 
@@ -61,6 +69,23 @@ Each incoming HTTP request is handled by its own thread managed by the HTTP libr
 
 - All JSON formatting and chat template logic must stay in the HTTP layer.
 - Avoid passing raw JSON between the HTTP layer and `server_slot`. Instead, parse everything into native C++ types as early as possible.
+
+### Example trace of a request
+
+Here is an example trace of an API request for text completion:
+
+- A request arrives at the HTTP layer.
+- The request is routed to the corresponding handler inside `server_routes`. In this case, `handle_completions_impl` is invoked.
+- The handler parses the input request, constructs a new `server_task`, and passes it to `server_res_generator`.
+- `server_res_generator` creates a new `task_result_state` for each task:
+    - `task_result_state` stays in the HTTP layer, responsible for keeping track of the current state of the response (e.g., parsing tool calls or thinking messages).
+    - `server_task` is moved into `server_queue` inside `server_context`.
+- `server_context` launches the task by moving it into an available slot (see `launch_slot_with_task()`).
+- `update_slot()` processes the task as described in the "Batching" section above.
+- Results may be sent using `send_partial_response` or `send_final_response`, which creates a new `server_task_result` and pushes it to the response queue.
+- At the same time, `server_res_generator` listens to the response queue and retrieves this response.
+- As the response is stateless, `server_res_generator` calls `response->update()` to update the response with the current state.
+- `server_res_generator` then calls `response->to_json()` and passes the response to the HTTP layer.
 
 ### Testing
 
