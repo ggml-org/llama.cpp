@@ -2271,6 +2271,136 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
 }
 
 // ====================== iFairy model =======================
+
+// 原始 6-bit 索引 → 4-bit 规范索引（idx'）与复数变换因子
+static const uint8_t ifairy_canonical_idx[64] = {
+     0,  2,  1,  3,  8, 10,  9, 11,  // [ 0.. 7]
+     4,  6,  5,  7, 12, 14, 13, 15,  // [ 8..15]
+    10,  8, 11,  9,  2,  0,  3,  1,  // [16..23]
+    14, 12, 15, 13,  6,  4,  7,  5,  // [24..31]
+    15, 13, 12, 14,  7,  5,  4,  6,  // [32..39]
+     3,  1,  0,  2, 11,  9,  8, 10,  // [40..47]
+     5,  7,  6,  4, 13, 15, 14, 12,  // [48..55]
+     9, 11, 10,  8,  1,  3,  2,  0,  // [56..63]
+};
+
+// 原始 6-bit 索引 → 复数因子指数 e，满足 i^e = factor
+static const uint8_t ifairy_factor_exp[64] = {
+     2,  2,  2,  2,  2,  2,  2,  2,  // [ 0.. 7] -> (-1, -1, -1, -1, -1, -1, -1, -1)
+     2,  2,  2,  2,  2,  2,  2,  2,  // [ 8..15] -> (-1, -1, -1, -1, -1, -1, -1, -1)
+     0,  0,  0,  0,  0,  0,  0,  0,  // [16..23] -> ( 1,  1,  1,  1,  1,  1,  1,  1)
+     0,  0,  0,  0,  0,  0,  0,  0,  // [24..31] -> ( 1,  1,  1,  1,  1,  1,  1,  1)
+     3,  3,  3,  3,  3,  3,  3,  3,  // [32..39] -> (-i, -i, -i, -i, -i, -i, -i, -i)
+     3,  3,  3,  3,  3,  3,  3,  3,  // [40..47] -> (-i, -i, -i, -i, -i, -i, -i, -i)
+     1,  1,  1,  1,  1,  1,  1,  1,  // [48..55] -> ( i,  i,  i,  i,  i,  i,  i,  i)
+     1,  1,  1,  1,  1,  1,  1,  1,  // [56..63] -> ( i,  i,  i,  i,  i,  i,  i,  i)
+};
+
+static inline uint8_t ggml_ifairy_factor_to_opcode(uint8_t factor_exp) {
+    switch (factor_exp & 3) {
+        case 0: // 1
+            return 0x00;
+        case 1: //  i -> swap + neg_real
+            return 0x80 | 0x20;
+        case 2: // -1 -> neg_real + neg_imag
+            return 0x20 | 0x40;
+        case 3: // -i -> swap + neg_imag
+            return 0x80 | 0x40;
+    }
+
+    GGML_UNREACHABLE();
+}
+
+static inline uint8_t ggml_ifairy_pack_triplet(uint8_t c0, uint8_t c1, uint8_t c2) {
+    GGML_ASSERT(c0 < 4 && c1 < 4 && c2 < 4);
+
+    const uint8_t idx_raw = (uint8_t) ((c0 << 4) | (c1 << 2) | c2);
+    const uint8_t idx_norm = ifairy_canonical_idx[idx_raw];
+    const uint8_t opcode = ggml_ifairy_factor_to_opcode(ifairy_factor_exp[idx_raw]);
+
+    return (uint8_t) (idx_norm | opcode);
+}
+
+static inline uint8_t ggml_ifairy_read_code(const block_ifairy * row_blocks, int64_t idx) {
+    const int64_t block_idx      = idx / QK_K;
+    const int64_t idx_in_block   = idx - block_idx * QK_K;
+    const int     chunk          = (int) (idx_in_block >> 6);       // 0..3
+    const int     lane           = (int) (idx_in_block & 0x0f);     // 0..15
+    const int     part           = (int) ((idx_in_block >> 4) & 0x3); // 0..3
+    const uint8_t packed         = row_blocks[block_idx].qs[chunk * 16 + lane];
+    const uint8_t code           = (packed >> (2 * part)) & 0x3;
+
+    return code;
+}
+
+struct ggml_ifairy_3w_index_info ggml_ifairy_3w_get_index_info(int64_t k) {
+    GGML_ASSERT(k > 0);
+    GGML_ASSERT(k % QK_K == 0);
+
+    const int64_t k_padded = ((k + 2) / 3) * 3;
+
+    struct ggml_ifairy_3w_index_info info = {
+        /*.k              =*/ k,
+        /*.k_padded       =*/ k_padded,
+        /*.groups_per_row =*/ k_padded / 3,
+    };
+
+    return info;
+}
+
+size_t ggml_ifairy_3w_index_buffer_size(const struct ggml_ifairy_3w_index_info * info, int64_t rows) {
+    GGML_ASSERT(info != NULL);
+    GGML_ASSERT(rows > 0);
+
+    const size_t groups  = (size_t) info->groups_per_row;
+    const size_t n_rows  = (size_t) rows;
+
+    GGML_ASSERT(groups <= SIZE_MAX / n_rows);
+
+    return groups * n_rows;
+}
+
+size_t ggml_ifairy_3w_index_buffer_size_aligned64(const struct ggml_ifairy_3w_index_info * info, int64_t rows) {
+    const size_t raw = ggml_ifairy_3w_index_buffer_size(info, rows);
+    return GGML_PAD(raw, 64);
+}
+
+bool ggml_ifairy_3w_encode(const block_ifairy * GGML_RESTRICT weights, int64_t k, int64_t rows, uint8_t * GGML_RESTRICT dst, size_t dst_size) {
+    GGML_ASSERT(weights != NULL);
+    GGML_ASSERT(dst != NULL);
+    GGML_ASSERT(k > 0);
+    GGML_ASSERT(rows > 0);
+    GGML_ASSERT(k % QK_K == 0);
+
+    const struct ggml_ifairy_3w_index_info info = ggml_ifairy_3w_get_index_info(k);
+    const size_t required = ggml_ifairy_3w_index_buffer_size(&info, rows);
+    if (dst_size < required) {
+        return false;
+    }
+
+    const int64_t blocks_per_row = k / QK_K;
+    for (int64_t row = 0; row < rows; ++row) {
+        const block_ifairy * row_blocks = weights + row * blocks_per_row;
+        uint8_t * row_dst = dst + row * info.groups_per_row;
+
+        for (int64_t g = 0; g < info.groups_per_row; ++g) {
+            const int64_t base = g * 3;
+
+            const uint8_t c0 = base     < k ? ggml_ifairy_read_code(row_blocks, base)     : 0;
+            const uint8_t c1 = base + 1 < k ? ggml_ifairy_read_code(row_blocks, base + 1) : 0;
+            const uint8_t c2 = base + 2 < k ? ggml_ifairy_read_code(row_blocks, base + 2) : 0;
+
+            row_dst[g] = ggml_ifairy_pack_triplet(c0, c1, c2);
+        }
+    }
+
+    if (dst_size > required) {
+        memset(dst + required, 0, dst_size - required);
+    }
+
+    return true;
+}
+
 void quantize_row_ifairy_ref(const float * GGML_RESTRICT x_real, const float * GGML_RESTRICT x_imag, block_ifairy * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;

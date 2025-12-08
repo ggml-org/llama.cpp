@@ -23,6 +23,7 @@
 - **激活格式**：
   - 模型侧激活为复数：实部、虚部分别量化为 int8，并带有各自的缩放因子。
   - 需要 per‑tensor 或 per‑行的激活缩放，保证 LUT 内的 int8 不溢出。
+  - 当前实现复用 `GGML_TYPE_IFAIRY_Q16`/`block_ifairy_q16` 作为激活容器（int8 实/虚分平面 + fp16 缩放），不新增激活类型。原因：该类型已在 ggml 注册、量化/缩放链路完整，符合「预量化 + 查表」性能模型；直接使用 float 激活会在预处理引入更多浮点访存，抵消 LUT 吞吐优势。
 - **硬件假设**：
   - ARMv8.2‑A + NEON。推荐平台额外支持 DOTPROD 指令集（`__ARM_FEATURE_DOTPROD`），但 **本 3‑weight LUT 路径仅依赖 NEON 基本向量与查表指令**（`vqtbl1q_s8`、`vaddq_*` 等），不强制使用 `vdotq_s32`。
   - 假设内存对齐到 16 / 64 字节，有利于加载和预取。
@@ -915,6 +916,13 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 将二者打包到索引缓冲（例如一个字节存 idx'，另一个字节存 factor，或压缩到 1 字节）。使用 6.5 中定义的单字节格式存储 idx' 与复数变换 opcode。
   - 同时生成权重缩放数组。
 - 确保索引缓冲对齐、与原始权重一一对应，并记录必要的 tile 参数（例如行块大小、列块大小）。
+
+> **实现进展（已落地代码）**  
+> - 常量表：`ggml/src/ggml-quants.c` 中新增 `ifairy_canonical_idx[64]` 与 `ifairy_factor_exp[64]`，对应 4.2 的规范映射。  
+> - opcode 映射：指数 → `(swap, neg_real, neg_imag)` 编码，规则与 6.5 保持一致：`1→0x00`，`i→0xA0`，`-1→0x60`，`-i→0xC0`。  
+> - 索引生成 API：`ggml_ifairy_3w_encode()`（声明于 `ggml/src/ggml-quants.h`）直接从压缩 2‑bit 权重生成三权重索引缓冲，k 按 3 向上取整并在尾部用 code=0 做 padding；`ggml_ifairy_3w_get_index_info()` / `ggml_ifairy_3w_index_buffer_size(_aligned64)` 提供布局与容量计算。  
+> - 单元校验：`tests/test-ifairy.cpp` 增加 `test_ifairy_lut_index`，验证前 3 组编码 `[0x69, 0xA0, 0x0D]` 及 padding 行为（K=256 → groups=86，末尾填 0x60），作为 10.2 的回归守护。  
+> - 下一步：在权重加载/转换流程中调用上述 API 写入权重侧索引缓冲，并在 NEON 内核消费该缓冲。
 
 ### 10.3 步骤三：激活预处理与 LUT 构造
 

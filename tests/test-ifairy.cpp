@@ -162,6 +162,80 @@ bool compare_arrays(const float* a, const float* b, size_t n, float max_error = 
 }
 
 // ============================================================================
+// 3-weight LUT 索引缓冲构造
+// ============================================================================
+
+static void set_ifairy_code(block_ifairy & blk, int idx, uint8_t code) {
+    assert(idx >= 0 && idx < QK_K);
+    const int chunk = idx / 64;
+    const int part  = (idx >> 4) & 0x3;
+    const int lane  = idx & 0x0f;
+
+    uint8_t & packed = blk.qs[chunk * 16 + lane];
+    packed &= (uint8_t) ~(0x3u << (2 * part));
+    packed |= (uint8_t) ((code & 0x3u) << (2 * part));
+}
+
+bool test_ifairy_lut_index() {
+    printf("\n=== Test 2: iFairy 3-weight index encoding ===\n");
+
+    const int64_t k = QK_K;   // 256
+    const int64_t rows = 1;
+    const int64_t blocks_per_row = k / QK_K;
+
+    std::vector<block_ifairy> weights((size_t) rows * (size_t) blocks_per_row);
+    block_ifairy blk{};
+
+    // 设置前三个三权重组：
+    // g0: (0,1,2) -> 0x69
+    // g1: (3,3,3) -> 0xA0
+    // g2: (1,2,3) -> 0x0D
+    set_ifairy_code(blk, 0, 0);
+    set_ifairy_code(blk, 1, 1);
+    set_ifairy_code(blk, 2, 2);
+    set_ifairy_code(blk, 3, 3);
+    set_ifairy_code(blk, 4, 3);
+    set_ifairy_code(blk, 5, 3);
+    set_ifairy_code(blk, 6, 1);
+    set_ifairy_code(blk, 7, 2);
+    set_ifairy_code(blk, 8, 3);
+
+    weights[0] = blk;
+
+    const ggml_ifairy_3w_index_info info = ggml_ifairy_3w_get_index_info(k);
+    const size_t required = ggml_ifairy_3w_index_buffer_size(&info, rows);
+
+    std::vector<uint8_t> index(required);
+
+    const bool ok = ggml_ifairy_3w_encode(weights.data(), k, rows, index.data(), index.size());
+    if (!ok) {
+        fprintf(stderr, "Failed to encode iFairy 3-weight index buffer\n");
+        return false;
+    }
+
+    const size_t groups = (size_t) info.groups_per_row;
+
+    bool pass = true;
+    pass &= groups == 86;               // 256 -> K3 = 258 -> 86 groups
+    pass &= index.size() == required;
+    pass &= index[0] == 0x69;
+    pass &= index[1] == 0xA0;
+    pass &= index[2] == 0x0D;
+    pass &= index[3] == 0x60;           // 默认 0 填充
+    pass &= index[groups - 1] == 0x60;  // 末尾 padding
+
+    if (!pass) {
+        fprintf(stderr, "Index encoding mismatch: [%02x, %02x, %02x, %02x, ... %02x]\n",
+                index[0], index[1], index[2], index[3], index[groups - 1]);
+    } else {
+        printf("  groups_per_row=%zu, first bytes=[%02x %02x %02x %02x], last=%02x\n",
+               groups, index[0], index[1], index[2], index[3], index[groups - 1]);
+    }
+
+    return pass;
+}
+
+// ============================================================================
 // 测试 1: 量化/反量化
 // ============================================================================
 
@@ -213,11 +287,11 @@ bool test_quantization() {
 }
 
 // ============================================================================
-// 测试 2: ROPE 算子
+// 测试 3: ROPE 算子
 // ============================================================================
 
 bool test_rope() {
-    printf("\n=== Test 2: iFairy ROPE ===\n");
+    printf("\n=== Test 3: iFairy ROPE ===\n");
 
     // 读取测试数据
     std::string json_data = read_file("tests/ifairy-test-data/rope_test.json");
@@ -298,11 +372,11 @@ bool test_rope() {
 }
 
 // ============================================================================
-// 测试 3: 复数矩阵乘法
+// 测试 4: 复数矩阵乘法
 // ============================================================================
 
 bool test_complex_matmul() {
-    printf("\n=== Test 3: Complex Matrix Multiplication ===\n");
+    printf("\n=== Test 4: Complex Matrix Multiplication ===\n");
 
     // 读取测试数据
     std::string json_data = read_file("tests/ifairy-test-data/matmul_test.json");
@@ -407,13 +481,18 @@ int main(int argc, char** argv) {
         num_failed++;
     }
 
-    if (!test_rope()) {
+    if (!test_ifairy_lut_index()) {
         fprintf(stderr, "Test 2 FAILED\n");
         num_failed++;
     }
 
-    if (!test_complex_matmul()) {
+    if (!test_rope()) {
         fprintf(stderr, "Test 3 FAILED\n");
+        num_failed++;
+    }
+
+    if (!test_complex_matmul()) {
+        fprintf(stderr, "Test 4 FAILED\n");
         num_failed++;
     }
 

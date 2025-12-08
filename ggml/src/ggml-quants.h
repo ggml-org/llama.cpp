@@ -93,6 +93,17 @@ GGML_API size_t quantize_tq2_0(const float * GGML_RESTRICT src, void * GGML_REST
 GGML_API size_t quantize_ifairy(const float * GGML_RESTRICT src_real, const float * GGML_RESTRICT src_imag, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_ifairy_q16(const float * GGML_RESTRICT src_real, const float * GGML_RESTRICT src_imag, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
+struct ggml_ifairy_3w_index_info {
+    int64_t k;              // 原始 K 维
+    int64_t k_padded;       // 按 3 对齐后的 K3
+    int64_t groups_per_row; // 每行三权重组数量
+};
+
+GGML_API struct ggml_ifairy_3w_index_info ggml_ifairy_3w_get_index_info(int64_t k);
+GGML_API size_t ggml_ifairy_3w_index_buffer_size(const struct ggml_ifairy_3w_index_info * info, int64_t rows);
+GGML_API size_t ggml_ifairy_3w_index_buffer_size_aligned64(const struct ggml_ifairy_3w_index_info * info, int64_t rows);
+GGML_API bool ggml_ifairy_3w_encode(const block_ifairy * GGML_RESTRICT weights, int64_t k, int64_t rows, uint8_t * GGML_RESTRICT dst, size_t dst_size);
+
 GGML_API size_t quantize_tq2_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_q2_K(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_q3_K(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
