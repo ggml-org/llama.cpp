@@ -16,7 +16,7 @@ The project differentiates between 3 levels of contributors:
     - If you modified a `ggml` operator or added a new one, add the corresponding test cases to `test-backend-ops`
 - Create separate PRs for each feature or fix. Avoid combining unrelated changes in a single PR
 - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
-- If your PR becomes stale, don't hesitate to ping the maintainers in the comments
+- If your PR becomes stale, rebase it on top of latest `master` to get maintainers attention
 - Maintainers will rely on your insights and approval when making a final decision to approve and merge a PR
 - Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related PRs
 - Using AI to generate PRs is permitted. However, you must (1) explicitly disclose how AI was used and (2) conduct a thorough manual review before publishing the PR. Note that trivial tab autocompletions do not require disclosure.

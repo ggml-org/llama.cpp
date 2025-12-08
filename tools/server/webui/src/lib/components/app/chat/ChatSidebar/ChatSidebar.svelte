@@ -8,6 +8,7 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
 
 	const sidebar = Sidebar.useSidebar();
@@ -98,6 +99,10 @@
 
 		await goto(`#/chat/${id}`);
 	}
+
+	function handleStopGeneration(id: string) {
+		chatStore.stopGenerationForChat(id);
+	}
 </script>
 
 <ScrollArea class="h-[100vh]">
@@ -132,6 +137,7 @@
 							onSelect={selectConversation}
 							onEdit={handleEditConversation}
 							onDelete={handleDeleteConversation}
+							onStop={handleStopGeneration}
 						/>
 					</Sidebar.MenuItem>
 				{/each}

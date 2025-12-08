@@ -159,6 +159,22 @@ class ModelsStore {
 	}
 
 	/**
+	 * Get context size (n_ctx) for a specific model from cached props
+	 */
+	getModelContextSize(modelId: string): number | null {
+		const props = this.modelPropsCache.get(modelId);
+		return props?.default_generation_settings?.n_ctx ?? null;
+	}
+
+	/**
+	 * Get context size for the currently selected model or null if no model is selected
+	 */
+	get selectedModelContextSize(): number | null {
+		if (!this.selectedModelName) return null;
+		return this.getModelContextSize(this.selectedModelName);
+	}
+
+	/**
 	 * Check if props are being fetched for a model
 	 */
 	isModelPropsFetching(modelId: string): boolean {
@@ -579,3 +595,4 @@ export const loadedModelIds = () => modelsStore.loadedModelIds;
 export const loadingModelIds = () => modelsStore.loadingModelIds;
 export const propsCacheVersion = () => modelsStore.propsCacheVersion;
 export const singleModelName = () => modelsStore.singleModelName;
+export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;
