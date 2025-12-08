@@ -2,7 +2,11 @@ import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
-import { selectedModelName, modelsStore } from '$lib/stores/models.svelte';
+import {
+	selectedModelName,
+	modelsStore,
+	selectedModelContextSize
+} from '$lib/stores/models.svelte';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -261,6 +265,13 @@ class ChatStore {
 			return activeState.contextTotal;
 		}
 
+		if (isRouterMode()) {
+			const modelContextSize = selectedModelContextSize();
+			if (modelContextSize && modelContextSize > 0) {
+				return modelContextSize;
+			}
+		}
+
 		const propsContextSize = contextSize();
 		if (propsContextSize && propsContextSize > 0) {
 			return propsContextSize;
@@ -458,6 +469,14 @@ class ChatStore {
 		onError?: (error: Error) => void,
 		modelOverride?: string | null
 	): Promise<void> {
+		// Ensure model props are cached before streaming (for correct n_ctx in processing info)
+		if (isRouterMode()) {
+			const modelName = modelOverride || selectedModelName();
+			if (modelName && !modelsStore.getModelProps(modelName)) {
+				await modelsStore.fetchModelProps(modelName);
+			}
+		}
+
 		let streamedContent = '';
 		let streamedReasoningContent = '';
 		let streamedToolCallContent = '';
@@ -624,6 +643,22 @@ class ChatStore {
 		this.clearChatStreaming(currentConv.id);
 
 		try {
+			if (isNewConversation) {
+				const rootId = await DatabaseService.createRootMessage(currentConv.id);
+				const currentConfig = config();
+				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+
+				if (systemPrompt) {
+					const systemMessage = await DatabaseService.createSystemMessage(
+						currentConv.id,
+						systemPrompt,
+						rootId
+					);
+
+					conversationsStore.addMessageToActive(systemMessage);
+				}
+			}
+
 			const userMessage = await this.addMessage('user', content, 'text', '-1', extras);
 			if (!userMessage) throw new Error('Failed to add user message');
 			if (isNewConversation && content)
@@ -666,13 +701,17 @@ class ChatStore {
 
 		if (!activeConv) return;
 
-		await this.savePartialResponseIfNeeded(activeConv.id);
+		await this.stopGenerationForChat(activeConv.id);
+	}
+
+	async stopGenerationForChat(convId: string): Promise<void> {
+		await this.savePartialResponseIfNeeded(convId);
 
 		this.stopStreaming();
-		this.abortRequest(activeConv.id);
-		this.setChatLoading(activeConv.id, false);
-		this.clearChatStreaming(activeConv.id);
-		this.clearProcessingState(activeConv.id);
+		this.abortRequest(convId);
+		this.setChatLoading(convId, false);
+		this.clearChatStreaming(convId);
+		this.clearProcessingState(convId);
 	}
 
 	/**
@@ -999,14 +1038,20 @@ class ChatStore {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isLoading) return;
 
-		const result = this.getMessageByIdWithRole(messageId, 'user');
+		let result = this.getMessageByIdWithRole(messageId, 'user');
+
+		if (!result) {
+			result = this.getMessageByIdWithRole(messageId, 'system');
+		}
+
 		if (!result) return;
 		const { message: msg } = result;
 
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
-			const isFirstUserMessage = rootMessage && msg.parent === rootMessage.id;
+			const isFirstUserMessage =
+				msg.role === 'user' && rootMessage && msg.parent === rootMessage.id;
 
 			const parentId = msg.parent || rootMessage?.id;
 			if (!parentId) return;
@@ -1037,7 +1082,10 @@ class ChatStore {
 				);
 			}
 			await conversationsStore.refreshActiveMessages();
-			await this.generateResponseForMessage(newMessage.id);
+
+			if (msg.role === 'user') {
+				await this.generateResponseForMessage(newMessage.id);
+			}
 		} catch (error) {
 			console.error('Failed to edit message with branching:', error);
 		}

@@ -337,19 +337,23 @@
 		line-height: 1.75;
 	}
 
+	div :global(:is(h1, h2, h3, h4, h5, h6):first-child) {
+		margin-top: 0;
+	}
+
 	/* Headers with consistent spacing */
 	div :global(h1) {
 		font-size: 1.875rem;
 		font-weight: 700;
-		margin: 1.5rem 0 0.75rem 0;
 		line-height: 1.2;
+		margin: 1.5rem 0 0.75rem 0;
 	}
 
 	div :global(h2) {
 		font-size: 1.5rem;
 		font-weight: 600;
-		margin: 1.25rem 0 0.5rem 0;
 		line-height: 1.3;
+		margin: 1.25rem 0 0.5rem 0;
 	}
 
 	div :global(h3) {

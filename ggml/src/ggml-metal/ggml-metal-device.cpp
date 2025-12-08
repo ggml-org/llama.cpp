@@ -175,6 +175,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_unary(ggml_metal
     const char * op_str = "undefined";
     switch (op->op) {
         case GGML_OP_SCALE:      op_str = "scale";      break;
+        case GGML_OP_FILL:       op_str = "fill";       break;
         case GGML_OP_CLAMP:      op_str = "clamp";      break;
         case GGML_OP_SQR:        op_str = "sqr";        break;
         case GGML_OP_SQRT:       op_str = "sqrt";       break;
@@ -199,6 +200,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_unary(ggml_metal
                 case GGML_UNARY_OP_HARDSWISH:   op_str = "hardswish";   break;
                 case GGML_UNARY_OP_HARDSIGMOID: op_str = "hardsigmoid"; break;
                 case GGML_UNARY_OP_EXP:         op_str = "exp";         break;
+                case GGML_UNARY_OP_SOFTPLUS:    op_str = "softplus";    break;
+                case GGML_UNARY_OP_EXPM1:       op_str = "expm1";       break;
                 default: GGML_ABORT("fatal error");
             } break;
         default: GGML_ABORT("fatal error");
@@ -322,6 +325,28 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_cumsum_add(ggml_
     char name[256];
 
     snprintf(base, 256, "kernel_cumsum_add_%s", ggml_type_name(op->src[0]->type));
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_tri(ggml_metal_library_t lib, const ggml_tensor * op) {
+    GGML_ASSERT(op->op == GGML_OP_TRI);
+    GGML_ASSERT(op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+
+    char base[256];
+    char name[256];
+
+    const char * op_str = "tri";
+    const int ttype = op->op_params[0];
+
+    snprintf(base, 256, "kernel_%s_%s_%d", op_str, ggml_type_name(op->src[0]->type), ttype);
+
     snprintf(name, 256, "%s", base);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
