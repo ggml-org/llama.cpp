@@ -1,7 +1,7 @@
 #include "server-common.h"
 #include "server-models.h"
-#include "server-config.h"
 
+#include "preset.h"
 #include "download.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
@@ -12,13 +12,10 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <cctype>
 #include <cstring>
-#include <limits>
 #include <atomic>
 #include <chrono>
 #include <queue>
-#include <map>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -78,150 +75,130 @@ static std::filesystem::path get_server_exec_path() {
 #endif
 }
 
-static std::string to_upper_copy(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return (char) std::toupper(c); });
-    return value;
-}
+struct local_model {
+    std::string name;
+    std::string path;
+    std::string path_mmproj;
+};
 
-static std::string pick_preferred_mmproj(const std::vector<std::filesystem::path> & paths) {
-    if (paths.empty()) {
-        return "";
-    }
-
-    auto score = [](const std::string & path) {
-        const auto upper = to_upper_copy(path);
-        if (upper.find("BF16") != std::string::npos) {
-            return 3;
-        }
-        if (upper.find("F16") != std::string::npos) {
-            return 2;
-        }
-        if (upper.find("F32") != std::string::npos) {
-            return 1;
-        }
-        return 0;
-    };
-
-    const auto * best = &paths.front();
-    int best_score = score(best->string());
-    for (const auto & candidate : paths) {
-        const int candidate_score = score(candidate.string());
-        if (candidate_score > best_score) {
-            best = &candidate;
-            best_score = candidate_score;
-        }
-    }
-
-    return best->string();
-}
-
-static std::vector<server_local_model> list_local_models(const std::string & dir) {
+static std::vector<local_model> list_local_models(const std::string & dir) {
     if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
         throw std::runtime_error(string_format("error: '%s' does not exist or is not a directory\n", dir.c_str()));
     }
 
-    std::vector<server_local_model> models;
-
-    struct dir_model_files {
-        std::vector<std::filesystem::path> model_files;
-        std::vector<std::filesystem::path> mmproj_files;
+    std::vector<local_model> models;
+    auto scan_subdir = [&models](const std::string & subdir_path, const std::string & name) {
+        auto files = fs_list(subdir_path, false);
+        common_file_info model_file;
+        common_file_info first_shard_file;
+        common_file_info mmproj_file;
+        for (const auto & file : files) {
+            if (string_ends_with(file.name, ".gguf")) {
+                if (file.name.find("mmproj") != std::string::npos) {
+                    mmproj_file = file;
+                } else if (file.name.find("-00001-of-") != std::string::npos) {
+                    first_shard_file = file;
+                } else {
+                    model_file = file;
+                }
+            }
+        }
+        // single file model
+        local_model model{
+            /* name        */ name,
+            /* path        */ first_shard_file.path.empty() ? model_file.path : first_shard_file.path,
+            /* path_mmproj */ mmproj_file.path // can be empty
+        };
+        if (!model.path.empty()) {
+            models.push_back(model);
+        }
     };
 
-    std::map<std::filesystem::path, dir_model_files> model_directories;
-
-    for (const auto & entry : std::filesystem::recursive_directory_iterator(
-                 dir, std::filesystem::directory_options::skip_permission_denied)) {
-        if (!entry.is_regular_file()) {
-            continue;
+    auto files = fs_list(dir, true);
+    for (const auto & file : files) {
+        if (file.is_dir) {
+            scan_subdir(file.path, file.name);
+        } else if (string_ends_with(file.name, ".gguf")) {
+            // single file model
+            std::string name = file.name;
+            string_replace_all(name, ".gguf", "");
+            local_model model{
+                /* name        */ name,
+                /* path        */ file.path,
+                /* path_mmproj */ ""
+            };
+            models.push_back(model);
         }
-
-        const auto & path = entry.path();
-        if (!string_ends_with(path.filename().string(), ".gguf")) {
-            continue;
-        }
-
-        auto & files = model_directories[path.parent_path()];
-        const auto filename = path.filename().string();
-        if (filename.find("mmproj") != std::string::npos) {
-            files.mmproj_files.push_back(path);
-            continue;
-        }
-
-        if (filename.find("-00001-of-") != std::string::npos) {
-            files.model_files.push_back(path);
-            continue;
-        }
-
-        // skip shards that aren't the first chunk
-        if (filename.find("-000") != std::string::npos && filename.find("-of-") != std::string::npos) {
-            continue;
-        }
-
-        files.model_files.push_back(path);
     }
-
-    for (const auto & [parent_path, files] : model_directories) {
-        if (files.model_files.empty()) {
-            continue;
-        }
-
-        std::string preferred_mmproj = pick_preferred_mmproj(files.mmproj_files);
-
-        const auto * best_model = &files.model_files.front();
-        std::uintmax_t best_size = std::numeric_limits<std::uintmax_t>::max();
-        for (const auto & candidate : files.model_files) {
-            std::error_code size_ec;
-            const auto size = std::filesystem::file_size(candidate, size_ec);
-            if (size_ec) {
-                continue;
-            }
-            if (best_size == std::numeric_limits<std::uintmax_t>::max() || size < best_size) {
-                best_model = &candidate;
-                best_size = size;
-            }
-        }
-
-        std::error_code ec;
-        auto rel_parent = std::filesystem::relative(parent_path, dir, ec);
-        std::string name;
-        if (!ec && !rel_parent.empty() && rel_parent.string() != ".") {
-            name = rel_parent.generic_string();
-        } else {
-            name = parent_path.filename().generic_string();
-        }
-
-        server_local_model model{
-            /* name        */ name,
-            /* path        */ std::filesystem::absolute(*best_model).string(),
-            /* path_mmproj */ preferred_mmproj.empty() ? "" : std::filesystem::absolute(preferred_mmproj).string()
-        };
-        models.push_back(model);
-    }
-
     return models;
 }
 
-static bool is_option(const std::string & arg) {
-    return !arg.empty() && arg[0] == '-';
-}
+//
+// server_presets
+//
 
-static std::vector<std::string> strip_router_control_args(const std::vector<std::string> & args) {
-    std::vector<std::string> filtered;
-    filtered.reserve(args.size());
 
-    for (size_t i = 0; i < args.size(); ++i) {
-        const auto & arg = args[i];
-        if (is_router_control_arg(arg)) {
-            if (i + 1 < args.size() && !is_option(args[i + 1])) {
-                ++i;
-            }
-            continue;
-        }
-
-        filtered.push_back(arg);
+server_presets::server_presets(int argc, char ** argv, common_params & base_params, const std::string & models_dir)
+        : ctx_params(common_params_parser_init(base_params, LLAMA_EXAMPLE_SERVER)) {
+    if (!models_dir.empty()) {
+        auto presets_path = models_dir + DIRECTORY_SEPARATOR + "presets.ini";
+        presets = common_presets_load(presets_path, ctx_params);
+        SRV_INF("Loaded %zu presets from %s\n", presets.size(), presets_path.c_str());
     }
 
-    return filtered;
+    common_params_parse(argc, argv, LLAMA_EXAMPLE_SERVER, base_args);
+
+    // populate reserved args (will be appended by the router)
+    for (auto & opt : ctx_params.options) {
+        if (opt.env == nullptr) {
+            continue;
+        }
+        std::string env = opt.env;
+        if (env == "LLAMA_ARG_PORT" ||
+            env == "LLAMA_ARG_HOST" ||
+            env == "LLAMA_ARG_ALIAS" ||
+            env == "LLAMA_ARG_API_KEY" ||
+            env == "LLAMA_ARG_MODELS_DIR" ||
+            env == "LLAMA_ARG_MODELS_MAX" ||
+            env == "LLAMA_ARG_NO_MODELS_AUTOLOAD" ||
+            env == "LLAMA_ARG_MODEL" ||
+            env == "LLAMA_ARG_MMPROJ" ||
+            env == "LLAMA_ARG_HF_REPO") {
+            control_args[env] = opt;
+        }
+    }
+}
+
+common_preset server_presets::get_preset(const std::string & name) {
+    auto it = presets.find(name);
+    if (it != presets.end()) {
+        return it->second;
+    }
+    return common_preset();
+}
+
+void server_presets::render_args(server_model_meta & meta) {
+    common_preset preset = meta.preset; // copy
+    // force removing control args if any
+    for (auto & cargs : control_args) {
+        preset.options.erase(cargs.second);
+    }
+    // inherit from base args
+    for (const auto & [arg, value] : base_args) {
+        preset.options[arg] = value;
+    }
+    // set control values
+    preset.options[control_args["LLAMA_ARG_PORT"]] = std::to_string(meta.port);
+    preset.options[control_args["LLAMA_ARG_ALIAS"]] = meta.name;
+    if (meta.in_cache) {
+        preset.options[control_args["LLAMA_ARG_HF_REPO"]] = meta.name;
+    } else {
+        preset.options[control_args["LLAMA_ARG_MODEL"]] = meta.path;
+        if (!meta.path_mmproj.empty()) {
+            preset.options[control_args["LLAMA_ARG_MMPROJ"]] = meta.path_mmproj;
+        }
+    }
+    meta.args = preset.to_args();
 }
 
 //
@@ -232,12 +209,10 @@ server_models::server_models(
         const common_params & params,
         int argc,
         char ** argv,
-        char ** envp) : base_params(params), server_config(params.models_dir) {
+        char ** envp) : base_params(params), presets(argc, argv, base_params, params.models_dir) {
     for (int i = 0; i < argc; i++) {
         base_args.push_back(std::string(argv[i]));
     }
-
-    base_args = strip_router_control_args(base_args);
     for (char ** env = envp; *env != nullptr; env++) {
         base_env.push_back(std::string(*env));
     }
@@ -254,6 +229,7 @@ server_models::server_models(
     auto cached_models = common_list_cached_models();
     for (const auto & model : cached_models) {
         server_model_meta meta{
+            /* preset      */ presets.get_preset(model.to_string()),
             /* name        */ model.to_string(),
             /* path        */ model.manifest_path,
             /* path_mmproj */ "", // auto-detected when loading
@@ -264,6 +240,7 @@ server_models::server_models(
             /* args        */ std::vector<std::string>(),
             /* exit_code   */ 0
         };
+        presets.render_args(meta); // populate meta.args
         mapping[meta.name] = instance_t{
             /* subproc */ std::make_shared<subprocess_s>(),
             /* th      */ std::thread(),
@@ -273,13 +250,13 @@ server_models::server_models(
     // add local models specificed via --models-dir
     if (!params.models_dir.empty()) {
         auto local_models = list_local_models(params.models_dir);
-        server_config.sync(local_models, base_args);
         for (const auto & model : local_models) {
             if (mapping.find(model.name) != mapping.end()) {
                 // already exists in cached models, skip
                 continue;
             }
             server_model_meta meta{
+                /* preset      */ presets.get_preset(model.name),
                 /* name        */ model.name,
                 /* path        */ model.path,
                 /* path_mmproj */ model.path_mmproj,
@@ -290,12 +267,18 @@ server_models::server_models(
                 /* args        */ std::vector<std::string>(),
                 /* exit_code   */ 0
             };
+            presets.render_args(meta); // populate meta.args
             mapping[meta.name] = instance_t{
                 /* subproc */ std::make_shared<subprocess_s>(),
                 /* th      */ std::thread(),
                 /* meta    */ meta
             };
         }
+    }
+    // log available models
+    SRV_INF("Available models (%zu) (*: custom preset)\n", mapping.size());
+    for (const auto & [name, inst] : mapping) {
+        SRV_INF("  %c %s\n", inst.meta.preset.name.empty() ? ' ' : '*', name.c_str());
     }
 }
 
@@ -430,25 +413,7 @@ void server_models::unload_lru() {
     }
 }
 
-static void add_or_replace_arg(std::vector<std::string> & args, const std::string & key, const std::string & value) {
-    for (size_t i = 0; i < args.size();) {
-        if (args[i] == key) {
-            args.erase(args.begin() + i);
-            if (i < args.size() && !is_option(args[i])) {
-                args.erase(args.begin() + i);
-            }
-        } else {
-            ++i;
-        }
-    }
-
-    args.push_back(key);
-    if (!value.empty()) {
-        args.push_back(value);
-    }
-}
-
-void server_models::load(const std::string & name, bool auto_load) {
+void server_models::load(const std::string & name) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
@@ -477,43 +442,8 @@ void server_models::load(const std::string & name, bool auto_load) {
     {
         SRV_INF("spawning server instance with name=%s on port %d\n", inst.meta.name.c_str(), inst.meta.port);
 
-        std::vector<std::string> child_args;
-        if (auto_load && !meta.args.empty()) {
-            child_args = strip_router_control_args(meta.args); // copy previous args minus router-only flags
-        } else {
-            child_args.push_back(base_args[0]);
-            if (inst.meta.in_cache) {
-                child_args.push_back("-hf");
-                child_args.push_back(inst.meta.name);
-            } else {
-                child_args.push_back("-m");
-                child_args.push_back(inst.meta.path);
-                if (!inst.meta.path_mmproj.empty()) {
-                    child_args.push_back("--mmproj");
-                    child_args.push_back(inst.meta.path_mmproj);
-                }
-            }
-
-            child_args.push_back("--port");
-            child_args.push_back(std::to_string(inst.meta.port));
-
-            child_args.push_back("--alias");
-            child_args.push_back(inst.meta.name);
-        }
-
-        std::vector<std::string> child_env = base_env; // copy
-        auto config_env = server_config.env_for(inst.meta.name);
-        for (const auto & [key, value] : config_env) {
-            if (value == "false") {
-                continue;
-            }
-
-            if (value == "true" || value.empty()) {
-                child_env.push_back(key + "=");
-            } else {
-                child_env.push_back(key + "=" + value);
-            }
-        }
+        std::vector<std::string> child_args = inst.meta.args; // copy
+        std::vector<std::string> child_env  = base_env; // copy
         child_env.push_back("LLAMA_SERVER_ROUTER_PORT=" + std::to_string(base_params.port));
 
         SRV_INF("%s", "spawning server instance with args:\n");
@@ -659,7 +589,7 @@ bool server_models::ensure_model_loaded(const std::string & name) {
     }
     if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
         SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
-        load(name, true);
+        load(name);
     }
 
     SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
@@ -842,38 +772,6 @@ void server_models_routes::init_routes() {
         return models.proxy_request(req, method, name, true); // update last usage for POST request only
     };
 
-    this->get_router_models = [this](const server_http_req &) {
-        auto res = std::make_unique<server_http_res>();
-        json models_json = json::array();
-        auto all_models = models.get_all_meta();
-        std::time_t t = std::time(0);
-        for (const auto & meta : all_models) {
-            json status {
-                {"value", server_model_status_to_string(meta.status)},
-                {"args",  meta.args},
-            };
-            if (meta.is_failed()) {
-                status["exit_code"] = meta.exit_code;
-                status["failed"]    = true;
-            }
-            models_json.push_back(json {
-                {"id",       meta.name},
-                {"object",   "model"},    // for OAI-compat
-                {"owned_by", "llamacpp"}, // for OAI-compat
-                {"created",  t},          // for OAI-compat
-                {"in_cache", meta.in_cache},
-                {"path",     meta.path},
-                {"status",   status},
-                // TODO: add other fields, may require reading GGUF metadata
-            });
-        }
-        res_ok(res, {
-            {"data", models_json},
-            {"object", "list"},
-        });
-        return res;
-    };
-
     this->post_router_models_load = [this](const server_http_req & req) {
         auto res = std::make_unique<server_http_res>();
         json body = json::parse(req.body);
@@ -887,7 +785,7 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        models.load(name, false);
+        models.load(name);
         res_ok(res, {{"success", true}});
         return res;
     };
@@ -911,9 +809,12 @@ void server_models_routes::init_routes() {
         std::time_t t = std::time(0);
         for (const auto & meta : all_models) {
             json status {
-                {"value", server_model_status_to_string(meta.status)},
-                {"args",  meta.args},
+                {"value",  server_model_status_to_string(meta.status)},
+                {"args",   meta.args},
             };
+            if (!meta.preset.name.empty()) {
+                status["preset"] = meta.preset.to_ini();
+            }
             if (meta.is_failed()) {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;

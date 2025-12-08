@@ -1383,8 +1383,6 @@ Alternatively, you can point the router to a local directory containing your GGU
 llama-server --models-dir ./models_directory
 ```
 
-The directory is scanned recursively, so nested vendor/model layouts such as `vendor_name/model_name/*.gguf` are supported. The model name in the router UI matches the relative path inside `--models-dir` (for example, `vendor_name/model_name`).
-
 If the model contains multiple GGUF (for multimodal or multi-shard), files should be put into a subdirectory. The directory structure should look like this:
 
 ```sh
