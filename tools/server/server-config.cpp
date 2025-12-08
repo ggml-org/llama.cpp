@@ -80,12 +80,6 @@ void server_config_manager::ensure_loaded() {
 
     if (!fs::exists(path)) {
         data.clear();
-        last_write_time = {};
-        return;
-    }
-
-    const auto current_write_time = fs::last_write_time(path);
-    if (last_write_time == current_write_time) {
         return;
     }
 
@@ -96,35 +90,35 @@ void server_config_manager::ensure_loaded() {
 
     std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-    static const auto & parser = *new common_peg_arena(build_peg_parser([](common_peg_parser_builder & p) {
+    static const auto parser = build_peg_parser([](auto & p) {
         const auto ws = p.space();
         const auto new_line = p.choice({p.literal("\r\n"), p.literal("\n"), p.literal("\r")});
 
         const auto section_name = p.tag("section-name", p.until("]"));
-        const auto section_line = p.zero_or_more(ws) + "[" + section_name + "]" + p.optional(p.until_one_of({"\r", "\n"}));
+        const auto section_line = ws + "[" + section_name + "]" + p.until_one_of({"\r", "\n"});
 
         const auto key = p.tag("key", p.until("="));
         const auto value = p.tag("value", p.until_one_of({"\r", "\n"}));
-        const auto key_value_line = p.zero_or_more(ws) + key + p.zero_or_more(ws) + "=" + p.zero_or_more(ws) + p.optional(value);
+        const auto key_value_line = ws + key + ws + "=" + ws + value;
 
-        const auto comment = p.choice({p.literal(";"), p.literal("#")}) + p.optional(p.until_one_of({"\r", "\n"}));
-        const auto comment_line = p.zero_or_more(ws) + comment;
+        const auto comment = p.choice({p.literal(";"), p.literal("#")}) + p.until_one_of({"\r", "\n"});
+        const auto comment_line = ws + comment;
 
-        const auto blank_line = p.zero_or_more(ws) + new_line;
+        const auto blank_line = ws + new_line;
 
         const auto line = p.choice({
-            section_line << p.optional(new_line),
-            key_value_line << p.optional(new_line),
-            comment_line << p.optional(new_line),
+            section_line + new_line,
+            key_value_line + new_line,
+            comment_line + new_line,
             blank_line,
         });
 
-        return p.rule("ini", p.zero_or_more(line) << p.optional(p.zero_or_more(ws)) << p.end());
-    }));
+        return p.rule("ini", p.zero_or_more(line) + p.optional(ws) + p.end());
+    });
 
     common_peg_parse_context ctx(contents);
     const auto result = parser.parse(ctx);
-    if (!result.success() || result.end != contents.size()) {
+    if (!result.success()) {
         throw std::runtime_error("failed to parse server config file: " + path);
     }
 
@@ -181,7 +175,6 @@ void server_config_manager::ensure_loaded() {
     }
 
     data = std::move(parsed);
-    last_write_time = current_write_time;
 }
 
 // write_locked expects the caller to hold `mutex`.
@@ -220,7 +213,6 @@ void server_config_manager::write_locked() {
     }
 
     file.flush();
-    last_write_time = fs::last_write_time(path);
 }
 
 bool is_router_control_arg(const std::string & arg) {

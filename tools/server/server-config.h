@@ -31,7 +31,6 @@ private:
 private:
     std::string path;
     std::string models_dir;
-    std::filesystem::file_time_type last_write_time{};
     std::map<std::string, std::map<std::string, std::string>> data;
     std::mutex mutex;
 };
