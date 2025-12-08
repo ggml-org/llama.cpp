@@ -55,6 +55,8 @@ struct task_params {
     int32_t n_indent  =  0; // minimum line indentation for the generated text in number of whitespace characters
     int32_t n_cmpl    =  1; // number of completions to generate from this prompt
 
+    int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
+
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
 
@@ -62,18 +64,19 @@ struct task_params {
 
     std::vector<std::string> antiprompt;
     std::vector<std::string> response_fields;
-    bool timings_per_token = false;
+
+    bool timings_per_token   = false;
     bool post_sampling_probs = false;
 
     struct common_params_sampling sampling;
     struct common_params_speculative speculative;
 
     // response formatting
-    bool                         verbose                   = false;
-    task_response_type           res_type                  = TASK_RESPONSE_TYPE_NONE;
-    std::string                  oaicompat_model;
-    std::string                  oaicompat_cmpl_id;
-    common_chat_syntax           oaicompat_chat_syntax;
+    bool               verbose  = false;
+    task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
+    std::string        oaicompat_model;
+    std::string        oaicompat_cmpl_id;
+    common_chat_syntax oaicompat_chat_syntax;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)

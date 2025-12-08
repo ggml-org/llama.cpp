@@ -1880,8 +1880,18 @@ struct server_context_impl {
                                     n_past = std::min(n_past, slot.alora_invocation_start - 1);
                                 }
 
+                                const auto n_cache_reuse = slot.task->params.n_cache_reuse;
+
+                                const bool can_cache_reuse =
+                                    llama_memory_can_shift(llama_get_memory(ctx)) &&
+                                    !slot.prompt.tokens.has_mtmd;
+
+                                if (!can_cache_reuse && n_cache_reuse > 0) {
+                                    SLT_WRN(slot, "cache reuse is not supported - ignoring n_cache_reuse = %d\n", n_cache_reuse);
+                                }
+
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
-                                if (params_base.n_cache_reuse > 0) {
+                                if (can_cache_reuse && n_cache_reuse > 0) {
                                     GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
 
                                     size_t head_c = n_past; // cache
@@ -1892,7 +1902,7 @@ struct server_context_impl {
                                         GGML_ABORT("not supported by multimodal");
                                     }
 
-                                    SLT_DBG(slot, "trying to reuse chunks with size > %d, n_past = %d\n", params_base.n_cache_reuse, n_past);
+                                    SLT_DBG(slot, "trying to reuse chunks with size > %d, n_past = %d\n", n_cache_reuse, n_past);
 
                                     while (head_c < slot.prompt.tokens.size() &&
                                            head_p < input_tokens.size()) {
@@ -1901,11 +1911,10 @@ struct server_context_impl {
                                         while (head_c + n_match < slot.prompt.tokens.size() &&
                                                head_p + n_match < input_tokens.size()       &&
                                                slot.prompt.tokens[head_c + n_match] == input_tokens[head_p + n_match]) {
-
                                             n_match++;
                                         }
 
-                                        if (n_match >= (size_t) params_base.n_cache_reuse) {
+                                        if (n_match >= (size_t) n_cache_reuse) {
                                             SLT_INF(slot, "reusing chunk with size %zu, shifting KV cache [%zu, %zu) -> [%zu, %zu)\n", n_match, head_c, head_c + n_match, head_p, head_p + n_match);
                                             //for (size_t i = head_p; i < head_p + n_match; i++) {
                                             //    SLT_DBG(slot, "cache token %3zu: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx, prompt_tokens[i]).c_str());
