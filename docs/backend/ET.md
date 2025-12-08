@@ -83,6 +83,12 @@ cmake --build build --config Release
 # cmake --install build
 ```
 
+Build targeting sysemu backend instead of physical hardware:
+```sh
+cmake -B build -DGGML_ET=ON -DGGML_ET_SYSEMU=ON
+cmake --build build --config Release
+```
+
 ### III. Run
 
 Run llama.cpp binaries as usual. (Of course, please make sure you have the

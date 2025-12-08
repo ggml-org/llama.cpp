@@ -8,6 +8,14 @@ else()
     set(ET_PLATFORM_PATH "/opt/et")
 endif()
 
+# Use sysemu for ET backend if compiled with `-DGGML_ET_SYSEMU=ON`
+if(GGML_ET_SYSEMU)
+    message(STATUS "Using ET backend with sysemu instead of hardware")
+    add_compile_definitions(GGML_ET_SYSEMU=1)
+else()
+    message(STATUS "Using ET backend with hardware device")
+endif()
+
 # Add ET platform CMake modules and config files to search paths
 list(APPEND CMAKE_PREFIX_PATH ${ET_PLATFORM_PATH}/lib/cmake)
 list(APPEND CMAKE_MODULE_PATH ${ET_PLATFORM_PATH}/lib/cmake)
