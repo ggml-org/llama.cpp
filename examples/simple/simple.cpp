@@ -135,6 +135,7 @@ int main(int argc, char ** argv) {
         int n = llama_token_to_piece(vocab, id, buf, sizeof(buf), 0, true);
         if (n < 0) {
             fprintf(stderr, "%s: error: failed to convert token to piece\n", __func__);
+            llama_sampler_free(smpl);
             return 1;
         }
         std::string s(buf, n);
@@ -148,6 +149,7 @@ int main(int argc, char ** argv) {
     if (llama_model_has_encoder(model)) {
         if (llama_encode(ctx, batch)) {
             fprintf(stderr, "%s : failed to eval\n", __func__);
+            llama_sampler_free(smpl);
             return 1;
         }
 
@@ -169,6 +171,7 @@ int main(int argc, char ** argv) {
         // evaluate the current batch with the transformer model
         if (llama_decode(ctx, batch)) {
             fprintf(stderr, "%s : failed to eval, return code %d\n", __func__, 1);
+            llama_sampler_free(smpl);
             return 1;
         }
 
@@ -180,6 +183,7 @@ int main(int argc, char ** argv) {
 
             // is it an end of generation?
             if (llama_vocab_is_eog(vocab, new_token_id)) {
+                llama_sampler_free(smpl);
                 break;
             }
 
@@ -187,6 +191,7 @@ int main(int argc, char ** argv) {
             int n = llama_token_to_piece(vocab, new_token_id, buf, sizeof(buf), 0, true);
             if (n < 0) {
                 fprintf(stderr, "%s: error: failed to convert token to piece\n", __func__);
+                llama_sampler_free(smpl);
                 return 1;
             }
             std::string s(buf, n);
