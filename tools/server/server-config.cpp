@@ -7,26 +7,12 @@
 #include <cctype>
 #include <fstream>
 #include <functional>
-#include <optional>
 #include <set>
 
 namespace {
 
 bool is_option(const std::string & arg) {
     return !arg.empty() && arg[0] == '-';
-}
-
-std::string trim(const std::string & value) {
-    const auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
-    size_t start = 0;
-    while (start < value.size() && is_space(value[start])) {
-        ++start;
-    }
-    size_t end = value.size();
-    while (end > start && is_space(value[end - 1])) {
-        --end;
-    }
-    return value.substr(start, end - start);
 }
 
 bool is_implicit_value(const std::vector<std::string> & args, size_t index) {
@@ -91,29 +77,44 @@ void server_config_manager::ensure_loaded() {
     std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
     static const auto parser = build_peg_parser([](auto & p) {
-        const auto ws = p.space();
-        const auto new_line = p.choice({p.literal("\r\n"), p.literal("\n"), p.literal("\r")});
+        // newline ::= "\r\n" / "\n" / "\r"
+        auto newline = p.rule("newline", p.literal("\r\n") | p.literal("\n") | p.literal("\r"));
 
-        const auto section_name = p.tag("section-name", p.until("]"));
-        const auto section_line = ws + "[" + section_name + "]" + p.until_one_of({"\r", "\n"});
+        // ws ::= [ \t]*
+        auto ws = p.rule("ws", p.chars("[ \t]", 0, -1));
 
-        const auto key = p.tag("key", p.until("="));
-        const auto value = p.tag("value", p.until_one_of({"\r", "\n"}));
-        const auto key_value_line = ws + key + ws + "=" + ws + value;
+        // comment ::= [;#] (!newline .)*
+        auto comment = p.rule("comment", p.chars("[;#]", 1, 1) + p.zero_or_more(p.negate(newline) + p.any()));
 
-        const auto comment = p.choice({p.literal(";"), p.literal("#")}) + p.until_one_of({"\r", "\n"});
-        const auto comment_line = ws + comment;
+        // eol ::= ws comment? (newline / EOF)
+        auto eol = p.rule("eol", ws + p.optional(comment) + (newline | p.end()));
 
-        const auto blank_line = ws + new_line;
+        // ident ::= [a-zA-Z_] [a-zA-Z0-9_.-]*
+        auto ident = p.rule("ident", p.chars("[a-zA-Z_]", 1, 1) + p.chars("[a-zA-Z0-9_.-]", 0, -1));
 
-        const auto line = p.choice({
-            section_line + new_line,
-            key_value_line + new_line,
-            comment_line + new_line,
-            blank_line,
-        });
+        // value ::= (!eol-start .)*
+        auto eol_start = p.rule("eol-start", ws + (p.chars("[;#]", 1, 1) | newline | p.end()));
+        auto value = p.rule("value", p.zero_or_more(p.negate(eol_start) + p.any()));
 
-        return p.rule("ini", p.zero_or_more(line) + p.optional(ws) + p.end());
+        // header-line ::= "[" ws ident ws "]" eol
+        auto header_line = p.rule("header-line", "[" + ws + p.tag("section-name", p.chars("[^]]")) + ws + "]" + eol);
+
+        // kv-line ::= ident ws "=" ws value eol
+        auto kv_line = p.rule("kv-line", p.tag("key", ident) + ws + "=" + ws + p.tag("value", value) + eol);
+
+        // comment-line ::= ws comment (newline / EOF)
+        auto comment_line = p.rule("comment-line", ws + comment + (newline | p.end()));
+
+        // blank-line ::= ws (newline / EOF)
+        auto blank_line = p.rule("blank-line", ws + (newline | p.end()));
+
+        // line ::= header-line / kv-line / comment-line / blank-line
+        auto line = p.rule("line", header_line | kv_line | comment_line | blank_line);
+
+        // ini ::= line* EOF
+        auto ini = p.rule("ini", p.zero_or_more(line) + p.end());
+
+        return ini;
     });
 
     common_peg_parse_context ctx(contents);
@@ -123,56 +124,32 @@ void server_config_manager::ensure_loaded() {
     }
 
     std::map<std::string, std::map<std::string, std::string>> parsed;
+
     std::string current_section;
-    std::optional<std::string> pending_key;
+    std::string current_key;
 
-    const auto flush_pending = [&](const std::string & value) {
-        if (current_section.empty() || !pending_key) {
-            return;
-        }
-
-        const auto & key = *pending_key;
-        if (key.rfind("LLAMA_ARG_", 0) != 0) {
-            return;
-        }
-
-        parsed[current_section][key] = value;
-    };
-
-    ctx.ast.visit(result, [&](const common_peg_ast_node & node) {
+    ctx.ast.visit(result, [&](const auto & node) {
         if (node.tag == "section-name") {
-            if (pending_key) {
-                flush_pending("");
-                pending_key.reset();
-            }
-
-            current_section = trim(std::string(node.text));
-            return;
-        }
-
-        if (node.tag == "key") {
-            if (pending_key) {
-                flush_pending("");
-            }
-
-            pending_key = trim(std::string(node.text));
-            return;
-        }
-
-        if (node.tag == "value") {
-            if (!pending_key) {
+            const std::string section = std::string(node.text);
+            if (section.rfind("LLAMA_ARG_", 0) == 0) {
+                current_section.clear();
                 return;
             }
 
-            flush_pending(trim(std::string(node.text)));
-            pending_key.reset();
-            return;
+            current_section = section;
+            parsed[current_section] = {};
+        } else if (node.tag == "key") {
+            const std::string key = std::string(node.text);
+            if (key.rfind("LLAMA_ARG_", 0) == 0) {
+                current_key = key;
+            } else {
+                current_key.clear();
+            }
+        } else if (node.tag == "value" && !current_key.empty() && !current_section.empty()) {
+            parsed[current_section][current_key] = std::string(node.text);
+            current_key.clear();
         }
     });
-
-    if (pending_key) {
-        flush_pending("");
-    }
 
     data = std::move(parsed);
 }
