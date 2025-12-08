@@ -1444,8 +1444,8 @@ version = 1
 chat-template = chatml
 ; numeric value
 n-gpu-layer = 123
-; boolean value
-jinja = false
+; flag value (for certain flags, you need to use the "no-" prefix for negation)
+jinja = true
 ; shorthand argument (for example, context size)
 c = 4096
 ; environment variable name
