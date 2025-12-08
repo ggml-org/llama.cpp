@@ -155,11 +155,12 @@ task_params server_task::params_from_json_cmpl(
 
     // Sampling parameter defaults are loaded from the global server context (but individual requests can still them)
     task_params defaults;
-    defaults.sampling    = params_base.sampling;
-    defaults.speculative = params_base.speculative;
-    defaults.n_keep      = params_base.n_keep;
-    defaults.n_predict   = params_base.n_predict;
-    defaults.antiprompt  = params_base.antiprompt;
+    defaults.sampling      = params_base.sampling;
+    defaults.speculative   = params_base.speculative;
+    defaults.n_keep        = params_base.n_keep;
+    defaults.n_predict     = params_base.n_predict;
+    defaults.n_cache_reuse = params_base.n_cache_reuse;
+    defaults.antiprompt    = params_base.antiprompt;
 
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose           = params_base.verbosity > 9;
@@ -176,6 +177,7 @@ task_params server_task::params_from_json_cmpl(
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
     params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
+    params.n_cache_reuse    = json_value(data,       "n_cache_reuse",      defaults.n_cache_reuse);
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
     params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
