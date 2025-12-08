@@ -477,3 +477,22 @@ def test_return_progress(n_batch, batch_count, reuse_cache):
     assert last_progress["total"] > 0
     assert last_progress["processed"] == last_progress["total"]
     assert total_batch_count == batch_count
+
+
+def test_chat_completions_multiple_choices():
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 8,
+        "n": 2,
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+    })
+    assert res.status_code == 200
+    assert len(res.body["choices"]) == 2
+    for choice in res.body["choices"]:
+        assert "assistant" == choice["message"]["role"]
+        assert match_regex("Suddenly", choice["message"]["content"])
+        assert choice["finish_reason"] == "length"

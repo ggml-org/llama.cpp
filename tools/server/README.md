@@ -2,7 +2,7 @@
 
 Fast, lightweight, pure C/C++ HTTP server based on [httplib](https://github.com/yhirose/cpp-httplib), [nlohmann::json](https://github.com/nlohmann/json) and **llama.cpp**.
 
-Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
+Set of LLM REST APIs and a web UI to interact with llama.cpp.
 
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
@@ -19,7 +19,7 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
  * Speculative decoding
  * Easy-to-use web UI
 
-The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggml-org/llama.cpp/issues/4216).
+For the ful list of features, please refer to [server's changelog](https://github.com/ggml-org/llama.cpp/issues/9291)
 
 ## Usage
 
@@ -289,69 +289,6 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
   cmake --build build --config Release -t llama-server
   ```
 
-## Web UI
-
-The project includes a web-based user interface for interacting with `llama-server`. It supports both single-model (`MODEL` mode) and multi-model (`ROUTER` mode) operation.
-
-### Features
-
--   **Chat interface** with streaming responses
--   **Multi-model support** (ROUTER mode) - switch between models, auto-load on selection
--   **Modality validation** - ensures selected model supports conversation's attachments (images, audio)
--   **Conversation management** - branching, regeneration, editing with history preservation
--   **Attachment support** - images, audio, PDFs (with vision/text fallback)
--   **Configurable parameters** - temperature, top_p, etc. synced with server defaults
--   **Dark/light theme**
-
-### Tech Stack
-
--   **SvelteKit** - frontend framework with Svelte 5 runes for reactive state
--   **TailwindCSS** + **shadcn-svelte** - styling and UI components
--   **Vite** - build tooling
--   **IndexedDB** (Dexie) - local storage for conversations
--   **LocalStorage** - user settings persistence
-
-### Architecture
-
-The WebUI follows a layered architecture:
-
-```
-Routes → Components → Hooks → Stores → Services → Storage/API
-```
-
--   **Stores** - reactive state management (`chatStore`, `conversationsStore`, `modelsStore`, `serverStore`, `settingsStore`)
--   **Services** - stateless API/database communication (`ChatService`, `ModelsService`, `PropsService`, `DatabaseService`)
--   **Hooks** - reusable logic (`useModelChangeValidation`, `useProcessingState`)
-
-For detailed architecture diagrams, see [`tools/server/webui/docs/`](webui/docs/):
-
--   `high-level-architecture.mmd` - full architecture with all modules
--   `high-level-architecture-simplified.mmd` - simplified overview
--   `data-flow-simplified-model-mode.mmd` - data flow for single-model mode
--   `data-flow-simplified-router-mode.mmd` - data flow for multi-model mode
--   `flows/*.mmd` - detailed per-domain flows (chat, conversations, models, etc.)
-
-### Development
-
-```sh
-# make sure you have Node.js installed
-cd tools/server/webui
-npm i
-
-# run dev server (with hot reload)
-npm run dev
-
-# run tests
-npm run test
-
-# build production bundle
-npm run build
-```
-
-After `public/index.html.gz` has been generated, rebuild `llama-server` as described in the [build](#build) section to include the updated UI.
-
-**Note:** The Vite dev server automatically proxies API requests to `http://localhost:8080`. Make sure `llama-server` is running on that port during development.
-
 ## Quick Start
 
 To get started right away, run the following command, making sure to use the correct path for the model you have:
@@ -380,7 +317,7 @@ docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggml-org/llama.cpp:se
 docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggml-org/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
 ```
 
-## Testing with CURL
+## Using with CURL
 
 Using [curl](https://curl.se/). On Windows, `curl.exe` should be available in the base OS.
 
@@ -389,46 +326,6 @@ curl --request POST \
     --url http://localhost:8080/completion \
     --header "Content-Type: application/json" \
     --data '{"prompt": "Building a website can be done in 10 simple steps:","n_predict": 128}'
-```
-
-## Advanced testing
-
-We implemented a [server test framework](./tests/README.md) using human-readable scenario.
-
-*Before submitting an issue, please try to reproduce it with this format.*
-
-## Node JS Test
-
-You need to have [Node.js](https://nodejs.org/en) installed.
-
-```bash
-mkdir llama-client
-cd llama-client
-```
-
-Create an index.js file and put this inside:
-
-```javascript
-const prompt = "Building a website can be done in 10 simple steps:"
-
-async function test() {
-    let response = await fetch("http://127.0.0.1:8080/completion", {
-        method: "POST",
-        body: JSON.stringify({
-            prompt,
-            n_predict: 64,
-        })
-    })
-    console.log((await response.json()).content)
-}
-
-test()
-```
-
-And run it:
-
-```bash
-node index.js
 ```
 
 ## API Endpoints
@@ -492,6 +389,10 @@ Note for `multimodal_data` in JSON object prompts. This should be an array of st
 
 `n_keep`: Specify the number of tokens from the prompt to retain when the context size is exceeded and tokens need to be discarded. The number excludes the BOS token.
 By default, this value is set to `0`, meaning no tokens are kept. Use `-1` to retain all tokens from the prompt.
+
+`n_cmpl`: Number of completions to generate from the current prompt. If input has multiple prompts, the output will have N prompts times `n_cmpl` entries.
+
+`n_cache_reuse`: Min chunk size to attempt reusing from the cache via KV shifting. For more info, see `--cache-reuse` arg. Default: `0`, which is disabled.
 
 `stream`: Allows receiving each predicted token in real-time instead of waiting for the completion to finish (uses a different response format). To enable this, set to `true`.
 
@@ -1634,6 +1535,22 @@ Response:
 }
 ```
 
+## API errors
+
+`llama-server` returns errors in the same format as OAI: https://github.com/openai/openai-openapi
+
+Example of an error:
+
+```json
+{
+    "error": {
+        "code": 401,
+        "message": "Invalid API Key",
+        "type": "authentication_error"
+    }
+}
+```
+
 ## More examples
 
 ### Interactive mode
@@ -1651,26 +1568,6 @@ Run with bash:
 
 ```sh
 bash chat.sh
-```
-
-### OAI-like API
-
-The HTTP `llama-server` supports an OAI-like API: https://github.com/openai/openai-openapi
-
-### API errors
-
-`llama-server` returns errors in the same format as OAI: https://github.com/openai/openai-openapi
-
-Example of an error:
-
-```json
-{
-    "error": {
-        "code": 401,
-        "message": "Invalid API Key",
-        "type": "authentication_error"
-    }
-}
 ```
 
 Apart from error types supported by OAI, we also have custom types that are specific to functionalities of llama.cpp:
