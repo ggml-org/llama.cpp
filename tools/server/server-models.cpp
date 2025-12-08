@@ -7,7 +7,6 @@
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <sheredom/subprocess.h>
 
-#include <cstdio>
 #include <functional>
 #include <algorithm>
 #include <thread>
@@ -78,17 +77,9 @@ static std::filesystem::path get_server_exec_path() {
 
 struct local_model {
     std::string name;
-    std::string display_name;
     std::string path;
     std::string path_mmproj;
 };
-
-static std::string sanitize_model_name(const std::string & name) {
-    std::string sanitized = name;
-    string_replace_all(sanitized, "/", "_");
-    string_replace_all(sanitized, "\\", "_");
-    return sanitized;
-}
 
 static std::vector<local_model> list_local_models(const std::string & dir) {
     if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
@@ -96,69 +87,47 @@ static std::vector<local_model> list_local_models(const std::string & dir) {
     }
 
     std::vector<local_model> models;
-    std::function<void(const std::string &, const std::string &)> scan_subdir =
-        [&](const std::string & subdir_path, const std::string & name) {
-            auto files = fs_list(subdir_path, true);  // Need directories for recursion
-            common_file_info model_file;
-            common_file_info first_shard_file;
-            common_file_info mmproj_file;
-
-            for (const auto & file : files) {
-                if (file.is_dir) {
-                    const std::string child_name = name.empty() ? file.name : name + "/" + file.name;
-                    scan_subdir(file.path, child_name);
-                    continue;
-                }
-
-                if (string_ends_with(file.name, ".gguf")) {
-                    if (file.name.find("mmproj") != std::string::npos) {
-                        mmproj_file = file;
-                    } else if (file.name.find("-00001-of-") != std::string::npos) {
-                        first_shard_file = file;
-                    } else {
-                        model_file = file;
-                    }
+    auto scan_subdir = [&models](const std::string & subdir_path, const std::string & name) {
+        auto files = fs_list(subdir_path, false);
+        common_file_info model_file;
+        common_file_info first_shard_file;
+        common_file_info mmproj_file;
+        for (const auto & file : files) {
+            if (string_ends_with(file.name, ".gguf")) {
+                if (file.name.find("mmproj") != std::string::npos) {
+                    mmproj_file = file;
+                } else if (file.name.find("-00001-of-") != std::string::npos) {
+                    first_shard_file = file;
+                } else {
+                    model_file = file;
                 }
             }
-
-            // Convert absolute paths to relative
-            std::string model_path = first_shard_file.path.empty() ? model_file.path : first_shard_file.path;
-            if (!model_path.empty()) {
-                std::error_code ec;
-                auto rel_path = std::filesystem::relative(model_path, dir, ec);
-                if (!ec) {
-                    model_path = rel_path.generic_string();
-                }
-            }
-
-            std::string mmproj_path = mmproj_file.path;
-            if (!mmproj_path.empty()) {
-                std::error_code ec;
-                auto rel_path = std::filesystem::relative(mmproj_path, dir, ec);
-                if (!ec) {
-                    mmproj_path = rel_path.generic_string();
-                }
-            }
-
-            local_model model{
-                /* name         */ name,
-                /* display_name */ sanitize_model_name(name),
-                /* path         */ model_path,
-                /* path_mmproj  */ mmproj_path // can be empty
-            };
-            if (!model.path.empty()) {
-                models.push_back(model);
-            }
+        }
+        // single file model
+        local_model model{
+            /* name        */ name,
+            /* path        */ first_shard_file.path.empty() ? model_file.path : first_shard_file.path,
+            /* path_mmproj */ mmproj_file.path // can be empty
         };
+        if (!model.path.empty()) {
+            models.push_back(model);
+        }
+    };
 
-    scan_subdir(dir, "");
-
-    // when scanning the root, the name is empty, so adjust names for models directly under models_dir
-    for (auto & model : models) {
-        if (model.name.empty() && !model.path.empty()) {
-            model.name = std::filesystem::path(model.path).filename().string();
-            string_replace_all(model.name, ".gguf", "");
-            model.display_name = sanitize_model_name(model.name);
+    auto files = fs_list(dir, true);
+    for (const auto & file : files) {
+        if (file.is_dir) {
+            scan_subdir(file.path, file.name);
+        } else if (string_ends_with(file.name, ".gguf")) {
+            // single file model
+            std::string name = file.name;
+            string_replace_all(name, ".gguf", "");
+            local_model model{
+                /* name        */ name,
+                /* path        */ file.path,
+                /* path_mmproj */ ""
+            };
+            models.push_back(model);
         }
     }
     return models;
@@ -169,8 +138,8 @@ static std::vector<local_model> list_local_models(const std::string & dir) {
 //
 
 
-server_presets::server_presets(int argc, char ** argv, common_params & base_params, const std::string & presets_path, const std::string & models_dir)
-        : ctx_params(common_params_parser_init(base_params, LLAMA_EXAMPLE_SERVER)), models_dir(models_dir) {
+server_presets::server_presets(int argc, char ** argv, common_params & base_params, const std::string & presets_path)
+        : ctx_params(common_params_parser_init(base_params, LLAMA_EXAMPLE_SERVER)) {
     if (!presets_path.empty()) {
         presets = common_presets_load(presets_path, ctx_params);
         SRV_INF("Loaded %zu presets from %s\n", presets.size(), presets_path.c_str());
@@ -185,7 +154,6 @@ server_presets::server_presets(int argc, char ** argv, common_params & base_para
         if (env == "LLAMA_ARG_PORT" ||
             env == "LLAMA_ARG_HOST" ||
             env == "LLAMA_ARG_ALIAS" ||
-            env == "LLAMA_ARG_MODELS_PRESET" ||
             env == "LLAMA_ARG_API_KEY" ||
             env == "LLAMA_ARG_MODELS_DIR" ||
             env == "LLAMA_ARG_MODELS_MAX" ||
@@ -240,17 +208,9 @@ void server_presets::render_args(server_model_meta & meta) {
     if (meta.in_cache) {
         preset.options[control_args["LLAMA_ARG_HF_REPO"]] = meta.name;
     } else {
-        std::string model_path = meta.path;
-        if (!models_dir.empty() && !std::filesystem::path(model_path).is_absolute()) {
-            model_path = models_dir + "/" + model_path;
-        }
-        preset.options[control_args["LLAMA_ARG_MODEL"]] = model_path;
+        preset.options[control_args["LLAMA_ARG_MODEL"]] = meta.path;
         if (!meta.path_mmproj.empty()) {
-            std::string mmproj_path = meta.path_mmproj;
-            if (!models_dir.empty() && !std::filesystem::path(mmproj_path).is_absolute()) {
-                mmproj_path = models_dir + "/" + mmproj_path;
-            }
-            preset.options[control_args["LLAMA_ARG_MMPROJ"]] = mmproj_path;
+            preset.options[control_args["LLAMA_ARG_MMPROJ"]] = meta.path_mmproj;
         }
     }
     meta.args = preset.to_args();
@@ -264,7 +224,7 @@ server_models::server_models(
         const common_params & params,
         int argc,
         char ** argv,
-        char ** envp) : base_params(params), presets(argc, argv, base_params, params.models_preset, params.models_dir) {
+        char ** envp) : base_params(params), presets(argc, argv, base_params, params.models_preset) {
     for (int i = 0; i < argc; i++) {
         base_args.push_back(std::string(argv[i]));
     }
@@ -272,13 +232,12 @@ server_models::server_models(
         base_env.push_back(std::string(*env));
     }
     GGML_ASSERT(!base_args.empty());
-    // Save binary path before base_args is modified by presets parsing
+    // set binary path
     try {
-        server_binary_path = get_server_exec_path().string();
+        base_args[0] = get_server_exec_path().string();
     } catch (const std::exception & e) {
         LOG_WRN("failed to get server executable path: %s\n", e.what());
-        LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
-        server_binary_path = std::string(argv[0]);
+        LOG_WRN("using original argv[0] as fallback: %s\n", base_args[0].c_str());
     }
     load_models();
 }
@@ -348,18 +307,13 @@ void server_models::load_models() {
     if (!base_params.models_dir.empty()) {
         auto local_models = list_local_models(base_params.models_dir);
         for (const auto & model : local_models) {
-            const std::string name = model.display_name;
-            if (mapping.find(name) != mapping.end()) {
+            if (mapping.find(model.name) != mapping.end()) {
                 // already exists in cached models, skip
                 continue;
             }
-            auto preset = presets.get_preset(name);
-            if (preset.name.empty() && name != model.name) {
-                preset = presets.get_preset(model.name);
-            }
             server_model_meta meta{
-                /* preset      */ preset,
-                /* name        */ name,
+                /* preset      */ presets.get_preset(model.name),
+                /* name        */ model.name,
                 /* path        */ model.path,
                 /* path_mmproj */ model.path_mmproj,
                 /* in_cache    */ false,
@@ -552,15 +506,11 @@ void server_models::load(const std::string & name) {
         throw std::runtime_error("failed to get a port number");
     }
 
-    presets.render_args(inst.meta);
-
     inst.subproc = std::make_shared<subprocess_s>();
     {
         SRV_INF("spawning server instance with name=%s on port %d\n", inst.meta.name.c_str(), inst.meta.port);
 
         std::vector<std::string> child_args = inst.meta.args; // copy
-        // Insert binary path as argv[0]
-        child_args.insert(child_args.begin(), server_binary_path);
         std::vector<std::string> child_env  = base_env; // copy
         child_env.push_back("LLAMA_SERVER_ROUTER_PORT=" + std::to_string(base_params.port));
 
