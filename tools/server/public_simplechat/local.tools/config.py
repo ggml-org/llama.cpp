@@ -152,7 +152,7 @@ class Config(DictyDataclassMixin):
         Helper to process command line arguments.
 
         Flow setup below such that
-        * location of --config in commandline will decide whether command line or config file will get
+        * location of --op.configFile in commandline will decide whether command line or config file will get
         priority wrt setting program parameters.
         * str type values in cmdline are picked up directly, without running them through ast.literal_eval,
         bcas otherwise one will have to ensure throught the cmdline arg mechanism that string quote is

@@ -26,7 +26,7 @@ build/bin/llama-server -m <path/to/model.gguf> \
 If one needs web related access / tool calls dont forget to run
 
 ```bash
-cd tools/server/public_simplechat/local.tools; python3 ./simplemcp.py --config simplemcp.json
+cd tools/server/public_simplechat/local.tools; python3 ./simplemcp.py --op.configFile simplemcp.json
 ```
 
 - `--debug True` enables debug mode which captures internet handshake data
