@@ -31,7 +31,7 @@ struct xml_tool_call_format {
     std::optional<std::string> last_val_end = std::nullopt;
     std::optional<std::string> last_tool_end = std::nullopt;
     bool trim_raw_argval = false;
-    bool allow_toolcall_in_think = false; // TODO: UNTESTED!!!
+    bool allow_toolcall_in_think = false;
 };
 
 // make a GBNF that accept any strings except those containing any of the forbidden strings.
