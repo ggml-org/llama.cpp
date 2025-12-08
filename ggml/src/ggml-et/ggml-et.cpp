@@ -11,6 +11,16 @@
 #include <cstring>
 #include <vector>
 
+#if __has_include(<filesystem>)
+#include <filesystem>
+namespace fs = std::filesystem;
+#elif __has_include(<experimental/filesystem>)
+#include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
+#else
+#error "cannot include the filesystem library"
+#endif
+
 /*
   ET Driver.
 
@@ -25,6 +35,72 @@ static struct ggml_et_driver {
     bool profiling_enabled = false;
 } _drv;
 
+// Check at runtime environment variables for paths likely holding ET toolchain with sysemu elf files
+std::string ggml_et_get_default_et_path() {
+    // List of environment variables to check in order of preference
+    const char* const env_vars[] = {"ET_TOOLCHAIN", "TOOLCHAIN_ROOT"};
+
+    for (const char* var : env_vars) {
+        if (const char* et_path = std::getenv(var)) {
+            if (et_path && *et_path != '\0') {
+                return fs::path(et_path).string();
+            }
+        }
+    }
+
+    // Otherwise assume default
+    return fs::path("/opt/et").string();
+}
+
+// config when using sysemu instead of PCIe hardware device
+// adapted from `ainekko/et-platform/esperanto-tools-libs/tools/src/bench.cpp`
+inline auto ggml_et_get_default_sysemu_options() {
+    constexpr uint64_t kSysEmuMaxCycles = std::numeric_limits<uint64_t>::max();
+    constexpr uint64_t kSysEmuMinionShiresMask = 0x1FFFFFFFFu;
+    const std::string et_path = ggml_et_get_default_et_path() + "/";
+
+    emu::SysEmuOptions sysEmuOptions;
+
+    // Construct all paths
+    sysEmuOptions.bootromTrampolineToBL2ElfPath = et_path + "lib/esperanto-fw/BootromTrampolineToBL2/BootromTrampolineToBL2.elf";
+    sysEmuOptions.spBL2ElfPath = et_path + "lib/esperanto-fw/ServiceProcessorBL2/fast-boot/ServiceProcessorBL2_fast-boot.elf";
+    sysEmuOptions.machineMinionElfPath = et_path + "lib/esperanto-fw/MachineMinion/MachineMinion.elf";
+    sysEmuOptions.masterMinionElfPath = et_path + "lib/esperanto-fw/MasterMinion/MasterMinion.elf";
+    sysEmuOptions.workerMinionElfPath = et_path + "lib/esperanto-fw/WorkerMinion/WorkerMinion.elf";
+    sysEmuOptions.executablePath = et_path + "bin/sys_emu";
+
+    // Check that each path has a valid existing non-zero file otherwise emulator just silently hangs
+    const std::vector<std::string> required_files = {
+        sysEmuOptions.bootromTrampolineToBL2ElfPath,
+        sysEmuOptions.spBL2ElfPath,
+        sysEmuOptions.machineMinionElfPath,
+        sysEmuOptions.masterMinionElfPath,
+        sysEmuOptions.workerMinionElfPath,
+        sysEmuOptions.executablePath,
+    };
+
+    for (const auto& file : required_files) {
+        if (!fs::exists(file) || fs::file_size(file) == 0) {
+            // Check that each path has a valid existing non-zero file otherwise emulator just silently hangs
+            GGML_LOG_ERROR("ET: Unable to find required sysemu file: %s\n", file.c_str());
+            GGML_LOG_ERROR("ET: Confirm et-platform is correctly installed at configured path.\n");
+            exit(1);
+        }
+    }
+
+    sysEmuOptions.runDir = (fs::current_path().string() + "/");
+    sysEmuOptions.maxCycles = kSysEmuMaxCycles;
+    sysEmuOptions.minionShiresMask = kSysEmuMinionShiresMask;
+    sysEmuOptions.puUart0Path = sysEmuOptions.runDir + "pu_uart0_tx.log";
+    sysEmuOptions.puUart1Path = sysEmuOptions.runDir + "pu_uart1_tx.log";
+    sysEmuOptions.spUart0Path = sysEmuOptions.runDir + "spio_uart0_tx.log";
+    sysEmuOptions.spUart1Path = sysEmuOptions.runDir + "spio_uart1_tx.log";
+    sysEmuOptions.startGdb = false;
+    sysEmuOptions.memcheck = false;
+
+    return sysEmuOptions;
+}
+
 // Forward declaration
 static void ggml_et_driver_cleanup();
 
@@ -33,7 +109,16 @@ static bool ggml_et_driver_init() {
 	assert(_drv.device_layer != nullptr);
     } else {
 	try {
-	    _drv.device_layer = dev::IDeviceLayer::createPcieDeviceLayer();
+        #if defined GGML_ET_SYSEMU && GGML_ET_SYSEMU
+        // For emulator device using sysEmuOptions provided by function above enabled compiling with `-DGGML_ET_SYSEMU=ON`
+        GGML_LOG_INFO("ET: Attempting to initialize sysemu device loading firmware from %s\n", ggml_et_get_default_et_path().c_str());
+        _drv.device_layer = dev::IDeviceLayer::createSysEmuDeviceLayer(ggml_et_get_default_sysemu_options());
+        #else
+        // For physical PCIe device
+        GGML_LOG_INFO("ET: Attempting to initialize PCIe hardware device\n");
+        _drv.device_layer = dev::IDeviceLayer::createPcieDeviceLayer();
+        #endif
+
 	    _drv.runtime = rt::IRuntime::create(_drv.device_layer);
 	    GGML_LOG_INFO("ET: FOUND %d devices!\n", _drv.device_layer->getDevicesCount());
 
