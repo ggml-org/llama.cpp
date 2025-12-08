@@ -422,12 +422,6 @@ std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & dev
             {GGML_TYPE_Q5_K, ExtraQuantType::F16     },
         };
     }
-    if (device == "GPU") {
-        return {
-            // gs16 will be supported on openvino-2025.4
-            {GGML_TYPE_Q6_K, ExtraQuantType::Q8_0_32},
-        };
-    }
     return {};
 }
 
