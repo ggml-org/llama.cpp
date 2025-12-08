@@ -933,6 +933,8 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 对每个激活 pack、每个三权重组 `g`，构建一对长度为 16 的扁平表 `lut_real_g[16]` / `lut_imag_g[16]`，对应 16 个规范模式；
   - 使用 int16/int32 累加后饱和裁剪为 int8，并尽量使用 NEON（`vaddq_s16` / `vsubq_s16` / `vrev64q_s16` / `vqmovn_s16` / `vst1q_s8`）实现批量构表，避免标量复数乘和逐 byte 写入。
 
+> 当前进展（标量 reference）：`ggml/src/ggml-ifairy-lut.cpp` 已实现标量版 LUT 构造与 qgemm（尚未接入路由）。构表使用 ifairy_q16 激活（实/虚分平面 int8 + fp16 scale），按三权重组和 16 个规范模式累加后饱和到 int8。`lut_scales` 目前占位填 1.0，待与实际激活/权重缩放集成后更新；qgemm 按索引 opcode（swap/neg）应用 LUT 值并累加为 int32，再乘 `lut_scales` 输出 float。
+
 ### 10.4 步骤四：标量参考内核
 
 - 实现一个纯标量版本的 3‑weight LUT matvec：

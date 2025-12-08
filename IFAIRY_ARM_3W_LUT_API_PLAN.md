@@ -141,6 +141,7 @@ return true; // NEON available -> NEON path; else scalar LUT
 ## 12. 计划拆解(可执行 TODO)
 - [x] 接口骨架文件与 CMake 线路（init/free/can/wsize/transform/preprocess/qgemm）。— 已添加 stub 版 API、头文件与 CMake 选项 `GGML_IFAIRY_ARM_LUT`，预防链接缺失；当前 can/wsize 返回禁用状态、preprocess/qgemm 为 no-op，后续实现时再开启路径。
 - [ ] 标量预处理 + 标量 qgemm（用于正确性基准）。
+  - 进度：已在 `ggml/src/ggml-ifairy-lut.cpp` 提供标量 reference（构表 + qgemm），当前未接入路由，scale 使用占位 1.0，等待与实际缩放/权重尺度集成后再开启。
 - [ ] NEON 预处理/LUT 构造（按 BK tile）。
 - [ ] NEON qgemm（16 组解码流水 + 行展开）。
 - [ ] ggml 路由集成（mul_mat 分支 + workbuf 管理）。

@@ -216,9 +216,6 @@ endif()
 
 if (GGML_IFAIRY_ARM_LUT)
     target_compile_definitions(ggml-base PUBLIC GGML_IFAIRY_ARM_LUT)
-    if (GGML_SYSTEM_ARCH STREQUAL "ARM")
-        target_sources(ggml-base PRIVATE ggml-cpu/arch/arm/ifairy-lut.cpp)
-    endif()
 endif()
 
 add_library(ggml
