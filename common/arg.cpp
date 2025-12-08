@@ -2611,6 +2611,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_DIR"));
     add_opt(common_arg(
+        {"--models-preset"}, "PATH",
+        "path to INI file containing model presets for the router server (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.models_preset = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_PRESET"));
+    add_opt(common_arg(
         {"--models-max"}, "N",
         string_format("for router server, maximum number of models to load simultaneously (default: %d, 0 = unlimited)", params.models_max),
         [](common_params & params, int value) {

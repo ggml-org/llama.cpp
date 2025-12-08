@@ -54,12 +54,12 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
     std::map<std::string, std::map<std::string, std::string>> parsed;
 
     if (!std::filesystem::exists(path)) {
-        return parsed; // return empty if file does not exist (expected behavior)
+        throw std::runtime_error("preset file does not exist: " + path);
     }
 
     std::ifstream file(path);
     if (!file.good()) {
-        throw std::runtime_error("failed to open server config file: " + path);
+        throw std::runtime_error("failed to open server preset file: " + path);
     }
 
     std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());

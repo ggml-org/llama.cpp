@@ -138,10 +138,9 @@ static std::vector<local_model> list_local_models(const std::string & dir) {
 //
 
 
-server_presets::server_presets(int argc, char ** argv, common_params & base_params, const std::string & models_dir)
+server_presets::server_presets(int argc, char ** argv, common_params & base_params, const std::string & presets_path)
         : ctx_params(common_params_parser_init(base_params, LLAMA_EXAMPLE_SERVER)) {
-    if (!models_dir.empty()) {
-        auto presets_path = models_dir + DIRECTORY_SEPARATOR + "presets.ini";
+    if (!presets_path.empty()) {
         presets = common_presets_load(presets_path, ctx_params);
         SRV_INF("Loaded %zu presets from %s\n", presets.size(), presets_path.c_str());
     }
@@ -165,6 +164,14 @@ server_presets::server_presets(int argc, char ** argv, common_params & base_para
             env == "LLAMA_ARG_MMPROJ" ||
             env == "LLAMA_ARG_HF_REPO") {
             control_args[env] = opt;
+        }
+    }
+
+    // remove any router-controlled args from base_args
+    for (const auto & cargs : control_args) {
+        auto it = base_args.find(cargs.second);
+        if (it != base_args.end()) {
+            base_args.erase(it);
         }
     }
 }
@@ -209,7 +216,7 @@ server_models::server_models(
         const common_params & params,
         int argc,
         char ** argv,
-        char ** envp) : base_params(params), presets(argc, argv, base_params, params.models_dir) {
+        char ** envp) : base_params(params), presets(argc, argv, base_params, params.models_preset) {
     for (int i = 0; i < argc; i++) {
         base_args.push_back(std::string(argv[i]));
     }
