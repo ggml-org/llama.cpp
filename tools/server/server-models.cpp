@@ -157,6 +157,7 @@ server_presets::server_presets(int argc, char ** argv, common_params & base_para
             env == "LLAMA_ARG_API_KEY" ||
             env == "LLAMA_ARG_MODELS_DIR" ||
             env == "LLAMA_ARG_MODELS_MAX" ||
+            env == "LLAMA_ARG_MODELS_PRESET" ||
             env == "LLAMA_ARG_MODEL" ||
             env == "LLAMA_ARG_MMPROJ" ||
             env == "LLAMA_ARG_HF_REPO" ||
