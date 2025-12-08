@@ -1,5 +1,8 @@
 #pragma once
 
+#include <time.h>       // for struct timespec, clock_gettime
+#include <stdint.h>     // for uintptr_t
+
 #define APIR_BACKEND_INITIALIZE_SUCCESS 0
 #define APIR_BACKEND_INITIALIZE_CANNOT_OPEN_BACKEND_LIBRARY 1
 #define APIR_BACKEND_INITIALIZE_CANNOT_OPEN_GGML_LIBRARY 2

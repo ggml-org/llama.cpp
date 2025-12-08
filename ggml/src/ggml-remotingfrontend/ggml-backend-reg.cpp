@@ -85,9 +85,9 @@ static void ggml_backend_remoting_reg_init_devices(ggml_backend_reg_t reg) {
 	  /* .reg     = */ reg,
 	  /* .context = */ ctx,
 	};
-
+#if USE_METAL_GUEST_SUPPORTS_OP == 1
 	ctx->metal_dev_ctx = get_metal_dev_context(dev);
-
+#endif
         devices.push_back(dev);
       }
       initialized = true;

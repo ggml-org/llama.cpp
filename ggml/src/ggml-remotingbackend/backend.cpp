@@ -99,6 +99,7 @@ extern "C" {
       return APIR_LOAD_LIBRARY_SYMBOL_MISSING;
     }
 
+#if USE_METAL_GUEST_SUPPORTS_OP == 1
     ggml_backend_metal_get_device_context_fct = (void (*)(ggml_backend_dev_t, bool *, bool *, bool *)) dlsym(backend_library_handle, GGML_BACKEND_LIBRARY_METAL_DEVICE_CONTEXT);
     dlsym_error = dlerror();
     if (dlsym_error) {
@@ -107,6 +108,7 @@ extern "C" {
 
       return APIR_LOAD_LIBRARY_SYMBOL_MISSING;
     }
+#endif
 
     uint32_t ret = backend_dispatch_initialize(ggml_backend_reg_fct, ggml_backend_init_fct);
 

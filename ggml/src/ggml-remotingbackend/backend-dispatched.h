@@ -87,35 +87,42 @@ static inline const char *backend_dispatch_command_name(ApirBackendCommandType t
   }
 }
 
+extern "C" {
 static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATCH_TABLE_COUNT] = {
   /* device */
-  [APIR_COMMAND_TYPE_DEVICE_GET_COUNT] = backend_reg_get_device_count,
-  [APIR_COMMAND_TYPE_DEVICE_GET_NAME] = backend_device_get_name,
-  [APIR_COMMAND_TYPE_DEVICE_GET_DESCRIPTION] = backend_device_get_description,
-  [APIR_COMMAND_TYPE_DEVICE_GET_TYPE] = backend_device_get_type,
-  [APIR_COMMAND_TYPE_DEVICE_GET_MEMORY] = backend_device_get_memory,
-  [APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP] = backend_device_supports_op,
-  [APIR_COMMAND_TYPE_DEVICE_GET_BUFFER_TYPE] = backend_device_get_buffer_type,
-  [APIR_COMMAND_TYPE_DEVICE_GET_PROPS] = backend_device_get_props,
-  [APIR_COMMAND_TYPE_DEVICE_BUFFER_FROM_PTR] = backend_device_buffer_from_ptr,
+  
+  /* APIR_COMMAND_TYPE_DEVICE_GET_COUNT  = */ backend_reg_get_device_count,
+  /* APIR_COMMAND_TYPE_DEVICE_GET_NAME  = */ backend_device_get_name,
+  /* APIR_COMMAND_TYPE_DEVICE_GET_DESCRIPTION  = */ backend_device_get_description,
+  /* APIR_COMMAND_TYPE_DEVICE_GET_TYPE  = */ backend_device_get_type,
+  /* APIR_COMMAND_TYPE_DEVICE_GET_MEMORY  = */ backend_device_get_memory,
+  /* APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP  = */ backend_device_supports_op,
+  /* APIR_COMMAND_TYPE_DEVICE_GET_BUFFER_TYPE  = */ backend_device_get_buffer_type,
+  /* APIR_COMMAND_TYPE_DEVICE_GET_PROPS  = */ backend_device_get_props,
+  /* APIR_COMMAND_TYPE_DEVICE_BUFFER_FROM_PTR  = */ backend_device_buffer_from_ptr,
 
   /* buffer-type */
-  [APIR_COMMAND_TYPE_BUFFER_TYPE_GET_NAME] = backend_buffer_type_get_name,
-  [APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALIGNMENT] = backend_buffer_type_get_alignment,
-  [APIR_COMMAND_TYPE_BUFFER_TYPE_GET_MAX_SIZE] = backend_buffer_type_get_max_size,
-  [APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST] = backend_buffer_type_is_host,
-  [APIR_COMMAND_TYPE_BUFFER_TYPE_ALLOC_BUFFER] = backend_buffer_type_alloc_buffer,
+  
+  /* APIR_COMMAND_TYPE_BUFFER_TYPE_GET_NAME  = */ backend_buffer_type_get_name,
+  /* APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALIGNMENT  = */ backend_buffer_type_get_alignment,
+  /* APIR_COMMAND_TYPE_BUFFER_TYPE_GET_MAX_SIZE  = */ backend_buffer_type_get_max_size,
+  /* APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST  = */ backend_buffer_type_is_host,
+  /* APIR_COMMAND_TYPE_BUFFER_TYPE_ALLOC_BUFFER  = */ backend_buffer_type_alloc_buffer,
 
   /* buffer */
-  [APIR_COMMAND_TYPE_BUFFER_GET_BASE] = backend_buffer_get_base,
-  [APIR_COMMAND_TYPE_BUFFER_SET_TENSOR] = backend_buffer_set_tensor,
-  [APIR_COMMAND_TYPE_BUFFER_GET_TENSOR] = backend_buffer_get_tensor,
-  [APIR_COMMAND_TYPE_BUFFER_CLEAR] = backend_buffer_clear,
-  [APIR_COMMAND_TYPE_BUFFER_FREE_BUFFER] = backend_buffer_free_buffer,
+  
+  /* APIR_COMMAND_TYPE_BUFFER_GET_BASE  = */ backend_buffer_get_base,
+  /* APIR_COMMAND_TYPE_BUFFER_SET_TENSOR  = */ backend_buffer_set_tensor,
+  /* APIR_COMMAND_TYPE_BUFFER_GET_TENSOR  = */ backend_buffer_get_tensor,
+  /* APIR_COMMAND_TYPE_BUFFER_CLEAR  = */ backend_buffer_clear,
+  /* APIR_COMMAND_TYPE_BUFFER_FREE_BUFFER  = */ backend_buffer_free_buffer,
 
   /* backend */
-  [APIR_COMMAND_TYPE_BACKEND_GRAPH_COMPUTE] = backend_graph_compute,
+  
+  /* APIR_COMMAND_TYPE_BACKEND_GRAPH_COMPUTE  = */ backend_graph_compute,
 
   /* metal */
-  [APIR_COMMAND_TYPE_METAL_GET_DEVICE_CONTEXT] = backend_metal_get_device_context,
+  
+  /* APIR_COMMAND_TYPE_METAL_GET_DEVICE_CONTEXT  = */ backend_metal_get_device_context,
 };
+}

@@ -109,9 +109,9 @@ static void ggml_backend_remoting_buffer_get_tensor_from_ptr(ggml_backend_buffer
 static bool ggml_backend_remoting_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
   NOT_IMPLEMENTED;
 
-  STOP_HERE;
+  // STOP_HERE;
 
-  return true;
+  return false;
 
   UNUSED(buffer);
   UNUSED(src);

@@ -54,7 +54,7 @@ deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
   }
   result->buffer = reinterpret_cast<ggml_backend_buffer_t>(tensor->buffer);
   if (result->buffer && backend_buffers.find(result->buffer) == backend_buffers.end()) {
-    printf("WARNING: BUFFER NOT FOUND | %p\n", (void *)result->buffer);
+    //printf("WARNING: BUFFER NOT FOUND | %p\n", (void *)result->buffer);
     result->buffer = nullptr;
   }
 

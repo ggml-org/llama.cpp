@@ -15,6 +15,17 @@ backend_graph_compute(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, stru
   UNUSED(ctx);
   UNUSED(enc);
 
+  static bool async_backend_initialized = false;
+  static bool async_backend;
+
+  if (!async_backend_initialized) {
+    struct ggml_backend_dev_props props;
+
+    dev->iface.get_props(dev, &props);
+    async_backend = props.caps.async;
+    async_backend_initialized = true;
+  }
+
   start_timer(&graph_compute_timer);
 
   uint32_t shmem_res_id;
@@ -48,7 +59,10 @@ backend_graph_compute(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, stru
   }
 #endif
   status = bck->iface.graph_compute(bck, cgraph);
-  bck->iface.synchronize(bck);
+
+  if (async_backend) {
+    bck->iface.synchronize(bck);
+  }
 
   vn_encode_ggml_status(enc, &status);
 
