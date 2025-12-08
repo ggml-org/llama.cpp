@@ -6003,6 +6003,59 @@ class Gemma3VisionModel(MmprojModel):
         return [] # skip other tensors
 
 
+@ModelBase.register("Gemma3nVisionModel", "Gemma3nForVisionConditionalGeneration")
+class Gemma3nVisionModel(MmprojModel):
+    """Vision encoder converter for Gemma3n using MobileNetV5 architecture"""
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        # Set projector type to GEMMA3N
+        self.gguf_writer.add_clip_projector_type(gguf.VISION_PROJECTOR_TYPE.GEMMA3N)
+
+        # MobileNetV5 specific parameters
+        self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_vision_use_gelu(True)  # MobileNetV5 uses approximate GELU
+
+        # Image sequence length (256 tokens = 16x16 for Gemma3n)
+        image_seq_length = self.preprocessor_config.get("image_seq_length", 256)
+        # Note: Additional metadata can be added as needed
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # Force quantization settings for specific tensor types
+        if "input_projection" in name or "input_proj" in name:
+            return gguf.GGMLQuantizationType.F16
+        if ".embeddings." in name or "stem" in name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        # Skip non-vision tensors
+        if not (name.startswith("multi_modal_projector.") or
+                name.startswith("vision_tower.") or
+                name.startswith("multimodal_projector.") or
+                name.startswith("vision_model.")):
+            return []
+
+        # Process MobileNetV5 and projection tensors
+        name = name.replace("_weight", ".weight")
+
+        # Gemma3n uses Gemma3p5RMSNorm which has scale_shift=0, so no correction needed
+        # Unlike Gemma3 which uses Gemma3RMSNorm with scale_shift=1
+        # Only apply correction if explicitly needed based on the norm type
+        if "soft_emb_norm.weight" in name:
+            # For Gemma3n, typically no correction needed, but check model version
+            # If the model uses Gemma3RMSNorm style, uncomment below:
+            # logger.info(f"Correcting norm value for '{name}'")
+            # data_torch = data_torch + 1
+            pass
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+
 @ModelBase.register("Gemma3nForConditionalGeneration")
 class Gemma3NModel(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA3N

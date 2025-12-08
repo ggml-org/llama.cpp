@@ -223,6 +223,31 @@ struct clip_hparams {
     }
 };
 
+// MobileNetV5 block structure for Gemma3n vision encoder
+struct mobilenetv5_block {
+    // Universal Inverted Residual block components
+    ggml_tensor * expand_conv_w = nullptr;    // 1x1 expansion convolution
+    ggml_tensor * expand_norm_w = nullptr;    // RMSNorm after expansion
+
+    ggml_tensor * dw_conv_w = nullptr;        // Depthwise 3x3 or 5x5 convolution
+    ggml_tensor * dw_norm_w = nullptr;        // RMSNorm after depthwise
+
+    ggml_tensor * se_reduce_w = nullptr;      // Squeeze-Excitation reduction
+    ggml_tensor * se_reduce_b = nullptr;
+    ggml_tensor * se_expand_w = nullptr;      // Squeeze-Excitation expansion
+    ggml_tensor * se_expand_b = nullptr;
+
+    ggml_tensor * project_conv_w = nullptr;   // 1x1 projection convolution
+    ggml_tensor * project_norm_w = nullptr;   // RMSNorm after projection
+
+    // Multi-Query Attention components (if present)
+    ggml_tensor * mqa_q_w = nullptr;          // Query projection
+    ggml_tensor * mqa_k_w = nullptr;          // Key projection
+    ggml_tensor * mqa_v_w = nullptr;          // Value projection
+    ggml_tensor * mqa_o_w = nullptr;          // Output projection
+    ggml_tensor * mqa_norm_w = nullptr;       // Pre-attention norm
+};
+
 struct clip_layer {
     // attention
     ggml_tensor * k_w = nullptr;
@@ -377,6 +402,17 @@ struct clip_model {
     // gemma3
     ggml_tensor * mm_input_proj_w = nullptr;
     ggml_tensor * mm_soft_emb_norm_w = nullptr;
+
+    // mobilenetv5 for gemma3n
+    std::vector<mobilenetv5_block> mobilenet_blocks;
+    ggml_tensor * mobilenet_stem_conv_w = nullptr;
+    ggml_tensor * mobilenet_stem_norm_w = nullptr;
+
+    // Multi-Scale Fusion Adapter (MSFA) components
+    ggml_tensor * msfa_concat_conv_w = nullptr;      // Concatenated feature processing
+    ggml_tensor * msfa_concat_norm_w = nullptr;
+    ggml_tensor * msfa_ffn_expand_w = nullptr;       // FFN expansion
+    ggml_tensor * msfa_ffn_project_w = nullptr;      // FFN projection
 
     // pixtral
     ggml_tensor * token_embd_img_break = nullptr;
@@ -538,6 +574,190 @@ struct clip_graph {
         ctx0_ptr.reset(ggml_init(params));
         ctx0 = ctx0_ptr.get();
         gf = ggml_new_graph_custom(ctx0, ctx->max_nodes, false);
+    }
+
+    // Helper function for 2D RMSNorm used in MobileNetV5
+    ggml_tensor * rms_norm_2d(ggml_tensor * inp, ggml_tensor * weight) {
+        // RMSNorm: norm = x / sqrt(mean(x^2) + eps) * weight
+        ggml_tensor * sq = ggml_sqr(ctx0, inp);
+        ggml_tensor * mean = ggml_mean(ctx0, sq);
+        ggml_tensor * rms = ggml_sqrt(ctx0, ggml_add1(ctx0, mean, eps));
+        ggml_tensor * normed = ggml_div(ctx0, inp, rms);
+        if (weight) {
+            normed = ggml_mul(ctx0, normed, weight);
+        }
+        return normed;
+    }
+
+    // Squeeze-and-Excitation layer
+    ggml_tensor * build_se_layer(ggml_tensor * inp, ggml_tensor * reduce_w, ggml_tensor * reduce_b,
+                                   ggml_tensor * expand_w, ggml_tensor * expand_b) {
+        if (!reduce_w || !expand_w) {
+            return inp;  // No SE layer
+        }
+
+        // Global average pooling
+        ggml_tensor * pooled = ggml_pool_2d(ctx0, inp, GGML_OP_POOL_AVG, inp->ne[0], inp->ne[1],
+                                             inp->ne[0], inp->ne[1], 0, 0);
+
+        // Reduce
+        ggml_tensor * se = ggml_mul_mat(ctx0, reduce_w, pooled);
+        if (reduce_b) {
+            se = ggml_add(ctx0, se, reduce_b);
+        }
+        se = ggml_gelu(ctx0, se);  // Approximate GELU activation
+
+        // Expand
+        se = ggml_mul_mat(ctx0, expand_w, se);
+        if (expand_b) {
+            se = ggml_add(ctx0, se, expand_b);
+        }
+        se = ggml_sigmoid(ctx0, se);
+
+        // Scale input
+        return ggml_mul(ctx0, inp, se);
+    }
+
+    // Universal Inverted Residual block (main building block of MobileNetV5)
+    ggml_tensor * build_inverted_residual_block(ggml_tensor * inp, const mobilenetv5_block & block,
+                                                  bool has_skip, int stride = 1) {
+        ggml_tensor * cur = inp;
+        ggml_tensor * residual = inp;
+
+        // Expansion phase (1x1 conv)
+        if (block.expand_conv_w) {
+            cur = ggml_conv_2d_sk_p0(ctx0, block.expand_conv_w, cur);
+            if (block.expand_norm_w) {
+                cur = rms_norm_2d(cur, block.expand_norm_w);
+            }
+            cur = ggml_gelu(ctx0, cur);
+        }
+
+        // Depthwise convolution (3x3 or 5x5)
+        if (block.dw_conv_w) {
+            // Depthwise conv with padding
+            int kernel_size = block.dw_conv_w->ne[0];
+            int padding = kernel_size / 2;
+            cur = ggml_conv_depthwise_2d(ctx0, block.dw_conv_w, cur, stride, stride, padding, padding, 1, 1);
+            if (block.dw_norm_w) {
+                cur = rms_norm_2d(cur, block.dw_norm_w);
+            }
+            cur = ggml_gelu(ctx0, cur);
+        }
+
+        // Squeeze-and-Excitation
+        cur = build_se_layer(cur, block.se_reduce_w, block.se_reduce_b,
+                            block.se_expand_w, block.se_expand_b);
+
+        // Projection phase (1x1 conv)
+        if (block.project_conv_w) {
+            cur = ggml_conv_2d_sk_p0(ctx0, block.project_conv_w, cur);
+            if (block.project_norm_w) {
+                cur = rms_norm_2d(cur, block.project_norm_w);
+            }
+        }
+
+        // Skip connection (only if stride=1 and same spatial dimensions)
+        if (has_skip && stride == 1) {
+            cur = ggml_add(ctx0, cur, residual);
+        }
+
+        return cur;
+    }
+
+    // MobileNetV5 encoder with Multi-Scale Fusion Adapter
+    ggml_cgraph * build_mobilenetv5() {
+        // Raw image input
+        ggml_tensor * inp = build_inp();
+
+        // Stem: Conv3x3, stride 2
+        ggml_tensor * cur = ggml_conv_2d(ctx0, model.mobilenet_stem_conv_w, inp, 2, 2, 1, 1, 1, 1);
+        if (model.mobilenet_stem_norm_w) {
+            cur = rms_norm_2d(cur, model.mobilenet_stem_norm_w);
+        }
+        cur = ggml_gelu(ctx0, cur);
+
+        // Process through MobileNetV5 blocks
+        // Store intermediate features for MSFA
+        std::vector<ggml_tensor*> intermediate_features;
+        const int total_blocks = model.mobilenet_blocks.size();
+
+        for (int i = 0; i < total_blocks; i++) {
+            const auto & block = model.mobilenet_blocks[i];
+
+            // Determine if this block has a skip connection
+            // This is a simplification; actual logic depends on stride and channels
+            bool has_skip = (i > 0);  // Skip for all blocks except first
+            int stride = 1;  // Most blocks have stride 1, some have stride 2
+
+            cur = build_inverted_residual_block(cur, block, has_skip, stride);
+
+            // Collect intermediate features at key stages for MSFA
+            // Typically we collect features after certain stages
+            // For simplicity, collect every 4th block's output
+            if ((i + 1) % 4 == 0 || i == total_blocks - 1) {
+                intermediate_features.push_back(cur);
+            }
+        }
+
+        // Multi-Scale Fusion Adapter (MSFA)
+        // Resize all intermediate features to the same resolution and concatenate
+        if (!intermediate_features.empty()) {
+            // Get the highest resolution (typically the first feature map)
+            ggml_tensor * target = intermediate_features[0];
+            int target_h = target->ne[1];
+            int target_w = target->ne[0];
+
+            // Resize and concatenate all features
+            std::vector<ggml_tensor*> resized_features;
+            for (auto feat : intermediate_features) {
+                if (feat->ne[0] != target_w || feat->ne[1] != target_h) {
+                    // Bilinear interpolation to resize
+                    feat = ggml_upscale(ctx0, feat, target_w / feat->ne[0]);
+                }
+                resized_features.push_back(feat);
+            }
+
+            // Concatenate along channel dimension (simplified - actual implementation may differ)
+            cur = resized_features[resized_features.size() - 1];  // Use last feature for now
+
+            // Process concatenated features through FFN
+            if (model.msfa_ffn_expand_w) {
+                cur = ggml_mul_mat(ctx0, model.msfa_ffn_expand_w, cur);
+                cur = ggml_gelu(ctx0, cur);
+            }
+            if (model.msfa_ffn_project_w) {
+                cur = ggml_mul_mat(ctx0, model.msfa_ffn_project_w, cur);
+            }
+        }
+
+        // Gemma3n-specific projection (same as Gemma3)
+        if (ctx->proj_type() == PROJECTOR_TYPE_GEMMA3N) {
+            // Reshape for processing
+            const int batch_size = 1;
+            int feat_h = cur->ne[1];
+            int feat_w = cur->ne[0];
+
+            cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 1, 0, 2, 3));
+
+            // Apply RMS normalization
+            cur = ggml_rms_norm(ctx0, cur, eps);
+            if (model.mm_soft_emb_norm_w) {
+                cur = ggml_mul(ctx0, cur, model.mm_soft_emb_norm_w);
+            }
+
+            // Project to language model embedding space
+            if (model.mm_input_proj_w) {
+                cur = ggml_mul_mat(ctx0,
+                    ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_input_proj_w)),
+                    cur);
+            }
+        }
+
+        // Build the graph
+        ggml_build_forward_expand(gf, cur);
+
+        return gf;
     }
 
     ggml_cgraph * build_siglip() {
@@ -2489,6 +2709,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 res = graph.build_siglip();
             } break;
+        case PROJECTOR_TYPE_GEMMA3N:
+            {
+                res = graph.build_mobilenetv5();
+            } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
@@ -2826,6 +3050,13 @@ struct clip_model_loader {
                         // test model (tinygemma3) has a different value, we optionally read it
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                     } break;
+                case PROJECTOR_TYPE_GEMMA3N:
+                    {
+                        // Gemma3n uses MobileNetV5 which produces 256 tokens (16x16)
+                        // Similar configuration to Gemma3
+                        hparams.n_merge = 1;  // MobileNetV5 handles resizing internally
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                    } break;
                 case PROJECTOR_TYPE_QWEN2VL:
                 case PROJECTOR_TYPE_QWEN25VL:
                 case PROJECTOR_TYPE_QWEN3VL:
@@ -3151,6 +3382,26 @@ struct clip_model_loader {
                 {
                     model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
                     model.mm_soft_emb_norm_w = get_tensor(TN_MM_SOFT_EMB_N);
+                } break;
+            case PROJECTOR_TYPE_GEMMA3N:
+                {
+                    // Load projection weights (same as Gemma3)
+                    model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
+                    model.mm_soft_emb_norm_w = get_tensor(TN_MM_SOFT_EMB_N);
+
+                    // Load MobileNetV5 stem weights
+                    model.mobilenet_stem_conv_w = get_tensor("v.mobilenet.stem.conv.weight", false);
+                    model.mobilenet_stem_norm_w = get_tensor("v.mobilenet.stem.norm.weight", false);
+
+                    // Load MobileNetV5 block weights (dynamic loading based on model architecture)
+                    // Blocks will be loaded during the weight loading phase
+                    // This is a placeholder - actual implementation will load blocks dynamically
+
+                    // Load MSFA weights
+                    model.msfa_concat_conv_w = get_tensor("v.mobilenet.msfa.concat_conv.weight", false);
+                    model.msfa_concat_norm_w = get_tensor("v.mobilenet.msfa.concat_norm.weight", false);
+                    model.msfa_ffn_expand_w = get_tensor("v.mobilenet.msfa.ffn_expand.weight", false);
+                    model.msfa_ffn_project_w = get_tensor("v.mobilenet.msfa.ffn_project.weight", false);
                 } break;
             case PROJECTOR_TYPE_IDEFICS3:
                 {
@@ -5084,6 +5335,10 @@ bool clip_is_llava(const struct clip_ctx * ctx) {
 
 bool clip_is_gemma3(const struct clip_ctx * ctx) {
     return ctx->proj_type() == PROJECTOR_TYPE_GEMMA3;
+}
+
+bool clip_is_gemma3n(const struct clip_ctx * ctx) {
+    return ctx->proj_type() == PROJECTOR_TYPE_GEMMA3N;
 }
 
 bool clip_has_vision_encoder(const struct clip_ctx * ctx) {

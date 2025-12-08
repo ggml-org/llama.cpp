@@ -456,6 +456,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
     GLM_EDGE  = auto()
     MERGER    = auto()
     GEMMA3    = auto()
+    GEMMA3N   = auto()
     QWEN3VL   = auto()
     COGVLM    = auto()
 
