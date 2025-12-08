@@ -214,6 +214,8 @@ void server_presets::render_args(server_model_meta & meta) {
         }
     }
     meta.args = preset.to_args();
+    // add back the binary path at the front
+    meta.args.insert(meta.args.begin(), get_server_exec_path().string());
 }
 
 //
@@ -509,6 +511,8 @@ void server_models::load(const std::string & name) {
     inst.subproc = std::make_shared<subprocess_s>();
     {
         SRV_INF("spawning server instance with name=%s on port %d\n", inst.meta.name.c_str(), inst.meta.port);
+
+        presets.render_args(inst.meta); // update meta.args
 
         std::vector<std::string> child_args = inst.meta.args; // copy
         std::vector<std::string> child_env  = base_env; // copy
