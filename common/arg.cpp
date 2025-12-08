@@ -47,6 +47,7 @@
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
 using json = nlohmann::ordered_json;
+using namespace common_arg_utils;
 
 static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_MTMD,
@@ -759,15 +760,15 @@ static std::string list_builtin_chat_templates() {
     return msg.str();
 }
 
-static bool is_truthy(const std::string & value) {
+bool common_arg_utils::is_truthy(const std::string & value) {
     return value == "on" || value == "enabled" || value == "1";
 }
 
-static bool is_falsey(const std::string & value) {
+bool common_arg_utils::is_falsey(const std::string & value) {
     return value == "off" || value == "disabled" || value == "0";
 }
 
-static bool is_autoy(const std::string & value) {
+bool common_arg_utils::is_autoy(const std::string & value) {
     return value == "auto" || value == "-1";
 }
 

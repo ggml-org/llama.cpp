@@ -82,6 +82,12 @@ struct common_arg {
     }
 };
 
+namespace common_arg_utils {
+    bool is_truthy(const std::string & value);
+    bool is_falsey(const std::string & value);
+    bool is_autoy(const std::string & value);
+}
+
 struct common_params_context {
     enum llama_example ex = LLAMA_EXAMPLE_COMMON;
     common_params & params;

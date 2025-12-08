@@ -20,11 +20,18 @@ std::vector<std::string> common_preset::to_args() const {
 
     for (const auto & [opt, value] : options) {
         args.push_back(opt.args.back()); // use the last arg as the main arg
+        if (opt.value_hint == nullptr && opt.value_hint_2 == nullptr) {
+            // flag option, no value
+            if (common_arg_utils::is_falsey(value)) {
+                // skip the flag
+                args.pop_back();
+            }
+        }
         if (opt.value_hint != nullptr) {
             // single value
             args.push_back(value);
         }
-        if (opt.value_hint_2 != nullptr) {
+        if (opt.value_hint != nullptr && opt.value_hint_2 != nullptr) {
             throw std::runtime_error(string_format(
                 "common_preset::to_args(): option '%s' has two values, which is not supported yet",
                 opt.args.back()
