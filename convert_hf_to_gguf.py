@@ -6011,14 +6011,16 @@ class Gemma3nVisionModel(MmprojModel):
     # Set n_block_keys to empty list to skip the find_hparam check
     n_block_keys = []
 
-    def __init__(self, *args, **kwargs):
-        # Store the original parent init
-        super().__init__(*args, **kwargs)
+    def find_hparam(self, keys: list[str], optional: bool = False) -> Any:
+        """Override to return 0 for block count since MobileNetV5 is CNN-based"""
+        if not keys:  # If n_block_keys is empty (our case)
+            return 0
+        # Otherwise use parent implementation
+        return super().find_hparam(keys, optional)
 
-        # MobileNetV5 is CNN-based with hardcoded architecture, set block_count to 0
-        # This needs to be done after parent init since parent may have set it
-        self.block_count = 0
-        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
+    def __init__(self, *args, **kwargs):
+        # Parent init will call find_hparam which now returns 0 for empty keys
+        super().__init__(*args, **kwargs)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
