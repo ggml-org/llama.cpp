@@ -508,7 +508,7 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
     const HVX_VectorPred rd_mask = Q6_Q_vsetq_R(VLEN / 2);
     r1_x_d -= VLEN / 2;  // make sure r1 at the high half of the vector
 
-    for (; i < nb; i++) {
+    if (i < nb) {
         HVX_Vector_x8 vy_q = hvx_vec_load_q8x4x8(y_q + i * y_qblk_size);
         HVX_Vector_x8 r0_q = hvx_vec_load_q4x4x8(r0_x_q + i * x_qblk_size);
         HVX_Vector_x8 r1_q = hvx_vec_load_q4x4x8(r1_x_q + i * x_qblk_size);
@@ -524,6 +524,7 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
 
         r0_sum = Q6_Vqf32_vadd_Vqf32Vqf32(r0_sum, r0_fa);
         r1_sum = Q6_Vqf32_vadd_Vqf32Vqf32(r1_sum, r1_fa);
+        i++;
     }
 
     // Process leftovers, we still load full 4x4x2 block but zero out unused scales/blocks
@@ -757,8 +758,12 @@ static void vec_dot_mxfp4x4x2_q8x4x2(const int n,
     // Compute combined scale (fp32).
     // Apply scale to acc and accumulate into the row sum (qf32).
 
-    const uint32_t nb   = n / qk;  // num full blocks
-    int32_t        nloe = n % qk;  // num leftover elemements (must be signed)
+    const uint32_t nb   = n / qk;                         // num full blocks
+    int32_t        nloe = n % qk;                         // num leftover elemements (must be signed)
+
+    const HVX_Vector half      = Q6_Vh_vsplat_R(0x3800);  // 0.5 in fp16
+    const HVX_Vector expand    = *(const HVX_Vector *) expand_x32_e8m0;
+    const HVX_Vector e8m0_mask = Q6_V_vsplat_R(0x000000ff);
 
     uint32_t i = 0;
     for (; i < nb; i++) {
@@ -771,19 +776,16 @@ static void vec_dot_mxfp4x4x2_q8x4x2(const int n,
         HVX_Vector r0_d = *(const HVX_UVector *) (r0_x_d + i * x_dblk_size);
 
         // Convert vy_d from fp16 to fp32 while applying 0.5 scaling which is used for e8m0 halving
-        HVX_Vector half = Q6_Vh_vsplat_R(0x3800);  // 0.5 in fp16
-        vy_d            = Q6_V_lo_W(Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vy_d), half));
-        vy_d            = Q6_Vsf_equals_Vqf32(vy_d);
+        vy_d = Q6_V_lo_W(Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vy_d), half));
+        vy_d = Q6_Vsf_equals_Vqf32(vy_d);
 
         // Convert rX_d scales from e8m0 to fp32
         // Expand and zero-pad 32x uint8 e8m0 values to uint32s : 0 0 0 0, 0 0 0 1, 0 0 0 2, ...
         // Left shift with zero fill to create FP32
         // FIXME: might need to handle zero as a special case (see ggml-cpu code)
-        HVX_Vector expand    = *(const HVX_Vector *) expand_x32_e8m0;
-        HVX_Vector e8m0_mask = Q6_V_vsplat_R(0x000000ff);
-        r0_d                 = Q6_V_vdelta_VV(r0_d, expand);
-        r0_d                 = Q6_V_vand_VV(r0_d, e8m0_mask);
-        r0_d                 = Q6_Vw_vasl_VwR(r0_d, 23);
+        r0_d = Q6_V_vdelta_VV(r0_d, expand);
+        r0_d = Q6_V_vand_VV(r0_d, e8m0_mask);
+        r0_d = Q6_Vw_vasl_VwR(r0_d, 23);
 
         HVX_Vector r0_dd = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r0_d, vy_d));
 
@@ -811,11 +813,9 @@ static void vec_dot_mxfp4x4x2_q8x4x2(const int n,
         // Expand and zero-pad 32x uint8 e8m0 values to uint32s : 0 0 0 0, 0 0 0 1, 0 0 0 2, ...
         // Left shift with zero fill to create FP32
         // FIXME: might need to handle zero as a special case (see ggml-cpu code)
-        HVX_Vector expand    = *(const HVX_Vector *) expand_x32_e8m0;
-        HVX_Vector e8m0_mask = Q6_V_vsplat_R(0x000000ff);
-        r0_d                 = Q6_V_vdelta_VV(r0_d, expand);
-        r0_d                 = Q6_V_vand_VV(r0_d, e8m0_mask);
-        r0_d                 = Q6_Vw_vasl_VwR(r0_d, 23);
+        r0_d = Q6_V_vdelta_VV(r0_d, expand);
+        r0_d = Q6_V_vand_VV(r0_d, e8m0_mask);
+        r0_d = Q6_Vw_vasl_VwR(r0_d, 23);
 
         HVX_Vector r0_dd = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r0_d, vy_d));
 
