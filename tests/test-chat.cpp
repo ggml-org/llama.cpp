@@ -457,8 +457,7 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
     };
 
     auto merged = simple_assist_msg("");
-    common_chat_msg last_msg;
-    last_msg.role = "assistant";
+    auto last_msg = parse_msg("");
     for (size_t i = 1; i <= raw_message.size(); ++i) {
         auto curr_msg = parse_msg(std::string(utf8_truncate_safe_view(std::string_view(raw_message).substr(0, i))));
         if (curr_msg == simple_assist_msg("")) continue;
@@ -485,11 +484,7 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
         assert_msg_equals(curr_msg, merged, true);
         last_msg = curr_msg;
     }
-    if constexpr (std::is_invocable_v<T, std::string, bool>) {
-        assert_msg_equals(expected, parse_msg(raw_message, false), true);
-    } else {
-        assert_msg_equals(expected, parse_msg(raw_message), true);
-    }
+    assert_msg_equals(expected, parse_msg(raw_message), true);
     assert_msg_equals(expected, merged, true);
 }
 
