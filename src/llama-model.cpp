@@ -1606,8 +1606,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
 
-                switch (hparams.n_layer) {
-                    case 28: type = LLM_TYPE_20B; break;
+                switch (hparams.n_ff_exp) {
+                    case 1408: type = LLM_TYPE_16B; break;
+                    case 1792: type = LLM_TYPE_20B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
