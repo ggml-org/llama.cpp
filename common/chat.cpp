@@ -591,6 +591,16 @@ common_chat_templates_ptr common_chat_templates_init(
             "{%- if false %}");
     }
 
+    // TODO @aldehir : this is a temporary fix, pending Minja changes
+    // Ref: https://github.com/ggml-org/llama.cpp/pull/17713#issuecomment-3631342664
+    if (default_template_src.find("[TOOL_CALLS]") != std::string::npos
+            // search for the error message and patch it
+            && default_template_src.find("if (message['content'] is none or") != std::string::npos) {
+        string_replace_all(default_template_src,
+            "{%- if (message['content'] is none or message['content'] == '' or message['content']|length == 0) and (message['tool_calls'] is not defined or message['tool_calls'] is none or message['tool_calls']|length == 0) %}",
+            "{%- if false %}");
+    }
+
     std::string token_bos = bos_token_override;
     std::string token_eos = eos_token_override;
     bool add_bos = false;

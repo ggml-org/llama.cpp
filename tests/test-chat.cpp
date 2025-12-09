@@ -3515,7 +3515,7 @@ static void test_template_output_peg_parsers() {
 
     {
         // Ministral-3-14B-Reasoning-2512
-        auto tmpls = read_templates("models/templates/unsloth-mistral-Ministral-3-14B-Reasoning-2512.jinja");
+        auto tmpls = read_templates("models/templates/mistralai-Ministral-3-14B-Reasoning-2512.jinja");
 
         // Test basic message
         test_peg_parser(tmpls.get(), [&](auto & t) {
