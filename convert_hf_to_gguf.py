@@ -6003,7 +6003,7 @@ class Gemma3VisionModel(MmprojModel):
         return [] # skip other tensors
 
 
-@ModelBase.register("Gemma3nVisionModel", "Gemma3nForVisionConditionalGeneration")
+@ModelBase.register("Gemma3nForConditionalGeneration", "Gemma3nVisionModel")
 class Gemma3nVisionModel(MmprojModel):
     """Vision encoder converter for Gemma3n using MobileNetV5 architecture"""
 
@@ -6056,7 +6056,7 @@ class Gemma3nVisionModel(MmprojModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
-@ModelBase.register("Gemma3nForConditionalGeneration")
+@ModelBase.register("Gemma3nForCausalLM")
 class Gemma3NModel(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA3N
     norm_shift = 0.0 # same value with Gemma3p5RMSNorm scale_shift on python code
