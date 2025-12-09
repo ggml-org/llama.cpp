@@ -4,7 +4,7 @@
 #define CUDA_FILL_BLOCK_SIZE 256
 
 template <typename T>
-static __global__ void fill_kernel(T * __restrict__ dst, const int64_t k, const T value) {
+static __global__ void fill_kernel(T * dst, const int64_t k, const T value) {
     const int64_t i = (int64_t)blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= k) {
         return;
