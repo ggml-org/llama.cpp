@@ -34,6 +34,10 @@
 
 #define CMD_EXIT "exit"
 
+// address for child process, this is needed because router may run on 0.0.0.0
+// ref: https://github.com/ggml-org/llama.cpp/issues/17862
+#define CHILD_ADDR "127.0.0.1"
+
 static std::filesystem::path get_server_exec_path() {
 #if defined(_WIN32)
     wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
@@ -204,7 +208,7 @@ void server_presets::render_args(server_model_meta & meta) {
     }
     // 3. control args (from router)
     // set control values
-    preset.options[control_args["LLAMA_ARG_HOST"]] = "127.0.0.1";
+    preset.options[control_args["LLAMA_ARG_HOST"]] = CHILD_ADDR;
     preset.options[control_args["LLAMA_ARG_PORT"]] = std::to_string(meta.port);
     preset.options[control_args["LLAMA_ARG_ALIAS"]] = meta.name;
     if (meta.in_cache) {
@@ -693,7 +697,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     auto proxy = std::make_unique<server_http_proxy>(
             method,
-            base_params.hostname,
+            CHILD_ADDR,
             meta->port,
             req.path,
             req.headers,
