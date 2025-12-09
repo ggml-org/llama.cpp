@@ -147,8 +147,14 @@ void ggml_print_backtrace(void) {
     // 1. libdispatch "poisons" forked child processes
     // 2. lldb has issues attaching to parent from forked child
     // Use simple backtrace() instead to avoid Terminal.app crashes
-    ggml_print_backtrace_symbols();
-    return;
+    const char * GGML_BACKTRACE_LLDB = getenv("GGML_BACKTRACE_LLDB");
+    if (!GGML_BACKTRACE_LLDB) {
+        fprintf(stderr, "WARNING: Using native backtrace. Set GGML_BACKTRACE_LLDB for more info.\n");
+        fprintf(stderr, "WARNING: GGML_BACKTRACE_LLDB may cause native MacOS Terminal.app to crash.\n");
+        fprintf(stderr, "See: https://github.com/ggml-org/llama.cpp/pull/17869\n");
+        ggml_print_backtrace_symbols();
+        return;
+    }
 #endif
 #if defined(__linux__)
     FILE * f = fopen("/proc/self/status", "r");
