@@ -411,7 +411,7 @@ static void soft_max_f32_cuda(const float *                                x,
             if (ggml_cuda_info().devices[id].supports_cooperative_launch) {
                 ggml_cuda_pool_alloc<float> tmp_alloc(ctx.pool(), ggml_cuda_info().devices[id].nsm * sizeof(float));
 
-                void * kernel_args[] = { (void *) &x, (void *) &dst, (void *) &tmp_alloc.ptr, (void *) &params };
+                void * kernel_args[] = { (void *) &x, (void *) &dst, (void *) &tmp_alloc.ptr, (void *) const_cast<soft_max_params *>(& params)};
                 CUDA_CHECK(cudaLaunchCooperativeKernel((void *) soft_max_f32_parallelize_cols,
                                                        dim3(ggml_cuda_info().devices[id].nsm, 1, 1),
                                                        dim3(WARP_SIZE * 8, 1, 1), kernel_args, 0, stream));
