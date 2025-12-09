@@ -5825,11 +5825,11 @@ class Gemma3Model(TextModel):
     norm_shift = 1.0  # Gemma3RMSNorm adds 1.0 to the norm value
 
     def set_vocab(self):
-        if (self.dir_model / "tokenizer.json").is_file():
-            self._set_vocab_gpt2()
-        else:
+        if (self.dir_model / "tokenizer.model").is_file():
             self._set_vocab_sentencepiece()
             self.gguf_writer.add_add_space_prefix(False)
+        else:
+            self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
         hparams = self.hparams
@@ -5847,11 +5847,13 @@ class Gemma3Model(TextModel):
         self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 1_000_000.0)) # for global layers
         # attn_logit_softcapping is removed in Gemma3
         assert hparams.get("attn_logit_softcapping") is None
-        self.gguf_writer.add_final_logit_softcapping(self.hparams.get("final_logit_softcapping", 0))
-        self.gguf_writer.add_sliding_window(hparams["sliding_window"])
+        if (final_logit_softcap := hparams.get("final_logit_softcapping")):
+            self.gguf_writer.add_final_logit_softcapping(final_logit_softcap)
+        if hparams.get("sliding_window_pattern") != 1:
+            self.gguf_writer.add_sliding_window(hparams["sliding_window"])
         self.gguf_writer.add_head_count_kv(hparams.get("num_key_value_heads", 4))
         if hparams.get("rope_scaling") is not None:
-            rope_scaling = self.hparams["rope_scaling"]
+            rope_scaling = hparams["rope_scaling"]
             if rope_scaling["rope_type"] == "linear":
                 # important: this rope_scaling is only applied for global layers, and not used by 1B model
                 self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
@@ -5876,10 +5878,10 @@ class Gemma3Model(TextModel):
 
         # remove OOV (out-of-vocabulary) rows in token_embd
         if "embed_tokens.weight" in name:
-            if (self.dir_model / "tokenizer.json").is_file():
-                tokens = self.get_vocab_base()[0]
-            else:
+            if (self.dir_model / "tokenizer.model").is_file():
                 tokens = self._create_vocab_sentencepiece()[0]
+            else:
+                tokens = self.get_vocab_base()[0]
             data_torch = data_torch[:len(tokens)]
 
         # ref code in Gemma3RMSNorm

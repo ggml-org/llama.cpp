@@ -1264,6 +1264,21 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_GEMMA3:
             {
+                const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                if (found_swa && hparams.n_swa > 0) {
+                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                    hparams.set_swa_pattern(6);
+
+                    hparams.rope_freq_base_train_swa  = 10000.0f;
+                    hparams.rope_freq_scale_train_swa = 1.0f;
+                } else {
+                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+                }
+
+                hparams.f_final_logit_softcapping = 0.0f;
+                ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
                 switch (hparams.n_layer) {
                     case 18: type = LLM_TYPE_270M; break;
                     case 26: type = LLM_TYPE_1B; break;
@@ -1273,22 +1288,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case 62: type = LLM_TYPE_27B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
-
-                if (type == LLM_TYPE_8B) {
-                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
-
-                    ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
-                } else {
-                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                    hparams.set_swa_pattern(6);
-
-                    hparams.rope_freq_base_train_swa  = 10000.0f;
-                    hparams.rope_freq_scale_train_swa = 1.0f;
-
-                    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
-                }
-
-                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
                 // ref: https://github.com/google/gemma_pytorch/blob/014acb7ac4563a5f77c76d7ff98f31b568c16508/gemma/config.py#L289
                 hparams.f_attention_scale = type == LLM_TYPE_27B

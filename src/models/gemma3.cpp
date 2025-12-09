@@ -140,7 +140,7 @@ llm_build_gemma3<iswa>::llm_build_gemma3(const llama_model & model, const llm_gr
     // lm_head
     cur = build_lora_mm(model.output, cur);
 
-    if constexpr (!iswa) {
+    if (hparams.f_final_logit_softcapping) {
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
         cur = ggml_tanh(ctx0, cur);
         cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
