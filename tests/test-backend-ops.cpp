@@ -6253,6 +6253,31 @@ struct test_solve_tri : public test_case {
     }
 };
 
+// GGML_OP_DIAG
+struct test_diag : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override { return VARS_TO_STR2(type, ne); }
+
+    test_diag(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 1, 4, 3 })
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(ne[1] == 1);
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_diag(ctx, a);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
+
 enum llm_norm_type {
     LLM_NORM,
     LLM_NORM_RMS,
@@ -7825,6 +7850,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_fill(2.0f, GGML_TYPE_F32, { 303, 207, 11, 3 }));
     test_cases.emplace_back(new test_fill(-152.0f, GGML_TYPE_F32, { 800, 600, 4, 4 }));
     test_cases.emplace_back(new test_fill(3.5f, GGML_TYPE_F32, { 2048, 512, 2, 2 }));
+
+    test_cases.emplace_back(new test_diag());
+    test_cases.emplace_back(new test_diag(GGML_TYPE_F32, { 79, 1, 19, 13 }));
+    test_cases.emplace_back(new test_diag(GGML_TYPE_F32, { 256, 1, 8, 16 }));
 
     test_cases.emplace_back(new test_solve_tri());
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 11, 11, 1, 1 }, { 5, 11, 1, 1 }));
