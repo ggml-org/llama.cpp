@@ -67,6 +67,30 @@ Parentheses `()` can be used to group sequences, which allows for embedding alte
 - `{m,n}` repeats the precedent symbol or sequence at between `m` and `n` times (included)
 - `{0,n}` repeats the precedent symbol or sequence at most `n` times (included)
 
+## Tokens
+
+Tokens allow grammars to match specific tokenizer tokens rather than character sequences. This is useful for constraining outputs based on special tokens (like `<think>` or `</think>`).
+
+Tokens can be specified in two ways:
+
+1. **Token ID**: Use angle brackets with the token ID in square brackets: `<[token-id]>`. For example, `<[1000]>` matches the token with ID 1000.
+
+2. **Token string**: Use angle brackets with the token text directly: `<token>`. For example, `<think>` will match the token whose text is exactly `<think>`. This only works if the string tokenizes to exactly one token in the vocabulary, otherwise the grammar will fail to parse.
+
+You can negate token matches using the `!` prefix: `!<[1000]>` or `!<think>` matches any token *except* the specified one.
+
+```
+# Match a thinking block: <think>...</think>
+# Using token strings (requires these to be single tokens in the vocab)
+root ::= <think> thinking </think> .*
+thinking ::= !</think>*
+
+# Equivalent grammar using explicit token IDs
+# Assumes token 1000 = <think>, token 1001 = </think>
+root ::= <[1000]> thinking <[1001]> .*
+thinking ::= !<[1001]>*
+```
+
 ## Comments and newlines
 
 Comments can be specified with `#`:

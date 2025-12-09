@@ -708,6 +708,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         params.use_jinja = true;
     }
 
+    params.use_color = tty_can_use_colors();
+
     // load dynamic backends
     ggml_backend_load_all();
 
@@ -790,10 +792,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
-        {"-co", "--color"},
-        string_format("colorise output to distinguish prompt and user input from generations (default: %s)", params.use_color ? "true" : "false"),
-        [](common_params & params) {
-            params.use_color = true;
+        {"-co", "--color"}, "[on|off|auto]",
+        "Colorize output to distinguish prompt and user input from generations ('on', 'off', or 'auto', default: 'auto')\n"
+        "'auto' enables colors when output is to a terminal",
+        [](common_params & params, const std::string & value) {
+            if (is_truthy(value)) {
+                params.use_color = true;
+            } else if (is_falsey(value)) {
+                params.use_color = false;
+            } else if (is_autoy(value)) {
+                params.use_color = tty_can_use_colors();
+            } else {
+                throw std::invalid_argument(
+                    string_format("error: unknown value for --color: '%s'\n", value.c_str()));
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP}));
     add_opt(common_arg(
@@ -1022,7 +1034,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                                params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
                            } else {
                                throw std::runtime_error(
-                                   string_format("error: unkown value for --flash-attn: '%s'\n", value.c_str()));
+                                   string_format("error: unknown value for --flash-attn: '%s'\n", value.c_str()));
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
@@ -2696,7 +2708,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 common_log_set_colors(common_log_main(), LOG_COLORS_AUTO);
             } else {
                 throw std::invalid_argument(
-                    string_format("error: unkown value for --log-colors: '%s'\n", value.c_str()));
+                    string_format("error: unknown value for --log-colors: '%s'\n", value.c_str()));
             }
         }
     ).set_env("LLAMA_LOG_COLORS"));
