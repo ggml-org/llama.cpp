@@ -18,6 +18,8 @@ import time
 import ssl
 import traceback
 import json
+import select
+import socket
 from typing import Any
 from dataclasses import asdict
 import tcpdf as mTCPdf
@@ -197,6 +199,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if (gMe.op.sslContext):
                 self.request = gMe.op.sslContext.wrap_socket(self.request, server_side=True)
                 self.setup()
+            else:
+                conn: socket.socket = self.connection
+                readReady, _, _ = select.select([conn], [], [], 1.0)
+                if readReady:
+                    peek = conn.recv(3, socket.MSG_PEEK)
+                    if peek.startswith(b'\x16\x03'):
+                        raise ConnectionError("Https in http mode???")
         except:
             print(f"ERRR:ProxyHandler:SSLHS:{traceback.format_exception_only(sys.exception())}")
             return

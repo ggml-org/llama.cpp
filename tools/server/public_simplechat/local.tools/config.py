@@ -76,6 +76,10 @@ class Network(DictyDataclassMixin):
 class Op(DictyDataclassMixin):
     """
     Used to store runtime operation related config entries and states
+
+    Attributes:
+        sslContext: stores ssl context to use,
+            indirectly indicate if using https mode or not
     """
     configFile: str = "/dev/null"
     debug: bool = False
