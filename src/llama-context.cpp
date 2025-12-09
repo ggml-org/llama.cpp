@@ -14,6 +14,30 @@
 #include <stdexcept>
 
 //
+// MLA (Multi-head Latent Attention) detection helper
+//
+
+// Check if the model uses MLA (Multi-head Latent Attention) architecture
+// MLA is used by DeepSeek2, Kimi Linear, and similar models
+// These models have specific tensor patterns: kv_lora_rank > 0 and n_embd_head_k_mla > 0
+static bool is_mla_model(const llama_model & model) {
+    const auto & hparams = model.hparams;
+    
+    // Check for MLA-specific architectures
+    if (model.arch == LLM_ARCH_DEEPSEEK2 || model.arch == LLM_ARCH_KIMI_LINEAR) {
+        return true;
+    }
+    
+    // Check for MLA-specific hyperparameters
+    // MLA models have kv_lora_rank > 0 (compressed KV) and typically n_embd_head_k_mla > 0
+    if (hparams.n_lora_kv > 0 && hparams.n_embd_head_k_mla > 0) {
+        return true;
+    }
+    
+    return false;
+}
+
+//
 // llama_context
 //
 
@@ -317,30 +341,94 @@ llama_context::llama_context(
 
             const size_t prefix_len = strlen(LLAMA_TENSOR_NAME_FATTN) + 1;
             bool fa_device_mismatch = false;
+            int fa_node_count = 0;
+            int fa_mismatch_count = 0;  // Track number of layers with device mismatch
+            int first_mismatch_layer = -1;  // Track first mismatched layer for reporting
+            const bool model_is_mla = is_mla_model(model);  // Check if this is an MLA model
+            
+            LLAMA_LOG_DEBUG("%s: checking Flash Attention device assignments (total graph nodes: %d)\n", 
+                __func__, ggml_graph_n_nodes(gf));
+            
             for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
                 ggml_tensor * n = ggml_graph_node(gf, i);
                 if (n->op != GGML_OP_FLASH_ATTN_EXT) {
                     continue;
                 }
-                ggml_backend_dev_t device_fa = ggml_backend_get_device(
-                    ggml_backend_sched_get_tensor_backend(sched.get(), n));
+                fa_node_count++;
+                
+                ggml_backend_t backend_fa = ggml_backend_sched_get_tensor_backend(sched.get(), n);
+                ggml_backend_dev_t device_fa = backend_fa ? ggml_backend_get_device(backend_fa) : nullptr;
 
                 // TODO: instead of the tensor names, use a map to keep track of which (FA) tensors belong to which layer
                 GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
                 const int il = std::stoi(n->name + prefix_len);
                 ggml_backend_dev_t device_kv = model.dev_layer(il);
+                
+                // Log detailed information about each Flash Attention node
+                LLAMA_LOG_DEBUG("%s: FA node '%s' (layer %d): Q[%lld,%lld,%lld,%lld] K[%lld,%lld,%lld,%lld] V[%lld,%lld,%lld,%lld]\n",
+                    __func__, n->name, il,
+                    (long long)n->src[0]->ne[0], (long long)n->src[0]->ne[1], (long long)n->src[0]->ne[2], (long long)n->src[0]->ne[3],
+                    (long long)n->src[1]->ne[0], (long long)n->src[1]->ne[1], (long long)n->src[1]->ne[2], (long long)n->src[1]->ne[3],
+                    (long long)n->src[2]->ne[0], (long long)n->src[2]->ne[1], (long long)n->src[2]->ne[2], (long long)n->src[2]->ne[3]);
+                LLAMA_LOG_DEBUG("%s: FA node '%s' (layer %d): K.type=%s V.type=%s\n",
+                    __func__, n->name, il,
+                    ggml_type_name(n->src[1]->type), ggml_type_name(n->src[2]->type));
+                LLAMA_LOG_DEBUG("%s: FA node '%s' (layer %d): expected_device=%s actual_device=%s backend=%s\n",
+                    __func__, n->name, il,
+                    ggml_backend_dev_name(device_kv),
+                    device_fa ? ggml_backend_dev_name(device_fa) : "NULL",
+                    backend_fa ? ggml_backend_name(backend_fa) : "NULL");
+                
                 if (device_fa != device_kv) {
-                    LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
-                        "is assigned to device %s (usually due to missing support)\n",
-                        __func__, il, ggml_backend_dev_name(device_kv), ggml_backend_dev_name(device_fa));
+                    fa_mismatch_count++;
+                    if (first_mismatch_layer < 0) {
+                        first_mismatch_layer = il;
+                    }
+                    
+                    // Log verbose device assignment details when requested
+                    // This provides detailed per-layer information for debugging
+                    LLAMA_LOG_DEBUG("%s: layer %d device mismatch: expected=%s actual=%s\n",
+                        __func__, il, ggml_backend_dev_name(device_kv), 
+                        device_fa ? ggml_backend_dev_name(device_fa) : "NULL");
+                    
+                    // Log source tensor devices for debugging
+                    for (int src_idx = 0; src_idx < GGML_MAX_SRC && n->src[src_idx]; src_idx++) {
+                        ggml_tensor * src = n->src[src_idx];
+                        ggml_backend_t src_backend = ggml_backend_sched_get_tensor_backend(sched.get(), src);
+                        ggml_backend_dev_t src_device = src_backend ? ggml_backend_get_device(src_backend) : nullptr;
+                        LLAMA_LOG_DEBUG("%s:   src[%d] '%s': device=%s type=%s shape=[%lld,%lld,%lld,%lld]\n",
+                            __func__, src_idx, src->name,
+                            src_device ? ggml_backend_dev_name(src_device) : "NULL",
+                            ggml_type_name(src->type),
+                            (long long)src->ne[0], (long long)src->ne[1], (long long)src->ne[2], (long long)src->ne[3]);
+                    }
+                    
                     // FIXME: fa_device_mismatch logic is wrong for --no-kv-offload, but this is broken anyways
                     fa_device_mismatch = true;
-                    break;
                 }
             }
+            
+            LLAMA_LOG_DEBUG("%s: found %d Flash Attention nodes in graph\n", __func__, fa_node_count);
+            
             if (fa_device_mismatch) {
                 cparams.flash_attn = false;
-                LLAMA_LOG_WARN("%s: Flash Attention was auto, set to disabled\n", __func__);
+                
+                // For MLA models, use INFO level with a clear message indicating this is expected behavior
+                // MLA models (DeepSeek2, Kimi Linear) have specific tensor operations (repeat, concat) 
+                // that may not have full CUDA support, causing Flash Attention to fall back to CPU
+                if (model_is_mla) {
+                    // Consolidated message for MLA models - avoid per-layer spam
+                    LLAMA_LOG_INFO("%s: MLA model detected - Flash Attention disabled for %d layer(s), "
+                        "using standard attention (output is correct)\n", 
+                        __func__, fa_mismatch_count);
+                    LLAMA_LOG_DEBUG("%s: MLA Flash Attention fallback reason: CUDA repeat/concat ops or head_dim=192 not fully supported\n", __func__);
+                } else {
+                    // For non-MLA models, use WARNING as this may indicate a configuration issue
+                    LLAMA_LOG_WARN("%s: Flash Attention disabled for %d layer(s) due to device mismatch "
+                        "(first mismatch at layer %d)\n", 
+                        __func__, fa_mismatch_count, first_mismatch_layer);
+                }
+                
                 if (ggml_is_quantized(params.type_v)) {
                     throw std::runtime_error("quantized V cache was requested, but this requires Flash Attention");
                 }

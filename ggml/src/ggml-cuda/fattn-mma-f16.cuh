@@ -188,6 +188,38 @@ struct fattn_mma_f16_config<128, 128> {
 };
 
 template <>
+struct fattn_mma_f16_config<192, 192> {
+    static constexpr int  nbatch_fa      = 64;
+    static constexpr int  nwarps_max     = 4;
+    static constexpr bool Q_in_reg       = true;
+    static constexpr int  nstages_target = 2;
+
+    static int get_nbatch_K2_host(const int /*cc*/, const int /*ncols*/) {
+        return 96;
+    }
+
+    static constexpr __device__ int get_nbatch_K2_device(int /*ncols*/) {
+        return 96;
+    }
+
+    static int get_nbatch_V2_host(const int /*cc*/, const int /*ncols*/) {
+        return 96;
+    }
+
+    static constexpr __device__ int get_nbatch_V2_device(int /*ncols*/) {
+        return 96;
+    }
+
+    static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
+        return 96;
+    }
+
+    static constexpr __device__ int get_nbatch_combine_device(int /*ncols*/) {
+        return 96;
+    }
+};
+
+template <>
 struct fattn_mma_f16_config<256, 256> {
     static constexpr int  nbatch_fa      = 32;
     static constexpr int  nwarps_max     = 4;
@@ -1491,6 +1523,7 @@ DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 80,  80,   8)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 96,  96,   8)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(112, 112,   8)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(128, 128,   8)
+DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(192, 192,   8)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(256, 256,   8)
 
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 64,  64,  16)
@@ -1498,6 +1531,7 @@ DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 80,  80,  16)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 96,  96,  16)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(112, 112,  16)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(128, 128,  16)
+DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(192, 192,  16)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(256, 256,  16)
 
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 64,  64,  32)
@@ -1505,6 +1539,7 @@ DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 80,  80,  32)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 96,  96,  32)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(112, 112,  32)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(128, 128,  32)
+DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(192, 192,  32)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(256, 256,  32)
 
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 64,  64,  64)
@@ -1512,6 +1547,7 @@ DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 80,  80,  64)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2( 96,  96,  64)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(112, 112,  64)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(128, 128,  64)
+DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(192, 192,  64)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(256, 256,  64)
 
 // The number of viable configurations for Deepseek is very limited:

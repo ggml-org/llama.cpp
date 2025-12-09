@@ -62,6 +62,15 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_nv
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 16, 256, 2,  64,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 32, 256, 2,  64,  64)
 
+    // For DV=192, nbatch_V = nbatch_K * nbatch_fa / DV must divide nbatch_fa evenly
+    // Also nbatch_fa % 32 == 0 (warp_size constraint)
+    // Using nbatch_K=48, nbatch_fa=96: nbatch_V = 48 * 96 / 192 = 24, 96 % 24 = 0 ✓, 96 % 32 = 0 ✓
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  2,  64, 2,  96,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  4, 128, 2,  96,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  8, 256, 2,  96,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 16, 256, 2,  96,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 32, 256, 2,  96,  48)
+
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  2,  64, 2,  64,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  4, 128, 2,  64,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  8, 256, 2,  64,  64)
@@ -115,6 +124,15 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_nv
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128,  8, 128, 3,  64, 128)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 16, 128, 3,  32, 128)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 32, 256, 2,  64,  64)
+
+    // For DV=192, nbatch_V = nbatch_K * nbatch_fa / DV must divide nbatch_fa evenly
+    // Using nbatch_K=48: nbatch_V = 48 * nbatch_fa / 192 = nbatch_fa / 4
+    // So nbatch_fa must be divisible by 4 and by 32 (warp_size), i.e., divisible by 32
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  2, 128, 3,  64,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  4, 128, 3,  32,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  8, 256, 2,  32,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 16, 256, 2,  32,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 32, 256, 2,  32,  48)
 
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  2, 128, 3,  64,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  4, 128, 3,  32,  64)
@@ -177,6 +195,15 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_am
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 32, 256, 2,  64,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 64, 256, 2,  64,  32)
 
+    // For DV=192, nbatch_V = nbatch_K * nbatch_fa / DV must divide nbatch_fa evenly
+    // Using nbatch_K=48: nbatch_V = 48 * nbatch_fa / 192 = nbatch_fa / 4
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  2, 256, 2,  64,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  4, 128, 2,  64,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  8, 256, 2,  64,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 16, 256, 2,  32,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 32, 256, 2,  32,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 64, 256, 2,  64,  48)
+
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  2, 256, 2, 128,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  4, 256, 2,  64, 128)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  8, 256, 2,  64, 128)
@@ -238,6 +265,15 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_am
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 16, 256, 3, 128, 128)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 32, 256, 3, 128,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(128, 128, 64, 256, 3,  64,  64)
+
+    // For DV=192, nbatch_V = nbatch_K * nbatch_fa / DV must divide nbatch_fa evenly
+    // Using nbatch_K=48: nbatch_V = 48 * nbatch_fa / 192 = nbatch_fa / 4
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  2,  64, 8,  32,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  4, 128, 6,  32,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192,  8, 128, 6,  32,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 16, 256, 5,  32,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 32, 256, 3,  64,  48)
+    GGML_CUDA_FATTN_TILE_CONFIG_CASE(192, 192, 64, 256, 3,  64,  48)
 
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  2,  64, 8,  32,  64)
     GGML_CUDA_FATTN_TILE_CONFIG_CASE(256, 256,  4, 128, 6,  32, 256)
@@ -1229,5 +1265,6 @@ extern DECL_FATTN_TILE_CASE( 80,  80);
 extern DECL_FATTN_TILE_CASE( 96,  96);
 extern DECL_FATTN_TILE_CASE(112, 112);
 extern DECL_FATTN_TILE_CASE(128, 128);
+extern DECL_FATTN_TILE_CASE(192, 192);
 extern DECL_FATTN_TILE_CASE(256, 256);
 extern DECL_FATTN_TILE_CASE(576, 512);

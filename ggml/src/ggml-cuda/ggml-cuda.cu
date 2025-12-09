@@ -55,6 +55,7 @@
 #include "ggml-cuda/set-rows.cuh"
 #include "ggml-cuda/pad_reflect_1d.cuh"
 #include "ggml-cuda/solve_tri.cuh"
+#include "ggml-cuda/repeat.cuh"
 #include "ggml.h"
 
 #include <algorithm>
@@ -2423,7 +2424,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_count_equal(ctx, dst);
             break;
         case GGML_OP_REPEAT:
-            ggml_cuda_op_repeat(ctx, dst);
+            // Use optimized MLA kernel if supported, otherwise fall back to general implementation
+            if (ggml_cuda_repeat_mla_supported(dst)) {
+                ggml_cuda_op_repeat_mla(ctx, dst);
+            } else {
+                ggml_cuda_op_repeat(ctx, dst);
+            }
             break;
         case GGML_OP_REPEAT_BACK:
             ggml_cuda_op_repeat_back(ctx, dst);
@@ -4455,8 +4461,16 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 return op->type == GGML_TYPE_F32 && (op->src[0]->ne[2]*op->src[0]->ne[3]) <= (1 << 15);
         case GGML_OP_CONCAT:
             {
+                // Support F32 and F16 for MLA tensor shapes
+                // **Feature: mla-flash-attention-fix**
+                // **Validates: Requirements 3.1, 3.4**
                 ggml_type src0_type = op->src[0]->type;
-                return src0_type != GGML_TYPE_I32 && src0_type != GGML_TYPE_I16;
+                ggml_type src1_type = op->src[1]->type;
+                // Both sources must have the same type, and must be F32 or F16
+                if (src0_type != src1_type) {
+                    return false;
+                }
+                return src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16;
             } break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             {

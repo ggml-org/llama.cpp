@@ -92,6 +92,10 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
             GGML_ASSERT(V->ne[0] == 128);
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<128, 128>(ctx, dst);
             break;
+        case 192:
+            GGML_ASSERT(V->ne[0] == 192);
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<192, 192>(ctx, dst);
+            break;
         case 256:
             GGML_ASSERT(V->ne[0] == 256);
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<256, 256>(ctx, dst);
@@ -228,6 +232,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case  96:
         case 128:
         case 112:
+        case 192:
         case 256:
             if (V->ne[0] != K->ne[0]) {
                 return BEST_FATTN_KERNEL_NONE;
