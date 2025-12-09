@@ -204,6 +204,7 @@ void server_presets::render_args(server_model_meta & meta) {
     }
     // 3. control args (from router)
     // set control values
+    preset.options[control_args["LLAMA_ARG_HOST"]] = "127.0.0.1";
     preset.options[control_args["LLAMA_ARG_PORT"]] = std::to_string(meta.port);
     preset.options[control_args["LLAMA_ARG_ALIAS"]] = meta.name;
     if (meta.in_cache) {
