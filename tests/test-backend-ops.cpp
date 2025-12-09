@@ -8164,15 +8164,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    // NOTE: tensor a->ne00 == d_conv - 1 + n_seq_tokens,
-    //  so d_conv == 4 && ne00 == 4 => n_seq_tokens == 1
-    for (int64_t d_conv : {3, 4}) {
-        for (int64_t d_inner: {1024, 1536, 2048}) {
-            test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));
-            test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {8, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));
-            test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
-        }
-    }
+    // Examples from granite-4.0-h-1b/ggml-model-Q8_0.gguf
+    // d_inner == 3072
+    // d_conv == 4
+    test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1})); // prefill
+    test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1})); // generate
 
     return test_cases;
 }
