@@ -164,6 +164,7 @@ server_models::server_models(
             /* path        */ model.manifest_path,
             /* path_mmproj */ "", // auto-detected when loading
             /* in_cache    */ true,
+            /* hostname    */ "",
             /* port        */ 0,
             /* status      */ SERVER_MODEL_STATUS_UNLOADED,
             /* last_used   */ 0,
@@ -189,6 +190,7 @@ server_models::server_models(
                 /* path        */ model.path,
                 /* path_mmproj */ model.path_mmproj,
                 /* in_cache    */ false,
+                /* hostname    */ "",
                 /* port        */ 0,
                 /* status      */ SERVER_MODEL_STATUS_UNLOADED,
                 /* last_used   */ 0,
@@ -364,6 +366,7 @@ void server_models::load(const std::string & name, bool auto_load) {
     // prepare new instance info
     instance_t inst;
     inst.meta           = meta;
+    inst.meta.hostname  = "127.0.0.1";
     inst.meta.port      = get_free_port();
     inst.meta.status    = SERVER_MODEL_STATUS_LOADING;
     inst.meta.last_used = ggml_time_ms();
@@ -392,6 +395,7 @@ void server_models::load(const std::string & name, bool auto_load) {
         }
 
         // set model args
+        add_or_replace_arg(child_args, "--host", inst.meta.hostname);
         add_or_replace_arg(child_args, "--port", std::to_string(inst.meta.port));
         add_or_replace_arg(child_args, "--alias", inst.meta.name);
 
@@ -571,7 +575,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     auto proxy = std::make_unique<server_http_proxy>(
             method,
-            base_params.hostname,
+            meta->hostname,
             meta->port,
             req.path,
             req.headers,
@@ -599,7 +603,7 @@ std::thread server_models::setup_child_server(const common_params & base_params,
     body["value"] = server_model_status_to_string(SERVER_MODEL_STATUS_LOADED);
     req.body = body.dump();
 
-    SRV_INF("notifying router server (port=%d) that model %s is ready\n", router_port, name.c_str());
+    SRV_INF("notifying router server (host=%s port=%d) that model %s is ready\n", base_params.hostname.c_str(), router_port, name.c_str());
     auto result = cli.send(std::move(req));
     if (result.error() != httplib::Error::Success) {
         auto err_str = httplib::to_string(result.error());

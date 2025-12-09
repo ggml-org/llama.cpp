@@ -51,6 +51,7 @@ struct server_model_meta {
     std::string path;
     std::string path_mmproj; // only available if in_cache=false
     bool in_cache = false; // if true, use -hf; use -m otherwise
+    std::string hostname;
     int port = 0;
     server_model_status status = SERVER_MODEL_STATUS_UNLOADED;
     int64_t last_used = 0; // for LRU unloading
