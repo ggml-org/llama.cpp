@@ -77,6 +77,7 @@
 #define FC_MUL_MV                      600
 #define FC_MUL_MM                      700
 #define FC_ROPE                        800
+#define FC_SSM_CONV                    900
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPTG 8
