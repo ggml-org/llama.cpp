@@ -903,7 +903,7 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
         const float * restrict vy  = (const float * restrict) y;
 
         for (uint32_t i = 0; i < n; i++) {
-            rsum += vx[i] * (__fp16) vy[i];
+            rsum += (float)vx[i] * vy[i];
         }
         *s = rsum;
         return;
@@ -926,8 +926,10 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
         HVX_Vector     x  = vx[i];
         HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), Q6_Vh_vsplat_R(0x3C00));  // mul by 1.0
 
-        HVX_Vector hi = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(xp)), Q6_V_hi_W(yp));
-        HVX_Vector lo = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(xp)), Q6_V_lo_W(yp));
+        //NOTE: need volatile here to prevent compiler optimization
+        // Seem compiler cannot guarantee read-after-write??
+        volatile HVX_Vector hi = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(xp)), Q6_V_hi_W(yp));
+        volatile HVX_Vector lo = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(xp)), Q6_V_lo_W(yp));
 
         HVX_Vector sum = Q6_Vqf32_vadd_Vqf32Vqf32(hi, lo);
         rsum           = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, sum);
@@ -1510,8 +1512,6 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
     // This is the size of the rest of the dimensions of the result
     const uint32_t nr1 = ne1 * ne2 * ne3;
 
-    uint32_t chunk_size = 64;
-
     // distribute the thread work across the inner or outer loop based on which one is larger
     uint32_t nchunk0 = nr0 > nr1 ? nth : 1;  // parallelize by src0 rows
     uint32_t nchunk1 = nr0 > nr1 ? 1 : nth;  // parallelize by src1 rows
@@ -1544,11 +1544,11 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
     const uint32_t blck_0 = 64;
     const uint32_t blck_1 = 64;
 
-    float tmp[32];
+    __attribute__((aligned(128))) float tmp[64];
 
     for (uint32_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
         for (uint32_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
-            for (uint32_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ir1++) {
+            for (uint32_t ir1 = iir1; ir1 < MIN(iir1 + blck_1, ir1_end); ir1++) {
                 const uint32_t i13 = (ir1 / (ne12 * ne1));
                 const uint32_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
                 const uint32_t i11 = (ir1 - i13 * ne12 * ne1 - i12 * ne1);
@@ -1566,7 +1566,8 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
                     (const uint8_t *) src1->data + (i11 + i12 * ne11 + i13 * ne12 * ne11) * src1_row_size;
                 float * dst_col = (float *) ((uint8_t * restrict) dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
 
-                for (uint32_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0++) {
+                const uint32_t ir0_block_end = MIN(iir0 + blck_0, ir0_end);
+                for (uint32_t ir0 = iir0; ir0 < ir0_block_end; ir0++) {
                     vec_dot_f16_f32(ne00, &tmp[ir0 - iir0], src0_row + ir0 * src0_row_size, src1_col);
                 }
 
