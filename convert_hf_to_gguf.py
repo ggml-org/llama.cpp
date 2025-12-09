@@ -3885,7 +3885,7 @@ class Eagle2VLVisionModel(MmprojModel):
             self.gguf_writer.add_vision_image_std(list(img_std))
 
     # Note:
-    # Eagle2-specific tensor layout normalization (mlp1 → mm.*, QKV split, Conv3D → Conv2D)
+    # Eagle2-specific tensor layout normalization (mlp1 → mm.*, QKV split)
     # will live here in Eagle2VLVisionModel.modify_tensors() in a follow-up.
     # The C++ builder will assume canonical weights and perform zero ad-hoc transposes.
 
@@ -3997,18 +3997,7 @@ class Eagle2VLVisionModel(MmprojModel):
                 (self.map_tensor_name(name.replace("qkv", "v")), wv),
             ]
 
-        # 5) Conv3D patch embed -> two Conv2D kernels
-        if name.endswith("patch_embed.proj.weight") and data_torch.ndim == 5:
-            c_out, c_in, kt, kh, kw = data_torch.shape
-            del c_out, c_in, kh, kw  # unused
-            assert kt == 2, "Current implementation only supports temporal_patch_size of 2"
-            base = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"
-            return [
-                (base, data_torch[:, :, 0, ...]),
-                (base + ".1", data_torch[:, :, 1, ...]),
-            ]
-
-        # 6) Default mapping for remaining Eagle2 vision tensors
+        # 5) Default mapping for remaining Eagle2 vision tensors
         if name.startswith("vision_model.") or name.startswith("model.vision_model.") or name.startswith("visual."):
             return [(self.map_tensor_name(name), data_torch)]
 
