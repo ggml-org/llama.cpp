@@ -1078,6 +1078,14 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     common_init_sampler_from_model(model, params.sampling);
 
+    // Allow models to override the forced reasoning close message via GGUF metadata
+    if (params.reasoning_force_close_message == COMMON_DEFAULT_REASONING_FORCE_CLOSE_MESSAGE) {
+        char buf[512] = {0};
+        if (llama_model_meta_val_str(model, "tokenizer.ggml.reasoning_force_close_message", buf, sizeof(buf)) > 0) {
+            params.reasoning_force_close_message = buf;
+        }
+    }
+
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     auto cparams = common_context_params_to_llama(params);

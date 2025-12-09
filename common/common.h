@@ -102,6 +102,8 @@ enum llama_example {
     LLAMA_EXAMPLE_COUNT,
 };
 
+inline constexpr const char * COMMON_DEFAULT_REASONING_FORCE_CLOSE_MESSAGE = "... I now conclude my reasoning and will provide the final answer.";
+
 enum common_sampler_type {
     COMMON_SAMPLER_TYPE_NONE        = 0,
     COMMON_SAMPLER_TYPE_DRY         = 1,
@@ -466,6 +468,7 @@ struct common_params {
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int reasoning_budget = -1;
+    std::string reasoning_force_close_message = COMMON_DEFAULT_REASONING_FORCE_CLOSE_MESSAGE;
     bool prefill_assistant = true;                                                                          // if true, any trailing assistant message will be prefilled into the response
 
     std::vector<std::string> api_keys;

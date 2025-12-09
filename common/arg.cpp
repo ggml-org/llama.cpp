@@ -2574,12 +2574,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK"));
     add_opt(common_arg(
         {"--reasoning-budget"}, "N",
-        "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)",
+        "controls the maximum number of thinking tokens allowed; -1 for unlimited, 0 to disable thinking, or a positive value to limit thinking tokens (default: -1)",
         [](common_params & params, int value) {
-            if (value != 0 && value != -1) { throw std::invalid_argument("invalid value"); }
+            if (value < -1) { throw std::invalid_argument("invalid value: must be -1 (unlimited), 0 (disabled), or a positive number"); }
             params.reasoning_budget = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK_BUDGET"));
+    add_opt(common_arg(
+        {"--reasoning-force-close-message"}, "STRING",
+        string_format(
+            "if specified, forces the model to close its reasoning/thoughts when generating this message (default: %s)\n",
+            params.reasoning_force_close_message.c_str()
+        ),
+        [](common_params & params, const std::string & value) {
+            params.reasoning_force_close_message = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK_FORCE_CLOSE_MESSAGE"));
     add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
