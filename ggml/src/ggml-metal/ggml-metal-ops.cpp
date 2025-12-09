@@ -1366,11 +1366,20 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
     };
 
     // Use batched kernel for prefill (ne1 > 1) to reduce threadgroup dispatch overhead
-    constexpr int BATCH_SIZE = 256;
     const bool use_batched = (ne1 > 1);
 
     if (use_batched) {
-        auto pipeline = ggml_metal_library_get_pipeline_ssm_conv_batched(lib, op);
+        // Determine the smallest power of 2 that's >= ne1, but <= 256
+        int BATCH_SIZE;
+        if      (ne1 > 128) BATCH_SIZE = 256;
+        else if (ne1 > 64 ) BATCH_SIZE = 128;
+        else if (ne1 > 32 ) BATCH_SIZE = 64;
+        else if (ne1 > 16 ) BATCH_SIZE = 32;
+        else if (ne1 > 8  ) BATCH_SIZE = 16;
+        else if (ne1 > 4  ) BATCH_SIZE = 8;
+        else                BATCH_SIZE = 2;
+
+        auto pipeline = ggml_metal_library_get_pipeline_ssm_conv_batched(lib, op, BATCH_SIZE);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);

@@ -411,18 +411,26 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv(ggml_me
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv_batched(ggml_metal_library_t lib, const ggml_tensor * op) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv_batched(ggml_metal_library_t lib, const ggml_tensor * op, int ssm_conv_bs) {
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
 
     GGML_ASSERT(ggml_is_contiguous(op->src[0]));
     GGML_ASSERT(ggml_is_contiguous(op->src[1]));
 
-    const char * name = "kernel_ssm_conv_f32_f32_b256";
+    char base[256];
+    char name[256];
+    // TODO: Add suffix if vectorized float added
+    snprintf(base, 256, "kernel_ssm_conv_%s_%s_batched", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type));
+    snprintf(name, 256, "%s_ssm_conv_bs=%d", base, ssm_conv_bs);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
-        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+        ggml_metal_cv_set_int16(cv, ssm_conv_bs, FC_SSM_CONV + 0);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
     }
 
     return res;
