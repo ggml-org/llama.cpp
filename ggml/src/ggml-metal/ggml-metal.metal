@@ -2392,9 +2392,6 @@ kernel void kernel_ssm_conv_f32_f32_batched(
     x[0] = sumf;
 }
 
-// typedef decltype(kernel_ssm_conv_f32_f32_batched<1>) kernel_ssm_conv_batched_t;
-// template [[host_name("kernel_ssm_conv_f32_f32_b256")]] kernel kernel_ssm_conv_batched_t kernel_ssm_conv_f32_f32_batched<256>;
-
 // ref: ggml.c:ggml_compute_forward_ssm_scan_f32, Mamba-2 part
 // Optimized version: reduces redundant memory loads by having one thread load shared values
 kernel void kernel_ssm_scan_f32(
