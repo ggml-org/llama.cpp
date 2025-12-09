@@ -7,15 +7,16 @@
 	import remarkRehype from 'remark-rehype';
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
-	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
-	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
+	import type { Root as HastRoot } from 'hast';
+	import type { Root as MdastRoot, RootContent } from 'mdast';
 	import { browser } from '$app/environment';
+	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
+	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
+	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
 	import '$styles/katex-custom.scss';
-
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import CodePreviewDialog from './CodePreviewDialog.svelte';
 
 	interface Props {
@@ -26,7 +27,8 @@
 	let { content, class: className = '' }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
-	let processedHtml = $state('');
+	let renderedBlocks = $state<MarkdownBlock[]>([]);
+	let unstableBlockHtml = $state('');
 	let previewDialogOpen = $state(false);
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
@@ -64,8 +66,13 @@
 			.use(rehypeStringify); // Convert to HTML string
 	});
 
+	type MarkdownBlock = {
+		id: string;
+		html: string;
+	};
+
 	function enhanceLinks(html: string): string {
-		if (!html.includes('<a')) {
+		if (!browser || !html.includes('<a')) {
 			return html;
 		}
 
@@ -92,7 +99,7 @@
 	}
 
 	function enhanceCodeBlocks(html: string): string {
-		if (!html.includes('<pre')) {
+		if (!browser || !html.includes('<pre')) {
 			return html;
 		}
 
@@ -143,8 +150,8 @@
 			copyButton.setAttribute('type', 'button');
 
 			copyButton.innerHTML = `
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-                        `;
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+`;
 
 			const actions = document.createElement('div');
 			actions.className = 'code-block-actions';
@@ -159,8 +166,8 @@
 				previewButton.setAttribute('type', 'button');
 
 				previewButton.innerHTML = `
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye lucide-eye-icon"><path d="M2.062 12.345a1 1 0 0 1 0-.69C3.5 7.73 7.36 5 12 5s8.5 2.73 9.938 6.655a1 1 0 0 1 0 .69C20.5 16.27 16.64 19 12 19s-8.5-2.73-9.938-6.655"/><circle cx="12" cy="12" r="3"/></svg>
-                                `;
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye lucide-eye-icon"><path d="M2.062 12.345a1 1 0 0 1 0-.69C3.5 7.73 7.36 5 12 5s8.5 2.73 9.938 6.655a1 1 0 0 1 0 .69C20.5 16.27 16.64 19 12 19s-8.5-2.73-9.938-6.655"/><circle cx="12" cy="12" r="3"/></svg>
+`;
 
 				actions.appendChild(previewButton);
 			}
@@ -176,22 +183,6 @@
 		}
 
 		return mutated ? tempDiv.innerHTML : html;
-	}
-
-	async function processMarkdown(text: string): Promise<string> {
-		try {
-			let normalized = preprocessLaTeX(text);
-			const result = await processor().process(normalized);
-			const html = String(result);
-			const enhancedLinks = enhanceLinks(html);
-
-			return enhanceCodeBlocks(enhancedLinks);
-		} catch (error) {
-			console.error('Markdown processing error:', error);
-
-			// Fallback to plain text with line breaks
-			return text.replace(/\n/g, '<br>');
-		}
 	}
 
 	function getCodeInfoFromTarget(target: HTMLElement) {
@@ -296,31 +287,136 @@
 		}
 	}
 
-	$effect(() => {
-		if (content) {
-			processMarkdown(content)
-				.then((result) => {
-					processedHtml = result;
-				})
-				.catch((error) => {
-					console.error('Failed to process markdown:', error);
-					processedHtml = content.replace(/\n/g, '<br>');
-				});
-		} else {
-			processedHtml = '';
+	function getNodeId(node: RootContent, indexFallback: number): string {
+		const position = node.position;
+
+		if (position?.start?.offset != null && position?.end?.offset != null) {
+			return `${position.start.offset}-${position.end.offset}`;
 		}
+
+		return `${node.type}-${indexFallback}`;
+	}
+
+	function stringifyProcessedNode(
+		processorInstance: ReturnType<typeof processor>,
+		processedRoot: HastRoot,
+		child: unknown
+	) {
+		const root: HastRoot = {
+			...(processedRoot as HastRoot),
+			children: [child as never]
+		};
+
+		const html = processorInstance.stringify(root);
+
+		return enhanceCodeBlocks(enhanceLinks(html));
+	}
+
+	let pendingMarkdown: string | null = null;
+	let isProcessing = false;
+
+	async function processMarkdown(markdown: string) {
+		if (!markdown) {
+			renderedBlocks = [];
+			unstableBlockHtml = '';
+			return;
+		}
+
+		const normalized = preprocessLaTeX(markdown);
+		const processorInstance = processor();
+		const ast = processorInstance.parse(normalized) as MdastRoot;
+		const children = ast.children ?? [];
+		const nodeIds = children.map((node, index) => getNodeId(node as RootContent, index));
+
+		const processedRoot = (await processorInstance.run(ast)) as HastRoot;
+		const processedChildren = processedRoot.children ?? [];
+		const stableCount = Math.max(processedChildren.length - 1, 0);
+		const availableStable = Math.min(stableCount, processedChildren.length);
+
+		const nextBlocks: MarkdownBlock[] = [];
+
+		for (let index = 0; index < availableStable; index++) {
+			const id = nodeIds[index] ?? `processed-${index}`;
+			const existing = renderedBlocks[index];
+
+			if (existing && existing.id === id) {
+				nextBlocks.push(existing);
+				continue;
+			}
+
+			const html = stringifyProcessedNode(
+				processorInstance,
+				processedRoot,
+				processedChildren[index]
+			);
+
+			nextBlocks.push({ id, html });
+		}
+
+		let unstableHtml = '';
+
+		if (processedChildren.length > availableStable) {
+			const unstableChild = processedChildren[availableStable];
+			unstableHtml = stringifyProcessedNode(processorInstance, processedRoot, unstableChild);
+		}
+
+		renderedBlocks = nextBlocks;
+		unstableBlockHtml = unstableHtml;
+	}
+
+	async function updateRenderedBlocks(markdown: string) {
+		pendingMarkdown = markdown;
+
+		if (isProcessing) {
+			return;
+		}
+
+		isProcessing = true;
+
+		try {
+			while (pendingMarkdown !== null) {
+				const nextMarkdown = pendingMarkdown;
+				pendingMarkdown = null;
+
+				await processMarkdown(nextMarkdown);
+			}
+		} catch (error) {
+			console.error('Failed to process markdown:', error);
+			renderedBlocks = [];
+			unstableBlockHtml = markdown.replace(/\n/g, '<br>');
+		} finally {
+			isProcessing = false;
+		}
+	}
+
+	$effect(() => {
+		updateRenderedBlocks(content);
 	});
 
 	$effect(() => {
-		if (containerRef && processedHtml) {
+		const hasRenderedBlocks = renderedBlocks.length > 0;
+		const hasUnstableBlock = Boolean(unstableBlockHtml);
+
+		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
 		}
 	});
 </script>
 
 <div bind:this={containerRef} class={className}>
-	<!-- eslint-disable-next-line no-at-html-tags -->
-	{@html processedHtml}
+	{#each renderedBlocks as block (block.id)}
+		<div class="markdown-block" data-block-id={block.id}>
+			<!-- eslint-disable-next-line no-at-html-tags -->
+			{@html block.html}
+		</div>
+	{/each}
+
+	{#if unstableBlockHtml}
+		<div class="markdown-block markdown-block--unstable" data-block-id="unstable">
+			<!-- eslint-disable-next-line no-at-html-tags -->
+			{@html unstableBlockHtml}
+		</div>
+	{/if}
 </div>
 
 <CodePreviewDialog
@@ -331,6 +427,11 @@
 />
 
 <style>
+	.markdown-block,
+	.markdown-block--unstable {
+		display: contents;
+	}
+
 	/* Base typography styles */
 	div :global(p:not(:last-child)) {
 		margin-bottom: 1rem;
