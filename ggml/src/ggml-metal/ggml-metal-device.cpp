@@ -420,8 +420,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv_batched
 
     char base[256];
     char name[256];
-    // TODO: Add suffix if vectorized float added
-    snprintf(base, 256, "kernel_ssm_conv_%s_%s_batched", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type));
+
+    const char * suffix = "";
+    if (op->src[1]->ne[0] % 4 == 0) {
+        suffix = "_4";
+    }
+
+    snprintf(base, 256, "kernel_ssm_conv_%s_%s_batched%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), suffix);
     snprintf(name, 256, "%s_ssm_conv_bs=%d", base, ssm_conv_bs);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
