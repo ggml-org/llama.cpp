@@ -66,7 +66,9 @@ llama_context::llama_context(
         for (size_t i = 0; i < params.n_samplers; ++i) {
             const auto & config = params.samplers[i];
 
-            // TODO: assert this is a llama_sampler_chain instance
+            if (llama_sampler_chain_get(config.sampler, -1) != nullptr) {
+                throw std::runtime_error("the backend samplers must be of type llama_sampler_chain");
+            }
 
             if (set_sampler(config.seq_id, config.sampler)) {
                 const int n_samplers = llama_sampler_chain_n(config.sampler);
