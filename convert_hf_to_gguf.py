@@ -6007,6 +6007,17 @@ class Gemma3VisionModel(MmprojModel):
 class Gemma3nVisionModel(MmprojModel):
     """Vision encoder converter for Gemma3n using MobileNetV5 architecture"""
 
+    def __init__(self, *args, **kwargs):
+        # MobileNetV5 is CNN-based and doesn't have transformer layers
+        # Override n_block_keys to handle CNN architecture
+        self.n_block_keys = ["num_stages", "num_layers", "depth"]
+        super().__init__(*args, **kwargs)
+
+        # If still no block count found, set to 0 for CNN architectures
+        if self.block_count is None:
+            self.block_count = 0
+            self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
