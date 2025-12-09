@@ -307,13 +307,13 @@ static inline HVX_Vector hvx_vec_rmpy_x8_nloe(HVX_Vector_x8 x, HVX_Vector_x8 y, 
     return hvx_vec_rmpy_x8_n(x, y, 1024);
 }
 
-static inline HVX_Vector_x2 hvx_vec_load_d_and_mpy_rx2(const uint8_t * restrict r0_x_d,
+static inline HVX_Vector_x2 hvx_vec_load_and_mul_d_rx2(const uint8_t * restrict r0_x_d,
                                                        const uint8_t * restrict r1_x_d,
                                                        const uint8_t * restrict y_d,
                                                        const HVX_Vector rd_mask) {
-    HVX_Vector vy_d = *(const HVX_UVector *) y_d;
-    HVX_Vector r0_d = *(const HVX_UVector *) r0_x_d;
-    HVX_Vector r1_d = *(const HVX_UVector *) r1_x_d;
+    HVX_Vector vy_d = *(const HVX_Vector *) y_d;
+    HVX_Vector r0_d = *(const HVX_Vector *) r0_x_d;
+    HVX_Vector r1_d = *(const HVX_Vector *) r1_x_d;
 
     vy_d             = Q6_Vh_vshuff_Vh(vy_d);
     HVX_Vector r01_d = Q6_V_vmux_QVV(rd_mask, r0_d, r1_d);
@@ -329,12 +329,12 @@ static inline HVX_Vector_x2 hvx_vec_load_d_and_mpy_rx2(const uint8_t * restrict 
     return r;
 }
 
-static inline HVX_Vector_x4 hvx_vec_load_d_and_mpy_r2x2(const uint8_t * restrict r0_x_d,
+static inline HVX_Vector_x4 hvx_vec_load_and_mul_d_r2x2(const uint8_t * restrict r0_x_d,
                                                         const uint8_t * restrict r1_x_d,
                                                         const uint8_t * restrict y_d) {
-    HVX_Vector vy_d = *(const HVX_UVector *) y_d;
-    HVX_Vector r0_d = *(const HVX_UVector *) r0_x_d;
-    HVX_Vector r1_d = *(const HVX_UVector *) r1_x_d;
+    HVX_Vector vy_d = *(const HVX_Vector *) y_d;
+    HVX_Vector r0_d = *(const HVX_Vector *) r0_x_d;
+    HVX_Vector r1_d = *(const HVX_Vector *) r1_x_d;
 
     vy_d = Q6_Vh_vshuff_Vh(vy_d);
     r0_d = Q6_Vh_vshuff_Vh(r0_d);
@@ -490,7 +490,7 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
         }
 
         HVX_Vector_x4 r_dd =
-            hvx_vec_load_d_and_mpy_r2x2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size, y_d + i * y_dblk_size);
+            hvx_vec_load_and_mul_d_r2x2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size, y_d + i * y_dblk_size);
 
         HVX_Vector r00_fa = Q6_Vqf32_vmpy_VsfVsf(r00_ia, r_dd.v[0]);
         HVX_Vector r01_fa = Q6_Vqf32_vmpy_VsfVsf(r01_ia, r_dd.v[1]);
@@ -516,7 +516,7 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
         HVX_Vector r0_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_full(r0_q, vy_q));
         HVX_Vector r1_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_full(r1_q, vy_q));
 
-        HVX_Vector_x2 r_dd = hvx_vec_load_d_and_mpy_rx2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size,
+        HVX_Vector_x2 r_dd = hvx_vec_load_and_mul_d_rx2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size,
                                                         y_d + i * y_dblk_size, rd_mask);
 
         HVX_Vector r0_fa = Q6_Vqf32_vmpy_VsfVsf(r0_ia, r_dd.v[0]);
@@ -536,7 +536,7 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
         HVX_Vector r0_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_nloe(r0_q, vy_q, nloe));
         HVX_Vector r1_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_nloe(r1_q, vy_q, nloe));
 
-        HVX_Vector_x2 r_dd = hvx_vec_load_d_and_mpy_rx2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size,
+        HVX_Vector_x2 r_dd = hvx_vec_load_and_mul_d_rx2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size,
                                                         y_d + i * y_dblk_size, rd_mask);
 
         // Zero out unused scales
@@ -685,7 +685,7 @@ static void vec_dot_q8x4x2_q8x4x2_rx2(const int n,
         HVX_Vector r0_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_full(r0_q, vy_q));
         HVX_Vector r1_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_full(r1_q, vy_q));
 
-        HVX_Vector_x2 r_dd = hvx_vec_load_d_and_mpy_rx2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size,
+        HVX_Vector_x2 r_dd = hvx_vec_load_and_mul_d_rx2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size,
                                                         y_d + i * y_dblk_size, rd_mask);
 
         HVX_Vector r0_fa = Q6_Vqf32_vmpy_VsfVsf(r0_ia, r_dd.v[0]);
@@ -704,7 +704,7 @@ static void vec_dot_q8x4x2_q8x4x2_rx2(const int n,
         HVX_Vector r0_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_nloe(r0_q, vy_q, nloe));
         HVX_Vector r1_ia = Q6_Vsf_equals_Vw(hvx_vec_rmpy_x8_nloe(r1_q, vy_q, nloe));
 
-        HVX_Vector_x2 r_dd = hvx_vec_load_d_and_mpy_rx2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size,
+        HVX_Vector_x2 r_dd = hvx_vec_load_and_mul_d_rx2(r0_x_d + i * x_dblk_size, r1_x_d + i * x_dblk_size,
                                                         y_d + i * y_dblk_size, rd_mask);
 
         // Zero out unused scales
@@ -961,8 +961,8 @@ static void vec_dot_mxfp4x4x2_q8x4x2_rx2(const int n,
     }
 
     // Convert into fp32 and reduce
-    r0_sum = hvx_vec_fp32_reduce_sum(Q6_Vsf_equals_Vqf32(r0_sum));
-    r1_sum = hvx_vec_fp32_reduce_sum(Q6_Vsf_equals_Vqf32(r1_sum));
+    r0_sum            = hvx_vec_fp32_reduce_sum(Q6_Vsf_equals_Vqf32(r0_sum));
+    r1_sum            = hvx_vec_fp32_reduce_sum(Q6_Vsf_equals_Vqf32(r1_sum));
     HVX_VectorPair p0 = Q6_W_vshuff_VVR(r1_sum, r0_sum, 4);
 
     hvx_vec_store_u(&s[0], 8, Q6_V_lo_W(p0));
@@ -2273,7 +2273,7 @@ int op_matmul_id(struct htp_ops_context * octx) {
 
                 assert(i02 >= 0 && i02 < n_as);
 
-                MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) { id, iid1 };
+                MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping){ id, iid1 };
                 matrix_row_counts[i02] += 1;
             }
         }
