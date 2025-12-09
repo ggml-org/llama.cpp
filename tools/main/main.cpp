@@ -44,10 +44,10 @@ static bool need_insert_eot = false;
 static void print_usage(int argc, char ** argv) {
     (void) argc;
 
-    LOG("\nexample usage:\n");
-    LOG("\n  text generation:     %s -m your_model.gguf -p \"I believe the meaning of life is\" -n 128 -no-cnv\n", argv[0]);
-    LOG("\n  chat (conversation): %s -m your_model.gguf -sys \"You are a helpful assistant\"\n", argv[0]);
-    LOG("\n");
+    console::write("\nexample usage:\n");
+    console::write("\n  text generation:     %s -m your_model.gguf -p \"I believe the meaning of life is\" -n 128 -no-cnv\n", argv[0]);
+    console::write("\n  chat (conversation): %s -m your_model.gguf -sys \"You are a helpful assistant\"\n", argv[0]);
+    console::write("\n");
 }
 
 static bool file_exists(const std::string & path) {
@@ -70,11 +70,11 @@ static void sigint_handler(int signo) {
             need_insert_eot = true;
         } else {
             console::cleanup();
-            LOG("\n");
+            console::write("\n");
             common_perf_print(*g_ctx, *g_smpl);
 
             // make sure all logs are flushed
-            LOG("Interrupted by user\n");
+            console::write("Interrupted by user\n");
             common_log_pause(common_log_main());
 
             _exit(130);
@@ -82,6 +82,139 @@ static void sigint_handler(int signo) {
     }
 }
 #endif
+
+class partial_formatter {
+public:
+    enum output_type {
+        CONTENT,
+        REASONING,
+    };
+
+    struct output {
+        std::string formatted;
+        output_type type;
+    };
+
+    partial_formatter(const common_chat_syntax & syntax) : syntax(syntax), had_reasoning(false) {}
+
+    std::vector<output> operator()(const std::string & accumulated) {
+        common_chat_msg next = common_chat_parse(accumulated, true, syntax);
+
+        auto diffs = common_chat_msg_diff::compute_diffs(previous, next);
+        std::vector<output> result;
+        for (const auto & diff : diffs) {
+            if (!diff.reasoning_content_delta.empty()) {
+                if (!had_reasoning) {
+                    result.push_back({"\n⇒ ", REASONING});
+                }
+                result.push_back({diff.reasoning_content_delta, REASONING});
+                had_reasoning = true;
+            }
+            if (!diff.content_delta.empty()) {
+                if (had_reasoning) {
+                    result.push_back({"\n\n", REASONING});
+                    had_reasoning = false;
+                }
+                result.push_back({diff.content_delta, CONTENT});
+            }
+        }
+        previous = next;
+        return result;
+    }
+
+    void clear() {
+        previous = common_chat_msg();
+        had_reasoning = false;
+    }
+
+private:
+    common_chat_syntax syntax;
+    common_chat_msg previous;
+    bool had_reasoning;
+};
+
+class chat_formatter {
+public:
+    chat_formatter(
+        std::vector<common_chat_msg> & chat_msgs,
+        const common_chat_templates_ptr & chat_templates,
+        const common_params & params)
+        : chat_msgs(chat_msgs),
+          chat_templates(chat_templates),
+          params(params) {}
+
+    std::string operator()(const std::string & role, const std::string & content) {
+        if (role == "user") {
+            formatted_cumulative.clear(); // Needed if template strips reasoning
+
+            if (partial_formatter_ptr) {
+                partial_formatter_ptr->clear(); // Remove stale data from delta
+            }
+        }
+
+        common_chat_msg new_msg;
+        if (role == "assistant" && syntax_ptr) {
+            new_msg = common_chat_parse(content, false, *syntax_ptr);
+        } else {
+            new_msg.content = content;
+        }
+        new_msg.role = role;
+
+        chat_msgs.push_back(new_msg);
+
+        common_chat_templates_inputs cinputs;
+        cinputs.messages.assign(chat_msgs.cbegin(), chat_msgs.cend());
+        cinputs.use_jinja = params.use_jinja;
+        cinputs.add_generation_prompt = (role == "user");
+        cinputs.reasoning_format = params.reasoning_format;
+
+        cinputs.enable_thinking =
+            params.use_jinja &&
+            params.reasoning_budget != 0 &&
+            common_chat_templates_support_enable_thinking(chat_templates.get());
+
+        common_chat_params cparams = common_chat_templates_apply(chat_templates.get(), cinputs);
+
+        if (!syntax_ptr) {
+            syntax_ptr.reset(new common_chat_syntax);
+            syntax_ptr->format = cparams.format;
+            syntax_ptr->reasoning_format = params.reasoning_format;
+            syntax_ptr->thinking_forced_open = cparams.thinking_forced_open;
+            syntax_ptr->parse_tool_calls = false;
+        }
+
+        bool use_partial_formatter = params.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+        if (!partial_formatter_ptr && use_partial_formatter) {
+            partial_formatter_ptr = std::make_unique<partial_formatter>(*syntax_ptr);
+        }
+
+        std::string formatted;
+        if (formatted_cumulative.size() > cparams.prompt.size()) {
+            LOG_WRN("template cumulative size was reduced from \"%zu\" to \"%zu\" "
+                    "likely due to template's removal of message reasoning.\n",
+                    formatted_cumulative.size(), cparams.prompt.size());
+
+        } else {
+            formatted = cparams.prompt.substr(formatted_cumulative.size());
+        }
+
+        formatted_cumulative = cparams.prompt;
+
+        LOG_DBG("formatted: '%s'\n", formatted.c_str());
+        return formatted;
+    }
+
+    partial_formatter * get_partial_formatter() { return partial_formatter_ptr.get(); }
+    const std::string & get_full_prompt() const { return formatted_cumulative; }
+
+private:
+    std::vector<common_chat_msg> & chat_msgs;
+    const common_chat_templates_ptr & chat_templates;
+    const common_params & params;
+    std::unique_ptr<common_chat_syntax> syntax_ptr;
+    std::unique_ptr<partial_formatter> partial_formatter_ptr;
+    std::string formatted_cumulative;
+};
 
 int main(int argc, char ** argv) {
     common_params params;
@@ -269,15 +402,7 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> embd_inp;
 
     bool waiting_for_first_input = false;
-    auto chat_add_and_format = [&chat_msgs, &chat_templates](const std::string & role, const std::string & content) {
-        common_chat_msg new_msg;
-        new_msg.role = role;
-        new_msg.content = content;
-        auto formatted = common_chat_format_single(chat_templates.get(), chat_msgs, new_msg, role == "user", g_params->use_jinja);
-        chat_msgs.push_back(new_msg);
-        LOG_DBG("formatted: '%s'\n", formatted.c_str());
-        return formatted;
-    };
+    chat_formatter chat_add_and_format(chat_msgs, chat_templates, params);
 
     std::string prompt;
     {
@@ -295,13 +420,9 @@ int main(int argc, char ** argv) {
             }
 
             if (!params.system_prompt.empty() || !params.prompt.empty()) {
-                common_chat_templates_inputs inputs;
-                inputs.use_jinja = g_params->use_jinja;
-                inputs.messages = chat_msgs;
-                inputs.add_generation_prompt = !params.prompt.empty();
-
-                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+                prompt = chat_add_and_format.get_full_prompt();
             }
+
         } else {
             // otherwise use the prompt as is
             prompt = params.prompt;
@@ -576,6 +697,12 @@ int main(int argc, char ** argv) {
         embd_inp.push_back(decoder_start_token_id);
     }
 
+    if (chat_add_and_format.get_partial_formatter()) {
+        for (const auto & msg : chat_msgs) {
+            console::write(msg.content + "\n");
+        }
+    }
+
     while ((n_remain != 0 && !is_antiprompt) || params.interactive) {
         // predict
         if (!embd.empty()) {
@@ -723,6 +850,19 @@ int main(int argc, char ** argv) {
 
             if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
                 assistant_ss << common_token_to_piece(ctx, id, false);
+
+                if (auto * formatter = chat_add_and_format.get_partial_formatter()) {
+                    auto outputs = (*formatter)(assistant_ss.str());
+                    for (const auto & out : outputs) {
+                        if (out.type == partial_formatter::REASONING) {
+                            console::set_display(console::reasoning);
+                        } else {
+                            console::set_display(console::reset);
+                        }
+                        console::write(out.formatted);
+                    }
+                    console::set_display(console::reset);
+                }
             }
 
             // echo this to console
@@ -754,8 +894,9 @@ int main(int argc, char ** argv) {
             for (auto id : embd) {
                 const std::string token_str = common_token_to_piece(ctx, id, params.special);
 
-                // Console/Stream Output
-                LOG("%s", token_str.c_str());
+                if (!chat_add_and_format.get_partial_formatter()) {
+                    console::write(token_str);
+                }
 
                 // Record Displayed Tokens To Log
                 // Note: Generated tokens are created one by one hence this check
@@ -838,7 +979,7 @@ int main(int argc, char ** argv) {
                         chat_add_and_format("assistant", assistant_ss.str());
                     }
                     is_interacting = true;
-                    LOG("\n");
+                    console::write("\n");
                 }
             }
 
@@ -852,8 +993,12 @@ int main(int argc, char ** argv) {
             if ((n_past > 0 || waiting_for_first_input) && is_interacting) {
                 LOG_DBG("waiting for user input\n");
 
+                // color user input only
+                console::set_display(console::user_input);
+                display = params.display_prompt;
+
                 if (params.conversation_mode) {
-                    LOG("\n> ");
+                    console::write("\n> ");
                 }
 
                 if (params.input_prefix_bos) {
@@ -864,12 +1009,8 @@ int main(int argc, char ** argv) {
                 std::string buffer;
                 if (!params.input_prefix.empty() && !params.conversation_mode) {
                     LOG_DBG("appending input prefix: '%s'\n", params.input_prefix.c_str());
-                    LOG("%s", params.input_prefix.c_str());
+                    console::write(params.input_prefix);
                 }
-
-                // color user input only
-                console::set_display(console::user_input);
-                display = params.display_prompt;
 
                 std::string line;
                 bool another_line = true;
@@ -883,7 +1024,7 @@ int main(int argc, char ** argv) {
                 display = true;
 
                 if (buffer.empty()) { // Ctrl+D on empty line exits
-                    LOG("EOF by user\n");
+                    console::write("EOF by user\n");
                     break;
                 }
 
@@ -901,7 +1042,7 @@ int main(int argc, char ** argv) {
                     // append input suffix if any
                     if (!params.input_suffix.empty() && !params.conversation_mode) {
                         LOG_DBG("appending input suffix: '%s'\n", params.input_suffix.c_str());
-                        LOG("%s", params.input_suffix.c_str());
+                        console::write(params.input_suffix);
                     }
 
                     LOG_DBG("buffer: '%s'\n", buffer.c_str());
@@ -975,7 +1116,7 @@ int main(int argc, char ** argv) {
 
         // end of generation
         if (!embd.empty() && llama_vocab_is_eog(vocab, embd.back()) && !(params.interactive)) {
-            LOG(" [end of text]\n");
+            console::write(" [end of text]\n");
             break;
         }
 
@@ -988,11 +1129,11 @@ int main(int argc, char ** argv) {
     }
 
     if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
-        LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
+        LOG_INF("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
     }
 
-    LOG("\n\n");
+    console::write("\n\n");
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);

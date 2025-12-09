@@ -151,6 +151,7 @@ private:
     std::mutex mtx;
     std::thread thrd;
     std::condition_variable cv;
+    std::condition_variable cv_flushed;
 
     FILE * file;
 
@@ -265,6 +266,10 @@ public:
                     cur = entries[head];
 
                     head = (head + 1) % entries.size();
+
+                    if (head == tail) {
+                        cv_flushed.notify_all();
+                    }
                 }
 
                 if (cur.is_end) {
@@ -353,6 +358,18 @@ public:
 
         this->timestamps = timestamps;
     }
+
+    bool is_active() const {
+        return running;
+    }
+
+    void flush() {
+        if (!running) {
+            return;
+        }
+        std::unique_lock<std::mutex> lock(mtx);
+        cv_flushed.wait(lock, [this]() { return head == tail; });
+    }
 };
 
 //
@@ -384,6 +401,14 @@ void common_log_resume(struct common_log * log) {
 
 void common_log_free(struct common_log * log) {
     delete log;
+}
+
+bool common_log_is_active(struct common_log * log) {
+    return log->is_active();
+}
+
+void common_log_flush(struct common_log * log) {
+    log->flush();
 }
 
 void common_log_add(struct common_log * log, enum ggml_log_level level, const char * fmt, ...) {

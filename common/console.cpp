@@ -1,6 +1,7 @@
 #include "console.h"
 #include <vector>
 #include <iostream>
+#include <cstdarg>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -24,14 +25,14 @@
 #include <termios.h>
 #endif
 
-#define ANSI_COLOR_RED     "\x1b[31m"
-#define ANSI_COLOR_GREEN   "\x1b[32m"
-#define ANSI_COLOR_YELLOW  "\x1b[33m"
-#define ANSI_COLOR_BLUE    "\x1b[34m"
-#define ANSI_COLOR_MAGENTA "\x1b[35m"
-#define ANSI_COLOR_CYAN    "\x1b[36m"
-#define ANSI_COLOR_RESET   "\x1b[0m"
-#define ANSI_BOLD          "\x1b[1m"
+#define ANSI_COLOR_RED     LOG_COL_RED
+#define ANSI_COLOR_GREEN   LOG_COL_GREEN
+#define ANSI_COLOR_YELLOW  LOG_COL_YELLOW
+#define ANSI_COLOR_BLUE    LOG_COL_BLUE
+#define ANSI_COLOR_MAGENTA LOG_COL_MAGENTA
+#define ANSI_COLOR_CYAN    LOG_COL_CYAN
+#define ANSI_COLOR_RESET   LOG_COL_DEFAULT
+#define ANSI_BOLD          LOG_COL_BOLD
 
 namespace console {
 
@@ -142,23 +143,63 @@ namespace console {
     // Keep track of current display and only emit ANSI code if it changes
     void set_display(display_t display) {
         if (advanced_display && current_display != display) {
-            fflush(stdout);
-            switch(display) {
-                case reset:
-                    fprintf(out, ANSI_COLOR_RESET);
-                    break;
-                case prompt:
-                    fprintf(out, ANSI_COLOR_YELLOW);
-                    break;
-                case user_input:
-                    fprintf(out, ANSI_BOLD ANSI_COLOR_GREEN);
-                    break;
-                case error:
-                    fprintf(out, ANSI_BOLD ANSI_COLOR_RED);
-            }
             current_display = display;
-            fflush(out);
+
+            if (display == user_input && common_log_is_active(common_log_main())) {
+                common_log_flush(common_log_main());
+            }
+
+            if (display == user_input || !common_log_is_active(common_log_main())) {
+                fflush(stdout);
+                switch(display) {
+                    case reset:
+                        fprintf(out, ANSI_COLOR_RESET);
+                        break;
+                    case prompt:
+                        fprintf(out, ANSI_COLOR_YELLOW);
+                        break;
+                    case user_input:
+                        fprintf(out, ANSI_BOLD ANSI_COLOR_GREEN);
+                        break;
+                    case error:
+                        fprintf(out, ANSI_BOLD ANSI_COLOR_RED);
+                        break;
+                    case reasoning:
+                        fprintf(out, ANSI_COLOR_BLUE);
+                        break;
+                }
+                fflush(out);
+            }
         }
+    }
+
+    display_t get_display() {
+        return current_display;
+    }
+
+    const char * get_display_color() {
+        switch(current_display) {
+            case reset:
+                return ANSI_COLOR_RESET;
+            case prompt:
+                return ANSI_COLOR_YELLOW;
+            case user_input:
+                return ANSI_BOLD ANSI_COLOR_GREEN;
+            case error:
+                return ANSI_BOLD ANSI_COLOR_RED;
+            case reasoning:
+                return ANSI_COLOR_BLUE;
+            default:
+                return "";
+        }
+    }
+
+    void write_console(const char * format, ...) {
+        va_list args;
+        va_start(args, format);
+        vfprintf(out, format, args);
+        va_end(args);
+        fflush(out);
     }
 
     static char32_t getchar32() {
