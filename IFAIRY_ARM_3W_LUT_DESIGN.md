@@ -23,7 +23,7 @@
 - **激活格式**：
   - 模型侧激活为复数：实部、虚部分别量化为 int8，并带有各自的缩放因子。
   - 需要 per‑tensor 或 per‑行的激活缩放，保证 LUT 内的 int8 不溢出。
-  - 当前实现复用 `GGML_TYPE_IFAIRY_Q16`/`block_ifairy_q16` 作为激活容器（int8 实/虚分平面 + fp16 缩放），不新增激活类型。原因：该类型已在 ggml 注册、量化/缩放链路完整，符合「预量化 + 查表」性能模型；直接使用 float 激活会在预处理引入更多浮点访存，抵消 LUT 吞吐优势。
+  - 当前实现复用 `block_ifairy_q16` 作为激活容器（int8 实/虚分平面 + fp16 缩放），不新增激活类型。原因：该量化块已在 ggml 注册、量化/缩放链路完整，符合「预量化 + 查表」性能模型；直接使用 float 激活会在预处理引入更多浮点访存，抵消 LUT 吞吐优势。(但是激活的tensor type 为 GGML_TYPE_F32, 也就是用 F32类型做存储，前后16位分别是实部和虚部的f16)
 - **硬件假设**：
   - ARMv8.2‑A + NEON。推荐平台额外支持 DOTPROD 指令集（`__ARM_FEATURE_DOTPROD`），但 **本 3‑weight LUT 路径仅依赖 NEON 基本向量与查表指令**（`vqtbl1q_s8`、`vaddq_*` 等），不强制使用 `vdotq_s32`。
   - 假设内存对齐到 16 / 64 字节，有利于加载和预取。
@@ -955,6 +955,8 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 微调块大小（例如每次处理 32 或 64 个 3‑weight 组）；
   - 展开循环以减少分支；
   - 调整 LUT 表和激活 pack 的布局，使其更利于 cache 与寄存器复用。
+
+> 当前：mul_mat 路由已接通标量 LUT，`transform_tensor` 生成索引 shadow（挂 `extra`），`get_wsize` 上报 per-thread LUT+scale 工作区，mul_mat 按行拆分并用 workbuf 预处理后 qgemm，输出按 bf16-packed（每个 float 容器存实/虚 bf16）。待改进：索引释放仍依赖全局 `ggml_ifairy_lut_free`，未随 tensor 回收；缩放仍为 per-tensor；NEON 核心未就绪；GGUF ifairy 类型仍触发 loader “unknown type” 警告。
 
 ### 10.6 步骤六：测试与基准
 

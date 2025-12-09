@@ -142,7 +142,10 @@ return true; // NEON available -> NEON path; else scalar LUT
 - [x] 接口骨架文件与 CMake 线路（init/free/can/wsize/transform/preprocess/qgemm）。— 头文件与 CMake 选项 `GGML_IFAIRY_ARM_LUT` 已生效；`can_mul_mat`/预处理/qgemm 提供标量实现，`wsize/transform` 仍占位，后续补齐索引 shadow tensor 与 workbuf 估算。
 - [x] 标量预处理 + 标量 qgemm（用于正确性基准）。
   - 进度：`ggml/src/ggml-ifairy-lut.cpp` 提供标量 reference（构表 + qgemm）。预处理使用 ifairy_q16 激活构建 16 模式 LUT，激活缩放取第一块 fp16 缩放；qgemm 按索引 opcode 应用 LUT，int32 累加后乘激活缩放与权重缩放（取第一块 d_real/d_imag）输出 float。`tests/test-ifairy.cpp::test_ifairy_lut_scalar_matmul` 新增单测，对 K=QK_K 场景下的 encode + preprocess + qgemm 与直接复数点积（按量化值解码）进行逐元素比对。
-- [ ] ggml 路由集成（mul_mat 分支 + workbuf 管理）。
+- [x] ggml 路由集成（mul_mat 分支 + workbuf 管理）。
+  - 进度：`ggml_ifairy_lut_get_wsize` 计算每线程 LUT/scales 工作区并通过 `ggml_cpu_extra_work_size` 上报；`mul_mat` 检测 ifairy 类型时调用 `transform_tensor` 生成索引 shadow（挂在 `tensor->extra`），按线程切分行，复用 per-thread workbuf 预处理激活→LUT，使用 LUT qgemm 写入 bf16-packed 输出；缺陷：索引释放依赖 `ggml_ifairy_lut_free`，暂未在张量释放时自动回收；GGUF 类型注册仍未解决 loader “unknown type ifairy” 警告。
+  - 路由策略：env `GGML_IFAIRY_LUT=0` 关闭；形状需 K%QK_K==0，dst F32；暂用标量 LUT，NEON 待后续；多线程拆 row。
+  - 缩放对齐：仍使用 per-tensor 缩放（首块 d_real/d_imag）；未实现 per-block scales。
 - [ ] NEON 预处理/LUT 构造（按 BK tile）。
 - [ ] NEON qgemm（16 组解码流水 + 行展开）。
 - [ ] 单测补充（LUT vs 真值；路径开关）。

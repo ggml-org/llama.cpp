@@ -1250,15 +1250,45 @@ void ggml_compute_forward_mul_mat(
 
 #if defined(GGML_IFAIRY_ARM_LUT)
     if (ggml_ifairy_lut_can_mul_mat(src0, src1, dst)) {
-        if (nth != 1) {
-            if (ith == 0) {
-                GGML_LOG_WARN("ifairy_lut: nth=%d not supported, falling back to default mul_mat\n", nth);
+        // ensure indexes are prepared
+        bool have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
+        if (!have_index && ith == 0) {
+            ggml_ifairy_lut_transform_tensor((struct ggml_tensor *) src0, NULL);
+        }
+        ggml_barrier(params->threadpool);
+        have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
+
+        const size_t need = ggml_ifairy_lut_get_wsize(src0, src1, dst, nth);
+        const size_t per_thread = need == 0 ? 0 : need / (size_t) nth;
+
+        if (have_index && params->wdata && params->wsize >= need && per_thread > 0) {
+            const int64_t M = ne01;
+            const int64_t K = ne00;
+            const int64_t N = ne11;
+
+            const int64_t K3 = (K + 2) / 3 * 3;
+            const int64_t groups = K3 / 3;
+            const size_t index_stride = (size_t) groups;
+
+            const struct ifairy_lut_extra * extra = (const struct ifairy_lut_extra *) src0->extra;
+            const uint8_t * indexes = extra->indexes;
+
+            uint8_t * my_buf = params->wdata + per_thread * (size_t) ith;
+            const size_t lut_bytes = (size_t) N * (size_t) groups * 32;
+            int8_t * lut = (int8_t *) my_buf;
+            float * scales = (float *) (my_buf + lut_bytes);
+            const size_t act_stride = nb11;
+            const size_t dst_stride = nb1;
+
+            // build LUT once per thread (shared across rows)
+            ggml_ifairy_lut_preprocess((int) M, (int) K, (int) N, (const uint8_t *) src1->data, act_stride, scales, lut);
+
+            // each thread processes a subset of rows
+            for (int64_t row = ith; row < M; row += nth) {
+                const uint8_t * row_indexes = indexes + (size_t) row * index_stride;
+                ggml_ifairy_lut_qgemm(1, (int) K, (int) N, src0->data, row_indexes, lut, scales,
+                                      (float *) dst->data, dst_stride, true);
             }
-        } else if (ith == 0) {
-            ggml_ifairy_lut_mul_mat_scalar((int) ne01, (int) ne00, (int) ne11,
-                                           src0->data, src1->data, nb11, dst->data);
-            return;
-        } else {
             return;
         }
     }
