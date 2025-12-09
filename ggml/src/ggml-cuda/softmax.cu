@@ -209,6 +209,7 @@ static __device__ float two_stage_warp_reduce_sum(float val) {
     }
 }
 
+// TODO: Template to allow keeping ncols in registers if they fit
 static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __restrict__ x,
                                                                 float * __restrict__ dst,
                                                                 float * __restrict__ tmp_vals,
@@ -404,7 +405,9 @@ static void soft_max_f32_cuda(const float *                                x,
         launch_soft_max_kernels<32, 64, 128, 256, 512, 1024, 2048, 4096>(x, mask, sinks, dst, params, stream, block_dims, block_nums, nbytes_shared);
     } else {
         // Parallelize across SMs for top-p/dist-smapling
-        if (ncols_x > 10000 && mask == nullptr && sinks == nullptr && params.scale == 1.0f && params.max_bias == 0.0f) {
+        // The heuristic for parallelizing rows across SMs vs parallelizing single row & looping over all rows was done on the basis of a B6000 GPU and
+        // Can be adapted further for lower-SM-count GPUs, though keeping data in registers should be implemented first as that is the optimal solution.
+        if (ncols_x / (params.ne01 * params.ne02 * params.ne03) > 8192 && mask == nullptr && sinks == nullptr && params.scale == 1.0f && params.max_bias == 0.0f) {
             if (ggml_cuda_info().devices[id].supports_cooperative_launch) {
                 ggml_cuda_pool_alloc<float> tmp_alloc(ctx.pool(), ggml_cuda_info().devices[id].nsm * sizeof(float));
 
