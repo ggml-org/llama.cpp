@@ -62,6 +62,8 @@
 #include "ggml-sycl/mmvq.hpp"
 #include "ggml-sycl/fused-norm-gemm.hpp"
 #include "ggml-sycl/fused-moe-esimd.hpp"
+#include "ggml-sycl/gpu-sampler.hpp"
+#include "ggml-sycl/cont-batching.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded = false;
@@ -75,6 +77,7 @@ int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_xmx_gemm = 0;  // Enable XMX-accelerated GEMM (experimental)
 int g_ggml_sycl_xmx_threshold = 64; // Max batch size for XMX (XMX faster for N < threshold)
+thread_local bool g_ggml_sycl_graph_recording = false;  // True when SYCL graph is recording
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -381,7 +384,7 @@ struct ggml_backend_sycl_buffer_context {
 
 static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_type_t buft);
 
-static bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
+bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
     return buffer->buft->iface.get_name == ggml_backend_sycl_buffer_type_get_name;
 }
 
@@ -2111,6 +2114,597 @@ size_t ggml_backend_sycl_get_tp_data_offset(
     }
 
     return 0;
+}
+
+// ============================================================================
+// Pipeline Parallelism (PP) API - vLLM-style layer split with chunked prefill
+// ============================================================================
+
+void ggml_backend_sycl_pp_init(
+    const int * device_ids, int n_devices,
+    int total_layers, const int * layers_per_stage) {
+    ggml_sycl_pp_init(device_ids, n_devices, total_layers, layers_per_stage);
+}
+
+void ggml_backend_sycl_pp_free(void) {
+    ggml_sycl_pp_free();
+}
+
+bool ggml_backend_sycl_pp_enabled(void) {
+    return ggml_sycl_pp_enabled();
+}
+
+int ggml_backend_sycl_pp_num_stages(void) {
+    return ggml_sycl_pp_num_stages();
+}
+
+int ggml_backend_sycl_pp_get_device_for_layer(int layer) {
+    return ggml_sycl_pp_get_device_for_layer(layer);
+}
+
+void ggml_backend_sycl_pp_set_chunked_prefill(int32_t chunk_size, bool enabled) {
+    ggml_sycl_pp_set_chunked_prefill(chunk_size, enabled);
+}
+
+// ===========================================================================
+// GPU Sampling API Implementation
+// ===========================================================================
+
+// GPU sampler struct - holds backend context and sampler state
+struct ggml_sycl_sampler {
+    ggml_backend_t backend;
+    ggml_backend_sycl_context* sycl_ctx;
+    ggml_sycl_sampler_state state;
+    int n_vocab;
+};
+
+ggml_sycl_sampler_t ggml_backend_sycl_sampler_create(
+    ggml_backend_t backend, int n_vocab, uint32_t seed
+) try {
+    GGML_ASSERT(ggml_backend_is_sycl(backend));
+
+    ggml_sycl_sampler_t sampler = new ggml_sycl_sampler();
+    sampler->backend = backend;
+    sampler->sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    sampler->n_vocab = n_vocab;
+
+    // Initialize sampler state
+    ggml_sycl_sampler_init(sampler->state, n_vocab, seed);
+
+    return sampler;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error creating GPU sampler: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+void ggml_backend_sycl_sampler_free(ggml_sycl_sampler_t sampler) try {
+    if (sampler == nullptr) return;
+
+    if (sampler->state.initialized) {
+        sycl::queue& q = *sampler->sycl_ctx->stream();
+        ggml_sycl_sampler_free(sampler->state, q);
+    }
+
+    delete sampler;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error freeing GPU sampler: %s\n", exc.what());
+}
+
+int32_t ggml_backend_sycl_sample_token(
+    ggml_sycl_sampler_t sampler, ggml_tensor * logits_tensor, float temp
+) try {
+    // Sample from index 0 (for single-token decode)
+    return ggml_backend_sycl_sample_token_idx(sampler, logits_tensor, 0, temp);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error in GPU sampling: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int32_t ggml_backend_sycl_sample_token_idx(
+    ggml_sycl_sampler_t sampler, ggml_tensor * logits_tensor, int idx, float temp
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    GGML_ASSERT(logits_tensor != nullptr);
+    GGML_ASSERT(logits_tensor->type == GGML_TYPE_F32);
+
+    // Get GPU pointer for logits
+    float* logits_gpu = (float*)logits_tensor->data;
+    GGML_ASSERT(logits_gpu != nullptr);
+
+    // Get vocab size from tensor (ne[0] is vocab dimension)
+    int n_vocab = logits_tensor->ne[0];
+    GGML_ASSERT(n_vocab == sampler->n_vocab);
+
+    // Get number of batch entries (ne[1] is batch dimension)
+    int n_batch = logits_tensor->ne[1];
+    GGML_ASSERT(idx >= 0 && idx < n_batch);
+
+    // Offset to the correct batch entry
+    float* logits_at_idx = logits_gpu + (size_t)idx * n_vocab;
+
+    // Set up config
+    ggml_sycl_sampler_config config;
+    config.temp = temp;
+    config.top_k = 0;
+    config.top_p = 1.0f;
+    config.min_p = 0.0f;
+    config.seed = sampler->state.rng_state;  // Use current RNG state
+    config.greedy = (temp == 0.0f);
+
+    // Call GPU sampler with offset logits
+    return ggml_sycl_sample_token(*sampler->sycl_ctx, logits_at_idx, config, sampler->state);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error in GPU sampling: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+void ggml_backend_sycl_sample_token_async(
+    ggml_sycl_sampler_t sampler, ggml_tensor * logits_tensor, float temp
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    GGML_ASSERT(logits_tensor != nullptr);
+    GGML_ASSERT(logits_tensor->type == GGML_TYPE_F32);
+
+    float* logits_gpu = (float*)logits_tensor->data;
+    GGML_ASSERT(logits_gpu != nullptr);
+
+    int n_vocab = logits_tensor->ne[0];
+    GGML_ASSERT(n_vocab == sampler->n_vocab);
+
+    ggml_sycl_sampler_config config;
+    config.temp = temp;
+    config.top_k = 0;
+    config.top_p = 1.0f;
+    config.min_p = 0.0f;
+    config.seed = sampler->state.rng_state;
+    config.greedy = (temp == 0.0f);
+
+    // Call async GPU sampler (doesn't wait for result)
+    ggml_sycl_sample_token_async(*sampler->sycl_ctx, logits_gpu, config, sampler->state);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error in async GPU sampling: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int32_t ggml_backend_sycl_sample_token_get(ggml_sycl_sampler_t sampler) try {
+    GGML_ASSERT(sampler != nullptr);
+    return ggml_sycl_sample_token_wait(*sampler->sycl_ctx, sampler->state);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error getting GPU sampling result: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+// ===========================================================================
+// Multi-step GPU Sampling API
+// ===========================================================================
+
+void ggml_backend_sycl_sampler_reset_buffer(ggml_sycl_sampler_t sampler) try {
+    GGML_ASSERT(sampler != nullptr);
+    ggml_sycl_sampler_reset_buffer(sampler->state);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error resetting sampler buffer: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int ggml_backend_sycl_sample_token_to_device(
+    ggml_sycl_sampler_t sampler, ggml_tensor * logits_tensor, float temp
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    GGML_ASSERT(logits_tensor != nullptr);
+    GGML_ASSERT(logits_tensor->type == GGML_TYPE_F32);
+
+    float* logits_gpu = (float*)logits_tensor->data;
+    GGML_ASSERT(logits_gpu != nullptr);
+
+    int n_vocab = logits_tensor->ne[0];
+    GGML_ASSERT(n_vocab == sampler->n_vocab);
+
+    ggml_sycl_sampler_config config;
+    config.temp = temp;
+    config.top_k = 0;
+    config.top_p = 1.0f;
+    config.min_p = 0.0f;
+    config.seed = sampler->state.rng_state;
+    config.greedy = (temp == 0.0f);
+
+    return ggml_sycl_sample_token_to_buffer(*sampler->sycl_ctx, logits_gpu, config, sampler->state);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error in sample_token_to_device: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int32_t * ggml_backend_sycl_get_sampled_token_ptr(
+    ggml_sycl_sampler_t sampler, int index
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    return ggml_sycl_sampler_get_token_ptr(sampler->state, index);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error getting sampled token ptr: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int32_t * ggml_backend_sycl_get_current_token_ptr(ggml_sycl_sampler_t sampler) try {
+    GGML_ASSERT(sampler != nullptr);
+    return ggml_sycl_sampler_get_current_token_ptr(sampler->state);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error getting current token ptr: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int ggml_backend_sycl_get_sampled_tokens(
+    ggml_sycl_sampler_t sampler, int32_t * tokens, int max_tokens
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    GGML_ASSERT(tokens != nullptr);
+    return ggml_sycl_sampler_get_tokens(*sampler->sycl_ctx, sampler->state, tokens, max_tokens);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error getting sampled tokens: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int ggml_backend_sycl_get_token_count(ggml_sycl_sampler_t sampler) try {
+    GGML_ASSERT(sampler != nullptr);
+    return sampler->state.token_count;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error getting token count: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int ggml_backend_sycl_get_token_buffer_size(void) {
+    return GPU_SAMPLER_TOKEN_BUFFER_SIZE;
+}
+
+// ===========================================================================
+// Continuous Batching API Implementation (Multi-sequence GPU Sampling)
+// ===========================================================================
+
+// Multi-sequence sampler struct - holds backend context and multi-seq state
+struct ggml_sycl_multi_seq_sampler_wrapper {
+    ggml_backend_t backend;
+    ggml_backend_sycl_context* sycl_ctx;
+    ggml_sycl_multi_seq_sampler state;
+    uint32_t base_seed;
+};
+
+ggml_sycl_multi_seq_sampler_t ggml_backend_sycl_multi_seq_sampler_create(
+    ggml_backend_t backend, int max_seqs, int n_vocab, uint32_t seed
+) try {
+    GGML_ASSERT(ggml_backend_is_sycl(backend));
+    GGML_ASSERT(max_seqs > 0 && max_seqs <= CONT_BATCH_MAX_SEQS);
+    GGML_ASSERT(n_vocab > 0);
+
+    auto wrapper = new ggml_sycl_multi_seq_sampler_wrapper();
+    wrapper->backend = backend;
+    wrapper->sycl_ctx = (ggml_backend_sycl_context *)backend->context;
+    wrapper->base_seed = seed;
+
+    // Initialize multi-sequence sampler state
+    sycl::queue& q = *wrapper->sycl_ctx->stream();
+    ggml_sycl_multi_seq_sampler_init(wrapper->state, q, max_seqs, n_vocab);
+
+    return (ggml_sycl_multi_seq_sampler_t)wrapper;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error creating multi-seq sampler: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+void ggml_backend_sycl_multi_seq_sampler_free(
+    ggml_sycl_multi_seq_sampler_t sampler
+) try {
+    if (sampler == nullptr) return;
+
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+    if (wrapper->state.initialized) {
+        sycl::queue& q = *wrapper->sycl_ctx->stream();
+        ggml_sycl_multi_seq_sampler_free(wrapper->state, q);
+    }
+
+    delete wrapper;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error freeing multi-seq sampler: %s\n", exc.what());
+}
+
+bool ggml_backend_sycl_multi_seq_add(
+    ggml_sycl_multi_seq_sampler_t sampler, int seq_id, float temp
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+
+    if (seq_id < 0 || seq_id >= wrapper->state.max_seqs) return false;
+
+    sycl::queue& q = *wrapper->sycl_ctx->stream();
+    // Generate unique seed for this sequence
+    uint32_t seq_seed = wrapper->base_seed + seq_id;
+    int slot = ggml_sycl_multi_seq_add(wrapper->state, q, seq_id, temp, seq_seed);
+
+    return slot >= 0;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error adding sequence: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+bool ggml_backend_sycl_multi_seq_remove(
+    ggml_sycl_multi_seq_sampler_t sampler, int seq_id
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+
+    // Check if sequence is active
+    bool was_active = false;
+    for (int i = 0; i < wrapper->state.max_seqs; i++) {
+        if (wrapper->state.h_seq_active[i] && wrapper->state.h_seq_ids[i] == seq_id) {
+            was_active = true;
+            break;
+        }
+    }
+
+    if (!was_active) return false;
+
+    sycl::queue& q = *wrapper->sycl_ctx->stream();
+    ggml_sycl_multi_seq_remove(wrapper->state, q, seq_id);
+    return true;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error removing sequence: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+void ggml_backend_sycl_multi_seq_set_temp(
+    ggml_sycl_multi_seq_sampler_t sampler, int seq_id, float temp
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+
+    // Find slot for this sequence
+    int slot = -1;
+    for (int i = 0; i < wrapper->state.max_seqs; i++) {
+        if (wrapper->state.h_seq_active[i] && wrapper->state.h_seq_ids[i] == seq_id) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot < 0) return;
+
+    sycl::queue& q = *wrapper->sycl_ctx->stream();
+    q.memcpy(wrapper->state.temperatures + slot, &temp, sizeof(float)).wait();
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error setting temperature: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int ggml_backend_sycl_multi_seq_get_active_count(
+    ggml_sycl_multi_seq_sampler_t sampler
+) {
+    GGML_ASSERT(sampler != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+    return wrapper->state.n_active;
+}
+
+int ggml_backend_sycl_multi_seq_sample(
+    ggml_sycl_multi_seq_sampler_t sampler,
+    float * batched_logits,
+    bool greedy
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    GGML_ASSERT(batched_logits != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+
+    if (wrapper->state.n_active == 0) return 0;
+
+    sycl::queue& q = *wrapper->sycl_ctx->stream();
+    ggml_sycl_multi_seq_sample(wrapper->state, q, batched_logits, greedy);
+
+    return wrapper->state.n_active;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error in multi-seq sampling: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int ggml_backend_sycl_multi_seq_get_tokens(
+    ggml_sycl_multi_seq_sampler_t sampler,
+    int32_t * tokens_out,
+    int * seq_ids_out,
+    int max_tokens
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    GGML_ASSERT(tokens_out != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+
+    if (wrapper->state.n_active == 0) return 0;
+
+    sycl::queue& q = *wrapper->sycl_ctx->stream();
+    int n_copy = std::min(wrapper->state.n_active, max_tokens);
+
+    // Copy sampled tokens from device
+    std::vector<int32_t> all_tokens(wrapper->state.max_seqs);
+    q.memcpy(all_tokens.data(), wrapper->state.sampled_tokens,
+             wrapper->state.max_seqs * sizeof(int32_t)).wait();
+
+    // Copy only active sequences' tokens
+    int idx = 0;
+    for (int i = 0; i < wrapper->state.max_seqs && idx < n_copy; i++) {
+        if (wrapper->state.h_seq_active[i]) {
+            tokens_out[idx] = all_tokens[i];
+            if (seq_ids_out != nullptr) {
+                seq_ids_out[idx] = wrapper->state.h_seq_ids[i];
+            }
+            idx++;
+        }
+    }
+
+    return idx;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error getting multi-seq tokens: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int32_t * ggml_backend_sycl_multi_seq_get_token_ptr(
+    ggml_sycl_multi_seq_sampler_t sampler, int seq_id
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+
+    return ggml_sycl_multi_seq_get_current_token_ptr(wrapper->state, seq_id);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error getting multi-seq token ptr: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int ggml_backend_sycl_multi_seq_get_active_seq_ids(
+    ggml_sycl_multi_seq_sampler_t sampler,
+    int * seq_ids_out,
+    int max_seqs
+) {
+    GGML_ASSERT(sampler != nullptr);
+    GGML_ASSERT(seq_ids_out != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+
+    int idx = 0;
+    for (int i = 0; i < wrapper->state.max_seqs && idx < max_seqs; i++) {
+        if (wrapper->state.h_seq_active[i]) {
+            seq_ids_out[idx++] = wrapper->state.h_seq_ids[i];
+        }
+    }
+
+    return idx;
+}
+
+void ggml_backend_sycl_multi_seq_reset_buffer(
+    ggml_sycl_multi_seq_sampler_t sampler, int seq_id
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+
+    // Find slot for this sequence
+    int slot = -1;
+    for (int i = 0; i < wrapper->state.max_seqs; i++) {
+        if (wrapper->state.h_seq_ids[i] == seq_id) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot < 0) return;
+
+    sycl::queue& q = *wrapper->sycl_ctx->stream();
+    int zero = 0;
+    q.memcpy(wrapper->state.write_indices + slot, &zero, sizeof(int));
+    q.memcpy(wrapper->state.token_counts + slot, &zero, sizeof(int)).wait();
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error resetting multi-seq buffer: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+int ggml_backend_sycl_multi_seq_get_ring_tokens(
+    ggml_sycl_multi_seq_sampler_t sampler,
+    int seq_id,
+    int32_t * tokens_out,
+    int max_tokens
+) try {
+    GGML_ASSERT(sampler != nullptr);
+    GGML_ASSERT(tokens_out != nullptr);
+    auto wrapper = (ggml_sycl_multi_seq_sampler_wrapper*)sampler;
+
+    sycl::queue& q = *wrapper->sycl_ctx->stream();
+    return ggml_sycl_multi_seq_get_tokens(wrapper->state, q, seq_id, tokens_out, max_tokens);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error getting ring tokens: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
+}
+
+// ===========================================================================
+// Batched Logits Management
+// ===========================================================================
+
+// Thread-local storage for batch logits info (set by llama layer)
+static thread_local struct {
+    float* logits_ptr;      // Device pointer to [n_tokens, n_vocab] logits
+    int n_tokens;           // Number of tokens with logits
+    int n_vocab;            // Vocabulary size
+    bool valid;
+} g_batch_logits_info = { nullptr, 0, 0, false };
+
+// Called by llama layer after decode to set logits info
+void ggml_backend_sycl_set_batch_logits_info(
+    float* logits_device_ptr, int n_tokens, int n_vocab
+) {
+    g_batch_logits_info.logits_ptr = logits_device_ptr;
+    g_batch_logits_info.n_tokens = n_tokens;
+    g_batch_logits_info.n_vocab = n_vocab;
+    g_batch_logits_info.valid = true;
+}
+
+void ggml_backend_sycl_clear_batch_logits_info(void) {
+    g_batch_logits_info.valid = false;
+}
+
+float * ggml_backend_sycl_get_batch_logits_ptr(void * ctx, int batch_idx) {
+    GGML_UNUSED(ctx);
+
+    if (!g_batch_logits_info.valid) return nullptr;
+    if (batch_idx < 0 || batch_idx >= g_batch_logits_info.n_tokens) return nullptr;
+
+    return g_batch_logits_info.logits_ptr + batch_idx * g_batch_logits_info.n_vocab;
+}
+
+int ggml_backend_sycl_get_batch_logits_count(void * ctx) {
+    GGML_UNUSED(ctx);
+
+    if (!g_batch_logits_info.valid) return 0;
+    return g_batch_logits_info.n_tokens;
+}
+
+// ===========================================================================
+// Device Memory Utilities
+// ===========================================================================
+
+void ggml_backend_sycl_copy_device_to_tensor(
+    void * src_device_ptr,
+    ggml_tensor * tensor,
+    size_t size
+) try {
+    GGML_ASSERT(src_device_ptr != nullptr);
+    GGML_ASSERT(tensor != nullptr);
+    GGML_ASSERT(tensor->buffer != nullptr);
+
+    // Get the SYCL context from the tensor's buffer
+    ggml_backend_sycl_buffer_context * ctx =
+        (ggml_backend_sycl_buffer_context *)tensor->buffer->context;
+    GGML_ASSERT(ctx != nullptr);
+
+    // Set device and get queue
+    ggml_sycl_set_device(ctx->device);
+    auto stream = dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
+
+    // Device-to-device copy
+    void* dst = tensor->data;
+    stream.memcpy(dst, src_device_ptr, size).wait();
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error in device-to-tensor copy: %s\n", exc.what());
+    GGML_ABORT("SYCL exception");
 }
 
 // host buffer type
@@ -3901,7 +4495,8 @@ tp_device1_worker g_tp_device1_worker;
 // a dedicated SYCL queue. This appears to be due to internal synchronization
 // in the Level Zero driver or SYCL runtime that doesn't support concurrent
 // kernel launches from multiple host threads on the same device.
-// Future: Investigate using out-of-order queues or single-threaded async approach.
+// Note: Out-of-order queues were investigated and produce non-deterministic
+// output on Intel Arc GPUs even with maximum synchronization, likely a driver bug.
 int g_ggml_sycl_tp_threaded_ffn = 0;  // DISABLED - causes hangs at MMVQ kernel
 
 // Forward declaration of worker thread function
@@ -7190,6 +7785,11 @@ static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_
 }
 
 static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    // Q6_K MMQ kernel now works on Intel GPUs (WARP_SIZE=16) after fixing:
+    // - Main loop stride (blocks_per_iter instead of blocks_per_warp)
+    // - Y-tile allocation (QI6_K instead of WARP_SIZE)
+    // - Y-tile indexing (no modulo wraparound)
+    // - vec_dot Y-tile stride (QI6_K instead of WARP_SIZE)
     return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
            src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
 }
@@ -9040,7 +9640,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
 
-        // Skip nodes already executed via fusion
+        // Skip nodes already executed via fusion - no kernel work needed
         if (fused_nodes.count(node)) {
             continue;
         }
@@ -9221,11 +9821,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
 #ifdef GGML_SYCL_GRAPH
 static bool check_graph_compatibility(ggml_cgraph * cgraph) {
-    if (ggml_sycl_info().device_count > 1) {
-        // A sycl_ex::command_graph object can only be created for a single device
-        GGML_LOG_INFO("%s: disabling SYCL graphs due to multiple devices\n", __func__);
-        return false;
-    }
+    // NOTE: Multi-device check removed (December 2024)
+    // Each backend context has its own device and exec_graph, so graphs can be
+    // created per-device. The scheduler calls graph_compute separately for each
+    // device's split, so SYCL graphs work correctly for pipeline parallelism.
+    // TP mode is disabled via separate check (g_sycl_tp_config.enabled).
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         const ggml_op node_op = cgraph->nodes[i]->op;
@@ -9410,11 +10010,13 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] begin_recording...\n");
+            g_ggml_sycl_graph_recording = true;  // Mark recording state
             model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
             GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] calling compute_impl...\n");
             ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
             GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] end_recording...\n");
             model_sycl_graph.end_recording();
+            g_ggml_sycl_graph_recording = false;  // Clear recording state
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH] finalize (new graph)...\n");
             auto exec_graph = model_sycl_graph.finalize();
@@ -10193,6 +10795,42 @@ const int32_t * ggml_sycl_get_seq_ids_host_q(size_t * count) {
 const int32_t * ggml_sycl_get_seq_ids_host_kv(size_t * count) {
     if (count) *count = g_sycl_seq_ids_cache.kv_count;
     return g_sycl_seq_ids_cache.kv_seq_ids;
+}
+
+// ==============================================================================
+// Thread-local cache for pending device tokens (multi-step GPU decode)
+// ==============================================================================
+
+struct ggml_sycl_device_token_cache {
+    void * token_ptr = nullptr;  // Device pointer to token(s)
+    size_t n_tokens = 0;         // Number of tokens
+};
+
+static thread_local ggml_sycl_device_token_cache g_sycl_device_token_cache;
+
+void ggml_backend_sycl_set_pending_device_token(void * token_ptr, size_t n_tokens) {
+    g_sycl_device_token_cache.token_ptr = token_ptr;
+    g_sycl_device_token_cache.n_tokens = n_tokens;
+}
+
+void ggml_backend_sycl_clear_pending_device_token(void) {
+    g_sycl_device_token_cache.token_ptr = nullptr;
+    g_sycl_device_token_cache.n_tokens = 0;
+}
+
+// Internal getter for llama-graph.cpp to access the pending device token
+void * ggml_sycl_get_pending_device_token(size_t * n_tokens) {
+    if (n_tokens) *n_tokens = g_sycl_device_token_cache.n_tokens;
+    return g_sycl_device_token_cache.token_ptr;
+}
+
+// Copy from device memory to host memory (synchronous)
+// Used when tokens tensor is on CPU backend but we have device tokens
+void ggml_sycl_copy_device_to_host(void * src_device, void * dst_host, size_t bytes) {
+    // Use device 0's queue for the copy (the token buffer is on the sampler's device)
+    // In multi-step decode, the sampler device is the same as the model device
+    auto & q = dpct::dev_mgr::instance().get_device(0).default_queue();
+    q.memcpy(dst_host, src_device, bytes).wait();
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_sycl_reg)
