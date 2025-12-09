@@ -1226,15 +1226,15 @@ static void llama_sampler_top_k_backend_apply(
     struct ggml_tensor * top_k = ggml_top_k(ctx, data->logits, sctx->k);
     ggml_set_name(top_k, "top_k");
 
-    struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, data->logits->ne[0]);
-    struct ggml_tensor * top_k_rows = ggml_get_rows(ctx, logits_rows, top_k);
-    ggml_set_name(top_k_rows, "top_k_rows");
-
     if (data->candidates) {
         data->candidates = ggml_get_rows(ctx, data->candidates, top_k);
     } else {
         data->candidates = top_k;
     }
+
+    struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, data->logits->ne[0]);
+    struct ggml_tensor * top_k_rows = ggml_get_rows(ctx, logits_rows, top_k);
+    ggml_set_name(top_k_rows, "top_k_rows");
 
     data->logits = ggml_reshape_1d(ctx, top_k_rows, sctx->k);
 
