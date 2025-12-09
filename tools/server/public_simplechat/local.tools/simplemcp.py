@@ -80,14 +80,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         bearer_transform()
         authline = self.headers['Authorization']
         if authline == None:
-            return mTC.TCOutResponse(False, 400, "WARN:No auth line")
+            return mTC.TCOutResponse(False, 401, "WARN:No auth line")
         authlineA = authline.strip().split(' ')
         if len(authlineA) != 2:
             return mTC.TCOutResponse(False, 400, "WARN:Invalid auth line")
         if authlineA[0] != 'Bearer':
             return mTC.TCOutResponse(False, 400, "WARN:Invalid auth type")
         if authlineA[1] != gMe.op.bearerTransformed:
-            return mTC.TCOutResponse(False, 400, "WARN:Invalid auth")
+            return mTC.TCOutResponse(False, 401, "WARN:Invalid auth")
         return mTC.TCOutResponse(True, 200, "Auth Ok")
 
     def send_mcp(self, statusCode: int, statusMessage: str, body: Any):
@@ -130,6 +130,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def mcp_run(self, body: bytes):
         oRPC = json.loads(body)
+        print(f"DBUG:PH:MCP:Method:{oRPC['method']}")
         if oRPC["method"] == "tools/call":
             self.mcp_toolscall(oRPC)
         elif oRPC["method"] == "tools/list":

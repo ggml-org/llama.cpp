@@ -43,7 +43,11 @@ class Sec(DictyDataclassMixin):
     certFile: str = ""
     keyFile: str = ""
     bearerAuth: str = ""
-    bAuthAlways: bool = True
+    bAuthAlways: bool = False
+    """
+    if true, expects authorization line irrespective of http / https
+    if false, authorization line needed only for https
+    """
 
 
 @dataclass
