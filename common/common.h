@@ -12,6 +12,10 @@
 #include <vector>
 #include <map>
 
+#if defined(_WIN32) && !defined(_WIN32_WINNT)
+#define _WIN32_WINNT 0x0A00
+#endif
+
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
 #else
@@ -485,6 +489,7 @@ struct common_params {
     bool log_json = false;
 
     std::string slot_save_path;
+    std::string media_path; // path to directory for loading media files
 
     float slot_prompt_similarity = 0.1f;
 
@@ -635,8 +640,9 @@ std::string string_from(const struct llama_context * ctx, const struct llama_bat
 // Filesystem utils
 //
 
-bool fs_validate_filename(const std::string & filename);
+bool fs_validate_filename(const std::string & filename, bool allow_subdirs = false);
 bool fs_create_directory_with_parents(const std::string & path);
+bool fs_is_directory(const std::string & path);
 
 std::string fs_get_cache_directory();
 std::string fs_get_cache_file(const std::string & filename);
@@ -648,6 +654,13 @@ struct common_file_info {
     bool        is_dir = false;
 };
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
+
+//
+// TTY utils
+//
+
+// Auto-detect if colors can be enabled based on terminal and environment
+bool tty_can_use_colors();
 
 //
 // Model utils

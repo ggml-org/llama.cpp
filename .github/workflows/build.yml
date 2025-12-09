@@ -547,6 +547,46 @@ jobs:
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
 
+  ubuntu-24-wasm-webgpu:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-latest-wasm-webgpu
+          evict-old-files: 1d
+
+      - name: Install Emscripten
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git
+          cd emsdk
+          ./emsdk install latest
+          ./emsdk activate latest
+
+      - name: Fetch emdawnwebgpu
+        run: |
+          DAWN_TAG="v20251027.212519"
+          EMDAWN_PKG="emdawnwebgpu_pkg-${DAWN_TAG}.zip"
+          echo "Downloading ${EMDAWN_PKG}"
+          curl -L -o emdawn.zip \
+            "https://github.com/google/dawn/releases/download/${DAWN_TAG}/${EMDAWN_PKG}"
+          unzip emdawn.zip
+
+      - name: Build WASM WebGPU
+        run: |
+          source emsdk/emsdk_env.sh
+          emcmake cmake -B build-wasm \
+            -DGGML_WEBGPU=ON \
+            -DLLAMA_CURL=OFF \
+            -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
+
+          cmake --build build-wasm --target test-backend-ops -j $(nproc)
+
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:6.1.2
@@ -1562,33 +1602,33 @@ jobs:
         run: |
           bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  ggml-ci-x64-amd-vulkan:
-    runs-on: [self-hosted, Linux, X64, AMD]
+  # ggml-ci-x64-amd-vulkan:
+  #   runs-on: [self-hosted, Linux, X64, AMD]
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Clone
+  #       id: checkout
+  #       uses: actions/checkout@v4
 
-      - name: Test
-        id: ggml-ci
-        run: |
-          vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #     - name: Test
+  #       id: ggml-ci
+  #       run: |
+  #         vulkaninfo --summary
+  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  ggml-ci-x64-amd-rocm:
-    runs-on: [self-hosted, Linux, X64, AMD]
+  # ggml-ci-x64-amd-rocm:
+  #   runs-on: [self-hosted, Linux, X64, AMD]
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Clone
+  #       id: checkout
+  #       uses: actions/checkout@v4
 
-      - name: Test
-        id: ggml-ci
-        run: |
-          amd-smi static
-          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #     - name: Test
+  #       id: ggml-ci
+  #       run: |
+  #         amd-smi static
+  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-mac-metal:
     runs-on: [self-hosted, macOS, ARM64]
@@ -1641,6 +1681,337 @@ jobs:
          id: ggml-ci
          run: |
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ubuntu-cpu-cmake-riscv64-native:
+    runs-on: RISCV64
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+          # Install necessary packages
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache
+
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+
+          # Install Rust stable version
+          rustup install stable
+          rustup default stable
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Check environment
+        run: |
+          uname -a
+          gcc --version
+          g++ --version
+          ldd --version
+          cmake --version
+          rustc --version
+
+      - name: Setup ccache
+        run: |
+          # Set unique cache directory for this job
+          export CCACHE_DIR="$HOME/.ccache/cpu-cmake-rv64-native"
+          mkdir -p "$CCACHE_DIR"
+
+          # Configure ccache for optimal performance
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+
+          # Enable more aggressive caching
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=hash_dir=false
+
+          # Export for subsequent steps
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DGGML_RPC=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L 'main|curl' --verbose --timeout 900
+
+      - name: Test llama2c conversion
+        id: llama2c_test
+        run: |
+          cd build
+          echo "Fetch tokenizer"
+          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/tok512.bin
+          echo "Fetch llama2c model"
+          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
+          ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
+          ./bin/llama-cli -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+
+  ubuntu-cmake-sanitizer-riscv64-native:
+    runs-on: RISCV64
+
+    continue-on-error: true
+
+    strategy:
+      matrix:
+        sanitizer: [ADDRESS, THREAD, UNDEFINED]
+        build_type: [Debug]
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+          # Install necessary packages
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache
+
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+
+          # Install Rust stable version
+          rustup install stable
+          rustup default stable
+
+      - name: GCC version check
+        run: |
+          gcc --version
+          g++ --version
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ccache
+        run: |
+          # Unique cache directory per matrix combination
+          export CCACHE_DIR="$HOME/.ccache/sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}"
+          mkdir -p "$CCACHE_DIR"
+
+          # Configure ccache
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=hash_dir=false
+
+          # Export for subsequent steps
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        if: ${{ matrix.sanitizer != 'THREAD' }}
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGGML_OPENMP=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Build (no OpenMP)
+        id: cmake_build_no_openmp
+        if: ${{ matrix.sanitizer == 'THREAD' }}
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
+
+  ubuntu-llguidance-riscv64-native:
+    runs-on: RISCV64
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+          # Install necessary packages
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache
+
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+
+          # Install Rust stable version
+          rustup install stable
+          rustup default stable
+
+      - name: GCC version check
+        run: |
+          gcc --version
+          g++ --version
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ccache
+        run: |
+          export CCACHE_DIR="$HOME/.ccache/llguidance-riscv64"
+          mkdir -p "$CCACHE_DIR"
+
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=hash_dir=false
+
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_LLGUIDANCE=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
+
+  ubuntu-cmake-rpc-riscv64-native:
+    runs-on: RISCV64
+
+    continue-on-error: true
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+          # Install necessary packages
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache
+
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+
+          # Install Rust stable version
+          rustup install stable
+          rustup default stable
+
+      - name: GCC version check
+        run: |
+          gcc --version
+          g++ --version
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ccache
+        run: |
+          export CCACHE_DIR="$HOME/.ccache/rpc-riscv64"
+          mkdir -p "$CCACHE_DIR"
+
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=hash_dir=false
+
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
+            -DGGML_RPC=ON
+
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose
 
   ggml-ci-arm64-graviton4-kleidiai:
      runs-on: ah-ubuntu_22_04-c8g_8x

@@ -11,6 +11,7 @@
 
 #include <random>
 #include <sstream>
+#include <fstream>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -493,6 +494,18 @@ int32_t server_tokens::process_chunk(
     return 0;
 }
 
+server_tokens server_tokens::clone() const {
+    server_tokens res;
+    res.has_mtmd = has_mtmd;
+    res.tokens   = tokens;
+    for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
+        size_t idx = it->first;
+        const mtmd::input_chunk_ptr & chunk = it->second;
+        res.map_idx_to_media[idx] = mtmd::input_chunk_ptr(mtmd_input_chunk_copy(chunk.get()));
+    }
+    return res;
+}
+
 //
 // tokenizer and input processing utils
 //
@@ -744,12 +757,6 @@ json oaicompat_completion_params_parse(const json & body) {
         llama_params["stop"] = json_value(body, "stop", json::array());
     }
 
-    // Handle "n" field
-    int n_choices = json_value(body, "n", 1);
-    if (n_choices != 1) {
-        throw std::runtime_error("Only one completion choice is allowed");
-    }
-
     // Handle "echo" field
     if (json_value(body, "echo", false)) {
         throw std::runtime_error("Only no echo is supported");
@@ -772,6 +779,65 @@ json oaicompat_completion_params_parse(const json & body) {
     }
 
     return llama_params;
+}
+
+// media_path always end with '/', see arg.cpp
+static void handle_media(
+        std::vector<raw_buffer> & out_files,
+        json & media_obj,
+        const std::string & media_path) {
+    std::string url = json_value(media_obj, "url", std::string());
+    if (string_starts_with(url, "http")) {
+        // download remote image
+        // TODO @ngxson : maybe make these params configurable
+        common_remote_params params;
+        params.headers.push_back("User-Agent: llama.cpp/" + build_info);
+        params.max_size = 1024 * 1024 * 10; // 10MB
+        params.timeout  = 10; // seconds
+        SRV_INF("downloading image from '%s'\n", url.c_str());
+        auto res = common_remote_get_content(url, params);
+        if (200 <= res.first && res.first < 300) {
+            SRV_INF("downloaded %zu bytes\n", res.second.size());
+            raw_buffer data;
+            data.insert(data.end(), res.second.begin(), res.second.end());
+            out_files.push_back(data);
+        } else {
+            throw std::runtime_error("Failed to download image");
+        }
+
+    } else if (string_starts_with(url, "file://")) {
+        if (media_path.empty()) {
+            throw std::invalid_argument("file:// URLs are not allowed unless --media-path is specified");
+        }
+        // load local image file
+        std::string file_path = url.substr(7); // remove "file://"
+        raw_buffer data;
+        if (!fs_validate_filename(file_path, true)) {
+            throw std::invalid_argument("file path is not allowed: " + file_path);
+        }
+        SRV_INF("loading image from local file '%s'\n", (media_path + file_path).c_str());
+        std::ifstream file(media_path + file_path, std::ios::binary);
+        if (!file) {
+            throw std::invalid_argument("file does not exist or cannot be opened: " + file_path);
+        }
+        data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        out_files.push_back(data);
+
+    } else {
+        // try to decode base64 image
+        std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
+        if (parts.size() != 2) {
+            throw std::runtime_error("Invalid url value");
+        } else if (!string_starts_with(parts[0], "data:image/")) {
+            throw std::runtime_error("Invalid url format: " + parts[0]);
+        } else if (!string_ends_with(parts[0], "base64")) {
+            throw std::runtime_error("url must be base64 encoded");
+        } else {
+            auto base64_data = parts[1];
+            auto decoded_data = base64_decode(base64_data);
+            out_files.push_back(decoded_data);
+        }
+    }
 }
 
 // used by /chat/completions endpoint
@@ -819,26 +885,26 @@ json oaicompat_chat_params_parse(
             auto schema_wrapper = json_value(response_format, "json_schema", json::object());
             json_schema = json_value(schema_wrapper, "schema", json::object());
         } else if (!response_type.empty() && response_type != "text") {
-            throw std::runtime_error("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
+            throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
         }
     }
 
     // get input files
     if (!body.contains("messages")) {
-        throw std::runtime_error("'messages' is required");
+        throw std::invalid_argument("'messages' is required");
     }
     json & messages = body.at("messages");
     if (!messages.is_array()) {
-        throw std::runtime_error("Expected 'messages' to be an array");
+        throw std::invalid_argument("Expected 'messages' to be an array");
     }
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
         if (role != "assistant" && !msg.contains("content")) {
-            throw std::runtime_error("All non-assistant messages must contain 'content'");
+            throw std::invalid_argument("All non-assistant messages must contain 'content'");
         }
         if (role == "assistant") {
             if (!msg.contains("content") && !msg.contains("tool_calls")) {
-                throw std::runtime_error("Assistant message must contain either 'content' or 'tool_calls'!");
+                throw std::invalid_argument("Assistant message must contain either 'content' or 'tool_calls'!");
             }
             if (!msg.contains("content")) {
                 continue; // avoid errors with no content
@@ -850,7 +916,7 @@ json oaicompat_chat_params_parse(
         }
 
         if (!content.is_array()) {
-            throw std::runtime_error("Expected 'content' to be a string or an array");
+            throw std::invalid_argument("Expected 'content' to be a string or an array");
         }
 
         for (auto & p : content) {
@@ -860,41 +926,8 @@ json oaicompat_chat_params_parse(
                     throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
-                json image_url  = json_value(p, "image_url", json::object());
-                std::string url = json_value(image_url, "url", std::string());
-                if (string_starts_with(url, "http")) {
-                    // download remote image
-                    // TODO @ngxson : maybe make these params configurable
-                    common_remote_params params;
-                    params.headers.push_back("User-Agent: llama.cpp/" + build_info);
-                    params.max_size = 1024 * 1024 * 10; // 10MB
-                    params.timeout  = 10; // seconds
-                    SRV_INF("downloading image from '%s'\n", url.c_str());
-                    auto res = common_remote_get_content(url, params);
-                    if (200 <= res.first && res.first < 300) {
-                        SRV_INF("downloaded %ld bytes\n", res.second.size());
-                        raw_buffer data;
-                        data.insert(data.end(), res.second.begin(), res.second.end());
-                        out_files.push_back(data);
-                    } else {
-                        throw std::runtime_error("Failed to download image");
-                    }
-
-                } else {
-                    // try to decode base64 image
-                    std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
-                    if (parts.size() != 2) {
-                        throw std::runtime_error("Invalid image_url.url value");
-                    } else if (!string_starts_with(parts[0], "data:image/")) {
-                        throw std::runtime_error("Invalid image_url.url format: " + parts[0]);
-                    } else if (!string_ends_with(parts[0], "base64")) {
-                        throw std::runtime_error("image_url.url must be base64 encoded");
-                    } else {
-                        auto base64_data = parts[1];
-                        auto decoded_data = base64_decode(base64_data);
-                        out_files.push_back(decoded_data);
-                    }
-                }
+                json image_url = json_value(p, "image_url", json::object());
+                handle_media(out_files, image_url, opt.media_path);
 
                 // replace this chunk with a marker
                 p["type"] = "text";
@@ -911,10 +944,12 @@ json oaicompat_chat_params_parse(
                 std::string format = json_value(input_audio, "format", std::string());
                 // while we also support flac, we don't allow it here so we matches the OAI spec
                 if (format != "wav" && format != "mp3") {
-                    throw std::runtime_error("input_audio.format must be either 'wav' or 'mp3'");
+                    throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
                 }
                 auto decoded_data = base64_decode(data); // expected to be base64 encoded
                 out_files.push_back(decoded_data);
+
+                // TODO: add audio_url support by reusing handle_media()
 
                 // replace this chunk with a marker
                 p["type"] = "text";
@@ -922,7 +957,7 @@ json oaicompat_chat_params_parse(
                 p.erase("input_audio");
 
             } else if (type != "text") {
-                throw std::runtime_error("unsupported content[].type");
+                throw std::invalid_argument("unsupported content[].type");
             }
         }
     }
@@ -940,7 +975,7 @@ json oaicompat_chat_params_parse(
     inputs.enable_thinking       = opt.enable_thinking;
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
-            throw std::runtime_error("Cannot use custom grammar constraints with tools.");
+            throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
         }
         llama_params["parse_tool_calls"] = true;
     }
@@ -959,7 +994,7 @@ json oaicompat_chat_params_parse(
     } else if (enable_thinking_kwarg == "false") {
         inputs.enable_thinking = false;
     } else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
-        throw std::runtime_error("invalid type for \"enable_thinking\" (expected boolean, got string)");
+        throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token
@@ -972,14 +1007,14 @@ json oaicompat_chat_params_parse(
 
         /* sanity check, max one assistant message at the end of the list */
         if (!inputs.messages.empty() && inputs.messages.back().role == "assistant"){
-            throw std::runtime_error("Cannot have 2 or more assistant messages at the end of the list.");
+            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
         }
 
         /* TODO: test this properly */
         inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
 
         if ( inputs.enable_thinking ) {
-            throw std::runtime_error("Assistant response prefill is incompatible with enable_thinking.");
+            throw std::invalid_argument("Assistant response prefill is incompatible with enable_thinking.");
         }
 
         inputs.add_generation_prompt = true;
@@ -1016,22 +1051,19 @@ json oaicompat_chat_params_parse(
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
-
-    // Handle "n" field
-    int n_choices = json_value(body, "n", 1);
-    if (n_choices != 1) {
-        throw std::runtime_error("Only one completion choice is allowed");
+    if (!chat_params.parser.empty()) {
+        llama_params["chat_parser"] = chat_params.parser;
     }
 
     // Handle "logprobs" field
     // TODO: The response format of this option is not yet OAI-compatible, but seems like no one really using it; We may need to fix it in the future
     if (json_value(body, "logprobs", false)) {
         if (has_tools && stream) {
-            throw std::runtime_error("logprobs is not supported with tools + stream");
+            throw std::invalid_argument("logprobs is not supported with tools + stream");
         }
         llama_params["n_probs"] = json_value(body, "top_logprobs", 20);
     } else if (body.contains("top_logprobs") && !body.at("top_logprobs").is_null()) {
-        throw std::runtime_error("top_logprobs requires logprobs to be set to true");
+        throw std::invalid_argument("top_logprobs requires logprobs to be set to true");
     }
 
     // Copy remaining properties to llama_params
@@ -1263,7 +1295,11 @@ json convert_anthropic_to_oai(const json & body) {
     return oai_body;
 }
 
-json format_embeddings_response_oaicompat(const json & request, const json & embeddings, bool use_base64) {
+json format_embeddings_response_oaicompat(
+        const json & request,
+        const std::string & model_name,
+        const json & embeddings,
+        bool use_base64) {
     json data = json::array();
     int32_t n_tokens = 0;
     int i = 0;
@@ -1293,7 +1329,7 @@ json format_embeddings_response_oaicompat(const json & request, const json & emb
     }
 
     json res = json {
-        {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
+        {"model", json_value(request, "model", model_name)},
         {"object", "list"},
         {"usage", json {
             {"prompt_tokens", n_tokens},
@@ -1307,6 +1343,7 @@ json format_embeddings_response_oaicompat(const json & request, const json & emb
 
 json format_response_rerank(
         const json & request,
+        const std::string & model_name,
         const json & ranks,
         bool is_tei_format,
         std::vector<std::string> & texts,
@@ -1338,7 +1375,7 @@ json format_response_rerank(
     if (is_tei_format) return results;
 
     json res = json{
-        {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
+        {"model", json_value(request, "model", model_name)},
         {"object", "list"},
         {"usage", json{
             {"prompt_tokens", n_tokens},

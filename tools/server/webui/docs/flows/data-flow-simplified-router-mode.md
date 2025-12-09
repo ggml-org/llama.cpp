@@ -15,7 +15,7 @@ sequenceDiagram
     Stores->>DB: load conversations
     Stores->>API: GET /props
     API-->>Stores: {role: "router"}
-    Stores->>API: GET /models
+    Stores->>API: GET /v1/models
     API-->>Stores: models[] with status (loaded/available)
     loop each loaded model
         Stores->>API: GET /props?model=X
@@ -28,7 +28,7 @@ sequenceDiagram
     alt model not loaded
         Stores->>API: POST /models/load
         loop poll status
-            Stores->>API: GET /models
+            Stores->>API: GET /v1/models
             API-->>Stores: check if loaded
         end
         Stores->>API: GET /props?model=X

@@ -89,7 +89,6 @@ export class ChatService {
 			custom,
 			timings_per_token,
 			// Config options
-			systemMessage,
 			disableReasoningFormat
 		} = options;
 
@@ -103,6 +102,7 @@ export class ChatService {
 				}
 			})
 			.filter((msg) => {
+				// Filter out empty system messages
 				if (msg.role === 'system') {
 					const content = typeof msg.content === 'string' ? msg.content : '';
 
@@ -112,10 +112,8 @@ export class ChatService {
 				return true;
 			});
 
-		const processedMessages = ChatService.injectSystemMessage(normalizedMessages, systemMessage);
-
 		const requestBody: ApiChatCompletionRequest = {
-			messages: processedMessages.map((msg: ApiChatMessageData) => ({
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
 				content: msg.content
 			})),
@@ -678,104 +676,37 @@ export class ChatService {
 	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
-	 * Get server properties - static method for API compatibility (to be refactored)
-	 */
-	static async getServerProps(): Promise<ApiLlamaCppServerProps> {
-		try {
-			const response = await fetch(`./props`, {
-				headers: getJsonHeaders()
-			});
-
-			if (!response.ok) {
-				throw new Error(`Failed to fetch server props: ${response.status}`);
-			}
-
-			const data = await response.json();
-			return data;
-		} catch (error) {
-			console.error('Error fetching server props:', error);
-			throw error;
-		}
-	}
-
-	/**
-	 * Get model information from /models endpoint (to be refactored)
-	 */
-	static async getModels(): Promise<ApiModelListResponse> {
-		try {
-			const response = await fetch(`./models`, {
-				headers: getJsonHeaders()
-			});
-
-			if (!response.ok) {
-				throw new Error(`Failed to fetch models: ${response.status} ${response.statusText}`);
-			}
-
-			const data = await response.json();
-			return data;
-		} catch (error) {
-			console.error('Error fetching models:', error);
-			throw error;
-		}
-	}
-
-	/**
-	 * Injects a system message at the beginning of the conversation if provided.
-	 * Checks for existing system messages to avoid duplication.
-	 *
-	 * @param messages - Array of chat messages to process
-	 * @param systemMessage - Optional system message to inject
-	 * @returns Array of messages with system message injected at the beginning if provided
-	 * @private
-	 */
-	private static injectSystemMessage(
-		messages: ApiChatMessageData[],
-		systemMessage?: string
-	): ApiChatMessageData[] {
-		const trimmedSystemMessage = systemMessage?.trim();
-
-		if (!trimmedSystemMessage) {
-			return messages;
-		}
-
-		if (messages.length > 0 && messages[0].role === 'system') {
-			if (messages[0].content !== trimmedSystemMessage) {
-				const updatedMessages = [...messages];
-				updatedMessages[0] = {
-					role: 'system',
-					content: trimmedSystemMessage
-				};
-				return updatedMessages;
-			}
-
-			return messages;
-		}
-
-		const systemMsg: ApiChatMessageData = {
-			role: 'system',
-			content: trimmedSystemMessage
-		};
-
-		return [systemMsg, ...messages];
-	}
-
-	/**
 	 * Parses error response and creates appropriate error with context information
 	 * @param response - HTTP response object
 	 * @returns Promise<Error> - Parsed error with context info if available
 	 */
-	private static async parseErrorResponse(response: Response): Promise<Error> {
+	private static async parseErrorResponse(
+		response: Response
+	): Promise<Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }> {
 		try {
 			const errorText = await response.text();
 			const errorData: ApiErrorResponse = JSON.parse(errorText);
 
 			const message = errorData.error?.message || 'Unknown server error';
-			const error = new Error(message);
+			const error = new Error(message) as Error & {
+				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
+			};
 			error.name = response.status === 400 ? 'ServerError' : 'HttpError';
+
+			if (errorData.error && 'n_prompt_tokens' in errorData.error && 'n_ctx' in errorData.error) {
+				error.contextInfo = {
+					n_prompt_tokens: errorData.error.n_prompt_tokens,
+					n_ctx: errorData.error.n_ctx
+				};
+			}
 
 			return error;
 		} catch {
-			const fallback = new Error(`Server error (${response.status}): ${response.statusText}`);
+			const fallback = new Error(
+				`Server error (${response.status}): ${response.statusText}`
+			) as Error & {
+				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
+			};
 			fallback.name = 'HttpError';
 			return fallback;
 		}

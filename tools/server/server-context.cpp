@@ -17,6 +17,7 @@
 #include <cinttypes>
 #include <memory>
 #include <unordered_set>
+#include <filesystem>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -34,7 +35,8 @@ constexpr int HTTP_POLLING_SECONDS = 1;
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
     SLOT_STATE_IDLE,
-    SLOT_STATE_STARTED, // TODO: this state is only used for setting up the initial prompt processing; maybe merge it with launch_slot_with_task in the future
+    SLOT_STATE_WAIT_OTHER, // after assigning a task, but waiting for parent slot to process prompt
+    SLOT_STATE_STARTED,    // after assigning a task and about to process prompt
     SLOT_STATE_PROCESSING_PROMPT,
     SLOT_STATE_DONE_PROMPT,
     SLOT_STATE_GENERATING,
@@ -100,7 +102,10 @@ struct server_slot {
     std::string  generated_text;
     llama_tokens generated_tokens;
 
-    common_chat_msg chat_msg;
+    // idx of draft tokens in the main batch
+    // non-empty if we went to evaluate draft tokens
+    // ref: https://github.com/ggml-org/llama.cpp/pull/17808
+    std::vector<int32_t> i_batch_dft;
 
     std::vector<completion_token_output> generated_token_probs;
 
@@ -150,10 +155,8 @@ struct server_slot {
 
     struct common_sampler * smpl = nullptr;
 
-    llama_token sampled;
-
-    common_chat_format chat_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
-    std::vector<std::string> generated_tool_call_ids;
+    llama_token sampled; // in speculative mode, this is the last accepted token
+    llama_tokens drafted;
 
     // stats
     size_t n_sent_text = 0; // number of sent text character
@@ -182,13 +185,12 @@ struct server_slot {
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
-        chat_format    = COMMON_CHAT_FORMAT_CONTENT_ONLY;
 
+        drafted.clear();
+        i_batch_dft.clear();
         generated_tokens.clear();
         generated_token_probs.clear();
-        chat_msg = {};
         json_schema = json();
-        generated_tool_call_ids.clear();
 
         // clear speculative decoding stats
         n_draft_total = 0;
@@ -261,6 +263,40 @@ struct server_slot {
         generated_token_probs.push_back(token);
     }
 
+    int get_n_draft_max() const {
+        if (!can_speculate()) {
+            return 0;
+        }
+
+        // determine the max draft that fits the current slot state
+        int n_draft_max = task->params.speculative.n_max;
+
+        // note: slot.prompt is not yet expanded with the `id` token sampled above
+        //       also, need to leave space for 1 extra token to allow context shifts
+        n_draft_max = std::min(n_draft_max, n_ctx - prompt.n_tokens() - 2);
+
+        if (n_remaining > 0) {
+            n_draft_max = std::min(n_draft_max, n_remaining - 1);
+        }
+
+        SLT_DBG(*this, "max possible draft: %d\n", n_draft_max);
+
+        if (n_draft_max < task->params.speculative.n_min) {
+            SLT_DBG(*this, "the max possible draft is too small: %d < %d - skipping speculative decoding\n", n_draft_max, task->params.speculative.n_min);
+            n_draft_max = 0;
+        }
+        return n_draft_max;
+    }
+
+    // note: a slot can also be either a parent or a child
+    bool is_parent() const {
+        return is_processing() && task->n_children > 0;
+    }
+
+    bool is_child() const {
+        return is_processing() && task->id_parent >= 0;
+    }
+
     void release() {
         if (is_processing()) {
             GGML_ASSERT(task);
@@ -299,23 +335,6 @@ struct server_slot {
         }
 
         return timings;
-    }
-
-    const common_chat_msg & update_chat_msg(std::vector<common_chat_msg_diff> & diffs) {
-        GGML_ASSERT(task);
-
-        auto previous_msg = chat_msg;
-        SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
-        auto new_msg = common_chat_parse(
-            generated_text,
-            /* is_partial= */ stop != STOP_TYPE_EOS,
-            task->params.oaicompat_chat_syntax);
-        if (!new_msg.empty()) {
-            new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
-            chat_msg = new_msg;
-            diffs = common_chat_msg_diff::compute_diffs(previous_msg, new_msg.empty() ? previous_msg : new_msg);
-        }
-        return chat_msg;
     }
 
     size_t find_stopping_strings(const std::string & text, const size_t last_token_size, bool is_full_stop) {
@@ -367,8 +386,7 @@ struct server_slot {
 
         if (n_draft_total > 0) {
             const float draft_ratio = (float) n_draft_accepted / n_draft_total;
-            SLT_INF(*this,
-                    "\n"
+            SLT_CNT(*this,
                     "draft acceptance rate = %0.5f (%5d accepted / %5d generated)\n",
                     draft_ratio, n_draft_accepted, n_draft_total
             );
@@ -406,6 +424,17 @@ struct server_slot {
         }
 
         return res;
+    }
+
+    void copy_state_to(server_slot & other) const {
+        llama_memory_seq_rm(llama_get_memory(ctx), other.id, 0, -1);
+        llama_memory_seq_cp(llama_get_memory(ctx), id, other.id, 0, -1);
+        other.n_decoded   = n_decoded;
+        other.n_remaining = n_remaining;
+        other.i_batch     = i_batch;
+        other.n_prompt_tokens_cache     = n_prompt_tokens_cache;
+        other.n_prompt_tokens_processed = n_prompt_tokens_processed;
+        other.prompt = prompt.clone();
     }
 };
 
@@ -517,6 +546,8 @@ struct server_context_impl {
 
     // Necessary similarity of prompt for slot selection
     float slot_prompt_similarity = 0.0f;
+
+    std::string model_name; // name of the loaded model, to be used by API
 
     common_chat_templates_ptr chat_templates;
     oaicompat_parser_options  oai_parser_opt;
@@ -758,6 +789,18 @@ struct server_context_impl {
         }
         SRV_WRN("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
+        if (!params_base.model_alias.empty()) {
+            // user explicitly specified model name
+            model_name = params_base.model_alias;
+        } else if (!params_base.model.name.empty()) {
+            // use model name in registry format (for models in cache)
+            model_name = params_base.model.name;
+        } else {
+            // fallback: derive model name from file name
+            auto model_path = std::filesystem::path(params_base.model.path);
+            model_name = model_path.filename().string();
+        }
+
         // thinking is enabled if:
         // 1. It's not explicitly disabled (reasoning_budget == 0)
         // 2. The chat template supports it
@@ -773,6 +816,7 @@ struct server_context_impl {
             /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
             /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
             /* enable_thinking       */ enable_thinking,
+            /* media_path            */ params_base.media_path,
         };
 
         // print sample chat example to make it clear which template is used
@@ -1031,7 +1075,9 @@ struct server_context_impl {
 
         slot.task = std::make_unique<const server_task>(std::move(task));
 
-        slot.state = SLOT_STATE_STARTED;
+        slot.state = slot.is_child()
+            ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
+            : SLOT_STATE_STARTED;
 
         SLT_INF(slot, "%s", "processing task\n");
 
@@ -1268,8 +1314,6 @@ struct server_context_impl {
         } else {
             res->content = tkn.text_to_send;
             res->tokens  = { tkn.tok };
-
-            slot.update_chat_msg(res->oaicompat_msg_diffs);
         }
 
         res->n_decoded           = slot.n_decoded;
@@ -1301,8 +1345,14 @@ struct server_context_impl {
         res->id_slot = slot.id;
 
         res->index           = slot.task->index;
-        res->content         = slot.generated_text;
-        res->tokens          = std::move(slot.generated_tokens);
+        // in stream mode, content and tokens are already in last partial chunk
+        if (slot.task->params.stream) {
+            res->content     = "";
+            res->tokens      = llama_tokens{};
+        } else {
+            res->content     = std::move(slot.generated_text);
+            res->tokens      = std::move(slot.generated_tokens);
+        }
         res->timings         = slot.get_timings();
         res->prompt          = slot.task->tokens.detokenize(ctx, true);
         res->response_fields = std::move(slot.task->params.response_fields);
@@ -1322,7 +1372,6 @@ struct server_context_impl {
         res->res_type          = slot.task->params.res_type;
         res->oaicompat_model   = slot.task->params.oaicompat_model;
         res->oaicompat_cmpl_id = slot.task->params.oaicompat_cmpl_id;
-        res->oaicompat_msg     = slot.update_chat_msg(res->oaicompat_msg_diffs);
 
         // populate res.probs_output
         if (slot.task->params.sampling.n_probs > 0) {
@@ -1690,6 +1739,12 @@ struct server_context_impl {
                     GGML_ABORT("not supported by multimodal");
                 }
 
+                if (slot.is_parent() || slot.is_child()) {
+                    send_error(slot, "context shift cannot be used for shared prompt", ERROR_TYPE_SERVER);
+                    slot.release();
+                    continue;
+                }
+
                 // Shift context
                 int n_keep = slot.task->params.n_keep < 0 ? slot.task->n_tokens() : slot.task->params.n_keep;
 
@@ -1751,14 +1806,57 @@ struct server_context_impl {
                 continue;
             }
 
-            slot.i_batch = batch.n_tokens;
+            // generate draft tokens in speculative decoding mode
+            // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
+            //       perform the speculative drafting for all sequences at the same time in a single batch
+            int n_draft_max = slot.get_n_draft_max();
+            if (n_draft_max > 0) {
+                if (mctx) {
+                    // we should never reach this, as speculative is automatically disabled if mmproj is loaded
+                    GGML_ABORT("not supported by multimodal");
+                }
 
-            common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
+                struct common_speculative_params params_spec;
+                params_spec.n_draft = n_draft_max;
+                params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max;
+                params_spec.p_min   = slot.task->params.speculative.p_min;
+                const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
+                llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
 
-            slot.prompt.tokens.push_back(slot.sampled);
+                // add the sampled token to the batch
+                slot.i_batch_dft.push_back(batch.n_tokens);
+                common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
+                slot.prompt.tokens.push_back(slot.sampled);
 
-            SLT_DBG(slot, "slot decode token, n_ctx = %d, n_tokens = %d, truncated = %d\n",
-                    slot.n_ctx, slot.prompt.n_tokens(), slot.truncated);
+                if (slot.task->params.speculative.n_min > (int) draft.size()) {
+                    SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int) draft.size(), slot.task->params.speculative.n_min);
+                    // fallback to normal decoding
+                    slot.i_batch = slot.i_batch_dft[0];
+                    slot.drafted.clear();
+                    slot.i_batch_dft.clear();
+                } else {
+                    // keep track of total number of drafted tokens tested
+                    slot.n_draft_total += draft.size();
+
+                    // add all drafted tokens to the batch
+                    for (size_t i = 0; i < draft.size(); i++) {
+                        slot.i_batch_dft.push_back(batch.n_tokens);
+                        common_batch_add(batch, draft[i], slot.prompt.tokens.pos_next(), { slot.id }, true);
+                        slot.prompt.tokens.push_back(draft[i]);
+                    }
+                    slot.drafted = std::move(draft);
+                }
+            } else {
+                // no speculative decoding
+                slot.i_batch = batch.n_tokens;
+
+                common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
+
+                slot.prompt.tokens.push_back(slot.sampled);
+
+                SLT_DBG(slot, "slot decode token, n_ctx = %d, n_tokens = %d, truncated = %d\n",
+                        slot.n_ctx, slot.prompt.n_tokens(), slot.truncated);
+            }
         }
 
         // process in chunks of params.n_batch
@@ -1857,8 +1955,18 @@ struct server_context_impl {
                                     n_past = std::min(n_past, slot.alora_invocation_start - 1);
                                 }
 
+                                const auto n_cache_reuse = slot.task->params.n_cache_reuse;
+
+                                const bool can_cache_reuse =
+                                    llama_memory_can_shift(llama_get_memory(ctx)) &&
+                                    !slot.prompt.tokens.has_mtmd;
+
+                                if (!can_cache_reuse && n_cache_reuse > 0) {
+                                    SLT_WRN(slot, "cache reuse is not supported - ignoring n_cache_reuse = %d\n", n_cache_reuse);
+                                }
+
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
-                                if (params_base.n_cache_reuse > 0) {
+                                if (can_cache_reuse && n_cache_reuse > 0) {
                                     GGML_ASSERT(!slot.prompt.tokens.has_mtmd);
 
                                     size_t head_c = n_past; // cache
@@ -1869,7 +1977,7 @@ struct server_context_impl {
                                         GGML_ABORT("not supported by multimodal");
                                     }
 
-                                    SLT_DBG(slot, "trying to reuse chunks with size > %d, n_past = %d\n", params_base.n_cache_reuse, n_past);
+                                    SLT_DBG(slot, "trying to reuse chunks with size > %d, n_past = %d\n", n_cache_reuse, n_past);
 
                                     while (head_c < slot.prompt.tokens.size() &&
                                            head_p < input_tokens.size()) {
@@ -1878,11 +1986,10 @@ struct server_context_impl {
                                         while (head_c + n_match < slot.prompt.tokens.size() &&
                                                head_p + n_match < input_tokens.size()       &&
                                                slot.prompt.tokens[head_c + n_match] == input_tokens[head_p + n_match]) {
-
                                             n_match++;
                                         }
 
-                                        if (n_match >= (size_t) params_base.n_cache_reuse) {
+                                        if (n_match >= (size_t) n_cache_reuse) {
                                             SLT_INF(slot, "reusing chunk with size %zu, shifting KV cache [%zu, %zu) -> [%zu, %zu)\n", n_match, head_c, head_c + n_match, head_p, head_p + n_match);
                                             //for (size_t i = head_p; i < head_p + n_match; i++) {
                                             //    SLT_DBG(slot, "cache token %3zu: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx, prompt_tokens[i]).c_str());
@@ -2313,7 +2420,31 @@ struct server_context_impl {
             // on successful decode, restore the original batch size
             n_batch = llama_n_batch(ctx);
 
+            // technically, measuring the time here excludes the sampling time for the last batch
+            // but on the other hand, we don't want to do too many system calls to measure the time, so it's ok
+            const int64_t t_current = ggml_time_us();
+
             for (auto & slot : slots) {
+                // may need to copy state to other slots
+                if (slot.state == SLOT_STATE_DONE_PROMPT && slot.is_parent()) {
+                    std::vector<server_slot *> child_slots;
+                    for (auto & other : slots) {
+                        if (other.state == SLOT_STATE_WAIT_OTHER && slot.task->id == other.task->id_parent) {
+                            child_slots.push_back(&other);
+                        }
+                    }
+
+                    // we can only proceed if all child slots are having the correct tasks
+                    if (child_slots.size() == slot.task->n_children) {
+                        // copy state to the child slots
+                        for (auto & child : child_slots) {
+                            SLT_INF(slot, "copying state to child %d\n", child->id);
+                            slot.copy_state_to(*child);
+                            child->state = SLOT_STATE_DONE_PROMPT;
+                        }
+                    }
+                }
+
                 // optionally send prompt processing progress
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
                     if (slot.task->params.stream && slot.task->params.return_progress) {
@@ -2347,6 +2478,10 @@ struct server_context_impl {
                     continue; // continue loop of slots
                 }
 
+                if (slot.i_batch_dft.size() > 0) {
+                    continue; // sample using speculative decoding
+                }
+
                 const int tok_idx = slot.i_batch - i;
 
                 llama_token id = common_sampler_sample(slot.smpl, ctx, tok_idx);
@@ -2356,8 +2491,6 @@ struct server_context_impl {
                 common_sampler_accept(slot.smpl, id, true);
 
                 slot.n_decoded += 1;
-
-                const int64_t t_current = ggml_time_us();
 
                 if (slot.n_decoded == 1) {
                     slot.t_start_generation = t_current;
@@ -2387,84 +2520,32 @@ struct server_context_impl {
                 }
             }
 
-            // do speculative decoding
-            // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
-            //       perform the speculative drafting for all sequences at the same time in a single batch
+            // speculative decoding - main model sample and accept
             for (auto & slot : slots) {
-                if (!slot.is_processing() || !slot.can_speculate()) {
+                if (slot.state != SLOT_STATE_GENERATING || slot.i_batch_dft.empty()) {
                     continue;
                 }
 
-                if (slot.state != SLOT_STATE_GENERATING) {
-                    continue;
-                }
-
-                if (mctx) {
-                    // we should never reach this, as speculative is automatically disabled if mmproj is loaded
-                    GGML_ABORT("not supported by multimodal");
-                }
-
-                // determine the max draft that fits the current slot state
-                int n_draft_max = slot.task->params.speculative.n_max;
-
-                // note: slot.prompt is not yet expanded with the `id` token sampled above
-                //       also, need to leave space for 1 extra token to allow context shifts
-                n_draft_max = std::min(n_draft_max, slot.n_ctx - slot.prompt.n_tokens() - 2);
-
-                if (slot.n_remaining > 0) {
-                    n_draft_max = std::min(n_draft_max, slot.n_remaining - 1);
-                }
-
-                SLT_DBG(slot, "max possible draft: %d\n", n_draft_max);
-
-                if (n_draft_max < slot.task->params.speculative.n_min) {
-                    SLT_DBG(slot, "the max possible draft is too small: %d < %d - skipping speculative decoding\n", n_draft_max, slot.task->params.speculative.n_min);
-
-                    continue;
-                }
-
-                llama_token id = slot.sampled;
-
-                struct common_speculative_params params_spec;
-                params_spec.n_draft = n_draft_max;
-                params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max;
-                params_spec.p_min   = slot.task->params.speculative.p_min;
-
-                const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
-                llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, id);
-
-                // ignore small drafts
-                if (slot.task->params.speculative.n_min > (int) draft.size()) {
-                    SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int) draft.size(), slot.task->params.speculative.n_min);
-
-                    continue;
-                }
-
-                // keep track of total number of drafted tokens tested
-                slot.n_draft_total += draft.size();
-
-                // construct the speculation batch
-                common_batch_clear(slot.batch_spec);
-                common_batch_add  (slot.batch_spec, id, slot.prompt.tokens.pos_next(), { slot.id }, true);
-
-                for (size_t i = 0; i < draft.size(); ++i) {
-                    common_batch_add(slot.batch_spec, draft[i], slot.prompt.tokens.pos_next() + 1 + i, { slot.id }, true);
-                }
-
-                SLT_DBG(slot, "decoding speculative batch, size = %d\n", slot.batch_spec.n_tokens);
-
-                llama_decode(ctx, slot.batch_spec);
+                size_t n_draft = slot.drafted.size();
 
                 // the accepted tokens from the speculation
-                const auto ids = common_sampler_sample_and_accept_n(slot.smpl, ctx, draft);
+                const auto ids = common_sampler_sample_and_accept_n(slot.smpl, ctx, slot.i_batch_dft, slot.drafted);
+                slot.i_batch_dft.clear();
+                slot.drafted.clear();
 
                 slot.n_decoded += ids.size();
+
+                slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
 
                 // update how many tokens out of those tested were accepted
                 slot.n_draft_accepted += ids.size() - 1;
 
-                slot.prompt.tokens.push_back(id);
+                // rollback to the state before sampling the draft tokens
+                slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
+
+                // add accepted tokens to the prompt
                 slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
+                slot.sampled = ids.back(); // last accepted token
 
                 llama_memory_seq_rm(llama_get_memory(ctx), slot.id, slot.prompt.n_tokens(), -1);
 
@@ -2487,7 +2568,7 @@ struct server_context_impl {
                     }
                 }
 
-                SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) draft.size(), slot.prompt.n_tokens());
+                SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) slot.drafted.size(), slot.prompt.n_tokens());
             }
         }
 
@@ -2507,6 +2588,10 @@ struct server_context_impl {
 
     int get_slot_n_ctx() {
         return slots.back().n_ctx;
+    }
+
+    server_response_reader get_response_reader() {
+        return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS);
     }
 };
 
@@ -2537,8 +2622,8 @@ llama_context * server_context::get_llama_context() const {
     return impl->ctx;
 }
 
-std::pair<server_queue &, server_response &> server_context::get_queues() {
-    return { impl->queue_tasks, impl->queue_results };
+server_response_reader server_context::get_response_reader() {
+    return impl->get_response_reader();
 }
 
 
@@ -2547,7 +2632,7 @@ std::pair<server_queue &, server_response &> server_context::get_queues() {
 struct server_res_generator : server_http_res {
     server_response_reader rd;
     server_res_generator(server_context_impl & ctx_server)
-        : rd({ctx_server.queue_tasks, ctx_server.queue_results}, HTTP_POLLING_SECONDS) {}
+        : rd(ctx_server.queue_tasks, ctx_server.queue_results, HTTP_POLLING_SECONDS) {}
     void ok(const json & response_data) {
         status = 200;
         data = safe_json_to_str(response_data);
@@ -2595,11 +2680,12 @@ static std::unique_ptr<server_res_generator> handle_completions_impl(
             inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
         }
         tasks.reserve(inputs.size());
+        int idx = 0;
         for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
             task.id    = ctx_server.queue_tasks.get_new_id();
-            task.index = i;
+            task.index = idx++;
 
             task.tokens = std::move(inputs[i]);
             task.params = server_task::params_from_json_cmpl(
@@ -2611,7 +2697,18 @@ static std::unique_ptr<server_res_generator> handle_completions_impl(
             // OAI-compat
             task.params.res_type          = res_type;
             task.params.oaicompat_cmpl_id = completion_id;
-            // oaicompat_model is already populated by params_from_json_cmpl
+            task.params.oaicompat_model   = ctx_server.model_name;
+
+            if (task.params.n_cmpl > 1) {
+                task.n_children = task.params.n_cmpl - 1;
+                for (size_t j = 0; j < task.n_children; j++) {
+                    server_task child = task.create_child(
+                        task.id,
+                        ctx_server.queue_tasks.get_new_id(),
+                        idx++);
+                    tasks.push_back(std::move(child));
+                }
+            }
 
             tasks.push_back(std::move(task));
         }
@@ -2638,10 +2735,22 @@ static std::unique_ptr<server_res_generator> handle_completions_impl(
                 GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(res.get()) != nullptr);
                 arr.push_back(res->to_json());
             }
-            // if single request, return single object instead of array
-            res->ok(arr.size() == 1 ? arr[0] : arr);
+            GGML_ASSERT(!arr.empty() && "empty results");
+            if (arr.size() == 1) {
+                // if single request, return single object instead of array
+                res->ok(arr[0]);
+            } else if (res_type == TASK_RESPONSE_TYPE_OAI_CHAT || res_type == TASK_RESPONSE_TYPE_OAI_CMPL) {
+                // if multiple results in OAI format, we need to re-format them
+                json & choices = arr[0]["choices"];
+                for (size_t i = 1; i < arr.size(); i++) {
+                    choices.push_back(std::move(arr[i]["choices"][0]));
+                }
+                res->ok(arr[0]);
+            } else {
+                // multi-results, non-OAI compat
+                res->ok(arr);
+            }
         }
-
     } else {
         // in streaming mode, the first error must be treated as non-stream response
         // this is to match the OAI API behavior
@@ -2660,76 +2769,92 @@ static std::unique_ptr<server_res_generator> handle_completions_impl(
         }
 
         // next responses are streamed
+        // to be sent immediately
+        json first_result_json = first_result->to_json();
         if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
-            res->data = format_anthropic_sse(first_result->to_json());
+            res->data = format_anthropic_sse(first_result_json);
         } else {
-            res->data = format_oai_sse(first_result->to_json()); // to be sent immediately
+            res->data = format_oai_sse(first_result_json);
         }
         res->status = 200;
         res->content_type = "text/event-stream";
         res->next = [res_this = res.get(), res_type, &should_stop](std::string & output) -> bool {
-            if (should_stop()) {
-                SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
-                return false; // should_stop condition met
-            }
-
-            if (!res_this->data.empty()) {
-                // flush the first chunk
-                output = std::move(res_this->data);
-                res_this->data.clear();
-                return true;
-            }
-
-            server_response_reader & rd = res_this->rd;
-
-            // check if there is more data
-            if (!rd.has_next()) {
+            static auto format_error = [](task_response_type res_type, const json & res_json) {
                 if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
-                    // Anthropic doesn't send [DONE], message_stop was already sent
-                    output = "";
-                } else if (res_type != TASK_RESPONSE_TYPE_NONE) {
-                    output = "data: [DONE]\n\n";
-                } else {
-                    output = "";
-                }
-                SRV_DBG("%s", "all results received, terminating stream\n");
-                return false; // no more data, terminate
-            }
-
-            // receive subsequent results
-            auto result = rd.next(should_stop);
-            if (result == nullptr) {
-                SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
-                return false; // should_stop condition met
-            }
-
-            // send the results
-            json res_json = result->to_json();
-            if (result->is_error()) {
-                if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
-                    output = format_anthropic_sse({
+                    return format_anthropic_sse({
                         {"event", "error"},
                         {"data", res_json},
                     });
                 } else {
-                    output = format_oai_sse(json {{ "error", res_json }});
+                    return format_oai_sse(json {{ "error", res_json }});
                 }
-                SRV_DBG("%s", "error received during streaming, terminating stream\n");
-                return false; // terminate on error
-            } else {
-                GGML_ASSERT(
-                    dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr
-                    || dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr
-                );
-                if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
-                    output = format_anthropic_sse(res_json);
-                } else {
-                    output = format_oai_sse(res_json);
-                }
-            }
+            };
 
-            // has next data, continue
-            return true;
+            try {
+                if (should_stop()) {
+                    SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
+                    return false; // should_stop condition met
+                }
+
+                if (!res_this->data.empty()) {
+                    // flush the first chunk
+                    output = std::move(res_this->data);
+                    res_this->data.clear();
+                    return true;
+                }
+
+                server_response_reader & rd = res_this->rd;
+
+                // check if there is more data
+                if (!rd.has_next()) {
+                    if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
+                        // Anthropic doesn't send [DONE], message_stop was already sent
+                        output = "";
+                    } else if (res_type != TASK_RESPONSE_TYPE_NONE) {
+                        output = "data: [DONE]\n\n";
+                    } else {
+                        output = "";
+                    }
+                    SRV_DBG("%s", "all results received, terminating stream\n");
+                    return false; // no more data, terminate
+                }
+
+                // receive subsequent results
+                auto result = rd.next(should_stop);
+                if (result == nullptr) {
+                    SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
+                    return false; // should_stop condition met
+                }
+
+                // send the results
+                if (result->is_error()) {
+                    json res_json = result->to_json();
+                    output = format_error(res_type, res_json);
+                    SRV_DBG("%s", "error received during streaming, terminating stream\n");
+                    return false; // terminate on error
+                } else {
+                    GGML_ASSERT(
+                        dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr
+                        || dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr
+                    );
+                    json res_json = result->to_json();
+                    if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
+                        output = format_anthropic_sse(res_json);
+                    } else {
+                        output = format_oai_sse(res_json);
+                    }
+                }
+
+                // has next data, continue
+                return true;
+
+            } catch (const std::exception & e) {
+                json error_json = format_error_response(e.what(), ERROR_TYPE_SERVER);
+                output = format_error(res_type, error_json);
+
+                // terminate on exception
+                return false;
+            }
         };
     }
 
@@ -2939,7 +3064,7 @@ void server_routes::init_routes() {
         json data = {
             { "default_generation_settings", default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params_base.n_parallel },
-            { "model_alias",                 ctx_server.params_base.model_alias },
+            { "model_alias",                 ctx_server.model_name },
             { "model_path",                  ctx_server.params_base.model.path },
             { "modalities",                  json {
                 {"vision", ctx_server.oai_parser_opt.allow_image},
@@ -3181,8 +3306,8 @@ void server_routes::init_routes() {
         json models = {
             {"models", {
                 {
-                    {"name", params.model_alias.empty() ? params.model.path : params.model_alias},
-                    {"model", params.model_alias.empty() ? params.model.path : params.model_alias},
+                    {"name", ctx_server.model_name},
+                    {"model", ctx_server.model_name},
                     {"modified_at", ""},
                     {"size", ""},
                     {"digest", ""}, // dummy value, llama.cpp does not support managing model file's hash
@@ -3204,7 +3329,7 @@ void server_routes::init_routes() {
             {"object", "list"},
             {"data", {
                 {
-                    {"id",       params.model_alias.empty() ? params.model.path : params.model_alias},
+                    {"id",       ctx_server.model_name},
                     {"object",   "model"},
                     {"created",  std::time(0)},
                     {"owned_by", "llamacpp"},
@@ -3317,7 +3442,7 @@ void server_routes::init_routes() {
 
         // create and queue the task
         json responses = json::array();
-        server_response_reader rd({ctx_server.queue_tasks, ctx_server.queue_results}, HTTP_POLLING_SECONDS);
+        server_response_reader rd = ctx_server.get_response_reader();
         {
             std::vector<server_task> tasks;
             tasks.reserve(documents.size());
@@ -3351,6 +3476,7 @@ void server_routes::init_routes() {
         // write JSON response
         json root = format_response_rerank(
             body,
+            ctx_server.model_name,
             responses,
             is_tei_format,
             documents,
@@ -3576,7 +3702,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 
     // create and queue the task
     json responses = json::array();
-    server_response_reader rd({ctx_server.queue_tasks, ctx_server.queue_results}, HTTP_POLLING_SECONDS);
+    server_response_reader rd = ctx_server.get_response_reader();
     {
         std::vector<server_task> tasks;
         for (size_t i = 0; i < tokenized_prompts.size(); i++) {
@@ -3613,7 +3739,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 
     // write JSON response
     json root = res_type == TASK_RESPONSE_TYPE_OAI_EMBD
-        ? format_embeddings_response_oaicompat(body, responses, use_base64)
+        ? format_embeddings_response_oaicompat(body, ctx_server.model_name, responses, use_base64)
         : json(responses);
     res->ok(root);
     return res;

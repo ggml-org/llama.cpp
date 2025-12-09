@@ -271,8 +271,21 @@ void server_response::terminate() {
 // server_response_reader
 //
 
+void server_response_reader::post_task(server_task && task) {
+    GGML_ASSERT(id_tasks.empty() && "post_task() can only be called once per reader");
+    id_tasks.insert(task.id);
+    states.push_back(task.create_state());
+    queue_results.add_waiting_task_id(task.id);
+    queue_tasks.post(std::move(task));
+}
+
 void server_response_reader::post_tasks(std::vector<server_task> && tasks) {
+    GGML_ASSERT(id_tasks.empty() && "post_tasks() can only be called once per reader");
     id_tasks = server_task::get_list_id(tasks);
+    states.reserve(tasks.size());
+    for (size_t i = 0; i < tasks.size(); i++) {
+        states.push_back(tasks[i].create_state());
+    }
     queue_results.add_waiting_tasks(tasks);
     queue_tasks.post(std::move(tasks));
 }
@@ -297,6 +310,12 @@ server_task_result_ptr server_response_reader::next(const std::function<bool()> 
                 stop(); // cancel remaining tasks
                 SRV_DBG("%s", "received error result, stopping further processing\n");
                 return result;
+            }
+            if (!states.empty()) {
+                // update the generation state if needed
+                size_t idx = result->get_index();
+                GGML_ASSERT(idx < states.size());
+                result->update(states[idx]);
             }
             if (result->is_stop()) {
                 received_count++;

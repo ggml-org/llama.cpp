@@ -30,6 +30,7 @@
 #include <thread> // for hardware_concurrency
 #include <vector>
 
+#ifndef __EMSCRIPTEN__
 #ifdef __linux__
 #include <linux/limits.h>
 #elif defined(_WIN32)
@@ -41,6 +42,8 @@
 #else
 #include <sys/syslimits.h>
 #endif
+#endif
+
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
 using json = nlohmann::ordered_json;
@@ -424,7 +427,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // model is required (except for server)
     // TODO @ngxson : maybe show a list of available models in CLI in this case
-    if (params.model.path.empty() && ctx_arg.ex != LLAMA_EXAMPLE_SERVER) {
+    if (params.model.path.empty() && ctx_arg.ex != LLAMA_EXAMPLE_SERVER && !params.usage) {
         throw std::invalid_argument("error: --model is required\n");
     }
 
@@ -705,6 +708,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         params.use_jinja = true;
     }
 
+    params.use_color = tty_can_use_colors();
+
     // load dynamic backends
     ggml_backend_load_all();
 
@@ -787,10 +792,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
-        {"-co", "--color"},
-        string_format("colorise output to distinguish prompt and user input from generations (default: %s)", params.use_color ? "true" : "false"),
-        [](common_params & params) {
-            params.use_color = true;
+        {"-co", "--color"}, "[on|off|auto]",
+        "Colorize output to distinguish prompt and user input from generations ('on', 'off', or 'auto', default: 'auto')\n"
+        "'auto' enables colors when output is to a terminal",
+        [](common_params & params, const std::string & value) {
+            if (is_truthy(value)) {
+                params.use_color = true;
+            } else if (is_falsey(value)) {
+                params.use_color = false;
+            } else if (is_autoy(value)) {
+                params.use_color = tty_can_use_colors();
+            } else {
+                throw std::invalid_argument(
+                    string_format("error: unknown value for --color: '%s'\n", value.c_str()));
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP}));
     add_opt(common_arg(
@@ -1019,7 +1034,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                                params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
                            } else {
                                throw std::runtime_error(
-                                   string_format("error: unkown value for --flash-attn: '%s'\n", value.c_str()));
+                                   string_format("error: unknown value for --flash-attn: '%s'\n", value.c_str()));
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
@@ -1226,7 +1241,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.warmup = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
@@ -2488,9 +2503,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "path to save slot kv cache (default: disabled)",
         [](common_params & params, const std::string & value) {
             params.slot_save_path = value;
+            if (!fs_is_directory(params.slot_save_path)) {
+                throw std::invalid_argument("not a directory: " + value);
+            }
             // if doesn't end with DIRECTORY_SEPARATOR, add it
             if (!params.slot_save_path.empty() && params.slot_save_path[params.slot_save_path.size() - 1] != DIRECTORY_SEPARATOR) {
                 params.slot_save_path += DIRECTORY_SEPARATOR;
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--media-path"}, "PATH",
+        "directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.media_path = value;
+            if (!fs_is_directory(params.media_path)) {
+                throw std::invalid_argument("not a directory: " + value);
+            }
+            // if doesn't end with DIRECTORY_SEPARATOR, add it
+            if (!params.media_path.empty() && params.media_path[params.media_path.size() - 1] != DIRECTORY_SEPARATOR) {
+                params.media_path += DIRECTORY_SEPARATOR;
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
@@ -2676,7 +2708,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 common_log_set_colors(common_log_main(), LOG_COLORS_AUTO);
             } else {
                 throw std::invalid_argument(
-                    string_format("error: unkown value for --log-colors: '%s'\n", value.c_str()));
+                    string_format("error: unknown value for --log-colors: '%s'\n", value.c_str()));
             }
         }
     ).set_env("LLAMA_LOG_COLORS"));

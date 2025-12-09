@@ -7,6 +7,7 @@ import subprocess
 import os
 import re
 import json
+from json import JSONDecodeError
 import sys
 import requests
 import time
@@ -83,6 +84,9 @@ class ServerProcess:
     pooling: str | None = None
     draft: int | None = None
     api_key: str | None = None
+    models_dir: str | None = None
+    models_max: int | None = None
+    no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
     draft_min: int | None = None
@@ -95,6 +99,7 @@ class ServerProcess:
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
+    media_path: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -142,6 +147,10 @@ class ServerProcess:
             server_args.extend(["--hf-repo", self.model_hf_repo])
         if self.model_hf_file:
             server_args.extend(["--hf-file", self.model_hf_file])
+        if self.models_dir:
+            server_args.extend(["--models-dir", self.models_dir])
+        if self.models_max is not None:
+            server_args.extend(["--models-max", self.models_max])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -203,6 +212,8 @@ class ServerProcess:
             server_args.extend(["--draft-min", self.draft_min])
         if self.no_webui:
             server_args.append("--no-webui")
+        if self.no_models_autoload:
+            server_args.append("--no-models-autoload")
         if self.jinja:
             server_args.append("--jinja")
         else:
@@ -217,6 +228,8 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
+        if self.media_path:
+            server_args.extend(["--media-path", self.media_path])
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
@@ -292,7 +305,13 @@ class ServerProcess:
         result = ServerResponse()
         result.headers = dict(response.headers)
         result.status_code = response.status_code
-        result.body = response.json() if parse_body else None
+        if parse_body:
+            try:
+                result.body = response.json()
+            except JSONDecodeError:
+                result.body = response.text
+        else:
+            result.body = None
         print("Response from server", json.dumps(result.body, indent=2))
         return result
 
@@ -431,8 +450,9 @@ class ServerPreset:
     @staticmethod
     def tinyllama2() -> ServerProcess:
         server = ServerProcess()
-        server.model_hf_repo = "ggml-org/models"
-        server.model_hf_file = "tinyllamas/stories260K.gguf"
+        server.offline = True # will be downloaded by load_all()
+        server.model_hf_repo = "ggml-org/test-model-stories260K"
+        server.model_hf_file = None
         server.model_alias = "tinyllama-2"
         server.n_ctx = 512
         server.n_batch = 32
@@ -476,8 +496,8 @@ class ServerPreset:
     def tinyllama_infill() -> ServerProcess:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()
-        server.model_hf_repo = "ggml-org/models"
-        server.model_hf_file = "tinyllamas/stories260K-infill.gguf"
+        server.model_hf_repo = "ggml-org/test-model-stories260K-infill"
+        server.model_hf_file = None
         server.model_alias = "tinyllama-infill"
         server.n_ctx = 2048
         server.n_batch = 1024
@@ -534,6 +554,7 @@ class ServerPreset:
     @staticmethod
     def router() -> ServerProcess:
         server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
         # router server has no models
         server.model_file = None
         server.model_alias = None

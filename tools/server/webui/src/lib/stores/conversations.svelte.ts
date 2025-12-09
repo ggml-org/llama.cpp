@@ -520,6 +520,19 @@ class ConversationsStore {
 	}
 
 	/**
+	 * Imports conversations from provided data (without file picker)
+	 * @param data - Array of conversation data with messages
+	 * @returns Import result with counts
+	 */
+	async importConversationsData(
+		data: ExportedConversations
+	): Promise<{ imported: number; skipped: number }> {
+		const result = await DatabaseService.importConversations(data);
+		await this.loadConversations();
+		return result;
+	}
+
+	/**
 	 * Adds a message to the active messages array
 	 * Used by chatStore when creating new messages
 	 * @param message - The message to add

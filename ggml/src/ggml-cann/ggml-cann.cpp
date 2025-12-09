@@ -2551,6 +2551,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_ACC:
         case GGML_OP_GROUP_NORM:
         case GGML_OP_PAD:
+            // TODO: add circular padding support for cann, see https://github.com/ggml-org/llama.cpp/pull/16985
+            return ggml_get_op_params_i32(op, 8) == 0;
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_LEAKY_RELU:
@@ -2564,6 +2566,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             return true;
         case GGML_OP_OUT_PROD:
             {
+#ifdef ASCEND_310P
+                // Ger is not supported on 310p device
+                return false;
+#endif
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:

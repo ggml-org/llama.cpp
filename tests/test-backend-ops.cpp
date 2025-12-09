@@ -41,12 +41,18 @@
 #include <vector>
 #include <unordered_map>
 
+#ifdef __EMSCRIPTEN__
+#   define N_THREADS 1
+#else
+#   define N_THREADS std::thread::hardware_concurrency()
+#endif
+
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
     std::vector<float> data(nels);
     {
         // parallel initialization
-        static const size_t n_threads = std::thread::hardware_concurrency();
+        static const size_t n_threads = N_THREADS;
         // static RNG initialization (revisit if n_threads stops being constant)
         static std::vector<std::default_random_engine> generators = []() {
             std::random_device rd;
@@ -65,15 +71,19 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
             }
         };
 
-        std::vector<std::future<void>> tasks;
-        tasks.reserve(n_threads);
-        for (size_t i = 0; i < n_threads; i++) {
-            size_t start =     i*nels/n_threads;
-            size_t end   = (i+1)*nels/n_threads;
-            tasks.push_back(std::async(std::launch::async, init_thread, i, start, end));
-        }
-        for (auto & t : tasks) {
-            t.get();
+        if (n_threads == 1) {
+            init_thread(0, 0, nels);
+        } else {
+            std::vector<std::future<void>> tasks;
+            tasks.reserve(n_threads);
+            for (size_t i = 0; i < n_threads; i++) {
+                size_t start =     i*nels/n_threads;
+                size_t end   = (i+1)*nels/n_threads;
+                tasks.push_back(std::async(std::launch::async, init_thread, i, start, end));
+            }
+            for (auto & t : tasks) {
+                t.get();
+            }
         }
     }
 
@@ -105,17 +115,23 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
             };
 
             const size_t min_blocks_per_thread = 1;
-            const size_t n_threads = std::min<size_t>(std::thread::hardware_concurrency()/2,
-                                                      std::max<size_t>(1, n_blocks / min_blocks_per_thread));
-            std::vector<std::future<void>> tasks;
-            tasks.reserve(n_threads);
-            for (size_t i = 0; i < n_threads; i++) {
-                size_t start =     i*n_blocks/n_threads;
-                size_t end   = (i+1)*n_blocks/n_threads;
-                tasks.push_back(std::async(std::launch::async, quantize_thread, start, end));
-            }
-            for (auto & t : tasks) {
-                t.get();
+            const size_t n_quant_threads = std::min<size_t>(std::max<size_t>(N_THREADS/2, 1),
+                                                            std::max<size_t>(1, n_blocks / min_blocks_per_thread));
+
+            if (n_quant_threads == 1) {
+                // single-threaded quantization: do all blocks in the current thread
+                quantize_thread(0, n_blocks);
+            } else {
+                std::vector<std::future<void>> tasks;
+                tasks.reserve(n_quant_threads);
+                for (size_t i = 0; i < n_quant_threads; i++) {
+                    size_t start =     i*n_blocks/n_quant_threads;
+                    size_t end   = (i+1)*n_blocks/n_quant_threads;
+                    tasks.push_back(std::async(std::launch::async, quantize_thread, start, end));
+                }
+                for (auto & t : tasks) {
+                    t.get();
+                }
             }
         }
         ggml_backend_tensor_set(tensor, dataq.data(), 0, dataq.size());
@@ -270,10 +286,11 @@ static double nmse(const float * a, const float * b, size_t n) {
     return mse_a_b / mse_a_0;
 }
 
-// difference between 2 integer sets (Jaccard distance, 0 - no difference, 1 - no overlap)
-static double jdst(const int32_t * a, const int32_t * b, size_t n) {
-    std::unordered_map<int32_t, size_t> set_a;
-    std::unordered_map<int32_t, size_t> set_b;
+// difference between 2 sets (Jaccard distance, 0 - no difference, 1 - no overlap)
+template <typename T>
+static double jdst(const T * a, const T * b, size_t n) {
+    std::unordered_map<T, size_t> set_a;
+    std::unordered_map<T, size_t> set_b;
 
     for (size_t i = 0; i < n; ++i) {
         set_a[a[i]]++;
@@ -4985,41 +5002,93 @@ struct test_top_k : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     const int k;
+    const bool ties;
+    ggml_tensor * input {};
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, k);
+        return VARS_TO_STR4(type, ne, k, ties);
     }
 
     test_top_k(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {16, 10, 10, 10},
-            int k = 4)
-        : type(type), ne(ne), k(k) {}
+            int k = 4, bool ties = false)
+        : type(type), ne(ne), k(k), ties(ties) {}
 
     double max_err() override {
         return 0.0;
     }
 
+    // When there are ties, only validate the final result.
+    // The logic in err can't handle the sentinel tensors.
+    bool run_whole_graph() override { return ties; }
+
     double err(const float * a, const float * b, size_t n) override {
-        std::vector<int32_t> ia(n);
-        std::vector<int32_t> ib(n);
+        // When there are no ties, we expect the exact same set of indices,
+        // but possibly in a different order. When there are ties, the indices
+        // can be different but the input values they correspond to should be
+        // the same. The logic for ties could work for non-ties, but only for
+        // the output tensor, not for the sentinel tensors.
+        if (ties) {
+            std::vector<float> src(ggml_nelements(input));
 
-        double diff = 0.0f;
+            ggml_backend_tensor_get(input, src.data(), 0, ggml_nelements(input) * ggml_type_size(type));
 
-        for (size_t i = 0; i < n; i++) {
-            ia[i] = (int32_t) a[i];
-            ib[i] = (int32_t) b[i];
+            double diff = 0.0f;
 
-            // penalize the result if the data is not integer valued
-            diff += std::fabs(a[i] - ia[i]);
-            diff += std::fabs(b[i] - ib[i]);
+            GGML_ASSERT(n == (size_t)(ggml_nrows(input) * k));
+            int64_t cols = input->ne[0];
+            std::vector<int32_t> ia(k);
+            std::vector<int32_t> ib(k);
+            std::vector<float> asrc(k);
+            std::vector<float> bsrc(k);
+            for (int64_t r = 0; r < ggml_nrows(input); r++) {
+                // Convert indices for the row back to integer
+                for (int64_t c = 0; c < k; c++) {
+                    ia[c] = (int32_t)a[r * k + c];
+                    ib[c] = (int32_t)b[r * k + c];
+                }
+                // The src values for each row should match.
+                for (int64_t c = 0; c < k; c++) {
+                    asrc[c] = src[r * cols + ia[c]];
+                    bsrc[c] = src[r * cols + ib[c]];
+                }
+                diff += jdst(asrc.data(), bsrc.data(), k);
+                // There should be no duplicate indices
+                std::sort(ia.begin(), ia.end());
+                std::sort(ib.begin(), ib.end());
+                if (std::adjacent_find(ia.begin(), ia.end()) != ia.end()) {
+                    diff += 1;
+                }
+                if (std::adjacent_find(ib.begin(), ib.end()) != ib.end()) {
+                    diff += 1;
+                }
+            }
+            return diff;
+        } else {
+            std::vector<int32_t> ia(n);
+            std::vector<int32_t> ib(n);
+
+            double diff = 0.0f;
+
+            for (size_t i = 0; i < n; i++) {
+                ia[i] = (int32_t) a[i];
+                ib[i] = (int32_t) b[i];
+
+                // penalize the result if the data is not integer valued
+                diff += std::fabs(a[i] - ia[i]);
+                diff += std::fabs(b[i] - ib[i]);
+            }
+
+            return diff + jdst(ia.data(), ib.data(), n);
         }
-
-        return diff + jdst(ia.data(), ib.data(), n);
     }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_name(a, "a");
+
+        // Save 'a' for err()
+        input = a;
 
         ggml_tensor * out = ggml_top_k(ctx, a, k);
         ggml_set_name(out, "out");
@@ -5031,11 +5100,16 @@ struct test_top_k : public test_case {
         std::random_device rd;
         std::default_random_engine rng(rd());
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            // initialize with unique values to avoid ties
+            int tie_denom = std::max(1, std::min(10, k / 2));
             for (int64_t r = 0; r < ggml_nrows(t); r++) {
                 std::vector<float> data(t->ne[0]);
                 for (int i = 0; i < t->ne[0]; i++) {
-                    data[i] = i;
+                    if (ties) {
+                        // integer division to introduce duplicates
+                        data[i] = i / tie_denom;
+                    } else {
+                        data[i] = i;
+                    }
                 }
                 std::shuffle(data.begin(), data.end(), rng);
                 ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(float));
@@ -5530,21 +5604,24 @@ struct test_pad : public test_case {
     const std::array<int64_t, 4> ne_a;
     const int pad_0;
     const int pad_1;
+    const bool circular;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne_a, pad_0, pad_1);
+        return VARS_TO_STR5(type, ne_a, pad_0, pad_1, circular);
     }
 
     test_pad(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {512, 512, 1, 1},
-            int pad_0 = 1, int pad_1 = 1)
-        : type(type), ne_a(ne_a), pad_0(pad_0), pad_1(pad_1)  {}
+            int pad_0 = 1, int pad_1 = 1, bool circular = false)
+        : type(type), ne_a(ne_a), pad_0(pad_0), pad_1(pad_1), circular(circular) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
         ggml_set_name(a, "a");
 
-        ggml_tensor * out = ggml_pad(ctx, a, pad_0, pad_1, 0, 0);
+        ggml_tensor * out = circular
+            ? ggml_pad_circular(ctx, a, pad_0, pad_1, 0, 0)
+            : ggml_pad(ctx, a, pad_0, pad_1, 0, 0);
         ggml_set_name(out, "out");
 
         return out;
@@ -5564,17 +5641,19 @@ struct test_pad_ext : public test_case {
     const int lp3;
     const int rp3;
     const bool v;
+    const bool circular;
 
     std::string vars() override {
-        return VARS_TO_STR11(type, ne_a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, v);
+        return VARS_TO_STR12(type, ne_a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, v, circular);
     }
 
     test_pad_ext(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {512, 512, 3, 1},
             int lp0 = 1, int rp0 = 1, int lp1 = 1, int rp1 = 1,
             int lp2 = 1, int rp2 = 1, int lp3 = 1, int rp3 = 1,
-            bool v = false)
-        : type(type), ne_a(ne_a), lp0(lp0), rp0(rp0), lp1(lp1), rp1(rp1), lp2(lp2), rp2(rp2), lp3(lp3), rp3(rp3), v(v) {}
+            bool v = false, bool circular = false)
+        : type(type), ne_a(ne_a), lp0(lp0), rp0(rp0), lp1(lp1), rp1(rp1), lp2(lp2), rp2(rp2), lp3(lp3), rp3(rp3),
+          v(v), circular(circular) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
@@ -5585,7 +5664,9 @@ struct test_pad_ext : public test_case {
             ggml_set_name(a, "view of a");
         }
 
-        ggml_tensor * out = ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+        ggml_tensor * out = circular
+            ? ggml_pad_ext_circular(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3)
+            : ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
         ggml_set_name(out, "out");
 
         return out;
@@ -6129,6 +6210,15 @@ struct test_solve_tri : public test_case {
     const std::array<int64_t, 4> ne_rhs;
 
     std::string vars() override { return VARS_TO_STR3(type, ne_lhs, ne_rhs); }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        int64_t n = ne_lhs[0];
+        int64_t k = ne_rhs[0];
+        int64_t batch = ne_lhs[2] * ne_lhs[3];
+        // n * (n + 1) / 2 non-zero elements of lhs, 2 flops each, for each col of rhs
+        return n * (n + 1) * k * batch;
+    }
 
     test_solve_tri(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_lhs = { 10, 10, 4, 3 },
@@ -6966,6 +7056,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_conv_transpose_2d({3, 2, 3, 1}, {2, 2, 1, 3}, 1));
     test_cases.emplace_back(new test_conv_transpose_2d({10, 10, 9, 1}, {3, 3, 1, 9}, 2));
+    test_cases.emplace_back(new test_conv_transpose_2d({129, 63, 35, 1}, {3, 3, 48, 35}, 1));
 
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4,  500, 1, 1}));
     test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, 5000, 1, 1}));
@@ -7640,6 +7731,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             if (k <= 1<<i) {
                 test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {(1<<i), 1, 1, 1}, k));
                 test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {(1<<i) + 11, 1, 2, 1}, k));
+                test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {(1<<i) + 11, 1, 2, 1}, k, true));
             }
         }
     }
@@ -7697,6 +7789,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_acc());
     test_cases.emplace_back(new test_pad());
+    test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true)); // circular
     test_cases.emplace_back(new test_pad_ext());
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
@@ -7709,6 +7802,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 10, 5, 4, 3 }));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 127, 5, 4, 3 }));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 128, 5, 4, 3 }));
+    test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 128, 128, 4, 4 }));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 255, 5, 4, 3 }));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 256, 5, 4, 3 }));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 511, 5, 4, 3 }));
@@ -7739,10 +7833,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 42, 42, 5, 2 }, { 10, 42, 5, 2 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 2, 2 }, { 10, 64, 2, 2 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 100, 100, 4, 4 }, { 41, 100, 4, 4 }));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 4 }, { 31, 128, 4, 4 }));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 300, 64, 4, 4 }));
 
     for (bool v : {false, true}) {
-        test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 1, 0, 1, 0, 0, 0, 0, v));
-        test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, v));
+        for (bool circular : {false, true}) {
+            test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 1, 0, 1, 0, 0, 0, 0, v, circular));
+            test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, v, circular));
+        }
     }
 
     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 576 }) {
@@ -7880,6 +7978,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         { 58,  3, 64,   32,  8 },
  // A deep layer of a ConvNet, several images in the batch
         { 16,  3, 512,  128, 8 },
+ // High resolution output (large NPQ)
+        {1536, 3, 64,   32,  1 },
     };
 
     for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
@@ -7937,6 +8037,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 2 }, { 6, 64, 4, 2 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 1 }, { 8, 128, 4, 1 }));
+    // qwen3next with CHUNK_SIZE 64
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 8, 32 }, { 64, 64, 8, 32 }));
+    // qwen3next with CHUNK_SIZE 128
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 32 }, { 128, 128, 4, 32 }));
+
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER, GGML_TYPE_F32, { 256, 256, 4, 4 }));
+    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG, GGML_TYPE_F32, { 1024, 1024, 8, 4 }));
+
+    test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 128, 128, 4, 4 }));
+    test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 2048, 16, 5, 4 }));
+    test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 20000, 10, 4, 1 }));
 
     for (int bs : {1, 2, 3, 4, 5, 8, 512}) {
         for (ggml_type type_a : all_types) {
@@ -8363,7 +8474,7 @@ int main(int argc, char ** argv) {
         auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
         if (ggml_backend_set_n_threads_fn) {
             // TODO: better value for n_threads
-            ggml_backend_set_n_threads_fn(backend, std::thread::hardware_concurrency());
+            ggml_backend_set_n_threads_fn(backend, N_THREADS);
         }
 
         size_t free, total;  // NOLINT

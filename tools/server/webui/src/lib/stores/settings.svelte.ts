@@ -370,6 +370,10 @@ class SettingsStore {
 		return { ...this.config };
 	}
 
+	canSyncParameter(key: string): boolean {
+		return ParameterSyncService.canSyncParameter(key);
+	}
+
 	/**
 	 * Get parameter information including source for a specific parameter
 	 */

@@ -7,6 +7,7 @@
 #include <sheredom/subprocess.h>
 
 #include <functional>
+#include <algorithm>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -24,7 +25,54 @@
 #include <unistd.h>
 #endif
 
+#if defined(__APPLE__) && defined(__MACH__)
+// macOS: use _NSGetExecutablePath to get the executable path
+#include <mach-o/dyld.h>
+#include <limits.h>
+#endif
+
 #define CMD_EXIT "exit"
+
+static std::filesystem::path get_server_exec_path() {
+#if defined(_WIN32)
+    wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
+    DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
+    if (len == 0 || len >= _countof(buf)) {
+        throw std::runtime_error("GetModuleFileNameW failed or path too long");
+    }
+    return std::filesystem::path(buf);
+#elif defined(__APPLE__) && defined(__MACH__)
+    char small_path[PATH_MAX];
+    uint32_t size = sizeof(small_path);
+
+    if (_NSGetExecutablePath(small_path, &size) == 0) {
+        // resolve any symlinks to get absolute path
+        try {
+            return std::filesystem::canonical(std::filesystem::path(small_path));
+        } catch (...) {
+            return std::filesystem::path(small_path);
+        }
+    } else {
+        // buffer was too small, allocate required size and call again
+        std::vector<char> buf(size);
+        if (_NSGetExecutablePath(buf.data(), &size) == 0) {
+            try {
+                return std::filesystem::canonical(std::filesystem::path(buf.data()));
+            } catch (...) {
+                return std::filesystem::path(buf.data());
+            }
+        }
+        throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
+    }
+#else
+    char path[FILENAME_MAX];
+    ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
+    if (count <= 0) {
+        throw std::runtime_error("failed to resolve /proc/self/exe");
+    }
+    return std::filesystem::path(std::string(path, count));
+#endif
+}
 
 struct local_model {
     std::string name;
@@ -98,6 +146,14 @@ server_models::server_models(
     }
     for (char ** env = envp; *env != nullptr; env++) {
         base_env.push_back(std::string(*env));
+    }
+    GGML_ASSERT(!base_args.empty());
+    // set binary path
+    try {
+        base_args[0] = get_server_exec_path().string();
+    } catch (const std::exception & e) {
+        LOG_WRN("failed to get server executable path: %s\n", e.what());
+        LOG_WRN("using original argv[0] as fallback: %s\n", base_args[0].c_str());
     }
     // TODO: allow refreshing cached model list
     // add cached models
@@ -587,26 +643,26 @@ static void res_ok(std::unique_ptr<server_http_res> & res, const json & response
     res->data = safe_json_to_str(response_data);
 }
 
-static void res_error(std::unique_ptr<server_http_res> & res, const json & error_data) {
+static void res_err(std::unique_ptr<server_http_res> & res, const json & error_data) {
     res->status = json_value(error_data, "code", 500);
     res->data = safe_json_to_str({{ "error", error_data }});
 }
 
 static bool router_validate_model(const std::string & name, server_models & models, bool models_autoload, std::unique_ptr<server_http_res> & res) {
     if (name.empty()) {
-        res_error(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
+        res_err(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
     auto meta = models.get_meta(name);
     if (!meta.has_value()) {
-        res_error(res, format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
+        res_err(res, format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
     if (models_autoload) {
         models.ensure_model_loaded(name);
     } else {
         if (meta->status != SERVER_MODEL_STATUS_LOADED) {
-            res_error(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return false;
         }
     }
@@ -706,11 +762,11 @@ void server_models_routes::init_routes() {
         std::string name = json_value(body, "model", std::string());
         auto model = models.get_meta(name);
         if (!model.has_value()) {
-            res_error(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
+            res_err(res, format_error_response("model is not found", ERROR_TYPE_NOT_FOUND));
             return res;
         }
         if (model->status == SERVER_MODEL_STATUS_LOADED) {
-            res_error(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         models.load(name, false);
@@ -768,11 +824,11 @@ void server_models_routes::init_routes() {
         std::string name = json_value(body, "model", std::string());
         auto model = models.get_meta(name);
         if (!model.has_value()) {
-            res_error(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         if (model->status != SERVER_MODEL_STATUS_LOADED) {
-            res_error(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+            res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
         models.unload(name);
@@ -834,6 +890,29 @@ struct pipe_t {
     }
 };
 
+static std::string to_lower_copy(const std::string & value) {
+    std::string lowered(value.size(), '\0');
+    std::transform(value.begin(), value.end(), lowered.begin(), [](unsigned char c) { return std::tolower(c); });
+    return lowered;
+}
+
+static bool should_strip_proxy_header(const std::string & header_name) {
+    // Headers that get duplicated when router forwards child responses
+    if (header_name == "server" ||
+        header_name == "transfer-encoding" ||
+        header_name == "content-length" || // quick fix for https://github.com/ggml-org/llama.cpp/issues/17710
+        header_name == "keep-alive") {
+        return true;
+    }
+
+    // Router injects CORS, child also sends them: duplicate
+    if (header_name.rfind("access-control-", 0) == 0) {
+        return true;
+    }
+
+    return false;
+}
+
 server_http_proxy::server_http_proxy(
         const std::string & method,
         const std::string & host,
@@ -870,6 +949,14 @@ server_http_proxy::server_http_proxy(
         msg_t msg;
         msg.status = response.status;
         for (const auto & [key, value] : response.headers) {
+            const auto lowered = to_lower_copy(key);
+            if (should_strip_proxy_header(lowered)) {
+                continue;
+            }
+            if (lowered == "content-type") {
+                msg.content_type = value;
+                continue;
+            }
             msg.headers[key] = value;
         }
         return pipe->write(std::move(msg)); // send headers first
@@ -877,7 +964,7 @@ server_http_proxy::server_http_proxy(
     httplib::ContentReceiverWithProgress content_receiver = [pipe](const char * data, size_t data_length, size_t, size_t) {
         // send data chunks
         // returns false if pipe is closed / broken (signal to stop receiving)
-        return pipe->write({{}, 0, std::string(data, data_length)});
+        return pipe->write({{}, 0, std::string(data, data_length), ""});
     };
 
     // prepare the request to destination server
@@ -900,8 +987,8 @@ server_http_proxy::server_http_proxy(
         if (result.error() != httplib::Error::Success) {
             auto err_str = httplib::to_string(result.error());
             SRV_ERR("http client error: %s\n", err_str.c_str());
-            pipe->write({{}, 500, ""}); // header
-            pipe->write({{}, 0, "proxy error: " + err_str}); // body
+            pipe->write({{}, 500, "", ""}); // header
+            pipe->write({{}, 0, "proxy error: " + err_str, ""}); // body
         }
         pipe->close_write(); // signal EOF to reader
         SRV_DBG("%s", "client request thread ended\n");
@@ -909,12 +996,17 @@ server_http_proxy::server_http_proxy(
     this->thread.detach();
 
     // wait for the first chunk (headers)
-    msg_t header;
-    if (pipe->read(header, should_stop)) {
-        SRV_DBG("%s", "received response headers\n");
-        this->status  = header.status;
-        this->headers = header.headers;
-    } else {
-        SRV_DBG("%s", "no response headers received (request cancelled?)\n");
+    {
+        msg_t header;
+        if (pipe->read(header, should_stop)) {
+            SRV_DBG("%s", "received response headers\n");
+            this->status  = header.status;
+            this->headers = std::move(header.headers);
+            if (!header.content_type.empty()) {
+                this->content_type = std::move(header.content_type);
+            }
+        } else {
+            SRV_DBG("%s", "no response headers received (request cancelled?)\n");
+        }
     }
 }

@@ -7,6 +7,8 @@
 #include <mutex>
 #include <unordered_set>
 
+// struct for managing server tasks
+// in most cases, use server_response_reader to post new tasks and retrieve results
 struct server_queue {
 private:
     int id = 0;
@@ -67,6 +69,8 @@ private:
     void cleanup_pending_task(int id_target);
 };
 
+// struct for managing server responses
+// in most cases, use server_response_reader to retrieve results
 struct server_response {
 private:
     bool running = true;
@@ -120,13 +124,18 @@ struct server_response_reader {
     bool cancelled = false;
     int polling_interval_seconds;
 
+    // tracking generation state and partial tool calls
+    // only used by streaming completions
+    std::vector<task_result_state> states;
+
     // should_stop function will be called each polling_interval_seconds
-    server_response_reader(std::pair<server_queue &, server_response &> server_queues, int polling_interval_seconds)
-        : queue_tasks(server_queues.first), queue_results(server_queues.second), polling_interval_seconds(polling_interval_seconds) {}
+    server_response_reader(server_queue & queue_tasks, server_response & queue_results, int polling_interval_seconds)
+        : queue_tasks(queue_tasks), queue_results(queue_results), polling_interval_seconds(polling_interval_seconds) {}
     ~server_response_reader() {
         stop();
     }
 
+    void post_task(server_task && tasks);
     void post_tasks(std::vector<server_task> && tasks);
     bool has_next() const;
 

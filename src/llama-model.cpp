@@ -423,8 +423,8 @@ static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode s
 }
 
 struct llama_model::impl {
-    impl() {}
-    ~impl() {}
+    impl() = default;
+    ~impl() = default;
 
     uint64_t n_elements = 0;
 
@@ -461,7 +461,7 @@ llama_model::llama_model(const llama_model_params & params) : params(params), pi
     pimpl->has_tensor_overrides = params.tensor_buft_overrides && params.tensor_buft_overrides[0].pattern;
 }
 
-llama_model::~llama_model() {}
+llama_model::~llama_model() = default;
 
 void llama_model::load_stats(llama_model_loader & ml) {
     pimpl->n_elements = ml.n_elements;
@@ -1627,6 +1627,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX;
                 }
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false);
+
+                // (optional) temperature tuning - used by mistral-large
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE,  hparams.f_attn_temp_scale,       false);
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_LENGTH, hparams.n_attn_temp_floor_scale, false);
 
                 switch (hparams.n_layer) {
                     case 27: type = LLM_TYPE_16B; break;

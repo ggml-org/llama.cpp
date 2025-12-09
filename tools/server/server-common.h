@@ -13,18 +13,18 @@
 #include <vector>
 #include <cinttypes>
 
-#define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo"
-
 const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
 
 using json = nlohmann::ordered_json;
 
 #define SLT_INF(slot, fmt, ...) LOG_INF("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_CNT(slot, fmt, ...) LOG_CNT(""                                 fmt,                                                                __VA_ARGS__)
 #define SLT_WRN(slot, fmt, ...) LOG_WRN("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_ERR(slot, fmt, ...) LOG_ERR("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 
 #define SRV_INF(fmt, ...) LOG_INF("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SRV_CNT(fmt, ...) LOG_CNT(""              fmt,               __VA_ARGS__)
 #define SRV_WRN(fmt, ...) LOG_WRN("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SRV_ERR(fmt, ...) LOG_ERR("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SRV_DBG(fmt, ...) LOG_DBG("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -217,6 +217,8 @@ public:
                 llama_pos pos,
                 int32_t seq_id,
                 size_t & n_tokens_out) const;
+
+    server_tokens clone() const;
 };
 
 
@@ -286,6 +288,7 @@ struct oaicompat_parser_options {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    std::string media_path;
 };
 
 // used by /chat/completions endpoint
@@ -298,11 +301,16 @@ json oaicompat_chat_params_parse(
 json convert_anthropic_to_oai(const json & body);
 
 // TODO: move it to server-task.cpp
-json format_embeddings_response_oaicompat(const json & request, const json & embeddings, bool use_base64 = false);
+json format_embeddings_response_oaicompat(
+    const json & request,
+    const std::string & model_name,
+    const json & embeddings,
+    bool use_base64 = false);
 
 // TODO: move it to server-task.cpp
 json format_response_rerank(
         const json & request,
+        const std::string & model_name,
         const json & ranks,
         bool is_tei_format,
         std::vector<std::string> & texts,

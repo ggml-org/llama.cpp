@@ -3,8 +3,7 @@
 	import * as Table from '$lib/components/ui/table';
 	import { BadgeModality, CopyToClipboardIcon } from '$lib/components/app';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { ChatService } from '$lib/services/chat';
+	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
 	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
 
 	interface Props {
@@ -16,38 +15,24 @@
 
 	let serverProps = $derived(serverStore.props);
 	let modelName = $derived(modelsStore.singleModelName);
+	let models = $derived(modelOptions());
+	let isLoadingModels = $derived(modelsLoading());
+
+	// Get the first model for single-model mode display
+	let firstModel = $derived(models[0] ?? null);
 
 	// Get modalities from modelStore using the model ID from the first model
-	// For now it supports only for single-model mode, will be extended with further improvements for multi-model functioanlities
 	let modalities = $derived.by(() => {
-		if (!modelsData?.data?.[0]?.id) return [];
-
-		return modelsStore.getModelModalitiesArray(modelsData.data[0].id);
+		if (!firstModel?.id) return [];
+		return modelsStore.getModelModalitiesArray(firstModel.id);
 	});
 
-	let modelsData = $state<ApiModelListResponse | null>(null);
-	let isLoadingModels = $state(false);
-
-	// Fetch models data when dialog opens
+	// Ensure models are fetched when dialog opens
 	$effect(() => {
-		if (open && !modelsData) {
-			loadModelsData();
+		if (open && models.length === 0) {
+			modelsStore.fetch();
 		}
 	});
-
-	async function loadModelsData() {
-		isLoadingModels = true;
-
-		try {
-			modelsData = await ChatService.getModels();
-		} catch (error) {
-			console.error('Failed to load models data:', error);
-			// Set empty data to prevent infinite loading
-			modelsData = { object: 'list', data: [] };
-		} finally {
-			isLoadingModels = false;
-		}
-	}
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>
@@ -70,8 +55,8 @@
 				<div class="flex items-center justify-center py-8">
 					<div class="text-sm text-muted-foreground">Loading model information...</div>
 				</div>
-			{:else if modelsData && modelsData.data.length > 0}
-				{@const modelMeta = modelsData.data[0].meta}
+			{:else if firstModel}
+				{@const modelMeta = firstModel.meta}
 
 				{#if serverProps}
 					<Table.Root>

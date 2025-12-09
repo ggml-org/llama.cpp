@@ -168,17 +168,13 @@ option(GGML_RVV              "ggml: enable rvv"              ON)
 option(GGML_RV_ZFH           "ggml: enable riscv zfh"        ON)
 option(GGML_RV_ZVFH          "ggml: enable riscv zvfh"       ON)
 option(GGML_RV_ZICBOP        "ggml: enable riscv zicbop"     ON)
+option(GGML_RV_ZIHINTPAUSE   "ggml: enable riscv zihintpause "  ON)
 option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"     OFF)
 option(GGML_VXE              "ggml: enable vxe"              ${GGML_NATIVE})
 
 option(GGML_CPU_ALL_VARIANTS "ggml: build all variants of the CPU backend (requires GGML_BACKEND_DL)" OFF)
 set(GGML_CPU_ARM_ARCH        "" CACHE STRING "ggml: CPU architecture for ARM")
 set(GGML_CPU_POWERPC_CPUTYPE "" CACHE STRING "ggml: CPU type for PowerPC")
-
-
-if (MINGW)
-    set(GGML_WIN_VER "0xA00" CACHE STRING   "ggml: Windows version")
-endif()
 
 # ggml core
 set(GGML_SCHED_MAX_COPIES  "4" CACHE STRING "ggml: max input copies for pipeline parallelism")
@@ -226,7 +222,7 @@ option(GGML_WEBGPU                          "ggml: use WebGPU"                  
 option(GGML_WEBGPU_DEBUG                    "ggml: enable WebGPU debug output"                OFF)
 option(GGML_WEBGPU_CPU_PROFILE              "ggml: enable WebGPU profiling (CPU)"             OFF)
 option(GGML_WEBGPU_GPU_PROFILE              "ggml: enable WebGPU profiling (GPU)"             OFF)
-
+option(GGML_WEBGPU_JSPI                     "ggml: use JSPI for WebGPU"                       ON)
 option(GGML_ZDNN                            "ggml: use zDNN"                                  OFF)
 option(GGML_METAL                           "ggml: use Metal"                                 ${GGML_METAL_DEFAULT})
 option(GGML_METAL_NDEBUG                    "ggml: disable Metal debugging"                   OFF)
@@ -257,6 +253,9 @@ option(GGML_HEXAGON                         "ggml: enable Hexagon backend"      
 
 # toolchain for vulkan-shaders-gen
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
+
+option(GGML_ZENDNN                          "ggml: use ZenDNN"                                OFF)
+option(ZENDNN_ROOT                          "ggml: path to ZenDNN installation"               "")
 
 # extra artifacts
 option(GGML_BUILD_TESTS    "ggml: build tests"    ${GGML_STANDALONE})
@@ -319,6 +318,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-sycl.h
     include/ggml-vulkan.h
     include/ggml-webgpu.h
+    include/ggml-zendnn.h
     include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
@@ -408,62 +408,67 @@ if (MSVC)
         /wd4996  # Disable POSIX deprecation warnings
         /wd4702  # Unreachable code warnings
     )
-    function(disable_msvc_warnings target_name)
+    set(MSVC_COMPILE_OPTIONS
+        "$<$<COMPILE_LANGUAGE:C>:/utf-8>"
+        "$<$<COMPILE_LANGUAGE:CXX>:/utf-8>"
+    )
+    function(configure_msvc_target target_name)
         if(TARGET ${target_name})
             target_compile_options(${target_name} PRIVATE ${MSVC_WARNING_FLAGS})
+            target_compile_options(${target_name} PRIVATE ${MSVC_COMPILE_OPTIONS})
         endif()
     endfunction()
 
-    disable_msvc_warnings(ggml-base)
-    disable_msvc_warnings(ggml)
-    disable_msvc_warnings(ggml-cpu)
-    disable_msvc_warnings(ggml-cpu-x64)
-    disable_msvc_warnings(ggml-cpu-sse42)
-    disable_msvc_warnings(ggml-cpu-sandybridge)
-    disable_msvc_warnings(ggml-cpu-haswell)
-    disable_msvc_warnings(ggml-cpu-skylakex)
-    disable_msvc_warnings(ggml-cpu-icelake)
-    disable_msvc_warnings(ggml-cpu-alderlake)
+    configure_msvc_target(ggml-base)
+    configure_msvc_target(ggml)
+    configure_msvc_target(ggml-cpu)
+    configure_msvc_target(ggml-cpu-x64)
+    configure_msvc_target(ggml-cpu-sse42)
+    configure_msvc_target(ggml-cpu-sandybridge)
+    configure_msvc_target(ggml-cpu-haswell)
+    configure_msvc_target(ggml-cpu-skylakex)
+    configure_msvc_target(ggml-cpu-icelake)
+    configure_msvc_target(ggml-cpu-alderlake)
 
     if (GGML_BUILD_EXAMPLES)
-        disable_msvc_warnings(common-ggml)
-        disable_msvc_warnings(common)
+        configure_msvc_target(common-ggml)
+        configure_msvc_target(common)
 
-        disable_msvc_warnings(mnist-common)
-        disable_msvc_warnings(mnist-eval)
-        disable_msvc_warnings(mnist-train)
+        configure_msvc_target(mnist-common)
+        configure_msvc_target(mnist-eval)
+        configure_msvc_target(mnist-train)
 
-        disable_msvc_warnings(gpt-2-ctx)
-        disable_msvc_warnings(gpt-2-alloc)
-        disable_msvc_warnings(gpt-2-backend)
-        disable_msvc_warnings(gpt-2-sched)
-        disable_msvc_warnings(gpt-2-quantize)
-        disable_msvc_warnings(gpt-2-batched)
+        configure_msvc_target(gpt-2-ctx)
+        configure_msvc_target(gpt-2-alloc)
+        configure_msvc_target(gpt-2-backend)
+        configure_msvc_target(gpt-2-sched)
+        configure_msvc_target(gpt-2-quantize)
+        configure_msvc_target(gpt-2-batched)
 
-        disable_msvc_warnings(gpt-j)
-        disable_msvc_warnings(gpt-j-quantize)
+        configure_msvc_target(gpt-j)
+        configure_msvc_target(gpt-j-quantize)
 
-        disable_msvc_warnings(magika)
-        disable_msvc_warnings(yolov3-tiny)
-        disable_msvc_warnings(sam)
+        configure_msvc_target(magika)
+        configure_msvc_target(yolov3-tiny)
+        configure_msvc_target(sam)
 
-        disable_msvc_warnings(simple-ctx)
-        disable_msvc_warnings(simple-backend)
+        configure_msvc_target(simple-ctx)
+        configure_msvc_target(simple-backend)
     endif()
 
     if (GGML_BUILD_TESTS)
-        disable_msvc_warnings(test-mul-mat)
-        disable_msvc_warnings(test-arange)
-        disable_msvc_warnings(test-backend-ops)
-        disable_msvc_warnings(test-cont)
-        disable_msvc_warnings(test-conv-transpose)
-        disable_msvc_warnings(test-conv-transpose-1d)
-        disable_msvc_warnings(test-conv1d)
-        disable_msvc_warnings(test-conv2d)
-        disable_msvc_warnings(test-conv2d-dw)
-        disable_msvc_warnings(test-customop)
-        disable_msvc_warnings(test-dup)
-        disable_msvc_warnings(test-opt)
-        disable_msvc_warnings(test-pool)
+        configure_msvc_target(test-mul-mat)
+        configure_msvc_target(test-arange)
+        configure_msvc_target(test-backend-ops)
+        configure_msvc_target(test-cont)
+        configure_msvc_target(test-conv-transpose)
+        configure_msvc_target(test-conv-transpose-1d)
+        configure_msvc_target(test-conv1d)
+        configure_msvc_target(test-conv2d)
+        configure_msvc_target(test-conv2d-dw)
+        configure_msvc_target(test-customop)
+        configure_msvc_target(test-dup)
+        configure_msvc_target(test-opt)
+        configure_msvc_target(test-pool)
     endif ()
 endif()

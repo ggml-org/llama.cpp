@@ -7,16 +7,20 @@
 /ci/                                    @ggerganov
 /cmake/                                 @ggerganov
 /common/CMakeLists.txt                  @ggerganov
-/common/arg.*                           @ggerganov @ericcurtin
+/common/arg.*                           @ggerganov
 /common/base64.hpp.*                    @ggerganov
 /common/build-info.*                    @ggerganov
+/common/chat.*                          @pwilkin
+/common/chat-peg-parser.*               @aldehir
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
 /common/http.*                          @angt
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
+/common/peg-parser.*                    @aldehir
 /common/sampling.*                      @ggerganov
 /common/speculative.*                   @ggerganov
+/common/unicode.*                       @aldehir
 /convert_*.py                           @CISC
 /examples/batched.swift/                @ggerganov
 /examples/batched/                      @ggerganov
@@ -81,14 +85,14 @@
 /src/llama-vocab.*                      @CISC
 /src/models/                            @CISC
 /tests/                                 @ggerganov
+/tests/test-chat-.*                     @pwilkin
 /tools/batched-bench/                   @ggerganov
 /tools/main/                            @ggerganov
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
 /tools/quantize/                        @ggerganov
 /tools/rpc/                             @rgerganov
-/tools/run/                             @ericcurtin
-/tools/server/*                         @ngxson @ggerganov @ericcurtin # no subdir
+/tools/server/*                         @ngxson @ggerganov # no subdir
 /tools/server/webui/                    @allozaur
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
