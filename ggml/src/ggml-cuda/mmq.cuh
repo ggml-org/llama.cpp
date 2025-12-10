@@ -806,7 +806,6 @@ static __device__ __forceinline__ void load_tiles_mxfp4_fp4(const char * __restr
 
         const block_mxfp4 * bxi = (const block_mxfp4 *) x + kbx0 + i * stride + kbx;
 
-        // Load 16 bytes more efficiently using memcpy (compiler optimizes to vector loads)
         int aux_q4[4];
         memcpy(aux_q4, bxi->qs, 16);
 
