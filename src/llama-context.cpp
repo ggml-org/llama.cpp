@@ -1211,8 +1211,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
     return 0;
 }
 
-static std::unordered_map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubatch & ubatch, uint32_t row_offset) {
-    std::unordered_map<llama_seq_id, uint32_t> seq_to_row;
+static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubatch & ubatch, uint32_t row_offset) {
+    std::map<llama_seq_id, uint32_t> seq_to_row;
     // how many output tokens we have seen so far for this ubatch.
     uint32_t local = 0;
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
@@ -1230,10 +1230,10 @@ static std::unordered_map<llama_seq_id, uint32_t> build_seq_to_output_row(const 
 }
 
 static void copy_tensor_async_ints(
-    const std::unordered_map<llama_seq_id, ggml_tensor*> & tensor_map,
+    const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
     llama_token * sampled,
     size_t sampled_size,
-    const std::unordered_map<llama_seq_id, uint32_t> & seq_to_row,
+    const std::map<llama_seq_id, uint32_t> & seq_to_row,
     ggml_backend_sched_t sched) {
     if (sampled == nullptr) {
         return;
@@ -1256,11 +1256,11 @@ static void copy_tensor_async_ints(
 }
 
 static void copy_tensor_async_floats(
-    const std::unordered_map<llama_seq_id, ggml_tensor*> & tensor_map,
+    const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
     float * dst,
     size_t stride,
     std::vector<uint32_t> & counts,
-    const std::unordered_map<llama_seq_id, uint32_t> & seq_to_row,
+    const std::map<llama_seq_id, uint32_t> & seq_to_row,
     ggml_backend_sched_t sched) {
     if (dst == nullptr) {
         return;
@@ -1287,11 +1287,11 @@ static void copy_tensor_async_floats(
 }
 
 static void copy_tensor_async_candidates(
-    const std::unordered_map<llama_seq_id, ggml_tensor*> & tensor_map,
+    const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
     llama_token * dst,
     size_t stride,
     std::vector<uint32_t> & counts,
-    const std::unordered_map<llama_seq_id, uint32_t> & seq_to_row,
+    const std::map<llama_seq_id, uint32_t> & seq_to_row,
     ggml_backend_sched_t sched) {
     if (dst == nullptr) {
         return;

@@ -2105,7 +2105,7 @@ void llm_graph_context::build_sampling() const {
     auto inp_sampling = std::make_unique<llm_graph_input_sampling>(samplers);
     res->add_input(std::move(inp_sampling));
 
-    std::unordered_map<llama_seq_id, int32_t> seq_to_logit_row;
+    std::map<llama_seq_id, int32_t> seq_to_logit_row;
     int32_t logit_row_idx = 0;
 
     for (uint32_t i = 0; i < ubatch.n_tokens; i++) {

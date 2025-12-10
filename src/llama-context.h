@@ -258,7 +258,7 @@ private:
     float * logits      = nullptr;
 
     struct sampling_info {
-        std::unordered_map<llama_seq_id, llama_sampler *> samplers;
+        std::map<llama_seq_id, llama_sampler *> samplers;
 
         float       * logits      = nullptr;
         size_t        logits_size = 0;
