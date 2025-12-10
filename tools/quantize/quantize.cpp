@@ -2,6 +2,10 @@
 #include "llama.h"
 #include "gguf.h"
 
+#include <algorithm>
+#include <cctype>
+#include <clocale>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -441,6 +445,8 @@ static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     if (argc < 3) {
         usage(argv[0]);
     }

@@ -8,6 +8,7 @@
 #include "log.h"
 
 #include <atomic>
+#include <clocale>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
 
@@ -66,6 +67,8 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 }
 
 int main(int argc, char ** argv, char ** envp) {
+    std::setlocale(LC_NUMERIC, "C");
+
     // own arguments required by this example
     common_params params;
 

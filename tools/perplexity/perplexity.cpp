@@ -3,10 +3,11 @@
 #include "log.h"
 #include "llama.h"
 
-#include <chrono>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -1976,6 +1977,8 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.n_ctx = 512;

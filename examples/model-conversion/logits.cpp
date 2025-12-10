@@ -2,6 +2,7 @@
 #include "common.h"
 
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -19,6 +20,8 @@ static void print_usage(int, char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     std::string model_path;
     std::string prompt = "Hello, my name is";
     int ngl = 0;

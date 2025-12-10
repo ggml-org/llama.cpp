@@ -7,6 +7,7 @@
 #include <limits.h>
 
 #include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -538,6 +539,8 @@ static std::string format_input_text(const std::string & prompt, const std::stri
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     ggml_time_init();
 
     common_params params;

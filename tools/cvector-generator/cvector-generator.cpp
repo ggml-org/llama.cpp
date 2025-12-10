@@ -7,6 +7,8 @@
 #include "pca.hpp"
 #include "mean.hpp"
 
+#include <clocale>
+
 #ifdef GGML_USE_CUDA
 #include "ggml-cuda.h"
 #endif
@@ -392,6 +394,8 @@ static int prepare_entries(common_params & params, train_context & ctx_train) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.out_file = "control_vector.gguf";
