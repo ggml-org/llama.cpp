@@ -1,11 +1,9 @@
 #include "common.cuh"
-#include "ggml-cuda/vendors/cuda.h"
 #include "ggml.h"
 #include "solve_tri.cuh"
 
 #include <cublas_api.h>
 #include <cublas_v2.h>
-#include <cuda_runtime_api.h>
 #include <driver_types.h>
 
 #define MAX_N_FAST 64
