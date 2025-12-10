@@ -3215,6 +3215,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_K_DRAFT"));
     add_opt(common_arg(
+        {"-mtp", "--multi-token-prediction"},
+        string_format("Activate multi-token-prediction (if supported) (default: %s)", params.mtp ? "true" : "false"),
+        [](common_params & params) {
+            params.mtp = true;
+        }
+    ));
+    add_opt(common_arg(
         {"-ctvd", "--cache-type-v-draft"}, "TYPE",
         string_format(
             "KV cache data type for V for the draft model\n"

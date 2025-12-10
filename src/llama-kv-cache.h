@@ -118,6 +118,12 @@ public:
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
             bool embd_all) override;
+    
+    llama_memory_context_ptr init_batch_with_sinfos(
+            llama_batch_allocr & balloc,
+            uint32_t n_ubatch,
+            const slot_info_vec_t & sinfos,
+            bool is_inplace_update);
 
     llama_memory_context_ptr init_full() override;
 
@@ -182,7 +188,7 @@ public:
     slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
 
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
-    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch, bool is_inplace_update = false);
 
     //
     // input API
@@ -309,7 +315,8 @@ public:
     llama_kv_cache_context(
             llama_kv_cache * kv,
             slot_info_vec_t sinfos,
-            std::vector<llama_ubatch> ubatches);
+            std::vector<llama_ubatch> ubatches,
+            bool is_inplace_update = false);
 
     virtual ~llama_kv_cache_context();
 
@@ -355,6 +362,10 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+    void set_sinfos(slot_info_vec_t new_sinfos);
+
+    const slot_info_vec_t & get_sinfos() const { return sinfos; }
+
 private:
     llama_memory_status status;
 
@@ -387,4 +398,6 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+
+    bool is_inplace_update = false;
 };

@@ -1720,8 +1720,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 // NextN/MTP parameters
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
 
-                // TODO: when MTP is implemented, this should probably be updated if needed
-                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                hparams.n_layer_kv_from_start = hparams.n_layer;
 
                 switch (hparams.n_layer) {
                     case 47: type = LLM_TYPE_106B_A12B; break; // GLM-4.5-Air (46 layers + 1 NextN layer)
@@ -5054,10 +5053,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // but only PROCESS up to last layer (skipping final NextN layer) in forward pass
                     for (int i = 0; i < n_layer; ++i) {
                         int flags = 0;
-                        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
-                            // skip all tensors in the NextN layers
-                            flags |= TENSOR_SKIP;
-                        }
 
                         auto & layer = layers[i];
 
@@ -7642,7 +7637,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     }
 
     // add on pooling layer
-    llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
+    if (params.mtp_params.op_type == MTP_OP_NONE) {
+        llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
+    }
 
     // if the gguf model was converted with --sentence-transformers-dense-modules
     // there will be two additional dense projection layers
@@ -7731,6 +7728,10 @@ const char * llama_model_cls_label(const struct llama_model * model, uint32_t i)
     }
 
     return nullptr;
+}
+
+int32_t llama_model_n_nextn_layer(const llama_model * model) {
+    return model->hparams.nextn_predict_layers;
 }
 
 // deprecated

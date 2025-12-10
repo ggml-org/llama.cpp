@@ -666,3 +666,42 @@ std::vector<common_sampler_type> common_sampler_types_from_chars(const std::stri
 
     return samplers;
 }
+
+/**
+ * Specialized sampling for speculative drafting.
+ * 
+ * Prioritizes performance by using a direct ArgMax loop (Greedy) when no 
+ * penalties (repetition, frequency, presence, DRY) are configured.
+ * Falls back to the full sampler chain if penalties are active to prevent 
+ * generative loops or adhere to constraints.
+ */
+llama_token common_sampler_sample_speculative(struct common_sampler * gsmpl, struct llama_context * ctx, int idx) {
+    const auto & params = gsmpl->params;
+
+    bool use_heavy_sampler = 
+        (params.penalty_last_n > 0 && (
+            params.penalty_repeat  != 1.0f || 
+            params.penalty_freq    != 0.0f || 
+            params.penalty_present != 0.0f
+        )) ||
+        (params.dry_allowed_length > 0 && params.dry_multiplier != 0.0f);
+
+    if (use_heavy_sampler) {
+        return common_sampler_sample(gsmpl, ctx, idx, false);
+    } 
+
+    float * logits = llama_get_logits_ith(ctx, idx);
+    const int n_vocab = llama_n_vocab(llama_model_get_vocab(llama_get_model(ctx)));
+
+    int best_id = 0;
+    float max_val = logits[0];
+
+    for (int i = 1; i < n_vocab; ++i) {
+        if (logits[i] > max_val) {
+            max_val = logits[i];
+            best_id = i;
+        }
+    }
+
+    return best_id;
+}

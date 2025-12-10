@@ -80,6 +80,7 @@ struct server_slot {
     mtmd_context * mctx = nullptr;
 
     common_speculative * spec = nullptr;
+    bool has_mtp = false;
 
     std::unique_ptr<const server_task> task;
     std::unique_ptr<const server_task> task_prev; // used for debugging
@@ -206,7 +207,7 @@ struct server_slot {
     bool need_embd() const {
         GGML_ASSERT(task);
 
-        return server_task_type_need_embd(task->type);
+        return server_task_type_need_embd(task->type) || has_mtp;
     }
 
     bool need_logits() const {
@@ -220,7 +221,8 @@ struct server_slot {
     bool can_split() const {
         return
             !need_embd() ||
-            (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_LAST);
+            (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_LAST) ||
+            (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_NONE);
     }
 
     bool can_batch_with(server_slot & other_slot) const {
@@ -252,7 +254,7 @@ struct server_slot {
     }
 
     bool can_speculate() const {
-        return ctx_dft;
+        return (ctx_dft || has_mtp);
     }
 
     void add_token(const completion_token_output & token) {
@@ -767,6 +769,18 @@ struct server_context_impl {
                 for (auto & pair : params_base.speculative.replacements) {
                     common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
+            }
+
+            // if model has MTP and no draft model is specified...
+            else if (llama_model_n_nextn_layer(model) > 0 && params_base.mtp) {
+                SRV_INF("model has nextn layers = %d\n", llama_model_n_nextn_layer(model));
+                slot.has_mtp = true;
+
+                slot.batch_spec = llama_batch_init(params_base.speculative.n_max + 1, 0, 1);
+                SLT_DBG(slot, "batch_spec contains %d tokens\n", slot.batch_spec.n_tokens);
+
+                SRV_INF("%s (n_max=%d)\n", "MTP needs embeddings on decode, enabling", params_base.speculative.n_max);
+                llama_set_embeddings(ctx, true);
             }
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
@@ -1971,12 +1985,34 @@ struct server_context_impl {
                     GGML_ABORT("not supported by multimodal");
                 }
 
+                llama_tokens draft;
+
                 struct common_speculative_params params_spec;
                 params_spec.n_draft = n_draft_max;
-                params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max;
                 params_spec.p_min   = slot.task->params.speculative.p_min;
-                const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
-                llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+
+                if (slot.ctx_dft) {
+                    params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max;
+                } else {
+                    params_spec.n_reuse = 0;
+                }
+
+                if (slot.has_mtp) {
+                    llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
+
+                    draft = mtp_speculative_gen_draft(
+                        slot.smpl, 
+                        ctx,
+                        params_spec,
+                        slot.sampled, 
+                        slot.prompt.n_tokens(),
+                        slot.id
+                    );
+                }
+                else {
+                    const llama_tokens& cached_text_tokens = slot.prompt.tokens.get_text_tokens();
+                    draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+                }
 
                 // add the sampled token to the batch
                 slot.i_batch_dft.push_back(batch.n_tokens);
@@ -2583,6 +2619,21 @@ struct server_context_impl {
                 continue; // continue loop of n_batch
             }
 
+            if (slot_batched && slot_batched->has_mtp &&
+                (slot_batched->state == SLOT_STATE_PROCESSING_PROMPT || slot_batched->state == SLOT_STATE_DONE_PROMPT)) {
+
+                // Prepare the context to reuse the exact sinfo layout (including multiple u-batches)
+                // from the main model's prompt processing pass. This ensures the MTP layer's
+                // KV cache is perfectly aligned.
+                if (llama_mtp_prepare_sinfo_for_warmup(ctx)) {
+                    mtp_update_kv_cache(ctx, batch_view, true);
+                    // Clean up the forced state to not affect subsequent decodes.
+                    llama_mtp_cancel_sinfo_update(ctx);
+                } else {
+                    LOG_ERR("%s: Failed to prepare the MTP for warmup.", __func__);
+                }
+            }
+
             // move the head of the batch forward with the number of tokens we just processed
             i_next = i + n_tokens;
 
@@ -2701,6 +2752,16 @@ struct server_context_impl {
                 const auto ids = common_sampler_sample_and_accept_n(slot.smpl.get(), ctx, slot.i_batch_dft, slot.drafted);
                 slot.i_batch_dft.clear();
                 slot.drafted.clear();
+
+                if (slot.has_mtp) {
+                    if (!ids.empty()) {
+                        llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, ids.size() - 1));
+                    } else {
+                        llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, 0));
+                    }
+
+                    mtp_accept_tokens(ctx, ids, slot.prompt.n_tokens(), slot.id);
+                }
 
                 slot.n_decoded += ids.size();
 
