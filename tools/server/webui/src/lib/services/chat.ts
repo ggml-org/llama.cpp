@@ -89,7 +89,6 @@ export class ChatService {
 			custom,
 			timings_per_token,
 			// Config options
-			systemMessage,
 			disableReasoningFormat
 		} = options;
 
@@ -103,6 +102,7 @@ export class ChatService {
 				}
 			})
 			.filter((msg) => {
+				// Filter out empty system messages
 				if (msg.role === 'system') {
 					const content = typeof msg.content === 'string' ? msg.content : '';
 
@@ -112,10 +112,8 @@ export class ChatService {
 				return true;
 			});
 
-		const processedMessages = ChatService.injectSystemMessage(normalizedMessages, systemMessage);
-
 		const requestBody: ApiChatCompletionRequest = {
-			messages: processedMessages.map((msg: ApiChatMessageData) => ({
+			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
 				content: msg.content
 			})),
@@ -676,46 +674,6 @@ export class ChatService {
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Utilities
 	// ─────────────────────────────────────────────────────────────────────────────
-
-	/**
-	 * Injects a system message at the beginning of the conversation if provided.
-	 * Checks for existing system messages to avoid duplication.
-	 *
-	 * @param messages - Array of chat messages to process
-	 * @param systemMessage - Optional system message to inject
-	 * @returns Array of messages with system message injected at the beginning if provided
-	 * @private
-	 */
-	private static injectSystemMessage(
-		messages: ApiChatMessageData[],
-		systemMessage?: string
-	): ApiChatMessageData[] {
-		const trimmedSystemMessage = systemMessage?.trim();
-
-		if (!trimmedSystemMessage) {
-			return messages;
-		}
-
-		if (messages.length > 0 && messages[0].role === 'system') {
-			if (messages[0].content !== trimmedSystemMessage) {
-				const updatedMessages = [...messages];
-				updatedMessages[0] = {
-					role: 'system',
-					content: trimmedSystemMessage
-				};
-				return updatedMessages;
-			}
-
-			return messages;
-		}
-
-		const systemMsg: ApiChatMessageData = {
-			role: 'system',
-			content: trimmedSystemMessage
-		};
-
-		return [systemMsg, ...messages];
-	}
 
 	/**
 	 * Parses error response and creates appropriate error with context information
