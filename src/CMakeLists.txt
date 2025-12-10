@@ -67,7 +67,7 @@ add_library(llama
             models/gemma-embedding.cpp
             models/gemma.cpp
             models/gemma2-iswa.cpp
-            models/gemma3-iswa.cpp
+            models/gemma3.cpp
             models/gemma3n-iswa.cpp
             models/glm4-moe.cpp
             models/glm4.cpp
@@ -139,6 +139,7 @@ add_library(llama
 set_target_properties(llama PROPERTIES
     VERSION ${LLAMA_INSTALL_VERSION}
     SOVERSION 0
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 target_include_directories(llama PRIVATE .)
