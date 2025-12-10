@@ -729,6 +729,8 @@ __device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e)
 
     int   best_i   = 0;
     float best_err = fabsf(ax - pos_lut[0]);
+
+#pragma unroll
     for (int i = 1; i < 8; ++i) {
         float err = fabsf(ax - pos_lut[i]);
         if (err < best_err) {
