@@ -62,7 +62,6 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
 
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         auto * cur_node = cgraph->nodes[node_n];
-        m_nodes.push_back(cur_node);
         set_input_output(cur_node);
     }
 
@@ -82,7 +81,6 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
         if (cur_node->op == GGML_OP_NONE) {
             continue;
         }
-        m_nodes.push_back(cur_node);
         set_input_output(cur_node, true);
     }
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {

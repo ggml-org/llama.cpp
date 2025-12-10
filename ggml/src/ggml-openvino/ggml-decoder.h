@@ -219,7 +219,6 @@ private:
     void validate_cgraph() const;
 
     ggml_cgraph * m_cgraph = nullptr;
-    std::vector<ggml_tensor *> m_nodes;
     std::map<std::string, ggml_tensor *> m_inputs;
 
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
