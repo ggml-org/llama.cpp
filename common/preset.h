@@ -30,4 +30,3 @@ struct common_preset {
 // interface for multiple presets in one file
 using common_presets = std::map<std::string, common_preset>;
 common_presets common_presets_load(const std::string & path, common_params_context & ctx_params);
-void common_presets_save(const std::string & path, const common_presets & presets);

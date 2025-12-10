@@ -107,10 +107,6 @@ bool common_params_parse(int argc, char ** argv, llama_example ex, std::map<comm
 // initialize argument parser context - used by test-arg-parser and preset
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 
-// Get environment variable name for a CLI flag (e.g. "--ctx-size" -> "LLAMA_ARG_CTX_SIZE")
-// Returns empty string if flag not found
-std::string common_arg_get_env_name(const std::string & flag);
-
 struct common_remote_params {
     std::vector<std::string> headers;
     long timeout = 0; // CURLOPT_TIMEOUT, in seconds ; 0 means no timeout

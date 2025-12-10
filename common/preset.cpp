@@ -178,16 +178,3 @@ common_presets common_presets_load(const std::string & path, common_params_conte
 
     return out;
 }
-
-void common_presets_save(const std::string & path, const common_presets & presets) {
-    std::ofstream file(path);
-    if (!file.good()) {
-        throw std::runtime_error("failed to open preset file for writing: " + path);
-    }
-
-    file << "version = 1\n\n";
-
-    for (const auto & it : presets) {
-        file << it.second.to_ini();
-    }
-}

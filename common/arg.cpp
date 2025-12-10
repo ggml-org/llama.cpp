@@ -74,17 +74,6 @@ static const std::vector<common_arg> & get_common_arg_defs() {
     return options;
 }
 
-std::string common_arg_get_env_name(const std::string & flag) {
-    for (const auto & arg : get_common_arg_defs()) {
-        for (const auto & arg_flag : arg.args) {
-            if (arg_flag == flag) {
-                return arg.env ? arg.env : "";
-            }
-        }
-    }
-    return "";
-}
-
 common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> examples) {
     this->examples = examples;
     return *this;
@@ -3324,12 +3313,4 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
     return ctx_arg;
-}
-
-static std::string rm_leading_dashes(const std::string & str) {
-    size_t pos = 0;
-    while (pos < str.size() && str[pos] == '-') {
-        ++pos;
-    }
-    return str.substr(pos);
 }
