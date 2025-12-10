@@ -1369,6 +1369,11 @@ llama-server
 
 ### Model sources
 
+There are 3 possible sources for model files:
+1. Cached models (controlled by the `LLAMA_CACHE` environment variable)
+2. Custom model directory (set via the `--models-dir` argument)
+3. Custom preset (set via the `--models-preset` argument)
+
 By default, the router looks for models in the cache. You can add Hugging Face models to the cache with:
 
 ```sh
@@ -1412,6 +1417,51 @@ llama-server -ctx 8192 -n 1024 -np 2
 ```
 
 Note: model instances inherit both command line arguments and environment variables from the router server.
+
+Alternatively, you can also add GGUF based preset (see next section)
+
+### Model presets
+
+Model presets allow advanced users to define custom configurations using an `.ini` file:
+
+```sh
+llama-server --models-preset ./my-models.ini
+```
+
+Each section in the file defines a new preset. Keys within a section correspond to command-line arguments (without leading dashes). For example, the argument `--n-gpu-layer 123` is written as `n-gpu-layer = 123`.
+
+Short argument forms (e.g., `c`, `ngl`) and environment variable names (e.g., `LLAMA_ARG_N_GPU_LAYERS`) are also supported as keys.
+
+Example:
+
+```ini
+version = 1
+
+; If the key corresponds to an existing model on the server,
+; this will be used as the default config for that model
+[ggml-org/MY-MODEL-GGUF:Q8_0]
+; string value
+chat-template = chatml
+; numeric value
+n-gpu-layer = 123
+; flag value (for certain flags, you need to use the "no-" prefix for negation)
+jinja = true
+; shorthand argument (for example, context size)
+c = 4096
+; environment variable name
+LLAMA_ARG_CACHE_RAM = 0
+; file paths are relative to server's CWD
+model-draft = ./my-models/draft.gguf
+; but it's RECOMMENDED to use absolute path
+model-draft = /Users/abc/my-models/draft.gguf
+
+; If the key does NOT correspond to an existing model,
+; you need to specify at least the model path
+[custom_model]
+model = /Users/abc/my-awesome-model-Q4_K_M.gguf
+```
+
+Note: some arguments are controlled by router (e.g., host, port, API key, HF repo, model alias). They will be removed or overwritten upload loading.
 
 ### Routing requests
 

@@ -47,6 +47,7 @@
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
 using json = nlohmann::ordered_json;
+using namespace common_arg_utils;
 
 static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_MTMD,
@@ -62,6 +63,15 @@ static std::string read_file(const std::string & fname) {
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     file.close();
     return content;
+}
+
+static const std::vector<common_arg> & get_common_arg_defs() {
+    static const std::vector<common_arg> options = [] {
+        common_params params;
+        auto ctx = common_params_parser_init(params, LLAMA_EXAMPLE_SERVER, nullptr);
+        return ctx.options;
+    }();
+    return options;
 }
 
 common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> examples) {
@@ -134,7 +144,7 @@ static std::vector<std::string> break_str_into_lines(std::string input, size_t m
     return result;
 }
 
-std::string common_arg::to_string() {
+std::string common_arg::to_string() const {
     // params for printing to console
     const static int n_leading_spaces = 40;
     const static int n_char_per_line_help = 70; // TODO: detect this based on current console
@@ -647,6 +657,53 @@ static void add_rpc_devices(const std::string & servers) {
     }
 }
 
+bool common_params_parse(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map) {
+    common_params dummy_params;
+    common_params_context ctx_arg = common_params_parser_init(dummy_params, ex, nullptr);
+
+    std::unordered_map<std::string, common_arg *> arg_to_options;
+    for (auto & opt : ctx_arg.options) {
+        for (const auto & arg : opt.args) {
+            arg_to_options[arg] = &opt;
+        }
+    }
+
+    // TODO @ngxson : find a way to deduplicate this code
+
+    // handle command line arguments
+    auto check_arg = [&](int i) {
+        if (i+1 >= argc) {
+            throw std::invalid_argument("expected value for argument");
+        }
+    };
+
+    for (int i = 1; i < argc; i++) {
+        const std::string arg_prefix = "--";
+
+        std::string arg = argv[i];
+        if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
+            std::replace(arg.begin(), arg.end(), '_', '-');
+        }
+        if (arg_to_options.find(arg) == arg_to_options.end()) {
+            throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
+        }
+        auto opt = *arg_to_options[arg];
+        std::string val;
+        if (opt.value_hint != nullptr) {
+            // arg with single value
+            check_arg(i);
+            val = argv[++i];
+        }
+        if (opt.value_hint_2 != nullptr) {
+            // TODO: support arg with 2 values
+            throw std::invalid_argument("error: argument with 2 values is not yet supported\n");
+        }
+        out_map[opt] = val;
+    }
+
+    return true;
+}
+
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
     auto ctx_arg = common_params_parser_init(params, ex, print_usage);
     const common_params params_org = ctx_arg.params; // the example can modify the default params
@@ -692,15 +749,15 @@ static std::string list_builtin_chat_templates() {
     return msg.str();
 }
 
-static bool is_truthy(const std::string & value) {
+bool common_arg_utils::is_truthy(const std::string & value) {
     return value == "on" || value == "enabled" || value == "1";
 }
 
-static bool is_falsey(const std::string & value) {
+bool common_arg_utils::is_falsey(const std::string & value) {
     return value == "off" || value == "disabled" || value == "0";
 }
 
-static bool is_autoy(const std::string & value) {
+bool common_arg_utils::is_autoy(const std::string & value) {
     return value == "auto" || value == "-1";
 }
 
@@ -2543,6 +2600,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.models_dir = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_DIR"));
+    add_opt(common_arg(
+        {"--models-preset"}, "PATH",
+        "path to INI file containing model presets for the router server (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.models_preset = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_PRESET"));
     add_opt(common_arg(
         {"--models-max"}, "N",
         string_format("for router server, maximum number of models to load simultaneously (default: %d, 0 = unlimited)", params.models_max),
