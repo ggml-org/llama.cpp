@@ -270,6 +270,7 @@ int main(int argc, char ** argv) {
     ggml_time_init();
 
     common_params params;
+    params.use_jinja = false;   // disable jinja by default
     params.sampling.temp = 0.2; // lower temp by default for better quality
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MTMD, show_additional_info)) {

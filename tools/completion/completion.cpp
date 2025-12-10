@@ -86,6 +86,10 @@ static void sigint_handler(int signo) {
 int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
+
+    // disable jinja by default
+    params.use_jinja = false;
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
