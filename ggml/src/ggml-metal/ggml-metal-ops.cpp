@@ -1365,15 +1365,43 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
         /*.nb2  =*/ nb2,
     };
 
-    auto pipeline = ggml_metal_library_get_pipeline_ssm_conv(lib, op);
+    // Use batched kernel for prefill (ne1 > 1) to reduce threadgroup dispatch overhead
+    const bool use_batched = (ne1 > 1);
 
-    ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),         3);
+    if (use_batched) {
+        // Determine the smallest power of 2 that's >= ne1, but <= 256
+        int BATCH_SIZE;
+        if      (ne1 > 128) BATCH_SIZE = 256;
+        else if (ne1 > 64 ) BATCH_SIZE = 128;
+        else if (ne1 > 32 ) BATCH_SIZE = 64;
+        else if (ne1 > 16 ) BATCH_SIZE = 32;
+        else if (ne1 > 8  ) BATCH_SIZE = 16;
+        else if (ne1 > 4  ) BATCH_SIZE = 8;
+        else                BATCH_SIZE = 2;
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne1, ne02, 1, 1, 1);
+        auto pipeline = ggml_metal_library_get_pipeline_ssm_conv_batched(lib, op, BATCH_SIZE);
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),         3);
+
+        // Dispatch: ne01 rows, ceil(ne1/BATCH_SIZE) token batches, ne02 sequences
+        // Each threadgroup has BATCH_SIZE threads, each handling one token
+        const int n_token_batches = (ne1 + BATCH_SIZE - 1) / BATCH_SIZE;
+        ggml_metal_encoder_dispatch_threadgroups(enc, ne01, n_token_batches, ne02, BATCH_SIZE, 1, 1);
+    } else {
+        auto pipeline = ggml_metal_library_get_pipeline_ssm_conv(lib, op);
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),         3);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne1, ne02, 1, 1, 1);
+    }
 
     return 1;
 }

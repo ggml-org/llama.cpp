@@ -85,6 +85,25 @@ struct task_params {
     json to_json(bool only_metrics = false) const;
 };
 
+// struct for tracking the state of a task (e.g., for streaming)
+struct task_result_state {
+    // tracking diffs for partial tool calls
+    std::vector<common_chat_msg_diff> diffs;
+    common_chat_syntax oaicompat_chat_syntax;
+    common_chat_msg chat_msg;
+    std::string generated_text; // append new chunks of generated text here
+    std::vector<std::string> generated_tool_call_ids;
+
+    task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
+        : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
+
+    // parse partial tool calls and update the internal state
+    common_chat_msg update_chat_msg(
+        const std::string & text_added,
+        bool is_partial,
+        std::vector<common_chat_msg_diff> & diffs);
+};
+
 struct server_task {
     int id    = -1; // to be filled by server_queue
     int index = -1; // used when there are multiple prompts (batch request)
@@ -149,6 +168,12 @@ struct server_task {
         copy.tokens    = tokens.clone();
         return copy;
     }
+
+    // the task will be moved into queue, then onto slots
+    // however, the state must be kept by caller (e.g., HTTP thread)
+    task_result_state create_state() const {
+        return task_result_state(params.oaicompat_chat_syntax);
+    }
 };
 
 struct result_timings {
@@ -178,25 +203,6 @@ struct result_prompt_progress {
     int64_t time_ms = 0;
 
     json to_json() const;
-};
-
-// struct for tracking the state of a task (e.g., for streaming)
-struct task_result_state {
-    // tracking diffs for partial tool calls
-    std::vector<common_chat_msg_diff> diffs;
-    common_chat_syntax oaicompat_chat_syntax;
-    common_chat_msg chat_msg;
-    std::string generated_text; // append new chunks of generated text here
-    std::vector<std::string> generated_tool_call_ids;
-
-    task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
-        : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
-
-    // parse partial tool calls and update the internal state
-    common_chat_msg update_chat_msg(
-        const std::string & text_added,
-        bool is_partial,
-        std::vector<common_chat_msg_diff> & diffs);
 };
 
 struct server_task_result {

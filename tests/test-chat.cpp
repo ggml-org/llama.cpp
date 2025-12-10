@@ -539,6 +539,71 @@ const common_chat_msg message_assist_call_python_lines           = simple_assist
 const common_chat_msg message_assist_call_python_lines_unclosed  = simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')");
 const common_chat_msg message_assist_call_code_interpreter       = simple_assist_msg("", "", "code_interpreter", "{\"code\":\"print('hey')\"}");
 
+// Use for PEG parser implementations
+struct peg_test_case {
+    common_chat_templates_inputs params;
+    std::string input;
+    common_chat_msg expect;
+};
+
+struct make_peg_parser {
+    common_chat_params params_;
+    common_peg_arena arena_;
+
+    make_peg_parser(common_chat_templates * tmpls, const common_chat_templates_inputs & inputs) {
+        params_ = common_chat_templates_apply(tmpls, inputs);
+        arena_.load(params_.parser);
+    }
+
+    common_chat_msg parse(const std::string & msg, bool is_partial) {
+        return common_chat_peg_parse(arena_, msg, is_partial, /* syntax = */ {params_.format});
+    }
+};
+
+static void test_peg_parser(common_chat_templates * tmpls, const std::function<void(peg_test_case &)> & init) {
+    peg_test_case tc;
+    init(tc);
+    if (tc.params.messages.empty()) {
+        tc.params.messages = {message_user};
+    }
+    if (tc.expect.role.empty()) {
+        tc.expect.role = "assistant";
+    }
+
+    auto parser = make_peg_parser(tmpls, tc.params);
+
+    common_chat_msg msg_accum;
+    common_chat_msg msg_prev;
+    msg_accum.role = msg_prev.role = "assistant";
+
+    for (size_t i = 1; i <= tc.input.size(); ++i) {
+        auto is_partial = i < tc.input.size();
+        common_chat_msg msg_current = parser.parse(tc.input.substr(0, i), is_partial);
+
+        for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
+            if (!diff.reasoning_content_delta.empty()) {
+                msg_accum.reasoning_content += diff.reasoning_content_delta;
+            }
+            if (!diff.content_delta.empty()) {
+                msg_accum.content += diff.content_delta;
+            }
+            if (diff.tool_call_index != std::string::npos) {
+                if (!diff.tool_call_delta.name.empty()) {
+                    msg_accum.tool_calls.push_back({diff.tool_call_delta.name, "", ""});
+                }
+                if (!diff.tool_call_delta.arguments.empty()) {
+                    msg_accum.tool_calls.back().arguments += diff.tool_call_delta.arguments;
+                }
+            }
+        }
+        assert_msg_equals(msg_current, msg_accum, true);
+        msg_prev = msg_current;
+    }
+
+    assert_msg_equals(tc.expect, parser.parse(tc.input, false), true);
+    assert_msg_equals(tc.expect, msg_accum, true);
+}
+
 static void test_msgs_oaicompat_json_conversion() {
     printf("[%s]\n", __func__);
     std::vector<common_chat_msg> msgs{
@@ -3434,7 +3499,95 @@ Hey there!<|im_end|>
         auto grammar = build_grammar(params.grammar);
         GGML_ASSERT(grammar && "Failed to build Qwen3-Coder grammar with union types");
     }
+}
 
+static void test_template_output_peg_parsers() {
+    printf("[%s]\n", __func__);
+
+    // JSON schemas
+    const char * invoice_schema = R"({
+        "type": "object",
+        "properties": {
+            "amount": {"type": "number"},
+            "date": {"type": "string"}
+        }
+    })";
+
+    {
+        // Ministral-3-14B-Reasoning-2512
+        auto tmpls = read_templates("models/templates/mistralai-Ministral-3-14B-Reasoning-2512.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test basic message and reasoning with reasoning_format = none
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?";
+            t.expect.content = "[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?";
+        });
+
+        // Test basic message and reasoning with reasoning_format = auto
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+            t.expect = message_assist_thoughts;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = R"([TOOL_CALLS]special_function[ARGS]{"arg1":1})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call;
+        });
+
+        // Test tool call with reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "[THINK]I'm\nthinking[/THINK]"
+                      R"([TOOL_CALLS]special_function[ARGS]{"arg1":1})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call_thoughts;
+        });
+
+        // Test parallel tool calls
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = R"([TOOL_CALLS]special_function[ARGS]{"arg1": 1})"
+                      R"([TOOL_CALLS]special_function_with_opt[ARGS]{"arg1": 1, "arg2": 2})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test response format
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "[THINK]I need to output the invoice details in JSON[/THINK]"
+                      "```json\n"
+                      R"({"amount": 123.45, "date": "2025-12-03"})"
+                      "\n```";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.json_schema = invoice_schema;
+
+            t.expect.reasoning_content = "I need to output the invoice details in JSON";
+            t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+    }
 }
 
 static void test_msg_diffs_compute() {
@@ -3560,6 +3713,7 @@ int main(int argc, char ** argv) {
             test_msgs_oaicompat_json_conversion();
             test_tools_oaicompat_json_conversion();
             test_template_output_parsers();
+            test_template_output_peg_parsers();
             std::cout << "\n[chat] All tests passed!" << '\n';
         }
         return 0;
