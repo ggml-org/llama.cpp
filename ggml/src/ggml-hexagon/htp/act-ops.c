@@ -255,6 +255,90 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
          src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
+
+static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
+                                       struct htp_tensor *       dst,
+                                       const int32_t *           op_params,
+                                       struct htp_spad *         src0_spad,
+                                       struct htp_spad *         dst_spad,
+                                       uint32_t                  nth,
+                                       uint32_t                  ith,
+                                       uint32_t                  src0_nrows_per_thread) {
+    htp_act_preamble2;
+
+    uint64_t t1, t2;
+    t1 = HAP_perf_get_qtimer_count();
+
+    const size_t src0_row_size = nb01;
+    const size_t dst_row_size  = nb1;
+
+    const uint32_t src0_nrows = ne01 * ne02 * ne03;
+
+    const uint32_t src0_start_row = src0_nrows_per_thread * ith;
+    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
+
+    // no work for this thread
+    if (src0_start_row >= src0_end_row) {
+        return;
+    }
+
+    int is_aligned = 1;
+    int opt_path   = 0;
+    if (!htp_is_aligned((void *) src0->data, VLEN) || !htp_is_aligned((void *) dst->data, VLEN)) {
+        is_aligned = 0;
+        FARF(HIGH, "silu-f32: unaligned addresses in elementwise op, possibly slower execution\n");
+    }
+    if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
+        opt_path = 1;
+    }
+
+    const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
+    uint8_t * restrict data_dst        = (uint8_t *) dst->data;
+
+    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_row_size);
+    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_row_size);
+
+    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
+        const float * restrict src0 = (float *) (data_src0 + (ir * src0_row_size));
+        float * restrict dst        = (float *) (data_dst + (ir * dst_row_size));
+
+        if (ir + 1 < src0_end_row) {
+            htp_l2fetch(src0 + src0_row_size, 1, src0_row_size, src0_row_size);
+        }
+
+
+        // gelu = 0.5 * x * (1.0 + tanh( sqrt(2/pi) * (x + 0.044715 * x^3) )) // gelu_tanh
+        // gelu = x * sigmoid(1.702 * x) // current implementation
+        if (1 == opt_path) {
+            hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
+            hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
+
+            hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
+        } else {
+            hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
+            // sigmoid
+            hvx_exp_f32((const uint8_t *) src0_spad_data, src0_spad_data, ne0, true);
+            hvx_add_scalar_f32(src0_spad_data, 1.0, dst_spad_data, ne0);
+            hvx_inverse_f32(dst_spad_data, src0_spad_data, ne0);
+
+            hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
+        }
+    }
+
+    t2 = HAP_perf_get_qtimer_count();
+
+    FARF(HIGH, "gelu-f32 %d/%d/%d: %ux%ux%ux%u (%u:%u) -> %ux%ux%ux%u usec %u\n", ith, nth, opt_path, ne00, ne01, ne02,
+         ne03, src0_start_row, src0_end_row, ne0, ne1, ne2, ne3, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+}
+
+static void unary_gelu_fp32(unsigned int n, unsigned int i, void * data) {
+    struct htp_ops_context * octx = (struct htp_ops_context *) data;
+    unary_gelu_fp32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
+                               octx->src0_nrows_per_thread);
+}
+
+
+
 static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
                                        struct htp_tensor *       dst,
                                        const int32_t *           op_params,
@@ -371,7 +455,10 @@ static int execute_op_activations_fp32(struct htp_ops_context * octx) {
             act_op_func = glu_swiglu_oai_fp32;
             op_type     = "swiglu-oai-f32";
             break;
-
+        case HTP_OP_UNARY_GELU:
+            act_op_func = unary_gelu_fp32;
+            op_type     = "gelu-f32";
+            break;
         default:
             FARF(ERROR, "Unsupported activations Op %u\n", octx->op);
             return HTP_STATUS_NO_SUPPORT;

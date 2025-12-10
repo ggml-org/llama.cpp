@@ -2164,8 +2164,14 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, src0, src1, dst)) {
-        return false;
+    if(src1){
+        if (!hex_supported_buffer(sess, src0, src1, dst)) {
+            return false;
+        }
+    }else{
+        if (!hex_supported_buffer(sess, src0, dst)) {
+            return false;
+        }
     }
 
     return true;
@@ -2665,6 +2671,10 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
                 req.op    = HTP_OP_UNARY_SILU;
                 supported = true;
             }
+            else if (ggml_get_unary_op(dst) == GGML_UNARY_OP_GELU){
+                req.op    = HTP_OP_UNARY_GELU;
+                supported = true;
+            }
             break;
 
         case GGML_OP_GLU:
@@ -2680,6 +2690,7 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
         case GGML_OP_SOFT_MAX:
             req.op    = HTP_OP_SOFTMAX;
             supported = true;
+            break;
 
         default:
             break;
@@ -2958,6 +2969,8 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 break;
             case GGML_OP_UNARY:
                 if (ggml_get_unary_op(node) == GGML_UNARY_OP_SILU) {
+                    ggml_hexagon_unary(node, flags);
+                } else if (ggml_get_unary_op(node) == GGML_UNARY_OP_GELU) {
                     ggml_hexagon_unary(node, flags);
                 }
                 break;
@@ -3257,7 +3270,6 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
     bool supp = false;
-
     switch (op->op) {
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
@@ -3295,6 +3307,9 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_UNARY:
             if (ggml_get_unary_op(op) == GGML_UNARY_OP_SILU) {
+                supp = ggml_hexagon_supported_activations(sess, op);
+            }
+            else if (ggml_get_unary_op(op) == GGML_UNARY_OP_GELU){
                 supp = ggml_hexagon_supported_activations(sess, op);
             }
             break;
