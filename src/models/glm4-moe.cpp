@@ -198,11 +198,9 @@ llm_build_glm4_moe::llm_build_glm4_moe(const llama_model & model, const llm_grap
 
 ggml_tensor * llm_build_glm4_moe::build_mtp_tail(const llama_layer & mtp_layer, ggml_tensor * prev_embeddings, int64_t n_embd_head) {
     ggml_tensor * embd_copy = ggml_dup(ctx0, prev_embeddings);
+    cb(embd_copy, "mtp_embd_copy", -1);
 
     const int il = hparams.n_layer - 1;
-    ggml_tensor * sum_node = ggml_sum(ctx0, embd_copy);
-
-    ggml_set_name(sum_node, "mtp_input_sum");
 
     ggml_tensor * inp_pos = build_inp_pos();
     auto * inp_attn = build_attn_inp_kv();
@@ -212,6 +210,7 @@ ggml_tensor * llm_build_glm4_moe::build_mtp_tail(const llama_layer & mtp_layer, 
     ggml_tensor * hidden_state_norm = build_norm(embd_copy, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, il);
     
     ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
+    cb(combined, "mtp_concat", il);
     ggml_tensor* cur = build_lora_mm(mtp_layer.nextn.eh_proj, combined);
 
     // now proceed through last layer (skipped in main model)
@@ -269,6 +268,7 @@ ggml_tensor * llm_build_glm4_moe::build_mtp_tail(const llama_layer & mtp_layer, 
     }
 
     ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+    cb(ffn_inp, "mtp_ffn_inp", il);
 
     cur = build_norm(ffn_inp, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, il);
 
@@ -302,6 +302,7 @@ ggml_tensor * llm_build_glm4_moe::build_mtp_tail(const llama_layer & mtp_layer, 
         cb(cur, "ffn_out", il);
     }
     cur = ggml_add(ctx0, cur, ffn_inp);
+    cb(cur, "mtp_ffn_out_resid", il);
     cur = build_norm(cur, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, il);
     cur = build_lora_mm(mtp_layer.nextn.shared_head_head, cur);
 
