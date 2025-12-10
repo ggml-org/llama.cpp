@@ -20,7 +20,8 @@ on:
       '**/*.swift',
       '**/*.m',
       '**/*.metal',
-      '**/*.comp'
+      '**/*.comp',
+      '**/*.glsl'
     ]
 
   pull_request:
@@ -40,7 +41,8 @@ on:
       '**/*.swift',
       '**/*.m',
       '**/*.metal',
-      '**/*.comp'
+      '**/*.comp',
+      '**/*.glsl'
     ]
 
 concurrency:
