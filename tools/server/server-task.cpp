@@ -208,10 +208,11 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.seed               = json_value(data, "seed",                defaults.sampling.seed);
     params.sampling.n_probs            = json_value(data, "n_probs",             defaults.sampling.n_probs);
     params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);
+    params.sampling.backend_sampling   = json_value(data, "backend_sampling",    defaults.sampling.backend_sampling);
     params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
 
-    const bool request_backend_sampling = json_value(data, "backend_sampling", defaults.sampling.backend_sampling);
-    params.sampling.backend_sampling = defaults.sampling.backend_sampling && request_backend_sampling;
+    printf("params.sampling.backend_sampling = %d\n", params.sampling.backend_sampling);
+    printf("defaults.sampling.backend_sampling = %d\n", defaults.sampling.backend_sampling);
 
     params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
     params.speculative.n_max = json_value(data, "speculative.n_max", defaults.speculative.n_max);

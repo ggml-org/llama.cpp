@@ -149,6 +149,7 @@ export interface ApiLlamaCppServerProps {
 			reasoning_in_content: boolean;
 			thinking_forced_open: boolean;
 			samplers: string[];
+			backend_sampling: boolean;
 			'speculative.n_max': number;
 			'speculative.n_min': number;
 			'speculative.p_min': number;
@@ -311,6 +312,7 @@ export interface ApiSlotData {
 		reasoning_in_content: boolean;
 		thinking_forced_open: boolean;
 		samplers: string[];
+		backend_sampling: boolean;
 		'speculative.n_max': number;
 		'speculative.n_min': number;
 		'speculative.p_min': number;
