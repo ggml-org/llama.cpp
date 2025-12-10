@@ -1,0 +1,357 @@
+{#--------TOOL RENDERING FUNCTIONS---------#}
+
+{#---------------------------------------------------------------
+  Converts JSON Schema (dict) to a TypeScript type definition
+----------------------------------------------------------------#}
+{%- macro json_schema_to_typescript(schema, indent="", indent_factor=2) -%}
+	{%- set ADDITIONAL_JSON_KEYS = ['format', 'maxItems', 'maximum', 'minItems', 'minimum', 'pattern'] -%}
+	{%- set ty = schema.get("type") -%}
+
+	{# ---------------- OBJECT ---------------- #}
+	{%- if ty == "object" -%}
+		{{- "{\n" -}}
+
+		{# Start building property list #}
+		{%- set props = schema.get("properties", {}) -%}
+		{%- set required = schema.get("required", []) -%}
+		{%- set has_additional_props = schema.get("additionalProperties") is defined -%}
+		{%- set additional_props_type = none -%}
+		{%- if has_additional_props -%}
+			{%- if schema.additionalProperties == true -%}
+				{%- set additional_props_type = {'type': 'any'} -%}
+			{%- elif schema.additionalProperties is mapping -%}
+				{%- set additional_props_type = schema.additionalProperties -%}
+			{%- endif -%}
+		{%- endif -%}
+
+		{%- for key, val in props.items() -%}
+			{# ---------- Description Comments ---------- #}
+			{%- if "description" in val -%}
+				{%- for line in val['description'].split('\n') -%}
+					{%- if line.strip() -%}
+						{{- indent + '// ' + line + '\n' -}}
+					{%- endif -%}
+				{%- endfor -%}
+			{%- endif -%}
+
+			{# ---------- Additional JSON Keys ---------- #}
+			{%- for add_key, add_val in val.items() -%}
+				{%- if add_key in ADDITIONAL_JSON_KEYS -%}
+					{%- if add_val is string -%}
+						{{- indent + '// ' + add_key + ': "' + add_val + '"' + '\n'  -}}
+					{%- else -%}
+						{{- indent + '// ' + add_key + ': ' ~ add_val ~ '\n' -}}
+					{%- endif -%}
+				{%- endif -%}
+			{%- endfor -%}
+
+			{# ---------- Property Definition ---------- #}
+            {%- set type_str = json_schema_to_typescript(
+                val, 
+                indent + (' ' * indent_factor), 
+                indent_factor
+            ) -%}
+
+			{{- indent + key + ('' if key in required else '?') + ': ' + type_str + ',' -}}
+
+			{%- if "default" in val or "defalut_value" in val -%}
+				{%- set default = val.get("default", val.get("defalut_value")) -%}
+				{%- if default is string -%}
+					{{- ' // default: "' + default + '"' -}}
+				{%- else -%}
+					{{- ' // default: ' ~ default -}}
+				{%- endif -%}
+			{%- endif -%}
+
+			{{- "\n" -}}
+		{%- endfor -%}
+
+		{# Handle additionalProperties as index signature #}
+		{%- if has_additional_props and additional_props_type is not none -%}
+			{%- set additional_type_str = json_schema_to_typescript(
+				additional_props_type,
+				indent + (' ' * indent_factor),
+				indent_factor
+			) -%}
+			{{- indent + '[key: string]: ' + additional_type_str + '\n' -}}
+		{%- endif -%}
+
+		{{- indent[:-indent_factor] + '}' -}}
+
+	{# ---------------- STRING ---------------- #}
+	{%- elif ty == "string" -%}
+		{%- if schema.get("enum") -%}
+            {%- set ns = namespace(enum = []) -%}
+            {%- for en in schema['enum'] -%}
+                {%- set ns.enum = ns.enum + ['"' ~ en ~ '"'] -%}
+            {%- endfor -%}
+			{{- ns.enum | join(' | ') -}}
+		{%- elif schema.get("format") in ['date-time', 'date'] -%}
+			{{- 'Date' -}}
+		{%- else -%}
+			{{- 'string' -}}
+		{%- endif -%}
+
+	{# ---------------- NUMBER / INTEGER ---------------- #}
+	{%- elif ty in ["number", "integer"] -%}
+		{%- if schema.get("enum") -%}
+			{{- schema.enum | join(' | ') -}}
+		{%- else -%}
+			{{- 'number' -}}
+		{%- endif -%}
+
+	{# ---------------- BOOLEAN ---------------- #}
+	{%- elif ty == "boolean" -%}
+		{{- 'boolean' -}}
+
+	{# ---------------- ARRAY ---------------- #}
+	{%- elif ty == "array" -%}
+		{%- if "items" in schema -%}
+			{{- json_schema_to_typescript(schema['items'], indent, indent_factor) + '[]' -}}
+		{%- else -%}
+			{{- 'Array<any>' -}}
+		{%- endif -%}
+
+	{# ---------------- FALLBACK ---------------- #}
+	{%- else -%}
+		{{- 'any' -}}
+	{%- endif -%}
+{%- endmacro -%}
+
+{#---------------------------------------------------------------
+  Renders a namespace and its tool definitions in TypeScript style
+----------------------------------------------------------------#}
+
+{%- macro render_tool_namespace(namespace_name, tools) -%}
+	{%- set ns = namespace(sections = ['namespace ' ~ namespace_name ~ ' {']) -%}
+
+	{%- for tool in tools -%}
+		{%- if tool.function -%}
+			{%- set tool = tool.function -%}
+		{%- endif -%}
+
+		{%- set ns_tool = namespace(content_lines=[]) -%}
+
+		{# ---------- TOOL DESCRIPTION ---------- #}
+		{%- if tool.get('description') -%}
+			{%- for line in tool['description'].split('\n') -%}
+				{%- if line.strip() -%}
+					{%- set ns_tool.content_lines = ns_tool.content_lines + ['// ' ~ line] -%}
+				{%- endif -%}
+			{%- endfor -%}
+		{%- endif -%}
+
+		{# ---------- TOOL SIGNATURE ---------- #}
+		{%- set main_body = "" -%}
+		{%- set params = tool.get("parameters") -%}
+		{%- if params and params.get("properties") -%}
+			{%- set param_type = json_schema_to_typescript(params, "  ") -%}
+			{%- set main_body = 'type ' ~ tool.name ~ ' = (_: ' ~ param_type ~ ') => ' -%}
+		{%- else -%}
+			{%- set main_body = 'type ' ~ tool.name ~ ' = () => ' -%}
+		{%- endif -%}
+
+		{# ---------- RETURN TYPE ---------- #}
+		{%- set return_params = tool.get("return_parameters") -%}
+		{%- if return_params and return_params.get("properties") -%}
+			{%- set return_type = json_schema_to_typescript(return_params, "  ") -%}
+			{%- set main_body = main_body ~ return_type -%}
+		{%- else -%}
+			{%- set main_body = main_body ~ 'any' -%}
+		{%- endif -%}
+
+		{%- set main_body = main_body ~ ';\n' -%}
+
+		{%- set ns_tool.content_lines = ns_tool.content_lines + [main_body] -%}
+
+		{# ---------- ADD TOOL TO SECTIONS ---------- #}
+		{%- set ns.sections = ns.sections + [ns_tool.content_lines | join('\n')] -%}
+	{%- endfor -%}
+
+	{%- set ns.sections = ns.sections + ['} // namespace ' ~ namespace_name] -%}
+
+	{{- ns.sections | join('\n') -}}
+{%- endmacro -%}
+
+
+{# ----------- MESSAGE RENDERING HELPER FUNCTIONS ------------ #}
+
+{%- macro render_role_message(message, role=None) -%}
+    {%- if not role -%}
+        {%- set role = message["role"] -%}
+    {%- endif -%}
+
+    {%- set message_content = message['content'] or '' -%}
+    {%- if message_content is not string -%}
+        {%- set message_content = message_content | tojson(ensure_ascii=False) -%}
+    {%- endif -%}
+
+    {{- role + add_tokens.role_sep + message_content + add_tokens.message_sep -}}
+
+{%- endmacro -%}
+
+
+{%- macro render_function_call(message) -%}
+    {%- set call = message['content'] -%}
+    {%- if call.function -%}
+        {%- set call = call.function -%}
+    {%- endif -%}
+
+    {%- set arguments = call['arguments'] -%}
+	{%- if arguments is not string -%}
+		{%- set arguments = arguments| tojson(ensure_ascii=False) -%}
+	{%- endif -%}
+
+    {{- render_role_message(
+        {
+            'role': 'function call',
+            'content': '{"name": "' ~ call['name'] ~ '", "arguments": ' ~ arguments ~ '}'
+        }
+    ) -}}
+{%- endmacro -%}
+
+{# ----- SPECIAL TOKENS ----- #}
+
+{%- set add_tokens = namespace(
+    role_sep="<|role_sep|>\n", 
+    message_sep="<|message_sep|>\n\n"
+) -%}
+
+{# ----- DEFAULT DEVSYSTEM ----- #}
+
+{%- set DEVSYSTEM -%}
+<role_description>
+Description of the roles available in the dialog.
+
+`developer system`
+A message added by Sber before the main dialog. It has the highest priority and sets global, non-overridable conditions (for example, conversation rules, the safety policy, the assistant's overall response style, etc.).
+
+`system`
+A system instruction added by developers or by the user, but with a lower priority than `developer system`. It usually describes the assistant's instructions, a specific response style, and other conditions for this particular dialog.
+
+`user`
+A message or request from the user. The assistant follows it if it does not conflict with higher-priority instructions (see <instruction_priority>).
+
+`user memory`
+A sequence of the most up-to-date long-term facts about the user at the time of their request, presented as a JSON list of strings. Facts are listed in chronological order, meaning newer facts are appended to the end of the sequence. When facts are changed or deleted, records of previous facts remain in the sequence. The assistant saves facts using a function and uses them in accordance with the <memory_guidelines> block below.
+
+`added files`
+Metadata about files available for use in the dialog, presented in JSON format. It contains the following keys: id (a unique file identifier), name (file name), type (file type).
+
+`assistant`
+The assistant's reply to the user's request. If the system instruction or the user does not set additional rules for `assistant`, this reply must comply with the instructions in the <assistant_guidelines> block below. The list of functions available to call is contained in `function descriptions`. The name of the required function and its arguments will be generated next by the `function call` role. In its replies, the assistant follows the instructions in accordance with <instruction_priority>.
+
+`function descriptions`
+Function descriptions in TypeScript format. A function is a special tool (or a set of instructions) that the assistant can call to perform specific actions, computations, or obtain data needed to solve the user's task. Each function description contains blocks with the name, description, and arguments. Sometimes the description contains separate blocks with return parameters and usage examples that illustrate the correct call and arguments.
+
+`function call`
+The function that `assistant` calls based on the dialog context, and its arguments. The function is invoked in strict accordance with the instructions in the <function_usage> block.
+
+`function result`
+The result of the last function call.
+</role_description>
+
+<available_modalities>
+The assistant can work with the following modalities: text, available functions.
+</available_modalities>
+
+<instruction_priority>
+If instructions from different roles conflict within the dialog context, observe the following priorities:  
+`developer system` > `system` > `user` > `function descriptions` > `function result` > `user memory`
+</instruction_priority>
+
+<function_usage>
+Basic instructions for working with functions.
+
+Only call those functions that are described in `function descriptions`.
+
+Call available functions when, according to their description, such a call will help provide a more complete and/or accurate answer to the user's request. Fill in function arguments using information from the dialog context. If a function could help answer the request but a required argument is missing from the context, ask the user for the missing data before calling the function. If a necessary function is unavailable or an error occurs, briefly inform the user and, if possible, suggest an alternative.
+</function_usage>
+
+<memory_guidelines>
+Rules for using facts in long-term memory:
+
+If there is no message under the `user memory` role in the dialog, this is equivalent to the absence of long-term facts about the user in memory. In that case, information about the user is limited to the current dialog, and no new facts should be saved.
+</memory_guidelines>
+
+<assistant_guidelines>
+You are a helpful assistant.
+
+# Instructions
+- Strictly follow the instruction priority.
+- Maintain a logical chain of reasoning when answering the user's question.
+- For complex questions (for example, STEM), try to answer in detail unless the system message or dialog context limits the response length.
+- Be helpful, truthful, and avoid unsafe or prohibited content in your responses.
+- Try to reply in the language in which the user asked their question.
+</assistant_guidelines>
+
+A dialog will follow below.
+The dialog may include various roles described in the <role_description> block.
+Each turn begins with the role name and a special token that marks the end of the role's full name, and ends with a special end-of-turn token.
+Your task is to continue the dialog from the last specified role in accordance with the dialog context.
+{%- endset -%}
+
+
+{#- ---------------------- RENDERING STARTS HERE ---------------------- -#}
+
+
+{# ----- RENDER BOS TOKEN ----- #}
+{{- bos_token -}}
+
+
+{# ----- RENDER DEVSYSTEM ----- #}
+{{- render_role_message({"role": "developer system", "content": DEVSYSTEM}) -}}
+
+{# ----- RENDER SYSTEM IF PRESENT ----- #}
+{%- if messages and messages[0]['role'] == 'system' -%}
+    {{- render_role_message(messages[0]) -}}
+    {%- set messages = messages[1:] -%}
+{%- endif -%}
+
+{# ----- RENDER TOOLS ----- #}
+{%- if tools -%}
+    {%- set tools_content = (
+        render_tool_namespace('functions', tools) 
+        + "\n\n"
+    ) -%}
+    {{- render_role_message({'role': 'function descriptions', 'content': tools_content}) -}}
+{%- endif -%}
+
+{# ----- MAIN MESSAGE LOOP ----- #}
+{%- for message in messages -%}
+
+    {# ----- TOOL MESSAGE -------#}
+    {%- if message['role'] == 'tool' -%}
+        {{- render_role_message(message, role='function result') -}}
+
+
+    {# ----- ASSISTANT MESSAGE ----- #}
+    {%- elif message['role'] == 'assistant' -%}
+
+        {# ----- FUNCTION CALL PART CHECKING: SINGLE CALL SETUP ----- #}
+        {%- if message.tool_calls is defined and message.tool_calls -%}
+            {%- set function_call = message.tool_calls[0] -%}
+        {%- else -%}
+            {%- set function_call = None -%}
+        {%- endif -%}
+
+        {# ----- MAIN ASSISTANT RENDERING ----- #}
+
+        {{- render_role_message({'role': 'assistant', 'content': message.content}) -}}
+        {%- if function_call -%}
+            {{- render_function_call({'role': 'function call', 'content': function_call}) -}}
+        {%- endif -%}
+
+        
+    {# ----- OTHER MESSAGES ----- #}
+    {%- else -%}
+        {{- render_role_message(message) -}}
+    {%- endif -%}
+
+    {# ----- ADDING GENERATION PROMPT ----- #}
+
+    {%- if loop.last and add_generation_prompt and message['role'] != 'assistant' -%}
+        {{- 'assistant' + add_tokens.role_sep -}}
+    {%- endif -%}
+
+{%- endfor -%}
