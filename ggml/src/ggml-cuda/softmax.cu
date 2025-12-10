@@ -2,8 +2,12 @@
 #include "ggml.h"
 #include "softmax.cuh"
 
+#ifdef GGML_USE_HIP
+#include <hip/hip_cooperative_groups.h>
+#else
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+#endif // GGML_USE_HIP
 
 #include <cstdint>
 #include <utility>
