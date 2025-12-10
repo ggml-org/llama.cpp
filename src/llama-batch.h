@@ -60,6 +60,8 @@ struct llama_ubatch {
         std::vector<llama_seq_id>   seq_id_unq;
         std::vector<int32_t>        seq_idx;
         std::vector<int8_t>         output;
+
+        std::vector<std::vector<llama_seq_id>> seq_id_data;
     };
 
     // the llama_ubatch pointers above point to this data if set. otherwise - points to non-owning data
