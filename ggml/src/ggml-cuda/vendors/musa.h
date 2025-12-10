@@ -21,6 +21,7 @@
 #define CUDA_R_16F  MUSA_R_16F
 #define CUDA_R_16BF MUSA_R_16BF
 #define CUDA_R_32F  MUSA_R_32F
+#define cublasStrsmBatched mublasStrsmBatched
 #define cublasComputeType_t cudaDataType_t
 #define cublasCreate mublasCreate
 #define cublasDestroy mublasDestroy
