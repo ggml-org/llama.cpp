@@ -120,6 +120,10 @@ struct server_task {
     task_params   params;
     server_tokens tokens;
 
+    // only used by CLI, this delegates the tokenization to the server
+    json                    cli_input = nullptr;
+    std::vector<raw_buffer> cli_files;
+
     server_task_type type;
 
     // used by SERVER_TASK_TYPE_SLOT_SAVE, SERVER_TASK_TYPE_SLOT_RESTORE, SERVER_TASK_TYPE_SLOT_ERASE

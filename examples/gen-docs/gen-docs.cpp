@@ -76,7 +76,7 @@ static void export_md(std::string fname, llama_example ex) {
 }
 
 int main(int, char **) {
-    export_md("autogen-main.md", LLAMA_EXAMPLE_MAIN);
+    export_md("autogen-main.md", LLAMA_EXAMPLE_COMPLETION);
     export_md("autogen-server.md", LLAMA_EXAMPLE_SERVER);
 
     return 0;

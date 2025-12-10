@@ -9,6 +9,13 @@
 
 struct server_context_impl; // private implementation
 
+struct server_context_info {
+    std::string build_info;
+    std::string model_name;
+    bool has_inp_image;
+    bool has_inp_audio;
+};
+
 struct server_context {
     std::unique_ptr<server_context_impl> impl;
 
@@ -33,6 +40,10 @@ struct server_context {
 
     // get a new response reader, used by CLI application
     server_response_reader get_response_reader();
+
+    // get server info
+    // used by CLI application
+    server_context_info get_info() const;
 };
 
 
