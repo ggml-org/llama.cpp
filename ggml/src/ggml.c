@@ -1018,6 +1018,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 
     "FLASH_ATTN_EXT",
     "FLASH_ATTN_BACK",
+    "PAGED_ATTENTION",
+    "PAGED_CPY",
     "SSM_CONV",
     "SSM_SCAN",
     "WIN_PART",
@@ -1045,7 +1047,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1127,6 +1129,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
     "flash_attn_ext(x)",
     "flash_attn_back(x)",
+    "paged_attn(q,k,v,bt,sl)",
+    "paged_cpy(kv_cur,kv_cache,slot_idxs)",
     "ssm_conv(x)",
     "ssm_scan(x)",
     "win_part(x)",
@@ -1154,7 +1158,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5319,6 +5323,68 @@ void ggml_flash_attn_ext_add_sinks(
     GGML_ASSERT(sinks->type == GGML_TYPE_F32);
 
     a->src[4] = sinks;
+}
+
+// ggml_paged_attention
+
+struct ggml_tensor * ggml_paged_attention(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k_cache,
+        struct ggml_tensor  * v_cache,
+        struct ggml_tensor  * block_tables,
+        struct ggml_tensor  * seq_lens,
+        int32_t               block_size,
+        float                 scale) {
+
+    // Validate inputs
+    GGML_ASSERT(q->ne[0] == k_cache->ne[2]);  // head_size must match
+    GGML_ASSERT(k_cache->ne[2] == v_cache->ne[2]);  // k and v head_size must match
+    GGML_ASSERT(block_tables->type == GGML_TYPE_I32);
+    GGML_ASSERT(seq_lens->type == GGML_TYPE_I32);
+
+    // Output shape: [head_size, n_heads, n_tokens]
+    // Same as input query shape
+    int64_t ne[4] = { q->ne[0], q->ne[1], q->ne[2], q->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, q->type, 4, ne);
+
+    // Store parameters: scale and block_size
+    float params[] = { scale, (float)block_size };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_PAGED_ATTENTION;
+    result->src[0] = q;
+    result->src[1] = k_cache;
+    result->src[2] = v_cache;
+    result->src[3] = block_tables;
+    result->src[4] = seq_lens;
+
+    return result;
+}
+
+// ggml_paged_cpy
+
+struct ggml_tensor * ggml_paged_cpy(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * kv_cur,
+        struct ggml_tensor  * kv_cache,
+        struct ggml_tensor  * slot_idxs) {
+
+    // Validate inputs
+    GGML_ASSERT(kv_cur->ne[0] == kv_cache->ne[2]);  // head_size must match
+    GGML_ASSERT(slot_idxs->type == GGML_TYPE_I32);
+    GGML_ASSERT(slot_idxs->ne[0] == kv_cur->ne[2]);  // one slot idx per token
+
+    // Output shape: same as kv_cache (operation modifies it in-place)
+    // But we return kv_cache itself to add this op to the graph
+    struct ggml_tensor * result = ggml_view_tensor(ctx, kv_cache);
+
+    result->op     = GGML_OP_PAGED_CPY;
+    result->src[0] = kv_cur;
+    result->src[1] = kv_cache;
+    result->src[2] = slot_idxs;
+
+    return result;
 }
 
 // ggml_flash_attn_back

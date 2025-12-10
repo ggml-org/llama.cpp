@@ -2199,9 +2199,12 @@ struct server_context_impl {
                     SLT_INF(slot, "n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
-                        SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
+                        SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing KV cache\n", p0);
 
-                        clear_slot(slot);
+                        // For paged KV cache, partial removal may not be supported yet
+                        // In this case, clear the entire sequence to avoid stale KV data
+                        llama_memory_seq_rm(llama_get_memory(ctx), slot.id, -1, -1);
+                        slot.prompt.tokens.clear();
 
                         // there is no common part left
                         slot.n_prompt_tokens_cache = 0;

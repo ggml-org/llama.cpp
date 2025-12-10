@@ -14,7 +14,9 @@ llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_para
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn = build_attn_inp_kv();
+    auto * inp_attn_base = build_attn_inp();
+    auto * inp_attn = dynamic_cast<llm_graph_input_attn_kv*>(inp_attn_base);
+    auto * inp_attn_paged = dynamic_cast<llm_graph_input_attn_paged*>(inp_attn_base);
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
@@ -80,9 +82,15 @@ llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_para
                 cb(Qcur, "Qcur_normed", il);
                 cb(Kcur, "Kcur_normed", il);
             }
-            cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].bo,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            if (inp_attn_paged) {
+                cur = build_attn(inp_attn_paged,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            } else {
+                cur = build_attn(inp_attn,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            }
             cb(cur, "attn_out", il);
         }
         if (il == n_layer - 1 && inp_out_ids) {

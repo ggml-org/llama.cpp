@@ -33,6 +33,8 @@
 #include "ggml-cuda/opt-step-sgd.cuh"
 #include "ggml-cuda/out-prod.cuh"
 #include "ggml-cuda/pad.cuh"
+#include "ggml-cuda/paged-attention-backend.cuh"
+#include "ggml-cuda/paged-cpy.cuh"
 #include "ggml-cuda/pool2d.cuh"
 #include "ggml-cuda/quantize.cuh"
 #include "ggml-cuda/rope.cuh"
@@ -2732,6 +2734,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_OPT_STEP_SGD:
             ggml_cuda_opt_step_sgd(ctx, dst);
             break;
+        case GGML_OP_PAGED_ATTENTION:
+            ggml_cuda_op_paged_attention(ctx, dst);
+            break;
+        case GGML_OP_PAGED_CPY:
+            ggml_cuda_op_paged_cpy(ctx, dst);
+            break;
         case GGML_OP_SOLVE_TRI:
             ggml_cuda_op_solve_tri(ctx, dst);
             break;
@@ -4630,6 +4638,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_CUMSUM:
         case GGML_OP_TRI:
         case GGML_OP_DIAG:
+            return true;
+        case GGML_OP_PAGED_ATTENTION:
+            return ggml_cuda_can_paged_attention(op);
+        case GGML_OP_PAGED_CPY:
             return true;
         case GGML_OP_SOLVE_TRI:
             return op->src[0]->ne[0] <= 64 && op->src[1]->ne[0] <= 32;
