@@ -775,10 +775,6 @@ struct clip_graph {
 
             // if flash attn is used, we need to pad the mask and cast to f16
             if (ctx->flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
-                int n_pad = GGML_PAD(window_mask->ne[1], GGML_KQ_MASK_PAD) - window_mask->ne[1];
-                if (n_pad > 0) {
-                    window_mask = ggml_pad(ctx0, window_mask, 0, n_pad, 0, 0);
-                }
                 window_mask = ggml_cast(ctx0, window_mask, GGML_TYPE_F16);
             }
 
@@ -791,7 +787,7 @@ struct clip_graph {
 
         // loop over layers
         for (int il = 0; il < n_layer; il++) {
-            auto & layer = model.layers[il];
+            const auto & layer = model.layers[il];
             const bool full_attn = use_window_attn ? (il + 1) % n_wa_pattern == 0 : true;
 
             ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
