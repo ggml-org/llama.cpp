@@ -917,7 +917,7 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
 
     // for some reason we need volatile here so that the compiler doesn't try anything funky
     volatile HVX_Vector rsum = Q6_V_vsplat_R(0);
-
+    float r_sum_scalar = 0.0f;
     uint32_t i = 0;
 
     for (i = 0; i < nv0; i++) {
@@ -936,23 +936,32 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
     }
 
     if (nv1) {
-        HVX_VectorPair yp = vy[i];
+        // HVX_VectorPair yp = vy[i];
 
-        HVX_Vector     x  = vx[i];
-        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), Q6_Vh_vsplat_R(0x3C00));  // mul by 1.0
+        // HVX_Vector     x  = vx[i];
+        // HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), Q6_Vh_vsplat_R(0x3C00));  // mul by 1.0
 
-        if (nv1 >= 32) {
-            HVX_Vector hi = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(xp)), Q6_V_hi_W(yp));
-            rsum          = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, hi);
-            nv1 -= 32;
-        }
+        // if (nv1 >= 32) {
+        //     volatile HVX_Vector hi = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(xp)), Q6_V_hi_W(yp));
+        //     rsum          = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, hi);
+        //     nv1 -= 32;
+        // }
 
+        // rsum = hvx_vec_qf32_reduce_sum(rsum);
+
+        // if (nv1) {
+        //     volatile HVX_Vector lo  = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(xp)), Q6_V_lo_W(yp));
+        //     HVX_Vector sum = hvx_vec_qf32_reduce_sum_n(lo, nv1);
+        //     rsum           = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, sum);
+        // }
+
+        //process the remainder using scalar loop
         rsum = hvx_vec_qf32_reduce_sum(rsum);
+        const __fp16 * restrict sx = (const __fp16 * restrict) x;
+        const float * restrict sy  = (const float * restrict) y;
 
-        if (nv1) {
-            HVX_Vector lo  = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(xp)), Q6_V_lo_W(yp));
-            HVX_Vector sum = hvx_vec_qf32_reduce_sum_n(lo, nv1);
-            rsum           = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, sum);
+        for (uint32_t i = nv0 * 64; i < n; i++) {
+            r_sum_scalar += (float) sx[i] * sy[i];
         }
 
         // hvx_vec_dump_fp16("X", x);
@@ -963,7 +972,7 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
         rsum = hvx_vec_qf32_reduce_sum(rsum);
     }
 
-    *s = hvx_vec_get_fp32(Q6_Vsf_equals_Vqf32(rsum));
+    *s = hvx_vec_get_fp32(Q6_Vsf_equals_Vqf32(rsum)) + r_sum_scalar;
 
 #    ifdef HTP_DEBUG
     {
@@ -1500,9 +1509,6 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    const size_t src0_row_size = sizeof(__fp16) * ne00;
-    const size_t src1_row_size = sizeof(float) * ne10;
-
     assert(ne12 % ne02 == 0);
     assert(ne13 % ne03 == 0);
 
@@ -1561,14 +1567,16 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
                 const uint32_t i2 = i12;
                 const uint32_t i3 = i13;
 
-                const uint8_t * restrict src0_row = (const uint8_t *) src0->data + (0 + i02 * nb02 + i03 * nb03);
+                const uint8_t * restrict src0_base = (const uint8_t *) src0->data + (0 + i02 * nb02 + i03 * nb03);
                 const uint8_t * restrict src1_col =
-                    (const uint8_t *) src1->data + (i11 + i12 * ne11 + i13 * ne12 * ne11) * src1_row_size;
+                    (const uint8_t *) src1->data + (i11 * nb11 + i12 * nb12 + i13 * nb13);
                 float * dst_col = (float *) ((uint8_t * restrict) dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
 
                 const uint32_t ir0_block_end = MIN(iir0 + blck_0, ir0_end);
                 for (uint32_t ir0 = iir0; ir0 < ir0_block_end; ir0++) {
-                    vec_dot_f16_f32(ne00, &tmp[ir0 - iir0], src0_row + ir0 * src0_row_size, src1_col);
+                    // Use nb01 stride for non-contiguous src0 support
+                    const uint8_t * restrict src0_row = src0_base + ir0 * nb01;
+                    vec_dot_f16_f32(ne00, &tmp[ir0 - iir0], src0_row, src1_col);
                 }
 
                 hvx_copy_fp32_ua((uint8_t *) &dst_col[iir0], (uint8_t *) tmp, MIN(iir0 + blck_0, ir0_end) - iir0);
