@@ -385,18 +385,12 @@ public:
 
 class llm_graph_input_sampling : public llm_graph_input_i {
 public:
-    llm_graph_input_sampling(int32_t n_vocab, bool sorted,
-            std::unordered_map<llama_seq_id, llama_sampler *> samplers) :
-        n_vocab(n_vocab), sorted_value(sorted), samplers(std::move(samplers)) { }
+    llm_graph_input_sampling(std::unordered_map<llama_seq_id, llama_sampler *> samplers) :
+        samplers(std::move(samplers)) { }
     virtual ~llm_graph_input_sampling() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
     bool can_reuse(const llm_graph_params & params) override;
-
-    int32_t       n_vocab;
-    bool          sorted_value;
-    ggml_tensor * size           = nullptr; // I32 [1]
-    ggml_tensor * sorted         = nullptr; // I32 [1]
 
     std::unordered_map<llama_seq_id, llama_sampler *> samplers;
 };

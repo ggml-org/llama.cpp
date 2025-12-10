@@ -1241,7 +1241,10 @@ static void copy_tensor_async_ints(
 
     for (const auto & [seq_id, tensor] : tensor_map) {
         auto it = seq_to_row.find(seq_id);
-        GGML_ASSERT(it != seq_to_row.end());
+        if (it == seq_to_row.end()) {
+            continue;
+        }
+
         const uint32_t row = it->second;
         GGML_ASSERT(row < sampled_size);
 
@@ -1265,7 +1268,10 @@ static void copy_tensor_async_floats(
 
     for (const auto & [seq_id, tensor] : tensor_map) {
         auto it = seq_to_row.find(seq_id);
-        GGML_ASSERT(it != seq_to_row.end());
+        if (it == seq_to_row.end()) {
+            continue;
+        }
+
         const uint32_t row = it->second;
         GGML_ASSERT(row < counts.size());
 
@@ -1293,7 +1299,10 @@ static void copy_tensor_async_candidates(
 
     for (const auto & [seq_id, tensor] : tensor_map) {
         auto it = seq_to_row.find(seq_id);
-        GGML_ASSERT(it != seq_to_row.end());
+        if (it == seq_to_row.end()) {
+            continue;
+        }
+
         const uint32_t row = it->second;
         GGML_ASSERT(row < counts.size());
 
