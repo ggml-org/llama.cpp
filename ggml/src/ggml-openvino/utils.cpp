@@ -97,7 +97,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
         cache_hit = it != decoder_cache.end();
         if (cache_hit) {
             ggml_decoder = it->second;
-            cache_hit = ggml_decoder->get_model_params().can_reuse_statically(m_params);
+            cache_hit = ggml_decoder->get_model_params().can_reuse_dynamically(m_params);
         }
 
         if (cache_hit) {

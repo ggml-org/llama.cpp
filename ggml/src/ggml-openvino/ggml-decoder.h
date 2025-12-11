@@ -25,15 +25,15 @@ struct ModelParams {
 
     // std::vector<std::string> kv_names;
 
-    bool can_reuse_dynamically(const ModelParams & other) const {
+    bool operator==(const ModelParams & other) const {
         return n_seq == other.n_seq && n_heads == other.n_heads && n_heads_kv == other.n_heads_kv &&
-               head_size == other.head_size && rope_params == other.rope_params && swa_layers == other.swa_layers;
+               head_size == other.head_size && rope_params == other.rope_params && swa_layers == other.swa_layers &&
+               ctx_per_seq == other.ctx_per_seq && ctx_per_seq_swa == other.ctx_per_seq_swa;
     }
 
-    bool can_reuse_statically(const ModelParams & other) const {
-        return can_reuse_dynamically(other) && ctx_per_seq == other.ctx_per_seq &&
-               ctx_per_seq_swa == other.ctx_per_seq_swa;
-    }
+    bool can_reuse_dynamically(const ModelParams & other) const { return *this == other; }
+
+    bool can_reuse_statically(const ModelParams & other) const { return *this == other; }
 };
 
 struct ComputeParams {
