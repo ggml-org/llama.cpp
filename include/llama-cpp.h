@@ -1,6 +1,5 @@
 #pragma once
 
-#include <vector>
 #ifndef __cplusplus
 #error "This header is for C++ only"
 #endif
