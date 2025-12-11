@@ -127,6 +127,12 @@ void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
         return NULL;
     }
 
+    // FIXME JG: a multi_buffer has a non-zero size, according to the above comment get_base is not optional,
+    //     I don't know whether the above comment is correct
+    if (!buffer->iface.get_base) {
+        return NULL;
+    }
+
     void * base = buffer->iface.get_base(buffer);
 
     GGML_ASSERT(base != NULL && "backend buffer base cannot be NULL");
