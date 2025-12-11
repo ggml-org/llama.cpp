@@ -1503,7 +1503,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--power-law-target"}, "N",
-        string_format("Power Law sampler target probability (default: %.2f, 0.0 to 1.0)\n"
+        string_format("Power Law sampler target probability (default: %.2f; allowed range 0.0 to 1.0)\n"
                       "[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927)",
                       (double)params.sampling.power_law_target),
         [](common_params & params, const std::string & value) {
@@ -1512,7 +1512,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--power-law-target-range"}, "N",
-        string_format("Power Law sampler adaptive target range (target±range) (default: %.2f, 0.0 = fixed target)", (double)params.sampling.power_law_target_range),
+        string_format("Power Law sampler adaptive target range (target±range) (default: %.2f; 0.0 = fixed target)", (double)params.sampling.power_law_target_range),
         [](common_params & params, const std::string & value) {
             params.sampling.power_law_target_range = std::stof(value);
         }
