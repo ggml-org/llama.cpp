@@ -120,6 +120,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_16B_A1B:       return "16B.A1B";
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
+        case LLM_TYPE_80B_A3B:       return "80B.A3B";
         case LLM_TYPE_100B_A6B:      return "100B.A6B";
         case LLM_TYPE_106B_A12B:     return "106B.A12B";
         case LLM_TYPE_230B_A10B:     return "230B.A10B";
@@ -1264,18 +1265,25 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_GEMMA3:
             {
-                hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                hparams.set_swa_pattern(6);
+                const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                if (found_swa && hparams.n_swa > 0) {
+                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                    hparams.set_swa_pattern(6);
 
-                hparams.rope_freq_base_train_swa  = 10000.0f;
-                hparams.rope_freq_scale_train_swa = 1.0f;
+                    hparams.rope_freq_base_train_swa  = 10000.0f;
+                    hparams.rope_freq_scale_train_swa = 1.0f;
+                } else {
+                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+                }
 
-                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
+                hparams.f_final_logit_softcapping = 0.0f;
+                ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
                 switch (hparams.n_layer) {
                     case 18: type = LLM_TYPE_270M; break;
                     case 26: type = LLM_TYPE_1B; break;
+                    case 32: type = LLM_TYPE_8B; break; // Rnj-1
                     case 34: type = LLM_TYPE_4B; break;
                     case 48: type = LLM_TYPE_12B; break;
                     case 62: type = LLM_TYPE_27B; break;
@@ -1599,8 +1607,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
 
-                switch (hparams.n_layer) {
-                    case 28: type = LLM_TYPE_20B; break;
+                switch (hparams.n_ff_exp) {
+                    case 1408: type = LLM_TYPE_16B; break;
+                    case 1792: type = LLM_TYPE_20B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -2249,7 +2258,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
 
                 switch (hparams.n_layer) {
-                    case 80: type = LLM_TYPE_80B_A3B; break;
+                    case 48: type = LLM_TYPE_80B_A3B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -7304,7 +7313,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_GEMMA3:
             {
-                llm = std::make_unique<llm_build_gemma3_iswa>(*this, params);
+                if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+                    llm = std::make_unique<llm_build_gemma3<true>>(*this, params);
+                } else {
+                    llm = std::make_unique<llm_build_gemma3<false>>(*this, params);
+                }
             } break;
         case LLM_ARCH_GEMMA3N:
             {

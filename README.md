@@ -61,7 +61,7 @@ range of hardware - locally and in the cloud.
 - Plain C/C++ implementation without any dependencies
 - Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
 - AVX, AVX2, AVX512 and AMX support for x86 architectures
-- RVV, ZVFH, ZFH and ZICBOP support for RISC-V architectures
+- RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
 - 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
 - Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
 - Vulkan and SYCL backend support
@@ -343,19 +343,6 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
     # use a custom template
     llama-cli -m model.gguf -cnv --in-prefix 'User: ' --reverse-prompt 'User:'
-    ```
-
-    </details>
-
-- <details>
-    <summary>Run simple text completion</summary>
-
-    To disable conversation mode explicitly, use `-no-cnv`
-
-    ```bash
-    llama-cli -m model.gguf -p "I believe the meaning of life is" -n 128 -no-cnv
-
-    # I believe the meaning of life is to find your own truth and to live in accordance with it. For me, this means being true to myself and following my passions, even if they don't align with societal expectations. I think that's what I love about yoga – it's not just a physical practice, but a spiritual one too. It's about connecting with yourself, listening to your inner voice, and honoring your own unique journey.
     ```
 
     </details>

@@ -55,6 +55,8 @@ struct task_params {
     int32_t n_indent  =  0; // minimum line indentation for the generated text in number of whitespace characters
     int32_t n_cmpl    =  1; // number of completions to generate from this prompt
 
+    int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
+
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
 
@@ -62,24 +64,44 @@ struct task_params {
 
     std::vector<std::string> antiprompt;
     std::vector<std::string> response_fields;
-    bool timings_per_token = false;
+
+    bool timings_per_token   = false;
     bool post_sampling_probs = false;
 
     struct common_params_sampling sampling;
     struct common_params_speculative speculative;
 
     // response formatting
-    bool                         verbose                   = false;
-    task_response_type           res_type                  = TASK_RESPONSE_TYPE_NONE;
-    std::string                  oaicompat_model;
-    std::string                  oaicompat_cmpl_id;
-    common_chat_syntax           oaicompat_chat_syntax;
+    bool               verbose  = false;
+    task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
+    std::string        oaicompat_model;
+    std::string        oaicompat_cmpl_id;
+    common_chat_syntax oaicompat_chat_syntax;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
+};
+
+// struct for tracking the state of a task (e.g., for streaming)
+struct task_result_state {
+    // tracking diffs for partial tool calls
+    std::vector<common_chat_msg_diff> diffs;
+    common_chat_syntax oaicompat_chat_syntax;
+    common_chat_msg chat_msg;
+    std::string generated_text; // append new chunks of generated text here
+    std::vector<std::string> generated_tool_call_ids;
+
+    task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
+        : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
+
+    // parse partial tool calls and update the internal state
+    common_chat_msg update_chat_msg(
+        const std::string & text_added,
+        bool is_partial,
+        std::vector<common_chat_msg_diff> & diffs);
 };
 
 struct server_task {
@@ -97,6 +119,10 @@ struct server_task {
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
     server_tokens tokens;
+
+    // only used by CLI, this delegates the tokenization to the server
+    json                    cli_input = nullptr;
+    std::vector<raw_buffer> cli_files;
 
     server_task_type type;
 
@@ -146,6 +172,12 @@ struct server_task {
         copy.tokens    = tokens.clone();
         return copy;
     }
+
+    // the task will be moved into queue, then onto slots
+    // however, the state must be kept by caller (e.g., HTTP thread)
+    task_result_state create_state() const {
+        return task_result_state(params.oaicompat_chat_syntax);
+    }
 };
 
 struct result_timings {
@@ -175,25 +207,6 @@ struct result_prompt_progress {
     int64_t time_ms = 0;
 
     json to_json() const;
-};
-
-// struct for tracking the state of a task (e.g., for streaming)
-struct task_result_state {
-    // tracking diffs for partial tool calls
-    std::vector<common_chat_msg_diff> diffs;
-    common_chat_syntax oaicompat_chat_syntax;
-    common_chat_msg chat_msg;
-    std::string generated_text; // append new chunks of generated text here
-    std::vector<std::string> generated_tool_call_ids;
-
-    task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
-        : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
-
-    // parse partial tool calls and update the internal state
-    common_chat_msg update_chat_msg(
-        const std::string & text_added,
-        bool is_partial,
-        std::vector<common_chat_msg_diff> & diffs);
 };
 
 struct server_task_result {

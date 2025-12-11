@@ -3,8 +3,10 @@
 #include "common.h"
 
 #include <set>
+#include <map>
 #include <string>
 #include <vector>
+#include <cstring>
 
 //
 // CLI argument parsing
@@ -23,6 +25,8 @@ struct common_arg {
     void (*handler_string) (common_params & params, const std::string &) = nullptr;
     void (*handler_str_str)(common_params & params, const std::string &, const std::string &) = nullptr;
     void (*handler_int)    (common_params & params, int) = nullptr;
+
+    common_arg() = default;
 
     common_arg(
         const std::initializer_list<const char *> & args,
@@ -61,8 +65,28 @@ struct common_arg {
     bool is_exclude(enum llama_example ex);
     bool get_value_from_env(std::string & output) const;
     bool has_value_from_env() const;
-    std::string to_string();
+    std::string to_string() const;
+
+    // for using as key in std::map
+    bool operator<(const common_arg& other) const {
+        if (args.empty() || other.args.empty()) {
+            return false;
+        }
+        return strcmp(args[0], other.args[0]) < 0;
+    }
+    bool operator==(const common_arg& other) const {
+        if (args.empty() || other.args.empty()) {
+            return false;
+        }
+        return strcmp(args[0], other.args[0]) == 0;
+    }
 };
+
+namespace common_arg_utils {
+    bool is_truthy(const std::string & value);
+    bool is_falsey(const std::string & value);
+    bool is_autoy(const std::string & value);
+}
 
 struct common_params_context {
     enum llama_example ex = LLAMA_EXAMPLE_COMMON;
@@ -76,7 +100,11 @@ struct common_params_context {
 // if one argument has invalid value, it will automatically display usage of the specific argument (and not the full usage message)
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 
-// function to be used by test-arg-parser
+// parse input arguments from CLI into a map
+// TODO: support repeated args in the future
+bool common_params_parse(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map);
+
+// initialize argument parser context - used by test-arg-parser and preset
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 
 struct common_remote_params {
