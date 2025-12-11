@@ -3849,9 +3849,10 @@ class Eagle2VLVisionModel(MmprojModel):
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.EAGLE2VL)
 
         # Vision attention layernorm eps: use config if available, else 1e-6
-        eps = 1e-6
-        if isinstance(self.global_config, dict):
-            eps = self.global_config.get("rms_norm_eps", eps)
+        vc = self.get_vision_config() or {}
+        eps = 1e-6        
+        if isinstance(vc, dict) and "layer_norm_eps" in vc:
+            eps = vc["layer_norm_eps"]
         self.gguf_writer.add_vision_attention_layernorm_eps(eps)
 
         # 2x2 spatial merge
