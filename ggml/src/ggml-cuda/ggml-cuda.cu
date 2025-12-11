@@ -80,6 +80,12 @@
 #include <string>
 #include <vector>
 
+
+
+
+void ggml_cuda_op_hardswish(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 [[noreturn]]
@@ -2503,14 +2509,14 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_RELU:
                     ggml_cuda_op_relu(ctx, dst);
                     break;
+                case GGML_UNARY_OP_HARDSWISH:
+                    ggml_cuda_op_hardswish(ctx, dst);
+                    break;    
                 case GGML_UNARY_OP_SIGMOID:
                     ggml_cuda_op_sigmoid(ctx, dst);
                     break;
                 case GGML_UNARY_OP_HARDSIGMOID:
                     ggml_cuda_op_hardsigmoid(ctx, dst);
-                    break;
-                case GGML_UNARY_OP_HARDSWISH:
-                    ggml_cuda_op_hardswish(ctx, dst);
                     break;
                 case GGML_UNARY_OP_EXP:
                     ggml_cuda_op_exp(ctx, dst);
@@ -4296,6 +4302,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
     switch (op->op) {
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
+                case GGML_UNARY_OP_HARDSWISH:
+                    return true;
                 case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_SGN:
                 case GGML_UNARY_OP_NEG:
@@ -4305,7 +4313,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_SIGMOID:
                 case GGML_UNARY_OP_HARDSIGMOID:
-                case GGML_UNARY_OP_HARDSWISH:
                 case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
@@ -4554,7 +4561,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_COS:
         case GGML_OP_CLAMP:
         case GGML_OP_LOG:
-            return true;
         case GGML_OP_SSM_SCAN: {
             if (op->src[3]->ne[0] == 1) {
                 // Mamba2

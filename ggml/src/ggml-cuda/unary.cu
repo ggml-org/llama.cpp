@@ -21,6 +21,7 @@ static __device__ __forceinline__ float op_gelu(float x) {
     return ggml_cuda_op_gelu_single(x);
 }
 
+
 static __device__ __forceinline__ float op_gelu_erf(float x) {
     const float SQRT_2_INV = 0.70710678118654752440084436210484f;
 
@@ -194,9 +195,33 @@ void ggml_cuda_op_hardsigmoid(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     ggml_cuda_op_unary<op_hardsigmoid>(ctx, dst);
 }
 
-void ggml_cuda_op_hardswish(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary<op_hardswish>(ctx, dst);
+
+// --- Custom HardSwish Implementation by Chandan ---
+static __global__ void k_hardswish(const float * src, float * dst, const int k) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < k) {
+        float x = src[i];
+        // HardSwish: x * min(max(x + 3, 0), 6) / 6
+        dst[i] = x * fminf(fmaxf(x + 3.0f, 0.0f), 6.0f) / 6.0f;
+    }
 }
+
+void ggml_cuda_op_hardswish(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src = dst->src[0];
+    const float * src_d = (const float *)src->data;
+    float * dst_d = (float *)dst->data;
+
+    const int64_t num_elements = ggml_nelements(src);
+    const int block_size = 256;
+    const int grid_size = (num_elements + block_size - 1) / block_size;
+
+    cudaStream_t stream = ctx.stream();
+    k_hardswish<<<grid_size, block_size, 0, stream>>>(src_d, dst_d, num_elements);
+}
+// --------------------------------------------------
+
+
+
 
 void ggml_cuda_op_exp(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_exp>(ctx, dst);
