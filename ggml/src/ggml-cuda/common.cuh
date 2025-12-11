@@ -249,7 +249,7 @@ static const char * cu_get_error_str(CUresult err) {
 
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL
 #    define BLACKWELL_MMA_AVAILABLE
-#endif
+#endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_BLACKWELL
 
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 #define CP_ASYNC_AVAILABLE
@@ -716,8 +716,8 @@ __device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e)
         return 0;
     }
 
-    const float sign = x < 0.0f ? -1.0f : 1.0f;
-    float       ax   = fabsf(x) * e;
+    const uint8_t sign_bit = x < 0.0f ? 0x8 : 0;
+    float         ax       = fabsf(x) * e;
 
     // Positive LUT
     static constexpr float pos_lut[8] = { 0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f };
@@ -732,19 +732,14 @@ __device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e)
 
 #pragma unroll
     for (int i = 1; i < 8; ++i) {
-        float err = fabsf(ax - pos_lut[i]);
+        const float err = fabsf(ax - pos_lut[i]);
         if (err < best_err) {
             best_err = err;
             best_i   = i;
         }
     }
 
-    // Positive codes: 0..7, negative: 8..15 (sign bit = MSB)
-    if (sign > 0.0f) {
-        return static_cast<uint8_t>(best_i);        // 0..7
-    } else {
-        return static_cast<uint8_t>(best_i | 0x8);  // 8..15
-    }
+    return static_cast<uint8_t>(best_i | sign_bit);
 }
 
 // See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.

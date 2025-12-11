@@ -218,8 +218,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_Q5_1:    return MMQ_MMA_TILE_X_K_Q8_1;
         case GGML_TYPE_Q8_0:    return MMQ_MMA_TILE_X_K_Q8_0;
 #ifdef BLACKWELL_MMA_AVAILABLE
-        case GGML_TYPE_MXFP4:
-            return MMQ_MMA_TILE_X_K_FP4;
+        case GGML_TYPE_MXFP4:   return MMQ_MMA_TILE_X_K_FP4;
 #else
         case GGML_TYPE_MXFP4:   return MMQ_MMA_TILE_X_K_Q8_1;
 #endif
@@ -784,7 +783,6 @@ static __device__ __forceinline__ void load_tiles_mxfp4_fp4(const char * __restr
     constexpr int nwarps = mmq_get_nwarps_device();
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
-#if defined(BLACKWELL_MMA_AVAILABLE)
     int *      x_qs = (int *) x_tile;
     uint32_t * x_sc = (uint32_t *) (x_qs + MMQ_TILE_NE_K);
 
@@ -833,7 +831,6 @@ static __device__ __forceinline__ void load_tiles_mxfp4_fp4(const char * __restr
             x_sc[i * MMQ_MMA_TILE_X_K_FP4 + kbx / 2] = e;
         }
     }
-#endif
 }
 
 template <int mmq_x, int mmq_y>
@@ -1027,7 +1024,7 @@ static __device__ __forceinline__ void vec_dot_mxfp4_mxfp4_mma(const int * __res
     const int *      y_qs = (const int *) y + 2;
     const uint32_t * y_sc = (const uint32_t *) y;                       // E8M0 scales for Y
 
-    tile_A   A[ntx][MMQ_TILE_NE_K / (2 * QI8_0)];       // 2 x 4 A tiles. Per warp there will be 1 scale pe rtile
+    tile_A   A[ntx][MMQ_TILE_NE_K / (2 * QI8_0)];       // 2 x 4 A tiles. Per warp there will be 1 scale per tile
     uint32_t scaleA[ntx][MMQ_TILE_NE_K / (2 * QI8_0)];  // per tile you would only have 1 scale per thread
 
     // Block scale
@@ -3260,7 +3257,7 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_MXFP4> {
 #else
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_mxfp4<mmq_y, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, MMQ_Q8_1_DS_LAYOUT_D4>;
-#endif
+#endif // BLACKWELL_MMA_AVAILABLE
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
@@ -3393,15 +3390,21 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     constexpr mmq_write_back_t write_back = mmq_write_back_dp4a<mmq_x, mmq_y, need_check>;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 
+#if defined(BLACKWELL_MMA_AVAILABLE)
+    constexpr bool use_native_mxfp4 = (type == GGML_TYPE_MXFP4);
+#else
+    constexpr bool use_native_mxfp4 = false;
+#endif // defined(BLACKWELL_MMA_AVAILBLE)
+
+
     constexpr int blocks_per_iter = MMQ_ITER_K / qk;
 
     float sum[mmq_x*mmq_y / (nwarps*warp_size)] = {0.0f};
 
-    constexpr size_t sz       = type == GGML_TYPE_MXFP4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
-    constexpr size_t y_stride = type == GGML_TYPE_MXFP4 ? MMQ_TILE_Y_FP4_K : MMQ_TILE_Y_K;
+    constexpr size_t sz       = use_native_mxfp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
+    constexpr size_t y_stride = use_native_mxfp4 ? MMQ_TILE_Y_FP4_K : MMQ_TILE_Y_K;
 
-    constexpr int y_block_stride =
-        type == GGML_TYPE_MXFP4 ? (sz / sizeof(int))  // 18 ints per block_fp4_mmq (covers 128 values = 4 qk-blocks)
+    constexpr int y_block_stride = use_native_mxfp4 ? (sz / sizeof(int))  // 18 ints per block_fp4_mmq (covers 128 values = 4 qk-blocks)
                                   :
                                   (qk * sz / (4 * QK8_1 * sizeof(int)));  // original formula for Q8_1
 
@@ -3409,7 +3412,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
         {
             const int * by0 =
-                type == GGML_TYPE_MXFP4 ?
+                use_native_mxfp4 ?
                     y + ncols_y * ((kb0 / 4) * y_block_stride)  // kb0/4 for MXFP4 since 4 qk-blocks per block_fp4_mmq
                     :
                     y + ncols_y * (kb0 * y_block_stride);       // original for Q8_1
@@ -3429,7 +3432,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
         {
             const int * by0 =
-                type == GGML_TYPE_MXFP4 ?
+                use_native_mxfp4 ?
                     y + ncols_y * ((kb0 / 4) * y_block_stride + y_block_stride)  // advance by one block_fp4_mmq
                     :
                     y + ncols_y * (kb0 * y_block_stride +
