@@ -469,6 +469,7 @@ extern "C" {
 
     // fits mparams and cparams to free device memory (assumes system memory is unlimited)
     // returns true if the parameters could be successfully modified to fit device memory
+    // this function is NOT thread safe because it modifies the global ggml logger state
     LLAMA_API bool llama_params_fit(
                                    const char   * path_model,
                     struct llama_model_params   * mparams,
