@@ -2390,8 +2390,8 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
 }
 
 static void llama_sampler_power_law_reset(struct llama_sampler * smpl) {
-    auto * ctx    = (llama_sampler_power_law *) smpl->ctx;
-    ctx->history  = ring_buffer<float>(ctx->window_size);
+    auto * ctx   = (llama_sampler_power_law *) smpl->ctx;
+    ctx->history = ring_buffer<float>(ctx->window_size);
 }
 
 static struct llama_sampler * llama_sampler_power_law_clone(const struct llama_sampler * smpl) {
