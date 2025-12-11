@@ -4630,9 +4630,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_CUMSUM:
         case GGML_OP_TRI:
         case GGML_OP_DIAG:
-            return true;
         case GGML_OP_SOLVE_TRI:
-            return op->src[0]->ne[0] <= 64 && op->src[1]->ne[0] <= 32;
+            return true;
+
         default:
             return false;
     }
