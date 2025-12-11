@@ -2334,8 +2334,9 @@ static const char * llama_sampler_power_law_name(const struct llama_sampler * /*
 static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_power_law *) smpl->ctx;
 
-    const float min_target = ctx->target - ctx->target_range;
-    const float max_target = ctx->target + ctx->target_range;
+    // clamp the target range to [0.0, 1.0]
+    const float min_target = std::max(ctx->target - ctx->target_range, 0.0f);
+    const float max_target = std::min(ctx->target + ctx->target_range, 1.0f);
 
     // compute probabilities to get the "original" values
     llama_sampler_softmax_impl(cur_p, false);
