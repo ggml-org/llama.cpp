@@ -1502,6 +1502,29 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
+        {"--power-law-target"}, "N",
+        string_format("Power Law sampler target probability (default: %.2f, 0.0 to 1.0)\n"
+                      "[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927)",
+                      (double)params.sampling.power_law_target),
+        [](common_params & params, const std::string & value) {
+            params.sampling.power_law_target = std::stof(value);
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"--power-law-target-range"}, "N",
+        string_format("Power Law sampler adaptive range +/- from target (default: %.2f, 0.0 = no adaptation)", (double)params.sampling.power_law_target_range),
+        [](common_params & params, const std::string & value) {
+            params.sampling.power_law_target_range = std::stof(value);
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"--power-law-window-size"}, "N",
+        string_format("Power Law sampler rolling window size, in tokens (default: %d)", params.sampling.power_law_window_size),
+        [](common_params & params, int value) {
+            params.sampling.power_law_window_size = value;
+        }
+    ).set_sparam());
+    add_opt(common_arg(
         {"--dynatemp-range"}, "N",
         string_format("dynamic temperature range (default: %.1f, 0.0 = disabled)", (double)params.sampling.dynatemp_range),
         [](common_params & params, const std::string & value) {

@@ -1294,8 +1294,8 @@ extern "C" {
     /// ref: https://github.com/ggml-org/llama.cpp/pull/17927
     LLAMA_API struct llama_sampler * llama_sampler_init_power_law(
                                float    target,       // target probability (0.0 to 1.0)
-                               float    target_range, // adaptive target range (±range from target)
-                             int32_t    queue_size,   // rolling history window size for adaptation
+                               float    target_range, // adaptive target range (+/- range from target)
+                             int32_t    window_size,  // rolling history window size for target adaptation
                             uint32_t    seed);        // RNG seed
 
     LLAMA_API struct llama_sampler * llama_sampler_init_logit_bias(

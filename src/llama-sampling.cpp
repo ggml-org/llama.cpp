@@ -2320,7 +2320,7 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
 struct llama_sampler_power_law {
     const float    target;
     const float    target_range;
-    const int32_t  queue_size;
+    const int32_t  window_size;
     const uint32_t seed;
 
     std::mt19937       rng;
@@ -2359,7 +2359,7 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
             sum_excluding_oldest += ctx->history.rat(i);
         }
 
-        float next_value = (ctx->target * ctx->queue_size) - sum_excluding_oldest;
+        float next_value = (ctx->target * ctx->window_size) - sum_excluding_oldest;
         computed_target = std::max(min_target, std::min(next_value, max_target));
     }
 
@@ -2397,12 +2397,12 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
 
 static void llama_sampler_power_law_reset(struct llama_sampler * smpl) {
     auto * ctx    = (llama_sampler_power_law *) smpl->ctx;
-    ctx->history  = ring_buffer<float>(ctx->queue_size);
+    ctx->history  = ring_buffer<float>(ctx->window_size);
 }
 
 static struct llama_sampler * llama_sampler_power_law_clone(const struct llama_sampler * smpl) {
     const auto * ctx  = (const llama_sampler_power_law *) smpl->ctx;
-    auto * result     = llama_sampler_init_power_law(ctx->target, ctx->target_range, ctx->queue_size, ctx->seed);
+    auto * result     = llama_sampler_init_power_law(ctx->target, ctx->target_range, ctx->window_size, ctx->seed);
     auto * result_ctx = (llama_sampler_power_law *) result->ctx;
 
     result_ctx->rng     = ctx->rng;
@@ -2427,7 +2427,7 @@ static struct llama_sampler_i llama_sampler_power_law_i = {
 struct llama_sampler * llama_sampler_init_power_law(
     float    target,
     float    target_range,
-    int32_t  queue_size,
+    int32_t  window_size,
     uint32_t seed
 ) {
     auto seed_cur = get_rng_seed(seed);
@@ -2436,10 +2436,10 @@ struct llama_sampler * llama_sampler_init_power_law(
         /* .ctx   = */ new llama_sampler_power_law {
             /* .target       = */ target,
             /* .target_range = */ target_range,
-            /* .queue_size   = */ queue_size,
+            /* .window_size  = */ window_size,
             /* .seed         = */ seed_cur,
             /* .rng          = */ std::mt19937(seed_cur),
-            /* .history      = */ ring_buffer<float>(queue_size),
+            /* .history      = */ ring_buffer<float>(window_size),
         }
     );
 }

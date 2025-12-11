@@ -186,7 +186,7 @@ struct common_params_sampling {
     int32_t dry_penalty_last_n     = -1;     // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
     float   power_law_target       = 0.5;    // target probability (0.0 to 1.0)
     float   power_law_target_range = 0.5;    // adapt the target within this range (target +/- range)
-    int32_t power_law_queue_size   = 10;     // rolling history window size for adaptation
+    int32_t power_law_window_size  = 10;     // rolling history window size for target adaptation
     int32_t mirostat               = 0;      // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
     float   top_n_sigma            = -1.00f; // -1.0 = disabled
     float   mirostat_tau           = 5.00f;  // target entropy
