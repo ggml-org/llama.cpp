@@ -291,32 +291,36 @@ static void llama_params_fit_impl(
 
     // utility function that returns a static C string matching the tensors for a specific layer index and layer fraction:
     auto get_overflow_pattern = [&](const size_t il, const layer_fraction_t lf) -> const char * {
+        constexpr size_t n_strings = 1000;
+        if (il >= n_strings) {
+            throw std::runtime_error("at most " + std::to_string(n_strings) + " model layers are supported");
+        }
         switch (lf) {
             case LAYER_FRACTION_ATTN: {
-                static std::vector<std::string> patterns;
-                while (patterns.size() <= il) {
-                    patterns.push_back("blk\\." + std::to_string(patterns.size()) + "\\.ffn_(up|gate|down).*");
+                static std::array<std::string, n_strings> patterns;
+                if (patterns[il].empty()) {
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(up|gate|down).*";
                 }
                 return patterns[il].c_str();
             }
             case LAYER_FRACTION_UP: {
-                static std::vector<std::string> patterns;
-                while (patterns.size() <= il) {
-                    patterns.push_back("blk\\." + std::to_string(patterns.size()) + "\\.ffn_(gate|down).*");
+                static std::array<std::string, n_strings> patterns;
+                if (patterns[il].empty()) {
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(gate|down).*";
                 }
                 return patterns[il].c_str();
             }
             case LAYER_FRACTION_GATE: {
-                static std::vector<std::string> patterns;
-                while (patterns.size() <= il) {
-                    patterns.push_back("blk\\." + std::to_string(patterns.size()) + "\\.ffn_down.*");
+                static std::array<std::string, n_strings> patterns;
+                if (patterns[il].empty()) {
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_down.*";
                 }
                 return patterns[il].c_str();
             }
             case LAYER_FRACTION_MOE: {
-                static std::vector<std::string> patterns;
-                while (patterns.size() <= il) {
-                    patterns.push_back("blk\\." + std::to_string(patterns.size()) + "\\.ffn_(up|down|gate)_(ch|)exps");
+                static std::array<std::string, n_strings> patterns;
+                if (patterns[il].empty()) {
+                    patterns[il] = "blk\\." + std::to_string(il) + "\\.ffn_(up|down|gate)_(ch|)exps";
                 }
                 return patterns[il].c_str();
             }
