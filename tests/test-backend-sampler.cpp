@@ -7,6 +7,7 @@
 #undef NDEBUG
 #endif
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <array>
@@ -31,7 +32,15 @@ struct test_model_context {
 
         llama_backend_init();
 
-        model = llama_model_load_from_file(model_path, llama_model_default_params());
+        // force CPU backend since it always supports all ggml operations
+        ggml_backend_dev_t devs[2];
+        devs[0] = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        devs[1] = nullptr;
+
+        auto mparams = llama_model_default_params();
+        mparams.devices = devs;
+
+        model = llama_model_load_from_file(model_path, mparams);
         if (model == nullptr) {
             fprintf(stderr, "Warning: failed to load model '%s', skipping test\n", model_path);
             cleanup();
@@ -63,9 +72,7 @@ struct test_model_context {
         if (n_seq_max < 0) {
             int32_t max_seq_id = 0;
             for (const auto & config : configs) {
-                if (config.seq_id > max_seq_id) {
-                    max_seq_id = config.seq_id;
-                }
+                max_seq_id = std::max(config.seq_id, max_seq_id);
             }
             cparams.n_seq_max = max_seq_id + 1;
         } else {
@@ -858,6 +865,8 @@ static void test_backend_logit_bias_sampling(const char * model_path) {
     const std::string backend_token_str = test_ctx.token_to_piece(backend_token, false);
     printf("logit bias sampled token = %d, string='%s'\n", backend_token, backend_token_str.c_str());
     GGML_ASSERT(backend_token == bias_token);
+
+    printf("backend logit bias sampling test PASSED\n");
 
     llama_sampler_free(backend_sampler_chain);
 }

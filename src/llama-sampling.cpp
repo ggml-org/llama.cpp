@@ -616,8 +616,9 @@ private:
 
 // check if all ggml ops used by the sampler are supported by the backend
 static bool llama_sampler_backend_support(
-        llama_sampler      * smpl,
-        ggml_backend_dev_t   device) {
+        llama_sampler              * smpl,
+        ggml_backend_buffer_type_t   buft) {
+    auto * device = ggml_backend_buft_get_device(buft);
     if (!device) {
         // CPU backend always supported
         return true;
@@ -669,6 +670,9 @@ static bool llama_sampler_backend_support(
         struct ggml_tensor * op = ggml_graph_node(gf, i);
 
         if (!ggml_backend_dev_supports_op(device, op)) {
+            LLAMA_LOG_WARN("%s: device '%s' does not have support for op %s needed for sampler '%s'\n",
+                    __func__, ggml_backend_dev_name(device), ggml_op_name(op->op), smpl->iface->name(smpl));
+
             return false;
         }
     }
@@ -958,7 +962,7 @@ static bool llama_sampler_greedy_backend_init(
         ggml_backend_buffer_type_t   buft) {
     auto * sctx = (llama_sampler_greedy *) smpl->ctx;
 
-    const bool res = llama_sampler_backend_support(smpl, ggml_backend_buft_get_device(buft));
+    const bool res = llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
 
@@ -1142,7 +1146,7 @@ static bool llama_sampler_dist_backend_init(
         sctx->inp_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(sctx->inp_ctx.get(), buft));
     }
 
-    const bool res = llama_sampler_backend_support(smpl, ggml_backend_buft_get_device(buft));
+    const bool res = llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
 
@@ -1274,7 +1278,7 @@ static bool llama_sampler_top_k_backend_init(
         ggml_backend_buffer_type_t   buft) {
     auto * sctx = (llama_sampler_top_k *) smpl->ctx;
 
-    const bool res = llama_sampler_backend_support(smpl, ggml_backend_buft_get_device(buft));
+    const bool res = llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
 
@@ -1419,7 +1423,7 @@ static bool llama_sampler_top_p_backend_init(
         ggml_backend_buffer_type_t   buft) {
     auto * sctx = (llama_sampler_top_p *) smpl->ctx;
 
-    const bool res = llama_sampler_backend_support(smpl, ggml_backend_buft_get_device(buft));
+    const bool res = llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
 
@@ -1613,7 +1617,7 @@ static bool llama_sampler_min_p_backend_init(
         ggml_backend_buffer_type_t   buft) {
     auto * sctx = (llama_sampler_min_p *) smpl->ctx;
 
-    const bool res = llama_sampler_backend_support(smpl, ggml_backend_buft_get_device(buft));
+    const bool res = llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
 
@@ -1861,7 +1865,7 @@ static bool llama_sampler_temp_backend_init(
         ggml_backend_buffer_type_t   buft) {
     auto * sctx = (llama_sampler_temp *) smpl->ctx;
 
-    const bool res = llama_sampler_backend_support(smpl, ggml_backend_buft_get_device(buft));
+    const bool res = llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
 
@@ -2004,7 +2008,7 @@ static bool llama_sampler_temp_ext_backend_init(
         ggml_backend_buffer_type_t   buft) {
     auto * sctx = (llama_sampler_temp_ext *) smpl->ctx;
 
-    const bool res = llama_sampler_backend_support(smpl, ggml_backend_buft_get_device(buft));
+    const bool res = llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
 
