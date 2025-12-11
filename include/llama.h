@@ -1291,12 +1291,12 @@ extern "C" {
 
     /// @details power law sampler, reshapes probability distribution to target specific probability ranges
     /// ref: https://github.com/MrJackSpade/llama.cpp
-    /// ref: [PR]
+    /// ref: https://github.com/ggml-org/llama.cpp/pull/17927
     LLAMA_API struct llama_sampler * llama_sampler_init_power_law(
-                                float    target,       // target probability (0.0 to 1.0)
-                                float    target_range, // adaptive target range (±range from target)
-                                int32_t  queue_size,   // rolling history window size for adaptation
-                                uint32_t seed);        // RNG seed
+                               float    target,       // target probability (0.0 to 1.0)
+                               float    target_range, // adaptive target range (±range from target)
+                             int32_t    queue_size,   // rolling history window size for adaptation
+                            uint32_t    seed);        // RNG seed
 
     LLAMA_API struct llama_sampler * llama_sampler_init_logit_bias(
                              int32_t   n_vocab,

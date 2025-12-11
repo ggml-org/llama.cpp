@@ -2315,7 +2315,7 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
 
 // power-law
 // ref: https://github.com/MrJackSpade/llama.cpp/tree/master
-// ref: [PR]
+// ref: https://github.com/ggml-org/llama.cpp/pull/17927
 
 struct llama_sampler_power_law {
     const float    target;
@@ -2404,7 +2404,8 @@ static struct llama_sampler * llama_sampler_power_law_clone(const struct llama_s
     auto * result     = llama_sampler_init_power_law(ctx->target, ctx->target_range, ctx->queue_size, ctx->seed);
     auto * result_ctx = (llama_sampler_power_law *) result->ctx;
 
-    result_ctx->history  = ctx->history;
+    result_ctx->rng     = ctx->rng;
+    result_ctx->history = ctx->history;
 
     return result;
 }
