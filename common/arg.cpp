@@ -1359,7 +1359,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.top_k = value;
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TOP_K;
         }
-    ).set_sparam());
+    ).set_sparam().set_env("LLAMA_ARG_TOP_K"));
     add_opt(common_arg(
         {"--top-p"}, "N",
         string_format("top-p sampling (default: %.1f, 1.0 = disabled)", (double)params.sampling.top_p),
