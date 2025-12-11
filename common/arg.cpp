@@ -1512,7 +1512,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--power-law-target-range"}, "N",
-        string_format("Power Law sampler adaptive range +/- from target (default: %.2f, 0.0 = no adaptation)", (double)params.sampling.power_law_target_range),
+        string_format("Power Law sampler adaptive target range (target±range) (default: %.2f, 0.0 = fixed target)", (double)params.sampling.power_law_target_range),
         [](common_params & params, const std::string & value) {
             params.sampling.power_law_target_range = std::stof(value);
         }

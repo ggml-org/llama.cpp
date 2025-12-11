@@ -2314,8 +2314,15 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
 }
 
 // power-law
-// ref: https://github.com/MrJackSpade/llama.cpp/tree/master
-// ref: https://github.com/ggml-org/llama.cpp/pull/17927
+//
+// this sampler is like `greedy`, `dist`, and `mirostat` in that it actually selects a token ID
+// rather than just transforming logits. therefore it must always be the last sampler in the
+// sampler chain.
+//
+// it is recommended to only perform minimal truncation before this sampler.
+//
+// ref: https://github.com/MrJackSpade/llama.cpp/tree/master (original impl, documentation)
+// ref: https://github.com/ggml-org/llama.cpp/pull/17927     (llama.cpp PR)
 
 struct llama_sampler_power_law {
     const float    target;
