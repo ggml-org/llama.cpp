@@ -6740,7 +6740,7 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() con
             ret[buft] += ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.get(), buft);
         } else {
             for (const auto & buf : bufs) {
-                GGML_ASSERT(ggml_backend_buffer_get_base(buf.get()) != nullptr);
+                // GGML_ASSERT(ggml_backend_buffer_get_base(buf.get()) != nullptr); // multi_buffer does not have a defined base
                 ret[ggml_backend_buffer_get_type(buf.get())] += ggml_backend_buffer_get_size(buf.get());
             }
         }
