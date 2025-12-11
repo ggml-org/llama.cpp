@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { Input } from '$lib/components/ui/input';
-	import { Search } from '@lucide/svelte';
+	import { SearchInput } from '$lib/components/app';
 
 	interface Props {
 		value?: string;
@@ -15,19 +14,6 @@
 		onInput,
 		class: className
 	}: Props = $props();
-
-	function handleInput(event: Event) {
-		const target = event.target as HTMLInputElement;
-
-		value = target.value;
-		onInput?.(target.value);
-	}
 </script>
 
-<div class="relative mb-4 {className}">
-	<Search
-		class="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 transform text-muted-foreground"
-	/>
-
-	<Input bind:value class="pl-10" oninput={handleInput} {placeholder} type="search" />
-</div>
+<SearchInput bind:value {placeholder} {onInput} class="mb-4 {className}" />
