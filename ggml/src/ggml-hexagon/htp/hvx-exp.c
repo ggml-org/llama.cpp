@@ -31,13 +31,13 @@ void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int
     int unaligned_addr = 0;
     int unaligned_loop = 0;
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
-        FARF(HIGH, "hvx_exp_f32: unaligned address in hvx op, possibly slower execution\n");
+        //FARF(HIGH, "hvx_exp_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
     // assert((0 == unaligned_addr) || (0 == num_elems_whole));
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        FARF(HIGH, "hvx_exp_f32: unaligned loop in hvx op, possibly slower execution\n");
+        //FARF(HIGH, "hvx_exp_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
     HVX_Vector vec_out = Q6_V_vzero();
