@@ -1519,7 +1519,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--power-law-window-size"}, "N",
-        string_format("Power Law sampler rolling window size, in tokens (default: %d)", params.sampling.power_law_window_size),
+        string_format("Power Law sampler rolling window size, in tokens (default: %d; 0 = fixed target)", params.sampling.power_law_window_size),
         [](common_params & params, int value) {
             params.sampling.power_law_window_size = value;
         }
