@@ -804,25 +804,8 @@ static __device__ __forceinline__ void load_tiles_mxfp4_fp4(const char * __restr
 
         const block_mxfp4 * bxi = (const block_mxfp4 *) x + kbx0 + i * stride + kbx;
 
-        int aux_q4[4];
-        memcpy(aux_q4, bxi->qs, 16);
-
-        // Compress: extract low nibbles from each byte and pack into 16 bits
-        // Input byte layout: [hi3|lo3][hi2|lo2][hi1|lo1][hi0|lo0]
-        // Output: [lo3|lo2|lo1|lo0] as 16 bits
-        const auto compress = [](const int x) -> int {
-            const int m = x & 0x0F0F0F0F;  // isolate low nibbles: 0x0lo30lo20lo10lo0
-            // Pack nibbles: shift and combine
-            const int t1 = (m | (m >> 4)) & 0x00FF00FF;  // 0x00_lo3lo2_00_lo1lo0
-            return (t1 | (t1 >> 8)) & 0x0000FFFF;         // 0x0000_lo3lo2lo1lo0
-        };
-
         const int k0 = kbx * 4;
-
-        x_qs[i * MMQ_MMA_TILE_X_K_FP4 + k0 + 0] = compress(aux_q4[1]) << 16 | compress(aux_q4[0]);
-        x_qs[i * MMQ_MMA_TILE_X_K_FP4 + k0 + 1] = compress(aux_q4[3]) << 16 | compress(aux_q4[2]);
-        x_qs[i * MMQ_MMA_TILE_X_K_FP4 + k0 + 2] = compress(aux_q4[1] >> 4) << 16 | compress(aux_q4[0] >> 4);
-        x_qs[i * MMQ_MMA_TILE_X_K_FP4 + k0 + 3] = compress(aux_q4[3] >> 4) << 16 | compress(aux_q4[2] >> 4);
+        memcpy(x_qs + i * MMQ_MMA_TILE_X_K_FP4 + k0, bxi->qs, 16);
 
         // Load E8M0 scales: pack 2 consecutive scales into one uint32
         if (kbx % 2 == 0) {
