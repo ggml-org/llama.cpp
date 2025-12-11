@@ -2334,10 +2334,6 @@ static const char * llama_sampler_power_law_name(const struct llama_sampler * /*
 static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_power_law *) smpl->ctx;
 
-    // these don't need to be modified or exposed to the user
-    const float peak_logit_value   = 3.0f;
-    const float tail_heaviness     = 3.0f;
-
     const float min_target = ctx->target - ctx->target_range;
     const float max_target = ctx->target + ctx->target_range;
 
@@ -2382,9 +2378,8 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
     for (size_t i = 0; i < cur_p->size; ++i) {
         float p = cur_p->data[i].p;
 
-        float distance            = std::abs(p - computed_target);
-        float normalized_distance = distance / 0.2f;
-        cur_p->data[i].logit      = peak_logit_value / (1.0f + std::pow(normalized_distance, tail_heaviness));
+        float normalized_distance = std::abs(p - computed_target) / 0.2f;
+        cur_p->data[i].logit      = 3.0f / (1.0f + std::pow(normalized_distance, 3.0f));
     }
 
     llama_sampler_softmax_impl(cur_p, false);
