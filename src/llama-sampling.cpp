@@ -2370,24 +2370,11 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
         computed_target = std::max(min_target, std::min(next_value, max_target));
     }
 
-    // find closest token (for degenerate width ~ 0 case)
-    float min_distance      = FLT_MAX;
-    int   closest_token_idx = -1;
-
-    for (size_t i = 0; i < cur_p->size; ++i) {
-        float distance = std::abs(cur_p->data[i].p - computed_target);
-        if (distance < min_distance) {
-            min_distance      = distance;
-            closest_token_idx = (int) i;
-        }
-    }
-
     // apply power law transformation
     for (size_t i = 0; i < cur_p->size; ++i) {
         float p = cur_p->data[i].p;
-
         float normalized_distance = std::abs(p - computed_target) / 0.2f;
-        cur_p->data[i].logit      = 3.0f / (1.0f + std::pow(normalized_distance, 3.0f));
+        cur_p->data[i].logit = 3.0f / (1.0f + std::pow(normalized_distance, 3.0f));
     }
 
     llama_sampler_softmax_impl(cur_p, false);
