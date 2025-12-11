@@ -3,6 +3,8 @@
 llm_build_mistral3::llm_build_mistral3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
+    const float attn_factor = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
+
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
     GGML_ASSERT(n_embd_head == hparams.n_rot);
 

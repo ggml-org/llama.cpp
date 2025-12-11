@@ -2279,18 +2279,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     }
                 }
 
-                // TODO: this seems to be correct with the case of mscale == mscale_all_dims == 1.0f
-                //       but may need further verification with other values
-                if (hparams.rope_yarn_log_mul != 0.0f) {
-                    float factor = 1.0f / hparams.rope_freq_scale_train;
-                    float mscale = 1.0f;
-                    float mscale_all_dims = hparams.rope_yarn_log_mul;
-                    static auto get_mscale = [](float scale, float mscale) {
-                        return scale <= 1.0f ? 1.0f : (0.1f * mscale * logf(scale) + 1.0f);
-                    };
-                    hparams.yarn_attn_factor = get_mscale(factor, mscale) / get_mscale(factor, mscale_all_dims);
-                }
-
                 switch (hparams.n_layer) {
                     case 26: type = LLM_TYPE_3B; break;
                     case 34: type = LLM_TYPE_8B; break;
