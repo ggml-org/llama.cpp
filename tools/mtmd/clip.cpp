@@ -595,11 +595,12 @@ struct clip_graph {
             cur = ggml_mul(ctx0, cur, model.mm_input_norm_w);
             cur = ggml_add(ctx0, cur, model.mm_input_norm_b);
 
-            cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
-            cur = ggml_add(ctx0, cur, model.mm_1_b);
-            cur = ggml_gelu(ctx0, cur);
-            cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
-            cur = ggml_add(ctx0, cur, model.mm_2_b);
+            cur = build_ffn(cur,
+                model.mm_1_w, model.mm_1_b,
+                nullptr, nullptr,
+                model.mm_2_w, model.mm_2_b,
+                FFN_GELU,
+                -1);
 
         } else if (ctx->proj_type() == PROJECTOR_TYPE_JANUS_PRO) {
             cur = build_ffn(cur,
@@ -667,16 +668,12 @@ struct clip_graph {
 
         // LlavaMultiModalProjector (always using GELU activation)
         {
-            cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
-            if (model.mm_1_b) {
-                cur = ggml_add(ctx0, cur, model.mm_1_b);
-            }
-
-            cur = ggml_gelu(ctx0, cur);
-            cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
-            if (model.mm_2_b) {
-                cur = ggml_add(ctx0, cur, model.mm_2_b);
-            }
+            cur = build_ffn(cur,
+                model.mm_1_w, model.mm_1_b,
+                nullptr, nullptr,
+                model.mm_2_w, model.mm_2_b,
+                FFN_GELU,
+                -1);
         }
 
         // arrangement of the [IMG_BREAK] token
@@ -775,10 +772,6 @@ struct clip_graph {
 
             // if flash attn is used, we need to pad the mask and cast to f16
             if (ctx->flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
-                int n_pad = GGML_PAD(window_mask->ne[1], GGML_KQ_MASK_PAD) - window_mask->ne[1];
-                if (n_pad > 0) {
-                    window_mask = ggml_pad(ctx0, window_mask, 0, n_pad, 0, 0);
-                }
                 window_mask = ggml_cast(ctx0, window_mask, GGML_TYPE_F16);
             }
 
@@ -791,7 +784,7 @@ struct clip_graph {
 
         // loop over layers
         for (int il = 0; il < n_layer; il++) {
-            auto & layer = model.layers[il];
+            const auto & layer = model.layers[il];
             const bool full_attn = use_window_attn ? (il + 1) % n_wa_pattern == 0 : true;
 
             ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
@@ -870,16 +863,12 @@ struct clip_graph {
         // multimodal projection
         ggml_tensor * embeddings = inpL;
         embeddings = ggml_reshape_3d(ctx0, embeddings, n_embd * 4, n_pos / 4, batch_size);
-
-        embeddings = ggml_mul_mat(ctx0, model.mm_0_w, embeddings);
-        embeddings = ggml_add(ctx0, embeddings, model.mm_0_b);
-
-        // GELU activation
-        embeddings = ggml_gelu(ctx0, embeddings);
-
-        // Second linear layer
-        embeddings = ggml_mul_mat(ctx0, model.mm_1_w, embeddings);
-        embeddings = ggml_add(ctx0, embeddings, model.mm_1_b);
+        embeddings = build_ffn(embeddings,
+                            model.mm_0_w, model.mm_0_b,
+                            nullptr, nullptr,
+                            model.mm_1_w, model.mm_1_b,
+                            FFN_GELU,
+                            -1);
 
         if (use_window_attn) {
             window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
@@ -1257,11 +1246,12 @@ struct clip_graph {
             // projector LayerNorm uses pytorch's default eps = 1e-5
             // ref: https://huggingface.co/OpenGVLab/InternVL3-8B-Instruct/blob/a34d3e4e129a5856abfd6aa6de79776484caa14e/modeling_internvl_chat.py#L79
             cur = build_norm(cur, model.mm_0_w, model.mm_0_b, NORM_TYPE_NORMAL, 1e-5, -1);
-            cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
-            cur = ggml_add(ctx0, cur, model.mm_1_b);
-            cur = ggml_gelu(ctx0, cur);
-            cur = ggml_mul_mat(ctx0, model.mm_3_w, cur);
-            cur = ggml_add(ctx0, cur, model.mm_3_b);
+            cur = build_ffn(cur,
+                model.mm_1_w, model.mm_1_b,
+                nullptr, nullptr,
+                model.mm_3_w, model.mm_3_b,
+                FFN_GELU,
+                -1);
         }
 
         // build the graph
@@ -1412,11 +1402,12 @@ struct clip_graph {
             cb(cur, "proj_inp_normed", -1);
 
             // projection mlp
-            cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
-            cur = ggml_add(ctx0, cur, model.mm_1_b);
-            cur = ggml_gelu(ctx0, cur);
-            cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
-            cur = ggml_add(ctx0, cur, model.mm_2_b);
+            cur = build_ffn(cur,
+                model.mm_1_w, model.mm_1_b,
+                nullptr, nullptr,
+                model.mm_2_w, model.mm_2_b,
+                FFN_GELU,
+                -1);
             cb(cur, "proj_out", -1);
         }
 
@@ -1887,9 +1878,12 @@ struct clip_graph {
 
         } else if (ctx->proj_type() == PROJECTOR_TYPE_VOXTRAL) {
             // projector
-            cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
-            cur = ggml_gelu_erf(ctx0, cur);
-            cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
+            cur = build_ffn(cur,
+                model.mm_1_w, model.mm_1_b,
+                nullptr, nullptr,
+                model.mm_2_w, model.mm_2_b,
+                FFN_GELU_ERF,
+                -1);
 
         } else {
             GGML_ABORT("%s: unknown projector type", __func__);
@@ -2074,34 +2068,66 @@ private:
 
             // self-attention
             {
-                ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.q_w, cur);
-                if (layer.q_b) {
-                    Qcur = ggml_add(ctx0, Qcur, layer.q_b);
-                }
+                ggml_tensor * Qcur = nullptr;
+                ggml_tensor * Kcur = nullptr;
+                ggml_tensor * Vcur = nullptr;
+                if (layer.qkv_w != nullptr) {
+                    // fused qkv
+                    cur = ggml_mul_mat(ctx0, layer.qkv_w, cur);
+                    if (layer.qkv_b != nullptr) {
+                        cur = ggml_add(ctx0, cur, layer.qkv_b);
+                    }
 
-                ggml_tensor * Kcur = ggml_mul_mat(ctx0, layer.k_w, cur);
-                if (layer.k_b) {
-                    Kcur = ggml_add(ctx0, Kcur, layer.k_b);
-                }
+                    Qcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
+                        /* nb1    */ ggml_row_size(cur->type, d_head),
+                        /* nb2    */ cur->nb[1],
+                        /* offset */ 0);
 
-                ggml_tensor * Vcur = ggml_mul_mat(ctx0, layer.v_w, cur);
-                if (layer.v_b) {
-                    Vcur = ggml_add(ctx0, Vcur, layer.v_b);
-                }
+                    Kcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
+                        /* nb1    */ ggml_row_size(cur->type, d_head),
+                        /* nb2    */ cur->nb[1],
+                        /* offset */ ggml_row_size(cur->type, n_embd));
 
-                if (layer.q_norm) {
-                    Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
-                    cb(Qcur, "Qcur_norm", il);
-                }
+                    Vcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
+                        /* nb1    */ ggml_row_size(cur->type, d_head),
+                        /* nb2    */ cur->nb[1],
+                        /* offset */ ggml_row_size(cur->type, 2 * n_embd));
 
-                if (layer.k_norm) {
-                    Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
-                    cb(Kcur, "Kcur_norm", il);
-                }
+                    // TODO: q/k norm requires row size == n_embd, while here it's d_head
+                    // we can add support in the future if needed
+                    GGML_ASSERT(layer.q_norm == nullptr && layer.k_norm == nullptr);
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+                } else {
+                    // separate q, k, v
+                    Qcur = ggml_mul_mat(ctx0, layer.q_w, cur);
+                    if (layer.q_b) {
+                        Qcur = ggml_add(ctx0, Qcur, layer.q_b);
+                    }
+
+                    Kcur = ggml_mul_mat(ctx0, layer.k_w, cur);
+                    if (layer.k_b) {
+                        Kcur = ggml_add(ctx0, Kcur, layer.k_b);
+                    }
+
+                    Vcur = ggml_mul_mat(ctx0, layer.v_w, cur);
+                    if (layer.v_b) {
+                        Vcur = ggml_add(ctx0, Vcur, layer.v_b);
+                    }
+
+                    if (layer.q_norm) {
+                        Qcur = build_norm(Qcur, layer.q_norm, NULL, norm_t, eps, il);
+                        cb(Qcur, "Qcur_norm", il);
+                    }
+
+                    if (layer.k_norm) {
+                        Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
+                        cb(Kcur, "Kcur_norm", il);
+                    }
+
+                    Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
+                    Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
+                    Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+                }
 
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);

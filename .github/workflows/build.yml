@@ -243,7 +243,7 @@ jobs:
           echo "Fetch llama2c model"
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
-          ./bin/llama-cli -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+          ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
       - name: Test llama2c (s390x)
         id: llama2c_test_s390x
@@ -252,7 +252,7 @@ jobs:
           cd build
           echo "Fetch llama2c big-endian model"
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
-          ./bin/llama-cli -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+          ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-latest-cmake-sanitizer:
     runs-on: ubuntu-latest
@@ -1770,7 +1770,7 @@ jobs:
           echo "Fetch llama2c model"
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
-          ./bin/llama-cli -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+          ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-cmake-sanitizer-riscv64-native:
     runs-on: RISCV64
