@@ -54,7 +54,7 @@ static void solve_tri_f32_cublas(ggml_backend_cuda_context & ctx,
         CUDA_CHECK(cudaMemcpyAsync(X, B, total_elements_BX * sizeof(float), cudaMemcpyDeviceToDevice, stream));
     }
 
-    int id = ggml_cuda_get_device();
+    const int id = ggml_cuda_get_device();
 
     ggml_cuda_pool_alloc<const float *> A_ptrs_alloc(ctx.pool(id), total_batches);
     ggml_cuda_pool_alloc<float *>       X_ptrs_alloc(ctx.pool(id), total_batches);
