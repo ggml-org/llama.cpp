@@ -151,6 +151,15 @@ return true; // NEON available -> NEON path; else scalar LUT
 - [ ] 单测补充（LUT vs 真值；路径开关）。
 - [ ] 性能/正确性记录，更新设计文档。
 
+## 13. 现状与已知问题（LUT=1 路径）
+- 已知崩溃：`GGML_IFAIRY_LUT=1 ./build/bin/llama-cli ...` 在 warmup/计算阶段仍 SIGABRT（关闭 LUT 正常）。标量单测与关闭 LUT 路径均通过。
+- 已修：ifairy RMSNorm 按 bf16-pair 解包重打包，二元算子 NaN 检查对 ifairy_add/mul 放宽，mul_mat 支持 F32 激活临时量化 + workbuf LUT。
+- 未决/调试计划：
+  1) 定位崩溃节点：在 compute 流程中对 ifairy 专用算子/常规算子增加日志或断点，确认哪一步处理了打包复数导致 NaN/Inf 或断言。
+  2) 覆盖其他算子：检查除 RMSNorm/二元算子外的 ifairy 相关 op（如 rope/split/merge）是否仍假定普通 float，需要 bf16 解包/重打包。
+  3) 索引释放：仍依赖 `ggml_ifairy_lut_free`，未绑 tensor 生命周期，需补回收或改为可追踪 buffer。
+  4) 缩放策略：仍为 per-tensor，确认是否需 per-block；与 LUT 构造/累加对齐。
+  5) GGUF 类型注册：loader 仍报 “unknown type ifairy”，需注册类型以消除警告。***
 ---
 
 > 本文档为 API/规划，不含实现代码；落地时需确保与《IFAIRY_ARM_3W_LUT_DESIGN.md》一致，并优先采用“每线程独立预处理+计算”以避免 barrier 瓶颈。***

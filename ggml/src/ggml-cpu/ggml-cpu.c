@@ -1274,14 +1274,38 @@ void ggml_compute_forward_mul_mat(
             const uint8_t * indexes = extra->indexes;
 
             uint8_t * my_buf = params->wdata + per_thread * (size_t) ith;
-            const size_t lut_bytes = (size_t) N * (size_t) groups * 32;
-            int8_t * lut = (int8_t *) my_buf;
-            float * scales = (float *) (my_buf + lut_bytes);
-            const size_t act_stride = nb11;
+            const int64_t blocks_per_col = K / QK_K;
+            size_t offset = 0;
+            block_ifairy_q16 * act_q = NULL;
+            if (src1->type == GGML_TYPE_F32) {
+                act_q = (block_ifairy_q16 *) (my_buf + offset);
+                offset += (size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16);
+            } else {
+                // src1 already quantized
+            }
+            int8_t * lut = (int8_t *) (my_buf + offset);
+            offset += (size_t) N * (size_t) groups * 32;
+            float * scales = (float *) (my_buf + offset);
+            const size_t act_stride = src1->type == GGML_TYPE_F32
+                                        ? (size_t) blocks_per_col * sizeof(block_ifairy_q16)
+                                        : nb11;
             const size_t dst_stride = nb1;
 
+            // quantize activations once (thread 0) if needed
+            if (src1->type == GGML_TYPE_F32) {
+                ggml_barrier(params->threadpool);
+                if (ith == 0) {
+                    const float * act_f32 = (const float *) src1->data;
+                    for (int64_t c = 0; c < N; ++c) {
+                        quantize_row_ifairy_q16(act_f32 + c * (nb11 / sizeof(float)), act_q + c * blocks_per_col, K);
+                    }
+                }
+                ggml_barrier(params->threadpool);
+            }
+
             // build LUT once per thread (shared across rows)
-            ggml_ifairy_lut_preprocess((int) M, (int) K, (int) N, (const uint8_t *) src1->data, act_stride, scales, lut);
+            const void * act_src = (src1->type == GGML_TYPE_F32) ? (const void *) act_q : src1->data;
+            ggml_ifairy_lut_preprocess((int) M, (int) K, (int) N, act_src, act_stride, scales, lut);
 
             // each thread processes a subset of rows
             for (int64_t row = ith; row < M; row += nth) {

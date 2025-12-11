@@ -3616,24 +3616,26 @@ static void ggml_compute_forward_rms_norm_ifairy(
 
                 ggml_float sum = 0.0;
                 for (int64_t i00 = 0; i00 < ne00; i00++) {
-                    sum += (ggml_float)(x[i00] * x[i00]);
+                    const ggml_bf16_t * p = (const ggml_bf16_t *) &x[i00];
+                    const float xr = GGML_BF16_TO_FP32(p[0]);
+                    const float xi = GGML_BF16_TO_FP32(p[1]);
+                    sum += (ggml_float)(xr * xr + xi * xi);
                 }
 
-                const float mean = sum/(ne00 / 2);
+                const float mean = sum/(float) ne00;
 
                 float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
 
-                memcpy(y, x, ne00 * sizeof(float));
-                // for (int i00 = 0; i00 < ne00; i00++) {
-                //     y[i00] = x[i00];
-                // }
-
                 const float scale = 1.0f/sqrtf(mean + eps);
 
-                // if you hit this, likely you got an inf somewhere earlier
-                assert(scale > 0.0f);
-
-                ggml_vec_scale_f32(ne00, y, scale);
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    const ggml_bf16_t * p = (const ggml_bf16_t *) &x[i00];
+                    const float xr = GGML_BF16_TO_FP32(p[0]) * scale;
+                    const float xi = GGML_BF16_TO_FP32(p[1]) * scale;
+                    ggml_bf16_t * q = (ggml_bf16_t *) &y[i00];
+                    q[0] = GGML_FP32_TO_BF16(xr);
+                    q[1] = GGML_FP32_TO_BF16(xi);
+                }
             }
         }
     }

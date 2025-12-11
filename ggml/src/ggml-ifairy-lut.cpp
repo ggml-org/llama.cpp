@@ -43,7 +43,7 @@ bool ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0, const struct g
         return false;
     }
 
-    if (src0->type != GGML_TYPE_IFAIRY || src1->type != GGML_TYPE_F32) {
+    if (src0->type != GGML_TYPE_IFAIRY || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_IFAIRY_Q16)) {
         return false;
     }
     if (dst->type != GGML_TYPE_F32) {
@@ -64,9 +64,14 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     const int64_t N = src1->ne[1];
     const int64_t K3 = (K + 2) / 3 * 3;
     const int64_t groups = K3 / 3;
+    const int64_t blocks_per_col = K / QK_K;
+    size_t quant_bytes = 0;
+    if (src1->type == GGML_TYPE_F32) {
+        quant_bytes = (size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16);
+    }
     const size_t lut_bytes = (size_t) N * (size_t) groups * 32;
     const size_t scale_bytes = (size_t) N * 2 * sizeof(float);
-    const size_t per_thread = GGML_PAD(lut_bytes + scale_bytes, 64);
+    const size_t per_thread = GGML_PAD(quant_bytes + lut_bytes + scale_bytes, 64);
     return per_thread * (size_t) n_threads;
 }
 

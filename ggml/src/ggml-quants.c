@@ -2324,6 +2324,7 @@ static inline uint8_t ggml_ifairy_pack_triplet(uint8_t c0, uint8_t c1, uint8_t c
 static inline uint8_t ggml_ifairy_read_code(const block_ifairy * row_blocks, int64_t idx) {
     const int64_t block_idx      = idx / QK_K;
     const int64_t idx_in_block   = idx - block_idx * QK_K;
+    // todo_liweitao check chunk
     const int     chunk          = (int) (idx_in_block >> 6);       // 0..3
     const int     lane           = (int) (idx_in_block & 0x0f);     // 0..15
     const int     part           = (int) ((idx_in_block >> 4) & 0x3); // 0..3

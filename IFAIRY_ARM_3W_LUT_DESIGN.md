@@ -956,7 +956,7 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 展开循环以减少分支；
   - 调整 LUT 表和激活 pack 的布局，使其更利于 cache 与寄存器复用。
 
-> 当前：mul_mat 路由已接通标量 LUT，`transform_tensor` 生成索引 shadow（挂 `extra`），`get_wsize` 上报 per-thread LUT+scale 工作区，mul_mat 按行拆分并用 workbuf 预处理后 qgemm，输出按 bf16-packed（每个 float 容器存实/虚 bf16）。待改进：索引释放仍依赖全局 `ggml_ifairy_lut_free`，未随 tensor 回收；缩放仍为 per-tensor；NEON 核心未就绪；GGUF ifairy 类型仍触发 loader “unknown type” 警告。
+> 当前：mul_mat 路由已接通标量 LUT，`transform_tensor` 生成索引 shadow（挂 `extra`），`get_wsize` 上报 per-thread LUT+scale 工作区，mul_mat 按行拆分并用 workbuf 预处理后 qgemm，输出按 bf16-packed（每个 float 容器存实/虚 bf16）。已修复 ifairy RMSNorm 以 bf16-pair 方式解包累加/重打包；二元算子仅对 ifairy_add/mul 放宽 NaN 检查。待改进：索引释放仍依赖全局 `ggml_ifairy_lut_free`，未随 tensor 回收；缩放仍为 per-tensor；NEON 核心未就绪；GGUF ifairy 类型仍触发 loader “unknown type” 警告；`GGML_IFAIRY_LUT=1` 运行 llama-cli 仍会 SIGABRT（需定位具体算子/数据路径）。***
 
 ### 10.6 步骤六：测试与基准
 
