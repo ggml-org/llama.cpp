@@ -8,7 +8,6 @@ llama_add_compile_flags()
 
 add_library(llama
             ../include/llama.h
-            ../include/llama-cpp.h
             llama.cpp
             llama-adapter.cpp
             llama-arch.cpp
@@ -16,7 +15,6 @@ add_library(llama
             llama-chat.cpp
             llama-context.cpp
             llama-cparams.cpp
-            llama-debug.cpp
             llama-grammar.cpp
             llama-graph.cpp
             llama-hparams.cpp

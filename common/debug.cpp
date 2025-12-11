@@ -1,7 +1,7 @@
-#include "llama.h"
-#include "llama-cpp.h"
-#include "ggml-backend.h"
-#include "llama-impl.h"
+#include "debug.h"
+#include "log.h"
+
+#include <string>
 #include <cmath>
 
 std::string ggml_ne_string(const ggml_tensor * t) {
@@ -53,41 +53,41 @@ void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const
         }
     }
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        LLAMA_LOG("                                     [\n");
+        LOG_ERR("                                     [\n");
         for (int64_t i2 = 0; i2 < ne[2]; i2++) {
             if (i2 == n && ne[2] > 2*n) {
-                LLAMA_LOG("                                      ..., \n");
+                LOG_ERR("                                      ..., \n");
                 i2 = ne[2] - n;
             }
-            LLAMA_LOG("                                      [\n");
+            LOG_ERR("                                      [\n");
             for (int64_t i1 = 0; i1 < ne[1]; i1++) {
                 if (i1 == n && ne[1] > 2*n) {
-                    LLAMA_LOG("                                       ..., \n");
+                    LOG_ERR("                                       ..., \n");
                     i1 = ne[1] - n;
                 }
-                LLAMA_LOG("                                       [");
+                LOG_ERR("                                       [");
                 for (int64_t i0 = 0; i0 < ne[0]; i0++) {
                     if (i0 == n && ne[0] > 2*n) {
-                        LLAMA_LOG("..., ");
+                        LOG_ERR("..., ");
                         i0 = ne[0] - n;
                     }
                     const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
-                    LLAMA_LOG("%12.4f", v);
+                    LOG_ERR("%12.4f", v);
                     if (i0 < ne[0] - 1) {
-                        LLAMA_LOG(", ");
+                        LOG_ERR(", ");
                     }
                 }
-                LLAMA_LOG("],\n");
+                LOG_ERR("],\n");
             }
-            LLAMA_LOG("                                      ],\n");
+            LOG_ERR("                                      ],\n");
         }
-        LLAMA_LOG("                                     ]\n");
-        LLAMA_LOG("                                     sum = %f\n", sum);
+        LOG_ERR("                                     ]\n");
+        LOG_ERR("                                     sum = %f\n", sum);
     }
 
     if constexpr (abort) {
         if (std::isnan(sum)) {
-            LLAMA_LOG_ERROR("encountered NaN - aborting\n");
+            LOG_ERR("encountered NaN - aborting\n");
             exit(0);
         }
     }
@@ -119,7 +119,7 @@ bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
         snprintf(src1_str, sizeof(src1_str), "%s{%s}", src1->name, ggml_ne_string(src1).c_str());
     }
 
-    LLAMA_LOG("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__,
+    LOG_ERR("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__,
          t->name, ggml_type_name(t->type), ggml_op_desc(t),
          src0->name, ggml_ne_string(src0).c_str(),
          src1 ? src1_str : "",

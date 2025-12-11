@@ -9,7 +9,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "gguf.h"
-#include "llama-cpp.h"
+#include "common/debug.h"
 
 #include <cassert>
 #include <cmath>

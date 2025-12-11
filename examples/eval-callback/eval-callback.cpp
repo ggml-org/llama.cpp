@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "debug.h"
 #include "log.h"
 #include "llama.h"
 #include "llama-cpp.h"

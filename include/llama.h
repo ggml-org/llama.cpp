@@ -1533,8 +1533,6 @@ extern "C" {
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval);
 
-    // common debug functions
-    LLAMA_API float ggml_get_float_value(const uint8_t * data, enum ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3);
 #ifdef __cplusplus
 }
 #endif
