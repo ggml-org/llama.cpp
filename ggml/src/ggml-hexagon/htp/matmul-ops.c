@@ -311,9 +311,9 @@ static inline HVX_Vector_x2 hvx_vec_load_and_mul_d_rx2(const uint8_t * restrict 
                                                        const uint8_t * restrict r1_x_d,
                                                        const uint8_t * restrict y_d,
                                                        const HVX_Vector rd_mask) {
-    HVX_Vector vy_d = *(const HVX_Vector *) y_d;
-    HVX_Vector r0_d = *(const HVX_Vector *) r0_x_d;
-    HVX_Vector r1_d = *(const HVX_Vector *) r1_x_d;
+    HVX_Vector vy_d = *(const HVX_UVector *) y_d;
+    HVX_Vector r0_d = *(const HVX_UVector *) r0_x_d;
+    HVX_Vector r1_d = *(const HVX_UVector *) r1_x_d;
 
     vy_d             = Q6_Vh_vshuff_Vh(vy_d);
     HVX_Vector r01_d = Q6_V_vmux_QVV(rd_mask, r0_d, r1_d);
@@ -332,9 +332,9 @@ static inline HVX_Vector_x2 hvx_vec_load_and_mul_d_rx2(const uint8_t * restrict 
 static inline HVX_Vector_x4 hvx_vec_load_and_mul_d_r2x2(const uint8_t * restrict r0_x_d,
                                                         const uint8_t * restrict r1_x_d,
                                                         const uint8_t * restrict y_d) {
-    HVX_Vector vy_d = *(const HVX_Vector *) y_d;
-    HVX_Vector r0_d = *(const HVX_Vector *) r0_x_d;
-    HVX_Vector r1_d = *(const HVX_Vector *) r1_x_d;
+    HVX_Vector vy_d = *(const HVX_UVector *) y_d;
+    HVX_Vector r0_d = *(const HVX_UVector *) r0_x_d;
+    HVX_Vector r1_d = *(const HVX_UVector *) r1_x_d;
 
     vy_d = Q6_Vh_vshuff_Vh(vy_d);
     r0_d = Q6_Vh_vshuff_Vh(r0_d);
