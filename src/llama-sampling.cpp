@@ -3225,7 +3225,7 @@ struct llama_sampler_logit_bias : public llama_sampler_backend {
     struct ggml_tensor * inp_logit_bias;
     struct ggml_tensor * inp_logit_idxs;
 
-    ggml_context_ptr inp_ctx;
+    ggml_context_ptr        inp_ctx;
     ggml_backend_buffer_ptr inp_buf;
 };
 
@@ -3389,6 +3389,7 @@ struct llama_sampler * llama_sampler_init_logit_bias(
             /* .logit_bias     = */ std::vector<llama_logit_bias>(logit_bias, logit_bias + n_logit_bias),
             /* .to_search      = */ {},
             /* .inp_logit_bias = */ nullptr,
+            /* .inp_logit_idxs = */ nullptr,
             /* .inp_ctx        = */ nullptr,
             /* .inp_buf        = */ nullptr,
         }
