@@ -135,7 +135,10 @@ struct server_response_reader {
         stop();
     }
 
-    void post_task(server_task && tasks);
+    int get_new_id() {
+        return queue_tasks.get_new_id();
+    }
+    void post_task(server_task && task);
     void post_tasks(std::vector<server_task> && tasks);
     bool has_next() const;
 
