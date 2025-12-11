@@ -314,6 +314,8 @@ static void test_backend_greedy_sampling(const char * model_path) {
             GGML_ASSERT(false && "Failed to decode token");
         }
     }
+
+    llama_sampler_free(backend_sampler_chain);
 }
 
 static void test_backend_top_k_sampling(const char * model_path) {
@@ -348,6 +350,8 @@ static void test_backend_top_k_sampling(const char * model_path) {
         printf("top_k candidate[%zu] = %d : %s\n", i, candidates[i],
                test_ctx.token_to_piece(candidates[i], false).c_str());
     }
+
+    llama_sampler_free(backend_sampler_chain);
 
     // Sample using CPU sampler for verification that it is possible to do hybrid
     // sampling, first top_k on the backend and then dist on the CPU.
@@ -391,6 +395,9 @@ static void test_backend_temp_sampling(const char * model_path) {
         if (!test_ctx.decode({{0, "Some where over"}, {1, "Once upon a"}})) {
             GGML_ASSERT(false && "Failed to decode token");
         }
+
+        llama_sampler_free(backend_sampler_chain_0);
+        llama_sampler_free(backend_sampler_chain_1);
 
         // Verfify sequence 0
         {
@@ -457,6 +464,8 @@ static void test_backend_temp_sampling(const char * model_path) {
 
         uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
         GGML_ASSERT(n_logits == 1);
+
+        llama_sampler_free(backend_sampler_chain);
     };
 
     test_argmax_temp(0.0f);
@@ -496,6 +505,8 @@ static void test_backend_temp_ext_sampling(const char * model_path) {
             int n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx, batch_idx);
             GGML_ASSERT(n_logits == test_ctx.n_vocab);
         }
+
+        llama_sampler_free(backend_sampler_chain);
     }
 
     test_ctx.reset();
@@ -532,6 +543,8 @@ static void test_backend_temp_ext_sampling(const char * model_path) {
         } else {
             GGML_ASSERT(n_logits == (uint32_t) test_ctx.n_vocab);
         }
+
+        llama_sampler_free(backend_sampler_chain);
     };
 
     test_argmax_temp(0.0f,  0.3f, 1.0f); // Greedy (temp=0)
@@ -597,6 +610,7 @@ static void test_backend_min_p_sampling(const char * model_path) {
 
     printf("min-p sampling test PASSED\n");
 
+    llama_sampler_free(backend_sampler_chain);
     llama_sampler_free(chain);
 }
 
@@ -653,6 +667,7 @@ static void test_backend_top_p_sampling(const char * model_path) {
 
     printf("top-p sampling test PASSED\n");
 
+    llama_sampler_free(backend_sampler_chain);
     llama_sampler_free(chain);
 }
 
@@ -723,6 +738,9 @@ static void test_backend_multi_sequence_sampling(const char * model_path) {
         }
     }
 
+    llama_sampler_free(sampler_chain_0);
+    llama_sampler_free(sampler_chain_1);
+
     printf("backend multi-sequence sampling test PASSED\n");
 }
 
@@ -755,6 +773,7 @@ static void test_backend_dist_sampling(const char * model_path) {
     GGML_ASSERT(token >= 0 && token < test_ctx.n_vocab);
 
     llama_sampler_free(backend_sampler_chain);
+
     printf("backend dist sampling test PASSED\n");
 }
 

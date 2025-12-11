@@ -920,6 +920,30 @@ static const char * llama_sampler_greedy_name(const struct llama_sampler * smpl)
     return sctx->get_name();
 }
 
+static void llama_sampler_greedy_reset(struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_greedy *) smpl->ctx;
+    GGML_UNUSED(ctx);
+}
+
+static struct llama_sampler * llama_sampler_greedy_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const llama_sampler_greedy *) smpl->ctx;
+    auto * result = llama_sampler_init_greedy();
+
+    // copy the state
+    {
+        auto * result_ctx = (llama_sampler_greedy *) result->ctx;
+
+        GGML_UNUSED(ctx);
+        GGML_UNUSED(result_ctx);
+    }
+
+    return result;
+}
+
+static void llama_sampler_greedy_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_greedy *) smpl->ctx;
+}
+
 static void llama_sampler_greedy_apply(struct llama_sampler * /*smpl*/, llama_token_data_array * cur_p) {
     cur_p->selected = 0;
     for (size_t i = 1; i < cur_p->size; ++i) {
@@ -959,9 +983,9 @@ static struct llama_sampler_i llama_sampler_greedy_i = {
     /* .name              = */ llama_sampler_greedy_name,
     /* .accept            = */ nullptr,
     /* .apply             = */ llama_sampler_greedy_apply,
-    /* .reset             = */ nullptr,
-    /* .clone             = */ nullptr,
-    /* .free              = */ nullptr,
+    /* .reset             = */ llama_sampler_greedy_reset,
+    /* .clone             = */ llama_sampler_greedy_clone,
+    /* .free              = */ llama_sampler_greedy_free,
     /* .backend_init      = */ llama_sampler_greedy_backend_init,
     /* .backend_accept    = */ nullptr,
     /* .backend_apply     = */ llama_sampler_greedy_backend_apply,
@@ -1069,6 +1093,12 @@ static void llama_sampler_dist_apply(struct llama_sampler * smpl, llama_token_da
 #endif
 }
 
+static void llama_sampler_dist_reset(struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_dist *) smpl->ctx;
+    ctx->seed_cur = get_rng_seed(ctx->seed);
+    ctx->rng.seed(ctx->seed_cur);
+}
+
 static struct llama_sampler * llama_sampler_dist_clone(const struct llama_sampler * smpl) {
     const auto * ctx = (const llama_sampler_dist *) smpl->ctx;
     auto * result = llama_sampler_init_dist(ctx->seed);
@@ -1081,12 +1111,6 @@ static struct llama_sampler * llama_sampler_dist_clone(const struct llama_sample
     }
 
     return result;
-}
-
-static void llama_sampler_dist_reset(struct llama_sampler * smpl) {
-    auto * ctx = (llama_sampler_dist *) smpl->ctx;
-    ctx->seed_cur = get_rng_seed(ctx->seed);
-    ctx->rng.seed(ctx->seed_cur);
 }
 
 static void llama_sampler_dist_free(struct llama_sampler * smpl) {
