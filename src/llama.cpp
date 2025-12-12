@@ -334,7 +334,8 @@ static void llama_params_fit_impl(
         uint32_t n_part  = 0; // number of partial layers, <= n_layer
 
         // for the first partial layer varying parts can overflow, all further layers use LAYER_FRACTION_MOE:
-        layer_fraction_t overflow_type = LAYER_FRACTION_NONE;
+        // layer_fraction_t overflow_type = LAYER_FRACTION_NONE; // this doesn't compile on Windows
+        layer_fraction_t overflow_type = layer_fraction_t(0);
     };
 
     const size_t ntbo = llama_max_tensor_buft_overrides();
