@@ -2338,12 +2338,14 @@ struct ggml_ifairy_3w_index_info ggml_ifairy_3w_get_index_info(int64_t k) {
     GGML_ASSERT(k > 0);
     GGML_ASSERT(k % QK_K == 0);
 
-    const int64_t k_padded = ((k + 2) / 3) * 3;
+    const int64_t blocks = k / QK_K;
+    const int64_t groups_per_block = (QK_K - 1) / 3; // drop the 256th element -> 255 elements per block
+    const int64_t k_padded = blocks * (QK_K - 1);
 
     struct ggml_ifairy_3w_index_info info = {
         /*.k              =*/ k,
         /*.k_padded       =*/ k_padded,
-        /*.groups_per_row =*/ k_padded / 3,
+        /*.groups_per_row =*/ blocks * groups_per_block,
     };
 
     return info;
@@ -2380,12 +2382,15 @@ bool ggml_ifairy_3w_encode(const block_ifairy * GGML_RESTRICT weights, int64_t k
     }
 
     const int64_t blocks_per_row = k / QK_K;
+    const int64_t groups_per_block = (QK_K - 1) / 3; // 255/3 = 85 groups per 256-block
     for (int64_t row = 0; row < rows; ++row) {
         const block_ifairy * row_blocks = weights + row * blocks_per_row;
         uint8_t * row_dst = dst + row * info.groups_per_row;
 
         for (int64_t g = 0; g < info.groups_per_row; ++g) {
-            const int64_t base = g * 3;
+            const int64_t blk   = g / groups_per_block;
+            const int64_t intra = g - blk * groups_per_block;
+            const int64_t base  = blk * QK_K + intra * 3; // spans 0..254, skip 255
 
             const uint8_t c0 = base     < k ? ggml_ifairy_read_code(row_blocks, base)     : 0;
             const uint8_t c1 = base + 1 < k ? ggml_ifairy_read_code(row_blocks, base + 1) : 0;

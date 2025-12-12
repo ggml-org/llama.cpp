@@ -1276,15 +1276,14 @@ void ggml_compute_forward_mul_mat(
         const int64_t K = ne00;
         const int64_t N = ne11;
 
-        const int64_t K3 = (K + 2) / 3 * 3;
-        const int64_t groups = K3 / 3;
+        const int64_t groups = (K / QK_K) * ((QK_K - 1) / 3);
         const int64_t blocks_per_col = K / QK_K;
 
         const size_t quant_bytes = src1->type == GGML_TYPE_F32
                                      ? GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64)
                                      : 0;
         const size_t lut_bytes   = (size_t) N * (size_t) groups * 32;
-        const size_t scale_bytes = (size_t) N * 2 * sizeof(float);
+        const size_t scale_bytes = (size_t) N * (size_t) groups * 2 * sizeof(float);
         const size_t tmp_bytes   = (size_t) N * sizeof(float);
         const size_t per_thread  = GGML_PAD(lut_bytes + scale_bytes + tmp_bytes, 64);
         const size_t need        = quant_bytes + per_thread * (size_t) nth;
@@ -1330,7 +1329,8 @@ void ggml_compute_forward_mul_mat(
                 const uint8_t * row_indexes = indexes + (size_t) row * index_stride;
                 float * tmp_row = (float *) row_tmp_bytes;
                 ggml_ifairy_lut_qgemm(1, (int) K, (int) N, src0->data, row_indexes, lut, scales,
-                                      tmp_row, sizeof(float), sizeof(float), true);
+                                      act_src, act_stride, tmp_row, sizeof(float), sizeof(float), true,
+                                      getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT") && strcmp(getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT"), "0") != 0);
                 for (int64_t col = 0; col < N; ++col) {
                     uint8_t * dst_elem = dst_base + (size_t) col * nb1 + (size_t) row * nb0;
                     memcpy(dst_elem,

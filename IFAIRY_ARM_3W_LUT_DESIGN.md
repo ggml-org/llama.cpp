@@ -970,6 +970,91 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 对比：非 LUT 标准vecdot实现；
 - 根据结果调整是否默认启用 3‑weight LUT。
 
+### 10.7 Debug 与提速路线（从“能跑”到“正确且快”）
+
+> 现状：在 Debug build 下，Time Profiler 显示热点集中于 `ggml_ifairy_lut_qgemm`（~85%）与 `ggml_ifairy_factor_to_opcode`（~7%）；同时 `GGML_IFAIRY_LUT=1` 可能出现“输出乱码/不可读”现象。此处给出一条可由 Codex 全流程执行的定位与提速路线。
+
+#### A) 先把性能测试从 Debug 拉回 Release
+
+- Debug 会放大函数调用与分支成本，导致 profiler 结论失真。必须先建 Release 目录用于性能结论：
+  ```bash
+  cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release -DGGML_IFAIRY_ARM_LUT=ON
+  cmake --build build-rel --target llama-cli test-ifairy -j 8
+  ```
+
+#### B) 正确性优先：为 LUT 路径增加“抽样校验”与可复现对照
+
+1) **对照复现（LUT=0 vs LUT=1）**
+```bash
+GGML_IFAIRY_LUT=0 build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv
+GGML_IFAIRY_LUT=1 build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv
+```
+- 若 LUT=1 输出乱码，优先判定为 LUT 数学/缩放与 ifairy 参考实现不一致，而不是 tokenizer 问题。
+
+2) **建议实现：`GGML_IFAIRY_LUT_VALIDATE=1`**
+- 在 LUT mul_mat 分支中对“前 N 个 ifairy mul_mat”做抽样校验（比如 op 计数 < 8）。
+- 对抽样的少量行（例如 row=0、row=M/2）用现有 ifairy vecdot（`ggml_vec_dot_ifairy_q16_K`）计算参考输出，与 LUT 输出比较 max diff；超阈值直接 abort 并打印 src/dst 形状与 nb。
+- 目的：把“乱码”快速定位到某一层某一 matmul，而不是凭感觉猜。
+
+3) **缩放一致性检查（关键）**
+- ifairy 的激活量化容器 `block_ifairy_q16` 是 per-block `d_real/d_imag`，而不是 per-tensor；LUT 路径若只取“第一块缩放”会造成系统性数值错误，最终表现为输出乱码。
+- 修复优先级：先让 LUT 数学对齐 `ggml_vec_dot_ifairy_q16_K` 的缩放位置与公式，再做 NEON 提速。
+
+#### C) 解释热点：为什么 `ggml_ifairy_factor_to_opcode` 会占 7%
+
+- 该函数应当只在“索引/权重转换”阶段使用。如果 profiler 显示占比明显，通常意味着：
+  - `transform_tensor` 在推理过程中被重复触发（graph 重建/weight view/extra 丢失）；
+  - 或者索引生成没有被缓存/复用。
+- 建议（工程修复）：把 transform 前移到模型加载阶段，或构建全局缓存（key=`tensor->data` 指针）保证同一权重只转换一次；后续改为 shadow tensor 或可追踪 buffer 管理生命周期。
+
+#### D) 提速路线（按收益排序）
+
+1) **Release + 关闭日志**：默认不开 `GGML_IFAIRY_LUT_DEBUG`，避免 can_mul_mat 的高频日志污染性能。
+2) **标量止血**（NEON 之前）：
+   - 为 `n==1` 的 matvec 写专用 qgemm（去掉 N/stride 分支与多余 memcpy）。
+   - `code` byte 解码改为 `decode_table[256]`，减少 bit/branch。
+   - 索引生成缓存：消灭推理期重复 transform。
+3) **NEON 关键提速（最终目标）**：
+   - 按 BitNet TL1 思路实现 BM=16：对同一 group，LUT 常驻寄存器，用 vqtbl 对 **16 行并行查表**，把当前 85% hotpath 的标量循环改为 SIMD。
+   - 优先实现 `n==1`，再扩展 `n==2/4`。
+4) **缩放与分组布局优化**：
+   - 尽量让 3‑weight 分组不跨 `QK_K=256` block（按 block 内分组并 padding），从结构上匹配 per-block 缩放并减少 LUT 复杂度。
+
+#### E) CLI Profiling（Codex 可直接跑）
+
+```bash
+mkdir -p tmp/traces
+GGML_IFAIRY_LUT=1 xcrun xctrace record \
+  --template "Time Profiler" \
+  --time-limit 15s \
+  --output tmp/traces/ifairy_lut_timeprofile.trace \
+  --launch -- build-rel/bin/llama-cli \
+    -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv
+```
+
+> 以上步骤完成后，再进入 10.5 的 NEON 内核实现；否则在数学/缩放未对齐前，提速只会把“乱码”跑得更快。***
+
+#### F) 输出“乱码”专项修正计划
+
+1) **严格校验模式（短期确保正确）**  
+   - 新增 env `GGML_IFAIRY_LUT_VALIDATE_STRICT=1`：在 LUT 分支内，如发现三权重组跨 `QK_K` block，则退化为逐权重计算（每权重单独应用激活缩放和权重量化缩放，复数乘累加），仍在 LUT 路径，不回退 vec_dot；仅用于验证输出可读性，默认关闭。
+   - 可与抽样校验共用：只对前 N 个 ifairy mul_mat、少量行做严格模式，以减少性能冲击。
+
+2) **分组与缩放重排（正式修复）**  
+   - 方案 A（推荐）：索引编码按 block 切分，每个 `QK_K=256` 内 `(QK_K/3)` 组，尾部 padding；预处理/LUT/qgemm 也按 block 切片。这样每组权重与激活缩放都属于同一 block，无需平均近似。  
+   - 方案 B（过渡）：扩展 scale buffer 为“每组 3 个权重的缩放”（6 float），即便组跨 block 也能精确应用缩放；在 A 落地后回收为 A。
+
+3) **落地顺序**  
+   - 先实现严格校验模式，确认文本恢复可读，并记录具体层/组是否跨 block。  
+   - 若严格模式可读，则优先推进方案 A；如改索引风险高，先落方案 B 保证正确输出，再迭代到 A。  
+   - 保持 Release 构建，默认关闭 debug 输出，避免性能噪声。***
+
+### G) 当前进展（方案 A 落地后的状态补充）
+- 索引/预处理/qgemm 已统一使用方案 A：每个 `QK_K=256` block 丢弃末尾 1 个权重（255=85*3），`groups_per_block=85`。`ggml_ifairy_3w_encode`、wsize、预处理以及标量 qgemm 均按新分组计算。
+- 严格校验模式：`GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 时 qgemm 直接按量化权重 + 激活重构累加用于校验；`tests/test-ifairy` 在 strict/非 strict 下均 0 diff 通过。
+- 类型注册：`llama-model-loader` 已加入 `LLAMA_FTYPE_MOSTLY_IFAIRY` 映射，加载时不再报警 “unknown type ifairy”。
+- 问题仍存：`GGML_IFAIRY_LUT=1`（即便 strict=1）运行 `llama-cli` 输出仍为乱码，需继续排查（可能与方案 A 丢弃 block 尾元素或缩放/布局差异有关）；首要目标是让 LUT 路径输出可读文本，再推进 NEON 与性能优化。
+
 ---
 
 ## 11. 未来扩展方向

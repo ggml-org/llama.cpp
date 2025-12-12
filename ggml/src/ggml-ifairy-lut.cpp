@@ -19,6 +19,16 @@
 static std::vector<ifairy_lut_extra *> g_ifairy_lut_extras;
 static std::mutex g_ifairy_lut_mutex;
 
+static inline uint8_t ggml_ifairy_read_code_local(const block_ifairy * row_blocks, int64_t idx) {
+    const int64_t block_idx    = idx / QK_K;
+    const int64_t idx_in_block = idx - block_idx * QK_K;
+    const int     chunk        = (int) (idx_in_block >> 6);          // 0..3
+    const int     lane         = (int) (idx_in_block & 0x0f);        // 0..15
+    const int     part         = (int) ((idx_in_block >> 4) & 0x3);  // 0..3
+    const uint8_t packed       = row_blocks[block_idx].qs[chunk * 16 + lane];
+    return (packed >> (2 * part)) & 0x3;
+}
+
 // Scalar reference implementation for iFairy 3-weight LUT path.
 // Integration into routing is pending; functions here produce correct scalar outputs.
 
@@ -31,7 +41,9 @@ void ggml_ifairy_lut_free(void) {
     std::lock_guard<std::mutex> lock(g_ifairy_lut_mutex);
     for (auto * e : g_ifairy_lut_extras) {
         if (e) {
-            ggml_aligned_free(e->indexes, e->size);
+            if (e->indexes && e->index_tensor == NULL) {
+                ggml_aligned_free(e->indexes, e->size);
+            }
             delete e;
         }
     }
@@ -103,15 +115,14 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     }
     const int64_t K = src0->ne[0];
     const int64_t N = src1->ne[1];
-    const int64_t K3 = (K + 2) / 3 * 3;
-    const int64_t groups = K3 / 3;
     const int64_t blocks_per_col = K / QK_K;
+    const int64_t groups = blocks_per_col * ((QK_K - 1) / 3); // drop each 256th elem
     size_t quant_bytes = 0;
     if (src1->type == GGML_TYPE_F32) {
         quant_bytes = GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64);
     }
     const size_t lut_bytes = (size_t) N * (size_t) groups * 32;
-    const size_t scale_bytes = (size_t) N * 2 * sizeof(float);
+    const size_t scale_bytes = (size_t) N * (size_t) groups * 2 * sizeof(float);
     const size_t tmp_bytes = (size_t) N * sizeof(float);
     const size_t per_thread = GGML_PAD(lut_bytes + scale_bytes + tmp_bytes, 64);
     return quant_bytes + per_thread * (size_t) n_threads;
@@ -155,6 +166,7 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
     extra = new ifairy_lut_extra;
     extra->indexes = buf;
     extra->size    = index_bytes;
+    extra->index_tensor = NULL;
     tensor->extra  = extra;
 
     {
@@ -175,8 +187,9 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
     }
 
     const int64_t K  = k;
-    const int64_t K3 = (K + 2) / 3 * 3;
-    const int64_t groups = K3 / 3;
+    const int64_t blocks = K / QK_K;
+    const int64_t groups_per_block = (QK_K - 1) / 3;
+    const int64_t groups = blocks * groups_per_block;
 
     // canonical patterns for idx' = 0..15 (u1, u2)
     static const int8_t u_wr[16] = { 1, 1, 1, 1, 0, 0, 0, 0,-1,-1,-1,-1, 0, 0, 0, 0};
@@ -187,24 +200,24 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
     for (int col = 0; col < n; ++col) {
         const uint8_t * act_col_bytes = (const uint8_t *) act + (size_t) col * act_stride;
         const block_ifairy_q16 * act_blocks = (const block_ifairy_q16 *) act_col_bytes;
-        float * scales_out = (float *) lut_scales + (size_t) col * 2;
-        // Use first block as per-tensor activation scales (matches current pipeline).
-        scales_out[0] = GGML_FP16_TO_FP32(act_blocks[0].d_real);
-        scales_out[1] = GGML_FP16_TO_FP32(act_blocks[0].d_imag);
+        float * scales_out = (float *) lut_scales + (size_t) col * (size_t) groups * 2;
 
         int8_t * lut_out = (int8_t *) lut_buf + (size_t) col * (size_t) groups * 32;
 
         for (int64_t g = 0; g < groups; ++g) {
-            const int64_t idx0 = g * 3 + 0;
-            const int64_t idx1 = g * 3 + 1;
-            const int64_t idx2 = g * 3 + 2;
+            const int64_t blk   = g / groups_per_block;
+            const int64_t intra = g - blk * groups_per_block;
 
-            const int64_t blk0 = idx0 / QK_K;
-            const int64_t blk1 = idx1 / QK_K;
-            const int64_t blk2 = idx2 / QK_K;
-            const int off0 = idx0 % QK_K;
-            const int off1 = idx1 % QK_K;
-            const int off2 = idx2 % QK_K;
+            const int64_t idx0 = blk * QK_K + intra * 3 + 0;
+            const int64_t idx1 = blk * QK_K + intra * 3 + 1;
+            const int64_t idx2 = blk * QK_K + intra * 3 + 2;
+
+            const int blk0 = (int) blk;
+            const int blk1 = (int) blk;
+            const int blk2 = (int) blk;
+            const int off0 = (int) (idx0 - blk * QK_K);
+            const int off1 = (int) (idx1 - blk * QK_K);
+            const int off2 = (int) (idx2 - blk * QK_K);
 
             int xr0 = 0, xi0 = 0;
             int xr1 = 0, xi1 = 0;
@@ -216,6 +229,19 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
 
             int8_t * real_tbl = lut_out + (size_t) g * 32 + 0;
             int8_t * imag_tbl = lut_out + (size_t) g * 32 + 16;
+
+            float act_scale_r = 0.0f;
+            float act_scale_i = 0.0f;
+            int   scale_cnt   = 0;
+            if (idx0 < K) { act_scale_r += GGML_FP16_TO_FP32(act_blocks[blk0].d_real); act_scale_i += GGML_FP16_TO_FP32(act_blocks[blk0].d_imag); ++scale_cnt; }
+            if (idx1 < K) { act_scale_r += GGML_FP16_TO_FP32(act_blocks[blk1].d_real); act_scale_i += GGML_FP16_TO_FP32(act_blocks[blk1].d_imag); ++scale_cnt; }
+            if (idx2 < K) { act_scale_r += GGML_FP16_TO_FP32(act_blocks[blk2].d_real); act_scale_i += GGML_FP16_TO_FP32(act_blocks[blk2].d_imag); ++scale_cnt; }
+            if (scale_cnt > 0) {
+                act_scale_r /= (float) scale_cnt;
+                act_scale_i /= (float) scale_cnt;
+            }
+            scales_out[g * 2 + 0] = act_scale_r;
+            scales_out[g * 2 + 1] = act_scale_i;
 
             for (int idx = 0; idx < 16; ++idx) {
                 const int wr1 = u_wr[idx];
@@ -244,28 +270,28 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
     }
 }
 
-void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uint8_t * indexes, const void * lut, const void * lut_scales, float * dst, size_t dst_col_stride, size_t dst_row_stride, bool pack_bf16) {
-    if (!indexes || !lut || !lut_scales || !dst || !qweights) {
+void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uint8_t * indexes, const void * lut, const void * lut_scales, const void * act, size_t act_stride, float * dst, size_t dst_col_stride, size_t dst_row_stride, bool pack_bf16, bool strict) {
+    if (!indexes || !dst || !qweights) {
         return;
     }
 
     const int64_t K = k;
-    const int64_t K3 = (K + 2) / 3 * 3;
-    const int64_t groups = K3 / 3;
+    const int64_t blocks = K / QK_K;
+    const int64_t groups_per_block = (QK_K - 1) / 3;
+    const int64_t groups = blocks * groups_per_block;
 
-    // Use first block as per-tensor weight scales (aligns with current ifairy quantization).
     const block_ifairy * w_blocks = (const block_ifairy *) qweights;
-    const float w_scale_r = GGML_FP16_TO_FP32(w_blocks[0].d_real);
-    const float w_scale_i = GGML_FP16_TO_FP32(w_blocks[0].d_imag);
 
     for (int row = 0; row < m; ++row) {
+        const block_ifairy * w_row = w_blocks + (size_t) row * (size_t) blocks;
         for (int col = 0; col < n; ++col) {
             const int8_t * lut_base = (const int8_t *) lut + (size_t) col * (size_t) groups * 32;
             const uint8_t * idx_row = indexes + (size_t) row * (size_t) groups;
-            const float * scales = (const float *) lut_scales + (size_t) col * 2;
+            const float * scales = (const float *) lut_scales + (size_t) col * (size_t) groups * 2;
+            const block_ifairy_q16 * act_blocks = act ? (const block_ifairy_q16 *) ((const uint8_t *) act + (size_t) col * act_stride) : NULL;
 
-            int32_t acc_r = 0;
-            int32_t acc_i = 0;
+            float acc_r = 0.0f;
+            float acc_i = 0.0f;
 
             for (int64_t g = 0; g < groups; ++g) {
                 const uint8_t code = idx_row[g];
@@ -274,31 +300,92 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
                 const bool neg_r   = (code & 0x20u) != 0;
                 const bool neg_i   = (code & 0x40u) != 0;
 
-                const int8_t val_r = lut_base[(size_t) g * 32 + idx];
-                const int8_t val_i = lut_base[(size_t) g * 32 + 16 + idx];
+                const int64_t blk   = g / groups_per_block;
+                const int64_t intra = g - blk * groups_per_block;
+                const int idx0 = (int) (blk * QK_K + intra * 3 + 0);
+                const int idx1 = (int) (blk * QK_K + intra * 3 + 1);
+                const int idx2 = (int) (blk * QK_K + intra * 3 + 2);
 
-                int vr = val_r;
-                int vi = val_i;
-                if (do_swap) {
-                    int tmp = vr;
-                    vr = vi;
-                    vi = tmp;
+                if (!strict) {
+                    const int8_t val_r = lut_base[(size_t) g * 32 + idx];
+                    const int8_t val_i = lut_base[(size_t) g * 32 + 16 + idx];
+
+                    int vr = val_r;
+                    int vi = val_i;
+                    if (do_swap) {
+                        int tmp = vr;
+                        vr = vi;
+                        vi = tmp;
+                    }
+                    if (neg_r) vr = -vr;
+                    if (neg_i) vi = -vi;
+
+                    const int w_blk = (int) blk;
+                    const float w_scale_r = GGML_FP16_TO_FP32(w_row[w_blk].d_real);
+                    const float w_scale_i = GGML_FP16_TO_FP32(w_row[w_blk].d_imag);
+
+                    const float act_scale_r = scales[g * 2 + 0];
+                    const float act_scale_i = scales[g * 2 + 1];
+
+                    acc_r += (float) vr * act_scale_r * w_scale_r;
+                    acc_i += (float) vi * act_scale_i * w_scale_i;
+                } else {
+                    // strict: reconstruct contribution directly from quantized weights/activations
+                    const int blk0 = idx0 / QK_K;
+                    const int blk1 = idx1 / QK_K;
+                    const int blk2 = idx2 / QK_K;
+                    const int off0 = idx0 - blk0 * QK_K;
+                    const int off1 = idx1 - blk1 * QK_K;
+                    const int off2 = idx2 - blk2 * QK_K;
+
+                    int xr0 = 0, xi0 = 0;
+                    int xr1 = 0, xi1 = 0;
+                    int xr2 = 0, xi2 = 0;
+
+                    if (idx0 < K) { xr0 = (int8_t) act_blocks[blk0].x_real[off0]; xi0 = (int8_t) act_blocks[blk0].x_imag[off0]; }
+                    if (idx1 < K) { xr1 = (int8_t) act_blocks[blk1].x_real[off1]; xi1 = (int8_t) act_blocks[blk1].x_imag[off1]; }
+                    if (idx2 < K) { xr2 = (int8_t) act_blocks[blk2].x_real[off2]; xi2 = (int8_t) act_blocks[blk2].x_imag[off2]; }
+
+                    const float a0r = (idx0 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk0].d_real) : 0.0f;
+                    const float a0i = (idx0 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk0].d_imag) : 0.0f;
+                    const float a1r = (idx1 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk1].d_real) : 0.0f;
+                    const float a1i = (idx1 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk1].d_imag) : 0.0f;
+                    const float a2r = (idx2 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk2].d_real) : 0.0f;
+                    const float a2i = (idx2 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk2].d_imag) : 0.0f;
+
+                    const uint8_t c0 = (idx0 < K) ? ggml_ifairy_read_code_local(w_row, idx0) : 0;
+                    const uint8_t c1 = (idx1 < K) ? ggml_ifairy_read_code_local(w_row, idx1) : 0;
+                    const uint8_t c2 = (idx2 < K) ? ggml_ifairy_read_code_local(w_row, idx2) : 0;
+
+                    auto accum_one = [&](uint8_t c, float ar, float ai, const block_ifairy & wb, float & rr, float & ii) {
+                        if (c <= 1) {
+                            const float w = (c == 1 ? 1.0f : -1.0f) * GGML_FP16_TO_FP32(wb.d_real);
+                            rr += w * ar;
+                            ii += w * ai;
+                        } else {
+                            const float w = (c == 3 ? 1.0f : -1.0f) * GGML_FP16_TO_FP32(wb.d_imag);
+                            rr += -w * ai;
+                            ii +=  w * ar;
+                        }
+                    };
+
+                    float real = 0.0f;
+                    float imag = 0.0f;
+                    if (idx0 < K) accum_one(c0, (float) xr0 * a0r, (float) xi0 * a0i, w_row[blk0], real, imag);
+                    if (idx1 < K) accum_one(c1, (float) xr1 * a1r, (float) xi1 * a1i, w_row[blk1], real, imag);
+                    if (idx2 < K) accum_one(c2, (float) xr2 * a2r, (float) xi2 * a2i, w_row[blk2], real, imag);
+
+                    acc_r += real;
+                    acc_i += imag;
                 }
-                if (neg_r) vr = -vr;
-                if (neg_i) vi = -vi;
-
-                acc_r += vr;
-                acc_i += vi;
             }
 
-            const float act_scale_r = scales[0];
-            const float act_scale_i = scales[1];
-            float out_r = (float) acc_r * act_scale_r * w_scale_r;
-            float out_i = (float) acc_i * act_scale_i * w_scale_i;
+            const float out_r = acc_r;
+            const float out_i = acc_i;
 
             if (!isfinite(out_r) || !isfinite(out_i)) {
-                ggml_abort(__FILE__, __LINE__, "ifairy_lut_qgemm: non-finite output (row=%d col=%d acc_r=%d acc_i=%d act_scale_r=%f act_scale_i=%f w_scale_r=%f w_scale_i=%f)",
-                           row, col, acc_r, acc_i, act_scale_r, act_scale_i, w_scale_r, w_scale_i);
+                ggml_abort(__FILE__, __LINE__, "ifairy_lut_qgemm: non-finite output (row=%d col=%d acc_r=%f acc_i=%f)",
+                           row, col, out_r, out_i);
             }
 
             uint8_t * out_base = (uint8_t *) dst + (size_t) col * dst_col_stride + (size_t) row * dst_row_stride;
@@ -322,10 +409,12 @@ static void ggml_ifairy_lut_mul_mat_scalar_internal(int m, int k, int n, const v
         return;
     }
 
+    const bool strict = getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT") && strcmp(getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT"), "0") != 0;
+
     // preprocess activations -> LUT per column
     ggml_ifairy_lut_preprocess(m, k, n, act, act_stride, scales, lut);
     const size_t dst_row_stride = 2 * sizeof(float);
-    ggml_ifairy_lut_qgemm(m, k, n, qweights, indexes, lut, scales, dst, dst_col_stride, dst_row_stride, false);
+    ggml_ifairy_lut_qgemm(m, k, n, qweights, indexes, lut, scales, act, act_stride, dst, dst_col_stride, dst_row_stride, false, strict);
 }
 
 void ggml_ifairy_lut_mul_mat_scalar(int m, int k, int n, const void * qweights, const void * act, size_t act_stride, float * dst) {
@@ -334,8 +423,9 @@ void ggml_ifairy_lut_mul_mat_scalar(int m, int k, int n, const void * qweights, 
     }
 
     const int64_t K = k;
-    const int64_t K3 = (K + 2) / 3 * 3;
-    const int64_t groups = K3 / 3;
+    const int64_t blocks = K / QK_K;
+    const int64_t groups_per_block = (QK_K - 1) / 3;
+    const int64_t groups = blocks * groups_per_block;
 
     // workspace: indexes + LUT + scales
     const size_t index_bytes = (size_t) m * (size_t) groups;
