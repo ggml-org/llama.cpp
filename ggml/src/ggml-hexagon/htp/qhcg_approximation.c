@@ -120,7 +120,7 @@ int32_t qhcg_approximation(float *restrict input, float *restrict output, uint32
     HVX_Vector sline;
     HVX_Vector sline_tmp;    
     HVX_Vector sout;
-    int32_t block; //l2fetch_block;
+    int32_t block, l2fetch_block;
     int32_t leftover = size & 31;
     int32_t vectors_in_rounddown = size / 32;
     int32_t leftover_size = leftover * sizeof(float);
@@ -241,12 +241,12 @@ int32_t qhcg_approximation(float *restrict input, float *restrict output, uint32
     for (int32_t i = vectors_in_rounddown - 1; i > 0; i -= BLOCK_SIZE)
     {
         block = Q6_R_min_RR(i, BLOCK_SIZE);
-        //l2fetch_block = Q6_R_min_RR(i - L2FETCH_AHEAD, BLOCK_SIZE);
+        l2fetch_block = Q6_R_min_RR(i - L2FETCH_AHEAD, BLOCK_SIZE);
 
-        // if (l2fetch_block > 0)
-        // {
-        //     l2fetch(input_v_ptr + L2FETCH_AHEAD, 128, 128, l2fetch_block, 0);
-        // }
+        if (l2fetch_block > 0)
+        {
+            l2fetch(input_v_ptr + L2FETCH_AHEAD, 128, 128, l2fetch_block, 0);
+        }
 
         /* Process one vector at a time */
         for (int32_t j = 0; j < block; ++j)
