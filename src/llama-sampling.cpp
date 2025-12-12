@@ -2326,12 +2326,11 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
 
 struct llama_sampler_power_law {
     const float    target;
-    const float    target_range;
     const int32_t  window_size;
-    const uint32_t seed;
 
+    const uint32_t     seed;
     std::mt19937       rng;
-    ring_buffer<float> history;
+    ring_buffer<float> window;
 };
 
 static const char * llama_sampler_power_law_name(const struct llama_sampler * /*smpl*/) {
@@ -2341,66 +2340,82 @@ static const char * llama_sampler_power_law_name(const struct llama_sampler * /*
 static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_power_law *) smpl->ctx;
 
-    // clamp the target range to [0.0, 1.0]
-    const float min_target = std::max(ctx->target - ctx->target_range, 0.0f);
-    const float max_target = std::min(ctx->target + ctx->target_range, 1.0f);
+    if (ctx->target < 0.0f) {
+        // no-op: just sample from the distribution as-is
+        llama_sampler_softmax_impl(cur_p, false);
+        const int idx = llama_sample_dist(cur_p, ctx->rng);
+        cur_p->selected = idx;
+        return;
+    }
+
+    // fixed power law transform parameters (from original implementation)
+    const float distribution_width = 0.2f;
+    const float peak_logit_value   = 3.0f;
+    const float tail_heaviness     = 3.0f;
 
     // compute probabilities to get the "original" values
     llama_sampler_softmax_impl(cur_p, false);
 
-    // store original probabilities (needed for history update)
+    // store original probabilities (used for future target adaptation)
     std::vector<float> original_probs;
     original_probs.reserve(cur_p->size);
     for (size_t i = 0; i < cur_p->size; ++i) {
         original_probs.push_back(cur_p->data[i].p);
     }
 
+    //
     // calculate adaptive target
+    //
+
+    const float min_target = 0.0f;
+    const float max_target = 1.0f;
+
     float computed_target = ctx->target;
-    if (ctx->history.size() > 0) {
+    if (ctx->window.size() > 0) {
         float sum_excluding_oldest = 0.0f;
-        size_t sz = ctx->history.size();
+        size_t sz = ctx->window.size();
 
         // sum all except the oldest element
         for (size_t i = 0; i < sz - 1; ++i) {
-            sum_excluding_oldest += ctx->history.rat(i);
+            sum_excluding_oldest += ctx->window.rat(i);
         }
 
         float next_value = (ctx->target * ctx->window_size) - sum_excluding_oldest;
         computed_target = std::max(min_target, std::min(next_value, max_target));
     }
 
-    // apply power law transformation
+    //
+    // power law transform
+    //
+
     for (size_t i = 0; i < cur_p->size; ++i) {
         float p = cur_p->data[i].p;
-        float normalized_distance = std::abs(p - computed_target) / 0.2f;
-        cur_p->data[i].logit = 3.0f / (1.0f + std::pow(normalized_distance, 3.0f));
+        float normalized_distance = std::abs(p - computed_target) / distribution_width;
+        cur_p->data[i].logit = peak_logit_value / (1.0f + std::pow(normalized_distance, tail_heaviness));
     }
 
     llama_sampler_softmax_impl(cur_p, false);
 
-    // sample from distribution
+    // sample from the transformed distribution
     const int idx = llama_sample_dist(cur_p, ctx->rng);
-
-    // set sampled token
     cur_p->selected = idx;
 
-    // update history with ORIGINAL probability
-    ctx->history.push_back(original_probs[idx]);
+    // add the ORIGINAL probability to the rolling window
+    ctx->window.push_back(original_probs[idx]);
 }
 
 static void llama_sampler_power_law_reset(struct llama_sampler * smpl) {
-    auto * ctx   = (llama_sampler_power_law *) smpl->ctx;
-    ctx->history = ring_buffer<float>(ctx->window_size);
+    auto * ctx  = (llama_sampler_power_law *) smpl->ctx;
+    ctx->window = ring_buffer<float>(ctx->window_size);
 }
 
 static struct llama_sampler * llama_sampler_power_law_clone(const struct llama_sampler * smpl) {
     const auto * ctx  = (const llama_sampler_power_law *) smpl->ctx;
-    auto * result     = llama_sampler_init_power_law(ctx->target, ctx->target_range, ctx->window_size, ctx->seed);
+    auto * result     = llama_sampler_init_power_law(ctx->target, ctx->window_size, ctx->seed);
     auto * result_ctx = (llama_sampler_power_law *) result->ctx;
 
     result_ctx->rng     = ctx->rng;
-    result_ctx->history = ctx->history;
+    result_ctx->window = ctx->window;
 
     return result;
 }
@@ -2420,7 +2435,6 @@ static struct llama_sampler_i llama_sampler_power_law_i = {
 
 struct llama_sampler * llama_sampler_init_power_law(
     float    target,
-    float    target_range,
     int32_t  window_size,
     uint32_t seed
 ) {
@@ -2429,11 +2443,10 @@ struct llama_sampler * llama_sampler_init_power_law(
         /* .iface = */ &llama_sampler_power_law_i,
         /* .ctx   = */ new llama_sampler_power_law {
             /* .target       = */ target,
-            /* .target_range = */ target_range,
             /* .window_size  = */ window_size,
             /* .seed         = */ seed_cur,
             /* .rng          = */ std::mt19937(seed_cur),
-            /* .history      = */ ring_buffer<float>(window_size),
+            /* .window       = */ ring_buffer<float>(window_size),
         }
     );
 }

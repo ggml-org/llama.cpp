@@ -1297,13 +1297,16 @@ extern "C" {
     ///
     /// it is recommended to only perform minimal truncation before this sampler.
     ///
+    /// @param target target probability (valid range 0.0 to 1.0; <0 = disabled)
+    /// @param window_size rolling window size for target adaptation (≤0 = fixed target)
+    /// @param seed RNG seed
+    ///
     /// ref: https://github.com/MrJackSpade/llama.cpp/tree/master (original impl, documentation)
     /// ref: https://github.com/ggml-org/llama.cpp/pull/17927     (llama.cpp PR)
     LLAMA_API struct llama_sampler * llama_sampler_init_power_law(
-                               float    target,       // target probability (0.0 to 1.0)
-                               float    target_range, // adaptive target range (target±range)
-                             int32_t    window_size,  // rolling history window size for target adaptation
-                            uint32_t    seed);        // RNG seed
+                               float    target,
+                             int32_t    window_size,
+                            uint32_t    seed);
 
     LLAMA_API struct llama_sampler * llama_sampler_init_logit_bias(
                              int32_t   n_vocab,

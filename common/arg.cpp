@@ -1503,23 +1503,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--power-law-target"}, "N",
-        string_format("Power Law sampler target probability (default: %.2f; allowed range 0.0 to 1.0)\n"
-                      "[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927)",
+        string_format("target probability for Power Law sampling (valid range 0.0 to 1.0; <0 = disabled) "
+                      "(%.1f = default)\n[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927)",
                       (double)params.sampling.power_law_target),
         [](common_params & params, const std::string & value) {
             params.sampling.power_law_target = std::stof(value);
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--power-law-target-range"}, "N",
-        string_format("Power Law sampler adaptive target range (target±range) (default: %.2f; 0.0 = fixed target)", (double)params.sampling.power_law_target_range),
-        [](common_params & params, const std::string & value) {
-            params.sampling.power_law_target_range = std::stof(value);
-        }
-    ).set_sparam());
-    add_opt(common_arg(
         {"--power-law-window-size"}, "N",
-        string_format("Power Law sampler rolling window size, in tokens (default: %d; 0 = fixed target)", params.sampling.power_law_window_size),
+        string_format("rolling window size for target adaptation in Power Law sampling (≤0 = fixed target; %d = default)", params.sampling.power_law_window_size),
         [](common_params & params, int value) {
             params.sampling.power_law_window_size = value;
         }
