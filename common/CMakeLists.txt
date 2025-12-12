@@ -60,6 +60,8 @@ add_library(${TARGET} STATIC
     common.h
     console.cpp
     console.h
+    debug.cpp
+    debug.h
     download.cpp
     download.h
     http.h

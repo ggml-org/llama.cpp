@@ -9,6 +9,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "gguf.h"
+#include "common/debug.h"
 
 #include <cassert>
 #include <cmath>
@@ -432,7 +433,7 @@ struct clip_ctx {
 
     // for debugging
     bool debug_graph = false;
-    std::vector<ggml_tensor *> debug_print_tensors;
+    base_callback_data cb_data;
 
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
@@ -477,6 +478,10 @@ struct clip_ctx {
         sched.reset(
             ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false, true)
         );
+
+        if (debug_graph) {
+            ggml_backend_sched_set_eval_callback(sched.get(), ggml_debug<false>, &cb_data);
+        }
     }
 
     ~clip_ctx() {
@@ -1999,14 +2004,11 @@ private:
     // utility functions
     //
 
-    void cb(ggml_tensor * cur0, const char * name, int il) const {
-        if (ctx->debug_graph) {
-            ggml_tensor * cur = ggml_cpy(ctx0, cur0, ggml_dup_tensor(ctx0, cur0));
-            std::string cur_name = il >= 0 ? std::string(name) + "_" + std::to_string(il) : name;
-            ggml_set_name(cur, cur_name.c_str());
-            ggml_set_output(cur);
-            ggml_build_forward_expand(gf, cur);
-            ctx->debug_print_tensors.push_back(cur);
+    void cb(ggml_tensor * cur, const char * name, int il) const {
+        if (il >= 0) {
+            ggml_format_name(cur, "%s-%d", name, il);
+        } else {
+            ggml_set_name(cur, name);
         }
     }
 
@@ -4668,7 +4670,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     // build the inference graph
-    ctx->debug_print_tensors.clear();
     ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
     ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
@@ -5010,18 +5011,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     if (status != GGML_STATUS_SUCCESS) {
         LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
         return false;
-    }
-
-    // print debug nodes
-    if (ctx->debug_graph) {
-        LOG_INF("\n\n---\n\n");
-        LOG_INF("\n\nDebug graph:\n\n");
-        for (ggml_tensor * t : ctx->debug_print_tensors) {
-            std::vector<uint8_t> data(ggml_nbytes(t));
-            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
-            print_tensor_shape(t);
-            print_tensor_data(t, data.data(), 3);
-        }
     }
 
     // the last node is the embedding tensor
