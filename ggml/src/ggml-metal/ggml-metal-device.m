@@ -769,7 +769,7 @@ ggml_metal_device_t ggml_metal_device_init(void) {
 #endif
 
             dev->props.use_shared_buffers = dev->props.has_unified_memory;
-#if defined(TARGET_OS_OSX)
+#if TARGET_OS_OSX
             // In case of eGPU, shared memory may be preferable.
             dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
 #endif
