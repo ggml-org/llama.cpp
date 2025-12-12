@@ -16,6 +16,7 @@ struct common_arg {
     std::set<enum llama_example> examples = {LLAMA_EXAMPLE_COMMON};
     std::set<enum llama_example> excludes = {};
     std::vector<const char *> args;
+    std::vector<const char *> args_neg;  // for negated args like --no-xxx
     const char * value_hint   = nullptr; // help text or example for arg value
     const char * value_hint_2 = nullptr; // for second arg value
     const char * env          = nullptr;
@@ -25,6 +26,7 @@ struct common_arg {
     void (*handler_string) (common_params & params, const std::string &) = nullptr;
     void (*handler_str_str)(common_params & params, const std::string &, const std::string &) = nullptr;
     void (*handler_int)    (common_params & params, int) = nullptr;
+    void (*handler_bool)   (common_params & params, bool) = nullptr;
 
     common_arg() = default;
 
@@ -47,6 +49,13 @@ struct common_arg {
         const std::string & help,
         void (*handler)(common_params & params)
     ) : args(args), help(help), handler_void(handler) {}
+
+    common_arg(
+        const std::initializer_list<const char *> & args,
+        const std::initializer_list<const char *> & args_neg,
+        const std::string & help,
+        void (*handler)(common_params & params, bool)
+    ) : args(args), args_neg(args_neg), help(help), handler_bool(handler) {}
 
     // support 2 values for arg
     common_arg(
@@ -80,6 +89,10 @@ struct common_arg {
         }
         return strcmp(args[0], other.args[0]) == 0;
     }
+
+    // get all args and env vars (including negated args/env)
+    std::vector<std::string> get_args() const;
+    std::vector<std::string> get_env() const;
 };
 
 namespace common_arg_utils {

@@ -105,6 +105,16 @@ bool common_arg::is_exclude(enum llama_example ex) {
 
 bool common_arg::get_value_from_env(std::string & output) const {
     if (env == nullptr) return false;
+    if (!args_neg.empty()) {
+        // for compatibility, we need to check LLAMA_ARG_NO_ env as well
+        std::string neg_env = env;
+        string_replace_all(neg_env, "LLAMA_ARG_", "LLAMA_ARG_NO_");
+        char * neg_value = std::getenv(neg_env.c_str());
+        if (neg_value) {
+            output = "0"; // falsey
+            return true;
+        }
+    }
     char * value = std::getenv(env);
     if (value) {
         output = value;
@@ -114,6 +124,14 @@ bool common_arg::get_value_from_env(std::string & output) const {
 }
 
 bool common_arg::has_value_from_env() const {
+    if (env != nullptr && !args_neg.empty()) {
+        // for compatibility, we need to check LLAMA_ARG_NO_ env as well
+        std::string neg_env = env;
+        string_replace_all(neg_env, "LLAMA_ARG_", "LLAMA_ARG_NO_");
+        if (std::getenv(neg_env.c_str())) {
+            return true;
+        }
+    }
     return env != nullptr && std::getenv(env);
 }
 
@@ -151,9 +169,10 @@ std::string common_arg::to_string() const {
     std::string leading_spaces(n_leading_spaces, ' ');
 
     std::ostringstream ss;
-    for (const auto arg : args) {
-        if (arg == args.front()) {
-            if (args.size() == 1) {
+    auto all_args = get_args(); // also contains args_neg
+    for (const auto & arg : all_args) {
+        if (arg == all_args.front()) {
+            if (all_args.size() == 1) {
                 ss << arg;
             } else {
                 // first arg is usually abbreviation, we need padding to make it more beautiful
@@ -162,7 +181,7 @@ std::string common_arg::to_string() const {
                 ss << tmp << spaces;
             }
         } else {
-            ss << arg << (arg != args.back() ? ", " : "");
+            ss << arg << (arg != all_args.back() ? ", " : "");
         }
     }
     if (value_hint) ss << " " << value_hint;
@@ -179,6 +198,31 @@ std::string common_arg::to_string() const {
         ss << (&line == &help_lines.front() ? "" : leading_spaces) << line << "\n";
     }
     return ss.str();
+}
+
+std::vector<std::string> common_arg::get_args() const {
+    std::vector<std::string> result;
+    for (const auto & arg : args) {
+        result.push_back(std::string(arg));
+    }
+    for (const auto & arg : args_neg) {
+        result.push_back(std::string(arg));
+    }
+    return result;
+}
+
+std::vector<std::string> common_arg::get_env() const {
+    std::vector<std::string> result;
+    if (env) {
+        result.push_back(std::string(env));
+    }
+    if (!args_neg.empty() && env) {
+        // for compatibility, we need to add LLAMA_ARG_NO_ variant
+        std::string neg_env = env;
+        string_replace_all(neg_env, "LLAMA_ARG_", "LLAMA_ARG_NO_");
+        result.push_back(neg_env);
+    }
+    return result;
 }
 
 //
@@ -316,6 +360,16 @@ static std::string get_all_kv_cache_types() {
     return msg.str();
 }
 
+static bool parse_bool_value(const std::string & value) {
+    if (is_truthy(value)) {
+        return true;
+    } else if (is_falsey(value)) {
+        return false;
+    } else {
+        throw std::invalid_argument("invalid boolean value");
+    }
+}
+
 //
 // CLI argument parsing functions
 //
@@ -323,10 +377,13 @@ static std::string get_all_kv_cache_types() {
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
-    std::unordered_map<std::string, common_arg *> arg_to_options;
+    std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
         for (const auto & arg : opt.args) {
-            arg_to_options[arg] = &opt;
+            arg_to_options[arg] = {&opt, /* is_positive */ true};
+        }
+        for (const auto & arg : opt.args_neg) {
+            arg_to_options[arg] = {&opt, /* is_positive */ false};
         }
     }
 
@@ -335,11 +392,14 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         std::string value;
         if (opt.get_value_from_env(value)) {
             try {
-                if (opt.handler_void && (value == "1" || value == "true")) {
+                if (opt.handler_void && is_truthy(value)) {
                     opt.handler_void(params);
                 }
                 if (opt.handler_int) {
                     opt.handler_int(params, std::stoi(value));
+                }
+                if (opt.handler_bool) {
+                    opt.handler_bool(params, parse_bool_value(value));
                 }
                 if (opt.handler_string) {
                     opt.handler_string(params, value);
@@ -369,13 +429,19 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         if (arg_to_options.find(arg) == arg_to_options.end()) {
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
         }
-        auto opt = *arg_to_options[arg];
+        auto & tmp = arg_to_options[arg];
+        auto opt = *tmp.first;
+        bool is_positive = tmp.second;
         if (opt.has_value_from_env()) {
             fprintf(stderr, "warn: %s environment variable is set, but will be overwritten by command line argument %s\n", opt.env, arg.c_str());
         }
         try {
             if (opt.handler_void) {
                 opt.handler_void(params);
+                continue;
+            }
+            if (opt.handler_bool) {
+                opt.handler_bool(params, is_positive);
                 continue;
             }
 
@@ -402,7 +468,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             throw std::invalid_argument(string_format(
                 "error while handling argument \"%s\": %s\n\n"
                 "usage:\n%s\n\nto show complete usage, run with -h",
-                arg.c_str(), e.what(), arg_to_options[arg]->to_string().c_str()));
+                arg.c_str(), e.what(), opt.to_string().c_str()));
         }
     }
 
@@ -750,11 +816,11 @@ static std::string list_builtin_chat_templates() {
 }
 
 bool common_arg_utils::is_truthy(const std::string & value) {
-    return value == "on" || value == "enabled" || value == "1";
+    return value == "on" || value == "enabled" || value == "true" || value == "1";
 }
 
 bool common_arg_utils::is_falsey(const std::string & value) {
-    return value == "off" || value == "disabled" || value == "0";
+    return value == "off" || value == "disabled" || value == "false" || value == "0";
 }
 
 bool common_arg_utils::is_autoy(const std::string & value) {
@@ -839,10 +905,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--display-prompt"},
         {"--no-display-prompt"},
-        string_format("don't print prompt at generation (default: %s)", !params.display_prompt ? "true" : "false"),
-        [](common_params & params) {
-            params.display_prompt = false;
+        string_format("whether to print prompt at generation (default: %s)", params.display_prompt ? "true" : "false"),
+        [](common_params & params, bool value) {
+            params.display_prompt = value;
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
@@ -1056,17 +1123,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_UNIFIED"));
     add_opt(common_arg(
-        {"--no-context-shift"},
-        string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
-        [](common_params & params) {
-            params.ctx_shift = false;
-        }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
-    add_opt(common_arg(
         {"--context-shift"},
-        string_format("enables context shift on infinite text generation (default: %s)", params.ctx_shift ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.ctx_shift = true;
+        {"--no-context-shift"},
+        string_format("whether to use context shift on infinite text generation (default: %s)", params.ctx_shift ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.ctx_shift = value;
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CONTEXT_SHIFT"));
     add_opt(common_arg(
@@ -1106,20 +1167,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DIFFUSION}));
     add_opt(common_arg(
+        {"--perf"},
         {"--no-perf"},
-        string_format("disable internal libllama performance timings (default: %s)", params.no_perf ? "true" : "false"),
-        [](common_params & params) {
-            params.no_perf = true;
-            params.sampling.no_perf = true;
+        string_format("whether to enable internal libllama performance timings (default: %s)", params.no_perf ? "true" : "false"),
+        [](common_params & params, bool value) {
+            params.no_perf = !value;
+            params.sampling.no_perf = !value;
         }
-    ).set_env("LLAMA_ARG_NO_PERF"));
+    ).set_env("LLAMA_ARG_PERF"));
     add_opt(common_arg(
+        {"--show-timings"},
         {"--no-show-timings"},
-        string_format("disable timing information after each response (default: %s)", params.show_timings ? "true" : "false"),
-        [](common_params & params) {
-            params.show_timings = false;
+        string_format("whether to show timing information after each response (default: %s)", params.show_timings ? "true" : "false"),
+        [](common_params & params, bool value) {
+            params.show_timings = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_NO_SHOW_TIMINGS"));
+    ).set_examples({LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SHOW_TIMINGS"));
     add_opt(common_arg(
         {"-f", "--file"}, "FNAME",
         "a file containing the prompt (default: none)",
@@ -1171,16 +1234,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_excludes({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-e", "--escape"},
-        string_format("process escapes sequences (\\n, \\r, \\t, \\', \\\", \\\\) (default: %s)", params.escape ? "true" : "false"),
-        [](common_params & params) {
-            params.escape = true;
-        }
-    ));
-    add_opt(common_arg(
         {"--no-escape"},
-        "do not process escape sequences",
-        [](common_params & params) {
-            params.escape = false;
+        string_format("whether to process escapes sequences (\\n, \\r, \\t, \\', \\\", \\\\) (default: %s)", params.escape ? "true" : "false"),
+        [](common_params & params, bool value) {
+            params.escape = value;
         }
     ));
     add_opt(common_arg(
@@ -1227,19 +1284,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-cnv", "--conversation"},
-        "run in conversation mode:\n"
+        {"-no-cnv", "--no-conversation"},
+        "whether to run in conversation mode:\n"
         "- does not print special tokens and suffix/prefix\n"
         "- interactive mode is also enabled\n"
         "(default: auto enabled if chat template is available)",
-        [](common_params & params) {
-            params.conversation_mode = COMMON_CONVERSATION_MODE_ENABLED;
-        }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
-    add_opt(common_arg(
-        {"-no-cnv", "--no-conversation"},
-        "force disable conversation mode (default: false)",
-        [](common_params & params) {
-            params.conversation_mode = COMMON_CONVERSATION_MODE_DISABLED;
+        [](common_params & params, bool value) {
+            params.conversation_mode = value ? COMMON_CONVERSATION_MODE_ENABLED : COMMON_CONVERSATION_MODE_DISABLED;
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
@@ -1297,10 +1348,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
+        {"--warmup"},
         {"--no-warmup"},
-        "skip warming up the model with an empty run",
-        [](common_params & params) {
-            params.warmup = false;
+        string_format("whether to perform warmup with an empty run (default: %s)", params.warmup ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.warmup = value;
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
@@ -1702,19 +1754,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_GRP_ATTN_W").set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
+        {"-kvo", "--kv-offload"},
         {"-nkvo", "--no-kv-offload"},
-        "disable KV offload",
-        [](common_params & params) {
-            params.no_kv_offload = true;
+        string_format("whether to enable KV cache offloading (default: %s)", params.no_kv_offload ? "disabled" : "enabled"),
+        [](common_params & params, bool value) {
+            params.no_kv_offload = !value;
         }
-    ).set_env("LLAMA_ARG_NO_KV_OFFLOAD"));
+    ).set_env("LLAMA_ARG_KV_OFFLOAD"));
     add_opt(common_arg(
+        {"--repack"},
         {"-nr", "--no-repack"},
-        "disable weight repacking",
-        [](common_params & params) {
-            params.no_extra_bufts = true;
+        string_format("whether to enable weight repacking (default: %s)", params.no_extra_bufts ? "disabled" : "enabled"),
+        [](common_params & params, bool value) {
+            params.no_extra_bufts = !value;
         }
-    ).set_env("LLAMA_ARG_NO_REPACK"));
+    ).set_env("LLAMA_ARG_REPACK"));
     add_opt(common_arg(
         {"--no-host"},
         "bypass host buffer allowing extra buffers to be used",
@@ -1843,18 +1897,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"-cb", "--cont-batching"},
-        string_format("enable continuous batching (a.k.a dynamic batching) (default: %s)", params.cont_batching ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.cont_batching = true;
+        {"-nocb", "--no-cont-batching"},
+        string_format("whether to enable continuous batching (a.k.a dynamic batching) (default: %s)", params.cont_batching ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.cont_batching = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CONT_BATCHING"));
-    add_opt(common_arg(
-        {"-nocb", "--no-cont-batching"},
-        "disable continuous batching",
-        [](common_params & params) {
-            params.cont_batching = false;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_CONT_BATCHING"));
     add_opt(common_arg(
         {"-mm", "--mmproj"}, "FILE",
         "path to a multimodal projector file. see tools/mtmd/README.md\n"
@@ -1871,19 +1919,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_URL"));
     add_opt(common_arg(
-        {"--no-mmproj"},
-        "explicitly disable multimodal projector, useful when using -hf",
-        [](common_params & params) {
-            params.no_mmproj = true;
+        {"--mmproj-auto"},
+        {"--no-mmproj", "--no-mmproj-auto"},
+        string_format("whether to use multimodal projector file (if available), useful when using -hf (default: %s)", params.no_mmproj ? "disabled" : "enabled"),
+        [](common_params & params, bool value) {
+            params.no_mmproj = !value;
         }
-    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_NO_MMPROJ"));
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_AUTO"));
     add_opt(common_arg(
+        {"--mmproj-offload"},
         {"--no-mmproj-offload"},
-        "do not offload multimodal projector to GPU",
-        [](common_params & params) {
-            params.mmproj_use_gpu = false;
+        string_format("whether to enable GPU offloading for multimodal projector (default: %s)", params.mmproj_use_gpu ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.mmproj_use_gpu = value;
         }
-    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_NO_MMPROJ_OFFLOAD"));
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_OFFLOAD"));
     add_opt(common_arg(
         {"--image", "--audio"}, "FILE",
         "path to an image or audio file. use with multimodal models, can be repeated if you have multiple files\n",
@@ -1923,12 +1973,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MLOCK"));
     add_opt(common_arg(
+        {"--mmap"},
         {"--no-mmap"},
-        "do not memory-map model (slower load but may reduce pageouts if not using mlock)",
-        [](common_params & params) {
-            params.use_mmap = false;
+        string_format("whether to memory-map model (if disabled, slower load but may reduce pageouts if not using mlock) (default: %s)", params.use_mmap ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.use_mmap = value;
         }
-    ).set_env("LLAMA_ARG_NO_MMAP"));
+    ).set_env("LLAMA_ARG_MMAP"));
     add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
@@ -2116,10 +2167,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--op-offload"},
         {"--no-op-offload"},
-        string_format("disable offloading host tensor operations to device (default: %s)", params.no_op_offload ? "true" : "false"),
-        [](common_params & params) {
-            params.no_op_offload = true;
+        string_format("whether to offload host tensor operations to device (default: %s)", params.no_op_offload ? "false" : "true"),
+        [](common_params & params, bool value) {
+            params.no_op_offload = !value;
         }
     ));
     add_opt(common_arg(
@@ -2315,10 +2367,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--ppl"},
         {"--no-ppl"},
-        string_format("do not compute perplexity (default: %s)", params.compute_ppl ? "true" : "false"),
-        [](common_params & params) {
-            params.compute_ppl = false;
+        string_format("whether to compute perplexity (default: %s)", params.compute_ppl ? "true" : "false"),
+        [](common_params & params, bool value) {
+            params.compute_ppl = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
@@ -2437,12 +2490,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_API_PREFIX"));
     add_opt(common_arg(
+        {"--webui"},
         {"--no-webui"},
-        string_format("Disable the Web UI (default: %s)", params.webui ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.webui = false;
+        string_format("whether to enable the Web UI (default: %s)", params.webui ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.webui = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_WEBUI"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI"));
     add_opt(common_arg(
         {"--embedding", "--embeddings"},
         string_format("restrict to only support embedding use case; use only with dedicated embedding models (default: %s)", params.embedding ? "enabled" : "disabled"),
@@ -2547,18 +2601,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_PROPS"));
     add_opt(common_arg(
         {"--slots"},
-        string_format("enable slots monitoring endpoint (default: %s)", params.endpoint_slots ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.endpoint_slots = true;
+        {"--no-slots"},
+        string_format("expose slots monitoring endpoint (default: %s)", params.endpoint_slots ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.endpoint_slots = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_SLOTS"));
-    add_opt(common_arg(
-        {"--no-slots"},
-        "disables slots monitoring endpoint",
-        [](common_params & params) {
-            params.endpoint_slots = false;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_ENDPOINT_SLOTS"));
     add_opt(common_arg(
         {"--slot-save-path"}, "PATH",
         "path to save slot kv cache (default: disabled)",
@@ -2609,26 +2657,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_MAX"));
     add_opt(common_arg(
+        {"--models-autoload"},
         {"--no-models-autoload"},
-        "disables automatic loading of models (default: enabled)",
-        [](common_params & params) {
-            params.models_autoload = false;
+        string_format("for router server, whether to automatically load models (default: %s)", params.models_autoload ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.models_autoload = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_MODELS_AUTOLOAD"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_AUTOLOAD"));
     add_opt(common_arg(
         {"--jinja"},
-        string_format("use jinja template for chat (default: %s)", params.use_jinja ? "enabled" : "disabled"),
-        [](common_params & params) {
-            params.use_jinja = true;
+        {"--no-jinja"},
+        string_format("whether to use jinja template engine for chat (default: %s)", params.use_jinja ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.use_jinja = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
-    add_opt(common_arg(
-        {"--no-jinja"},
-        string_format("disable jinja template for chat (default: %s)", params.use_jinja ? "disabled" : "enabled"),
-        [](common_params & params) {
-            params.use_jinja = false;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_NO_JINJA"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
@@ -2673,15 +2716,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
     add_opt(common_arg(
+        {"--prefill-assistant"},
         {"--no-prefill-assistant"},
         string_format(
             "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
             "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n"
         ),
-        [](common_params & params) {
-            params.prefill_assistant = false;
+        [](common_params & params, bool value) {
+            params.prefill_assistant = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_PREFILL_ASSISTANT"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PREFILL_ASSISTANT"));
     add_opt(common_arg(
         {"-sps", "--slot-prompt-similarity"}, "SIMILARITY",
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),
