@@ -6,11 +6,25 @@ add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
             mtmd.h
+            mtmd-helper.cpp
+            mtmd-helper.h
             clip.cpp
             clip.h
             clip-impl.h
-            mtmd-helper.cpp
-            mtmd-helper.h
+            clip-model.h
+            clip-graph.h
+            models/models.h
+            models/cogvlm.cpp
+            models/internvl.cpp
+            models/kimivl.cpp
+            models/llama4.cpp
+            models/llava.cpp
+            models/minicpmv.cpp
+            models/pixtral.cpp
+            models/qwen2vl.cpp
+            models/qwen3vl.cpp
+            models/siglip.cpp
+            models/whisper-enc.cpp
             )
 
 set_target_properties(mtmd PROPERTIES
