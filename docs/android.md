@@ -1,6 +1,26 @@
 
 # Android
 
+## Build with Android Studio
+
+Import the `examples/llama.android` directory into Android Studio, then perform a Gradle sync and build the project.
+![Project imported into Android Studio](./android/imported-into-android-studio.png)
+
+This Android binding supports hardware acceleration up to `SME2` for **Arm** and `AMX` for **x86-64** CPUs on Android and ChromeOS devices.
+It automatically detects the host's hardware to load compatible kernels. As a result, it runs seamlessly on both the latest premium devices and older devices that may lack modern CPU features or have limited RAM, without requiring any manual configuration.
+
+A minimal Android app frontend is included to showcase the binding’s core functionalities:
+1.	**Parse GGUF metadata** via `GgufMetadataReader` from either a `ContentResolver` provided `Uri` or a local `File`.
+2.	**Obtain a `TierDetection` or `InferenceEngine`** instance through the high-level facade APIs.
+3.	**Send a raw user prompt** for automatic template formatting, prefill, and decoding. Then collect the generated tokens in a Kotlin `Flow`.
+
+For a production-ready experience that leverages advanced features such as system prompts and benchmarks, check out [Arm AI Chat](https://play.google.com/store/apps/details?id=com.arm.aichat) on Google Play.
+This project is made possible through a collaborative effort by Arm's **CT-ML**, **CE-ML** and **STE** groups:
+
+| ![Home screen](./android/arm-ai-chat-home-screen.png)  | ![System prompt](./android/system-prompt-setup.png)  | !["Haiku"](./android/chat-with-system-prompt-haiku.png)  |
+|:------------------------------------------------------:|:----------------------------------------------------:|:--------------------------------------------------------:|
+|                      Home screen                       |                    System prompt                     |                         "Haiku"                          |
+
 ## Build on Android using Termux
 
 [Termux](https://termux.dev/en/) is an Android terminal emulator and Linux environment app (no root required). As of writing, Termux is available experimentally in the Google Play Store; otherwise, it may be obtained directly from the project repo or on F-Droid.
