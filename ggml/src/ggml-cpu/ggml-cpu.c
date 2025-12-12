@@ -81,6 +81,11 @@ struct ggml_arm_arch_features_type {
 } ggml_arm_arch_features = { 0 };
 #endif
 
+#if defined(__riscv)
+struct ggml_riscv_arch_features_type {
+    int rvv_vlen;
+} ggml_riscv_arch_features = { 0 };
+#endif
 
 #if defined(_WIN32)
 
@@ -702,6 +707,15 @@ static void ggml_init_arm_arch_features(void) {
 static void ggml_init_arm_arch_features(void) {}
 #endif
 #endif // __ARM_ARCH
+
+#if defined(__riscv) && defined(__riscv_v_intrinsic)
+#include <riscv_vector.h>
+static void ggml_init_riscv_arch_features(void) {
+    ggml_riscv_arch_features.rvv_vlen = __riscv_vlenb();
+}
+#else
+static void ggml_init_riscv_arch_features(void) {}
+#endif
 
 struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value) {
     GGML_ASSERT(!ggml_get_no_alloc(ctx));
@@ -3459,6 +3473,14 @@ int ggml_cpu_has_riscv_v(void) {
 #endif
 }
 
+int ggml_cpu_get_rvv_vlen(void) {
+#if defined(__riscv) && defined(__riscv_v_intrinsic)
+    return ggml_riscv_arch_features.rvv_vlen;
+#else
+    return 0;
+#endif
+}
+
 int ggml_cpu_has_f16c(void) {
 #if defined(__F16C__)
     return 1;
@@ -3623,6 +3645,10 @@ void ggml_cpu_init(void) {
 
 #if defined(__ARM_ARCH)
         ggml_init_arm_arch_features();
+#endif
+
+#if defined(__riscv)
+        ggml_init_riscv_arch_features();
 #endif
 
         is_first_call = false;
