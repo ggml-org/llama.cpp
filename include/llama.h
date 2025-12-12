@@ -377,9 +377,14 @@ extern "C" {
         bool pure;                            // quantize all tensors to the default type
         bool keep_split;                      // quantize to the same number of shards
         void * imatrix;                       // pointer to importance matrix data
+        void * activations;                   // pointer to activations data
         void * kv_overrides;                  // pointer to vector containing overrides
         void * tensor_types;                  // pointer to vector containing tensor types
         void * prune_layers;                  // pointer to vector containing layer indices to prune
+        float target_bpw;                     // target bits per weight (bpw)
+        bool keep_bpw_state;                  // keep bpw state file
+        void * bpw_state;                     // pointer to bpw state file
+        bool no_importance;                   // allocate target bpw budget equitably across all tensors
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
