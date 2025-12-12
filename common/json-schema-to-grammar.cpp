@@ -268,10 +268,10 @@ static bool is_reserved_name(const std::string & name) {
 }
 
 std::regex INVALID_RULE_CHARS_RE("[^a-zA-Z0-9-]+");
-std::regex GRAMMAR_LITERAL_ESCAPE_RE("[\r\n\"]");
+std::regex GRAMMAR_LITERAL_ESCAPE_RE("[\r\n\"\\\\]");
 std::regex GRAMMAR_RANGE_LITERAL_ESCAPE_RE("[\r\n\"\\]\\-\\\\]");
 std::unordered_map<char, std::string> GRAMMAR_LITERAL_ESCAPES = {
-    {'\r', "\\r"}, {'\n', "\\n"}, {'"', "\\\""}, {'-', "\\-"}, {']', "\\]"}
+    {'\r', "\\r"}, {'\n', "\\n"}, {'"', "\\\""}, {'-', "\\-"}, {']', "\\]"}, {'\\', "\\\\"}
 };
 
 std::unordered_set<char> NON_LITERAL_SET = {'|', '.', '(', ')', '[', ']', '{', '}', '*', '+', '?'};
@@ -974,7 +974,7 @@ public:
 
     void check_errors() {
         if (!_errors.empty()) {
-            throw std::runtime_error("JSON schema conversion failed:\n" + string_join(_errors, "\n"));
+            throw std::invalid_argument("JSON schema conversion failed:\n" + string_join(_errors, "\n"));
         }
         if (!_warnings.empty()) {
             fprintf(stderr, "WARNING: JSON schema conversion was incomplete: %s\n", string_join(_warnings, "; ").c_str());

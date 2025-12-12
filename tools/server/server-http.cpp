@@ -1,6 +1,6 @@
-#include "utils.hpp"
 #include "common.h"
 #include "server-http.h"
+#include "server-common.h"
 
 #include <cpp-httplib/httplib.h>
 
@@ -136,15 +136,22 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // Check for API key in the header
-        auto auth_header = req.get_header_value("Authorization");
+        // Check for API key in the Authorization header
+        std::string req_api_key = req.get_header_value("Authorization");
+        if (req_api_key.empty()) {
+            // retry with anthropic header
+            req_api_key = req.get_header_value("X-Api-Key");
+        }
 
+        // remove the "Bearer " prefix if needed
         std::string prefix = "Bearer ";
-        if (auth_header.substr(0, prefix.size()) == prefix) {
-            std::string received_api_key = auth_header.substr(prefix.size());
-            if (std::find(api_keys.begin(), api_keys.end(), received_api_key) != api_keys.end()) {
-                return true; // API key is valid
-            }
+        if (req_api_key.substr(0, prefix.size()) == prefix) {
+            req_api_key = req_api_key.substr(prefix.size());
+        }
+
+        // validate the API key
+        if (std::find(api_keys.begin(), api_keys.end(), req_api_key) != api_keys.end()) {
+            return true; // API key is valid
         }
 
         // API key is invalid or not provided

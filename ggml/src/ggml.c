@@ -124,6 +124,13 @@ static void ggml_print_backtrace_symbols(void) {
     int nptrs = backtrace(trace, sizeof(trace)/sizeof(trace[0]));
     backtrace_symbols_fd(trace, nptrs, STDERR_FILENO);
 }
+#elif defined(__APPLE__)
+#include <execinfo.h>
+static void ggml_print_backtrace_symbols(void) {
+    void * trace[100];
+    int nptrs = backtrace(trace, sizeof(trace)/sizeof(trace[0]));
+    backtrace_symbols_fd(trace, nptrs, STDERR_FILENO);
+}
 #else
 static void ggml_print_backtrace_symbols(void) {
     // platform not supported
@@ -135,6 +142,20 @@ void ggml_print_backtrace(void) {
     if (GGML_NO_BACKTRACE) {
         return;
     }
+#if defined(__APPLE__)
+    // On macOS, fork+debugger attachment is problematic due to:
+    // 1. libdispatch "poisons" forked child processes
+    // 2. lldb has issues attaching to parent from forked child
+    // Use simple backtrace() instead to avoid Terminal.app crashes
+    const char * GGML_BACKTRACE_LLDB = getenv("GGML_BACKTRACE_LLDB");
+    if (!GGML_BACKTRACE_LLDB) {
+        fprintf(stderr, "WARNING: Using native backtrace. Set GGML_BACKTRACE_LLDB for more info.\n");
+        fprintf(stderr, "WARNING: GGML_BACKTRACE_LLDB may cause native MacOS Terminal.app to crash.\n");
+        fprintf(stderr, "See: https://github.com/ggml-org/llama.cpp/pull/17869\n");
+        ggml_print_backtrace_symbols();
+        return;
+    }
+#endif
 #if defined(__linux__)
     FILE * f = fopen("/proc/self/status", "r");
     size_t size = 0;
@@ -990,6 +1011,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "ARANGE",
     "TIMESTEP_EMBEDDING",
     "ARGSORT",
+    "TOP_K",
     "LEAKY_RELU",
     "TRI",
     "FILL",
@@ -1023,7 +1045,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
+static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1098,6 +1120,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "arange(start, stop, step)",
     "timestep_embedding(timesteps, dim, max_period)",
     "argsort(x)",
+    "top_k(x)",
     "leaky_relu(x)",
     "tri(x)",
     "fill(x, c)",
@@ -1131,7 +1154,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
+static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4889,6 +4912,8 @@ static struct ggml_tensor * ggml_interpolate_impl(
         int64_t               ne3,
         uint32_t              mode) {
     GGML_ASSERT((mode & 0xFF) < GGML_SCALE_MODE_COUNT);
+    // TODO: implement antialias for modes other than bilinear
+    GGML_ASSERT(!(mode & GGML_SCALE_FLAG_ANTIALIAS) || (mode & 0xFF) == GGML_SCALE_MODE_BILINEAR);
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ne0, ne1, ne2, ne3);
 
@@ -4943,6 +4968,18 @@ struct ggml_tensor * ggml_pad(
     return ggml_pad_ext(ctx, a, 0, p0, 0, p1, 0, p2, 0, p3);
 }
 
+// ggml_pad_circular
+
+struct ggml_tensor * ggml_pad_circular(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   p0,
+        int                   p1,
+        int                   p2,
+        int                   p3) {
+    return ggml_pad_ext_circular(ctx, a, 0, p0, 0, p1, 0, p2, 0, p3);
+}
+
 struct ggml_tensor * ggml_pad_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -4969,11 +5006,31 @@ struct ggml_tensor * ggml_pad_ext(
     ggml_set_op_params_i32(result, 5, rp2);
     ggml_set_op_params_i32(result, 6, lp3);
     ggml_set_op_params_i32(result, 7, rp3);
+    ggml_set_op_params_i32(result, 8, 0); // not circular by default
 
 
     result->op     = GGML_OP_PAD;
     result->src[0] = a;
 
+    return result;
+}
+
+// ggml_pad_ext_circular
+
+struct ggml_tensor * ggml_pad_ext_circular(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                  lp0,
+        int                  rp0,
+        int                  lp1,
+        int                  rp1,
+        int                  lp2,
+        int                  rp2,
+        int                  lp3,
+        int                  rp3
+        ) {
+    struct ggml_tensor * result = ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+    ggml_set_op_params_i32(result, 8, 1); // circular
     return result;
 }
 
@@ -5032,28 +5089,6 @@ struct ggml_tensor * ggml_roll(
 
     result->op     = GGML_OP_ROLL;
     result->src[0] = a;
-
-    return result;
-}
-
-// ggml_arange
-
-struct ggml_tensor * ggml_arange(
-        struct ggml_context * ctx,
-        float                 start,
-        float                 stop,
-        float                 step) {
-    GGML_ASSERT(stop > start);
-
-    const int64_t steps = (int64_t) ceilf((stop - start) / step);
-
-    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, steps);
-
-    ggml_set_op_params_f32(result, 0, start);
-    ggml_set_op_params_f32(result, 1, stop);
-    ggml_set_op_params_f32(result, 2, step);
-
-    result->op = GGML_OP_ARANGE;
 
     return result;
 }
@@ -5139,12 +5174,31 @@ struct ggml_tensor * ggml_argsort(
         struct ggml_tensor   * a,
         enum ggml_sort_order   order) {
     GGML_ASSERT(a->ne[0] <= INT32_MAX);
+
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_I32, GGML_MAX_DIMS, a->ne);
 
     ggml_set_op_params_i32(result, 0, (int32_t) order);
 
     result->op     = GGML_OP_ARGSORT;
     result->src[0] = a;
+
+    return result;
+}
+
+// ggml_argsort_top_k
+
+struct ggml_tensor * ggml_argsort_top_k(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   k) {
+    GGML_ASSERT(a->ne[0] >= k);
+
+    struct ggml_tensor * result = ggml_argsort(ctx, a, GGML_SORT_ORDER_DESC);
+
+    result = ggml_view_4d(ctx, result,
+                k, result->ne[1], result->ne[2], result->ne[3],
+                   result->nb[1], result->nb[2], result->nb[3],
+                0);
 
     return result;
 }
@@ -5157,12 +5211,32 @@ struct ggml_tensor * ggml_top_k(
         int                   k) {
     GGML_ASSERT(a->ne[0] >= k);
 
-    struct ggml_tensor * result = ggml_argsort(ctx, a, GGML_SORT_ORDER_DESC);
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, k, a->ne[1], a->ne[2], a->ne[3]);
 
-    result = ggml_view_4d(ctx, result,
-                k, result->ne[1], result->ne[2], result->ne[3],
-                   result->nb[1], result->nb[2], result->nb[3],
-                0);
+    result->op     = GGML_OP_TOP_K;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_arange
+
+struct ggml_tensor * ggml_arange(
+        struct ggml_context * ctx,
+        float                 start,
+        float                 stop,
+        float                 step) {
+    GGML_ASSERT(stop > start);
+
+    const int64_t steps = (int64_t) ceilf((stop - start) / step);
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, steps);
+
+    ggml_set_op_params_f32(result, 0, start);
+    ggml_set_op_params_f32(result, 1, stop);
+    ggml_set_op_params_f32(result, 2, step);
+
+    result->op = GGML_OP_ARANGE;
 
     return result;
 }
@@ -5186,8 +5260,6 @@ struct ggml_tensor * ggml_flash_attn_ext(
 
     if (mask) {
         GGML_ASSERT(ggml_is_contiguous(mask));
-        GGML_ASSERT(mask->ne[1] >= GGML_PAD(q->ne[1], GGML_KQ_MASK_PAD) &&
-                "the Flash-Attention kernel requires the mask to be padded to GGML_KQ_MASK_PAD and at least n_queries big");
         //GGML_ASSERT(ggml_can_repeat_rows(mask, qk));
 
         GGML_ASSERT(q->ne[2] % mask->ne[2] == 0);

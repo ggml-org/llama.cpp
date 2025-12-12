@@ -1886,6 +1886,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cann_flash_attn_ext(ctx, dst);
             break;
+        case GGML_OP_OUT_PROD:
+            ggml_cann_out_prod(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -2246,8 +2249,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
                                             bool &                      use_cann_graph,
                                             bool &                      cann_graph_update_required) {
 #ifdef USE_ACL_GRAPH
-    ggml_cann_graph * matched_graph = cann_ctx->graph_lru_cache.cache_list.front();
-    if (use_cann_graph && cann_graph_update_required) {
+    if (use_cann_graph && cann_graph_update_required) {  // Begin CANN graph capture
         ACL_CHECK(aclmdlRICaptureBegin(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
     }
 #endif  // USE_ACL_GRAPH
@@ -2271,12 +2273,14 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
     }
 
 #ifdef USE_ACL_GRAPH
-    if (use_cann_graph && cann_graph_update_required) {  // End CANN graph capture
-        ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &matched_graph->graph));
-    }
-
     if (use_cann_graph) {
-        // Execute graph
+        ggml_cann_graph * matched_graph = cann_ctx->graph_lru_cache.cache_list.front();
+
+        if (cann_graph_update_required) {  // End CANN graph capture
+            ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &matched_graph->graph));
+        }
+
+        // Execute CANN graph
         ACL_CHECK(aclmdlRIExecuteAsync(matched_graph->graph, cann_ctx->stream()));
     }
 #endif  // USE_ACL_GRAPH
@@ -2302,9 +2306,9 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
     // calculate rope cache for fist layer in current device.
     cann_ctx->rope_cache.cached = false;
 
-#ifdef USE_ACL_GRAPH
-    bool use_cann_graph             = true;
     bool cann_graph_update_required = false;
+#ifdef USE_ACL_GRAPH
+    bool use_cann_graph = true;
 
     static bool prefill_use_graph = parse_bool(get_env("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
     if (!prefill_use_graph) {
@@ -2334,8 +2338,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
         }
     }
 #else
-    bool use_cann_graph             = false;
-    bool cann_graph_update_required = false;
+    bool use_cann_graph = false;
 #endif  // USE_ACL_GRAPH
     evaluate_and_capture_cann_graph(cann_ctx, cgraph, use_cann_graph, cann_graph_update_required);
 
@@ -2471,23 +2474,14 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             }
         case GGML_OP_ROPE:
             {
-                // TODO: with ops-test v == 1
-                // TODO: n_dims <= ne0
-                if (op->src[0]->ne[0] != op->op_params[1]) {
-                    return false;
-                }
-
-                const int mode = ((const int32_t *) op->op_params)[2];
-                if (mode & GGML_ROPE_TYPE_MROPE) {
-                    return false;
-                }
-                if (mode & GGML_ROPE_TYPE_VISION) {
-                    return false;
-                }
                 if (op->src[0]->ne[0] > 896) {
                     return false;
                 }
 #ifdef ASCEND_310P
+                // TODO: Support rope_dim < ne00(dim)
+                if (op->src[0]->ne[0] != op->op_params[1]) {
+                    return false;
+                }
                 if (!ggml_is_contiguous(op->src[0])) {
                     return false;
                 }
@@ -2502,6 +2496,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     return false;
                 }
                 if (op->op_params[0] != GGML_SCALE_MODE_NEAREST) {
+                    return false;
+                }
+                if (op->op_params[0] & GGML_SCALE_FLAG_ANTIALIAS) {
                     return false;
                 }
                 return true;
@@ -2551,7 +2548,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_ARGSORT:
         case GGML_OP_ACC:
         case GGML_OP_GROUP_NORM:
+            return true;
         case GGML_OP_PAD:
+            // TODO: add circular padding support for cann, see https://github.com/ggml-org/llama.cpp/pull/16985
+            return ggml_get_op_params_i32(op, 8) == 0;
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_LEAKY_RELU:
@@ -2563,6 +2563,20 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_COUNT_EQUAL:
             return true;
+        case GGML_OP_OUT_PROD:
+            {
+#ifdef ASCEND_310P
+                // Ger is not supported on 310p device
+                return false;
+#endif
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_F16:
+                    case GGML_TYPE_F32:
+                        return true;
+                    default:
+                        return false;
+                }
+            }
         case GGML_OP_CONV_TRANSPOSE_1D:
             // TODO: ((weightL - 1) * dilationW - padLeft)=1336 should not be larger than 255.
             return (op->src[0]->ne[0] - 1) <= 255;

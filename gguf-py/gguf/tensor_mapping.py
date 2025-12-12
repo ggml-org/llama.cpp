@@ -376,6 +376,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.primary_router", # smallthinker
             "model.layers.{bid}.feed_forward.gate",               # lfm2moe
             "model.layers.{bid}.mlp.router.gate",               # afmoe
+            "layers.{bid}.gate",                                # mistral-large
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -450,6 +451,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.shared_expert.up_proj", # llama4
             "model.layers.{bid}.feed_forward.down_proj",
             "model.layers.{bid}.mlp.shared_mlp.up_proj",             # hunyuan
+            "layers.{bid}.shared_experts.w3",                        # mistral-large
         ),
 
         MODEL_TENSOR.FFN_UP_CHEXP: (
@@ -496,6 +498,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_experts.gate_proj",         # deepseek deepseek2
             "model.layers.{bid}.feed_forward.shared_expert.gate_proj", # llama4
             "model.layers.{bid}.mlp.shared_mlp.gate_proj",             # hunyuan
+            "layers.{bid}.shared_experts.w1",                          # mistral-large
         ),
 
         MODEL_TENSOR.FFN_GATE_CHEXP: (
@@ -557,6 +560,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.shared_expert.down_proj", # llama4
             "model.layers.{bid}.shared_mlp.output_linear",             # granitemoe
             "model.layers.{bid}.mlp.shared_mlp.down_proj",             # hunyuan
+            "layers.{bid}.shared_experts.w2",                          # mistral-large
         ),
 
         MODEL_TENSOR.FFN_DOWN_CHEXP: (
@@ -672,10 +676,11 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_IN: (
-            "model.layers.{bid}.in_proj",               # mamba-hf
-            "backbone.layers.{bid}.mixer.in_proj",      # mamba
-            "model.layers.{bid}.mamba.in_proj",         # jamba falcon-h1 granite-hybrid
-            "model.layers.layers.{bid}.mixer.in_proj",  # plamo2
+            "model.layers.{bid}.in_proj",                   # mamba-hf
+            "backbone.layers.{bid}.mixer.in_proj",          # mamba
+            "model.layers.{bid}.mamba.in_proj",             # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.in_proj",      # plamo2
+            "model.layers.{bid}.linear_attn.in_proj_qkvz",  # qwen3next
         ),
 
         MODEL_TENSOR.SSM_CONV1D: (
@@ -683,6 +688,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.conv1d",      # mamba
             "model.layers.{bid}.mamba.conv1d",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.conv1d",  # plamo2
+            "model.layers.{bid}.linear_attn.conv1d",   # qwen3next
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -697,6 +703,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.dt_proj",      # mamba
             "model.layers.{bid}.mamba.dt_proj",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.dt_proj",  # plamo2
+            "model.layers.{bid}.linear_attn.dt_proj",   # qwen3next
         ),
 
         MODEL_TENSOR.SSM_DT_NORM: (
@@ -709,6 +716,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.A_log",      # mamba
             "model.layers.{bid}.mamba.A_log",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.A_log",  # plamo2
+            "model.layers.{bid}.linear_attn.A_log",   # qwen3next
         ),
 
         MODEL_TENSOR.SSM_B_NORM: (
@@ -731,15 +739,21 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_NORM: (
-            "model.layers.{bid}.mamba.norm", # falcon-h1 granite-hybrid
-            "backbone.layers.{bid}.mixer.norm",  # mamba2
+            "model.layers.{bid}.mamba.norm",        # falcon-h1 granite-hybrid
+            "model.layers.{bid}.linear_attn.norm",  # qwen3next
+            "backbone.layers.{bid}.mixer.norm",     # mamba2
         ),
 
         MODEL_TENSOR.SSM_OUT: (
             "model.layers.{bid}.out_proj",               # mamba-hf
             "backbone.layers.{bid}.mixer.out_proj",      # mamba
             "model.layers.{bid}.mamba.out_proj",         # jamba falcon-h1 granite-hybrid
+            "model.layers.{bid}.linear_attn.out_proj",   # qwen3next
             "model.layers.layers.{bid}.mixer.out_proj",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_BETA_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_ba",  # qwen3next
         ),
 
         MODEL_TENSOR.TIME_MIX_W0: (
@@ -914,14 +928,17 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_Q_A: (
             "model.layers.{bid}.self_attn.q_a_proj", # deepseek2
+            "layers.{bid}.attention.wq_a",           # mistral-large
         ),
 
         MODEL_TENSOR.ATTN_Q_B: (
             "model.layers.{bid}.self_attn.q_b_proj", # deepseek2
+            "layers.{bid}.attention.wq_b",           # mistral-large
         ),
 
         MODEL_TENSOR.ATTN_KV_A_MQA: (
             "model.layers.{bid}.self_attn.kv_a_proj_with_mqa", # deepseek2
+            "layers.{bid}.attention.wkv_a_with_mqa",           # mistral-large
         ),
 
         MODEL_TENSOR.ATTN_KV_B: (
@@ -930,18 +947,22 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_K_B: (
             "model.layers.{bid}.self_attn.k_b_proj",  # deepseek2
+            "layers.{bid}.attention.k_b_proj",        # mistral-large
         ),
 
         MODEL_TENSOR.ATTN_V_B: (
             "model.layers.{bid}.self_attn.v_b_proj",  # deepseek2
+            "layers.{bid}.attention.v_b_proj",        # mistral-large
         ),
 
         MODEL_TENSOR.ATTN_Q_A_NORM: (
             "model.layers.{bid}.self_attn.q_a_layernorm", # deepseek2
+            "layers.{bid}.attention.q_a_norm",            # mistral-large
         ),
 
         MODEL_TENSOR.ATTN_KV_A_NORM: (
             "model.layers.{bid}.self_attn.kv_a_layernorm", # deepseek2
+            "layers.{bid}.attention.kv_a_norm",            # mistral-large
         ),
 
         MODEL_TENSOR.ATTN_SUB_NORM: (

@@ -6,7 +6,7 @@
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
-#define LLAMA_MAX_EXPERTS 384  // Kimi-K2
+#define LLAMA_MAX_EXPERTS 512 // Qwen3 Next
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
@@ -107,6 +107,7 @@ struct llama_hparams {
     float    rope_freq_base_train_swa;
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa;
+
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
 
@@ -162,8 +163,8 @@ struct llama_hparams {
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
     uint32_t n_no_rope_layer_step    = 4;
-    uint32_t n_attn_temp_floor_scale = 8192;
-    float    f_attn_temp_scale       = 0.1;
+    uint32_t n_attn_temp_floor_scale = 0;
+    float    f_attn_temp_scale       = 0.0f;
 
     // gemma3n altup
     uint32_t n_altup      = 4; // altup_num_inputs
@@ -267,7 +268,13 @@ struct llama_hparams {
     // TODO: think of a better place for this function
     // TODO: pack the SWA params in a struct?
     static bool is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama_pos p0, llama_pos p1);
+
+    // when YARN is applied with yarn_ext_factor != 0.0f, we need to cancel this factor:
+    // https://github.com/ggml-org/llama.cpp/blob/a81a569577cc38b32558958b048228150be63eae/ggml/src/ggml-cpu/ops.cpp#L5541-L5544
+    //
+    // ref: https://github.com/ggml-org/llama.cpp/discussions/7416
+    //      https://github.com/ggml-org/llama.cpp/pull/17945
+    static float yarn_attn_factor_adjust(float attn_factor, float freq_scale, float ext_factor);
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");
-

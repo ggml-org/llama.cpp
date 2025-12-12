@@ -16,6 +16,7 @@ add_library(mtmd
 set_target_properties(mtmd PROPERTIES
     VERSION ${LLAMA_INSTALL_VERSION}
     SOVERSION 0
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
@@ -50,6 +51,15 @@ endif()
 if (TARGET BUILD_INFO)
     add_dependencies(mtmd        BUILD_INFO)
     add_dependencies(mtmd-helper BUILD_INFO)
+endif()
+
+# if mtmd is linked against common, we throw an error
+if (TARGET mtmd)
+    get_target_property(libs mtmd LINK_LIBRARIES)
+    if (libs AND "common" IN_LIST libs)
+        message(FATAL_ERROR "mtmd is designed to be a public library.\n"
+                            "It must not link against common")
+    endif()
 endif()
 
 add_executable(llama-llava-cli    deprecation-warning.cpp)

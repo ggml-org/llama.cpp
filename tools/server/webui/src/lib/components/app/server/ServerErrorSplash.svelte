@@ -5,7 +5,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
-	import { config, updateConfig } from '$lib/stores/settings.svelte';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {
@@ -42,7 +42,7 @@
 		if (onRetry) {
 			onRetry();
 		} else {
-			serverStore.fetchServerProps();
+			serverStore.fetch();
 		}
 	}
 
@@ -61,7 +61,7 @@
 
 		try {
 			// Update the API key in settings first
-			updateConfig('apiKey', apiKeyInput.trim());
+			settingsStore.updateConfig('apiKey', apiKeyInput.trim());
 
 			// Test the API key by making a real request to the server
 			const response = await fetch('./props', {

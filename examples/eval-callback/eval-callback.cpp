@@ -4,10 +4,10 @@
 #include "llama.h"
 #include "ggml.h"
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
-#include <numeric>
 
 /**
  * This the arbitrary data which will be passed to each callback.
@@ -37,23 +37,23 @@ static inline float ggml_compute_bf16_to_fp32(ggml_bf16_t h) {
     return u.f;
 }
 
-static float ggml_get_float_value(uint8_t * data, ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
+static float ggml_get_float_value(const uint8_t * data, ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
     size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
     float v;
     if (type == GGML_TYPE_F16) {
-        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
+        v = ggml_fp16_to_fp32(*(const ggml_fp16_t *) &data[i]);
     } else if (type == GGML_TYPE_F32) {
-        v = *(float *) &data[i];
+        v = *(const float *) &data[i];
     } else if (type == GGML_TYPE_I64) {
-        v = (float) *(int64_t *) &data[i];
+        v = (float) *(const int64_t *) &data[i];
     } else if (type == GGML_TYPE_I32) {
-        v = (float) *(int32_t *) &data[i];
+        v = (float) *(const int32_t *) &data[i];
     } else if (type == GGML_TYPE_I16) {
-        v = (float) *(int16_t *) &data[i];
+        v = (float) *(const int16_t *) &data[i];
     } else if (type == GGML_TYPE_I8) {
-        v = (float) *(int8_t *) &data[i];
+        v = (float) *(const int8_t *) &data[i];
     } else if (type == GGML_TYPE_BF16) {
-        v = ggml_compute_bf16_to_fp32(*(ggml_bf16_t *) &data[i]);
+        v = ggml_compute_bf16_to_fp32(*(const ggml_bf16_t *) &data[i]);
     } else {
         GGML_ABORT("fatal error");
     }
