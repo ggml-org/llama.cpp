@@ -415,3 +415,11 @@ const char * llama_print_system_info(void) {
     return s.c_str();
 }
 
+const char * llama_ggml_version(void) {
+    return ggml_version();
+}
+
+const char * llama_ggml_commit(void) {
+    return ggml_commit();
+}
+
