@@ -628,6 +628,20 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_LLAMA:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE, hparams.f_attn_temp_scale, false);
+
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, hparams.yarn_attn_factor, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,     hparams.rope_yarn_log_mul, false);
+
+                // TODO: maybe add n_attn_temp_floor_scale as a separate KV?
+                if (hparams.f_attn_temp_scale != 0.0f) {
+                    hparams.n_attn_temp_floor_scale = hparams.n_ctx_orig_yarn;
+                    if (hparams.n_attn_temp_floor_scale == 0) {
+                        throw std::runtime_error("invalid n_ctx_orig_yarn for attention temperature scaling");
+                    }
+                }
 
                 if (hparams.n_expert == 8) {
                     switch (hparams.n_layer) {
