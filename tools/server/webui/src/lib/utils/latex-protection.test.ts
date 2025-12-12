@@ -303,6 +303,27 @@ $$\n\\pi_n(\\mathbb{S}^3) = \\begin{cases}
 		expect(output).toBe(input); // Code blocks prevent misinterpretation
 	});
 
+	test('preserves backslash parentheses in code blocks (GitHub issue)', () => {
+		const input = '```python\nfoo = "\\(bar\\)"\n```';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(input); // Code blocks should not have LaTeX conversion applied
+	});
+
+	test('preserves backslash brackets in code blocks', () => {
+		const input = '```python\nfoo = "\\[bar\\]"\n```';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(input); // Code blocks should not have LaTeX conversion applied
+	});
+
+	test('preserves backslash parentheses in inline code', () => {
+		const input = 'Use `foo = "\\(bar\\)"` in your code.';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(input);
+	});
+
 	test('escape backslash in mchem ce', () => {
 		const input = 'mchem ce:\n$\\ce{2H2(g) + O2(g) -> 2H2O(l)}$';
 		const output = preprocessLaTeX(input);
