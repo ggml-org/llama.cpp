@@ -2576,9 +2576,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                         return false;
                 }
             }
-        case GGML_OP_CONV_TRANSPOSE_1D:
-            // TODO: ((weightL - 1) * dilationW - padLeft)=1336 should not be larger than 255.
-            return (op->src[0]->ne[0] - 1) <= 255;
         case GGML_OP_SCALE:
             float bias;
             memcpy(&bias, (const float *) (op->op_params) + 1, sizeof(float));
