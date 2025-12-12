@@ -130,6 +130,15 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
     return ret;
 }
 
+// enum to identify part of a layer for distributing its tensors:
+enum layer_fraction_t {
+    LAYER_FRACTION_NONE  = 0, // nothing
+    LAYER_FRACTION_ATTN  = 1, // attention
+    LAYER_FRACTION_UP    = 2, // attention + up
+    LAYER_FRACTION_GATE  = 3, // attention + up + gate
+    LAYER_FRACTION_MOE   = 4, // everything but sparse MoE weights
+};
+// this enum is only used in llama_params_fit_impl but needs to be defined outside of it to fix a Windows compilation issue
 
 static void llama_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
@@ -280,15 +289,6 @@ static void llama_params_fit_impl(
     //   - for a dense model simply fill full layers, giving each device a contiguous slice of the model
     //   - for a MoE model, same as dense model but with all MoE tensors in system memory
 
-    // enum to identify part of a layer for distributing its tensors:
-    enum layer_fraction_t {
-        LAYER_FRACTION_NONE  = 0, // nothing
-        LAYER_FRACTION_ATTN  = 1, // attention
-        LAYER_FRACTION_UP    = 2, // attention + up
-        LAYER_FRACTION_GATE  = 3, // attention + up + gate
-        LAYER_FRACTION_MOE   = 4, // everything but sparse MoE weights
-    };
-
     // utility function that returns a static C string matching the tensors for a specific layer index and layer fraction:
     auto get_overflow_pattern = [&](const size_t il, const layer_fraction_t lf) -> const char * {
         constexpr size_t n_strings = 1000;
@@ -334,8 +334,7 @@ static void llama_params_fit_impl(
         uint32_t n_part  = 0; // number of partial layers, <= n_layer
 
         // for the first partial layer varying parts can overflow, all further layers use LAYER_FRACTION_MOE:
-        // layer_fraction_t overflow_type = LAYER_FRACTION_NONE; // this doesn't compile on Windows
-        layer_fraction_t overflow_type = layer_fraction_t(0);
+        layer_fraction_t overflow_type = LAYER_FRACTION_NONE;
     };
 
     const size_t ntbo = llama_max_tensor_buft_overrides();
