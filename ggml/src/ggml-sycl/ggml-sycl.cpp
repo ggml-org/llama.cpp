@@ -1822,6 +1822,9 @@ static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
     } else {
         GGML_ABORT("fatal error");
     }
+
+    // Ensure all kernels finish execution before proceeding further
+    stream->wait();
 }
 
 static void argmax_f32_i32_sycl(const float *x, int *dst, const int ncols,
