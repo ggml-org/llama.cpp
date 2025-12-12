@@ -194,10 +194,11 @@ bool test_ifairy_lut_index() {
     std::vector<block_ifairy> weights((size_t) rows * (size_t) blocks_per_row);
     block_ifairy blk{};
 
-    // 设置前三个三权重组：
-    // g0: (0,1,2) -> 0x69
-    // g1: (3,3,3) -> 0xA0
-    // g2: (1,2,3) -> 0x0D
+    // 设置前三个三权重组（直接 6-bit pattern 编码）：
+    // pat = c0 | (c1<<2) | (c2<<4)
+    // g0: (0,1,2) -> 0x24
+    // g1: (3,3,3) -> 0x3f
+    // g2: (1,2,3) -> 0x39
     set_ifairy_code(blk, 0, 0);
     set_ifairy_code(blk, 1, 1);
     set_ifairy_code(blk, 2, 2);
@@ -224,11 +225,11 @@ bool test_ifairy_lut_index() {
     const size_t groups = (size_t) info.groups_per_row;
 
     bool pass = true;
-    pass &= groups == 85;               // 256 -> drop 256th -> 255 elems -> 85 groups
+    pass &= groups == 86;               // 256 -> 85 triplets + 1 tail group (no drop)
     pass &= index.size() == required;
-    pass &= index[0] == 0x69;
-    pass &= index[1] == 0xA0;
-    pass &= index[2] == 0x0D;
+    pass &= index[0] == 0x24;
+    pass &= index[1] == 0x3f;
+    pass &= index[2] == 0x39;
 
     if (!pass) {
         fprintf(stderr, "Index encoding mismatch: [%02x, %02x, %02x, %02x, ...]\n",
@@ -470,13 +471,9 @@ bool test_ifairy_lut_scalar_matmul() {
             const float ar = act_sr * ar_q;
             const float ai = act_si * ai_q;
 
-            // scheme A: drop the last element of each 256-block to keep K' % 3 == 0
-            if (((k_idx + 1) % QK_K) == 0) {
-                continue;
-            }
-
-            acc_r += wr * ar - wi * ai;
-            acc_i += wr * ai + wi * ar;
+            // ggml ifairy dot uses w * conj(a)
+            acc_r += wr * ar + wi * ai;
+            acc_i += wi * ar - wr * ai;
         }
 
             ref_col[(size_t) r * 2 + 0] = acc_r;

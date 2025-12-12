@@ -116,12 +116,12 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     const int64_t K = src0->ne[0];
     const int64_t N = src1->ne[1];
     const int64_t blocks_per_col = K / QK_K;
-    const int64_t groups = blocks_per_col * ((QK_K - 1) / 3); // drop each 256th elem
+    const int64_t groups = blocks_per_col * ((QK_K + 2) / 3); // 85 triplets + 1 tail group per block
     size_t quant_bytes = 0;
     if (src1->type == GGML_TYPE_F32) {
         quant_bytes = GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64);
     }
-    const size_t lut_bytes = (size_t) N * (size_t) groups * 32;
+    const size_t lut_bytes = (size_t) N * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t);
     const size_t scale_bytes = (size_t) N * (size_t) groups * 2 * sizeof(float);
     const size_t tmp_bytes = (size_t) N * sizeof(float);
     const size_t per_thread = GGML_PAD(lut_bytes + scale_bytes + tmp_bytes, 64);
@@ -188,75 +188,76 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
 
     const int64_t K  = k;
     const int64_t blocks = K / QK_K;
-    const int64_t groups_per_block = (QK_K - 1) / 3;
+    const int64_t groups_per_block = (QK_K + 2) / 3;
     const int64_t groups = blocks * groups_per_block;
-
-    // canonical patterns for idx' = 0..15 (u1, u2)
-    static const int8_t u_wr[16] = { 1, 1, 1, 1, 0, 0, 0, 0,-1,-1,-1,-1, 0, 0, 0, 0};
-    static const int8_t u_wi[16] = { 0, 1, 0,-1, 1, 1, 1, 1, 0, 1, 0,-1,-1,-1,-1,-1};
-    static const int8_t v_wr[16] = { 1, 0,-1, 0, 1, 0,-1, 0, 1, 0,-1, 0, 1, 0,-1, 0};
-    static const int8_t v_wi[16] = { 0, 1, 0,-1, 0, 1, 0,-1, 0, 1, 0,-1, 0, 1, 0,-1};
 
     for (int col = 0; col < n; ++col) {
         const uint8_t * act_col_bytes = (const uint8_t *) act + (size_t) col * act_stride;
         const block_ifairy_q16 * act_blocks = (const block_ifairy_q16 *) act_col_bytes;
         float * scales_out = (float *) lut_scales + (size_t) col * (size_t) groups * 2;
 
-        int8_t * lut_out = (int8_t *) lut_buf + (size_t) col * (size_t) groups * 32;
+        int16_t * lut_out = (int16_t *) ((uint8_t *) lut_buf + (size_t) col * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t));
 
         for (int64_t g = 0; g < groups; ++g) {
             const int64_t blk   = g / groups_per_block;
             const int64_t intra = g - blk * groups_per_block;
 
-            const int64_t idx0 = blk * QK_K + intra * 3 + 0;
-            const int64_t idx1 = blk * QK_K + intra * 3 + 1;
-            const int64_t idx2 = blk * QK_K + intra * 3 + 2;
+            const bool tail = intra == groups_per_block - 1;
+            const int64_t base_off = tail ? (QK_K - 1) : intra * 3;
+            const int64_t idx0 = blk * QK_K + base_off + 0;
 
             const int blk0 = (int) blk;
+            const int off0 = (int) base_off;
             const int blk1 = (int) blk;
             const int blk2 = (int) blk;
-            const int off0 = (int) (idx0 - blk * QK_K);
-            const int off1 = (int) (idx1 - blk * QK_K);
-            const int off2 = (int) (idx2 - blk * QK_K);
+            const int off1 = (int) (base_off + 1);
+            const int off2 = (int) (base_off + 2);
 
             int xr0 = 0, xi0 = 0;
             int xr1 = 0, xi1 = 0;
             int xr2 = 0, xi2 = 0;
 
             if (idx0 < K) { xr0 = (int8_t) act_blocks[blk0].x_real[off0]; xi0 = (int8_t) act_blocks[blk0].x_imag[off0]; }
-            if (idx1 < K) { xr1 = (int8_t) act_blocks[blk1].x_real[off1]; xi1 = (int8_t) act_blocks[blk1].x_imag[off1]; }
-            if (idx2 < K) { xr2 = (int8_t) act_blocks[blk2].x_real[off2]; xi2 = (int8_t) act_blocks[blk2].x_imag[off2]; }
-
-            int8_t * real_tbl = lut_out + (size_t) g * 32 + 0;
-            int8_t * imag_tbl = lut_out + (size_t) g * 32 + 16;
+            if (!tail) {
+                xr1 = (int8_t) act_blocks[blk1].x_real[off1]; xi1 = (int8_t) act_blocks[blk1].x_imag[off1];
+                xr2 = (int8_t) act_blocks[blk2].x_real[off2]; xi2 = (int8_t) act_blocks[blk2].x_imag[off2];
+            }
 
             float act_scale_r = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
             float act_scale_i = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
             scales_out[g * 2 + 0] = act_scale_r;
             scales_out[g * 2 + 1] = act_scale_i;
 
-            for (int idx = 0; idx < 16; ++idx) {
-                const int wr1 = u_wr[idx];
-                const int wi1 = u_wi[idx];
-                const int wr2 = v_wr[idx];
-                const int wi2 = v_wi[idx];
+            // Build tables for all 64 (c0,c1,c2) patterns, matching ggml_vec_dot_ifairy_q16_K_generic:
+            //   sum_ac = Σ xr * wr
+            //   sum_ad = Σ xi * wr
+            //   sum_bc = Σ xr * wi
+            //   sum_bd = Σ xi * wi
+            // where code -> (wr,wi):
+            //   0 -> (-1,0), 1 -> (1,0), 2 -> (0,-1), 3 -> (0,1)
+            int16_t * tbl = lut_out + (size_t) g * (4 * 64);
+            for (int pat = 0; pat < 64; ++pat) {
+                const uint8_t c0 = (uint8_t) (pat & 3);
+                const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
+                const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
-                int real = xr0;
-                int imag = xi0;
+                int wr0 = 0, wi0 = 0;
+                int wr1 = 0, wi1 = 0;
+                int wr2 = 0, wi2 = 0;
 
-                real += wr1 * xr1 - wi1 * xi1;
-                imag += wr1 * xi1 + wi1 * xr1;
+                switch (c0) { case 0: wr0 = -1; break; case 1: wr0 =  1; break; case 2: wi0 = -1; break; case 3: wi0 =  1; break; }
+                switch (c1) { case 0: wr1 = -1; break; case 1: wr1 =  1; break; case 2: wi1 = -1; break; case 3: wi1 =  1; break; }
+                switch (c2) { case 0: wr2 = -1; break; case 1: wr2 =  1; break; case 2: wi2 = -1; break; case 3: wi2 =  1; break; }
 
-                real += wr2 * xr2 - wi2 * xi2;
-                imag += wr2 * xi2 + wi2 * xr2;
+                const int sum_ac = xr0 * wr0 + xr1 * wr1 + xr2 * wr2;
+                const int sum_ad = xi0 * wr0 + xi1 * wr1 + xi2 * wr2;
+                const int sum_bc = xr0 * wi0 + xr1 * wi1 + xr2 * wi2;
+                const int sum_bd = xi0 * wi0 + xi1 * wi1 + xi2 * wi2;
 
-                if (real > 127) real = 127;
-                if (real < -127) real = -127;
-                if (imag > 127) imag = 127;
-                if (imag < -127) imag = -127;
-
-                real_tbl[idx] = (int8_t) real;
-                imag_tbl[idx] = (int8_t) imag;
+                tbl[0 * 64 + pat] = (int16_t) sum_ac;
+                tbl[1 * 64 + pat] = (int16_t) sum_ad;
+                tbl[2 * 64 + pat] = (int16_t) sum_bc;
+                tbl[3 * 64 + pat] = (int16_t) sum_bd;
             }
         }
     }
@@ -269,7 +270,7 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
 
     const int64_t K = k;
     const int64_t blocks = K / QK_K;
-    const int64_t groups_per_block = (QK_K - 1) / 3;
+    const int64_t groups_per_block = (QK_K + 2) / 3;
     const int64_t groups = blocks * groups_per_block;
 
     const block_ifairy * w_blocks = (const block_ifairy *) qweights;
@@ -282,103 +283,90 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
     for (int row = 0; row < m; ++row) {
         const block_ifairy * w_row = w_blocks + (size_t) row * (size_t) blocks;
         for (int col = 0; col < n; ++col) {
-            const int8_t * lut_base = (const int8_t *) lut + (size_t) col * (size_t) groups * 32;
+            const int16_t * lut_base = (const int16_t *) ((const uint8_t *) lut + (size_t) col * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t));
             const uint8_t * idx_row = indexes + (size_t) row * (size_t) groups;
             const float * scales = (const float *) lut_scales + (size_t) col * (size_t) groups * 2;
             const block_ifairy_q16 * act_blocks = act ? (const block_ifairy_q16 *) ((const uint8_t *) act + (size_t) col * act_stride) : NULL;
 
-            float acc_r = 0.0f;
-            float acc_i = 0.0f;
+            const float coeff_w_real = GGML_FP16_TO_FP32(w_row[0].d_real);
+            const float coeff_w_imag = GGML_FP16_TO_FP32(w_row[0].d_imag);
 
-            for (int64_t g = 0; g < groups; ++g) {
-                const uint8_t code = idx_row[g];
-                const uint8_t idx = code & 0x0f;
-                const bool do_swap = (code & 0x80u) != 0;
-                const bool neg_r   = (code & 0x20u) != 0;
-                const bool neg_i   = (code & 0x40u) != 0;
+            float acc_ac_xr = 0.0f;
+            float acc_ad_xi = 0.0f;
+            float acc_bc_xr = 0.0f;
+            float acc_bd_xi = 0.0f;
 
-                const int64_t blk   = g / groups_per_block;
-                const int64_t intra = g - blk * groups_per_block;
-                const int idx0 = (int) (blk * QK_K + intra * 3 + 0);
-                const int idx1 = (int) (blk * QK_K + intra * 3 + 1);
-                const int idx2 = (int) (blk * QK_K + intra * 3 + 2);
+            if (strict) {
+                GGML_ASSERT(act_blocks != NULL);
 
-                if (!strict) {
-                    const int8_t val_r = lut_base[(size_t) g * 32 + idx];
-                    const int8_t val_i = lut_base[(size_t) g * 32 + 16 + idx];
+                // reference: match ggml_vec_dot_ifairy_q16_K_generic (w * conj(x))
+                for (int blk = 0; blk < (int) blocks; ++blk) {
+                    const uint8_t * GGML_RESTRICT w_ptr   = w_row[blk].qs;
+                    const int8_t  * GGML_RESTRICT x_r_ptr = (const int8_t *) act_blocks[blk].x_real;
+                    const int8_t  * GGML_RESTRICT x_i_ptr = (const int8_t *) act_blocks[blk].x_imag;
 
-                    int vr = val_r;
-                    int vi = val_i;
-                    if (do_swap) {
-                        int tmp = vr;
-                        vr = vi;
-                        vi = tmp;
+                    int32_t sum_ac = 0;
+                    int32_t sum_ad = 0;
+                    int32_t sum_bc = 0;
+                    int32_t sum_bd = 0;
+
+                    for (int j = 0; j < QK_K; ++j) {
+                        const int chunk    = j >> 6;
+                        const int lane     = j & 0xF;
+                        const int part     = (j >> 4) & 0x3;
+                        const int byte_idx = (chunk << 4) + lane;
+                        const int bit_off  = part * 2;
+
+                        const uint8_t packed = w_ptr[byte_idx];
+                        const uint8_t code   = (packed >> bit_off) & 0x3;
+
+                        int wr = 0;
+                        int wi = 0;
+                        switch (code) {
+                            case 0: wr = -1; wi =  0; break;
+                            case 1: wr =  1; wi =  0; break;
+                            case 2: wr =  0; wi = -1; break;
+                            case 3: wr =  0; wi =  1; break;
+                        }
+
+                        const int xr = (int) x_r_ptr[j];
+                        const int xi = (int) x_i_ptr[j];
+
+                        sum_ac += xr * wr;
+                        sum_ad += xi * wr;
+                        sum_bc += xr * wi;
+                        sum_bd += xi * wi;
                     }
-                    if (neg_r) vr = -vr;
-                    if (neg_i) vi = -vi;
 
-                    const int w_blk = (int) blk;
-                    const float w_scale_r = GGML_FP16_TO_FP32(w_row[w_blk].d_real);
-                    const float w_scale_i = GGML_FP16_TO_FP32(w_row[w_blk].d_imag);
+                    const float x_real = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
+                    const float x_imag = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
 
+                    acc_ac_xr += x_real * (float) sum_ac;
+                    acc_ad_xi += x_imag * (float) sum_ad;
+                    acc_bc_xr += x_real * (float) sum_bc;
+                    acc_bd_xi += x_imag * (float) sum_bd;
+                }
+            } else {
+                for (int64_t g = 0; g < groups; ++g) {
                     const float act_scale_r = scales[g * 2 + 0];
                     const float act_scale_i = scales[g * 2 + 1];
 
-                    acc_r += (float) vr * act_scale_r * w_scale_r;
-                    acc_i += (float) vi * act_scale_i * w_scale_i;
-                } else {
-                    // strict: reconstruct contribution directly from quantized weights/activations
-                    const int blk0 = idx0 / QK_K;
-                    const int blk1 = idx1 / QK_K;
-                    const int blk2 = idx2 / QK_K;
-                    const int off0 = idx0 - blk0 * QK_K;
-                    const int off1 = idx1 - blk1 * QK_K;
-                    const int off2 = idx2 - blk2 * QK_K;
+                    const uint8_t pat = (uint8_t) (idx_row[g] & 0x3f);
 
-                    int xr0 = 0, xi0 = 0;
-                    int xr1 = 0, xi1 = 0;
-                    int xr2 = 0, xi2 = 0;
+                    const int16_t sum_ac = lut_base[(size_t) g * (4 * 64) + 0 * 64 + pat];
+                    const int16_t sum_ad = lut_base[(size_t) g * (4 * 64) + 1 * 64 + pat];
+                    const int16_t sum_bc = lut_base[(size_t) g * (4 * 64) + 2 * 64 + pat];
+                    const int16_t sum_bd = lut_base[(size_t) g * (4 * 64) + 3 * 64 + pat];
 
-                    if (idx0 < K) { xr0 = (int8_t) act_blocks[blk0].x_real[off0]; xi0 = (int8_t) act_blocks[blk0].x_imag[off0]; }
-                    if (idx1 < K) { xr1 = (int8_t) act_blocks[blk1].x_real[off1]; xi1 = (int8_t) act_blocks[blk1].x_imag[off1]; }
-                    if (idx2 < K) { xr2 = (int8_t) act_blocks[blk2].x_real[off2]; xi2 = (int8_t) act_blocks[blk2].x_imag[off2]; }
-
-                    const float a0r = (idx0 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk0].d_real) : 0.0f;
-                    const float a0i = (idx0 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk0].d_imag) : 0.0f;
-                    const float a1r = (idx1 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk1].d_real) : 0.0f;
-                    const float a1i = (idx1 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk1].d_imag) : 0.0f;
-                    const float a2r = (idx2 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk2].d_real) : 0.0f;
-                    const float a2i = (idx2 < K && act_blocks) ? GGML_FP16_TO_FP32(act_blocks[blk2].d_imag) : 0.0f;
-
-                    const uint8_t c0 = (idx0 < K) ? ggml_ifairy_read_code_local(w_row, idx0) : 0;
-                    const uint8_t c1 = (idx1 < K) ? ggml_ifairy_read_code_local(w_row, idx1) : 0;
-                    const uint8_t c2 = (idx2 < K) ? ggml_ifairy_read_code_local(w_row, idx2) : 0;
-
-                    auto accum_one = [&](uint8_t c, float ar, float ai, const block_ifairy & wb, float & rr, float & ii) {
-                        if (c <= 1) {
-                            const float w = (c == 1 ? 1.0f : -1.0f) * GGML_FP16_TO_FP32(wb.d_real);
-                            rr += w * ar;
-                            ii += w * ai;
-                        } else {
-                            const float w = (c == 3 ? 1.0f : -1.0f) * GGML_FP16_TO_FP32(wb.d_imag);
-                            rr += -w * ai;
-                            ii +=  w * ar;
-                        }
-                    };
-
-                    float real = 0.0f;
-                    float imag = 0.0f;
-                    if (idx0 < K) accum_one(c0, (float) xr0 * a0r, (float) xi0 * a0i, w_row[blk0], real, imag);
-                    if (idx1 < K) accum_one(c1, (float) xr1 * a1r, (float) xi1 * a1i, w_row[blk1], real, imag);
-                    if (idx2 < K) accum_one(c2, (float) xr2 * a2r, (float) xi2 * a2i, w_row[blk2], real, imag);
-
-                    acc_r += real;
-                    acc_i += imag;
+                    acc_ac_xr += act_scale_r * (float) sum_ac;
+                    acc_ad_xi += act_scale_i * (float) sum_ad;
+                    acc_bc_xr += act_scale_r * (float) sum_bc;
+                    acc_bd_xi += act_scale_i * (float) sum_bd;
                 }
             }
 
-            const float out_r = acc_r;
-            const float out_i = acc_i;
+            const float out_r = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
+            const float out_i = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
 
             if (!isfinite(out_r) || !isfinite(out_i)) {
                 ggml_abort(__FILE__, __LINE__, "ifairy_lut_qgemm: non-finite output (row=%d col=%d acc_r=%f acc_i=%f)",
@@ -386,31 +374,67 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
             }
 
             if (do_cmp && cmp_prints < cmp_limit && row < 2 && col < 2 && act_blocks) {
-                double base_r = 0.0, base_i = 0.0;
-                // reference similar to vec_dot_ifairy_q16_K (per-weight scales, no LUT drop)
-                for (int idx = 0; idx < k; ++idx) {
-                    const int blk = idx / QK_K;
-                    const int off = idx - blk * QK_K;
-                    const uint8_t code = ggml_ifairy_read_code_local(w_row, idx);
-                    const float wr_scale = GGML_FP16_TO_FP32(w_row[blk].d_real);
-                    const float wi_scale = GGML_FP16_TO_FP32(w_row[blk].d_imag);
-                    float wr = 0.0f, wi = 0.0f;
-                    if (code <= 1) {
-                        wr = (code == 1 ? wr_scale : -wr_scale);
-                    } else {
-                        wi = (code == 3 ? wi_scale : -wi_scale);
+                double ref_ac_xr = 0.0;
+                double ref_ad_xi = 0.0;
+                double ref_bc_xr = 0.0;
+                double ref_bd_xi = 0.0;
+
+                for (int blk = 0; blk < (int) blocks; ++blk) {
+                    const uint8_t * GGML_RESTRICT w_ptr   = w_row[blk].qs;
+                    const int8_t  * GGML_RESTRICT x_r_ptr = (const int8_t *) act_blocks[blk].x_real;
+                    const int8_t  * GGML_RESTRICT x_i_ptr = (const int8_t *) act_blocks[blk].x_imag;
+
+                    int32_t sum_ac = 0;
+                    int32_t sum_ad = 0;
+                    int32_t sum_bc = 0;
+                    int32_t sum_bd = 0;
+
+                    for (int j = 0; j < QK_K; ++j) {
+                        const int chunk    = j >> 6;
+                        const int lane     = j & 0xF;
+                        const int part     = (j >> 4) & 0x3;
+                        const int byte_idx = (chunk << 4) + lane;
+                        const int bit_off  = part * 2;
+
+                        const uint8_t packed = w_ptr[byte_idx];
+                        const uint8_t code   = (packed >> bit_off) & 0x3;
+
+                        int wr = 0;
+                        int wi = 0;
+                        switch (code) {
+                            case 0: wr = -1; wi =  0; break;
+                            case 1: wr =  1; wi =  0; break;
+                            case 2: wr =  0; wi = -1; break;
+                            case 3: wr =  0; wi =  1; break;
+                        }
+
+                        const int xr = (int) x_r_ptr[j];
+                        const int xi = (int) x_i_ptr[j];
+
+                        sum_ac += xr * wr;
+                        sum_ad += xi * wr;
+                        sum_bc += xr * wi;
+                        sum_bd += xi * wi;
                     }
-                    const int8_t ar_q = act_blocks[blk].x_real[off];
-                    const int8_t ai_q = act_blocks[blk].x_imag[off];
-                    const float ar = GGML_FP16_TO_FP32(act_blocks[blk].d_real) * ar_q;
-                    const float ai = GGML_FP16_TO_FP32(act_blocks[blk].d_imag) * ai_q;
-                    base_r += (double) wr * (double) ar - (double) wi * (double) ai;
-                    base_i += (double) wr * (double) ai + (double) wi * (double) ar;
+
+                    const double x_real = (double) GGML_FP16_TO_FP32(act_blocks[blk].d_real);
+                    const double x_imag = (double) GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
+
+                    ref_ac_xr += x_real * (double) sum_ac;
+                    ref_ad_xi += x_imag * (double) sum_ad;
+                    ref_bc_xr += x_real * (double) sum_bc;
+                    ref_bd_xi += x_imag * (double) sum_bd;
                 }
-                const float diff_r = out_r - base_r;
-                const float diff_i = out_i - base_i;
-                fprintf(stderr, "[ifairy_lut_cmp] row=%d col=%d out=(%.6f,%.6f) base=(%.6f,%.6f) diff=(%.6f,%.6f)\n",
-                        row, col, out_r, out_i, base_r, base_i, diff_r, diff_i);
+
+                const double ref_r = (double) coeff_w_real * ref_ac_xr + (double) coeff_w_imag * ref_bd_xi;
+                const double ref_i = (double) coeff_w_imag * ref_bc_xr - (double) coeff_w_real * ref_ad_xi;
+
+                fprintf(stderr,
+                        "[ifairy_lut_cmp] row=%d col=%d out=(%.6f,%.6f) ref=(%.6f,%.6f) diff=(%.6f,%.6f)\n",
+                        row, col,
+                        out_r, out_i,
+                        (float) ref_r, (float) ref_i,
+                        out_r - (float) ref_r, out_i - (float) ref_i);
                 ++cmp_prints;
             }
 
@@ -450,13 +474,14 @@ void ggml_ifairy_lut_mul_mat_scalar(int m, int k, int n, const void * qweights, 
 
     const int64_t K = k;
     const int64_t blocks = K / QK_K;
-    const int64_t groups_per_block = (QK_K - 1) / 3;
+    const int64_t groups_per_block = (QK_K + 2) / 3;
     const int64_t groups = blocks * groups_per_block;
 
     // workspace: indexes + LUT + scales
-    const size_t index_bytes = (size_t) m * (size_t) groups;
-    const size_t lut_bytes   = (size_t) n * (size_t) groups * 32;
-    const size_t scale_bytes = (size_t) n * 2 * sizeof(float);
+    const size_t index_bytes_raw = (size_t) m * (size_t) groups;
+    const size_t index_bytes = GGML_PAD(index_bytes_raw, 64);
+    const size_t lut_bytes   = (size_t) n * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t);
+    const size_t scale_bytes = (size_t) n * (size_t) groups * 2 * sizeof(float);
     const size_t total_bytes = index_bytes + lut_bytes + scale_bytes;
 
     void * ptr = NULL;
@@ -470,7 +495,7 @@ void ggml_ifairy_lut_mul_mat_scalar(int m, int k, int n, const void * qweights, 
     float * scales = (float *) (buf + index_bytes + lut_bytes);
 
     // build indexes per row
-    ggml_ifairy_3w_encode((const block_ifairy *) qweights, K, m, indexes, index_bytes);
+    ggml_ifairy_3w_encode((const block_ifairy *) qweights, K, m, indexes, index_bytes_raw);
 
     ggml_ifairy_lut_mul_mat_scalar_internal(m, k, n, qweights, act, act_stride, indexes, lut, scales, dst, (size_t) m * 2 * sizeof(float));
 

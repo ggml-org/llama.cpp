@@ -33,6 +33,15 @@
 
 ---
 
+## 1.3 实装状态（2025‑12‑12）
+
+- 语义对齐：ggml baseline `ggml_vec_dot_ifairy_q16_K_generic` 计算的是 `w * conj(x)`（不是 `w * x`）；LUT 路径必须严格按此语义实现，否则会导致 `llama-cli` 输出乱码。
+- 当前实现为 Correctness-first 标量路径（CPU-only）：
+  - 索引：每组三权重直接 6-bit pattern，`pat = c0 | (c1<<2) | (c2<<4)`（存 1 byte，2 bit 预留）。
+  - 分组：按 `QK_K=256` block 内分组，`85` 个 triplet + `1` 个尾组 `{255}`（不丢弃真实维度）。
+  - LUT：每组三权重构建 `sum_ac/sum_ad/sum_bc/sum_bd` 四通道 × 64 pattern（int16），qgemm 按 vecdot 公式合成输出。
+- 性能：该实现工作区较大（`512B/组`）且仍为标量；后续 NEON 优化需要在保证上述语义不变的前提下，重新引入更紧凑的表结构（例如 16 pattern + 复数因子）或 BK-tile 以控制 cache。
+
 ## 2. 数学基础与三权重组合
 
 ### 2.1 2‑bit 复数权重语义
@@ -47,14 +56,14 @@
 对给定激活 `x = x_r + i x_i`，其对输出的复数贡献为
 
 ```text
-contrib(c, x) = w(c) · x
+contrib(c, x) = w(c) · conj(x)
 ```
 
 展开可得
 
 ```text
-contrib_real  = Re(w(c) · x)
-contrib_imag  = Im(w(c) · x)
+contrib_real  = Re(w(c) · conj(x))
+contrib_imag  = Im(w(c) · conj(x))
 ```
 
 权重行与激活列的点积就是对所有权重‑激活对的贡献求和。
@@ -70,8 +79,8 @@ codes = (c0, c1, c2),  ci ∈ {0,1,2,3}
 对应的 3 个权重分别作用在激活向量的 3 个位置 `(x0, x1, x2)` 上。标量形式下的复数贡献为
 
 ```text
-S_real = Re(w(c0)·x0 + w(c1)·x1 + w(c2)·x2)
-S_imag = Im(w(c0)·x0 + w(c1)·x1 + w(c2)·x2)
+S_real = Re(w(c0)·conj(x0) + w(c1)·conj(x1) + w(c2)·conj(x2))
+S_imag = Im(w(c0)·conj(x0) + w(c1)·conj(x1) + w(c2)·conj(x2))
 ```
 
 直接在主循环中逐个展开会产生大量标量运算与分支，难以发挥 NEON 性能。LUT 的目标是在 **预处理阶段** 将这些模式尽量折叠，使主循环只需要：
@@ -110,14 +119,15 @@ S_imag = Im(w(c0)·x0 + w(c1)·x1 + w(c2)·x2)
 
 ### 4.1 索引结构
 
-对每组三个 2‑bit 权重 `(c0, c1, c2)`，先按固定约定打包成一个 **原始 6bit 索引**：
+对每组三个 2‑bit 权重 `(c0, c1, c2)`，需要把三元组编码成一个 6-bit 索引。
+
+当前实现（见 `ggml/src/ggml-quants.c::ggml_ifairy_pack_triplet_direct`）采用 **低位在前** 的直接编码：
 
 ```text
-// 约定：高位在前，c0 对应最左侧权重
-idx_raw = (c0 << 4) | (c1 << 2) | c2   // ∈ [0,63]
+pat = c0 | (c1 << 2) | (c2 << 4)   // ∈ [0,63]
 ```
 
-该约定在整个路径中保持不变，`canonical_idx[64]` / `factor[64]` 常量表、权重转换阶段的索引缓冲构造以及参考脚本的枚举逻辑都必须遵守这一拼接方式。
+备注：本设计文档后续章节描述的 “canonical_idx[64] / factor[64] + 16 pattern” 属于 NEON 优化目标；在引入该优化前，需要统一/迁移索引拼接约定，避免实现与文档不一致。
 
 为了便于说明，可以将 `idx_raw` 拆分为三部分：
 
@@ -814,11 +824,13 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
 
 - 权重语义与 6bit 索引：
   - 权重编码沿用 1.2 的约定：`0 → −1`，`1 → +1`，`2 → −i`，`3 → +i`。
-  - 原始 6bit 索引实现为：
+  - 当前实现（CPU correctness-first）使用直接 pattern 编码为：
 
     ```text
-    idx_raw = (c0 << 4) | (c1 << 2) | c2   // ∈ [0,63]
+    pat = c0 | (c1 << 2) | (c2 << 4)   // ∈ [0,63]
     ```
+
+  - 备注：后续若要恢复 “canonical_idx/factor + 16 pattern” 的 NEON 优化，需要确保离线脚本与在线实现的索引拼接约定一致。
 
 - 规范分解与 `canonical_idx[64]`：
   - 对每个三元组 `(c0, c1, c2)`，对应权重 `(w0, w1, w2)` 满足：

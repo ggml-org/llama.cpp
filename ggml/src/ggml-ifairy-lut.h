@@ -12,8 +12,13 @@ struct ifairy_lut_extra {
     struct ggml_tensor * index_tensor;
 };
 
-// iFairy 3-weight LUT API skeleton
-// Note: current implementation is a stub; real functionality will be added in subsequent steps.
+// iFairy 3-weight LUT API
+//
+// Current state:
+// - CPU-only scalar LUT path integrated into ggml mul_mat (guarded by GGML_IFAIRY_ARM_LUT + GGML_IFAIRY_LUT env).
+// - Correctness matches ggml_vec_dot_ifairy_q16_K_generic semantics (w * conj(x)).
+// - Index encoding is direct 6-bit pattern per 3 weights: pat = c0 | (c1<<2) | (c2<<4).
+// - LUT build uses 4x64 int16 tables per group (sum_ac/ad/bc/bd); NEON optimization is pending.
 
 void   ggml_ifairy_lut_init(void);
 void   ggml_ifairy_lut_free(void);

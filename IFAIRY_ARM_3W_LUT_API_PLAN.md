@@ -20,13 +20,22 @@
 ## 2. 数据结构与内存组织
 
 ### 2.1 索引缓冲
-- 编码：低 4bit=idx'，bit5=neg_real，bit6=neg_imag，bit7=swap；padding code=0。
-- 构造（方案 A 已落地）：按 block 切分，每个 `QK_K=256` 丢弃末尾一个权重（255 个有效值可被 3 整除），`groups_per_block = (QK_K-1)/3 = 85`，`k_padded = blocks * (QK_K-1)`，行优先，每组三权重 1 字节。
+- 编码（当前实现，Correctness-first）：每个 3-weight 组用 1 字节存 **直接 6-bit pattern**：
+  - `pat = c0 | (c1 << 2) | (c2 << 4)`，其中 `ci` 为原始 2-bit ifairy code（0..3）
+  - `index_byte = pat`（高 2 bit 预留，当前为 0）
+- 构造（方案 A' 已落地，不改变模型）：按 block 切分，每个 `QK_K=256`：
+  - `intra=0..84`：覆盖 `0..254` 的 85 个 triplet
+  - `intra=85`：尾组 `({255}, pad, pad)`（缺失激活视为 0）
+  - `groups_per_block = (QK_K + 2) / 3 = 86`，`groups_per_row = blocks * 86`
 - 对齐：64B；默认保留原始 2‑bit 权重。可选 flag 允许仅保留索引、释放原始权重（减内存）。
 
 ### 2.2 工作区（激活侧）
-- 组成：激活 pack（直接读取 ifairy_q16，不新增 pack）、per‑group LUT（`lut_real[16]` + `lut_imag[16]`，共 32B/组）、LUT 缩放。
-- 尺寸（方案 A）：`groups = blocks * 85`，每列需要 `groups*32` LUT bytes + `groups*2*sizeof(float)` scales，F32 激活时还需 `blocks*sizeof(block_ifairy_q16)` 的量化缓冲；多线程按线程数乘以 64B 对齐 slice。
+- 组成（当前实现，Correctness-first）：激活 pack（读取 ifairy_q16 或由 F32 临时量化得到 ifairy_q16）、per-group LUT（4 通道 sums × 64 pattern，int16）、LUT scales（每组 2 floats）。
+- 尺寸（当前实现）：`groups = blocks * 86`
+  - LUT：`groups * (4 * 64) * sizeof(int16_t)` bytes（即 `groups * 512` bytes / 列）
+  - scales：`groups * 2 * sizeof(float)` bytes / 列
+  - F32 激活时还需 `blocks*sizeof(block_ifairy_q16)` 的量化缓冲
+  - 多线程按线程数乘以 64B 对齐 slice
 - BK tile 时，改用 tile 粒度计算；保证每线程有独立 slice，避免同步。
 
 ### 2.3 权重附加信息
@@ -53,7 +62,7 @@
 - `size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst, int n_threads);`
 - `bool   ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out);` // 生成索引/extra
 - `void   ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act /* ifairy_q16 */, size_t act_stride, void * lut_scales, void * lut_buf);`
-- `void   ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uint8_t * indexes, const void * lut, const void * lut_scales, float * dst, size_t dst_stride);`
+- `void   ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uint8_t * indexes, const void * lut, const void * lut_scales, const void * act, size_t act_stride, float * dst, size_t dst_col_stride, size_t dst_row_stride, bool pack_bf16, bool strict);`
 
 > 说明：v1 定位 matvec/小 N，N 通过参数显式传入；大 N 上层循环调用 preprocess+qgemm。
 
@@ -68,7 +77,7 @@
 
 ## 4. 行为约定与回退
 
-- K/K3：所有路径统一使用逻辑 K，内部通过 `K3=((K+2)/3)*3`；`extra` 存 K 与 K3，避免漂移。
+- K：当前实现要求 `K % QK_K == 0`，并严格按 block 内分组（`86` 组/256），不做跨 block 的 K3 padding。
 - 组粒度：每 16 组索引批处理；LUT 在 tile 内一次加载，常驻寄存器（避免循环内重复 load）。
 - 缩放：v1 仅 per‑tensor `d_real/d_imag` + per‑tensor LUT scale；若未来有 block scales，内核在 BK 汇总后乘以 block scale（不修改 LUT）。
 - 线程模型：完全并行，按 M 维分片；每线程独立 preprocess（量化/LUT）+ qgemm，无全局 barrier；wsize = n_threads * per_thread_slice。
@@ -118,8 +127,8 @@ return true; // transform_tensor 会按需生成索引；有 NEON 走 NEON，否
 
 ## 9. 数据约定示意（便于实现）
 
-- act：ifairy_q16，实/虚分平面各 K3 个 int8，`d_real/d_imag` 为 fp16；`act_stride` 传入列/批的字节跨度。
-- lut_buf：按列/线程分配；每组 32B（real16+imag16），共 `groups_per_row` 组，64B 对齐，可按 BK 分段。
+- act：ifairy_q16（`block_ifairy_q16`），每个 block 含 256 个实/虚量化值（按 `uint8_t` 存储并以 `int8_t` 语义解释）+ `d_real/d_imag`（fp16）；`act_stride` 传入列/批的字节跨度。
+- lut_buf：按列/线程分配；每组 `4 * 64 * int16`（`sum_ac/sum_ad/sum_bc/sum_bd`），共 `groups_per_row` 组，64B 对齐。
 - lut_scales：默认 fp32，每列/每 tensor 1 元素；若改为 per-BK，扩展为数组。
 - qweights：原始 ifairy 压缩权重（不重排）；可选在 drop 原权重模式下仅保留索引。
 - indexes：`extra->indexes` 指向的 1B/组 buffer。
@@ -140,7 +149,10 @@ return true; // transform_tensor 会按需生成索引；有 NEON 走 NEON，否
 ## 12. 计划拆解(可执行 TODO)
 - [x] 接口骨架文件与 CMake 线路（init/free/can/wsize/transform/preprocess/qgemm）。— 头文件与 CMake 选项 `GGML_IFAIRY_ARM_LUT` 已生效；`transform_tensor` 现生成索引并挂 `tensor->extra`；`wsize` 上报每线程 LUT/scale/可选激活量化缓冲；预处理/qgemm 标量实现可复用测试。
 - [x] 标量预处理 + 标量 qgemm（用于正确性基准）。
-  - 进度：`ggml/src/ggml-ifairy-lut.cpp` 提供标量 reference（构表 + qgemm）；严格校验模式可直接按三权重量化值重构累加（不依赖 LUT 缩放近似）。预处理使用 ifairy_q16 激活构建 16 模式 LUT；方案 A 采用“每 256 丢弃 1 个权重”避免组跨 block。`tests/test-ifairy.cpp::test_ifairy_lut_scalar_matmul` 更新为与方案 A 对齐（跳过第 256 个权重），现已 0 diff 通过。
+  - 进度：`ggml/src/ggml-ifairy-lut.cpp` 提供标量 LUT（构表 + qgemm），并严格对齐 `ggml_vec_dot_ifairy_q16_K_generic` 的数学语义：`w * conj(x)`。
+  - 分组：采用 A'（block 内 85 个 triplet + 1 个尾组 `{255}`，不丢弃真实权重）。
+  - LUT：每组构建 `sum_ac/sum_ad/sum_bc/sum_bd` 四通道 × 64 pattern（int16），保证数值严格一致。
+  - 单测：`tests/test-ifairy.cpp::test_ifairy_lut_scalar_matmul` 已改为按 `w * conj(x)` 的 reference，比对 0 diff 通过。
 - [x] ggml 路由集成（mul_mat 分支 + workbuf 管理）。
   - 进度：`ggml_ifairy_lut_get_wsize` 计算每线程 LUT/scales/可选激活量化缓冲并通过 `ggml_cpu_extra_work_size` 上报；`mul_mat` 检测 ifairy 类型时调用 `transform_tensor` 懒生成索引，按线程切分行，复用 per-thread workbuf 预处理激活→LUT，使用 LUT qgemm 写入 bf16-packed 输出；缺陷：索引释放依赖 `ggml_ifairy_lut_free`，暂未在张量释放时自动回收；GGUF 类型注册仍未解决 loader “unknown type ifairy” 警告。
   - 路由策略：env `GGML_IFAIRY_LUT=0` 关闭；形状需 K%QK_K==0，dst F32；支持 `src1` 为 ifairy_q16 或 bf16-pair F32；暂用标量 LUT，NEON 待后续；多线程拆 row。
@@ -152,7 +164,8 @@ return true; // transform_tensor 会按需生成索引；有 NEON 走 NEON，否
 - [ ] 性能/正确性记录，更新设计文档。
 
 ## 13. 现状与已知问题（LUT=1 路径）
-- 现状：`./build-rel/bin/test-ifairy` 全部通过（含 LUT 标量路径，方案 A 丢弃第 256 元素）；`GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 校验模式可复现 0 diff。`./build-rel/bin/llama-cli ...`（LUT=1，strict=1）已消除 “unknown type ifairy” 警告（增加了 ftype 映射），但输出仍为乱码，需继续定位（可能与方案 A 丢弃数据/缩放链路有关）。
+- 现状：`./build-rel/bin/test-ifairy` 全部通过（含 LUT 标量路径）；`GGML_IFAIRY_LUT=1` 下 `./build-rel/bin/llama-cli ... --seed 1 -n 16` 输出可读文本，且 `GGML_IFAIRY_LUT_VALIDATE_VECDOT=5` 抽样 diff 为 0。
+- 当前主要问题：性能仍显著落后于 baseline vecdot（Correctness-first 的 64-pattern/4 通道 LUT 工作区较大，且内核仍是标量）。
 - 已修：ifairy RMSNorm 按 bf16-pair 解包重打包；二元算子 NaN 检查对 ifairy_add/mul 放宽；mul_mat 支持 F32 激活临时量化 + workbuf LUT；`ggml_abort` 增加 last-node 诊断输出；`ggml_ifairy_lut_can_mul_mat` 接受 F32/ifairy_q16 激活并检查 K 对齐；方案 A 索引与 LUT 链路贯通，严格模式单测对齐。
 - 构建约束：`GGML_IFAIRY_ARM_LUT=ON` 时，CMake 自动强制关闭 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等非 CPU 后端（对手动开启的选项给出 warning），保证 LUT 调试与运行仅走 CPU 路径；无需用户在命令行追加一串 `-DGGML_*` 禁用 GPU。
 - 未决/调试计划：
@@ -163,10 +176,7 @@ return true; // transform_tensor 会按需生成索引；有 NEON 走 NEON，否
   5) 解决 LUT 路径生成乱码的问题（目前 strict 校验通过，CLI 输出仍异常），收敛到可读输出后再切回非 strict 模式并恢复性能调优。
 
 ### 13.1 当前困难（debug 结论汇总）
-- **“strict 仍乱码”**：`GGML_IFAIRY_LUT=1` + `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 时仍输出乱码，说明问题不只是 LUT 表近似/溢出，而是 **LUT 路由本身的数学/形状语义与 baseline 不一致**（例如丢弃元素改变模型等效计算）。
-- **方案 A 丢弃每 block 末元素的语义风险**：方案 A 为了让 `255=85*3`，当前实现“每 256 个权重丢弃最后一个元素”。这会改变真实模型的线性层（相当于强行把每 block 的最后一维权重置零），理论上足以破坏输出可读性；单测之所以能 0 diff，是因为单测的 reference 也同步跳过了该元素。
-- **比较基准与 vec_dot 的链接限制**：希望直接用 `ggml_vec_dot_ifairy_q16_K` 对照，但它在 `ggml-cpu` 目标里；而 LUT 实现在 `ggml-base`，不能直接链接调用。当前在 `GGML_IFAIRY_LUT_COMPARE` 下内联实现了与 vec_dot 等价的逐权重解码基准（per-block scales），用于定位差异。
-- **对照结果（仍有偏差）**：在 `GGML_IFAIRY_LUT_COMPARE=4` 的最小输出模式下，首行首列出现稳定偏差（例如 `diff≈(+0.0396,-0.1080)`），该偏差会随层数放大，最终表现为乱码。
+- **已解决“乱码”**：根因是 LUT 计算语义与 baseline 不一致（应为 `w * conj(x)`），以及旧 LUT（16 pattern + 2 通道）无法严格复现 `sum_ac/sum_ad/sum_bc/sum_bd` 四项累加；现已切换为 A' + 64 pattern + 4 通道 LUT，并用 `GGML_IFAIRY_LUT_VALIDATE_VECDOT` 在运行时抽样校验为 0 diff。
 
 ### 13.2 可能的解决方案（按优先级）
 1) **停止丢弃真实权重（回滚 A 的“drop”语义）**：方案 A 的核心是“分组不跨 block”，但不应通过丢弃真实维度来达成。更合理做法：

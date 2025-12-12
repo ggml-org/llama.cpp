@@ -2272,53 +2272,13 @@ void dequantize_row_tq2_0(const block_tq2_0 * GGML_RESTRICT x, float * GGML_REST
 
 // ====================== iFairy model =======================
 
-// 原始 6-bit 索引 → 4-bit 规范索引（idx'）与复数变换因子
-static const uint8_t ifairy_canonical_idx[64] = {
-     0,  2,  1,  3,  8, 10,  9, 11,  // [ 0.. 7]
-     4,  6,  5,  7, 12, 14, 13, 15,  // [ 8..15]
-    10,  8, 11,  9,  2,  0,  3,  1,  // [16..23]
-    14, 12, 15, 13,  6,  4,  7,  5,  // [24..31]
-    15, 13, 12, 14,  7,  5,  4,  6,  // [32..39]
-     3,  1,  0,  2, 11,  9,  8, 10,  // [40..47]
-     5,  7,  6,  4, 13, 15, 14, 12,  // [48..55]
-     9, 11, 10,  8,  1,  3,  2,  0,  // [56..63]
-};
-
-// 原始 6-bit 索引 → 复数因子指数 e，满足 i^e = factor
-static const uint8_t ifairy_factor_exp[64] = {
-     2,  2,  2,  2,  2,  2,  2,  2,  // [ 0.. 7] -> (-1, -1, -1, -1, -1, -1, -1, -1)
-     2,  2,  2,  2,  2,  2,  2,  2,  // [ 8..15] -> (-1, -1, -1, -1, -1, -1, -1, -1)
-     0,  0,  0,  0,  0,  0,  0,  0,  // [16..23] -> ( 1,  1,  1,  1,  1,  1,  1,  1)
-     0,  0,  0,  0,  0,  0,  0,  0,  // [24..31] -> ( 1,  1,  1,  1,  1,  1,  1,  1)
-     3,  3,  3,  3,  3,  3,  3,  3,  // [32..39] -> (-i, -i, -i, -i, -i, -i, -i, -i)
-     3,  3,  3,  3,  3,  3,  3,  3,  // [40..47] -> (-i, -i, -i, -i, -i, -i, -i, -i)
-     1,  1,  1,  1,  1,  1,  1,  1,  // [48..55] -> ( i,  i,  i,  i,  i,  i,  i,  i)
-     1,  1,  1,  1,  1,  1,  1,  1,  // [56..63] -> ( i,  i,  i,  i,  i,  i,  i,  i)
-};
-
-static inline uint8_t ggml_ifairy_factor_to_opcode(uint8_t factor_exp) {
-    switch (factor_exp & 3) {
-        case 0: // 1
-            return 0x00;
-        case 1: //  i -> swap + neg_real
-            return 0x80 | 0x20;
-        case 2: // -1 -> neg_real + neg_imag
-            return 0x20 | 0x40;
-        case 3: // -i -> swap + neg_imag
-            return 0x80 | 0x40;
-    }
-
-    GGML_UNREACHABLE();
-}
-
-static inline uint8_t ggml_ifairy_pack_triplet(uint8_t c0, uint8_t c1, uint8_t c2) {
+// For correctness (match ggml_vec_dot_ifairy_q16_K_generic), encode each 3-weight group
+// directly as a 6-bit pattern ID:
+//   pat = c0 | (c1 << 2) | (c2 << 4)
+// where each ci is the original 2-bit ifairy code in {0,1,2,3}.
+static inline uint8_t ggml_ifairy_pack_triplet_direct(uint8_t c0, uint8_t c1, uint8_t c2) {
     GGML_ASSERT(c0 < 4 && c1 < 4 && c2 < 4);
-
-    const uint8_t idx_raw = (uint8_t) ((c0 << 4) | (c1 << 2) | c2);
-    const uint8_t idx_norm = ifairy_canonical_idx[idx_raw];
-    const uint8_t opcode = ggml_ifairy_factor_to_opcode(ifairy_factor_exp[idx_raw]);
-
-    return (uint8_t) (idx_norm | opcode);
+    return (uint8_t) (c0 | (c1 << 2) | (c2 << 4));
 }
 
 static inline uint8_t ggml_ifairy_read_code(const block_ifairy * row_blocks, int64_t idx) {
@@ -2339,8 +2299,8 @@ struct ggml_ifairy_3w_index_info ggml_ifairy_3w_get_index_info(int64_t k) {
     GGML_ASSERT(k % QK_K == 0);
 
     const int64_t blocks = k / QK_K;
-    const int64_t groups_per_block = (QK_K - 1) / 3; // drop the 256th element -> 255 elements per block
-    const int64_t k_padded = blocks * (QK_K - 1);
+    const int64_t groups_per_block = (QK_K + 2) / 3; // 256 -> 85 triplets + 1 tail group (no drop)
+    const int64_t k_padded = k; // tail group uses internal padding; logical K unchanged
 
     struct ggml_ifairy_3w_index_info info = {
         /*.k              =*/ k,
@@ -2382,7 +2342,7 @@ bool ggml_ifairy_3w_encode(const block_ifairy * GGML_RESTRICT weights, int64_t k
     }
 
     const int64_t blocks_per_row = k / QK_K;
-    const int64_t groups_per_block = (QK_K - 1) / 3; // 255/3 = 85 groups per 256-block
+    const int64_t groups_per_block = (QK_K + 2) / 3; // 86 groups per 256-block (last is tail)
     for (int64_t row = 0; row < rows; ++row) {
         const block_ifairy * row_blocks = weights + row * blocks_per_row;
         uint8_t * row_dst = dst + row * info.groups_per_row;
@@ -2390,13 +2350,17 @@ bool ggml_ifairy_3w_encode(const block_ifairy * GGML_RESTRICT weights, int64_t k
         for (int64_t g = 0; g < info.groups_per_row; ++g) {
             const int64_t blk   = g / groups_per_block;
             const int64_t intra = g - blk * groups_per_block;
-            const int64_t base  = blk * QK_K + intra * 3; // spans 0..254, skip 255
+            // keep grouping within each 256-block:
+            // - intra=0..84: base = blk*256 + intra*3 (covers 0..254)
+            // - intra=85   : tail group: (255, pad, pad) (does NOT cross into next block)
+            const bool tail = intra == groups_per_block - 1;
+            const int64_t base = blk * QK_K + (tail ? (QK_K - 1) : intra * 3);
 
-            const uint8_t c0 = base     < k ? ggml_ifairy_read_code(row_blocks, base)     : 0;
-            const uint8_t c1 = base + 1 < k ? ggml_ifairy_read_code(row_blocks, base + 1) : 0;
-            const uint8_t c2 = base + 2 < k ? ggml_ifairy_read_code(row_blocks, base + 2) : 0;
+            const uint8_t c0 = base < k ? ggml_ifairy_read_code(row_blocks, base) : 0;
+            const uint8_t c1 = (!tail && base + 1 < k) ? ggml_ifairy_read_code(row_blocks, base + 1) : 0;
+            const uint8_t c2 = (!tail && base + 2 < k) ? ggml_ifairy_read_code(row_blocks, base + 2) : 0;
 
-            row_dst[g] = ggml_ifairy_pack_triplet(c0, c1, c2);
+            row_dst[g] = ggml_ifairy_pack_triplet_direct(c0, c1, c2);
         }
     }
 
