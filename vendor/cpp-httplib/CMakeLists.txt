@@ -9,6 +9,10 @@ if (NOT MSVC)
 endif()
 
 target_link_libraries  (${TARGET} PRIVATE Threads::Threads)
+
+if (WIN32 AND NOT MSVC)
+    target_link_libraries(${TARGET} PUBLIC ws2_32)
+endif()
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 target_compile_definitions(${TARGET} PRIVATE
