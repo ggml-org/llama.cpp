@@ -3862,6 +3862,200 @@ class Qwen2VLVisionModel(MmprojModel):
         return [] # skip other tensors
 
 
+@ModelBase.register("Eagle2_VLForConditionalGeneration","Eagle2_5_VLForConditionalGeneration")
+class Eagle2VLVisionModel(MmprojModel):
+    """
+    Dedicated Eagle2-VL mmproj converter.
+
+    Responsibilities:
+    - Emit a distinct projector_type (eagle2vl) and vision metadata (image/patch size, mean/std, eps, block_count, merge size).
+    - Perform Eagle2-specific layout normalization during conversion in modify_tensors (in a later follow-up).
+      The C++ runtime will assume canonical layout and must not include Eagle2-specific transposes or hacks.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.hparams_vision is not None:
+            # Prefer overrides from vision_config when present
+            vc = self.get_vision_config() or {}
+            if "image_size" in vc and "image_size" not in self.hparams_vision:
+                self.hparams_vision["image_size"] = vc["image_size"]
+            if "patch_size" in vc and "patch_size" not in self.hparams_vision:
+                self.hparams_vision["patch_size"] = vc["patch_size"]
+            if "image_mean" in vc and "image_mean" not in self.hparams_vision:
+                self.hparams_vision["image_mean"] = vc["image_mean"]
+            if "image_std" in vc and "image_std" not in self.hparams_vision:
+                self.hparams_vision["image_std"] = vc["image_std"]
+
+            # Normalize common aliases
+            if "num_heads" in self.hparams_vision and "num_attention_heads" not in self.hparams_vision:
+                self.hparams_vision["num_attention_heads"] = self.hparams_vision.get("num_heads")
+            if "depth" in self.hparams_vision and "num_hidden_layers" not in self.hparams_vision:
+                self.hparams_vision["num_hidden_layers"] = self.hparams_vision.get("depth")
+
+    def set_gguf_parameters(self):
+        # Base writes general vision fields (embedding/feed-forward/heads when available)
+        super().set_gguf_parameters()
+
+        # Projector type: Eagle2-VL
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.EAGLE2VL)
+
+        # Vision attention layernorm eps: use config if available, else 1e-6
+        vc = self.get_vision_config() or {}
+        eps = 1e-6        
+        if isinstance(vc, dict) and "layer_norm_eps" in vc:
+            eps = vc["layer_norm_eps"]
+        self.gguf_writer.add_vision_attention_layernorm_eps(eps)
+
+        # 2x2 spatial merge
+        self.gguf_writer.add_vision_spatial_merge_size(2)
+
+        # Mirror Qwen2VL-style image metadata if provided; do not guess
+        hpv = self.hparams_vision or {}
+
+        img_sz = hpv.get("image_size")
+        if isinstance(img_sz, (list, tuple)) and len(img_sz) > 0:
+            img_sz = img_sz[0]
+        if isinstance(img_sz, int):
+            self.gguf_writer.add_vision_image_size(img_sz)
+
+        patch_sz = hpv.get("patch_size")
+        if isinstance(patch_sz, (list, tuple)) and len(patch_sz) > 0:
+            patch_sz = patch_sz[0]
+        if isinstance(patch_sz, int):
+            self.gguf_writer.add_vision_patch_size(patch_sz)
+
+        blk_cnt = hpv.get("num_hidden_layers")
+        if isinstance(blk_cnt, int):
+            self.gguf_writer.add_vision_block_count(blk_cnt)
+
+        img_mean = hpv.get("image_mean")
+        if isinstance(img_mean, (list, tuple)) and len(img_mean) > 0:
+            self.gguf_writer.add_vision_image_mean(list(img_mean))
+
+        img_std = hpv.get("image_std")
+        if isinstance(img_std, (list, tuple)) and len(img_std) > 0:
+            self.gguf_writer.add_vision_image_std(list(img_std))
+
+    # Note:
+    # Eagle2-specific tensor layout normalization (mlp1 → mm.*, QKV split)
+    # will live here in Eagle2VLVisionModel.modify_tensors() in a follow-up.
+    # The C++ builder will assume canonical weights and perform zero ad-hoc transposes.
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        # 1) Name prefix normalization
+        if name.startswith("vision_model.vision_model."):
+            name = name.replace("vision_model.vision_model.", "model.vision_model.", 1)
+        # Eagle2 HF projector tensors often live under "multi_modal_projector.*"
+        # Normalize that prefix away so we can match on "mlp1.*" below
+        if name.startswith("multi_modal_projector."):
+            name = name.replace("multi_modal_projector.", "", 1)
+
+        # 2) Skip clearly non-vision towers
+        if name.startswith("audio") or name.startswith("talker") or name.startswith("token2wav"):
+            return []
+
+        # 2.1) Skip classification / pooling head tensors under vision model head
+        # Example tensors to skip:
+        # - vision_model.vision_model.head.attention.in_proj_weight
+        # - vision_model.vision_model.head.mlp.fc1.weight
+        # - vision_model.vision_model.head.probe
+        if ".head." in name:
+            return []
+
+        # 3) Projector MLP remap: map Eagle2-VL mlp1.* -> mm_input_norm/mm.0/mm.2
+        mlp_pos = name.find("mlp1.")
+        if mlp_pos != -1:
+            mlp_suffix = name[mlp_pos + len("mlp1."):]
+            # Map Eagle2-VL projector LayerNorm:
+            # mlp1.0.{weight,bias} correspond to the input LayerNorm of the projector
+            # (structure: LayerNorm → Linear → GELU → Linear).
+            # The C++ runtime applies ggml_norm + scale/shift, so we store γ/β as mm_input_norm_w/b.
+            if mlp_suffix.startswith("0."):
+                if mlp_suffix.endswith("weight"):
+                    return [("mm_input_norm_w", data_torch)]
+                if mlp_suffix.endswith("bias"):
+                    return [("mm_input_norm_b", data_torch)]
+                # any other subfield under mlp1.0.* (rare) -> skip
+                return []
+            
+            # Map first Linear (mlp1.1.*) -> mm.0.*
+            if mlp_suffix.startswith("1."):
+                new_name = "mm.0." + mlp_suffix[2:]
+                if new_name.endswith(".weight"):
+                    # Canonicalize to [n_in, n_out]; detect and transpose only if needed.
+                    if data_torch.ndim == 2:
+                        d0, d1 = int(data_torch.shape[0]), int(data_torch.shape[1])
+                        # Expected input width after 2x2 merge = vit_hidden * 4 (if available)
+                        vit_hidden = (self.hparams_vision or {}).get("hidden_size")
+                        expected_in = vit_hidden * 4 if isinstance(vit_hidden, int) and vit_hidden > 0 else None
+                        expected_out = getattr(self, "n_embd_text", None)
+                        # Strong orientation rule: if [out, in] = [n_embd_text, 4*hidden] -> transpose
+                        if isinstance(expected_in, int) and isinstance(expected_out, int) and expected_in > 0 and expected_out > 0:
+                            if d0 == expected_out and d1 == expected_in:
+                                data_torch = data_torch.transpose(-1, -2)
+                            elif d0 == expected_in and d1 == expected_out:
+                                pass  # already [n_in, n_out]
+                            else:
+                                # fall through to heuristic rules below
+                                pass
+                        if isinstance(expected_in, int) and expected_in > 0:
+                            if d0 == expected_in:
+                                pass  # already canonical [n_in, n_out]
+                            elif d1 == expected_in:
+                                data_torch = data_torch.transpose(-1, -2)
+                            else:
+                                # Fallback: choose orientation that puts larger dim on axis 0
+                                if d0 < d1:
+                                    data_torch = data_torch.transpose(-1, -2)
+                        else:
+                            # Fallback when vit_hidden is unknown: assume PyTorch [out, in] and transpose if in > out
+                            if d0 < d1:
+                                data_torch = data_torch.transpose(-1, -2)
+                    return [(new_name, data_torch)]
+                return [(new_name, data_torch)]
+            # Map second Linear (mlp1.3.*) -> mm.2.*
+            if mlp_suffix.startswith("3."):
+                new_name = "mm.2." + mlp_suffix[2:]
+                if new_name.endswith(".weight"):
+                    # Canonicalize to [n_in, n_out] for the second layer.
+                    # Here expected_in == expected_out == text emb dim; if ambiguous, leave as-is (often square).
+                    if data_torch.ndim == 2:
+                        d0, d1 = int(data_torch.shape[0]), int(data_torch.shape[1])
+                        expected = getattr(self, "n_embd_text", None)
+                        if isinstance(expected, int) and expected > 0:
+                            if d0 == expected and d1 == expected:
+                                pass
+                            elif d1 == expected and d0 != expected:
+                                data_torch = data_torch.transpose(-1, -2)
+                    return [(new_name, data_torch)]
+                return [(new_name, data_torch)]
+            # Unknown mlp1 component -> skip
+            return []
+
+        # 4) Fused QKV split
+        if ".qkv." in name:
+            # Determine split size from leading dimension
+            c3 = data_torch.shape[0]
+            assert c3 % 3 == 0, f"qkv tensor leading dim must be divisible by 3, got {c3} for {name}"
+            c = c3 // 3
+            wq = data_torch[:c]
+            wk = data_torch[c: 2 * c]
+            wv = data_torch[2 * c:]
+            return [
+                (self.map_tensor_name(name.replace("qkv", "q")), wq),
+                (self.map_tensor_name(name.replace("qkv", "k")), wk),
+                (self.map_tensor_name(name.replace("qkv", "v")), wv),
+            ]
+
+        # 5) Default mapping for remaining Eagle2 vision tensors
+        if name.startswith("vision_model.") or name.startswith("model.vision_model.") or name.startswith("visual."):
+            return [(self.map_tensor_name(name), data_torch)]
+
+        # Not an Eagle2 vision tensor -> skip
+        return []
+
 @ModelBase.register("Qwen2_5OmniModel")
 class Qwen25OmniModel(Qwen2VLVisionModel):
     has_vision_encoder = True

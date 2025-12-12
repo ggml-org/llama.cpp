@@ -1079,6 +1079,75 @@ struct clip_graph {
         return gf;
     }
 
+    // Eagle2-VL: normalized ViT with learned absolute position embeddings and 2-layer MLP projector (mm.0, GELU, mm.2)
+    ggml_cgraph * build_eagle2vl() {
+        GGML_ASSERT(model.class_embedding == nullptr);
+
+        const int n_pos = n_patches;
+
+        // Use resized learned position embeddings if dynamic resolution is used
+        ggml_tensor * learned_pos_embd = resize_position_embeddings();
+
+        // Build input patches via Conv2D, add patch bias if present
+        ggml_tensor * inp = build_inp();
+
+        // Vision encoder: use RMS norm per metadata (eps), FFN op per hparams
+        ggml_tensor * cur = build_vit(
+            inp, n_pos,
+            NORM_TYPE_RMS,
+            hparams.ffn_op,
+            learned_pos_embd,
+            nullptr);
+        // keep runtime quiet in normal runs; shapes are correct by construction
+
+        // Apply spatial patch merge (e.g., 2x2) before projector if requested
+        {
+            const int scale_factor = hparams.n_merge;
+            if (scale_factor > 1) {
+                // This returns a 2D tensor shaped [n_embd * scale_factor^2, n_pos / scale_factor^2]
+                // which matches the expected input width for mm.0
+                cur = build_patch_merge_permute(cur, scale_factor);
+                // merged tokens layout now matches projector input width
+            }
+        }
+
+        // 2-layer MLP projector: LayerNorm (mlp1.0) -> mm.0 -> GELU -> mm.2
+        ggml_tensor * embeddings = cur;
+
+        GGML_ASSERT(model.mm_0_w != nullptr);
+        GGML_ASSERT(model.mm_2_w != nullptr);
+
+        // ensure projector input is a packed 2D matrix [n_in, n_tokens]
+        embeddings = ggml_reshape_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
+        embeddings = ggml_cont_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
+
+        // Apply projector input LayerNorm (mlp1.0) with default eps = 1e-5
+        if (model.mm_input_norm_w || model.mm_input_norm_b) {
+            embeddings = build_norm(
+                embeddings,
+                model.mm_input_norm_w,
+                model.mm_input_norm_b,
+                NORM_TYPE_NORMAL,
+                1e-5f,
+                /*il=*/-1);
+        }
+
+        // Use shared FFN helper: Linear(mm.0) -> GELU -> Linear(mm.2)
+        embeddings = build_ffn(
+            embeddings,
+            model.mm_0_w, model.mm_0_b,
+            /*gate=*/nullptr, /*gate_b=*/nullptr,
+            model.mm_2_w, model.mm_2_b,
+            FFN_GELU,
+            /*il=*/0
+        );
+
+        // build the graph
+        ggml_build_forward_expand(gf, embeddings);
+
+        return gf;
+    }
+
     ggml_cgraph * build_minicpmv() {
         GGML_ASSERT(model.class_embedding == nullptr);
         const int n_pos       = n_patches;
@@ -2529,6 +2598,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 res = graph.build_qwen3vl();
             } break;
+        case PROJECTOR_TYPE_EAGLE2VL:
+            {
+                res = graph.build_eagle2vl();
+            } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
                 res = graph.build_minicpmv();
@@ -2803,6 +2876,15 @@ struct clip_model_loader {
 
             // model-specific params
             switch (model.proj_type) {
+                case PROJECTOR_TYPE_EAGLE2VL:
+                    {
+                        // spatial merge (default 2), allow override from metadata if present
+                        hparams.n_merge = 2;
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        // set reasonable token limits and warmup like qwen2vl
+                        hparams.set_limit_image_tokens(8, 4096);
+                        hparams.set_warmup_n_tokens(46*46);
+                    } break;
                 case PROJECTOR_TYPE_MINICPMV:
                     {
                         if (hparams.minicpmv_version == 0) {
@@ -3084,6 +3166,17 @@ struct clip_model_loader {
                         model.proj_type = PROJECTOR_TYPE_MLP_NORM;
                     }
                     model.image_newline = get_tensor(TN_IMAGE_NEWLINE, false);
+                } break;
+            case PROJECTOR_TYPE_EAGLE2VL:
+                {
+                    // projector input LayerNorm (mlp1.0.{weight,bias})
+                    model.mm_input_norm_w = get_tensor("mm_input_norm_w", false);
+                    model.mm_input_norm_b = get_tensor("mm_input_norm_b", false);
+                    // 2-layer MLP projector using mm.0 and mm.2
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"),   false);
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"),   false);
                 } break;
             case PROJECTOR_TYPE_LDP:
                 {
@@ -4334,6 +4427,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
 
         case PROJECTOR_TYPE_GLM_EDGE:
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_EAGLE2VL:
         case PROJECTOR_TYPE_INTERNVL: // TODO @ngxson : support dynamic resolution
             {
                 clip_image_u8 resized_image;
@@ -4581,6 +4675,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_EAGLE2VL:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_LLAMA4:
@@ -4964,6 +5059,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("patches", patches);
             } break;
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_EAGLE2VL:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_QWEN2A:
@@ -5082,6 +5178,9 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];
+        case PROJECTOR_TYPE_EAGLE2VL:
+            // final projector output dim
+            return ctx->model.mm_2_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }
