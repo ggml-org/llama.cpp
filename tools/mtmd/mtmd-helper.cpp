@@ -519,3 +519,16 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char *
 
     return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size());
 }
+
+// image-only helper, no mtmd_context required
+mtmd_bitmap * mtmd_helper_bitmap_init_from_file_noctx(const char * fname) {
+    int nx = 0, ny = 0, nc = 0;
+    unsigned char * data = stbi_load(fname, &nx, &ny, &nc, 3);
+    if (!data) {
+        LOG_ERR("%s: failed to decode image file %s\n", __func__, fname);
+        return nullptr;
+    }
+    mtmd_bitmap * result = mtmd_bitmap_init(nx, ny, data);
+    stbi_image_free(data);
+    return result;
+}

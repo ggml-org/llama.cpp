@@ -1615,7 +1615,9 @@ class MmprojModel(ModelBase):
     preprocessor_config: dict[str, Any]
     global_config: dict[str, Any]
 
-    n_block_keys = ["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth"]
+    # Prefer explicit "layers"  (e.g. JinaCLIP),
+    # keep legacy keys for other models.
+    n_block_keys = ["layers", "n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth"]
 
     has_vision_encoder: bool = True # by default
     has_audio_encoder: bool = False
@@ -5646,6 +5648,13 @@ class XLMRobertaModel(BertModel):
 
         if lora_names := hparams.get("lora_adaptations"):
             self._lora_names = lora_names
+
+        pe_type = (hparams.get("position_embedding_type") or "").lower()
+        rope_base = hparams.get("rotary_emb_base")
+        name_path = (hparams.get("_name_or_path") or "").lower()
+        is_vx = ("jina" in name_path and ("v2" in name_path or "v3" in name_path))
+        is_v3 = (pe_type == "rotary" or rope_base is not None) and is_vx
+        if is_v3 or self._lora_names:
             self.model_arch = gguf.MODEL_ARCH.JINA_BERT_V3
 
         super().__init__(dir_model, ftype, fname_out, hparams=hparams, **kwargs)
@@ -6874,6 +6883,140 @@ class JinaBertV2Model(BertModel):
             self.gguf_writer.add_token_type_count(2)
         else:
             raise NotImplementedError(f'Tokenizer {tokenizer_class} is not supported for JinaBertModel')
+
+
+@ModelBase.register("JinaCLIPVisionModel", "JinaCLIPModel")
+class JinaCLIPVisionModel(MmprojModel):
+    """JinaCLIP v2 Vision Encoder Model - handles vision component only"""
+    model_arch = gguf.MODEL_ARCH.MMPROJ
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Load config for vision encoder
+        config_path = self.dir_model / "config.json"
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"JinaCLIPVisionModel: missing config.json in {self.dir_model}. "
+                "Please ensure the original model config is present; default hyperparameter fallbacks are not used."
+            )
+        with open(config_path, encoding="utf-8") as f:
+            self.vision_config = json.load(f)
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        # For JinaCLIPVisionModel, the top-level AutoConfig dict is already
+        # the vision-only configuration.
+        return self.global_config
+
+    def set_vocab(self):
+        # Vision encoder doesn't need vocabulary
+        pass
+
+    def set_gguf_parameters(self):
+        cfg = self.vision_config
+
+        try:
+            width = int(cfg["width"])                 # channel dim
+            head_width = int(cfg["head_width"])       # per-head dim
+            layers = int(cfg["layers"])               # block count
+            image_size = int(cfg["image_size"])       # input image size
+            patch_size = int(cfg["patch_size"])       # patch size
+        except KeyError as e:
+            raise KeyError(f"JinaCLIPVisionModel: missing key in config.json: {e}")
+
+        if width % head_width != 0:
+            raise ValueError(
+                f"JinaCLIPVisionModel: width ({width}) not divisible by head_width ({head_width})"
+            )
+        n_head = width // head_width
+
+        if "mlp_ratio" in cfg:
+            n_ff = int(width * float(cfg["mlp_ratio"]))
+        elif bool(cfg.get("naive_swiglu", False)):
+            n_ff = int((width * 8) // 3)
+        else:
+            raise ValueError("JinaCLIPVisionModel: unable to infer FFN size; please provide 'mlp_ratio' or set 'naive_swiglu' in config.json")
+
+        self.gguf_writer.add_clip_has_vision_encoder(True)
+        proj_dim = int(cfg.get("projection_dim", width))
+        self.gguf_writer.add_vision_projection_dim(proj_dim)
+
+        self.gguf_writer.add_vision_image_size(image_size)
+        self.gguf_writer.add_vision_patch_size(patch_size)
+        self.gguf_writer.add_vision_embedding_length(width)
+        self.gguf_writer.add_vision_block_count(layers)
+        self.gguf_writer.add_vision_head_count(n_head)
+        self.gguf_writer.add_vision_feed_forward_length(n_ff)
+
+        self.gguf_writer.add_vision_attention_layernorm_eps(float(cfg.get("layer_norm_eps", 1e-5)))
+
+        mean = self.preprocessor_config.get("image_mean", self.preprocessor_config.get("mean"))
+        std  = self.preprocessor_config.get("image_std",  self.preprocessor_config.get("std"))
+        if mean is None or std is None:
+            raise KeyError(
+                "JinaCLIPVisionModel: preprocessor_config missing image mean/std (expected keys: 'image_mean'/'image_std' or 'mean'/'std')"
+            )
+        self.gguf_writer.add_vision_image_mean(mean)
+        self.gguf_writer.add_vision_image_std(std)
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.JINACLIP2)
+        self.gguf_writer.add_vision_use_silu(True)
+
+    def _strip_vm_prefix(self, name: str) -> str:
+        return name[len('vision_model.'):] if name.startswith('vision_model.') else name
+
+    def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias")) -> str:
+        if name.startswith('v.') or name.startswith('mm.'):
+            return name
+        return super().map_tensor_name(name, try_suffixes=try_suffixes)
+
+    def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
+        yielded_any = False
+        try:
+            for name, tensor in super().get_tensors():
+                yielded_any = True
+                yield name, tensor
+        except Exception as e:
+            logger.warning("mmproj(jinaclip): base get_tensors failed, falling back: %s", e)
+        if yielded_any:
+            return
+
+        candidates = [
+            self.dir_model / "pytorch_model.bin",
+            self.dir_model / "vision_model_weights.bin",
+        ]
+        model_path = next((p for p in candidates if p.exists()), None)
+        if model_path is None:
+            raise FileNotFoundError(f"mmproj(jinaclip): no model weights found in {self.dir_model}")
+        try:
+            state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
+        except TypeError:
+            state_dict = torch.load(model_path, map_location="cpu")
+
+        for name, tensor in state_dict.items():
+            yield name, tensor
+
+    def _should_be_f32(self, gguf_name: str) -> bool:
+        patterns = (
+            ".ln1.weight", ".ln1.bias",
+            ".ln2.weight", ".ln2.bias",
+            ".attn_ln.weight", ".attn_ln.bias",
+            ".ffn_norm.weight", ".ffn_norm.bias",
+            "v.patch_embd.proj.bias",
+        )
+        return any(p in gguf_name for p in patterns)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # keep only pos_embed special case (no .weight suffix); all other tensors use table-driven mapping
+        if name == 'pos_embed':
+            pos_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_POS] + '.weight'
+            return [(pos_name, data_torch)]
+
+        try:
+            return [(self.map_tensor_name(name), data_torch)]
+        except Exception:
+            logger.debug("mmproj(jinaclip): skip unmapped tensor %s", name)
+            return []
 
 
 @ModelBase.register("OpenELMForCausalLM")

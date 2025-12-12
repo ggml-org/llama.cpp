@@ -237,6 +237,9 @@ struct clip_layer {
     ggml_tensor * o_w = nullptr;
     ggml_tensor * o_b = nullptr;
 
+    ggml_tensor * attn_ln_w = nullptr;
+    ggml_tensor * attn_ln_b = nullptr;
+
     ggml_tensor * k_norm = nullptr;
     ggml_tensor * q_norm = nullptr;
 
@@ -250,6 +253,9 @@ struct clip_layer {
     ggml_tensor * ff_gate_b = nullptr;
     ggml_tensor * ff_down_w = nullptr;
     ggml_tensor * ff_down_b = nullptr;
+
+    ggml_tensor * ffn_norm_w = nullptr;
+    ggml_tensor * ffn_norm_b = nullptr;
 
     // layernorm 2
     ggml_tensor * ln_2_w = nullptr;
@@ -1789,6 +1795,157 @@ struct clip_graph {
 
         return gf;
     }
+
+    ggml_cgraph * build_jina2() {
+        const int n_pos = n_patches + (model.class_embedding ? 1 : 0);
+
+        GGML_ASSERT(n_patches_x == n_patches_y && "only square images supported");
+
+        int max_feature_layer = n_layer;
+
+        ggml_tensor * inp = build_inp();
+
+        if (ctx->proj_type() == PROJECTOR_TYPE_JINACLIP2) {
+            ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
+            ggml_tensor * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
+            ggml_set_name(pos_h, "pos_h");
+            ggml_set_name(pos_w, "pos_w");
+            ggml_set_input(pos_h);
+            ggml_set_input(pos_w);
+            ggml_build_forward_expand(gf, pos_h);
+            ggml_build_forward_expand(gf, pos_w);
+
+            ggml_tensor * rope_c_first  = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, d_head/2);
+            ggml_tensor * rope_c_second = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, d_head/2);
+            ggml_set_name(rope_c_first,  "rope_c_first");
+            ggml_set_name(rope_c_second, "rope_c_second");
+            ggml_set_input(rope_c_first);
+            ggml_set_input(rope_c_second);
+            ggml_build_forward_expand(gf, rope_c_first);
+            ggml_build_forward_expand(gf, rope_c_second);
+
+        }
+        if (model.class_embedding) {
+            inp = ggml_concat(ctx0, model.class_embedding, inp, 1);
+        }
+
+        ggml_tensor * positions = nullptr;
+
+        positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
+        ggml_set_name(positions, "positions");
+        ggml_set_input(positions);
+
+        inp = ggml_add(ctx0, inp, ggml_get_rows(ctx0, model.position_embeddings, positions));
+
+        ggml_tensor * inpL = inp;
+
+        // pre-layernorm
+        if (model.pre_ln_w) {
+            inpL = build_norm(inpL, model.pre_ln_w, model.pre_ln_b, NORM_TYPE_NORMAL, eps, -1);
+        }
+
+        // loop over layers
+        for (int il = 0; il < max_feature_layer; il++) {
+            auto &        layer = model.layers[il];
+            ggml_tensor * cur   = inpL;  // inpL = residual, cur = hidden_states
+
+            cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
+
+            {
+                ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.q_w, cur);
+                if (layer.q_b) {
+                    Qcur = ggml_add(ctx0, Qcur, layer.q_b);
+                }
+
+                ggml_tensor * Kcur = ggml_mul_mat(ctx0, layer.k_w, cur);
+                if (layer.k_b) {
+                    Kcur = ggml_add(ctx0, Kcur, layer.k_b);
+                }
+
+                ggml_tensor * Vcur = ggml_mul_mat(ctx0, layer.v_w, cur);
+                if (layer.v_b) {
+                    Vcur = ggml_add(ctx0, Vcur, layer.v_b);
+                }
+                Qcur = ggml_reshape_4d(ctx0, Qcur, d_head, n_head, n_pos, 1);
+                Kcur = ggml_reshape_4d(ctx0, Kcur, d_head, n_head, n_pos, 1);
+                Vcur = ggml_reshape_4d(ctx0, Vcur, d_head, n_head, n_pos, 1);
+
+                ggml_tensor * Q_rope_in = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
+                ggml_tensor * K_rope_in = ggml_permute(ctx0, Kcur, 0, 2, 1, 3);
+
+                // Apply 2D RoPE position encoding for JinaCLIP (skip CLS).
+                ggml_tensor * Q_cls =
+                    ggml_view_3d(ctx0, Q_rope_in, d_head, 1, n_head, Q_rope_in->nb[1], Q_rope_in->nb[2], 0);
+                ggml_tensor * Q_patches = ggml_view_3d(ctx0, Q_rope_in, d_head, n_pos - 1, n_head, Q_rope_in->nb[1],
+                                                       Q_rope_in->nb[2], Q_rope_in->nb[1]);
+
+                // Split K: CLS token (pos 0) + patch tokens (pos 1+)
+                ggml_tensor * K_cls =
+                    ggml_view_3d(ctx0, K_rope_in, d_head, 1, n_head, K_rope_in->nb[1], K_rope_in->nb[2], 0);
+                ggml_tensor * K_patches = ggml_view_3d(ctx0, K_rope_in, d_head, n_pos - 1, n_head, K_rope_in->nb[1],
+                                                       K_rope_in->nb[2], K_rope_in->nb[1]);
+
+                int pt_seq_len = 16;  // fallback pretrain length
+                if (hparams.patch_size > 0) {
+                    int cand = (int) llroundf(224.0f / (float) hparams.patch_size);
+                    if (cand > 0) {
+                        pt_seq_len = cand;
+                    }
+                }
+                const int hw_seq_len = static_cast<int>(sqrtf(n_pos - 1));  // image grid size (excluding CLS)
+                Q_patches = build_jinaclip_rope(ctx0, ctx, Q_patches, pt_seq_len, hw_seq_len, hparams.rope_theta, true,
+                                                true, il);
+                K_patches = build_jinaclip_rope(ctx0, ctx, K_patches, pt_seq_len, hw_seq_len, hparams.rope_theta, true,
+                                                false, il);
+                GGML_ASSERT(Q_cls->ne[0] == Q_patches->ne[0]);
+                GGML_ASSERT(Q_cls->ne[2] == Q_patches->ne[2]);
+                GGML_ASSERT(Q_cls->ne[3] == Q_patches->ne[3]);
+
+                // Recombine: CLS token + RoPE-processed patch tokens (seq dimension is 1 now)
+                ggml_tensor * Q_rope_out = ggml_concat(ctx0, Q_cls, Q_patches, 1);
+                ggml_tensor * K_rope_out = ggml_concat(ctx0, K_cls, K_patches, 1);
+
+                Qcur = ggml_permute(ctx0, Q_rope_out, 0, 2, 1, 3);
+                Kcur = ggml_permute(ctx0, K_rope_out, 0, 2, 1, 3);
+
+                cur = build_attn(layer.o_w, layer.o_b, Qcur, Kcur, Vcur, nullptr,
+                                 kq_scale, il);
+            }
+
+            // re-add the layer input, e.g., residual
+            cur = ggml_add(ctx0, cur, inpL);
+            cb(inpL, "inp_after_attn", il);
+
+            inpL = cur;
+
+            cb(cur, "ffn_inp", il);
+
+            // layernorm2
+            cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
+            cb(cur, "ffn_inp_normed", il);
+            // ffn
+            cur = build_ffn(cur, layer.ff_up_w, layer.ff_up_b, layer.ff_gate_w, layer.ff_gate_b, layer.ff_down_w,
+                            layer.ff_down_b, hparams.ffn_op, il);
+
+            // residual 2
+            cur = ggml_add(ctx0, inpL, cur);
+
+            inpL = cur;
+        }
+
+        // post-layernorm
+        if (model.post_ln_w) {
+            inpL = build_norm(inpL, model.post_ln_w, model.post_ln_b, NORM_TYPE_NORMAL, eps, -1);
+        }
+        // final
+
+        ggml_tensor * emb2d = ggml_reshape_2d(ctx0, inpL, inpL->ne[0], inpL->ne[1]);
+        ggml_tensor * cls   = ggml_view_2d(ctx0, emb2d, emb2d->ne[0], /*rows=*/1, emb2d->nb[1], /*offset=*/0);
+        ggml_set_name(cls, "cls_view");
+        ggml_build_forward_expand(gf, cls);
+        return gf;
+    }
+
     // whisper encoder with custom projector
     ggml_cgraph * build_whisper_enc() {
         const int n_frames = img.nx;
@@ -2317,6 +2474,18 @@ private:
                 } break;
         }
 
+        ggml_tensor * ffn_norm_w = nullptr;
+        ggml_tensor * ffn_norm_b = nullptr;
+        if (il >= 0 && il < (int) model.layers.size()) {
+            auto & layer = model.layers[il];
+            ffn_norm_w = layer.ffn_norm_w;
+            ffn_norm_b = layer.ffn_norm_b;
+        }
+        if (ffn_norm_w || ffn_norm_b) {
+            cur = build_norm(cur, ffn_norm_w, ffn_norm_b, NORM_TYPE_NORMAL, eps, il);
+            cb(cur, "ffn_norm", il);
+        }
+
         if (down) {
             cur = ggml_mul_mat(ctx0, down, cur);
         }
@@ -2327,6 +2496,7 @@ private:
 
         if (down_b) {
             cur = ggml_add(ctx0, cur, down_b);
+            cb(cur, "ffn_down_b", il);
         }
 
         return cur;
@@ -2386,6 +2556,26 @@ private:
 
         cb(cur, "kqv_out", il);
 
+        ggml_tensor * attn_ln_w = nullptr;
+        ggml_tensor * attn_ln_b = nullptr;
+        if (il >= 0 && il < (int) model.layers.size()) {
+            auto & layer = model.layers[il];
+            attn_ln_w = layer.attn_ln_w;
+            attn_ln_b = layer.attn_ln_b;
+        }
+        if (attn_ln_w && attn_ln_b) {
+            ggml_tensor * attn_ln_w_f32 = attn_ln_w;
+            ggml_tensor * attn_ln_b_f32 = attn_ln_b;
+
+            if (attn_ln_w->type == GGML_TYPE_F16) {
+                attn_ln_w_f32 = ggml_cast(ctx0, attn_ln_w, GGML_TYPE_F32);
+            }
+            if (attn_ln_b->type == GGML_TYPE_F16) {
+                attn_ln_b_f32 = ggml_cast(ctx0, attn_ln_b, GGML_TYPE_F32);
+            }
+            cur = build_norm(cur, attn_ln_w_f32, attn_ln_b_f32, NORM_TYPE_NORMAL, hparams.eps, il);
+        }
+
         if (wo) {
             cur = ggml_mul_mat(ctx0, wo, cur);
         }
@@ -2395,6 +2585,87 @@ private:
         }
 
         return cur;
+    }
+
+
+    ggml_tensor * build_jinaclip_rope(ggml_context * ctx0,
+                                      clip_ctx *     /*ctx*/,
+                                      ggml_tensor *  cur,
+                                      const int      pt_seq_len,
+                                      const int      ft_seq_len,
+                                      const float    freq_base,
+                                      const bool     has_cls_token = true,
+                                      const bool     /*if_query*/      = true,
+                                      const int      /*layer_id*/      = -1) {
+        (void) pt_seq_len;
+        (void) ft_seq_len;
+        const int64_t n_dim  = cur->ne[0];
+        const int64_t n_pos_patches  = cur->ne[1];
+        const int64_t n_head = cur->ne[2];
+
+        GGML_ASSERT(n_dim % 2 == 0);
+        const int64_t half = n_dim/2;
+
+        ggml_tensor * pos_h_full = ggml_graph_get_tensor(gf, "pos_h");
+        ggml_tensor * pos_w_full = ggml_graph_get_tensor(gf, "pos_w");
+        GGML_ASSERT(pos_h_full && pos_w_full);
+
+        const int64_t offset = has_cls_token ? 1 : 0;
+        ggml_tensor * pos_h = ggml_view_1d(ctx0, pos_h_full, n_pos_patches, offset * (int64_t)ggml_element_size(pos_h_full));
+        ggml_tensor * pos_w = ggml_view_1d(ctx0, pos_w_full, n_pos_patches, offset * (int64_t)ggml_element_size(pos_w_full));
+        ggml_tensor * pos_a = pos_h;
+        ggml_tensor * pos_b = pos_w;
+
+
+        ggml_tensor * first = ggml_view_3d(ctx0, cur,
+            half, n_head, n_pos_patches,
+            /*nb1 for head*/ cur->nb[2],
+            /*nb2 for seq */ cur->nb[1],
+            0);
+        ggml_tensor * c_first = ggml_graph_get_tensor(gf, "rope_c_first");
+        ggml_tensor * c_second = ggml_graph_get_tensor(gf, "rope_c_second");
+        GGML_ASSERT(c_first && c_second);
+
+        ggml_tensor * first_rot = ggml_rope_ext(
+            ctx0,
+            first,
+            pos_a,
+            c_first,
+            half,
+            0,
+            0,
+            freq_base,
+            1.0f,
+            0.0f, 1.0f, 0.0f, 0.0f);
+        first = ggml_view_3d(ctx0, first_rot,
+            half, n_pos_patches, n_head,
+            /*nb1 for seq */ first_rot->nb[2],
+            /*nb2 for head*/ first_rot->nb[1],
+            0);
+
+        ggml_tensor * second_hs = ggml_view_3d(ctx0, cur,
+            half, n_head, n_pos_patches,
+            /*nb1 for head*/ cur->nb[2],
+            /*nb2 for seq */ cur->nb[1],
+            /*offset*/ half * ggml_element_size(cur));
+        ggml_tensor * second_rot = ggml_rope_ext(
+            ctx0,
+            second_hs,
+            pos_b,
+            c_second,
+            half,
+            0,
+            0,
+            freq_base,
+            1.0f,
+            0.0f, 1.0f, 0.0f, 0.0f);
+        ggml_tensor * second = ggml_view_3d(ctx0, second_rot,
+            half, n_pos_patches, n_head,
+            second_rot->nb[2],
+            second_rot->nb[1],
+            0);
+        ggml_tensor * result = ggml_concat(ctx0, first, second, 0);
+        return result;
     }
 
     // implementation of the 2D RoPE without adding a new op in ggml
@@ -2546,6 +2817,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_QWEN2A:
             {
                 res = graph.build_whisper_enc();
+            } break;
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                res = graph.build_jina2();
             } break;
         case PROJECTOR_TYPE_KIMIVL:
             {
@@ -2875,6 +3150,11 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         set_llava_uhd_res_candidates(model, 3);
                     } break;
+                case PROJECTOR_TYPE_JINACLIP2:
+                    {
+                        hparams.rope_theta = 10000.0f;
+                        get_f32(KEY_VISION_ROPE_THETA, hparams.rope_theta, /*required=*/false);
+                    } break;
                 case PROJECTOR_TYPE_ULTRAVOX:
                 case PROJECTOR_TYPE_QWEN2A:
                 case PROJECTOR_TYPE_VOXTRAL:
@@ -3008,6 +3288,10 @@ struct clip_model_loader {
             layer.v_b    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "bias"), false);
             layer.o_b    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"), false);
             layer.qkv_b  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "bias"), false);
+
+            layer.attn_ln_w = get_tensor(string_format(TN_ATTN_LN, prefix, il, "weight"), false);
+            layer.attn_ln_b = get_tensor(string_format(TN_ATTN_LN, prefix, il, "bias"), false);
+
             layer.ln_1_b = get_tensor(string_format(TN_LN_1,        prefix, il, "bias"), false);
             layer.ln_2_b = get_tensor(string_format(TN_LN_2,        prefix, il, "bias"), false);
 
@@ -3019,6 +3303,8 @@ struct clip_model_loader {
             layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "weight"));
             layer.ff_down_b = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "bias"),   false);
 
+            layer.ffn_norm_w = get_tensor(string_format(TN_FFN_NORM, prefix, il, "weight"), false);
+            layer.ffn_norm_b = get_tensor(string_format(TN_FFN_NORM, prefix, il, "bias"), false);
 
             // qwen3vl deepstack layer
             layer.deepstack_norm_w = get_tensor(string_format(TN_DEEPSTACK_NORM, il, "weight"), false);
@@ -3274,6 +3560,12 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                } break;
+            case PROJECTOR_TYPE_JINACLIP2:
+                {
+                    // JinaCLIP is a pure vision encoder without separate projection layers
+                    // It only uses patch embedding projections
+                    // No additional mm projection tensors are loaded for JinaCLIP2
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -4391,6 +4683,44 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 res_imgs->grid_y = inst.grid_size.height;
             } break;
 
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                clip_image_u8 processed_image;
+                int           sz = params.image_size;
+
+                // 1) Preserve aspect ratio: resize so that the shorter side == sz (bicubic)
+                int in_w = img->nx;
+                int in_h = img->ny;
+                int out_w, out_h;
+                if (in_w <= 0 || in_h <= 0) {
+                    LOG_ERR("%s: invalid input image size %dx%d\n", __func__, in_w, in_h);
+                    return false;
+                }
+                if (in_w < in_h) {
+                    out_w = sz;
+                    out_h = std::max(1, (int) std::round((double) in_h * sz / in_w));
+                } else {
+                    out_h = sz;
+                    out_w = std::max(1, (int) std::round((double) in_w * sz / in_h));
+                }
+
+                clip_image_u8 resized_keep_ratio;
+                img_tool::resize(*img, resized_keep_ratio, clip_image_size{out_w, out_h}, img_tool::RESIZE_ALGO_BICUBIC);
+
+                // 2) Center-crop to sz x sz
+                int x0     = std::max(0, (resized_keep_ratio.nx - sz) / 2);
+                int y0     = std::max(0, (resized_keep_ratio.ny - sz) / 2);
+                int crop_w = std::min(sz, resized_keep_ratio.nx);
+                int crop_h = std::min(sz, resized_keep_ratio.ny);
+
+                img_tool::crop(resized_keep_ratio, processed_image, x0, y0, crop_w, crop_h);
+
+                // 3) Normalize
+                clip_image_f32_ptr img_f32(clip_image_f32_init());
+                normalize_image_u8_to_f32(processed_image, *img_f32, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(img_f32));
+            } break;
+
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
             {
@@ -4537,6 +4867,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_JANUS_PRO:
             {
                 // do nothing
+            } break;
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                n_patches = 1;
             } break;
         case PROJECTOR_TYPE_LDP:
         case PROJECTOR_TYPE_LDPV2:
@@ -4941,6 +5275,55 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             }
             set_input_i32("positions", positions);
         } break;
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                std::vector<int32_t> positions(n_pos);
+                for (int i = 0; i < n_pos; i++) {
+                    positions[i] = i;
+                }
+                set_input_i32("positions", positions);
+
+                const int n_patches = model.class_embedding ? (n_pos - 1) : n_pos;
+                const int n_patches_per_col = image_size_width / patch_size;
+                std::vector<int32_t> pos_data(n_pos, 0);
+
+                for (int i = 0; i < n_patches; ++i) {
+                    int idx = model.class_embedding ? (i + 1) : i;
+                    pos_data[idx] = i / n_patches_per_col;
+                }
+                set_input_i32("pos_h", pos_data);
+                std::fill(pos_data.begin(), pos_data.end(), 0);
+
+                for (int i = 0; i < n_patches; ++i) {
+                    int idx = model.class_embedding ? (i + 1) : i;
+                    pos_data[idx] = i % n_patches_per_col;
+                }
+                set_input_i32("pos_w", pos_data);
+
+                int pt_seq_len = 16;
+                if (patch_size > 0) {
+                    int cand = (int) llroundf(224.0f / (float) patch_size);
+                    if (cand > 0) pt_seq_len = cand;
+                }
+                float s = (float) pt_seq_len / (float) n_patches_per_col;
+                int d_head_local = hparams.n_embd / hparams.n_head;
+                int half_local = d_head_local/2;
+                std::vector<float> rope_c_first(half_local);
+                std::vector<float> rope_c_second(half_local);
+                float odd = std::pow(hparams.rope_theta, (float)-2.0f / (float)d_head_local);
+                for (int k = 0; k < half_local; ++k) {
+                    rope_c_first[k]  = 1.0f / s;
+                    rope_c_second[k] = 1.0f / (s * odd);
+                }
+
+                auto t1 = ggml_graph_get_tensor(gf, "rope_c_first");
+                auto t2 = ggml_graph_get_tensor(gf, "rope_c_second");
+                GGML_ASSERT(t1 && (t1->flags & GGML_TENSOR_FLAG_INPUT));
+                GGML_ASSERT(t2 && (t2->flags & GGML_TENSOR_FLAG_INPUT));
+                ggml_backend_tensor_set(t1, rope_c_first.data(), 0, ggml_nbytes(t1));
+                ggml_backend_tensor_set(t2, rope_c_second.data(), 0, ggml_nbytes(t2));
+
+            } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_LDP:
@@ -5051,6 +5434,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             return ctx->model.mm_2_w->ne[1];
+        case PROJECTOR_TYPE_JINACLIP2:
+            return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_MLP_NORM:
             return ctx->model.mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
@@ -5110,6 +5495,10 @@ bool clip_is_llava(const struct clip_ctx * ctx) {
 
 bool clip_is_gemma3(const struct clip_ctx * ctx) {
     return ctx->proj_type() == PROJECTOR_TYPE_GEMMA3;
+}
+
+bool clip_is_jinaclip2(const struct clip_ctx * ctx) {
+    return ctx->proj_type() == PROJECTOR_TYPE_JINACLIP2;
 }
 
 bool clip_has_vision_encoder(const struct clip_ctx * ctx) {
