@@ -2300,8 +2300,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
         // note: here we assume `mscale == 1.0f`
         // TODO: start reading the actual value of mscale and handle the case where it is not 1.0f
-        const float mscale          = 1.0f;
+              float mscale          = 1.0f;
         const float mscale_all_dims = hparams.rope_yarn_log_mul;
+
+        // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+        // special-case DEEPSEEK v2:
+        // https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite-Chat/blob/main/config.json#L42-L43
+        if (arch == LLM_ARCH_DEEPSEEK2 && mscale_all_dims != 1.0f) {
+            mscale = mscale_all_dims;
+        }
 
         static auto get_mscale = [](float scale, float mscale) {
             return scale <= 1.0f ? 1.0f : (0.1f * mscale * logf(scale) + 1.0f);
