@@ -1232,8 +1232,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     GGML_ASSERT(n_tokens%n_stream == 0);
 
     // n_tps == n_tokens_per_stream
-    const int64_t n_tps     = n_tokens/n_stream;
-    const int64_t n_tps_pad = GGML_PAD(n_tps, GGML_KQ_MASK_PAD);
+    const int64_t n_tps = n_tokens/n_stream;
 
     std::fill(data, data + ggml_nelements(dst), -INFINITY);
 
@@ -1266,7 +1265,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
                 const llama_pos p1_x = is_2d ? ubatch->pos[i + ubatch->n_tokens*2] : 0;
                 const llama_pos p1_y = is_2d ? ubatch->pos[i + ubatch->n_tokens]   : 0;
 
-                const uint64_t idst = n_kv*(h*n_stream*n_tps_pad + s*n_tps_pad + ii);
+                const uint64_t idst = n_kv*(h*n_stream*n_tps + s*n_tps + ii);
 
                 for (uint32_t j = 0; j < n_kv; ++j) {
                     if (cells.is_empty(j)) {
