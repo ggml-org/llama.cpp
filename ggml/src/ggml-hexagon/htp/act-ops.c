@@ -298,27 +298,35 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
     uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_row_size);
     uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_row_size);
 
-    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
-        const float * restrict src0 = (float *) (data_src0 + (ir * src0_row_size));
-        float * restrict dst        = (float *) (data_dst + (ir * dst_row_size));
-
-        if (ir + 1 < src0_end_row) {
-            htp_l2fetch(src0 + src0_row_size, 1, src0_row_size, src0_row_size);
+    const int BLOCK = 8;
+    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
+        const uint32_t block_end = MIN(ir + BLOCK, src0_end_row);
+        
+        // Prefetch next block
+        if (block_end < src0_end_row) {
+            const float * restrict prefetch_ptr = (float *) (data_src0 + (block_end * src0_row_size));
+            htp_l2fetch(prefetch_ptr, 1, block_end * src0_row_size, src0_row_size);
         }
 
+        // Process rows in current block
+        for (uint32_t ib = ir; ib < block_end; ib++) {
+            const float * restrict src0 = (float *) (data_src0 + (ib * src0_row_size));
+            float * restrict dst        = (float *) (data_dst + (ib * dst_row_size));
 
-        // gelu = 0.5 * x * (1.0 + tanh( sqrt(2/pi) * (x + 0.044715 * x^3) )) // gelu_tanh
-        // gelu = x * sigmoid(1.702 * x) // current implementation
-        if (1 == opt_path) {
-            hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
-            hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
+            // gelu = 0.5 * x * (1.0 + tanh( sqrt(2/pi) * (x + 0.044715 * x^3) )) // gelu_tanh
+            // gelu = x * sigmoid(1.702 * x) // current implementation
+            if (1 == opt_path) {
+                hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
+                hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
 
-            hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
-        } else {
-            hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
-            // sigmoid
-            hvx_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
-            hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
+                hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
+            } 
+            else {
+                hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
+                // sigmoid
+                hvx_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
+                hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
+            }
         }
     }
 
