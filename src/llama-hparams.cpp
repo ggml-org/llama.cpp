@@ -233,6 +233,8 @@ bool llama_hparams::is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama
 }
 
 float llama_hparams::yarn_attn_factor_adjust(float attn_factor, float freq_scale, float ext_factor) {
+    GGML_ASSERT(ext_factor >= 0.0f);
+
     if (ext_factor != 0.0f) {
         attn_factor *= 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
     }
