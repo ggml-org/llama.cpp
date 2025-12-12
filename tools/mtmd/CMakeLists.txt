@@ -53,6 +53,15 @@ if (TARGET BUILD_INFO)
     add_dependencies(mtmd-helper BUILD_INFO)
 endif()
 
+# if mtmd is linked against common, we throw an error
+if (TARGET mtmd)
+    get_target_property(libs mtmd LINK_LIBRARIES)
+    if (libs AND "common" IN_LIST libs)
+        message(FATAL_ERROR "mtmd is designed to be a public library.\n"
+                            "It must not link against common")
+    endif()
+endif()
+
 add_executable(llama-llava-cli    deprecation-warning.cpp)
 add_executable(llama-gemma3-cli   deprecation-warning.cpp)
 add_executable(llama-minicpmv-cli deprecation-warning.cpp)
