@@ -317,10 +317,7 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
         } else {
             hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
             // sigmoid
-            hvx_exp_f32((const uint8_t *) src0_spad_data, src0_spad_data, ne0, true);
-            hvx_add_scalar_f32(src0_spad_data, 1.0, dst_spad_data, ne0);
-            hvx_inverse_f32(dst_spad_data, src0_spad_data, ne0);
-
+            hvx_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
             hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
         }
     }
