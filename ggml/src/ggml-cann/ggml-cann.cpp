@@ -2199,34 +2199,42 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor *               
  * function returns true. Otherwise, the function returns false, indicating that a new
  * CANN graph needs to be captured.
  *
- * @param cann_ctx  The CANN backend context containing the graph cache.
- * @param cgraph    The current ggml computation graph.
+ * @param graph_cache The graph cache.
+ * @param cgraph      The current ggml computation graph.
  * @return true if a matching cached graph exists; false otherwise.
  */
-static bool is_matched_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
-    ggml_cann_graph_lru_cache & lru_cache = cann_ctx->graph_lru_cache;
-    for (auto & graph_ptr : lru_cache.cache_list) {
-        // Skip graphs with a different number of nodes.
-        if (graph_ptr->ggml_graph_properties.size() != static_cast<size_t>(cgraph->n_nodes)) {
-            continue;
+static bool is_matched_graph_in_cache(ggml_cann_graph_lru_cache & graph_cache, ggml_cgraph * cgraph) {
+    // lambda for checking if all nodes of the current graph match some given properties.
+    auto nodes_match_properties = [& cgraph](auto & properties) {
+        auto n_nodes = cgraph->n_nodes;
+
+        // Reject if the list sizes do not match.
+        if (properties.size() != static_cast<size_t>(n_nodes)) {
+            return false;
         }
 
-        // Check if all nodes match.
-        bool all_match = true;
-        for (int i = 0; i < cgraph->n_nodes; ++i) {
-            if (!ggml_graph_node_has_matching_properties(cgraph->nodes[i], &graph_ptr->ggml_graph_properties[i])) {
-                all_match = false;
-                break;
+        // Check all nodes of the graph.
+        for (int i = 0; i < n_nodes; ++i) {
+            // Reject if a node does not match its expected properties.
+            if (!ggml_graph_node_has_matching_properties(cgraph->nodes[i], & properties[i])) {
+                return false;
             }
         }
 
-        if (all_match) {
-            // update cache_list && renturn graph_ptr
-            lru_cache.move_to_front(graph_ptr);
+        // All nodes matched its expected properties.
+        return true;
+    };
+
+    // Search for a matching graph in the cache.
+    for (auto & cached_graph_ptr : graph_cache.cache_list) {
+        if (nodes_match_properties(cached_graph_ptr->ggml_graph_properties)) {
+            // A matching graph was found.
+            graph_cache.move_to_front(cached_graph_ptr);
             return true;
         }
     }
 
+    // A matching graph was not found.
     return false;
 }
 #endif  // USE_ACL_GRAPH
@@ -2331,7 +2339,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
 
     if (use_cann_graph) {
         // If no matching graph is found, the graph needs to be recaptured.
-        cann_graph_update_required = !is_matched_graph(cann_ctx, cgraph);
+        cann_graph_update_required = !is_matched_graph_in_cache(cann_ctx->graph_lru_cache, cgraph);
         if (cann_graph_update_required) {
             // If no matching graph is found, add a new ACL graph.
             add_lru_matched_graph_node_properties(cann_ctx, cgraph);
