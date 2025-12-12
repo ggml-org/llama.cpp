@@ -68,7 +68,7 @@ int main(int argc, char ** argv) {
     auto sparams = llama_sampler_chain_default_params();
     sparams.no_perf = false;
 
-    std::vector<llama_sampler *> sampler_configs;
+    std::vector<llama_sampler *> samplers;
 
     for (int32_t i = 0; i < n_parallel; ++i) {
         llama_sampler * smpl = llama_sampler_chain_init(sparams);
@@ -77,6 +77,8 @@ int main(int argc, char ** argv) {
         llama_sampler_chain_add(smpl, llama_sampler_init_top_p(params.sampling.top_p, params.sampling.min_keep));
         llama_sampler_chain_add(smpl, llama_sampler_init_temp (params.sampling.temp));
         llama_sampler_chain_add(smpl, llama_sampler_init_dist (params.sampling.seed));
+
+        samplers.push_back(smpl);
     }
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
@@ -178,7 +180,7 @@ int main(int argc, char ** argv) {
                 continue;
             }
 
-            const llama_token new_token_id = llama_sampler_sample(sampler_configs[i], ctx, i_batch[i]);
+            const llama_token new_token_id = llama_sampler_sample(samplers[i], ctx, i_batch[i]);
 
             // is it an end of generation? -> mark the stream as finished
             if (llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_predict) {
@@ -234,14 +236,14 @@ int main(int argc, char ** argv) {
             __func__, n_decode, (t_main_end - t_main_start) / 1000000.0f, n_decode / ((t_main_end - t_main_start) / 1000000.0f));
 
     LOG("\n");
-    llama_perf_sampler_print(sampler_configs[0]);
+    llama_perf_sampler_print(samplers[0]);
     llama_perf_context_print(ctx);
 
     fprintf(stderr, "\n");
 
     llama_batch_free(batch);
 
-    for (auto & sampler_config : sampler_configs) {
+    for (auto & sampler_config : samplers) {
         llama_sampler_free(sampler_config);
     }
 
