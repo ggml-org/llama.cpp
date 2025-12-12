@@ -722,11 +722,6 @@ __device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e)
     // Positive LUT
     static constexpr float pos_lut[8] = { 0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f };
 
-    // Saturate to max representable magnitude
-    if (ax > pos_lut[7]) {
-        ax = pos_lut[7];
-    }
-
     int   best_i   = 0;
     float best_err = fabsf(ax - pos_lut[0]);
 
