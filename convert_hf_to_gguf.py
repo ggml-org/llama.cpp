@@ -7286,6 +7286,10 @@ class DeepseekV2Model(TextModel):
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+
+            # [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+            # note: for legacy reasons, this is not consistent with the other usages of self.gguf_writer.add_rope_scaling_yarn_log_mul
+            # ref https://github.com/ggml-org/llama.cpp/pull/17945
             self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1 * rope_scaling["mscale_all_dim"])
 
     _experts: list[dict[str, Tensor]] | None = None
@@ -10041,6 +10045,10 @@ class MistralMoeModel(DeepseekV2Model):
         MistralModel.set_mistral_config(self.gguf_writer, self.hparams)
         yarn_params = self.hparams["yarn"]
         self.gguf_writer.add_attn_temperature_length(yarn_params["original_max_position_embeddings"])
+
+        # [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+        # note: for legacy reasons, this is not consistent with the other usages of self.gguf_writer.add_rope_scaling_yarn_log_mul
+        # ref https://github.com/ggml-org/llama.cpp/pull/17945
         self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1) # mscale_all_dim * 0.1
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
