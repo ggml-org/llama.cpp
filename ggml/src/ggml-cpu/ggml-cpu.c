@@ -18,6 +18,9 @@
 #include "ggml-ifairy-lut.h"
 #endif
 
+// debug helper: last node being computed (for crash diagnostics)
+extern struct ggml_tensor * ggml_debug_last_node;
+
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
 #elif !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__)
@@ -1249,6 +1252,17 @@ void ggml_compute_forward_mul_mat(
     //   compute by src0 rows
 
 #if defined(GGML_IFAIRY_ARM_LUT)
+    const char * ifairy_dbg_env = getenv("GGML_IFAIRY_LUT_DEBUG");
+    const bool ifairy_dbg_enabled = ifairy_dbg_env && strcmp(ifairy_dbg_env, "0") != 0;
+    if (ifairy_dbg_enabled) {
+        fprintf(stderr,
+                "[ifairy_lut_dbg] mul_mat candidate src0=[%lld,%lld,%lld,%lld] src1=[%lld,%lld,%lld,%lld] dst=[%lld,%lld,%lld,%lld] nth=%d\n",
+                (long long) src0->ne[0], (long long) src0->ne[1], (long long) src0->ne[2], (long long) src0->ne[3],
+                (long long) src1->ne[0], (long long) src1->ne[1], (long long) src1->ne[2], (long long) src1->ne[3],
+                (long long) dst->ne[0],  (long long) dst->ne[1],  (long long) dst->ne[2],  (long long) dst->ne[3],
+                nth);
+        fflush(stderr);
+    }
     if (ggml_ifairy_lut_can_mul_mat(src0, src1, dst)) {
         // ensure indexes are prepared
         bool have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
@@ -1258,38 +1272,40 @@ void ggml_compute_forward_mul_mat(
         ggml_barrier(params->threadpool);
         have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
 
-        const size_t need = ggml_ifairy_lut_get_wsize(src0, src1, dst, nth);
-        const size_t per_thread = need == 0 ? 0 : need / (size_t) nth;
+        const int64_t M = ne01;
+        const int64_t K = ne00;
+        const int64_t N = ne11;
+
+        const int64_t K3 = (K + 2) / 3 * 3;
+        const int64_t groups = K3 / 3;
+        const int64_t blocks_per_col = K / QK_K;
+
+        const size_t quant_bytes = src1->type == GGML_TYPE_F32
+                                     ? GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64)
+                                     : 0;
+        const size_t lut_bytes   = (size_t) N * (size_t) groups * 32;
+        const size_t scale_bytes = (size_t) N * 2 * sizeof(float);
+        const size_t tmp_bytes   = (size_t) N * sizeof(float);
+        const size_t per_thread  = GGML_PAD(lut_bytes + scale_bytes + tmp_bytes, 64);
+        const size_t need        = quant_bytes + per_thread * (size_t) nth;
 
         if (have_index && params->wdata && params->wsize >= need && per_thread > 0) {
-            const int64_t M = ne01;
-            const int64_t K = ne00;
-            const int64_t N = ne11;
-
-            const int64_t K3 = (K + 2) / 3 * 3;
-            const int64_t groups = K3 / 3;
-            const size_t index_stride = (size_t) groups;
-
             const struct ifairy_lut_extra * extra = (const struct ifairy_lut_extra *) src0->extra;
             const uint8_t * indexes = extra->indexes;
 
-            uint8_t * my_buf = params->wdata + per_thread * (size_t) ith;
-            const int64_t blocks_per_col = K / QK_K;
-            size_t offset = 0;
+            uint8_t * shared = (uint8_t *) params->wdata;
+            uint8_t * my_buf = shared + quant_bytes + per_thread * (size_t) ith;
             block_ifairy_q16 * act_q = NULL;
             if (src1->type == GGML_TYPE_F32) {
-                act_q = (block_ifairy_q16 *) (my_buf + offset);
-                offset += (size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16);
-            } else {
-                // src1 already quantized
+                act_q = (block_ifairy_q16 *) shared;
             }
-            int8_t * lut = (int8_t *) (my_buf + offset);
-            offset += (size_t) N * (size_t) groups * 32;
-            float * scales = (float *) (my_buf + offset);
+            int8_t * lut = (int8_t *) my_buf;
+            float * scales = (float *) (my_buf + lut_bytes);
+            uint8_t * row_tmp_bytes = my_buf + lut_bytes + scale_bytes;
             const size_t act_stride = src1->type == GGML_TYPE_F32
                                         ? (size_t) blocks_per_col * sizeof(block_ifairy_q16)
                                         : nb11;
-            const size_t dst_stride = nb1;
+            const size_t index_stride = (size_t) groups;
 
             // quantize activations once (thread 0) if needed
             if (src1->type == GGML_TYPE_F32) {
@@ -1308,10 +1324,19 @@ void ggml_compute_forward_mul_mat(
             ggml_ifairy_lut_preprocess((int) M, (int) K, (int) N, act_src, act_stride, scales, lut);
 
             // each thread processes a subset of rows
+            uint8_t * dst_base = (uint8_t *) dst->data;
+
             for (int64_t row = ith; row < M; row += nth) {
                 const uint8_t * row_indexes = indexes + (size_t) row * index_stride;
+                float * tmp_row = (float *) row_tmp_bytes;
                 ggml_ifairy_lut_qgemm(1, (int) K, (int) N, src0->data, row_indexes, lut, scales,
-                                      (float *) dst->data, dst_stride, true);
+                                      tmp_row, sizeof(float), sizeof(float), true);
+                for (int64_t col = 0; col < N; ++col) {
+                    uint8_t * dst_elem = dst_base + (size_t) col * nb1 + (size_t) row * nb0;
+                    memcpy(dst_elem,
+                           (uint8_t *) tmp_row + (size_t) col * sizeof(float),
+                           sizeof(float));
+                }
             }
             return;
         }
@@ -3001,6 +3026,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
+        ggml_debug_last_node = node;
         ggml_compute_forward(&params, node);
 
         if (state->ith == 0 && cplan->abort_callback &&

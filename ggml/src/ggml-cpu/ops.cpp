@@ -6161,6 +6161,13 @@ static void ggml_compute_forward_ifairy_split_impl(
                     const float x0 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[0]); //real
                     const float x1 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[1]); //imag
 
+                    if (!isfinite(x0) || !isfinite(x1)) {
+                        ggml_abort(__FILE__, __LINE__,
+                                   "ifairy_split: non-finite input (row=%lld idx=%lld src_op=%s)",
+                                   (long long) i1, (long long) i0,
+                                   ggml_op_name(src0->op));
+                    }
+
                     dst_data[0]      = x0;
                     dst_data[n_dims] = x1;
                 }

@@ -933,7 +933,7 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 对每个激活 pack、每个三权重组 `g`，构建一对长度为 16 的扁平表 `lut_real_g[16]` / `lut_imag_g[16]`，对应 16 个规范模式；
   - 使用 int16/int32 累加后饱和裁剪为 int8，并尽量使用 NEON（`vaddq_s16` / `vsubq_s16` / `vrev64q_s16` / `vqmovn_s16` / `vst1q_s8`）实现批量构表，避免标量复数乘和逐 byte 写入。
 
-> 当前进展（标量 reference）：`ggml/src/ggml-ifairy-lut.cpp` 已实现标量版 LUT 构造与 qgemm（尚未接入路由）。构表使用 ifairy_q16 激活（实/虚分平面 int8 + fp16 scale），按三权重组和 16 个规范模式累加后饱和到 int8。`lut_scales` 目前占位填 1.0，待与实际激活/权重缩放集成后更新；qgemm 按索引 opcode（swap/neg）应用 LUT 值并累加为 int32，再乘 `lut_scales` 输出 float。
+> 当前进展（标量 reference）：`ggml/src/ggml-ifairy-lut.cpp` 已实现标量版 LUT 构造与 qgemm，并接入 mul_mat 路由。构表使用 ifairy_q16 激活（或 F32 bf16-pair，经临时量化），按三权重组和 16 个规范模式累加后饱和到 int8；激活缩放取第一块 fp16 缩放。qgemm 按索引 opcode（swap/neg）应用 LUT 值并累加为 int32，再乘激活缩放与权重缩放（首块 d_real/d_imag）输出 float/bf16。
 
 ### 10.4 步骤四：标量参考内核
 
@@ -943,7 +943,7 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 真值来源于「原始 2‑bit 权重 + 浮点激活」的逐元素复数乘累加（不经过 LUT），标量 LUT 结果应在量化误差范围内逼近该真值；
   - NEON 内核则应与标量 LUT 结果在整数域一致（仅允许浮点收尾时 1 LSB 级别差异）。
 
-> 当前进展：`ggml/src/ggml-ifairy-lut.cpp` 提供标量参考预处理与 qgemm：\n> - 预处理：读取 ifairy_q16 激活，按 K3 分组与 16 个规范模式构建 `lut_real/lut_imag`，int8 饱和；激活缩放填充为第一块的 fp16 缩放。 \n> - qgemm：按索引 opcode（swap/neg）应用 LUT，int32 累加后乘激活缩放与权重缩放（取第一块权重的 d_real/d_imag）输出 float。 \n> - 仍未接入路由，scale 复用 per-tensor 方案，后续与真实缩放/权重路径对齐。***
+> 当前进展：`ggml/src/ggml-ifairy-lut.cpp` 提供标量参考预处理与 qgemm：\n> - 预处理：读取 ifairy_q16 激活（或 F32 bf16-pair 临时量化），按 K3 分组与 16 个规范模式构建 `lut_real/lut_imag`，int8 饱和；激活缩放填充为第一块的 fp16 缩放。 \n> - qgemm：按索引 opcode（swap/neg）应用 LUT，int32 累加后乘激活缩放与权重缩放（取第一块权重的 d_real/d_imag）输出 float/bf16（mul_mat 路由使用 bf16 packed）。 \n> - 已接入 mul_mat 路由，标量为默认回退；缩放仍为 per-tensor，后续与权重侧 block scale 对齐。***
 
 ### 10.5 步骤五：NEON 内核与优化
 
@@ -956,7 +956,7 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 展开循环以减少分支；
   - 调整 LUT 表和激活 pack 的布局，使其更利于 cache 与寄存器复用。
 
-> 当前：mul_mat 路由已接通标量 LUT，`transform_tensor` 生成索引 shadow（挂 `extra`），`get_wsize` 上报 per-thread LUT+scale 工作区，mul_mat 按行拆分并用 workbuf 预处理后 qgemm，输出按 bf16-packed（每个 float 容器存实/虚 bf16）。已修复 ifairy RMSNorm 以 bf16-pair 方式解包累加/重打包；二元算子仅对 ifairy_add/mul 放宽 NaN 检查。待改进：索引释放仍依赖全局 `ggml_ifairy_lut_free`，未随 tensor 回收；缩放仍为 per-tensor；NEON 核心未就绪；GGUF ifairy 类型仍触发 loader “unknown type” 警告；`GGML_IFAIRY_LUT=1` 运行 llama-cli 仍会 SIGABRT（需定位具体算子/数据路径）。***
+> 当前：mul_mat 路由已接通标量 LUT，`transform_tensor` 生成索引 shadow（挂 `extra`），`get_wsize` 上报 per-thread LUT+scale/可选激活量化缓冲，mul_mat 按行拆分并用 workbuf 预处理后 qgemm，输出按 bf16-packed（每个 float 容器存实/虚 bf16）。已修复 ifairy RMSNorm 以 bf16-pair 方式解包累加/重打包；二元算子仅对 ifairy_add/mul 放宽 NaN 检查；`ggml_abort` 增加 last-node 诊断打印；mul_mat 每线程 workbuf slice 现额外包含 `N*sizeof(float)` 的行缓冲，qgemm 直接写入后依列主序偏移（`col*nb1 + row*nb0`）回填 dst，彻底消除了 `_platform_memmove` 崩溃；构建阶段，`GGML_IFAIRY_ARM_LUT=ON` 会强制将 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等非 CPU 后端设置为 OFF 并提示 warning，确保 LUT 调试仅在 CPU 路径上运行。`GGML_IFAIRY_LUT=1` 已可跑通 llama-cli。待改进：索引释放仍依赖全局 `ggml_ifairy_lut_free`，未随 tensor 回收；缩放仍为 per-tensor；NEON 核心未就绪；GGUF ifairy 类型仍触发 loader “unknown type” 警告；需继续验证其他 ifairy 专用算子的 bf16 打包一致性。***
 
 ### 10.6 步骤六：测试与基准
 
@@ -964,7 +964,7 @@ y_i ≈ Σ_blocks ( acc_i_block * s_w_block * s_act_i )
   - 3‑weight LUT vs 逐元素点积；
   - 标量 LUT vs NEON LUT；
   - 多种矩阵形状与随机种子覆盖。
-  - 当前：`tests/test-ifairy.cpp::test_ifairy_lut_scalar_matmul` 覆盖标量 encode + preprocess + qgemm，针对 K=QK_K、N=2 的场景，将 LUT 输出与按量化值解码的直接复数点积逐元素比对，阈值 1e‑3。
+  - 当前：`tests/test-ifairy.cpp::test_ifairy_lut_scalar_matmul` 覆盖标量 encode + preprocess + qgemm，针对 K=QK_K、N=2 的场景，将 LUT 输出与按量化值解码的直接复数点积逐元素比对，阈值 1e‑3；`./build/bin/test-ifairy` 通过；`GGML_IFAIRY_LUT=1 ./build/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv` 可正常生成输出（仍有 ifairy 类型 loader 警告）。
 - 性能测试：
   - 记录典型模型与形状下的 token/s 或 ms/token；
   - 对比：非 LUT 标准vecdot实现；

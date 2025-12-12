@@ -203,6 +203,9 @@ void ggml_print_backtrace(void) {
 #endif
 
 static ggml_abort_callback_t g_abort_callback = NULL;
+struct ggml_tensor * ggml_debug_last_node = NULL;
+extern const char * ggml_op_name(enum ggml_op op);
+extern const char * ggml_type_name(enum ggml_type type);
 
 // Set the abort callback (passing null will restore original abort functionality: printing a message to stdout)
 GGML_API ggml_abort_callback_t ggml_set_abort_callback(ggml_abort_callback_t callback) {
@@ -227,6 +230,19 @@ void ggml_abort(const char * file, int line, const char * fmt, ...) {
     } else {
         // default: print error and backtrace to stderr
         fprintf(stderr, "%s\n", message);
+        if (ggml_debug_last_node) {
+            fprintf(stderr, "last node: op=%s type=%s ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu]\n",
+                    ggml_op_name(ggml_debug_last_node->op),
+                    ggml_type_name(ggml_debug_last_node->type),
+                    (long long) ggml_debug_last_node->ne[0],
+                    (long long) ggml_debug_last_node->ne[1],
+                    (long long) ggml_debug_last_node->ne[2],
+                    (long long) ggml_debug_last_node->ne[3],
+                    ggml_debug_last_node->nb[0],
+                    ggml_debug_last_node->nb[1],
+                    ggml_debug_last_node->nb[2],
+                    ggml_debug_last_node->nb[3]);
+        }
         ggml_print_backtrace();
     }
 

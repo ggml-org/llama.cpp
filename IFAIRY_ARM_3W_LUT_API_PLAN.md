@@ -9,6 +9,7 @@
 - 激活：复用现有 `GGML_TYPE_IFAIRY_Q16`（block_ifairy_q16，int8 实/虚分平面 + fp16 缩放）；不新增新类型。
 - 索引：3×2‑bit → 1 字节格式已在 `ggml-quants.[ch]` 完成。
 - 内核 v1 聚焦 matvec / 小 N（例如 N ≤ 4）；大 N 通过外层循环封装。
+- 构建约束：启用 `GGML_IFAIRY_ARM_LUT` 时，CMake 在 configure 阶段会自动把 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等后端强制为 `OFF`，并提示 warning，确保整个链路保持 CPU-only，无需在命令行手动追加多组 `-DGGML_*` 关闭 GPU。
 
 > 继续使用 ifairy_q16 的理由  
 > - 生态复用：已在 ggml 注册，量化/缩放/ROPE 等链路完整，无需新增类型与算子。  
@@ -98,8 +99,8 @@
 
 - BK/BM：初版按设计文档建议（如 BK≈3072），存于 extra；后续基准微调。
 - 批量：v1 小 N；大 N 通过外层循环；如需真 mul_mat 接口，后续扩充 API 的 N/stride。
-- 类型：严格要求 `src0->type=GGML_TYPE_IFAIRY`，`src1->type=GGML_TYPE_IFAIRY_Q16`，`dst->type=F32`。
-- 生命周期：索引用 shadow tensor；`extra` 只读；避免裸指针泄露。
+- 类型：`src0->type=GGML_TYPE_IFAIRY`，`src1->type` 支持 `GGML_TYPE_IFAIRY_Q16` 或 bf16-pair 容器的 `GGML_TYPE_F32`，`dst->type=F32`，K 必须按 `QK_K` 对齐。
+- 生命周期：索引目前挂 `tensor->extra` 并记录在全局列表，由 `ggml_ifairy_lut_free` 统一释放；尚未绑定张量释放生命周期，后续需改为 shadow tensor 或回收回调。
 - C/C++：统一使用 .cpp + extern "C" 接口，避免模板落入 .c。
 - 内存放大：索引 + 原权重双存；提供可选 flag 释放原权重以降内存。
 
@@ -107,14 +108,12 @@
 
 ```
 if (getenv("GGML_IFAIRY_LUT")== "0") return false;
-if (src0->type != GGML_TYPE_IFAIRY || src1->type != GGML_TYPE_IFAIRY_Q16) return false;
+if (src0->type != GGML_TYPE_IFAIRY) return false;
+if (src1->type not in {GGML_TYPE_IFAIRY_Q16, GGML_TYPE_F32}) return false; // F32 为 bf16-pair 容器
 if (dst->type != GGML_TYPE_F32) return false;
-if (src0->backend != CPU || src1->backend != CPU) return false;
-if (src1->ne[1] > N_limit /* e.g. 4 */) return false;
-extra = (ifairy_lut_extra *) src0->extra;
-if (!extra || !extra->indexes || extra->K != src0->ne[0]) return false;
-if (!shape_supported(extra->K, src0->ne[1]) && extra->BK==0) return false;
-return true; // NEON available -> NEON path; else scalar LUT
+if (src0->ne[0] % QK_K != 0 || src0->ne[0] != src1->ne[0]) return false;
+// 后续：可加平台/NEON 检查
+return true; // transform_tensor 会按需生成索引；有 NEON 走 NEON，否者走标量 LUT
 ```
 
 ## 9. 数据约定示意（便于实现）
@@ -139,27 +138,28 @@ return true; // NEON available -> NEON path; else scalar LUT
 - 性能：tok/s 对比旧 ifairy，确认 LUT 加载不成为热点（tile 内寄存器驻留）。
 
 ## 12. 计划拆解(可执行 TODO)
-- [x] 接口骨架文件与 CMake 线路（init/free/can/wsize/transform/preprocess/qgemm）。— 头文件与 CMake 选项 `GGML_IFAIRY_ARM_LUT` 已生效；`can_mul_mat`/预处理/qgemm 提供标量实现，`wsize/transform` 仍占位，后续补齐索引 shadow tensor 与 workbuf 估算。
+- [x] 接口骨架文件与 CMake 线路（init/free/can/wsize/transform/preprocess/qgemm）。— 头文件与 CMake 选项 `GGML_IFAIRY_ARM_LUT` 已生效；`transform_tensor` 现生成索引并挂 `tensor->extra`；`wsize` 上报每线程 LUT/scale/可选激活量化缓冲；预处理/qgemm 标量实现可复用测试。
 - [x] 标量预处理 + 标量 qgemm（用于正确性基准）。
   - 进度：`ggml/src/ggml-ifairy-lut.cpp` 提供标量 reference（构表 + qgemm）。预处理使用 ifairy_q16 激活构建 16 模式 LUT，激活缩放取第一块 fp16 缩放；qgemm 按索引 opcode 应用 LUT，int32 累加后乘激活缩放与权重缩放（取第一块 d_real/d_imag）输出 float。`tests/test-ifairy.cpp::test_ifairy_lut_scalar_matmul` 新增单测，对 K=QK_K 场景下的 encode + preprocess + qgemm 与直接复数点积（按量化值解码）进行逐元素比对。
 - [x] ggml 路由集成（mul_mat 分支 + workbuf 管理）。
-  - 进度：`ggml_ifairy_lut_get_wsize` 计算每线程 LUT/scales 工作区并通过 `ggml_cpu_extra_work_size` 上报；`mul_mat` 检测 ifairy 类型时调用 `transform_tensor` 生成索引 shadow（挂在 `tensor->extra`），按线程切分行，复用 per-thread workbuf 预处理激活→LUT，使用 LUT qgemm 写入 bf16-packed 输出；缺陷：索引释放依赖 `ggml_ifairy_lut_free`，暂未在张量释放时自动回收；GGUF 类型注册仍未解决 loader “unknown type ifairy” 警告。
-  - 路由策略：env `GGML_IFAIRY_LUT=0` 关闭；形状需 K%QK_K==0，dst F32；暂用标量 LUT，NEON 待后续；多线程拆 row。
-  - 缩放对齐：仍使用 per-tensor 缩放（首块 d_real/d_imag）；未实现 per-block scales。
+  - 进度：`ggml_ifairy_lut_get_wsize` 计算每线程 LUT/scales/可选激活量化缓冲并通过 `ggml_cpu_extra_work_size` 上报；`mul_mat` 检测 ifairy 类型时调用 `transform_tensor` 懒生成索引，按线程切分行，复用 per-thread workbuf 预处理激活→LUT，使用 LUT qgemm 写入 bf16-packed 输出；缺陷：索引释放依赖 `ggml_ifairy_lut_free`，暂未在张量释放时自动回收；GGUF 类型注册仍未解决 loader “unknown type ifairy” 警告。
+  - 路由策略：env `GGML_IFAIRY_LUT=0` 关闭；形状需 K%QK_K==0，dst F32；支持 `src1` 为 ifairy_q16 或 bf16-pair F32；暂用标量 LUT，NEON 待后续；多线程拆 row。
+  - 缩放对齐：仍使用 per-tensor 缩放（首块 d_real/d_imag）；未实现 per-block scales，后续需对齐权重侧 block scale 方案。
+  - 内存路径：激活量化缓冲仅由线程 0 填充一次，其余线程共享；每个线程的 workbuf slice 现在包含 LUT + scale + `N*sizeof(float)` 的临时行缓冲，`ggml_ifairy_lut_qgemm` 直接写入该缓冲后以列主序偏移（`col*nb1 + row*nb0`）回填 dst，彻底避免 heap 分配与 `_platform_memmove` 越界；`GGML_IFAIRY_LUT_DEBUG=1` 还会打印当前 op 的形状，便于后续排查。
 - [ ] NEON 预处理/LUT 构造（按 BK tile）。
 - [ ] NEON qgemm（16 组解码流水 + 行展开）。
 - [ ] 单测补充（LUT vs 真值；路径开关）。
 - [ ] 性能/正确性记录，更新设计文档。
 
 ## 13. 现状与已知问题（LUT=1 路径）
-- 已知崩溃：`GGML_IFAIRY_LUT=1 ./build/bin/llama-cli ...` 在 warmup/计算阶段仍 SIGABRT（关闭 LUT 正常）。标量单测与关闭 LUT 路径均通过。
-- 已修：ifairy RMSNorm 按 bf16-pair 解包重打包，二元算子 NaN 检查对 ifairy_add/mul 放宽，mul_mat 支持 F32 激活临时量化 + workbuf LUT。
+- 现状：`./build/bin/test-ifairy` 通过；`GGML_IFAIRY_LUT=1 ./build/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv` 正常输出；默认（env 未设置或=1）走 LUT 路径，env=0 回退旧 vec_dot。
+- 已修：ifairy RMSNorm 按 bf16-pair 解包重打包；二元算子 NaN 检查对 ifairy_add/mul 放宽；mul_mat 支持 F32 激活临时量化 + workbuf LUT；`ggml_abort` 增加 last-node 诊断输出；`ggml_ifairy_lut_can_mul_mat` 接受 F32/ifairy_q16 激活并检查 K 对齐。
+- 构建约束：`GGML_IFAIRY_ARM_LUT=ON` 时，CMake 自动强制关闭 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等非 CPU 后端（对手动开启的选项给出 warning），保证 LUT 调试与运行仅走 CPU 路径；无需用户在命令行追加一串 `-DGGML_*` 禁用 GPU。
 - 未决/调试计划：
-  1) 定位崩溃节点：在 compute 流程中对 ifairy 专用算子/常规算子增加日志或断点，确认哪一步处理了打包复数导致 NaN/Inf 或断言。
-  2) 覆盖其他算子：检查除 RMSNorm/二元算子外的 ifairy 相关 op（如 rope/split/merge）是否仍假定普通 float，需要 bf16 解包/重打包。
-  3) 索引释放：仍依赖 `ggml_ifairy_lut_free`，未绑 tensor 生命周期，需补回收或改为可追踪 buffer。
-  4) 缩放策略：仍为 per-tensor，确认是否需 per-block；与 LUT 构造/累加对齐。
-  5) GGUF 类型注册：loader 仍报 “unknown type ifairy”，需注册类型以消除警告。***
+  1) 清理索引释放：仍依赖 `ggml_ifairy_lut_free`，未绑 tensor 生命周期，需补回收或改为可追踪 buffer。
+  2) 缩放策略：仍为 per-tensor，确认是否需 per-block；与 LUT 构造/累加对齐。
+  3) GGUF 类型注册：loader 仍报 “unknown type ifairy”，需注册类型以消除警告。
+  4) 继续验证其他 ifairy 专用算子（rope/split/merge 等）在 bf16 打包上的一致性；确认非 ifairy 权重的 matmul 合理回退，不该回退的层需检查类型/形状。
 ---
 
 > 本文档为 API/规划，不含实现代码；落地时需确保与《IFAIRY_ARM_3W_LUT_DESIGN.md》一致，并优先采用“每线程独立预处理+计算”以避免 barrier 瓶颈。***
