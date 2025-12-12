@@ -162,6 +162,21 @@ return true; // transform_tensor 会按需生成索引；有 NEON 走 NEON，否
   4) 继续验证其他 ifairy 专用算子（rope/split/merge 等）在 bf16 打包上的一致性；确认非 ifairy 权重的 matmul 合理回退，不该回退的层需检查类型/形状。
   5) 解决 LUT 路径生成乱码的问题（目前 strict 校验通过，CLI 输出仍异常），收敛到可读输出后再切回非 strict 模式并恢复性能调优。
 
+### 13.1 当前困难（debug 结论汇总）
+- **“strict 仍乱码”**：`GGML_IFAIRY_LUT=1` + `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 时仍输出乱码，说明问题不只是 LUT 表近似/溢出，而是 **LUT 路由本身的数学/形状语义与 baseline 不一致**（例如丢弃元素改变模型等效计算）。
+- **方案 A 丢弃每 block 末元素的语义风险**：方案 A 为了让 `255=85*3`，当前实现“每 256 个权重丢弃最后一个元素”。这会改变真实模型的线性层（相当于强行把每 block 的最后一维权重置零），理论上足以破坏输出可读性；单测之所以能 0 diff，是因为单测的 reference 也同步跳过了该元素。
+- **比较基准与 vec_dot 的链接限制**：希望直接用 `ggml_vec_dot_ifairy_q16_K` 对照，但它在 `ggml-cpu` 目标里；而 LUT 实现在 `ggml-base`，不能直接链接调用。当前在 `GGML_IFAIRY_LUT_COMPARE` 下内联实现了与 vec_dot 等价的逐权重解码基准（per-block scales），用于定位差异。
+- **对照结果（仍有偏差）**：在 `GGML_IFAIRY_LUT_COMPARE=4` 的最小输出模式下，首行首列出现稳定偏差（例如 `diff≈(+0.0396,-0.1080)`），该偏差会随层数放大，最终表现为乱码。
+
+### 13.2 可能的解决方案（按优先级）
+1) **停止丢弃真实权重（回滚 A 的“drop”语义）**：方案 A 的核心是“分组不跨 block”，但不应通过丢弃真实维度来达成。更合理做法：
+   - A'：保留 K=256 全量权重，只对分组产生 `85` 个三元组 + 1 个“尾部单/双元素”特殊组（或尾部作为 padding 参与）；qgemm 处理尾组时只累加有效元素（1 或 2 个），并保持与 vec_dot 完全等价。
+   - 或者：仍构造 86 组（最后一组 1 个元素 + 2 个 padding），索引编码支持“不足 3 个元素”并在预处理里把缺失激活置 0。
+2) **方案 B（每组三独立缩放）作为过渡**：保留原 `K3=((K+2)/3)*3` 分组（允许跨 block），把 scale buffer 扩展为每组三个权重/激活的缩放（6 floats）以保证数学严格一致；确认输出可读后再回到 A'/NEON 优化。
+3) **把对照从“局部 compare”升级为可控的图级对照**：在 ggml mul_mat 路由里针对前几次 ifairy matmul：
+   - 同时计算 baseline（旧 vec_dot 路径）与 LUT strict 输出，比较 max diff；一旦超阈值就打印层名/shape/nb 并 abort，快速定位第一个出错层。
+4) **溢出假设的验证方式**：LUT 表构造时 int8 饱和、qgemm 累加为 float/double，本身不应产生 NaN；若怀疑饱和误差过大，可在 strict/compare 中统计 LUT 表值分布与饱和率（|val|==127 的比例），再决定是否扩大 LUT（int16）或改成 int32 累加后再缩放。
+
 ## 14. Debug / 提速 / 清理方案（可由 Codex 全流程执行）
 
 > 目标：解决“LUT=1 输出乱码 + 很慢”的现状，并把热点从标量 `ggml_ifairy_lut_qgemm` 迁移到 NEON/更合理的数据布局；同时清理当前临时 debug 输出/日志，保留可开关的诊断工具。

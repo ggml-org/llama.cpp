@@ -230,16 +230,8 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
             int8_t * real_tbl = lut_out + (size_t) g * 32 + 0;
             int8_t * imag_tbl = lut_out + (size_t) g * 32 + 16;
 
-            float act_scale_r = 0.0f;
-            float act_scale_i = 0.0f;
-            int   scale_cnt   = 0;
-            if (idx0 < K) { act_scale_r += GGML_FP16_TO_FP32(act_blocks[blk0].d_real); act_scale_i += GGML_FP16_TO_FP32(act_blocks[blk0].d_imag); ++scale_cnt; }
-            if (idx1 < K) { act_scale_r += GGML_FP16_TO_FP32(act_blocks[blk1].d_real); act_scale_i += GGML_FP16_TO_FP32(act_blocks[blk1].d_imag); ++scale_cnt; }
-            if (idx2 < K) { act_scale_r += GGML_FP16_TO_FP32(act_blocks[blk2].d_real); act_scale_i += GGML_FP16_TO_FP32(act_blocks[blk2].d_imag); ++scale_cnt; }
-            if (scale_cnt > 0) {
-                act_scale_r /= (float) scale_cnt;
-                act_scale_i /= (float) scale_cnt;
-            }
+            float act_scale_r = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
+            float act_scale_i = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
             scales_out[g * 2 + 0] = act_scale_r;
             scales_out[g * 2 + 1] = act_scale_i;
 
@@ -281,6 +273,11 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
     const int64_t groups = blocks * groups_per_block;
 
     const block_ifairy * w_blocks = (const block_ifairy *) qweights;
+
+    const char * cmp_env = getenv("GGML_IFAIRY_LUT_COMPARE");
+    const bool do_cmp = cmp_env && strcmp(cmp_env, "0") != 0;
+    const int cmp_limit = cmp_env && strcmp(cmp_env, "1") != 0 ? (int) strtol(cmp_env, NULL, 10) : 4; // default small
+    static int cmp_prints = 0;
 
     for (int row = 0; row < m; ++row) {
         const block_ifairy * w_row = w_blocks + (size_t) row * (size_t) blocks;
@@ -386,6 +383,35 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
             if (!isfinite(out_r) || !isfinite(out_i)) {
                 ggml_abort(__FILE__, __LINE__, "ifairy_lut_qgemm: non-finite output (row=%d col=%d acc_r=%f acc_i=%f)",
                            row, col, out_r, out_i);
+            }
+
+            if (do_cmp && cmp_prints < cmp_limit && row < 2 && col < 2 && act_blocks) {
+                double base_r = 0.0, base_i = 0.0;
+                // reference similar to vec_dot_ifairy_q16_K (per-weight scales, no LUT drop)
+                for (int idx = 0; idx < k; ++idx) {
+                    const int blk = idx / QK_K;
+                    const int off = idx - blk * QK_K;
+                    const uint8_t code = ggml_ifairy_read_code_local(w_row, idx);
+                    const float wr_scale = GGML_FP16_TO_FP32(w_row[blk].d_real);
+                    const float wi_scale = GGML_FP16_TO_FP32(w_row[blk].d_imag);
+                    float wr = 0.0f, wi = 0.0f;
+                    if (code <= 1) {
+                        wr = (code == 1 ? wr_scale : -wr_scale);
+                    } else {
+                        wi = (code == 3 ? wi_scale : -wi_scale);
+                    }
+                    const int8_t ar_q = act_blocks[blk].x_real[off];
+                    const int8_t ai_q = act_blocks[blk].x_imag[off];
+                    const float ar = GGML_FP16_TO_FP32(act_blocks[blk].d_real) * ar_q;
+                    const float ai = GGML_FP16_TO_FP32(act_blocks[blk].d_imag) * ai_q;
+                    base_r += (double) wr * (double) ar - (double) wi * (double) ai;
+                    base_i += (double) wr * (double) ai + (double) wi * (double) ar;
+                }
+                const float diff_r = out_r - base_r;
+                const float diff_i = out_i - base_i;
+                fprintf(stderr, "[ifairy_lut_cmp] row=%d col=%d out=(%.6f,%.6f) base=(%.6f,%.6f) diff=(%.6f,%.6f)\n",
+                        row, col, out_r, out_i, base_r, base_i, diff_r, diff_i);
+                ++cmp_prints;
             }
 
             uint8_t * out_base = (uint8_t *) dst + (size_t) col * dst_col_stride + (size_t) row * dst_row_stride;
