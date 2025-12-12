@@ -1723,6 +1723,14 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_GLM4V:
+            {
+                // TODO
+            } break;
+        case LLM_ARCH_GLM4V_MOE:
+            {
+                // TODO
+            } break;
         case LLM_ARCH_BITNET:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -5142,6 +5150,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
                 }
                 break;
+            case LLM_ARCH_GLM4V:
+                {
+                    // TODO
+                }
+                break;
+            case LLM_ARCH_GLM4V_MOE:
+                {
+                    // TODO
+                }
+                break;
             case LLM_ARCH_NEMOTRON:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -7423,6 +7441,14 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_glm4_moe>(*this, params);
             } break;
+        case LLM_ARCH_GLM4V:
+            {
+                llm = std::make_unique<llm_build_glm4v>(*this, params);
+            } break;
+        case LLM_ARCH_GLM4V_MOE:
+            {
+                llm = std::make_unique<llm_build_glm4v_moe>(*this, params);
+            } break;
         case LLM_ARCH_BITNET:
             {
                 llm = std::make_unique<llm_build_bitnet>(*this, params);
@@ -7832,6 +7858,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
+        case LLM_ARCH_GLM4V:
+        case LLM_ARCH_GLM4V_MOE:
             return LLAMA_ROPE_TYPE_MROPE;
         case LLM_ARCH_QWEN3VL:
         case LLM_ARCH_QWEN3VLMOE:

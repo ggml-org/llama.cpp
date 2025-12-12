@@ -280,7 +280,7 @@ struct clip_model {
     // embeddings
     ggml_tensor * class_embedding = nullptr;
     ggml_tensor * patch_embeddings_0 = nullptr;
-    ggml_tensor * patch_embeddings_1 = nullptr;  // second Conv2D kernel when we decouple Conv3D along temproal dimension (Qwen2VL)
+    ggml_tensor * patch_embeddings_1 = nullptr;  // second Conv2D kernel when we decouple Conv3D along temporal dimension (Qwen2VL, GLM4V)
     ggml_tensor * patch_bias = nullptr;
     ggml_tensor * position_embeddings = nullptr;
 
@@ -398,6 +398,22 @@ struct clip_model {
     ggml_tensor * mm_4h_to_h_w = nullptr;
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
+
+    // GLM4V projection
+    ggml_tensor * mm_post_conv_ln_w = nullptr;
+    ggml_tensor * mm_post_conv_ln_b = nullptr;
+    ggml_tensor * mm_downsample_w = nullptr;
+    ggml_tensor * mm_downsample_b = nullptr;
+    ggml_tensor * mm_merger_proj_w = nullptr;
+    ggml_tensor * mm_merger_proj_b = nullptr;
+    ggml_tensor * mm_merger_norm_w = nullptr;
+    ggml_tensor * mm_merger_norm_b = nullptr;
+    ggml_tensor * mm_merger_gate_w = nullptr;
+    ggml_tensor * mm_merger_gate_b = nullptr;
+    ggml_tensor * mm_merger_up_w = nullptr;
+    ggml_tensor * mm_merger_up_b = nullptr;
+    ggml_tensor * mm_merger_down_w = nullptr;
+    ggml_tensor * mm_merger_down_b = nullptr;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
@@ -1075,6 +1091,125 @@ struct clip_graph {
 
         // build the graph
         ggml_build_forward_expand(gf, embeddings);
+
+        return gf;
+    }
+
+    ggml_cgraph * build_glm4v() {
+        GGML_ASSERT(model.patch_embeddings_0 != nullptr);
+        GGML_ASSERT(model.patch_embeddings_1 != nullptr);
+        GGML_ASSERT(model.position_embeddings != nullptr);
+        GGML_ASSERT(model.class_embedding == nullptr);
+
+        // 2D RoPE input positions
+        ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(pos_h, "pos_h");
+        ggml_set_input(pos_h);
+
+        ggml_tensor * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
+        ggml_set_name(pos_w, "pos_w");
+        ggml_set_input(pos_w);
+
+        ggml_tensor * inp_raw = build_inp_raw();
+        ggml_tensor * inp;
+
+        // patch embedding
+        // - this is similar to Qwen2VL's handling of Conv3d for video/image inputs
+        // - for single images, the input is duplicated along the temporal axis
+        //
+        // ref: `class Glm4vVisionPatchEmbed(Qwen2_5_VisionPatchEmbed):`
+
+        ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+        if (model.patch_embeddings_1) {
+            auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+            inp = ggml_add(ctx0, inp, inp_1);
+        }
+
+        const int batch_size = 1;
+        inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [w, h, c, b] -> [c, w, h, b]
+        inp = ggml_cont_4d(ctx0, inp, n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
+        inp = ggml_reshape_4d(ctx0, inp, n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
+        inp = ggml_permute(ctx0, inp, 0, 2, 1, 3);
+        inp = ggml_cont_3d(ctx0, inp, n_embd, n_patches_x * n_patches_y, batch_size);
+        cb(inp, "patch_embed", -1);
+
+        // post-convolution layernorm
+        //
+        // ref: `self.post_conv_layernorm = Glm4vRMSNorm(config.hidden_size, eps=config.rms_norm_eps)`
+        inp = build_norm(inp, model.mm_post_conv_ln_w, model.mm_post_conv_ln_b, NORM_TYPE_RMS, eps, -1);
+        cb(inp, "post_conv_ln", -1);
+
+        // absolute position embeddings (interpolated)
+        //
+        // ref: self.embeddings
+        ggml_tensor * learned_pos_embd = resize_position_embeddings();
+        inp = ggml_add(ctx0, inp, learned_pos_embd);
+        cb(inp, "abs_pos_embed", -1);
+
+        // RoPE to be applied inside ViT blocks
+        //
+        // ref: self.rotary_pos_emb
+        auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+            return build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
+        };
+
+        // ViT blocks
+        ggml_tensor * cur = build_vit(
+                                inp, n_patches,
+                                NORM_TYPE_RMS,
+                                FFN_SILU, // hidden_act is "silu"
+                                nullptr,  // absolute embeddings already added
+                                add_pos);
+
+        // post-ViT layernorm
+        cur = build_norm(cur, model.post_ln_w, model.post_ln_b, NORM_TYPE_RMS, eps, -1);
+        cb(cur, "post_vit_ln", -1);
+
+        // reshape and permute to prepare for conv2d
+        const int merge_size = model.hparams.n_merge; // WIP: is this the correct value to use?
+        cur = ggml_reshape_3d(ctx0, cur, n_embd, n_patches_x, n_patches_y);
+        cur = ggml_permute(ctx0, cur, 1, 2, 0, 3); // -> [C, W, H, B] -> [W, H, C, B] for ggml
+        cb(cur, "pre_downsample_permute", -1);
+
+        // downsampling conv2d
+        cur = ggml_conv_2d(ctx0, model.mm_downsample_w, cur, merge_size, merge_size, 0, 0, 1, 1);
+        cb(cur, "downsample_conv", -1);
+
+        // reshape to [tokens, features]
+        cur = ggml_reshape_2d(ctx0, cur, cur->ne[0] * cur->ne[1], cur->ne[2]);
+        cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+        cb(cur, "post_downsample_reshape", -1);
+
+        // patch merger FFN
+        //
+        // ref: `class Glm4vVisionPatchMerger(nn.Module):`
+        {
+            // input projection
+            cur = ggml_mul_mat(ctx0, model.mm_merger_proj_w, cur);
+
+            // apply norm + GELU
+            cur = build_norm(cur, model.mm_merger_norm_w, model.mm_merger_norm_b, NORM_TYPE_NORMAL, 1e-5f, -1);
+            cur = ggml_gelu(ctx0, cur);
+            ggml_tensor * ffn_input = cur;
+            cb(cur, "merger_ffn_inp", -1);
+
+            // gate projection
+            ggml_tensor * gate = ggml_mul_mat(ctx0, model.mm_merger_gate_w, ffn_input);
+            cb(cur, "merger_gate", -1);
+
+            // up projection
+            ggml_tensor * up = ggml_mul_mat(ctx0, model.mm_merger_up_w, ffn_input);
+            cb(cur, "merger_up", -1);
+
+            // activation + down projection
+            cur = ggml_silu(ctx0, gate);
+            cur = ggml_mul(ctx0, cur, up);
+            cur = ggml_mul_mat(ctx0, model.mm_merger_down_w, cur);
+            cb(cur, "merger_ffn_out", -1);
+        }
+
+        // build the graph
+        ggml_build_forward_expand(gf, cur);
 
         return gf;
     }
@@ -2551,13 +2686,17 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 res = graph.build_kimivl();
             } break;
+        case PROJECTOR_TYPE_COGVLM:
+            {
+                res = graph.build_cogvlm();
+            } break;
         case PROJECTOR_TYPE_JANUS_PRO:
             {
                 res = graph.build_siglip();
             } break;
-        case PROJECTOR_TYPE_COGVLM:
+        case PROJECTOR_TYPE_GLM4V:
             {
-                res = graph.build_cogvlm();
+                res = graph.build_glm4v();
             } break;
         default:
             {
