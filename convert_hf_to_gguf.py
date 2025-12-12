@@ -10045,7 +10045,11 @@ class MistralMoeModel(DeepseekV2Model):
         MistralModel.set_mistral_config(self.gguf_writer, self.hparams)
         yarn_params = self.hparams["yarn"]
         self.gguf_writer.add_attn_temperature_length(yarn_params["original_max_position_embeddings"])
-        self.gguf_writer.add_rope_scaling_yarn_log_mul(1.0) # mscale_all_dim
+
+        # [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+        # note: for legacy reasons, this is not consistent with the other usages of self.gguf_writer.add_rope_scaling_yarn_log_mul
+        # ref https://github.com/ggml-org/llama.cpp/pull/17945
+        self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1) # mscale_all_dim * 0.1
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         if name.startswith("vision_") or name.startswith("patch_merger.") or "mm_projector" in name:

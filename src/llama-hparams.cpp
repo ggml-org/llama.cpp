@@ -1,7 +1,9 @@
 #include "llama-hparams.h"
 
 #include "ggml.h"
+
 #include <cassert>
+#include <cmath>
 
 void llama_hparams::set_swa_pattern(uint32_t n_pattern, bool dense_first) {
     if (dense_first) {
