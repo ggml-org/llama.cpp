@@ -50,6 +50,19 @@
 #include "llamafile/sgemm.h"
 #endif
 
+#if defined(__riscv)
+#if defined(__riscv_v_intrinsic)
+#include <riscv_vector.h>
+#endif
+#if defined(__linux__)
+#include <sys/auxv.h>
+// https://github.com/torvalds/linux/blob/master/arch/riscv/include/uapi/asm/hwcap.h#L24
+#if !defined(COMPAT_HWCAP_ISA_V)
+#define COMPAT_HWCAP_ISA_V (1 << ('V' - 'A'))
+#endif
+#endif
+#endif
+
 // Note: once we move threading into a separate C++ file
 // will use std::hardware_destructive_interference_size instead of hardcoding it here
 // and we'll use C++ attribute syntax.
@@ -3453,10 +3466,23 @@ int ggml_cpu_has_arm_fma(void) {
 
 int ggml_cpu_has_riscv_v(void) {
 #if defined(__riscv_v_intrinsic)
+#if defined(__linux__)
+    return !!(getauxval(AT_HWCAP) & COMPAT_HWCAP_ISA_V);
+#else
     return 1;
+#endif
 #else
     return 0;
 #endif
+}
+
+int ggml_cpu_get_riscv_vlen(void) {
+#if defined(__riscv_v_intrinsic)
+    if (ggml_cpu_has_riscv_v()) {
+        return __riscv_vlenb() * 8;
+    }
+#endif
+    return 0;
 }
 
 int ggml_cpu_has_f16c(void) {
