@@ -83,7 +83,7 @@ struct ggml_arm_arch_features_type {
 
 #if defined(__riscv)
 struct ggml_riscv_arch_features_type {
-    int rvv_cnt;
+    int rvv_vlen;
 } ggml_riscv_arch_features = { 0 };
 #endif
 
@@ -711,7 +711,7 @@ static void ggml_init_arm_arch_features(void) {}
 #if defined(__riscv) && defined(__riscv_v_intrinsic)
 #include <riscv_vector.h>
 static void ggml_init_riscv_arch_features(void) {
-    ggml_riscv_arch_features.rvv_cnt = __riscv_vlenb();
+    ggml_riscv_arch_features.rvv_vlen = __riscv_vlenb();
 }
 #else
 static void ggml_init_riscv_arch_features(void) {}
@@ -3473,9 +3473,9 @@ int ggml_cpu_has_riscv_v(void) {
 #endif
 }
 
-int ggml_cpu_get_rvv_cnt(void) {
+int ggml_cpu_get_rvv_vlen(void) {
 #if defined(__riscv) && defined(__riscv_v_intrinsic)
-    return ggml_riscv_arch_features.rvv_cnt;
+    return ggml_riscv_arch_features.rvv_vlen;
 #else
     return 0;
 #endif
