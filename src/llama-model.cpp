@@ -2298,6 +2298,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     if (hparams.rope_yarn_log_mul != 0.0f) {
         const float factor = 1.0f / hparams.rope_freq_scale_train;
 
+        // note: here we assume `mscale == 1.0f`
+        // TODO: start reading the actual value of mscale and handle the case where it is not 1.0f
         const float mscale          = 1.0f;
         const float mscale_all_dims = hparams.rope_yarn_log_mul;
 
