@@ -1635,7 +1635,12 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     // that have no expert_gating_func model parameter set
                     hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX;
                 }
-                ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, 0.0f);
+
+                if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, 0.0f)) {
+                    // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+                    // cancel the factor from the convert script
+                    hparams.rope_yarn_log_mul /= 0.1f;
+                }
 
                 // (optional) temperature tuning - used by mistral-large
                 ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE,  hparams.f_attn_temp_scale,       false);
