@@ -28,7 +28,6 @@ add_library(${HTP_LIB} SHARED
     softmax-ops.c
     act-ops.c
     rope-ops.c
-    qhcg_approximation.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

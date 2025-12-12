@@ -24,9 +24,6 @@
 #include "hvx-utils.h"
 #include "ops-utils.h"
 
-
-#include "qhcg_approximation.h"
-
 #define htp_act_preamble3              \
     const uint32_t ne00 = src0->ne[0]; \
     const uint32_t ne01 = src0->ne[1]; \
@@ -309,7 +306,7 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
             htp_l2fetch(src0 + src0_row_size, 1, src0_row_size, src0_row_size);
         }
 
-        #if 0
+
         // gelu = 0.5 * x * (1.0 + tanh( sqrt(2/pi) * (x + 0.044715 * x^3) )) // gelu_tanh
         // gelu = x * sigmoid(1.702 * x) // current implementation
         if (1 == opt_path) {
@@ -326,17 +323,6 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
 
             hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
         }
-        #else
-
-            // alternative method
-            float low_bound = -6.0f;
-            float up_bound = 6.0f;
-
-            qhcg_approximation(  (float*)src0, (float*)dst, ne0, low_bound, up_bound );
-  
-
-        #endif
-
     }
 
     t2 = HAP_perf_get_qtimer_count();
