@@ -290,6 +290,7 @@ class Keys:
         IMAGE_MEAN          = "clip.vision.image_mean"
         IMAGE_STD           = "clip.vision.image_std"
         SPATIAL_MERGE_SIZE  = "clip.vision.spatial_merge_size"
+        WINDOW_SIZE         = "clip.vision.window_size"
         USE_GELU            = "clip.use_gelu"
         USE_SILU            = "clip.use_silu"
         N_WA_PATTERN        = "clip.vision.n_wa_pattern" # used by qwen2.5vl
@@ -301,6 +302,11 @@ class Keys:
 
         class Projector:
             SCALE_FACTOR    = "clip.vision.projector.scale_factor"
+
+        class SAM:
+            BLOCK_COUNT         = "clip.vision.sam.block_count"
+            EMBEDDING_LENGTH    = "clip.vision.sam.embedding_length"
+            HEAD_COUNT          = "clip.vision.sam.head_count"
 
     class ClipAudio:
         NUM_MEL_BINS        = "clip.audio.num_mel_bins"
@@ -404,6 +410,7 @@ class MODEL_ARCH(IntEnum):
     ARCTIC           = auto()
     DEEPSEEK         = auto()
     DEEPSEEK2        = auto()
+    DEEPSEEK2OCR     = auto()
     CHATGLM          = auto()
     GLM4             = auto()
     GLM4_MOE         = auto()
@@ -685,6 +692,22 @@ class MODEL_TENSOR(IntEnum):
     V_MM_GATE            = auto() # cogvlm
     V_TOK_BOI            = auto() # cogvlm
     V_TOK_EOI            = auto() # cogvlm
+    V_SAM_POS_EMBD       = auto() # Deepseek-OCR
+    V_SAM_PATCH_EMBD     = auto() # Deepseek-OCR
+    V_SAM_PRE_NORM       = auto() # Deepseek-OCR
+    V_SAM_POST_NORM      = auto() # Deepseek-OCR
+    V_SAM_ATTN_POS_H     = auto() # Deepseek-OCR
+    V_SAM_ATTN_POS_W     = auto() # Deepseek-OCR
+    V_SAM_ATTN_QKV       = auto() # Deepseek-OCR
+    V_SAM_ATTN_OUT       = auto() # Deepseek-OCR
+    V_SAM_MLP_LIN_1      = auto() # Deepseek-OCR
+    V_SAM_MLP_LIN_2      = auto() # Deepseek-OCR
+    V_SAM_NECK           = auto() # Deepseek-OCR
+    V_SAM_NET_2          = auto() # Deepseek-OCR
+    V_SAM_NET_3          = auto() # Deepseek-OCR
+    V_ENC_EMBD_IMGNL     = auto() # Deepseek-OCR
+    V_ENC_EMBD_VSEP      = auto() # Deepseek-OCR
+
     # audio (mtmd)
     A_ENC_EMBD_POS       = auto()
     A_ENC_CONV1D         = auto()
@@ -777,6 +800,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ARCTIC:           "arctic",
     MODEL_ARCH.DEEPSEEK:         "deepseek",
     MODEL_ARCH.DEEPSEEK2:        "deepseek2",
+    MODEL_ARCH.DEEPSEEK2OCR:     "deepseek2-ocr",
     MODEL_ARCH.CHATGLM:          "chatglm",
     MODEL_ARCH.GLM4:             "glm4",
     MODEL_ARCH.GLM4_MOE:         "glm4moe",
@@ -1057,6 +1081,22 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
     MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
     MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
+    # DeepSeek-OCR SAM
+    MODEL_TENSOR.V_SAM_POS_EMBD:            "v.sam.pos_embd",
+    MODEL_TENSOR.V_SAM_PATCH_EMBD:          "v.sam.patch_embd",
+    MODEL_TENSOR.V_SAM_PRE_NORM:            "v.sam.blk.{bid}.pre_ln",
+    MODEL_TENSOR.V_SAM_POST_NORM:           "v.sam.blk.{bid}.post_ln",
+    MODEL_TENSOR.V_SAM_ATTN_POS_H:          "v.sam.blk.{bid}.attn.pos_h",
+    MODEL_TENSOR.V_SAM_ATTN_POS_W:          "v.sam.blk.{bid}.attn.pos_w",
+    MODEL_TENSOR.V_SAM_ATTN_QKV:            "v.sam.blk.{bid}.attn.qkv",
+    MODEL_TENSOR.V_SAM_ATTN_OUT:            "v.sam.blk.{bid}.attn.out",
+    MODEL_TENSOR.V_SAM_MLP_LIN_1:           "v.sam.blk.{bid}.mlp.lin1",
+    MODEL_TENSOR.V_SAM_MLP_LIN_2:           "v.sam.blk.{bid}.mlp.lin2",
+    MODEL_TENSOR.V_SAM_NECK:                "v.sam.neck.{bid}",
+    MODEL_TENSOR.V_SAM_NET_2:               "v.sam.net_2",
+    MODEL_TENSOR.V_SAM_NET_3:               "v.sam.net_3",
+    MODEL_TENSOR.V_ENC_EMBD_IMGNL:          "v.image_newline", # Deepseek-OCR
+    MODEL_TENSOR.V_ENC_EMBD_VSEP:           "v.view_seperator", # Deepseek-OCR
     # audio (mtmd)
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
     MODEL_TENSOR.A_ENC_CONV1D:              "a.conv1d.{bid}",
@@ -1093,6 +1133,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_EMBD_CLS,
         MODEL_TENSOR.V_ENC_EMBD_PATCH,
         MODEL_TENSOR.V_ENC_EMBD_POS,
+        MODEL_TENSOR.V_ENC_EMBD_IMGNL,
+        MODEL_TENSOR.V_ENC_EMBD_VSEP,
         MODEL_TENSOR.V_ENC_INPUT_NORM,
         MODEL_TENSOR.V_ENC_ATTN_QKV,
         MODEL_TENSOR.V_ENC_ATTN_Q,
@@ -1135,6 +1177,19 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MM_GATE,
         MODEL_TENSOR.V_TOK_BOI,
         MODEL_TENSOR.V_TOK_EOI,
+        MODEL_TENSOR.V_SAM_POS_EMBD,
+        MODEL_TENSOR.V_SAM_PATCH_EMBD,
+        MODEL_TENSOR.V_SAM_PRE_NORM,
+        MODEL_TENSOR.V_SAM_POST_NORM,
+        MODEL_TENSOR.V_SAM_ATTN_POS_H,
+        MODEL_TENSOR.V_SAM_ATTN_POS_W,
+        MODEL_TENSOR.V_SAM_ATTN_QKV,
+        MODEL_TENSOR.V_SAM_ATTN_OUT,
+        MODEL_TENSOR.V_SAM_MLP_LIN_1,
+        MODEL_TENSOR.V_SAM_MLP_LIN_2,
+        MODEL_TENSOR.V_SAM_NECK,
+        MODEL_TENSOR.V_SAM_NET_2,
+        MODEL_TENSOR.V_SAM_NET_3,
         # audio
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_CONV1D,
@@ -2303,7 +2358,41 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_Q_B,
         MODEL_TENSOR.ATTN_KV_A_MQA,
         MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
+    MODEL_ARCH.DEEPSEEK2OCR: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_V_B,
         MODEL_TENSOR.ATTN_Q_A_NORM,
         MODEL_TENSOR.ATTN_KV_A_NORM,
@@ -3139,6 +3228,10 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
+    MODEL_ARCH.DEEPSEEK2OCR: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+    ],
     MODEL_ARCH.CHATGLM: [
         MODEL_TENSOR.ROPE_FREQS,
     ],
@@ -3327,6 +3420,7 @@ class VisionProjectorType:
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"
+    DEEPSEEKOCR = "deepseekocr"
 
 
 # Items here are (block size, type size)
