@@ -604,7 +604,7 @@ static bool run_ifairy_backend_mul_mat(std::vector<uint32_t> & packed_out, bool 
     }
 
     const int64_t M = 8;
-    const int64_t N = 3;
+    const int64_t N = 2;
     const int64_t K = 2 * QK_K;
 
     const int64_t blocks_per_row = K / QK_K;

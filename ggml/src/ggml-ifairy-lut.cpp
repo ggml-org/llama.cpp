@@ -99,6 +99,7 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     }
     const bool strict = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
 
+    const int64_t M = src0->ne[1];
     const int64_t K = src0->ne[0];
     const int64_t N = src1->ne[1];
     const int64_t blocks_per_col = K / QK_K;
@@ -134,12 +135,35 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
 
     const size_t lut_bytes   = (size_t) N * (size_t) groups_tile * (size_t) (4 * 64) * sizeof(int16_t);
     const size_t scale_bytes = (size_t) N * (size_t) groups_tile * 2 * sizeof(float);
-    const size_t shared_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
+
+    size_t shared_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
+
+    // Optional "full accumulator" mode (tiled only):
+    // for small N, keep a single shared accumulator of size M*(4*N) floats so we can
+    // preprocess each K-tile only once (instead of once per BM row-block), reducing barriers.
+    bool fullacc = false;
+    if (tile_blocks > 0 && M > 0) {
+        const char * env = getenv("GGML_IFAIRY_LUT_FULLACC");
+        const size_t acc_bytes = (size_t) M * (size_t) (4 * N) * sizeof(float);
+        const bool auto_ok = (N <= 2) && (acc_bytes <= (size_t) (8 * 1024 * 1024));
+        if (env && strcmp(env, "0") == 0) {
+            fullacc = false;
+        } else if (env && strcmp(env, "0") != 0) {
+            fullacc = true;
+        } else {
+            fullacc = auto_ok;
+        }
+        if (fullacc) {
+            shared_bytes += GGML_PAD(acc_bytes, 64);
+        }
+    }
 
     // tmp buffer:
     // - non-tiled: N floats (bf16-pair packed into F32)
-    // - tiled:     BM*(4*N) floats accumulator (ac/ad/bc/bd), then combined and packed
-    const size_t tmp_bytes = GGML_PAD((size_t) (tile_blocks > 0 ? (bm * 4 * N) : N) * sizeof(float), 64);
+    // - tiled+BM:  BM*(4*N) floats accumulator (ac/ad/bc/bd), then combined and packed
+    // - tiled+fullacc: minimal per-thread scratch
+    const size_t tmp_elems = tile_blocks == 0 ? (size_t) N : (fullacc ? 16u : (size_t) (bm * 4 * N));
+    const size_t tmp_bytes = GGML_PAD(tmp_elems * sizeof(float), 64);
 
     return quant_bytes + shared_bytes + tmp_bytes * (size_t) n_threads;
 }

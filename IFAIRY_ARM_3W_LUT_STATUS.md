@@ -85,7 +85,8 @@
 1) **减少重复 preprocess 与同步开销（先让 BK/BM “不再变慢”）**  
    - 当前已落地：NEON 构表（`pat` 维度向量化）+ NEON 累加（标量回退）。  
    - 已有实验性 BK/BM tiling，但在部分 workload 上会因 `preprocess + barrier` 频繁而变慢。  
-   - 下一步优先项：减少 tile 粒度下的重复构表、降低 barrier 次数/成本，再在此基础上做 unroll/预取、评估 DOTPROD 版本。
+   - 已实现一条“full accumulator” 的 tiled 路径（默认对小 `N` 自动启用，可用 `GGML_IFAIRY_LUT_FULLACC=0/1` 控制）：为整个 `M×N` 维护共享 `{ac,ad,bc,bd}` 累加器，使每个 K-tile 的 `preprocess` 只做一次（不再按 BM 行块重复），显著减少 barrier 次数。
+   - 下一步优先项：在此基础上继续降低 barrier 成本、做 unroll/预取，并评估 DOTPROD 版本。
 
 2) **降低 LUT 工作区与带宽（提高上限）**  
    - 从 `4×64 int16` correctness-first 结构，演进到更紧凑的布局（例如 “16 canonical + factor” 等方向），降低 `lut/scales/indexes` 的带宽压力与 cache miss。
