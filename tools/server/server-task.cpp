@@ -167,6 +167,7 @@ task_params server_task::params_from_json_cmpl(
     params.timings_per_token = json_value(data, "timings_per_token", false);
 
     params.stream           = json_value(data,       "stream",             false);
+    params.echo             = json_value(data,       "echo",               false);
     auto stream_opt         = json_value(data,       "stream_options",     json::object());
     params.include_usage    = json_value(stream_opt, "include_usage",      false);
     params.cache_prompt     = json_value(data,       "cache_prompt",       true);
@@ -219,6 +220,14 @@ task_params server_task::params_from_json_cmpl(
     // Use OpenAI API logprobs only if n_probs wasn't provided
     if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
         params.sampling.n_probs = json_value(data, "logprobs", defaults.sampling.n_probs);
+    }
+
+    if (params.echo && params.sampling.n_probs == 0) {
+        throw std::runtime_error("Error: echo without logprobs is not yet supported");
+    }
+
+    if (params.echo && params.sampling.n_probs != 0 && !params.stream) {
+        throw std::runtime_error("Error: echo with logprobs requires streaming to be enabled");
     }
 
     if (data.contains("lora")) {
