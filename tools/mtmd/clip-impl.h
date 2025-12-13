@@ -133,6 +133,15 @@
 #define TN_TOK_BOI         "v.boi"
 #define TN_TOK_EOI         "v.eoi"
 
+// glm4v
+#define TN_GLM4V_POST_CONV_LN   "mm.post_conv_ln.%s"
+#define TN_GLM4V_DOWNSAMPLE     "mm.downsample.%s"
+#define TN_GLM4V_MERGER_PROJ    "mm.merger.proj.%s"
+#define TN_GLM4V_MERGER_NORM    "mm.merger.norm.%s"
+#define TN_GLM4V_MERGER_GATE    "mm.merger.gate.%s"
+#define TN_GLM4V_MERGER_UP      "mm.merger.up.%s"
+#define TN_GLM4V_MERGER_DOWN    "mm.merger.down.%s"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
@@ -164,6 +173,7 @@ enum projector_type {
     PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
+    PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -190,6 +200,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
+    { PROJECTOR_TYPE_GLM4V,     "glm4v"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
