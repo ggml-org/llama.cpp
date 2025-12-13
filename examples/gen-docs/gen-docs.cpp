@@ -14,12 +14,13 @@ static void write_table_header(std::ofstream & file) {
 static void write_table_entry(std::ofstream & file, const common_arg & opt) {
     file << "| `";
     // args
-    for (const auto & arg : opt.args) {
-    if (arg == opt.args.front()) {
+    auto all_args = opt.get_args();
+    for (const auto & arg : all_args) {
+    if (arg == all_args.front()) {
             file << arg;
-            if (opt.args.size() > 1) file << ", ";
+            if (all_args.size() > 1) file << ", ";
         } else {
-            file << arg << (arg != opt.args.back() ? ", " : "");
+            file << arg << (arg != all_args.back() ? ", " : "");
         }
     }
     // value hint
@@ -76,7 +77,7 @@ static void export_md(std::string fname, llama_example ex) {
 }
 
 int main(int, char **) {
-    export_md("autogen-main.md", LLAMA_EXAMPLE_MAIN);
+    export_md("autogen-main.md", LLAMA_EXAMPLE_COMPLETION);
     export_md("autogen-server.md", LLAMA_EXAMPLE_SERVER);
 
     return 0;

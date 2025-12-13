@@ -1,4 +1,5 @@
 #include "console.h"
+#include "log.h"
 #include <vector>
 #include <iostream>
 #include <cassert>
@@ -6,6 +7,10 @@
 #include <cctype>
 #include <cwctype>
 #include <cstdint>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <stdarg.h>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -35,6 +40,7 @@
 #define ANSI_COLOR_BLUE    "\x1b[34m"
 #define ANSI_COLOR_MAGENTA "\x1b[35m"
 #define ANSI_COLOR_CYAN    "\x1b[36m"
+#define ANSI_COLOR_GRAY    "\x1b[90m"
 #define ANSI_COLOR_RESET   "\x1b[0m"
 #define ANSI_BOLD          "\x1b[1m"
 
@@ -61,17 +67,17 @@ namespace console {
     //
 #endif
 
-    static bool      advanced_display = false;
-    static bool      simple_io        = true;
-    static display_t current_display  = reset;
+    static bool         advanced_display = false;
+    static bool         simple_io        = true;
+    static display_type current_display  = DISPLAY_TYPE_RESET;
 
-    static FILE*     out              = stdout;
+    static FILE*        out              = stdout;
 
 #if defined (_WIN32)
-    static void*     hConsole;
+    static void*        hConsole;
 #else
-    static FILE*     tty              = nullptr;
-    static termios   initial_state;
+    static FILE*        tty              = nullptr;
+    static termios      initial_state;
 #endif
 
     //
@@ -142,7 +148,7 @@ namespace console {
 
     void cleanup() {
         // Reset console display
-        set_display(reset);
+        set_display(DISPLAY_TYPE_RESET);
 
 #if !defined(_WIN32)
         // Restore settings on POSIX systems
@@ -162,20 +168,26 @@ namespace console {
     //
 
     // Keep track of current display and only emit ANSI code if it changes
-    void set_display(display_t display) {
+    void set_display(display_type display) {
         if (advanced_display && current_display != display) {
-            fflush(stdout);
+            common_log_flush(common_log_main());
             switch(display) {
-                case reset:
+                case DISPLAY_TYPE_RESET:
                     fprintf(out, ANSI_COLOR_RESET);
                     break;
-                case prompt:
+                case DISPLAY_TYPE_INFO:
+                    fprintf(out, ANSI_COLOR_MAGENTA);
+                    break;
+                case DISPLAY_TYPE_PROMPT:
                     fprintf(out, ANSI_COLOR_YELLOW);
                     break;
-                case user_input:
+                case DISPLAY_TYPE_REASONING:
+                    fprintf(out, ANSI_COLOR_GRAY);
+                    break;
+                case DISPLAY_TYPE_USER_INPUT:
                     fprintf(out, ANSI_BOLD ANSI_COLOR_GREEN);
                     break;
-                case error:
+                case DISPLAY_TYPE_ERROR:
                     fprintf(out, ANSI_BOLD ANSI_COLOR_RED);
             }
             current_display = display;
@@ -778,7 +790,6 @@ namespace console {
             }
 
             if (is_special_char) {
-                set_display(user_input);
                 replace_last(line.back());
                 is_special_char = false;
             }
@@ -961,7 +972,6 @@ namespace console {
             }
 
             if (!line.empty() && (line.back() == '\\' || line.back() == '/')) {
-                set_display(prompt);
                 replace_last(line.back());
                 is_special_char = true;
             }
@@ -1046,12 +1056,82 @@ namespace console {
     }
 
     bool readline(std::string & line, bool multiline_input) {
-        set_display(user_input);
-
         if (simple_io) {
             return readline_simple(line, multiline_input);
         }
         return readline_advanced(line, multiline_input);
     }
 
+    namespace spinner {
+        static const char LOADING_CHARS[] = {'|', '/', '-', '\\'};
+        static std::condition_variable cv_stop;
+        static std::thread th;
+        static size_t frame = 0; // only modified by one thread
+        static bool running = false;
+        static std::mutex mtx;
+        static auto wait_time = std::chrono::milliseconds(100);
+        static void draw_next_frame() {
+            // don't need lock because only one thread modifies running
+            frame = (frame + 1) % sizeof(LOADING_CHARS);
+            replace_last(LOADING_CHARS[frame]);
+            fflush(out);
+        }
+        void start() {
+            std::unique_lock<std::mutex> lock(mtx);
+            if (simple_io || running) {
+                return;
+            }
+            common_log_flush(common_log_main());
+            fprintf(out, "%c", LOADING_CHARS[0]);
+            fflush(out);
+            frame = 1;
+            running = true;
+            th = std::thread([]() {
+                std::unique_lock<std::mutex> lock(mtx);
+                while (true) {
+                    if (cv_stop.wait_for(lock, wait_time, []{ return !running; })) {
+                        break;
+                    }
+                    draw_next_frame();
+                }
+            });
+        }
+        void stop() {
+            {
+                std::unique_lock<std::mutex> lock(mtx);
+                if (simple_io || !running) {
+                    return;
+                }
+                running = false;
+                cv_stop.notify_all();
+            }
+            if (th.joinable()) {
+                th.join();
+            }
+            replace_last(' ');
+            pop_cursor();
+            fflush(out);
+        }
+    }
+
+    void log(const char * fmt, ...) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(out, fmt, args);
+        va_end(args);
+    }
+
+    void error(const char * fmt, ...) {
+        va_list args;
+        va_start(args, fmt);
+        display_type cur = current_display;
+        set_display(DISPLAY_TYPE_ERROR);
+        vfprintf(out, fmt, args);
+        set_display(cur); // restore previous color
+        va_end(args);
+    }
+
+    void flush() {
+        fflush(out);
+    }
 }
