@@ -2401,7 +2401,7 @@ static float llama_sampler_power_law_compute_target(
     if (sz > 0) {
         // Check if window is at capacity (oldest element will be evicted on next push)
         // Use the window_size parameter from context, not a capacity() method
-        const bool window_full = (sz == ctx->window_size);
+        const bool window_full = (sz == (size_t)ctx->window_size);
 
         // Compute weighted sum with exponential decay
         // rat(0) = newest in buffer, gets weight 1
@@ -2495,6 +2495,18 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
     // sample from the transformed distribution
     const int idx   = llama_sample_dist(cur_p, ctx->rng);
     cur_p->selected = idx;
+
+    // uncomment this to log the target values and history window contents for every token
+    //
+    // fprintf(stderr, "power_law: window_size=%zu/%d values=[", 
+    //         ctx->window.size(), ctx->window_size);
+    // for (size_t i = 0; i < ctx->window.size(); ++i) {
+    //     fprintf(stderr, "%.1f", ctx->window.rat(i));
+    //     if (i < ctx->window.size() - 1) fprintf(stderr, ",");
+    // }
+    // fprintf(stderr, "] computed_target=%.4f selected_token=%d orig_prob=%.4f\n", 
+    //         computed_target, cur_p->data[idx].id, original_probs[idx]);
+    // fflush(stderr);
 
     // add the ORIGINAL probability to the rolling window
     float original_p = original_probs[idx];
