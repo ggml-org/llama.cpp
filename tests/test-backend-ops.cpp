@@ -7971,8 +7971,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for (bool with_norm : {false, true}) {
         test_cases.emplace_back(new test_topk_moe({8, 22, 1, 1}, 4, with_norm));
+        test_cases.emplace_back(new test_topk_moe({31, 22, 1, 1}, 8, with_norm));
         test_cases.emplace_back(new test_topk_moe({32, 22, 1, 1}, 8, with_norm));
+        test_cases.emplace_back(new test_topk_moe({40, 22, 1, 1}, 8, with_norm));
+        test_cases.emplace_back(new test_topk_moe({71, 22, 1, 1}, 8, with_norm));
         test_cases.emplace_back(new test_topk_moe({128, 1, 1, 1}, 128, with_norm));
+        test_cases.emplace_back(new test_topk_moe({129, 1, 1, 1}, 128, with_norm));
     }
 
     test_cases.emplace_back(new test_topk_moe({ 8, 22, 1, 1 }, 4, /*with_norm*/ false, /*delayed_softmax*/ true));
