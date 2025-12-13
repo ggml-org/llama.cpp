@@ -58,6 +58,11 @@
 					type: 'input'
 				},
 				{
+					key: 'copyTextAttachmentsAsPlainText',
+					label: 'Copy text attachments as plain text',
+					type: 'checkbox'
+				},
+				{
 					key: 'enableContinueGeneration',
 					label: 'Enable "Continue" button',
 					type: 'checkbox',

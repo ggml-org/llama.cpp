@@ -24,7 +24,7 @@
 		MimeTypeImage,
 		MimeTypeText
 	} from '$lib/enums';
-	import { isIMEComposing } from '$lib/utils';
+	import { isIMEComposing, parseClipboardContent } from '$lib/utils';
 	import {
 		AudioRecorder,
 		convertToWav,
@@ -191,7 +191,6 @@
 
 			if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
 
-			// Check if model is selected first
 			if (!checkModelSelected()) return;
 
 			const messageToSend = message.trim();
@@ -227,6 +226,31 @@
 		}
 
 		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
+
+		if (text.startsWith('"')) {
+			const parsed = parseClipboardContent(text);
+
+			if (parsed.textAttachments.length > 0) {
+				event.preventDefault();
+
+				message = parsed.message;
+
+				const attachmentFiles = parsed.textAttachments.map(
+					(att) =>
+						new File([att.content], att.name, {
+							type: MimeTypeText.PLAIN
+						})
+				);
+
+				onFileUpload?.(attachmentFiles);
+
+				setTimeout(() => {
+					textareaRef?.focus();
+				}, 10);
+
+				return;
+			}
+		}
 
 		if (
 			text.length > 0 &&
