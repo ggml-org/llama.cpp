@@ -34,6 +34,7 @@ struct llama_hparams_convnext {
 
 struct llama_hparams {
     bool vocab_only;
+    bool no_alloc;
     bool rope_finetuned;
     bool use_par_res;
     bool swin_norm;

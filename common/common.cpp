@@ -1068,10 +1068,18 @@ static inline void common_init_sampler_from_model(
 struct common_init_result common_init_from_params(common_params & params) {
     common_init_result iparams;
     auto mparams = common_model_params_to_llama(params);
+    auto cparams = common_context_params_to_llama(params);
+
+    if (params.fit_params) {
+        LOG_INF("%s: fitting params to device memory, to report bugs during this step use -fit off (or --verbose if you can't)\n", __func__);
+        llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
+            params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target, params.fit_params_min_ctx,
+            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+    }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
-        LOG_ERR("%s: failed to load model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
+        LOG_ERR("%s: failed to load model '%s'\n",
             __func__, params.model.path.c_str());
         return iparams;
     }
@@ -1080,11 +1088,9 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
-    auto cparams = common_context_params_to_llama(params);
-
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
+        LOG_ERR("%s: failed to create context with model '%s'\n",
             __func__, params.model.path.c_str());
         llama_model_free(model);
         return iparams;

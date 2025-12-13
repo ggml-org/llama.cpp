@@ -36,12 +36,11 @@ const char * ggml_backend_buft_name(ggml_backend_buffer_type_t buft) {
 }
 
 ggml_backend_buffer_t ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    GGML_ASSERT(buft);
     if (size == 0) {
         // return a dummy buffer for zero-sized allocations
         return ggml_backend_buffer_init(buft, {}, NULL, 0);
     }
-
-    GGML_ASSERT(buft);
     return buft->iface.alloc_buffer(buft, size);
 }
 
@@ -125,6 +124,12 @@ void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(buffer);
     // get_base is optional if the buffer is zero-sized
     if (buffer->size == 0) {
+        return NULL;
+    }
+
+    // FIXME JG: a multi_buffer has a non-zero size, according to the above comment get_base is not optional,
+    //     I don't know whether the above comment is correct
+    if (!buffer->iface.get_base) {
         return NULL;
     }
 
@@ -1725,6 +1730,20 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
         sched->is_reset = true;
     }
     sched->is_alloc = false;
+}
+
+void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes) {
+    GGML_ASSERT(sched);
+    GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
+    GGML_ASSERT(sizes);
+
+    ggml_backend_sched_reset(sched);
+
+    ggml_backend_sched_synchronize(sched);
+
+    ggml_backend_sched_split_graph(sched, measure_graph);
+
+    ggml_gallocr_reserve_n_size(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids, sizes);
 }
 
 bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph) {
