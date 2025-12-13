@@ -747,9 +747,10 @@ class TextModel(ModelBase):
         else:
             self.hf_arch = ""
 
-        if "text_config" in self.hparams:
+        llm_config_key = "lm_config" if "lm_config" in self.hparams else "text_config"
+        if llm_config_key in self.hparams:
             # move the text_config to the root level
-            self.hparams = {**self.hparams, **self.hparams["text_config"]}
+            self.hparams = {**self.hparams, **self.hparams[llm_config_key]}
 
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
@@ -1486,6 +1487,16 @@ class TextModel(ModelBase):
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
 
+    def _set_vocab_glmedge(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab.add_to_gguf(self.gguf_writer)
+
     def _set_vocab_interns1(self):
         tokens: list[str] = []
         toktypes: list[int] = []
@@ -1615,7 +1626,7 @@ class MmprojModel(ModelBase):
     preprocessor_config: dict[str, Any]
     global_config: dict[str, Any]
 
-    n_block_keys = ["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth"]
+    n_block_keys = ["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth", "encoder_layers"]
 
     has_vision_encoder: bool = True # by default
     has_audio_encoder: bool = False
@@ -1632,11 +1643,12 @@ class MmprojModel(ModelBase):
 
         # get n_embd of the text model
         if not self.is_mistral_format:
-            if "text_config" not in self.hparams:
+            llm_config_key = "lm_config" if "lm_config" in self.hparams else "text_config"
+            if llm_config_key not in self.hparams:
                 self.hparams["text_config"] = {}
             if "audio_config" not in self.hparams:
                 self.hparams["audio_config"] = {}
-            text_config = {**self.hparams, **self.hparams["text_config"]}
+            text_config = {**self.hparams, **self.hparams[llm_config_key]}
             self.n_embd_text = text_config.get("hidden_size", text_config.get("n_embd", 0))
         else:
             text_config = {
@@ -1691,7 +1703,8 @@ class MmprojModel(ModelBase):
         return self.global_config.get(config_name)
 
     def get_audio_config(self) -> dict[str, Any] | None:
-        return self.global_config.get("audio_config")
+        mm_config_key = "whisper_config" if "whisper_config" in self.hparams else "audio_config"
+        return self.global_config.get(mm_config_key)
 
     def set_type(self):
         self.gguf_writer.add_type(gguf.GGUFType.MMPROJ)
@@ -2367,6 +2380,7 @@ class StableLMModel(TextModel):
     "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
+    "GlmasrModel",
     "LlamaModel")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
@@ -2418,6 +2432,8 @@ class LlamaModel(TextModel):
         # Apply to granite small models only
         if self.hparams.get("vocab_size", 32000) == 49152:
             self.gguf_writer.add_add_bos_token(False)
+        if self.hf_arch == "GlmasrModel":
+            self._set_vocab_glmedge()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -2454,6 +2470,7 @@ class LlamaModel(TextModel):
             "vision_language_adapter.",
             "patch_merger.",
             "pre_mm_projector_norm",
+            "audio_encoder.",
         ]
 
         is_multimodal_tensor = "vision_tower" in name \
@@ -9009,6 +9026,63 @@ class UltravoxModel(TextModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         raise NotImplementedError("Ultravox does not have text decoder. Instead, it uses Llama or other models for text. If you want to get the audio encoder, please use --mmproj argument")
+
+
+@ModelBase.register("GlmasrModel")
+class GlmASRWhisperEncoderModel(MmprojModel):
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "hidden_size" not in self.hparams and "intermediate_size" not in self.hparams:
+            self.hparams["hidden_size"] = self.hparams["d_model"]
+            self.hparams["intermediate_size"] = self.hparams["encoder_ffn_dim"]
+            self.hparams["num_attention_heads"] = self.hparams["encoder_attention_heads"]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GLMA)
+        self.gguf_writer.add_audio_num_mel_bins(self.hparams["num_mel_bins"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-5))
+        self.gguf_writer.add_audio_stack_factor(self.global_config["merge_factor"])
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".conv" in name and ".weight" in name:
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        if name.startswith("model.") or name.startswith("lm_head."):
+            # skip language model tensors
+            return []
+
+        if name.startswith("audio_encoder.whisper."):
+            name = name.replace("audio_encoder.whisper.","audio_tower.")
+        if "audio_encoder.layer_norm." in name or "audio_encoder.proj." in name:
+            name = name.replace("audio_encoder.", "audio_encoder.adapting.")
+
+        if name.startswith("audio_encoder.audio_bos_eos_token."):
+            return [(self.map_tensor_name("model.vision.boi"), data_torch[0]), (self.map_tensor_name("model.vision.eoi"), data_torch[1])]
+
+        if name.startswith("audio_encoder.adapting."):
+            name = name.replace("audio_encoder.adapting.","audio.multi_modal_projector.")
+            if ".layer_norm." in name:
+                name = name.replace(".layer_norm.", ".ln_pre.")
+            if ".0." in name:
+                name = name.replace(".0.", ".linear_1.")
+            if ".2." in name:
+                name = name.replace(".2.", ".linear_2.")
+            if ".proj." in name:
+                return []
+
+        if "conv1.bias" in name or "conv2.bias" in name:
+            # transpose conv1 and conv2 bias
+            data_torch = data_torch.unsqueeze(-1)
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @ModelBase.register("Qwen2AudioForConditionalGeneration")
