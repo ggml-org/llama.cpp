@@ -1589,7 +1589,7 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
     }
 #elif defined(TURING_MMA_AVAILABLE)
 
-    16, 4, int> tile_A;
+    typedef tile<16, 4, int> tile_A;
     typedef tile<16, 8, int> tile_A_8;
     typedef tile< 8, 4, int> tile_B;
     typedef tile<16, 8, int> tile_C;
