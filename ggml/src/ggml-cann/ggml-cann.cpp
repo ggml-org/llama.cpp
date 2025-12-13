@@ -1888,6 +1888,8 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
             break;
         case GGML_OP_OUT_PROD:
             ggml_cann_out_prod(ctx, dst);
+        case GGML_OP_SSM_CONV:
+            ggml_cann_ssm_conv(ctx, dst);
             break;
         default:
             return false;
@@ -2626,6 +2628,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 }
                 return true;
             }
+        case GGML_OP_SSM_CONV:
+            return true;
         default:
             return false;
     }
