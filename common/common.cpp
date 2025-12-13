@@ -1079,7 +1079,7 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
-        LOG_ERR("%s: failed to load model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
+        LOG_ERR("%s: failed to load model '%s'\n",
             __func__, params.model.path.c_str());
         return iparams;
     }
@@ -1090,7 +1090,7 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
+        LOG_ERR("%s: failed to create context with model '%s'\n",
             __func__, params.model.path.c_str());
         llama_model_free(model);
         return iparams;
