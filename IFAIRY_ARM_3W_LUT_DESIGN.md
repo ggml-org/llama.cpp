@@ -1084,7 +1084,7 @@ GGML_IFAIRY_LUT=1 xcrun xctrace record \
    若 A' 改动大，可先实现方案 B：允许组跨 block，但为每组三个元素保存独立缩放（6 floats），qgemm 严格应用；确认文本恢复可读后再回到 A'/NEON 优化。
 
 5) **对照工具与限制**  
-   直接调用 `ggml_vec_dot_ifairy_q16_K` 在工程上受限（它在 `ggml-cpu` 目标，而 LUT 实现在 `ggml-base`），因此当前对照采用内联的“vec_dot 等价”基准计算，并提供 `GGML_IFAIRY_LUT_COMPARE` 小规模输出用于定位第一处偏差。
+   直接调用 `ggml_vec_dot_ifairy_q16_K` 在工程上受限（它在 `ggml-cpu` 目标，而 LUT 实现在 `ggml-base`），因此当前对照采用内联的“vec_dot 等价”基准计算，并使用 `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 在运行时对 LUT 输出进行严格对照（不一致即断言）。
 
 ---
 

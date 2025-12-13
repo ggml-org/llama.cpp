@@ -1252,17 +1252,6 @@ void ggml_compute_forward_mul_mat(
     //   compute by src0 rows
 
 #if defined(GGML_IFAIRY_ARM_LUT)
-    const char * ifairy_dbg_env = getenv("GGML_IFAIRY_LUT_DEBUG");
-    const bool ifairy_dbg_enabled = ifairy_dbg_env && strcmp(ifairy_dbg_env, "0") != 0;
-    if (ifairy_dbg_enabled) {
-        fprintf(stderr,
-                "[ifairy_lut_dbg] mul_mat candidate src0=[%lld,%lld,%lld,%lld] src1=[%lld,%lld,%lld,%lld] dst=[%lld,%lld,%lld,%lld] nth=%d\n",
-                (long long) src0->ne[0], (long long) src0->ne[1], (long long) src0->ne[2], (long long) src0->ne[3],
-                (long long) src1->ne[0], (long long) src1->ne[1], (long long) src1->ne[2], (long long) src1->ne[3],
-                (long long) dst->ne[0],  (long long) dst->ne[1],  (long long) dst->ne[2],  (long long) dst->ne[3],
-                nth);
-        fflush(stderr);
-    }
     if (ggml_ifairy_lut_can_mul_mat(src0, src1, dst)) {
         // ensure indexes are prepared
         bool have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
@@ -1276,39 +1265,37 @@ void ggml_compute_forward_mul_mat(
         const int64_t K = ne00;
         const int64_t N = ne11;
 
-        const int64_t groups = (K / QK_K) * ((QK_K + 2) / 3);
         const int64_t blocks_per_col = K / QK_K;
+        const int64_t groups = blocks_per_col * ((QK_K + 2) / 3);
 
-        const size_t quant_bytes = src1->type == GGML_TYPE_F32
-                                     ? GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64)
-                                     : 0;
+        const size_t quant_bytes = src1->type == GGML_TYPE_F32 ? GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64) : 0;
         const size_t lut_bytes   = (size_t) N * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t);
         const size_t scale_bytes = (size_t) N * (size_t) groups * 2 * sizeof(float);
-        const size_t tmp_bytes   = (size_t) N * sizeof(float);
-        const size_t per_thread  = GGML_PAD(lut_bytes + scale_bytes + tmp_bytes, 64);
-        const size_t need        = quant_bytes + per_thread * (size_t) nth;
+        const size_t shared_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
+        const size_t tmp_bytes   = GGML_PAD((size_t) N * sizeof(float), 64);
+        const size_t need        = quant_bytes + shared_bytes + tmp_bytes * (size_t) nth;
 
-        if (have_index && params->wdata && params->wsize >= need && per_thread > 0) {
+        if (have_index && params->wdata && params->wsize >= need && shared_bytes > 0 && tmp_bytes > 0) {
             const struct ifairy_lut_extra * extra = (const struct ifairy_lut_extra *) src0->extra;
             const uint8_t * indexes = extra->indexes;
 
-            uint8_t * shared = (uint8_t *) params->wdata;
-            uint8_t * my_buf = shared + quant_bytes + per_thread * (size_t) ith;
-            block_ifairy_q16 * act_q = NULL;
-            if (src1->type == GGML_TYPE_F32) {
-                act_q = (block_ifairy_q16 *) shared;
-            }
-            int8_t * lut = (int8_t *) my_buf;
-            float * scales = (float *) (my_buf + lut_bytes);
-            uint8_t * row_tmp_bytes = my_buf + lut_bytes + scale_bytes;
+            uint8_t * work = (uint8_t *) params->wdata;
+            block_ifairy_q16 * act_q = src1->type == GGML_TYPE_F32 ? (block_ifairy_q16 *) work : NULL;
+
+            uint8_t * shared = work + quant_bytes;
+            int8_t * lut = (int8_t *) shared;
+            float * scales = (float *) (shared + lut_bytes);
+
+            uint8_t * tmp_base = shared + shared_bytes;
+            uint8_t * row_tmp_bytes = tmp_base + tmp_bytes * (size_t) ith;
             const size_t act_stride = src1->type == GGML_TYPE_F32
                                         ? (size_t) blocks_per_col * sizeof(block_ifairy_q16)
                                         : nb11;
             const size_t index_stride = (size_t) groups;
+            const bool strict = getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT") && strcmp(getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT"), "0") != 0;
 
             // quantize activations once (thread 0) if needed
             if (src1->type == GGML_TYPE_F32) {
-                ggml_barrier(params->threadpool);
                 if (ith == 0) {
                     const float * act_f32 = (const float *) src1->data;
                     for (int64_t c = 0; c < N; ++c) {
@@ -1318,9 +1305,12 @@ void ggml_compute_forward_mul_mat(
                 ggml_barrier(params->threadpool);
             }
 
-            // build LUT once per thread (shared across rows)
+            // build LUT once (thread 0), shared across all threads
             const void * act_src = (src1->type == GGML_TYPE_F32) ? (const void *) act_q : src1->data;
-            ggml_ifairy_lut_preprocess((int) M, (int) K, (int) N, act_src, act_stride, scales, lut);
+            if (ith == 0) {
+                ggml_ifairy_lut_preprocess((int) M, (int) K, (int) N, act_src, act_stride, scales, lut);
+            }
+            ggml_barrier(params->threadpool);
 
             // each thread processes a subset of rows
             uint8_t * dst_base = (uint8_t *) dst->data;
@@ -1330,38 +1320,7 @@ void ggml_compute_forward_mul_mat(
                 float * tmp_row = (float *) row_tmp_bytes;
                 const block_ifairy * w_row = (const block_ifairy *) src0->data + row * blocks_per_col;
                 ggml_ifairy_lut_qgemm(1, (int) K, (int) N, w_row, row_indexes, lut, scales,
-                                      act_src, act_stride, tmp_row, sizeof(float), sizeof(float), true,
-                                      getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT") && strcmp(getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT"), "0") != 0);
-
-                // optional: validate against reference vec_dot for a few entries (debug only)
-                const char * venv = getenv("GGML_IFAIRY_LUT_VALIDATE_VECDOT");
-                const int vlimit = venv && strcmp(venv, "0") != 0 ? (int) strtol(venv, NULL, 10) : 0;
-                static int vprints = 0;
-                if (vlimit > 0 && vprints < vlimit) {
-                    const block_ifairy_q16 * act_col0 = (const block_ifairy_q16 *) ((const uint8_t *) act_src + 0 * act_stride);
-                    float ref_packed = 0.0f;
-                    ggml_vec_dot_ifairy_q16_K((int) K,
-                                              &ref_packed,
-                                              sizeof(float),
-                                              (const void *) w_row,
-                                              sizeof(block_ifairy),
-                                              (const void *) act_col0,
-                                              sizeof(block_ifairy_q16),
-                                              1);
-                    const ggml_bf16_t ref_r_b = ((const ggml_bf16_t *) (&ref_packed))[0];
-                    const ggml_bf16_t ref_i_b = ((const ggml_bf16_t *) (&ref_packed))[1];
-                    const float ref_r = GGML_BF16_TO_FP32(ref_r_b);
-                    const float ref_i = GGML_BF16_TO_FP32(ref_i_b);
-                    const ggml_bf16_t got_r_b = ((const ggml_bf16_t *) (tmp_row + 0))[0];
-                    const ggml_bf16_t got_i_b = ((const ggml_bf16_t *) (tmp_row + 0))[1];
-                    const float got_r = GGML_BF16_TO_FP32(got_r_b);
-                    const float got_i = GGML_BF16_TO_FP32(got_i_b);
-                    const float dr = got_r - ref_r;
-                    const float di = got_i - ref_i;
-                    fprintf(stderr, "[ifairy_lut_vecdot] row=%lld col=0 got=(%.6f,%.6f) ref=(%.6f,%.6f) diff=(%.6f,%.6f)\n",
-                            (long long) row, got_r, got_i, ref_r, ref_i, dr, di);
-                    ++vprints;
-                }
+                                      act_src, act_stride, tmp_row, sizeof(float), sizeof(float), true, strict);
 
                 for (int64_t col = 0; col < N; ++col) {
                     uint8_t * dst_elem = dst_base + (size_t) col * nb1 + (size_t) row * nb0;

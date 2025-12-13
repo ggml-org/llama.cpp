@@ -19,14 +19,9 @@
 static std::vector<ifairy_lut_extra *> g_ifairy_lut_extras;
 static std::mutex g_ifairy_lut_mutex;
 
-static inline uint8_t ggml_ifairy_read_code_local(const block_ifairy * row_blocks, int64_t idx) {
-    const int64_t block_idx    = idx / QK_K;
-    const int64_t idx_in_block = idx - block_idx * QK_K;
-    const int     chunk        = (int) (idx_in_block >> 6);          // 0..3
-    const int     lane         = (int) (idx_in_block & 0x0f);        // 0..15
-    const int     part         = (int) ((idx_in_block >> 4) & 0x3);  // 0..3
-    const uint8_t packed       = row_blocks[block_idx].qs[chunk * 16 + lane];
-    return (packed >> (2 * part)) & 0x3;
+static inline bool ggml_ifairy_env_enabled(const char * name) {
+    const char * env = getenv(name);
+    return env && strcmp(env, "0") != 0;
 }
 
 // Scalar reference implementation for iFairy 3-weight LUT path.
@@ -51,11 +46,10 @@ void ggml_ifairy_lut_free(void) {
 }
 
 bool ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst) {
-    const bool dbg = getenv("GGML_IFAIRY_LUT_DEBUG") && strcmp(getenv("GGML_IFAIRY_LUT_DEBUG"), "0") != 0;
-    if (getenv("GGML_IFAIRY_LUT") && strcmp(getenv("GGML_IFAIRY_LUT"), "0") == 0) {
-        if (dbg) {
-            GGML_LOG_WARN("ifairy_lut: disabled by env GGML_IFAIRY_LUT=0\n");
-        }
+    const bool dbg = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG");
+    const char * enabled_env = getenv("GGML_IFAIRY_LUT");
+    if (enabled_env && strcmp(enabled_env, "0") == 0) {
+        if (dbg) { GGML_LOG_WARN("ifairy_lut: disabled by env GGML_IFAIRY_LUT=0\n"); }
         return false;
     }
 
@@ -80,32 +74,7 @@ bool ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0, const struct g
         }
         return false;
     }
-    if (dbg) {
-        const long long s0n0 = (long long) src0->ne[0];
-        const long long s0n1 = (long long) src0->ne[1];
-        const long long s0n2 = (long long) src0->ne[2];
-        const long long s0n3 = (long long) src0->ne[3];
-        const long long s1n0 = (long long) src1->ne[0];
-        const long long s1n1 = (long long) src1->ne[1];
-        const long long s1n2 = (long long) src1->ne[2];
-        const long long s1n3 = (long long) src1->ne[3];
-        const long long dn0  = (long long) dst->ne[0];
-        const long long dn1  = (long long) dst->ne[1];
-        const long long dn2  = (long long) dst->ne[2];
-        const long long dn3  = (long long) dst->ne[3];
-        GGML_LOG_WARN("ifairy_lut: can_mul_mat=true src0=[%lld,%lld,%lld,%lld] src1=[%lld,%lld,%lld,%lld] dst=[%lld,%lld,%lld,%lld] dst_nb=[%zu,%zu,%zu,%zu]\n",
-                      s0n0, s0n1, s0n2, s0n3,
-                      s1n0, s1n1, s1n2, s1n3,
-                      dn0,  dn1,  dn2,  dn3,
-                      dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3]);
-        fprintf(stderr,
-                "[ifairy_lut_dbg] src0=[%lld,%lld,%lld,%lld] src1=[%lld,%lld,%lld,%lld] dst=[%lld,%lld,%lld,%lld] dst_nb=[%zu,%zu,%zu,%zu]\n",
-                s0n0, s0n1, s0n2, s0n3,
-                s1n0, s1n1, s1n2, s1n3,
-                dn0,  dn1,  dn2,  dn3,
-                dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3]);
-        fflush(stderr);
-    }
+    if (dbg) { GGML_LOG_INFO("ifairy_lut: can_mul_mat=true\n"); }
     return true;
 }
 
@@ -123,9 +92,9 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     }
     const size_t lut_bytes = (size_t) N * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t);
     const size_t scale_bytes = (size_t) N * (size_t) groups * 2 * sizeof(float);
-    const size_t tmp_bytes = (size_t) N * sizeof(float);
-    const size_t per_thread = GGML_PAD(lut_bytes + scale_bytes + tmp_bytes, 64);
-    return quant_bytes + per_thread * (size_t) n_threads;
+    const size_t shared_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
+    const size_t tmp_bytes = GGML_PAD((size_t) N * sizeof(float), 64);
+    return quant_bytes + shared_bytes + tmp_bytes * (size_t) n_threads;
 }
 
 bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out) {
@@ -264,7 +233,7 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
 }
 
 void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uint8_t * indexes, const void * lut, const void * lut_scales, const void * act, size_t act_stride, float * dst, size_t dst_col_stride, size_t dst_row_stride, bool pack_bf16, bool strict) {
-    if (!indexes || !dst || !qweights) {
+    if (!indexes || !dst || !qweights || !lut || !lut_scales) {
         return;
     }
 
@@ -275,94 +244,37 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
 
     const block_ifairy * w_blocks = (const block_ifairy *) qweights;
 
-    const char * cmp_env = getenv("GGML_IFAIRY_LUT_COMPARE");
-    const bool do_cmp = cmp_env && strcmp(cmp_env, "0") != 0;
-    const int cmp_limit = cmp_env && strcmp(cmp_env, "1") != 0 ? (int) strtol(cmp_env, NULL, 10) : 4; // default small
-    static int cmp_prints = 0;
-
     for (int row = 0; row < m; ++row) {
         const block_ifairy * w_row = w_blocks + (size_t) row * (size_t) blocks;
+        const uint8_t * idx_row = indexes + (size_t) row * (size_t) groups;
+
+        const float coeff_w_real = GGML_FP16_TO_FP32(w_row[0].d_real);
+        const float coeff_w_imag = GGML_FP16_TO_FP32(w_row[0].d_imag);
+
         for (int col = 0; col < n; ++col) {
             const int16_t * lut_base = (const int16_t *) ((const uint8_t *) lut + (size_t) col * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t));
-            const uint8_t * idx_row = indexes + (size_t) row * (size_t) groups;
             const float * scales = (const float *) lut_scales + (size_t) col * (size_t) groups * 2;
             const block_ifairy_q16 * act_blocks = act ? (const block_ifairy_q16 *) ((const uint8_t *) act + (size_t) col * act_stride) : NULL;
-
-            const float coeff_w_real = GGML_FP16_TO_FP32(w_row[0].d_real);
-            const float coeff_w_imag = GGML_FP16_TO_FP32(w_row[0].d_imag);
 
             float acc_ac_xr = 0.0f;
             float acc_ad_xi = 0.0f;
             float acc_bc_xr = 0.0f;
             float acc_bd_xi = 0.0f;
+            for (int64_t g = 0; g < groups; ++g) {
+                const float act_scale_r = scales[g * 2 + 0];
+                const float act_scale_i = scales[g * 2 + 1];
 
-            if (strict) {
-                GGML_ASSERT(act_blocks != NULL);
+                const uint8_t pat = (uint8_t) (idx_row[g] & 0x3f);
 
-                // reference: match ggml_vec_dot_ifairy_q16_K_generic (w * conj(x))
-                for (int blk = 0; blk < (int) blocks; ++blk) {
-                    const uint8_t * GGML_RESTRICT w_ptr   = w_row[blk].qs;
-                    const int8_t  * GGML_RESTRICT x_r_ptr = (const int8_t *) act_blocks[blk].x_real;
-                    const int8_t  * GGML_RESTRICT x_i_ptr = (const int8_t *) act_blocks[blk].x_imag;
+                const int16_t sum_ac = lut_base[(size_t) g * (4 * 64) + 0 * 64 + pat];
+                const int16_t sum_ad = lut_base[(size_t) g * (4 * 64) + 1 * 64 + pat];
+                const int16_t sum_bc = lut_base[(size_t) g * (4 * 64) + 2 * 64 + pat];
+                const int16_t sum_bd = lut_base[(size_t) g * (4 * 64) + 3 * 64 + pat];
 
-                    int32_t sum_ac = 0;
-                    int32_t sum_ad = 0;
-                    int32_t sum_bc = 0;
-                    int32_t sum_bd = 0;
-
-                    for (int j = 0; j < QK_K; ++j) {
-                        const int chunk    = j >> 6;
-                        const int lane     = j & 0xF;
-                        const int part     = (j >> 4) & 0x3;
-                        const int byte_idx = (chunk << 4) + lane;
-                        const int bit_off  = part * 2;
-
-                        const uint8_t packed = w_ptr[byte_idx];
-                        const uint8_t code   = (packed >> bit_off) & 0x3;
-
-                        int wr = 0;
-                        int wi = 0;
-                        switch (code) {
-                            case 0: wr = -1; wi =  0; break;
-                            case 1: wr =  1; wi =  0; break;
-                            case 2: wr =  0; wi = -1; break;
-                            case 3: wr =  0; wi =  1; break;
-                        }
-
-                        const int xr = (int) x_r_ptr[j];
-                        const int xi = (int) x_i_ptr[j];
-
-                        sum_ac += xr * wr;
-                        sum_ad += xi * wr;
-                        sum_bc += xr * wi;
-                        sum_bd += xi * wi;
-                    }
-
-                    const float x_real = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
-                    const float x_imag = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
-
-                    acc_ac_xr += x_real * (float) sum_ac;
-                    acc_ad_xi += x_imag * (float) sum_ad;
-                    acc_bc_xr += x_real * (float) sum_bc;
-                    acc_bd_xi += x_imag * (float) sum_bd;
-                }
-            } else {
-                for (int64_t g = 0; g < groups; ++g) {
-                    const float act_scale_r = scales[g * 2 + 0];
-                    const float act_scale_i = scales[g * 2 + 1];
-
-                    const uint8_t pat = (uint8_t) (idx_row[g] & 0x3f);
-
-                    const int16_t sum_ac = lut_base[(size_t) g * (4 * 64) + 0 * 64 + pat];
-                    const int16_t sum_ad = lut_base[(size_t) g * (4 * 64) + 1 * 64 + pat];
-                    const int16_t sum_bc = lut_base[(size_t) g * (4 * 64) + 2 * 64 + pat];
-                    const int16_t sum_bd = lut_base[(size_t) g * (4 * 64) + 3 * 64 + pat];
-
-                    acc_ac_xr += act_scale_r * (float) sum_ac;
-                    acc_ad_xi += act_scale_i * (float) sum_ad;
-                    acc_bc_xr += act_scale_r * (float) sum_bc;
-                    acc_bd_xi += act_scale_i * (float) sum_bd;
-                }
+                acc_ac_xr += act_scale_r * (float) sum_ac;
+                acc_ad_xi += act_scale_i * (float) sum_ad;
+                acc_bc_xr += act_scale_r * (float) sum_bc;
+                acc_bd_xi += act_scale_i * (float) sum_bd;
             }
 
             const float out_r = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
@@ -373,7 +285,8 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
                            row, col, out_r, out_i);
             }
 
-            if (do_cmp && cmp_prints < cmp_limit && row < 2 && col < 2 && act_blocks) {
+            if (strict) {
+                GGML_ASSERT(act_blocks != NULL);
                 double ref_ac_xr = 0.0;
                 double ref_ad_xi = 0.0;
                 double ref_bc_xr = 0.0;
@@ -429,13 +342,9 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
                 const double ref_r = (double) coeff_w_real * ref_ac_xr + (double) coeff_w_imag * ref_bd_xi;
                 const double ref_i = (double) coeff_w_imag * ref_bc_xr - (double) coeff_w_real * ref_ad_xi;
 
-                fprintf(stderr,
-                        "[ifairy_lut_cmp] row=%d col=%d out=(%.6f,%.6f) ref=(%.6f,%.6f) diff=(%.6f,%.6f)\n",
-                        row, col,
-                        out_r, out_i,
-                        (float) ref_r, (float) ref_i,
-                        out_r - (float) ref_r, out_i - (float) ref_i);
-                ++cmp_prints;
+                const float dr = out_r - (float) ref_r;
+                const float di = out_i - (float) ref_i;
+                GGML_ASSERT(fabsf(dr) <= 1e-3f && fabsf(di) <= 1e-3f);
             }
 
             uint8_t * out_base = (uint8_t *) dst + (size_t) col * dst_col_stride + (size_t) row * dst_row_stride;

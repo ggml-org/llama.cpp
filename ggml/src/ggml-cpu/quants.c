@@ -109,23 +109,56 @@ void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
     assert(k % QK_K == 0);
     block_ifairy * GGML_RESTRICT y = vy;
 
-    float * x_real = (float *)malloc(k * sizeof(float));
-    float * x_imag = (float *)malloc(k * sizeof(float));
+    const int64_t nb = k / QK_K;
+
+    float d_real = 0.0f;
+    float d_imag = 0.0f;
 
     for (int64_t i = 0; i < k; ++i) {
-        const float* x_com = x + i;
+        const float * x_com = x + i;
 
-        ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t*)(x_com))[0];
-        ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t*)(x_com))[1];
+        const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) x_com)[0];
+        const ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t *) x_com)[1];
 
-        x_real[i] = GGML_BF16_TO_FP32(x_real_bf16);
-        x_imag[i] = GGML_BF16_TO_FP32(x_imag_bf16);
+        const float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+        const float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+
+        d_real = MAX(d_real, fabsf(x_real));
+        d_imag = MAX(d_imag, fabsf(x_imag));
     }
 
-    quantize_row_ifairy_ref(x_real, x_imag, y, k);
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        y[ib].d_real = GGML_FP32_TO_FP16(d_real);
+        y[ib].d_imag = GGML_FP32_TO_FP16(d_imag);
 
-    free(x_real);
-    free(x_imag);
+        for (int chunk = 0; chunk < 4; ++chunk) {
+            uint8_t packed[16] = {0};
+
+            for (int part = 0; part < 4; ++part) {
+                for (int lane = 0; lane < 16; ++lane) {
+                    const int idx = chunk * 64 + part * 16 + lane;
+                    const float * x_com = x + ib * QK_K + idx;
+
+                    const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) x_com)[0];
+                    const ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t *) x_com)[1];
+
+                    const float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+                    const float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+
+                    int code;
+                    if (x_real == 0.0f) {
+                        code = (x_imag > 0.0f) ? 3 : 2;
+                    } else {
+                        code = (x_real > 0.0f) ? 1 : 0;
+                    }
+
+                    packed[lane] |= (uint8_t) (code << (2 * part));
+                }
+            }
+
+            memcpy(y[ib].qs + chunk * 16, packed, sizeof(packed));
+        }
+    }
 }
 
 //===================================== Q8_K ==============================================

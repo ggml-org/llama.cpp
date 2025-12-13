@@ -2284,7 +2284,6 @@ static inline uint8_t ggml_ifairy_pack_triplet_direct(uint8_t c0, uint8_t c1, ui
 static inline uint8_t ggml_ifairy_read_code(const block_ifairy * row_blocks, int64_t idx) {
     const int64_t block_idx      = idx / QK_K;
     const int64_t idx_in_block   = idx - block_idx * QK_K;
-    // todo_liweitao check chunk
     const int     chunk          = (int) (idx_in_block >> 6);       // 0..3
     const int     lane           = (int) (idx_in_block & 0x0f);     // 0..15
     const int     part           = (int) ((idx_in_block >> 4) & 0x3); // 0..3
@@ -2792,9 +2791,6 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
             const float* x_com = x + j;
 
             ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t*)(x_com))[0];
-            //GGML_ASSERT(sizeof(ggml_bf16_t) == 2);
-            //GGML_ASSERT((void*)((const ggml_bf16_t*)(x_com)) == (void*)x_com);
-            //GGML_ASSERT((void*)((const ggml_bf16_t*)(x_com) + 1) == (void*)((const char*)x_com + 2));
             ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t*)(x_com))[1];
 
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);
@@ -2815,22 +2811,15 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
             float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);
 
-            // todo_liweitao 是否需要分开？
             int v = nearest_int(iscale_real * x_real);
-            y[i].x_real[j] = MIN(127, v);
+            y[i].x_real[j] = (int8_t) MAX(-127, MIN(127, v));
             v = nearest_int(iscale_imag * x_imag);
-            y[i].x_imag[j] = MIN(127, v);
+            y[i].x_imag[j] = (int8_t) MAX(-127, MIN(127, v));
         }
         y[i].d_real = GGML_FP32_TO_FP16(1.f / iscale_real);
         y[i].d_imag = GGML_FP32_TO_FP16(1.f / iscale_imag);
         x += QK_K;
     }
-}
-
-size_t quantize_row_ifairy_q16(const float *restrict x, block_ifairy_q16 *restrict y, int64_t k){
-    // todo_tbr
-    quantize_row_ifairy_q16_ref(x, y, k);
-    return k;
 }
 
 void dequantize_row_ifairy_q16(const block_ifairy_q16 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
