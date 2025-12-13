@@ -76,12 +76,14 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
 
     llama_model * model = llama_model_load_from_file(path_model, mparams_copy);
     if (model == nullptr) {
+        llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
         throw std::runtime_error("failed to load model");
     }
 
     llama_context * ctx = llama_init_from_model(model, *cparams);
     if (ctx == nullptr) {
         llama_model_free(model);
+        llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
         throw std::runtime_error("failed to create llama_context from model");
     }
 
