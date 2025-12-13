@@ -8039,6 +8039,160 @@ class Glm4MoeModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("Glm4vMoeForConditionalGeneration", "Glm4vForConditionalGeneration")
+class GLM4VisionModel(MmprojModel):
+    """Multimodal projector from:
+    - [zai-org/GLM-4.1V-9B-Thinking](https://huggingface.co/zai-org/GLM-4.1V-9B-Thinking)
+    - [zai-org/GLM-4.5V](https://huggingface.co/zai-org/GLM-4.5V)
+    - [zai-org/GLM-4.6V-Flash](https://huggingface.co/zai-org/GLM-4.6V-Flash)
+
+    ref: [#16600](https://github.com/ggml-org/llama.cpp/pull/16600)"""
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        vparams = self.hparams_vision
+        ln_eps = vparams.get("layer_norm_eps", 1e-5)
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GLM4V)
+        self.gguf_writer.add_vision_attention_layernorm_eps(ln_eps)
+        self.gguf_writer.add_vision_use_silu(True)
+        # GLM4V uses 2x2 spatial downsampling (kernel size matches downsample.weight shape)
+        self.gguf_writer.add_vision_spatial_merge_size(2)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".position_embd." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        if not name.startswith("model.visual."):
+            return []  # skip non-vision tensors
+
+        # CRITICAL FIX: Force eager evaluation of lazy tensors
+        # LazyTorchTensor wraps ALL operations (including .float(), .clone(), etc.)
+        # in new lazy tensors, so we MUST call to_eager() explicitly to materialize
+        from gguf.lazy import LazyBase
+
+        # Check if this is a lazy tensor and force eager evaluation
+        if isinstance(data_torch, LazyBase) or isinstance(data_torch, LazyTorchTensor):
+            data_torch = LazyBase.to_eager(data_torch)
+            # Verify it's now a real tensor
+            if hasattr(data_torch, 'is_meta') and data_torch.is_meta:
+                raise RuntimeError(f"ERROR: {name} is still a meta tensor after to_eager()!")
+
+        # GLM4V tensor name mappings: HuggingFace -> GGUF
+        # Handle patch embedding Conv3D -> two Conv2D kernels
+        if "patch_embed.proj.weight" in name:
+            # Split Conv3D [c_out, c_in, kt, kh, kw] into two Conv2D [c_out, c_in, kh, kw]
+            c1, c2, kt, kh, kw = data_torch.shape
+            del c1, c2, kh, kw  # unused
+            assert kt == 2, "GLM4V expects temporal_patch_size of 2"
+
+            # Slice the tensor (already materialized at start of modify_tensors)
+            slice0 = data_torch[:, :, 0, ...]
+            slice1 = data_torch[:, :, 1, ...]
+
+            return [
+                (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight", slice0),
+                (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", slice1),
+            ]
+
+        if "patch_embed.proj.bias" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".bias", data_torch)]
+
+        # Position embedding
+        if "embeddings.position_embedding" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_POS] + ".weight", data_torch)]
+
+        # Post-convolution layernorm (GLM4V-specific)
+        if "post_conv_layernorm.weight" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_POST_CONV_LN] + ".weight", data_torch)]
+        if "post_conv_layernorm.bias" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_POST_CONV_LN] + ".bias", data_torch)]
+
+        # Post layernorm
+        if "post_layernorm.weight" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_POST_NORM] + ".weight", data_torch)]
+        if "post_layernorm.bias" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_POST_NORM] + ".bias", data_torch)]
+
+        # Downsample (GLM4V-specific)
+        if "downsample.weight" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_DOWNSAMPLE] + ".weight", data_torch)]
+        if "downsample.bias" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_DOWNSAMPLE] + ".bias", data_torch)]
+
+        # Merger (GLM4V-specific)
+        if "merger.proj.weight" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_PROJ] + ".weight", data_torch)]
+        if "merger.proj.bias" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_PROJ] + ".bias", data_torch)]
+        if "merger.post_projection_norm.weight" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_NORM] + ".weight", data_torch)]
+        if "merger.post_projection_norm.bias" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_NORM] + ".bias", data_torch)]
+        if "merger.gate_proj.weight" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_GATE] + ".weight", data_torch)]
+        if "merger.gate_proj.bias" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_GATE] + ".bias", data_torch)]
+        if "merger.up_proj.weight" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_UP] + ".weight", data_torch)]
+        if "merger.up_proj.bias" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_UP] + ".bias", data_torch)]
+        if "merger.down_proj.weight" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_DOWN] + ".weight", data_torch)]
+        if "merger.down_proj.bias" in name:
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_MM_MERGER_DOWN] + ".bias", data_torch)]
+
+        # Vision transformer blocks (model.visual.blocks.{N}.*)
+        import re
+        block_match = re.match(r"model\.visual\.blocks\.(\d+)\.(.*)", name)
+        if block_match:
+            block_id = int(block_match.group(1))
+            rest = block_match.group(2)
+
+            # Attention
+            if rest == "attn.qkv.weight":
+                return [(f"v.blk.{block_id}.attn_qkv.weight", data_torch)]
+            if rest == "attn.qkv.bias":
+                return [(f"v.blk.{block_id}.attn_qkv.bias", data_torch)]
+            if rest == "attn.proj.weight":
+                return [(f"v.blk.{block_id}.attn_out.weight", data_torch)]
+            if rest == "attn.proj.bias":
+                return [(f"v.blk.{block_id}.attn_out.bias", data_torch)]
+
+            # Layer norms
+            if rest == "norm1.weight":
+                return [(f"v.blk.{block_id}.ln1.weight", data_torch)]
+            if rest == "norm1.bias":
+                return [(f"v.blk.{block_id}.ln1.bias", data_torch)]
+            if rest == "norm2.weight":
+                return [(f"v.blk.{block_id}.ln2.weight", data_torch)]
+            if rest == "norm2.bias":
+                return [(f"v.blk.{block_id}.ln2.bias", data_torch)]
+
+            # MLP (SwiGLU)
+            if rest == "mlp.gate_proj.weight":
+                return [(f"v.blk.{block_id}.ffn_gate.weight", data_torch)]
+            if rest == "mlp.gate_proj.bias":
+                return [(f"v.blk.{block_id}.ffn_gate.bias", data_torch)]
+            if rest == "mlp.up_proj.weight":
+                return [(f"v.blk.{block_id}.ffn_up.weight", data_torch)]
+            if rest == "mlp.up_proj.bias":
+                return [(f"v.blk.{block_id}.ffn_up.bias", data_torch)]
+            if rest == "mlp.down_proj.weight":
+                return [(f"v.blk.{block_id}.ffn_down.weight", data_torch)]
+            if rest == "mlp.down_proj.bias":
+                return [(f"v.blk.{block_id}.ffn_down.bias", data_torch)]
+
+        # If we get here, tensor wasn't handled - log warning and skip
+        logger.warning(f"GLM4V: Unhandled vision tensor: {name}")
+        return []
+
+
 @ModelBase.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
 class ChatGLMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.CHATGLM

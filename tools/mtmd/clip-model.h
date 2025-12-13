@@ -267,6 +267,22 @@ struct clip_model {
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
 
+    // glm4v
+    ggml_tensor * mm_post_conv_ln_w = nullptr;
+    ggml_tensor * mm_post_conv_ln_b = nullptr;
+    ggml_tensor * mm_downsample_w = nullptr;
+    ggml_tensor * mm_downsample_b = nullptr;
+    ggml_tensor * mm_merger_proj_w = nullptr;
+    ggml_tensor * mm_merger_proj_b = nullptr;
+    ggml_tensor * mm_merger_norm_w = nullptr;
+    ggml_tensor * mm_merger_norm_b = nullptr;
+    ggml_tensor * mm_merger_gate_w = nullptr;
+    ggml_tensor * mm_merger_gate_b = nullptr;
+    ggml_tensor * mm_merger_up_w = nullptr;
+    ggml_tensor * mm_merger_up_b = nullptr;
+    ggml_tensor * mm_merger_down_w = nullptr;
+    ggml_tensor * mm_merger_down_b = nullptr;
+
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
             || proj_type == PROJECTOR_TYPE_VOXTRAL;
