@@ -123,9 +123,9 @@ namespace ggml_cuda_mma {
             } else if constexpr (I == 32 && J == 4) {
                 return threadIdx.x % 32;
             } else if constexpr (I == 16 && J == 16) {
-                return 4 * (threadIdx.x / 16) + l;
+                return threadIdx.x % 16;
             } else if constexpr (I == 32 && J == 32) {
-                return 4 * (threadIdx.x / 32) + 8 * (l / 4) + (l % 4);
+                return threadIdx.x % 32;
             } else {
                 NO_DEVICE_CODE;
                 return -1;
@@ -140,9 +140,9 @@ namespace ggml_cuda_mma {
             } else if constexpr (I == 32 && J == 4) {
                 return 2 * (threadIdx.x / 32) + l;
             } else if constexpr (I == 16 && J == 16) {
-                return threadIdx.x % 16;
+                return 4 * (threadIdx.x / 16) + l;
             } else if constexpr (I == 32 && J == 32) {
-                return threadIdx.x % 32;
+                return 4 * (threadIdx.x / 32) + 8 * (l / 4) + (l % 4);
             } else {
                 NO_DEVICE_CODE;
                 return -1;
@@ -601,9 +601,7 @@ namespace ggml_cuda_mma {
                 t.x[l] = xs0[t.get_i(l)*stride + t.get_j(l)];
             }
         } else {
-            int64_t * xi = (int64_t *) t.x;
-            const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
-            xi[0] = xs[0];
+            ggml_cuda_memcpy_1<sizeof(t.x)>(t.x, xs0 + t.get_i(0) * stride + t.get_j(0));
         }
 #elif defined(AMD_WMMA_AVAILABLE)
         // All wmma layout has continues data when i-major.
