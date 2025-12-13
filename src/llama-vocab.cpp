@@ -2009,6 +2009,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "kimi-k2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_KIMI_K2;
                 clean_spaces = false;
+                ignore_merges = true;  // Kimi-K2 uses TikToken without BPE merges
             } else if (
                 tokenizer_pre == "grok-2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GROK_2;

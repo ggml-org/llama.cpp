@@ -95,8 +95,12 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Extract basename from model_path
+    // Extract basename from model_path (handle both / and \ for Windows)
     const char * basename = strrchr(model_path.c_str(), '/');
+    const char * basename_win = strrchr(model_path.c_str(), '\\');
+    if (basename_win != NULL && (basename == NULL || basename_win > basename)) {
+        basename = basename_win;
+    }
     basename = (basename == NULL) ? model_path.c_str() : basename + 1;
 
     char model_name[256];

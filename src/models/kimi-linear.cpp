@@ -414,6 +414,9 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
         // FFN Norm
         cur = build_norm(ffn_inp, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
+        
+        // Save the FFN norm output for shared expert
+        ggml_tensor * ffn_norm_out = cur;
 
         // FFN / MoE
         if (layer.ffn_gate_inp) {
@@ -425,15 +428,17 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
                                 (llama_expert_gating_func_type) hparams.expert_gating_func, il);
             cb(moe_out, "ffn_moe_out", il);
             
-            // Shared expert (if present)
+            // Shared expert (if present) - use ffn_norm_out as input
             if (layer.ffn_gate_shexp) {
-                ggml_tensor * ffn_shexp = build_ffn(cur,
+                ggml_tensor * ffn_shexp = build_ffn(ffn_norm_out,
                         layer.ffn_up_shexp, NULL, NULL,
                         layer.ffn_gate_shexp, NULL, NULL,
                         layer.ffn_down_shexp, NULL, NULL,
                         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
                 
+                // Add MoE output and shared expert output
+                // Use ggml_add which creates a new tensor for the result
                 cur = ggml_add(ctx0, moe_out, ffn_shexp);
                 cb(cur, "ffn_out", il);
             } else {

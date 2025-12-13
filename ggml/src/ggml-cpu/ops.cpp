@@ -9023,10 +9023,12 @@ static void ggml_compute_forward_kda_scan_f32(
 
                 // KDA recurrence: h[t] = exp(g[t]) * h[t-1] + k[t]^T * (beta[t] * (v[t] - h[t-1] @ k[t]))
                 // Note: Apply decay first, then compute retrieval and update
-                
+
                 // Step 1: Apply decay to h first: h = h * exp(g)
+                // Clamp g to [-80, 80] to avoid numerical overflow
                 for (int i = 0; i < head_dim; ++i) {
-                    const float exp_gi = expf(g[i]);
+                    const float g_clamped = fminf(fmaxf(g[i], -80.0f), 80.0f);
+                    const float exp_gi = expf(g_clamped);
                     for (int j = 0; j < head_dim; ++j) {
                         h[i * head_dim + j] *= exp_gi;
                     }
