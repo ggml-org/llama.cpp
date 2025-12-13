@@ -5,6 +5,7 @@
 //
 //    cmake -B build && cmake --build build --parallel && ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null
 //
+#include "chat-auto-parser.h"
 #include "chat.h"
 
 #include "log.h"
@@ -246,9 +247,27 @@ common_chat_tool code_interpreter_tool {
 std::vector<common_chat_tool> tools           { special_function_tool, special_function_tool_with_optional_param, python_tool };
 std::vector<common_chat_tool> llama_3_1_tools { special_function_tool, code_interpreter_tool };
 
-struct delta_data {
-    std::string        delta;
-    common_chat_params params;
+const common_chat_msg message_user {
+    "user",
+    "Hey there!",
+    /* .content_parts = */ {},
+    /* .tool_calls = */ {},
+    /* .reasoning_content = */ "",
+    /* .tool_name = */ "",
+    /* .tool_call_id = */ "",
+};
+
+const common_chat_msg message_user_parts {
+    "user",
+    /* .content = */ "",
+    /* .content_parts = */ {
+        { "text", "Hey" },
+        { "text", "there" },
+    },
+    /* .tool_calls = */ {},
+    /* .reasoning_content = */ "",
+    /* .tool_name = */ "",
+    /* .tool_call_id = */ "",
 };
 
 static common_chat_msg simple_assist_msg(const std::string & content, const std::string & reasoning_content = "", const std::string & tool_name = "", const std::string & arguments = "", const std::string & id = "") {
@@ -261,6 +280,39 @@ static common_chat_msg simple_assist_msg(const std::string & content, const std:
     }
     return msg;
 }
+
+const common_chat_msg message_assist                              = simple_assist_msg("Hello, world!\nWhat's up?");
+const common_chat_msg message_assist_empty                        = simple_assist_msg("");
+const common_chat_msg message_assist_thoughts_unparsed_deepseek   = simple_assist_msg("<think>I'm\nthinking</think>Hello, world!\nWhat's up?");
+const common_chat_msg message_assist_thoughts_unparsed_md         = simple_assist_msg("<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n```json\n{}```");
+const common_chat_msg message_assist_thoughts_unparsed_md_partial = simple_assist_msg("<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n```json\n{}");
+
+const common_chat_msg message_assist_thoughts_unparsed_r7b       = simple_assist_msg("<|START_THINKING|>I'm\nthinking<|END_THINKING|>Hello, world!\nWhat's up?");
+const common_chat_msg message_assist_thoughts_unparsed_magistral = simple_assist_msg("[THINK]raisonnement[/THINK]Réponse");
+const common_chat_msg message_assist_thoughts                    = simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking");
+const common_chat_msg message_assist_thoughts_unopened_unparsed  = simple_assist_msg("I'm\nthinking</think>Hello, world!\nWhat's up?");
+const common_chat_msg message_assist_thoughts_no_content         = simple_assist_msg("", "I'm\nthinking");
+const common_chat_msg message_assist_call                        = simple_assist_msg("", "", "special_function", "{\"arg1\": 1}");
+const common_chat_msg message_assist_call_noopt                  = simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1}");
+const common_chat_msg message_assist_call_withopt                = simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1, \"arg2\": 2}");
+const common_chat_msg message_assist_call_content                = simple_assist_msg("Hello, world!\nWhat's up?", "", "special_function", "{\"arg1\":1}");
+const common_chat_msg message_assist_call_empty_args             = simple_assist_msg("", "", "special_function");
+const common_chat_msg message_assist_call_cutoff_args            = simple_assist_msg("", "", "special_function", "{\"arg");
+const common_chat_msg message_assist_call_thoughts               = simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\":1}");
+const common_chat_msg message_assist_call_thoughts_unparsed      = simple_assist_msg("<think>I'm\nthinking</think>\n\n", "", "special_function", "{\"arg1\": 1}");
+const common_chat_msg message_assist_call_thoughts_content       = simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking", "special_function", "{\"arg1\": 1}");
+const common_chat_msg message_assist_call_id                     = simple_assist_msg("", "", "special_function", "{\"arg1\":1}", /* .id = */ "123456789");
+const common_chat_msg message_assist_call_idx                    = simple_assist_msg("", "", "special_function", "{\"arg1\":1}", /* .id = */ "0");
+const common_chat_msg message_assist_thoughts_call_idx           = simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\": 1}", /* id = */ "0");
+const common_chat_msg message_assist_call_python                 = simple_assist_msg("", "", "python", "{\"code\":\"print('hey')\"}");
+const common_chat_msg message_assist_call_python_lines           = simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')\"}");
+const common_chat_msg message_assist_call_python_lines_unclosed  = simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')");
+const common_chat_msg message_assist_call_code_interpreter       = simple_assist_msg("", "", "code_interpreter", "{\"code\":\"print('hey')\"}");
+
+struct delta_data {
+    std::string        delta;
+    common_chat_params params;
+};
 
 static delta_data init_delta(const struct common_chat_templates * tmpls, const std::vector<std::string> & end_tokens,
                              const common_chat_msg & user_message,
@@ -330,6 +382,12 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
     user_message.role = "user";
     user_message.content = "Hello, world!";
 
+    common_chat_templates_inputs inputs_tools;
+    inputs_tools.messages                   = {message_user};
+    inputs_tools.tools                      = {special_function_tool};
+
+    common_chat_params params = common_chat_templates_apply(tmpls, inputs_tools);
+
     for (const auto & tool_choice : std::vector<common_chat_tool_choice> {COMMON_CHAT_TOOL_CHOICE_AUTO, COMMON_CHAT_TOOL_CHOICE_REQUIRED}) {
         auto data = init_delta(tmpls, end_tokens, user_message, test_message, tools, tool_choice);
         if (!expected_delta.empty()) {
@@ -344,6 +402,10 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
             common_chat_syntax syntax;
             syntax.format = data.params.format;
             syntax.reasoning_format = reasoning_format;
+            if (!params.parser.empty()) {
+                syntax.parser = common_peg_arena();
+                syntax.parser.load(params.parser);
+            }
             const auto msg = common_chat_parse(data.delta, /* is_partial= */ false, syntax);
             assert_msg_equals(test_message, msg, ignore_whitespace_differences);
         }
@@ -487,57 +549,6 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
     assert_msg_equals(expected, parse_msg(raw_message), true);
     assert_msg_equals(expected, merged, true);
 }
-
-const common_chat_msg message_user {
-    "user",
-    "Hey there!",
-    /* .content_parts = */ {},
-    /* .tool_calls = */ {},
-    /* .reasoning_content = */ "",
-    /* .tool_name = */ "",
-    /* .tool_call_id = */ "",
-};
-
-const common_chat_msg message_user_parts {
-    "user",
-    /* .content = */ "",
-    /* .content_parts = */ {
-        { "text", "Hey" },
-        { "text", "there" },
-    },
-    /* .tool_calls = */ {},
-    /* .reasoning_content = */ "",
-    /* .tool_name = */ "",
-    /* .tool_call_id = */ "",
-};
-
-const common_chat_msg message_assist                              = simple_assist_msg("Hello, world!\nWhat's up?");
-const common_chat_msg message_assist_empty                        = simple_assist_msg("");
-const common_chat_msg message_assist_thoughts_unparsed_deepseek   = simple_assist_msg("<think>I'm\nthinking</think>Hello, world!\nWhat's up?");
-const common_chat_msg message_assist_thoughts_unparsed_md         = simple_assist_msg("<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n```json\n{}```");
-const common_chat_msg message_assist_thoughts_unparsed_md_partial = simple_assist_msg("<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n```json\n{}");
-
-const common_chat_msg message_assist_thoughts_unparsed_r7b       = simple_assist_msg("<|START_THINKING|>I'm\nthinking<|END_THINKING|>Hello, world!\nWhat's up?");
-const common_chat_msg message_assist_thoughts_unparsed_magistral = simple_assist_msg("[THINK]raisonnement[/THINK]Réponse");
-const common_chat_msg message_assist_thoughts                    = simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking");
-const common_chat_msg message_assist_thoughts_unopened_unparsed  = simple_assist_msg("I'm\nthinking</think>Hello, world!\nWhat's up?");
-const common_chat_msg message_assist_thoughts_no_content         = simple_assist_msg("", "I'm\nthinking");
-const common_chat_msg message_assist_call                        = simple_assist_msg("", "", "special_function", "{\"arg1\": 1}");
-const common_chat_msg message_assist_call_noopt                  = simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1}");
-const common_chat_msg message_assist_call_withopt                = simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1, \"arg2\": 2}");
-const common_chat_msg message_assist_call_content                = simple_assist_msg("Hello, world!\nWhat's up?", "", "special_function", "{\"arg1\":1}");
-const common_chat_msg message_assist_call_empty_args             = simple_assist_msg("", "", "special_function");
-const common_chat_msg message_assist_call_cutoff_args            = simple_assist_msg("", "", "special_function", "{\"arg");
-const common_chat_msg message_assist_call_thoughts               = simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\":1}");
-const common_chat_msg message_assist_call_thoughts_unparsed      = simple_assist_msg("<think>I'm\nthinking</think>\n\n", "", "special_function", "{\"arg1\": 1}");
-const common_chat_msg message_assist_call_thoughts_content       = simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking", "special_function", "{\"arg1\": 1}");
-const common_chat_msg message_assist_call_id                     = simple_assist_msg("", "", "special_function", "{\"arg1\":1}", /* .id = */ "123456789");
-const common_chat_msg message_assist_call_idx                    = simple_assist_msg("", "", "special_function", "{\"arg1\":1}", /* .id = */ "0");
-const common_chat_msg message_assist_thoughts_call_idx           = simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\": 1}", /* id = */ "0");
-const common_chat_msg message_assist_call_python                 = simple_assist_msg("", "", "python", "{\"code\":\"print('hey')\"}");
-const common_chat_msg message_assist_call_python_lines           = simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')\"}");
-const common_chat_msg message_assist_call_python_lines_unclosed  = simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')");
-const common_chat_msg message_assist_call_code_interpreter       = simple_assist_msg("", "", "code_interpreter", "{\"code\":\"print('hey')\"}");
 
 // Use for PEG parser implementations
 struct peg_test_case {
@@ -768,7 +779,7 @@ static void test_template_output_parsers() {
         // Not supported yet
         auto tmpls = read_templates("models/templates/CohereForAI-c4ai-command-r-plus-tool_use.jinja");
         assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_GENERIC, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
     }
     {
         auto tmpls = read_templates("models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja");
@@ -865,8 +876,9 @@ static void test_template_output_parsers() {
         std::vector<std::string>   end_tokens{ "<end_of_turn>" };
 
         assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_GENERIC, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_GENERIC,
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+        
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE,
                       common_chat_templates_apply(
                           read_templates("models/templates/microsoft-Phi-3.5-mini-instruct.jinja").get(),
                           inputs_tools)
@@ -884,34 +896,42 @@ static void test_template_output_parsers() {
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                     /* .reasoning_in_content = */ false,
                     /* .thinking_forced_open = */ true,
-                    /* .parse_tool_calls = */ false,
+                    /* .parse_tool_calls = */ false
                 }));
         assert_equals(
             message_assist_empty,
             common_chat_parse(
                 "{ \"tool_call\" : { \"name\" : \"t",
                 /* is_partial= */ true,
-                {COMMON_CHAT_FORMAT_GENERIC}));
+                {
+                   /* .format = */ COMMON_CHAT_FORMAT_GENERIC
+                }));
 
         assert_equals(
             simple_assist_msg("", "", "puppeteer_screenshot", "{\"name\":\"servethehome_homepage\","),
             common_chat_parse(
                 R"({"tool_call": {"name": "puppeteer_screenshot", "arguments": {"name": "servethehome_homepage",)",
                 /* is_partial= */ true,
-                {COMMON_CHAT_FORMAT_GENERIC}));
+                {
+                   /* .format = */ COMMON_CHAT_FORMAT_GENERIC,
+                }));
 
         assert_equals(
             message_assist_call_empty_args,
             common_chat_parse(
                 "{ \"tool_call\" : { \"name\" : \"special_function\"",
                 /* is_partial= */ true,
-                {COMMON_CHAT_FORMAT_GENERIC}));
+                {
+                   /* .format = */ COMMON_CHAT_FORMAT_GENERIC,
+                }));
         assert_equals(
             message_assist_call_cutoff_args,
             common_chat_parse(
                 "{ \"tool_call\" : { \"name\" : \"special_function\", \"arguments\" : { \"arg",
                 /* is_partial= */ true,
-                {COMMON_CHAT_FORMAT_GENERIC}));
+                {
+                   /* .format = */ COMMON_CHAT_FORMAT_GENERIC
+                }));
 
         assert_msg_equals(message_assist,
             common_chat_parse(
@@ -919,7 +939,9 @@ static void test_template_output_parsers() {
                 "  \"response\": \"Hello, world!\\nWhat's up?\"\n"
                 "}",
                 /* is_partial= */ false,
-                {COMMON_CHAT_FORMAT_GENERIC}));
+                {
+                   /* .format = */ COMMON_CHAT_FORMAT_GENERIC,
+                }));
         test_templates(tmpls.get(), end_tokens, message_assist_call_id, tools,
                       "{\n"
                       "  \"tool_calls\": [\n"

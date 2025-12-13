@@ -1,11 +1,10 @@
 #include "chat.h"
-#include "chat-parser.h"
+#include "chat-parser-xml-toolcall.h"
 #include "chat-peg-parser.h"
+#include "chat-auto-parser.h"
 #include "common.h"
-#include "json-partial.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
-#include "regex-partial.h"
 
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
@@ -15,7 +14,6 @@
 #include <cctype>
 #include <exception>
 #include <functional>
-#include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -2817,6 +2815,20 @@ static common_chat_params common_chat_templates_apply_jinja(
     // Mistral Nemo (w/ tools)
     if (src.find("[TOOL_CALLS]") != std::string::npos) {
         return common_chat_params_init_mistral_nemo(tmpl, params);
+    }
+
+    try {
+        TemplatePattern pattern = TemplateAnalyzer::analyze_template(tmpl);
+        if (pattern.format != TemplatePattern::UNKNOWN) {
+            auto auto_params = UniversalPEGGenerator::generate_parser(pattern, tmpl, params);
+            // Only use the auto-generated parser if it's different from the default format
+            if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY) {
+                return auto_params;
+            }
+        }
+    } catch (const std::exception& e) {
+        LOG_DBG("Automatic parser generation failed: %s - falling back to generic handler\n", e.what());
+        // Continue to generic handler if auto-generation fails
     }
 
     // Generic fallback
