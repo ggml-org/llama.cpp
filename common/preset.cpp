@@ -162,6 +162,26 @@ common_presets common_presets_load(const std::string & path, common_params_conte
     auto key_to_opt = get_map_key_opt(ctx_params);
     auto ini_data = parse_ini_from_file(path);
 
+    // merge "added" into "base", preserving existing keys in "base"
+    auto merge_sections = [](std::map<std::string, std::string> & base, const std::map<std::string, std::string> & added) {
+        for (const auto & [key, value] : added) {
+            if (base.find(key) == base.end()) {
+                base[key] = value;
+            }
+        }
+    };
+
+    // handle the "global" section as the default preset
+    if (ini_data.find("*") != ini_data.end()) {
+        auto & global_section = ini_data["*"];
+        for (auto & item : ini_data) {
+            merge_sections(item.second, global_section);
+        }
+    }
+
+    // TODO: support inheritance between presets in the future
+    //       note: server-models also need to be aware of the case where presets inherit from cached models
+
     for (auto section : ini_data) {
         common_preset preset;
         if (section.first.empty()) {

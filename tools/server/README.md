@@ -1439,6 +1439,12 @@ Example:
 ```ini
 version = 1
 
+; (Optional) This section provides global settings shared across all presets.
+; If the same key is defined in a specific preset, it will override the value in this global section.
+[*]
+c = 8192
+n-gpu-layer = 8
+
 ; If the key corresponds to an existing model on the server,
 ; this will be used as the default config for that model
 [ggml-org/MY-MODEL-GGUF:Q8_0]
