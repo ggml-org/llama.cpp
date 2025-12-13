@@ -28,7 +28,7 @@ struct sampler_tester {
             cur.emplace_back(llama_token_data{token_id, logit, 0.0f});
         }
 
-        cur_p = llama_token_data_array { cur.data(), cur.size(), -1, false };
+        cur_p = llama_token_data_array { cur.data(), cur.size(), false, -1, false };
     }
 
     sampler_tester(const std::vector<float> & probs, const std::vector<float> & probs_expected) : probs_expected(probs_expected) {
@@ -38,7 +38,7 @@ struct sampler_tester {
             cur.emplace_back(llama_token_data{token_id, logit, probs[token_id]});
         }
 
-        cur_p = llama_token_data_array { cur.data(), cur.size(), -1, false };
+        cur_p = llama_token_data_array { cur.data(), cur.size(), false, -1, false };
     }
 
     void apply(llama_sampler * sampler) {
@@ -270,13 +270,13 @@ static void test_sampler_queue(const size_t n_vocab, const std::string & sampler
 static void bench(llama_sampler * cnstr, const char * cnstr_name, const std::vector<llama_token_data> & data, int n_iter) {
     std::vector<llama_token_data> cur(data.size());
     std::copy(data.begin(), data.end(), cur.begin());
-    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+    llama_token_data_array cur_p = { cur.data(), cur.size(), false, -1, false };
     llama_sampler_apply(cnstr, &cur_p);
     llama_sampler_reset(cnstr);
     const int64_t t_start = ggml_time_us();
     for (int i = 0; i < n_iter; i++) {
         std::copy(data.begin(), data.end(), cur.begin());
-        llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+        llama_token_data_array cur_p = { cur.data(), cur.size(), false, -1, false };
         llama_sampler_apply(cnstr, &cur_p);
         llama_sampler_reset(cnstr);
     }

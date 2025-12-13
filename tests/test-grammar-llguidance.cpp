@@ -21,7 +21,7 @@ static bool match_string(const std::string & input, llama_sampler * grammar) {
     for (llama_token token_id = 0; token_id < (llama_token) n_vocab; token_id++) {
         cur.emplace_back(llama_token_data{ token_id, 0.0f, 0.0f });
     }
-    auto tok_arr = llama_token_data_array{ cur.data(), cur.size(), -1, false };
+    auto tok_arr = llama_token_data_array{ cur.data(), cur.size(), false, -1, false };
 
     for (const auto token : tokens) {
         for (llama_token token_id = 0; token_id < (llama_token) n_vocab; token_id++) {
@@ -1096,6 +1096,7 @@ static void one_hot(llama_token_data_array & tok_arr, llama_token selected) {
     }
 
     tok_arr.data[selected].logit = 100.0f;
+    tok_arr.normalized = false;
 }
 
 static void test_sampler_chain(void) {
@@ -1119,7 +1120,7 @@ start: /[A-Z ]*/)";
     for (llama_token token_id = 0; token_id < (llama_token) n_vocab; token_id++) {
         cur.emplace_back(llama_token_data{ token_id, 0.0f, 0.0f });
     }
-    auto tok_arr = llama_token_data_array{ cur.data(), cur.size(), -1, false };
+    auto tok_arr = llama_token_data_array{ cur.data(), cur.size(), false, -1, false };
 
     for (const auto token : tokens) {
         one_hot(tok_arr, token);
