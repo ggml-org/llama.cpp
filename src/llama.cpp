@@ -89,10 +89,7 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
 
     std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown = ctx->memory_breakdown();
 
-    for (const auto & buft_mb : memory_breakdown) {
-        ggml_backend_buffer_type_t          buft = buft_mb.first;
-        const llama_memory_breakdown_data & mb   = buft_mb.second;
-
+    for (const auto & [buft, mb] : memory_breakdown) {
         if (ggml_backend_buft_is_host(buft)) {
             continue;
         }
@@ -132,11 +129,11 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
 
 // enum to identify part of a layer for distributing its tensors:
 enum layer_fraction_t {
-    LAYER_FRACTION_NONE  = 0, // nothing
-    LAYER_FRACTION_ATTN  = 1, // attention
-    LAYER_FRACTION_UP    = 2, // attention + up
-    LAYER_FRACTION_GATE  = 3, // attention + up + gate
-    LAYER_FRACTION_MOE   = 4, // everything but sparse MoE weights
+    LAYER_FRACTION_NONE = 0, // nothing
+    LAYER_FRACTION_ATTN = 1, // attention
+    LAYER_FRACTION_UP   = 2, // attention + up
+    LAYER_FRACTION_GATE = 3, // attention + up + gate
+    LAYER_FRACTION_MOE  = 4, // everything but sparse MoE weights
 };
 // this enum is only used in llama_params_fit_impl but needs to be defined outside of it to fix a Windows compilation issue
 
@@ -250,7 +247,7 @@ static void llama_params_fit_impl(
                 LLAMA_LOG_INFO("%s: context size set by user to %" PRIu32 " -> no change\n", __func__, cparams->n_ctx);
             }
         }
-        if (global_surplus > 0) {
+        if (global_surplus >= 0) {
             LLAMA_LOG_INFO("%s: entire model can be fit across devices by reducing context\n", __func__);
             return;
         }
