@@ -502,8 +502,12 @@ llama_model_loader::llama_model_loader(
 
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
-
+    
+#if defined(__linux__)
+    files.emplace_back(new llama_file(fname.c_str(), "rb", !use_mmap));
+#else
     files.emplace_back(new llama_file(fname.c_str(), "rb"));
+#endif
     contexts.emplace_back(ctx);
 
     // Save tensors data offset of the main file.
@@ -571,7 +575,11 @@ llama_model_loader::llama_model_loader(
                 }
             }
 
+#if defined(__linux__)
+            files.emplace_back(new llama_file(fname_split, "rb", !use_mmap));
+#else
             files.emplace_back(new llama_file(fname_split, "rb"));
+#endif
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.
@@ -933,7 +941,14 @@ bool llama_model_loader::load_all_data(
     // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
     // NVMe raid configurations might require more / larger buffers.
     constexpr size_t n_buffers = 4;
+#if defined(__linux__)
+    constexpr size_t alignment = 4 * 1024; // 4 KiB for Direct I/O
+    // Buffer size: balance between memory usage and I/O efficiency
+    // 64MB works well for NVMe drives
+    constexpr size_t buffer_size = 64 * 1024 * 1024; // 64 MiB
+#else
     constexpr size_t buffer_size = 1 * 1024 * 1024; // 1MB
+#endif
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<ggml_backend_event_t> events;
@@ -982,7 +997,11 @@ bool llama_model_loader::load_all_data(
 
         // If the backend is supported, create pinned memory buffers and events for synchronisation.
         for (size_t idx = 0; idx < n_buffers; ++idx) {
+#if defined(__linux__)
+            auto * buf = ggml_backend_buft_alloc_buffer(host_buft, buffer_size + 2 * alignment);
+#else
             auto * buf = ggml_backend_buft_alloc_buffer(host_buft, buffer_size);
+#endif
             if (!buf) {
                 LLAMA_LOG_DEBUG("%s: failed to allocate host buffer for async uploads for device %s\n", func,
                     ggml_backend_dev_name(dev));
@@ -1018,6 +1037,35 @@ bool llama_model_loader::load_all_data(
             ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0))),
             ggml_backend_name(upload_backend));
     }
+
+#if defined(__linux__)
+    auto read_aligned_chunk = [](const llama_file * file,
+                                size_t offset,
+                                void * dest,
+                                size_t size,
+                                size_t alignment) {
+        off_t aligned_offset = offset & ~(alignment - 1);
+        off_t offset_from_alignment = offset - aligned_offset;
+        size_t bytes_to_read = (offset_from_alignment + size + alignment - 1) & ~(alignment - 1);
+        
+        void * raw_buffer = nullptr;
+        int ret = posix_memalign(&raw_buffer, alignment, bytes_to_read);
+        if (ret != 0) {
+            throw std::runtime_error(format("posix_memalign failed with error %d", ret));
+        }
+        
+        struct aligned_buffer_deleter {
+            void operator()(void * p) const { free(p); }
+        };
+        std::unique_ptr<void, aligned_buffer_deleter> buffer(raw_buffer);
+        
+        file->seek(aligned_offset, SEEK_SET);
+        file->read_raw(buffer.get(), bytes_to_read);
+        
+        uintptr_t actual_data = reinterpret_cast<uintptr_t>(buffer.get()) + offset_from_alignment;
+        memcpy(dest, reinterpret_cast<void *>(actual_data), size);
+    };
+#endif
 
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
         const auto * weight = get_weight(ggml_get_name(cur));
@@ -1064,9 +1112,18 @@ bool llama_model_loader::load_all_data(
             }
         } else {
             const auto & file = files.at(weight->idx);
+#if defined(__linux__)
+            auto offset = (off_t) weight->offs;
+            off_t aligned_offset = offset & ~(alignment - 1);
+            off_t offset_from_alignment = offset - aligned_offset;
+#endif
             if (ggml_backend_buffer_is_host(cur->buffer)) {
+#if defined(__linux__)
+                read_aligned_chunk(file.get(), weight->offs, cur->data, n_size, alignment);
+#else
                 file->seek(weight->offs, SEEK_SET);
                 file->read_raw(cur->data, n_size);
+#endif
                 if (check_tensors) {
                     validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
                         return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
@@ -1075,6 +1132,55 @@ bool llama_model_loader::load_all_data(
             } else {
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
                 if (upload_backend) {
+#if defined(__linux__)
+                    // Calculate aligned read boundaries
+                    size_t read_start = aligned_offset;
+                    size_t read_end = (offset + n_size + alignment - 1) & ~(alignment - 1);
+
+                    size_t bytes_read = 0;
+                    size_t data_read = 0;  // Actual tensor data copied (excluding padding)
+
+                    file->seek(aligned_offset, SEEK_SET);
+
+                    while (bytes_read < read_end - read_start) {
+                        size_t read_size = std::min<size_t>(buffer_size, read_end - read_start - bytes_read);
+
+                        // Align the destination pointer within the pinned buffer
+                        uintptr_t ptr_dest_aligned = (reinterpret_cast<uintptr_t>(host_ptrs[buffer_idx]) + alignment - 1) & ~(alignment - 1);
+
+                        // Wait for previous upload to complete before reusing buffer
+                        ggml_backend_event_synchronize(events[buffer_idx]);
+                        
+                        // Read aligned chunk from file
+                        file->read_raw(reinterpret_cast<void *>(ptr_dest_aligned), read_size);
+
+                        // Calculate actual data portion (excluding alignment padding)
+                        uintptr_t ptr_data = ptr_dest_aligned;
+                        size_t data_to_copy = read_size;
+
+                        // Skip alignment padding at start of first chunk
+                        if (bytes_read == 0) {
+                            ptr_data += offset_from_alignment;
+                            data_to_copy -= offset_from_alignment;
+                        }
+                        
+                        // Trim alignment padding at end of last chunk
+                        if (aligned_offset + bytes_read + read_size > offset + n_size) {
+                            data_to_copy -= (read_end - (offset + n_size));
+                        }
+
+                        // Async upload actual data to GPU
+                        ggml_backend_tensor_set_async(upload_backend, cur,
+                                                      reinterpret_cast<void *>(ptr_data), data_read, data_to_copy);
+                        ggml_backend_event_record(events[buffer_idx], upload_backend);
+
+                        data_read += data_to_copy;
+                        bytes_read += read_size;
+
+                        ++buffer_idx;
+                        buffer_idx %= n_buffers;
+                    }
+#else
                     file->seek(weight->offs, SEEK_SET);
 
                     size_t bytes_read = 0;
@@ -1091,11 +1197,16 @@ bool llama_model_loader::load_all_data(
                         ++buffer_idx;
                         buffer_idx %= n_buffers;
                     }
+#endif
                 } else {
                     read_buf.resize(n_size);
+#if defined(__linux__)
+                    read_aligned_chunk(file.get(), weight->offs, read_buf.data(), n_size, alignment);
+#else
                     file->seek(weight->offs, SEEK_SET);
-                    file->read_raw(read_buf.data(), n_size);
-                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
+                    file->read_raw(read_buf.data(), n_size);           
+#endif
+                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);   
                     if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
                         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
                     }

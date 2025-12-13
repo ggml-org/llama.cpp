@@ -14,6 +14,9 @@ using llama_mlocks = std::vector<std::unique_ptr<llama_mlock>>;
 
 struct llama_file {
     llama_file(const char * fname, const char * mode);
+#if defined(__linux__)
+    llama_file(const char * fname, const char * mode, bool uncached_read);
+#endif
     ~llama_file();
 
     size_t tell() const;

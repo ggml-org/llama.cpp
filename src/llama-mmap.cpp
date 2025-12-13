@@ -13,9 +13,10 @@
 #ifdef __has_include
     #if __has_include(<unistd.h>)
         #include <unistd.h>
+        #include <fcntl.h>
+        #include <sys/stat.h>
         #if defined(_POSIX_MAPPED_FILES)
             #include <sys/mman.h>
-            #include <fcntl.h>
         #endif
         #if defined(_POSIX_MEMLOCK_RANGE)
             #include <sys/resource.h>
@@ -158,6 +159,129 @@ struct llama_file::impl {
             std::fclose(fp);
         }
     }
+#elif defined(__linux__)
+    impl(const char * fname, const char * mode) : impl(fname, mode, false) {} 
+
+    impl(const char * fname, const char * mode, bool uncached_read) {
+        if (uncached_read) {
+            fd = open(fname, O_RDONLY | O_DIRECT);
+            if (fd == -1) {
+                throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+            }
+
+            struct stat file_stats{};
+            fstat(fd, &file_stats);
+
+            size = file_stats.st_size;
+
+            off_t ret = lseek(fd, 0, SEEK_SET);
+            if (ret == -1) {
+                throw std::runtime_error(format("seek error: %s", strerror(errno)));
+            }
+        } else {
+            fp = ggml_fopen(fname, mode);
+            if (fp == NULL) {
+                throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+            }
+            seek(0, SEEK_END);
+            size = tell();
+            seek(0, SEEK_SET);
+        }
+    }
+
+    size_t tell() const {
+        if (fd == -1) {
+            long ret = std::ftell(fp);
+            if (ret == -1) {
+                throw std::runtime_error(format("ftell error: %s", strerror(errno)));
+            }
+
+            return (size_t) ret;
+        }
+
+        off_t pos = lseek(fd, 0, SEEK_CUR);
+        if (pos == -1) {
+            throw std::runtime_error(format("lseek error: %s", strerror(errno)));
+        }
+        return (size_t) pos;
+    }
+
+    void seek(size_t offset, int whence) const {
+        off_t ret = 0;
+        if (fd == -1) {
+            ret = std::fseek(fp, (long) offset, whence);
+        } else {
+            ret = lseek(fd, offset, whence);
+        }
+        if (ret == -1) {
+            throw std::runtime_error(format("seek error: %s", strerror(errno)));
+        }
+    }
+
+    void read_raw(void * ptr, size_t len) const {
+        if (len == 0) {
+            return;
+        }
+        if (fd == -1) {
+            errno = 0;
+            std::size_t ret = std::fread(ptr, len, 1, fp);
+            if (ferror(fp)) {
+                throw std::runtime_error(format("read error: %s", strerror(errno)));
+            }
+            if (ret != 1) {
+                throw std::runtime_error("unexpectedly reached end of file");
+            }
+        } else {
+            bool successful = false;
+            while (!successful) {
+                off_t ret = read(fd, ptr, len);
+
+                if (ret == -1) {
+                    if (errno == EINTR) {
+                        continue;  // Interrupted by signal, retry
+                    }
+                    throw std::runtime_error(format("read error: %s", strerror(errno)));
+                }
+                if (ret == 0) {
+                    throw std::runtime_error("unexpectedly reached end of file");
+                }
+
+                successful = true;
+            }
+        }
+    }
+
+    uint32_t read_u32() const {
+        uint32_t ret;
+        read_raw(&ret, sizeof(ret));
+        return ret;
+    }
+
+    void write_raw(const void * ptr, size_t len) const {
+        if (len == 0) {
+            return;
+        }
+        errno = 0;
+        size_t ret = std::fwrite(ptr, len, 1, fp);
+        if (ret != 1) {
+            throw std::runtime_error(format("write error: %s", strerror(errno)));
+        }
+    }
+
+    void write_u32(uint32_t val) const {
+        write_raw(&val, sizeof(val));
+    }
+
+    ~impl() {
+        if (fp) {
+            std::fclose(fp);
+        } else if (fd != -1) {
+            close(fd);
+        }
+    }
+
+    int fd = -1;
+
 #else
     impl(const char * fname, const char * mode) {
         fp = ggml_fopen(fname, mode);
@@ -237,11 +361,14 @@ struct llama_file::impl {
     }
 #endif
 
-    FILE * fp;
-    size_t size;
+    FILE * fp{};
+    size_t size{};
 };
 
 llama_file::llama_file(const char * fname, const char * mode) : pimpl(std::make_unique<impl>(fname, mode)) {}
+#if defined(__linux__)
+llama_file::llama_file(const char * fname, const char * mode, bool uncached_read) : pimpl(std::make_unique<impl>(fname, mode, uncached_read)) {}
+#endif
 llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }
