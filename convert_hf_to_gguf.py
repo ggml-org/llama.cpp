@@ -9612,11 +9612,12 @@ class GptOssModel(TextModel):
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size"])
 
-        rope_scaling = self.hparams.get("rope_scaling") or {}
+        rope_scaling = self.hparams.get("rope_scaling") or (self.hparams.get("rope_parameters" or {}))
         rope_type = rope_scaling.get("rope_type", rope_scaling.get("type"))
         assert rope_type == "yarn", f"GPT-OSS only supports yarn rope scaling, got {rope_type}"
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
         self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+        self.gguf_writer.add_rope_freq_base(rope_scaling.get("rope_theta"))
         self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling.get("original_max_position_embeddings", 4096))
 
 
