@@ -797,11 +797,7 @@ template <int mmq_x, int mmq_y, mmq_q8_1_ds_layout ds_layout>
 static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA3)
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR_DUAL;
-#else
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR;
-#endif // defined(RDNA3)
+    constexpr data_layout input_layout = get_input_data_layout();
     typedef tile<16,  8, int, input_layout>        tile_A;
     typedef tile<16,  8, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
@@ -971,11 +967,7 @@ template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-#if defined(RDNA3)
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR_DUAL;
-#else
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR;
-#endif // defined(RDNA3)
+    constexpr data_layout input_layout = get_input_data_layout();
     typedef tile<16,  8, int, input_layout>        tile_A;
     typedef tile<16,  8, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
@@ -1140,10 +1132,11 @@ template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 #if defined(AMD_MFMA_AVAILABLE)
-    typedef tile<16,  8, int> tile_A;
-    typedef tile<16,  8, int> tile_B;
-    typedef tile<16, 16, int> tile_C;
-    typedef tile<64,  2, int> tile_load;
+    constexpr data_layout input_layout = get_input_data_layout();
+    typedef tile<16,  8, int, input_layout>        tile_A;
+    typedef tile<16,  8, int, input_layout>        tile_B;
+    typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
+    typedef tile<64,  2, int, input_layout>        tile_load;
 
     constexpr int granularity = mmq_get_granularity_device(mmq_x);
     constexpr int rows_per_warp = granularity;
@@ -1189,11 +1182,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
         }
     }
 #elif defined(AMD_WMMA_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
-#if defined(RDNA3)
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR_DUAL;
-#else
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR;
-#endif // defined(RDNA3)
+    constexpr data_layout input_layout = get_input_data_layout();
     typedef tile<16,  4, int, input_layout>        tile_A;
     typedef tile<16,  4, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
@@ -1450,10 +1439,11 @@ template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 #if defined(AMD_MFMA_AVAILABLE)
-    typedef tile<16,  8, int> tile_A;
-    typedef tile<16,  8, int> tile_B;
-    typedef tile<16, 16, int> tile_C;
-    typedef tile<64,  2, int> tile_load;
+    constexpr data_layout input_layout = get_input_data_layout();
+    typedef tile<16,  8, int, input_layout>        tile_A;
+    typedef tile<16,  8, int, input_layout>        tile_B;
+    typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
+    typedef tile<64,  2, int, input_layout>        tile_load;
 
     constexpr int granularity = mmq_get_granularity_device(mmq_x);
     constexpr int rows_per_warp = granularity;
@@ -1516,11 +1506,7 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
         }
     }
 #elif defined(AMD_WMMA_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
-#if defined(RDNA3)
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR_DUAL;
-#else
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR;
-#endif // defined(RDNA3)
+    constexpr data_layout input_layout = get_input_data_layout();
     typedef tile<16,  4, int, input_layout>        tile_A;
     typedef tile<16,  4, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
@@ -2284,10 +2270,11 @@ template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 #if defined(AMD_MFMA_AVAILABLE)
-    typedef tile<16,  8, int> tile_A;
-    typedef tile<16,  8, int> tile_B;
-    typedef tile<16, 16, int> tile_C;
-    typedef tile<64,  2, int> tile_load;
+    constexpr data_layout input_layout = get_input_data_layout();
+    typedef tile<16,  8, int, input_layout>        tile_A;
+    typedef tile<16,  8, int, input_layout>        tile_B;
+    typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
+    typedef tile<64,  2, int, input_layout>        tile_load;
 
     constexpr int granularity = mmq_get_granularity_device(mmq_x);
     constexpr int rows_per_warp = granularity;
@@ -2335,11 +2322,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
         }
     }
 #elif defined(AMD_WMMA_AVAILABLE) //wmma instructions can handle 16x4 tiles, does not require loading 64x2 tiles
-#if defined(RDNA3)
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR_DUAL;
-#else
-    constexpr data_layout input_layout = DATA_LAYOUT_I_MAJOR;
-#endif // defined(RDNA3)
+    constexpr data_layout input_layout = get_input_data_layout();
     typedef tile<16,  4, int, input_layout>        tile_A;
     typedef tile<16,  4, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;

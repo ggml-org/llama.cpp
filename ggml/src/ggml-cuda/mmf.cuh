@@ -35,11 +35,7 @@ static __global__ void mul_mat_f(
     constexpr bool is_tf32 = std::is_same_v<T, float>;
     constexpr int tile_B_I = is_tf32 ? 8 : 16;
     constexpr int tile_C_J = is_tf32 ? 8 : 16;
-#if defined(RDNA3)
-    constexpr data_layout ab_layout = is_tf32 ? DATA_LAYOUT_I_MAJOR : DATA_LAYOUT_I_MAJOR_DUAL;
-#else
-    constexpr data_layout ab_layout = DATA_LAYOUT_I_MAJOR;
-#endif //  #if defined(RDNA3)
+    constexpr data_layout ab_layout = is_tf32 ? DATA_LAYOUT_I_MAJOR : get_input_data_layout();
     typedef tile<16,       8,        T,     ab_layout>           tile_A;
     typedef tile<tile_B_I, 8,        T,     ab_layout>           tile_B;
     typedef tile<16,       tile_C_J, float, DATA_LAYOUT_J_MAJOR> tile_C;
@@ -281,11 +277,7 @@ static __global__ void mul_mat_f_ids(
     constexpr bool is_tf32 = std::is_same_v<T, float>;
     constexpr int tile_B_I = is_tf32 ? 8 : 16;
     constexpr int tile_C_J = is_tf32 ? 8 : 16;
-#if defined(RDNA3)
-    constexpr data_layout ab_layout = is_tf32 ? DATA_LAYOUT_I_MAJOR : DATA_LAYOUT_I_MAJOR_DUAL;
-#else
-    constexpr data_layout ab_layout = DATA_LAYOUT_I_MAJOR;
-#endif //  #if defined(RDNA3)
+    constexpr data_layout ab_layout = is_tf32 ? DATA_LAYOUT_I_MAJOR : get_input_data_layout();
     typedef tile<16,       8,        T,     ab_layout>           tile_A;
     typedef tile<tile_B_I, 8,        T,     ab_layout>           tile_B;
     typedef tile<16,       tile_C_J, float, DATA_LAYOUT_J_MAJOR> tile_C;

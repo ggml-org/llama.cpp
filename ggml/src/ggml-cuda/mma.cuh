@@ -93,6 +93,14 @@ namespace ggml_cuda_mma {
                dl == DATA_LAYOUT_I_MAJOR_DUAL;
     }
 
+    constexpr data_layout get_input_data_layout() {
+#if defined(RDNA3)
+        return DATA_LAYOUT_I_MAJOR_DUAL;
+#else
+        return DATA_LAYOUT_I_MAJOR;
+#endif // defined(RDNA3)
+    }
+
     template <int I_, int J_, typename T, data_layout ds_=DATA_LAYOUT_I_MAJOR>
     struct tile {};
 
