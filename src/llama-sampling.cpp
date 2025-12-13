@@ -2313,6 +2313,254 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
     return result;
 }
 
+// power-law
+//
+// this sampler is like `greedy`, `dist`, and `mirostat` in that it actually selects a token ID
+// rather than just transforming logits. therefore it must always be the last sampler in the
+// sampler chain.
+//
+// it is recommended to only perform minimal truncation before this sampler.
+//
+// ref: https://github.com/MrJackSpade/llama.cpp/tree/master (original impl, documentation)
+// ref: https://github.com/ggml-org/llama.cpp/pull/17927     (llama.cpp PR)
+
+struct llama_sampler_power_law {
+    const float    target;
+    const int32_t  window_size;
+
+    const uint32_t     seed;
+    std::mt19937       rng;
+    ring_buffer<float> window;
+};
+
+static const char * llama_sampler_power_law_name(const struct llama_sampler * /*smpl*/) {
+    return "power-law";
+}
+
+// Computes the target probability for the current sampling step.
+//
+// The target determines which token probabilities the power law distribution
+// will favor. This function implements a dynamic feedback mechanism to maintain
+// an average selection probability close to the base target over time.
+//
+// When the window is empty:
+//   - Returns the base target value (ctx->target)
+//
+// When the window has entries:
+//   - Calculates what the next target should be to keep the weighted average
+//     of selected token probabilities equal to ctx->target
+//   - Uses exponential decay weighting: newer values have more influence
+//
+// Exponential Decay Weighting:
+//   After inserting the new value, the weights will be:
+//     new_value:    weight = 1        (age 0, newest)
+//     rat(0):       weight = decay    (age 1)
+//     rat(1):       weight = decay^2  (age 2)
+//     ...
+//     rat(sz-2):    weight = decay^(sz-1)
+//     rat(sz-1):    evicted (oldest)
+//
+//   The "effective window size" is approximately 1/(1-decay):
+//     decay=0.9  → effective window ≈ 10 tokens
+//     decay=0.95 → effective window ≈ 20 tokens
+//     decay=1.0  → no decay, equivalent to simple average (original behavior)
+//
+// Formula derivation:
+//   We want the weighted average after insertion to equal target:
+//
+//     (new_value * 1 + Σ rat(i) * decay^(i+1)) / total_weight = target
+//
+//   Where total_weight = 1 + decay + decay^2 + ... + decay^(sz-1)
+//                      = (1 - decay^sz) / (1 - decay)   [geometric series]
+//
+//   Solving for new_value:
+//     new_value = target * total_weight - decay * Σ rat(i) * decay^i
+//
+//   The factor of 'decay' on the sum accounts for all existing values
+//   shifting one position older when the new value is inserted.
+//
+// The exponential decay helps prevent "fishtailing" - a phenomenon where
+// forced high-probability selections (when the model is very confident)
+// cause the algorithm to overcorrect with many low-probability selections,
+// then swing back the other way. By decaying old values, the influence of
+// forced selections fades faster, reducing oscillation amplitude and
+// recovery time.
+//
+// Finally, the computed target is clamped to [min_target, max_target] to
+// prevent extreme values that could destabilize sampling.
+//
+static float llama_sampler_power_law_compute_target(
+    const llama_sampler_power_law * ctx,
+                            float   min_target,
+                            float   max_target,
+                            float   tail_decay) {
+
+    float  computed_target = ctx->target;
+    size_t sz              = ctx->window.size();
+
+    if (sz > 0) {
+        // Check if window is at capacity (oldest element will be evicted on next push)
+        // Use the window_size parameter from context, not a capacity() method
+        const bool window_full = (sz == (size_t)ctx->window_size);
+
+        // Compute weighted sum with exponential decay
+        // rat(0) = newest in buffer, gets weight 1
+        // rat(i) gets weight decay^i
+        //
+        // When window is full: exclude oldest element (it will be evicted)
+        // When window is not full: include all elements (nothing evicted)
+        float  weighted_sum    = 0.0f;
+        float  weight          = 1.0f;
+        size_t elements_to_sum = window_full ? (sz - 1) : sz;
+
+        for (size_t i = 0; i < elements_to_sum; ++i) {
+            weighted_sum += ctx->window.rat(i) * weight;
+            weight *= tail_decay;
+        }
+
+        // Shift weights to account for new value taking position 0
+        // All existing values age by 1, so multiply their weights by decay
+        float shifted_weighted_sum = weighted_sum * tail_decay;
+
+        // Compute total weight after new value is inserted
+        // When full: sz elements remain (oldest evicted, new added)
+        // When not full: sz + 1 elements (new added, nothing evicted)
+        size_t final_element_count = window_full ? sz : (sz + 1);
+
+        float total_weight;
+        if (std::abs(tail_decay - 1.0f) < FLT_EPSILON) {
+            total_weight = (float) final_element_count;
+        } else {
+            total_weight = (1.0f - std::pow(tail_decay, (float) final_element_count)) / (1.0f - tail_decay);
+        }
+
+        // Solve for the new value that achieves target weighted average
+        float next_value = (ctx->target * total_weight) - shifted_weighted_sum;
+
+        // Clamp to allowed range
+        computed_target = std::max(min_target, std::min(next_value, max_target));
+    }
+
+    return computed_target;
+}
+
+static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_power_law *) smpl->ctx;
+
+    if (ctx->target < 0.0f) {
+        // no-op: just sample from the distribution as-is
+        llama_sampler_softmax_impl(cur_p, false);
+        const int idx   = llama_sample_dist(cur_p, ctx->rng);
+        cur_p->selected = idx;
+        return;
+    }
+
+    // fixed power law transform parameters
+    const float distribution_width = 0.3f;
+    const float peak_logit_value   = 5.0f;
+    const float tail_heaviness     = 2.0f;
+
+    // target computation parameters
+    const float min_target = 0.0f;
+    const float max_target = 1.0f;
+    const float tail_decay = 0.50f;  // exponential decay factor for history weighting
+                                     // lower = faster response, higher = more stability
+                                     // effective window ≈ 1/(1-decay) ≈ 20 tokens
+
+    // compute probabilities to get the "original" values
+    llama_sampler_softmax_impl(cur_p, false);
+
+    // store original probabilities (used for future target adaptation)
+    std::vector<float> original_probs;
+    original_probs.reserve(cur_p->size);
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        original_probs.push_back(cur_p->data[i].p);
+    }
+
+    // calculate adaptive target
+    float computed_target = llama_sampler_power_law_compute_target(ctx, min_target, max_target, tail_decay);
+
+    //
+    // power law transform
+    //
+
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        float p                   = cur_p->data[i].p;
+        float normalized_distance = std::abs(p - computed_target) / distribution_width;
+        cur_p->data[i].logit      = peak_logit_value / (1.0f + std::pow(normalized_distance, tail_heaviness));
+    }
+
+    llama_sampler_softmax_impl(cur_p, false);
+
+    // sample from the transformed distribution
+    const int idx   = llama_sample_dist(cur_p, ctx->rng);
+    cur_p->selected = idx;
+
+    // uncomment this to log the target values and history window contents for every token
+    //
+    // fprintf(stderr, "power_law: window_size=%zu/%d values=[", 
+    //         ctx->window.size(), ctx->window_size);
+    // for (size_t i = 0; i < ctx->window.size(); ++i) {
+    //     fprintf(stderr, "%.1f", ctx->window.rat(i));
+    //     if (i < ctx->window.size() - 1) fprintf(stderr, ",");
+    // }
+    // fprintf(stderr, "] computed_target=%.4f selected_token=%d orig_prob=%.4f\n", 
+    //         computed_target, cur_p->data[idx].id, original_probs[idx]);
+    // fflush(stderr);
+
+    // add the ORIGINAL probability to the rolling window
+    float original_p = original_probs[idx];
+
+    ctx->window.push_back(original_p);
+}
+
+static void llama_sampler_power_law_reset(struct llama_sampler * smpl) {
+    auto * ctx  = (llama_sampler_power_law *) smpl->ctx;
+    ctx->window = ring_buffer<float>(ctx->window_size);
+}
+
+static struct llama_sampler * llama_sampler_power_law_clone(const struct llama_sampler * smpl) {
+    const auto * ctx  = (const llama_sampler_power_law *) smpl->ctx;
+    auto * result     = llama_sampler_init_power_law(ctx->target, ctx->window_size, ctx->seed);
+    auto * result_ctx = (llama_sampler_power_law *) result->ctx;
+
+    result_ctx->rng     = ctx->rng;
+    result_ctx->window = ctx->window;
+
+    return result;
+}
+
+static void llama_sampler_power_law_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_power_law *) smpl->ctx;
+}
+
+static struct llama_sampler_i llama_sampler_power_law_i = {
+    /* .name   = */ llama_sampler_power_law_name,
+    /* .accept = */ nullptr,
+    /* .apply  = */ llama_sampler_power_law_apply,
+    /* .reset  = */ llama_sampler_power_law_reset,
+    /* .clone  = */ llama_sampler_power_law_clone,
+    /* .free   = */ llama_sampler_power_law_free,
+};
+
+struct llama_sampler * llama_sampler_init_power_law(
+    float    target,
+    int32_t  window_size,
+    uint32_t seed
+) {
+    auto seed_cur = get_rng_seed(seed);
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_power_law_i,
+        /* .ctx   = */ new llama_sampler_power_law {
+            /* .target       = */ target,
+            /* .window_size  = */ window_size,
+            /* .seed         = */ seed_cur,
+            /* .rng          = */ std::mt19937(seed_cur),
+            /* .window       = */ ring_buffer<float>(window_size),
+        }
+    );
+}
+
 // logit-bias
 
 struct llama_sampler_logit_bias {
