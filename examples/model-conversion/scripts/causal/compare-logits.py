@@ -4,6 +4,8 @@ import numpy as np
 import sys
 import os
 from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent / "utils"))
+from common import get_model_name_from_env_path
 
 def quick_logits_check(pytorch_file, llamacpp_file):
     """Lightweight sanity check before NMSE"""
@@ -35,20 +37,13 @@ def quick_logits_check(pytorch_file, llamacpp_file):
     return True
 
 def main():
-    model_path = os.getenv('MODEL_PATH')
-    if not model_path:
-        print("Error: MODEL_PATH environment variable not set")
-        sys.exit(1)
-
-    if not os.path.exists(model_path):
-        print(f"Error: Model file not found: {model_path}")
-        sys.exit(1)
-
-    model_name = os.path.basename(model_path)
+    model_name = get_model_name_from_env_path('MODEL_PATH')
     data_dir = Path("data")
-
     pytorch_file = data_dir / f"pytorch-{model_name}.bin"
-    llamacpp_file = data_dir / f"llamacpp-{model_name}.bin"
+
+    llamacpp_model_name = get_model_name_from_env_path('CONVERTED_MODEL')
+    print(f"Using converted model: {llamacpp_model_name}")
+    llamacpp_file = data_dir / f"llamacpp-{llamacpp_model_name}.bin"
 
     if not pytorch_file.exists():
         print(f"Error: PyTorch logits file not found: {pytorch_file}")
