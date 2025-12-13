@@ -1,8 +1,8 @@
-# iFairy ARM 3‑Weight LUT · 现状与后续工作（代码清理后）
+# iFairy ARM 3‑Weight LUT · 现状与后续工作（NEON 标量混合版）
 
-本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 **非 NEON** 标量 LUT 路径的代码现状、最近一次清理/整理的结果，以及下一步工作列表。
+本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、最近一次清理/整理的结果，以及下一步工作列表。
 
-## 1. 当前现状（可工作的标量 LUT 路径）
+## 1. 当前现状（可工作的 LUT 路径：NEON 优先，标量回退）
 
 - 路由位置：`ggml/src/ggml-cpu/ggml-cpu.c` 的 `ggml_compute_forward_mul_mat()` 内，当
   - `src0->type == GGML_TYPE_IFAIRY`
@@ -15,13 +15,22 @@
   - `pat = c0 | (c1<<2) | (c2<<4)`
   - 分组按 `QK_K=256` block 内部进行：`85` 个 triplet + `1` 个尾组（`{255, pad, pad}`），不跨 block、不丢维度。
 - LUT 构表：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_preprocess()`
-  - 每组三权重对应该列激活的 `4 × 64` 表（`sum_ac/sum_ad/sum_bc/sum_bd`，`int16`）。
+  - 每组三权重对应该列激活的 `4 × 64` 表（`sum_ac/sum_ad/sum_bc/sum_bd`，`int16`），并采用 `pat` 维度上的 **4 通道交织布局**（便于 NEON `vst4/vld1`）。
   - scale：每组 2 个 `float`（real/imag）。
 - GEMM：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_qgemm()`
   - 使用索引查表 + scale 累加，最终按 `ggml_vec_dot_ifairy_q16_K_generic` 语义合成输出（`w * conj(x)`）。
   - 输出默认以 **bf16-pair packed in F32** 的方式写回（与现有 ifairy vec_dot 约定一致）。
+  - 在 `__aarch64__ + __ARM_NEON` 下使用 NEON 累加（否则走标量）。
 
-## 2. 本次清理/整理做了什么（非 NEON 标量路径）
+### 1.1 为什么 LUT 是“四通道”而不是直接存实部/虚部？
+
+当前 correctness-first 采用 `sum_ac/sum_ad/sum_bc/sum_bd` 四通道（本质是把复数乘法拆成 4 个可独立累加的基底和），原因：
+
+- **严格复现 baseline 语义**：`ggml_vec_dot_ifairy_q16_K_generic` 在 `w * conj(x)` 下天然需要 `Σ(xr*wr) / Σ(xi*wr) / Σ(xr*wi) / Σ(xi*wi)` 四项，最后再组合成 `(out_r,out_i)`。
+- **scale/系数无法在 LUT 阶段完全合并**：激活块有 `d_real/d_imag` 两套 scale，权重行还有 `d_real/d_imag` 两个系数；其中权重系数是 **per-row** 的，LUT 预处理是 **per-column** 的，不能把权重系数 bake 进 LUT，否则会退化成“每行一份 LUT”，内存/构表成本不可接受。
+- **累加阶段不可消除**：点积跨 `K` 的求和必须在 qgemm 里做，因为每个 group 查哪个 `pat` 是由权重索引决定的；能做的优化是把乘法移出 inner-loop（当前四通道设计已经把权重系数的浮点乘法移到每个输出一次）。
+
+## 2. 本次清理/整理做了什么（NEON 版本落地前的清理）
 
 ### 2.1 移除 debug 导致的“非必要改动”
 
@@ -64,8 +73,9 @@
 
 ## 4. 后续工作（按优先级）
 
-1) **NEON 预处理 + NEON qgemm**（保持 `w * conj(x)` 语义不变）  
-   - 先实现 BK tile 的 LUT 构表与查表累加，再迭代 DOTPROD 版本。
+1) **BK tile + 更强 NEON 内核**（保持 `w * conj(x)` 语义不变）  
+   - 当前已落地：NEON 构表（`pat` 维度向量化）+ NEON 累加（标量回退）。  
+   - 下一步：引入 BK tile，降低 LUT/scale 的 cache 压力，并进一步 unroll/预取；再评估 DOTPROD 版本。
 2) **索引生命周期/缓存策略**  
    - 当前 `transform_tensor()` 生成的索引缓冲挂在 `tensor->extra`，在 CPU backend free 时统一释放；后续可考虑更细粒度的生命周期绑定与复用策略。
 3) **降低 LUT 工作区与带宽**  
@@ -74,4 +84,3 @@
    - 添加“LUT vs reference” 的针对性单测（覆盖多种 M/N/K 形状），并把 `GGML_IFAIRY_LUT_VALIDATE_STRICT` 纳入 CI/本地脚本流程（可仅跑小规模）。
 5) **性能记录与调参**  
    - 固定 `llama-cli` 命令与 seed，记录 LUT=0 vs LUT=1 的 tok/s；引入 `llama-bench`/`llama-perplexity` 做质量与性能对照。
-
