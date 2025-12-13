@@ -617,6 +617,8 @@ struct value_undefined_t : public value_t {
     value_undefined_t(const std::string & h = "") : hint(h) {}
     virtual std::string type() const override { return hint.empty() ? "Undefined" : "Undefined (hint: '" + hint + "')"; }
     virtual bool is_undefined() const override { return true; }
+    // note: some templates use "is none" as equivalent to "is undefined"
+    virtual bool is_none() const override { return true; }
     virtual bool as_bool() const override { return false; }
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
