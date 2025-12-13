@@ -879,6 +879,32 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
     }
 }
 
+static void common_chat_parse_gigachat_v3(common_chat_msg_parser & builder) {
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    // Regex to capture function name from JSON after "function call<|role_sep|\n"
+    static const common_regex function_regex(
+        R"(<\|message_sep\|>\n\nfunction call<\|role_sep\|>\n\s*\{\s*\"name\"\s*:\s*\"([^\"]+)\"\s*,\s*\"arguments\"\s*:)"
+    );
+
+    // Closing token of a tool call
+    static const common_regex close_regex(
+        R"(\}\s*)"
+    );
+
+    parse_json_tool_calls(
+        builder,
+        /* block_open = */ std::nullopt,
+        /* function_regex_start_only = */ std::nullopt,
+        /* function_regex = */ function_regex,
+        close_regex,
+        /* block_close = */ std::nullopt
+    );
+}
+
 static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
     static const xml_tool_call_format form {
         /* form.scope_start = */ "<minimax:tool_call>",
@@ -1478,6 +1504,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO:
             common_chat_parse_xiaomi_mimo(builder);
+            break;
+        case COMMON_CHAT_FORMAT_GIGACHAT_V3:
+            common_chat_parse_gigachat_v3(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));

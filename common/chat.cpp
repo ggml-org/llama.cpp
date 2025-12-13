@@ -672,6 +672,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
+        case COMMON_CHAT_FORMAT_GIGACHAT_V3: return "GigaChat V3";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1613,6 +1614,66 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
             };
         });
     }
+    return data;
+}
+
+static common_chat_params common_chat_params_init_gigachat_v3(
+        const common_chat_template & tmpl,
+        const struct templates_params & inputs) {
+
+    common_chat_params data;
+
+    auto prompt = apply(tmpl, inputs);
+    data.prompt = prompt;
+    data.format = COMMON_CHAT_FORMAT_GIGACHAT_V3;
+
+    data.preserved_tokens = {
+        "<|message_sep|>\n\n",
+        "<|role_sep|>\n",
+    };
+
+    if (inputs.tools.is_array() && !inputs.tools.empty()) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED && inputs.json_schema.is_null();
+
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> rules;
+
+
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string name = function.at("name");
+                auto parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+
+                // JSON schema for this tool
+                json schema = {
+                    {"type", "object"},
+                    {"properties", {
+                        {"name", {{"type", "string"}, {"const", name}}},
+                        {"arguments", parameters}
+                    }},
+                    {"required", json::array({"name", "arguments"})}
+                };
+
+                // Add a rule for this tool
+                rules.push_back(
+                    R"("<|message_sep|>\n\nfunction call<|role_sep|>\n")" + 
+                    builder.add_schema(name + "-call", schema)
+                );
+            });
+
+            builder.add_rule("root",
+                "(" + string_join(rules, " | ") + ")" +
+                (inputs.parallel_tool_calls ? "*" : "")
+            );
+
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
+                "<|message_sep|>\n\nfunction call<|role_sep|>\n"
+            });
+        });
+    }
+
     return data;
 }
 
@@ -2599,6 +2660,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<tool_calls>[") != std::string::npos &&
         src.find("]</tool_calls>") != std::string::npos) {
         return common_chat_params_init_apriel_1_5(tmpl, params);
+    }
+
+    // GigaChatV3 format detection
+    if (src.find("<|role_sep|>") != std::string::npos && src.find("<|message_sep|>") != std::string::npos) {
+        return common_chat_params_init_gigachat_v3(tmpl, params);
     }
 
     // Use generic handler when mixing tools + JSON schema.

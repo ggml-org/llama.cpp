@@ -3499,6 +3499,74 @@ Hey there!<|im_end|>
         auto grammar = build_grammar(params.grammar);
         GGML_ASSERT(grammar && "Failed to build Qwen3-Coder grammar with union types");
     }
+
+    {
+        auto tmpls = read_templates("models/templates/GigaChat3-10B-A1.8B.jinja");
+        std::vector<std::string> end_tokens{ "</s>", "<|message_sep|>\n\n" };
+
+        assert_equals(COMMON_CHAT_FORMAT_GIGACHAT_V3, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_GIGACHAT_V3, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Test parsing regular content
+        assert_msg_equals(message_assist,
+            common_chat_parse(
+                "Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_GIGACHAT_V3}));
+
+        // Test parsing tool calls
+        assert_msg_equals(message_assist_call,
+            common_chat_parse(
+                "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_GIGACHAT_V3}));
+
+        // Test tool calls with extra content
+        assert_msg_equals(message_assist_call_content,
+            common_chat_parse(
+                "Hello, world!\nWhat's up?<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_GIGACHAT_V3}
+            ));
+
+        // Test streaming
+        test_parser_with_streaming(message_assist_call_withopt,
+            "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function_with_opt\", \"arguments\": {\"arg1\": 1, \"arg2\": 2}}",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GIGACHAT_V3,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+
+        // Test template generation for regular content
+        test_templates(tmpls.get(), end_tokens, message_assist, tools,
+                      "Hello, world!\nWhat's up?",
+                      /* expect_grammar_triggered= */ false);
+
+        // Test template generation for tool calls
+        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
+                      "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
+                      /* ignore_whitespace_differences= */ true
+        );
+
+        // Test template generation for tools with optional parameters
+        test_templates(tmpls.get(), end_tokens, message_assist_call_noopt, tools,
+                      "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function_with_opt\", \"arguments\": {\"arg1\": 1}}",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
+                      /* ignore_whitespace_differences= */ true
+        );
+        test_templates(tmpls.get(), end_tokens, message_assist_call_withopt, tools,
+                      "<|message_sep|>\n\nfunction call<|role_sep|>\n{\"name\": \"special_function_with_opt\", \"arguments\": {\"arg1\": 1, \"arg2\": 2}}",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
+                      /* ignore_whitespace_differences= */ true
+        ); 
+    }
 }
 
 static void test_template_output_peg_parsers() {
