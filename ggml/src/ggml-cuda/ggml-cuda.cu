@@ -2412,7 +2412,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         nb1, nb2, nb3, stream);
 }
 
-static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
+static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, ggml_cuda_graph * cuda_graph, struct ggml_tensor * dst) {
     // why is this here instead of mul_mat?
     if (dst->src[0] != nullptr && ggml_backend_buft_is_cuda_split(dst->src[0]->buffer->buft)) {
         ggml_cuda_set_peer_access(dst->src[1]->ne[1], ctx.device);
@@ -2691,7 +2691,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_sum_rows(ctx, dst);
             break;
         case GGML_OP_MEAN:
-            ggml_cuda_op_mean(ctx, dst);
+            ggml_cuda_op_mean(ctx, cuda_graph, dst);
             break;
         case GGML_OP_SSM_CONV:
             ggml_cuda_op_ssm_conv(ctx, dst);
@@ -2850,8 +2850,8 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 }
 
 #ifdef USE_CUDA_GRAPH
-static bool check_node_graph_compatibility(ggml_cgraph * cgraph,
-    bool use_cuda_graph) {
+static bool check_node_graph_compatibility(const ggml_cgraph * cgraph) {
+    bool use_cuda_graph = true;
 
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
 
@@ -2961,45 +2961,49 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
     return true;
 }
 
-static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
+static void update_cuda_graph_properties(ggml_cuda_graph * cuda_graph, const ggml_cgraph * cgraph) {
+    cuda_graph->ggml_graph_properties.resize(cgraph->n_nodes);
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        set_ggml_graph_node_properties(cgraph->nodes[i], &cuda_graph->ggml_graph_properties[i]);
+    }
+}
 
+static bool is_cuda_graph_update_required(ggml_cuda_graph * cuda_graph, const ggml_cgraph * cgraph) {
     bool cuda_graph_update_required = false;
 
-    if (cuda_ctx->cuda_graph->instance == nullptr) {
+    if (cuda_graph->instance == nullptr) {
         cuda_graph_update_required = true;
     }
 
     // Check if the graph size has changed
-    if (cuda_ctx->cuda_graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
+    if (cuda_graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
         cuda_graph_update_required = true;
-        cuda_ctx->cuda_graph->ggml_graph_properties.resize(cgraph->n_nodes);
+        cuda_graph->ggml_graph_properties.resize(cgraph->n_nodes);
     }
 
     // Loop over nodes in GGML graph to determine if CUDA graph update is required
-    // and store properties to allow this comparison for the next token
     for (int i = 0; i < cgraph->n_nodes; i++) {
         bool has_matching_properties = true;
         if (!cuda_graph_update_required) {
-            has_matching_properties = ggml_graph_node_has_matching_properties(cgraph->nodes[i], &cuda_ctx->cuda_graph->ggml_graph_properties[i]);
+            has_matching_properties = ggml_graph_node_has_matching_properties(cgraph->nodes[i], &cuda_graph->ggml_graph_properties[i]);
         }
         if (!has_matching_properties) {
             cuda_graph_update_required = true;
         }
-        set_ggml_graph_node_properties(cgraph->nodes[i], &cuda_ctx->cuda_graph->ggml_graph_properties[i]);
     }
 
     return cuda_graph_update_required;
 }
 
-static void update_cuda_graph_executable(ggml_backend_cuda_context * cuda_ctx) {
+static void update_cuda_graph_executable(ggml_cuda_graph * cuda_graph) {
 
 #if CUDART_VERSION >= 12000
     cudaGraphExecUpdateResultInfo result_info;
-    cudaError_t stat = cudaGraphExecUpdate(cuda_ctx->cuda_graph->instance, cuda_ctx->cuda_graph->graph, &result_info);
+    cudaError_t stat = cudaGraphExecUpdate(cuda_graph->instance, cuda_graph->graph, &result_info);
 #else
     cudaGraphNode_t errorNode;
     cudaGraphExecUpdateResult result_info;
-    cudaError_t stat = cudaGraphExecUpdate(cuda_ctx->cuda_graph->instance, cuda_ctx->cuda_graph->graph, &errorNode, &result_info);
+    cudaError_t stat = cudaGraphExecUpdate(cuda_graph->instance, cuda_graph->graph, &errorNode, &result_info);
 #endif // CUDART_VERSION >= 12000
 
     if (stat == cudaErrorGraphExecUpdateFailure) {
@@ -3010,9 +3014,9 @@ static void update_cuda_graph_executable(ggml_backend_cuda_context * cuda_ctx) {
         // The pre-existing graph exec cannot be updated due to violated constraints
         // so instead clear error and re-instantiate
         (void)cudaGetLastError();
-        CUDA_CHECK(cudaGraphExecDestroy(cuda_ctx->cuda_graph->instance));
-        cuda_ctx->cuda_graph->instance = nullptr;
-        CUDA_CHECK(cudaGraphInstantiate(&cuda_ctx->cuda_graph->instance, cuda_ctx->cuda_graph->graph, NULL, NULL, 0));
+        CUDA_CHECK(cudaGraphExecDestroy(cuda_graph->instance));
+        cuda_graph->instance = nullptr;
+        CUDA_CHECK(cudaGraphInstantiate(&cuda_graph->instance, cuda_graph->graph, NULL, NULL, 0));
     } else {
         GGML_ASSERT(stat == cudaSuccess);
     }
@@ -3212,8 +3216,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
     return false;
 }
 
-static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
-    bool & graph_evaluated_or_captured, bool & use_cuda_graph, bool & cuda_graph_update_required) {
+static void evaluate_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cuda_graph * cuda_graph, const ggml_cgraph * cgraph) {
     // flag used to determine whether it is an integrated_gpu
     const bool integrated = ggml_cuda_info().devices[cuda_ctx->device].integrated;
 
@@ -3241,530 +3244,571 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         }
     };
 
-    while (!graph_evaluated_or_captured) {
-        // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
-        // With the use of CUDA graphs, the execution will be performed by the graph launch.
-        if (!use_cuda_graph || cuda_graph_update_required) {
-            [[maybe_unused]] int prev_i = 0;
+    [[maybe_unused]] int prev_i = 0;
 
-            if (stream_ctx.concurrent_events.size() > 0) {
-                should_launch_concurrent_events = true;
-                for (const auto & [tensor, event] : stream_ctx.concurrent_events) {
-                    should_launch_concurrent_events = should_launch_concurrent_events && event.is_valid();
-                }
-            }
-            if (should_launch_concurrent_events) {
-                // Restore original node order within each concurrent region to enable fusion within streams
+    if (stream_ctx.concurrent_events.size() > 0) {
+        should_launch_concurrent_events = true;
+        for (const auto & [tensor, event] : stream_ctx.concurrent_events) {
+            should_launch_concurrent_events = should_launch_concurrent_events && event.is_valid();
+        }
+    }
+    if (should_launch_concurrent_events) {
+        // Restore original node order within each concurrent region to enable fusion within streams
 
-                std::unordered_map<const ggml_tensor *, int> node_to_idx;
-                node_to_idx.reserve(cgraph->n_nodes);
-                for (int i = 0; i < cgraph->n_nodes; ++i) {
-                    node_to_idx[cgraph->nodes[i]] = i;
-                }
+        std::unordered_map<const ggml_tensor *, int> node_to_idx;
+        node_to_idx.reserve(cgraph->n_nodes);
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            node_to_idx[cgraph->nodes[i]] = i;
+        }
 
-                for (auto & [fork_node, event] : stream_ctx.concurrent_events) {
-                    // Find positions of all nodes from this event in the current graph
-                    std::vector<int> positions;
-                    positions.reserve(event.original_order.size());
+        for (auto & [fork_node, event] : stream_ctx.concurrent_events) {
+            // Find positions of all nodes from this event in the current graph
+            std::vector<int> positions;
+            positions.reserve(event.original_order.size());
 
-                    bool all_found = true;
-                    for (const ggml_tensor * orig_node : event.original_order) {
-                        auto it = node_to_idx.find(orig_node);
-                        if (it != node_to_idx.end()) {
-                            positions.push_back(it->second);
-                        } else {
-                            all_found = false;
-                            break;
-                        }
-                    }
-
-                    if (!all_found || positions.size() != event.original_order.size()) {
-                        continue;
-                    }
-
-                    // Sort positions to get contiguous range
-                    std::vector<int> sorted_positions = positions;
-                    std::sort(sorted_positions.begin(), sorted_positions.end());
-
-                    bool is_contiguous = true;
-                    for (size_t i = 1; i < sorted_positions.size(); ++i) {
-                        if (sorted_positions[i] != sorted_positions[i-1] + 1) {
-                            is_contiguous = false;
-                            break;
-                        }
-                    }
-
-                    if (!is_contiguous) {
-                        continue;
-                    }
-
-                    // Restore original order at the sorted positions
-                    int start_pos = sorted_positions[0];
-                    for (size_t i = 0; i < event.original_order.size(); ++i) {
-                        cgraph->nodes[start_pos + i] = const_cast<ggml_tensor *>(event.original_order[i]);
-                    }
+            bool all_found = true;
+            for (const ggml_tensor * orig_node : event.original_order) {
+                auto it = node_to_idx.find(orig_node);
+                if (it != node_to_idx.end()) {
+                    positions.push_back(it->second);
+                } else {
+                    all_found = false;
+                    break;
                 }
             }
 
-            for (int i = 0; i < cgraph->n_nodes; i++) {
-                ggml_tensor * node = cgraph->nodes[i];
-                if (is_concurrent_event_active) {
-                    GGML_ASSERT(concurrent_event);
+            if (!all_found || positions.size() != event.original_order.size()) {
+                continue;
+            }
 
-                    if (node == concurrent_event->join_node) {
-                        cuda_ctx->curr_stream_no = 0;
-                        for (int i = 1; i <= concurrent_event->n_streams; ++i) {
-                            // Wait on join events of forked streams in the main stream
-                            CUDA_CHECK(cudaEventRecord(concurrent_event->join_events[i - 1],
-                                                       cuda_ctx->stream(cuda_ctx->device, i)));
-                            CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), concurrent_event->join_events[i - 1]));
-                        }
+            // Sort positions to get contiguous range
+            std::vector<int> sorted_positions = positions;
+            std::sort(sorted_positions.begin(), sorted_positions.end());
 
-                        is_concurrent_event_active = false;
-                        concurrent_event           = nullptr;
-                    } else {
-                        GGML_ASSERT (concurrent_event->stream_mapping.find(node) != concurrent_event->stream_mapping.end());
-                        cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
-                        GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
-                    }
-                } else if (i - prev_i > 1) {
-                    //the previous node was fused
-                    const ggml_tensor * prev_node = cgraph->nodes[i - 1];
-                    try_launch_concurrent_event(prev_node);
-
-                    if (is_concurrent_event_active) {
-                        cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
-                        GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
-                    }
+            bool is_contiguous = true;
+            for (size_t i = 1; i < sorted_positions.size(); ++i) {
+                if (sorted_positions[i] != sorted_positions[i-1] + 1) {
+                    is_contiguous = false;
+                    break;
                 }
+            }
+
+            if (!is_contiguous) {
+                continue;
+            }
+
+            // Restore original order at the sorted positions
+            int start_pos = sorted_positions[0];
+            for (size_t i = 0; i < event.original_order.size(); ++i) {
+                cgraph->nodes[start_pos + i] = const_cast<ggml_tensor *>(event.original_order[i]);
+            }
+        }
+    }
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (is_concurrent_event_active) {
+            GGML_ASSERT(concurrent_event);
+
+            if (node == concurrent_event->join_node) {
+                cuda_ctx->curr_stream_no = 0;
+                for (int i = 1; i <= concurrent_event->n_streams; ++i) {
+                    // Wait on join events of forked streams in the main stream
+                    CUDA_CHECK(cudaEventRecord(concurrent_event->join_events[i - 1],
+                                                cuda_ctx->stream(cuda_ctx->device, i)));
+                    CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), concurrent_event->join_events[i - 1]));
+                }
+
+                is_concurrent_event_active = false;
+                concurrent_event           = nullptr;
+            } else {
+                GGML_ASSERT (concurrent_event->stream_mapping.find(node) != concurrent_event->stream_mapping.end());
+                cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
+                GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
+            }
+        } else if (i - prev_i > 1) {
+            //the previous node was fused
+            const ggml_tensor * prev_node = cgraph->nodes[i - 1];
+            try_launch_concurrent_event(prev_node);
+
+            if (is_concurrent_event_active) {
+                cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
+                GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
+            }
+        }
 
 #ifdef GGML_CUDA_DEBUG
-                const int nodes_fused = i - prev_i - 1;
-                if (nodes_fused > 0) {
-                    GGML_LOG_INFO("nodes_fused: %d\n", nodes_fused);
-                }
+        const int nodes_fused = i - prev_i - 1;
+        if (nodes_fused > 0) {
+            GGML_LOG_INFO("nodes_fused: %d\n", nodes_fused);
+        }
 #endif
-                prev_i = i;
+        prev_i = i;
 
-                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+        if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+            continue;
+        }
+
+
+        // start of fusion operations
+        static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
+        if (!disable_fusion) {
+
+            if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ true), {})) {
+                ggml_tensor * weights          = cgraph->nodes[i + 9];
+                ggml_tensor * selected_experts = cgraph->nodes[i + 3];
+                ggml_tensor * clamp            = cgraph->nodes[i + 7];
+                ggml_cuda_op_topk_moe(*cuda_ctx, node->src[0], weights, selected_experts, /*with norm*/ true,
+                                        /*delayed softmax*/ false, clamp);
+                i += 9;
+                continue;
+            }
+
+            if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ false), {})) {
+                ggml_tensor * weights          = cgraph->nodes[i + 4];
+                ggml_tensor * selected_experts = cgraph->nodes[i + 3];
+                ggml_cuda_op_topk_moe(*cuda_ctx, node->src[0], weights, selected_experts, /*with norm*/ false,
+                                        /*delayed softmax*/ false);
+                i += 4;
+                continue;
+            }
+
+            if (ggml_cuda_can_fuse(cgraph, i,
+                                    ggml_cuda_topk_moe_ops(/*with norm*/ false, /*delayed softmax*/ true), {})) {
+                ggml_tensor * weights = cgraph->nodes[i + 5];
+                ggml_tensor * ids     = cgraph->nodes[i + 1];
+
+                ggml_cuda_op_topk_moe(*cuda_ctx, node->src[0], weights, ids, /*with norm*/ false,
+                                        /*delayed_softmax*/ true);
+                i += 5;
+                continue;
+            }
+
+            if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
+                ggml_tensor * rope = cgraph->nodes[i];
+                ggml_tensor * set_rows = cgraph->nodes[i + 2];
+
+                ggml_cuda_op_rope_fused(*cuda_ctx, rope, set_rows);
+                i += 2;
+                continue;
+            }
+
+            if (node->op == GGML_OP_ADD) {
+                int n_fuse = 0;
+                ggml_op ops[8];
+                std::fill(ops, ops + 8, GGML_OP_ADD);
+
+                for (; n_fuse <= 6; ++n_fuse){
+                    if (!ggml_can_fuse(cgraph, i + n_fuse, ops + n_fuse, 2)) {
+                        break;
+                    }
+                    if (cgraph->nodes[i + n_fuse] != cgraph->nodes[i + n_fuse + 1]->src[0]) {
+                        break;
+                    }
+                    if (!ggml_are_same_layout(cgraph->nodes[i + n_fuse]->src[1], cgraph->nodes[i + n_fuse + 1]->src[1])) {
+                        break;
+                    }
+                }
+
+                n_fuse++;
+
+                if (n_fuse > 1) {
+                    for (int j = 0; j < n_fuse - 1; ++j) {
+                        node->src[j + 2] = cgraph->nodes[i + j + 1]->src[1];
+                    }
+                    cgraph->nodes[i + n_fuse - 1]->data = node->data;
+                    ggml_cuda_op_fused_add(*cuda_ctx, node, n_fuse);
+                    i += n_fuse - 1;
+
+                    continue;
+                }
+            }
+
+            bool fused_mul_mat_vec = false;
+            int fused_node_count = 0;
+
+            for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
+                const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
+
+                if (ggml_cuda_can_fuse(cgraph, i, { op, bias_op, op, bias_op, GGML_OP_GLU }, {})) {
+                    ggml_tensor * glu         = cgraph->nodes[i + 4];
+                    ggml_tensor * gate_bias_n = glu->src[0];
+                    ggml_tensor * up_bias_n   = glu->src[1];
+
+                    //we don't assume the order for {gate, up}. Instead infer it from the bias tensor
+                    ggml_tensor * gate_n      = nullptr;
+                    ggml_tensor * up_n        = nullptr;
+
+                    if (gate_bias_n->src[0] == cgraph->nodes[i] || gate_bias_n->src[1] == cgraph->nodes[i]) {
+                        gate_n = cgraph->nodes[i];
+                        up_n   = cgraph->nodes[i + 2];
+                    } else if (gate_bias_n->src[0] == cgraph->nodes[i + 2] || gate_bias_n->src[1] == cgraph->nodes[i + 2]) {
+                        gate_n = cgraph->nodes[i + 2];
+                        up_n   = cgraph->nodes[i];
+                    } else {
+                        continue;
+                    }
+
+                    auto get_bias_tensor = [](const ggml_tensor * bias_node, const ggml_tensor * mul_node, ggml_op op_bias) {
+                        if (op_bias == GGML_OP_ADD) {
+                            if (bias_node->src[0] == mul_node) {
+                                return bias_node->src[1];
+                            }
+                            if (bias_node->src[1] == mul_node) {
+                                return bias_node->src[0];
+                            }
+                            return (ggml_tensor *) nullptr;
+                        }
+                        GGML_ASSERT(op_bias == GGML_OP_ADD_ID);
+                        GGML_ASSERT(bias_node->src[0] == mul_node);
+                        return bias_node->src[1];
+                    };
+
+                    ggml_tensor * up_bias_tensor   = get_bias_tensor(up_bias_n, up_n, bias_op);
+                    ggml_tensor * gate_bias_tensor = get_bias_tensor(gate_bias_n, gate_n, bias_op);
+
+                    if (!up_bias_tensor || !gate_bias_tensor) {
+                        continue;
+                    }
+
+                    // we don't support repeating adds
+                    if (bias_op == GGML_OP_ADD &&
+                        (!ggml_are_same_shape(gate_bias_n->src[0], gate_bias_n->src[1]) ||
+                            !ggml_are_same_shape(up_bias_n->src[0], up_bias_n->src[1]))) {
+                        continue;
+                    }
+
+                    const ggml_tensor * src0 = up_n->src[0];
+                    const ggml_tensor * src1 = up_n->src[1];
+                    const ggml_tensor * ids  = up_n->src[2];
+
+                    if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n)) {
+                        ggml_cuda_mm_fusion_args_host fusion_data{};
+                        fusion_data.gate      = gate_n->src[0];
+                        fusion_data.x_bias    = up_bias_tensor;
+                        fusion_data.gate_bias = gate_bias_tensor;
+                        fusion_data.glu_op    = ggml_get_glu_op(glu);
+
+                        ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
+                        fused_mul_mat_vec = true;
+                        fused_node_count = 5;
+                        break;
+                    }
+
+                    if (ggml_cuda_should_fuse_mul_mat_vec_q(up_n)) {
+                        ggml_cuda_mm_fusion_args_host fusion_data{};
+                        fusion_data.gate      = gate_n->src[0];
+                        fusion_data.x_bias    = up_bias_tensor;
+                        fusion_data.gate_bias = gate_bias_tensor;
+                        fusion_data.glu_op    = ggml_get_glu_op(glu);
+
+                        ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
+                        fused_mul_mat_vec = true;
+                        fused_node_count = 5;
+                        break;
+                    }
+                } else if (ggml_cuda_can_fuse(cgraph, i, { op, op, GGML_OP_GLU }, {})) {
+                    ggml_tensor * glu  = cgraph->nodes[i + 2];
+                    ggml_tensor * gate = glu->src[0];
+                    ggml_tensor * up   = glu->src[1];
+
+                    bool ok = (gate == cgraph->nodes[i] && up == cgraph->nodes[i + 1])
+                        || (gate == cgraph->nodes[i + 1] && up == cgraph->nodes[i]);
+
+                    if (!ok) continue;
+
+                    const ggml_tensor * src0 = up->src[0];
+                    const ggml_tensor * src1 = up->src[1];
+                    const ggml_tensor * ids  = up->src[2];
+
+                    if (ggml_cuda_should_fuse_mul_mat_vec_f(up)) {
+                        ggml_cuda_mm_fusion_args_host fusion_data{};
+                        fusion_data.gate   = gate->src[0];
+                        fusion_data.glu_op = ggml_get_glu_op(glu);
+
+                        ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
+                        fused_mul_mat_vec = true;
+                        fused_node_count = 3;
+                        break;
+                    }
+
+                    if (ggml_cuda_should_fuse_mul_mat_vec_q(up)) {
+                        ggml_cuda_mm_fusion_args_host fusion_data{};
+                        fusion_data.gate   = gate->src[0];
+                        fusion_data.glu_op = ggml_get_glu_op(glu);
+
+                        ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
+                        fused_mul_mat_vec = true;
+                        fused_node_count = 3;
+                        break;
+                    }
+                }
+            }
+
+            if (fused_mul_mat_vec) {
+                i += fused_node_count - 1;
+                continue;
+            }
+
+            fused_mul_mat_vec = false;
+            fused_node_count = 0;
+
+            for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
+                const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
+
+                if (!ggml_can_fuse(cgraph, i, { op, bias_op })) {
                     continue;
                 }
 
+                ggml_tensor * mm_node   = cgraph->nodes[i];
+                ggml_tensor * bias_node = cgraph->nodes[i + 1];
 
-                // start of fusion operations
-                static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
-                if (!disable_fusion) {
-
-                    if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ true), {})) {
-                        ggml_tensor * weights          = cgraph->nodes[i + 9];
-                        ggml_tensor * selected_experts = cgraph->nodes[i + 3];
-                        ggml_tensor * clamp            = cgraph->nodes[i + 7];
-                        ggml_cuda_op_topk_moe(*cuda_ctx, node->src[0], weights, selected_experts, /*with norm*/ true,
-                                              /*delayed softmax*/ false, clamp);
-                        i += 9;
+                ggml_tensor * bias_tensor = nullptr;
+                if (bias_op == GGML_OP_ADD) {
+                    if (bias_node->src[0] == mm_node) {
+                        bias_tensor = bias_node->src[1];
+                    } else if (bias_node->src[1] == mm_node) {
+                        bias_tensor = bias_node->src[0];
+                    } else {
                         continue;
                     }
-
-                    if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ false), {})) {
-                        ggml_tensor * weights          = cgraph->nodes[i + 4];
-                        ggml_tensor * selected_experts = cgraph->nodes[i + 3];
-                        ggml_cuda_op_topk_moe(*cuda_ctx, node->src[0], weights, selected_experts, /*with norm*/ false,
-                                              /*delayed softmax*/ false);
-                        i += 4;
+                } else {
+                    if (bias_node->src[0] != mm_node) {
                         continue;
                     }
-
-                    if (ggml_cuda_can_fuse(cgraph, i,
-                                           ggml_cuda_topk_moe_ops(/*with norm*/ false, /*delayed softmax*/ true), {})) {
-                        ggml_tensor * weights = cgraph->nodes[i + 5];
-                        ggml_tensor * ids     = cgraph->nodes[i + 1];
-
-                        ggml_cuda_op_topk_moe(*cuda_ctx, node->src[0], weights, ids, /*with norm*/ false,
-                                              /*delayed_softmax*/ true);
-                        i += 5;
-                        continue;
-                    }
-
-                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
-                        ggml_tensor * rope = cgraph->nodes[i];
-                        ggml_tensor * set_rows = cgraph->nodes[i + 2];
-
-                        ggml_cuda_op_rope_fused(*cuda_ctx, rope, set_rows);
-                        i += 2;
-                        continue;
-                    }
-
-                    if (node->op == GGML_OP_ADD) {
-                        int n_fuse = 0;
-                        ggml_op ops[8];
-                        std::fill(ops, ops + 8, GGML_OP_ADD);
-
-                        for (; n_fuse <= 6; ++n_fuse){
-                            if (!ggml_can_fuse(cgraph, i + n_fuse, ops + n_fuse, 2)) {
-                                break;
-                            }
-                            if (cgraph->nodes[i + n_fuse] != cgraph->nodes[i + n_fuse + 1]->src[0]) {
-                                break;
-                            }
-                            if (!ggml_are_same_layout(cgraph->nodes[i + n_fuse]->src[1], cgraph->nodes[i + n_fuse + 1]->src[1])) {
-                                break;
-                            }
-                        }
-
-                        n_fuse++;
-
-                        if (n_fuse > 1) {
-                            for (int j = 0; j < n_fuse - 1; ++j) {
-                                node->src[j + 2] = cgraph->nodes[i + j + 1]->src[1];
-                            }
-                            cgraph->nodes[i + n_fuse - 1]->data = node->data;
-                            ggml_cuda_op_fused_add(*cuda_ctx, node, n_fuse);
-                            i += n_fuse - 1;
-
-                            continue;
-                        }
-                    }
-
-                    bool fused_mul_mat_vec = false;
-                    int fused_node_count = 0;
-
-                    for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
-                        const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
-
-                        if (ggml_cuda_can_fuse(cgraph, i, { op, bias_op, op, bias_op, GGML_OP_GLU }, {})) {
-                            ggml_tensor * glu         = cgraph->nodes[i + 4];
-                            ggml_tensor * gate_bias_n = glu->src[0];
-                            ggml_tensor * up_bias_n   = glu->src[1];
-
-                            //we don't assume the order for {gate, up}. Instead infer it from the bias tensor
-                            ggml_tensor * gate_n      = nullptr;
-                            ggml_tensor * up_n        = nullptr;
-
-                            if (gate_bias_n->src[0] == cgraph->nodes[i] || gate_bias_n->src[1] == cgraph->nodes[i]) {
-                                gate_n = cgraph->nodes[i];
-                                up_n   = cgraph->nodes[i + 2];
-                            } else if (gate_bias_n->src[0] == cgraph->nodes[i + 2] || gate_bias_n->src[1] == cgraph->nodes[i + 2]) {
-                                gate_n = cgraph->nodes[i + 2];
-                                up_n   = cgraph->nodes[i];
-                            } else {
-                                continue;
-                            }
-
-                            auto get_bias_tensor = [](const ggml_tensor * bias_node, const ggml_tensor * mul_node, ggml_op op_bias) {
-                                if (op_bias == GGML_OP_ADD) {
-                                    if (bias_node->src[0] == mul_node) {
-                                        return bias_node->src[1];
-                                    }
-                                    if (bias_node->src[1] == mul_node) {
-                                        return bias_node->src[0];
-                                    }
-                                    return (ggml_tensor *) nullptr;
-                                }
-                                GGML_ASSERT(op_bias == GGML_OP_ADD_ID);
-                                GGML_ASSERT(bias_node->src[0] == mul_node);
-                                return bias_node->src[1];
-                            };
-
-                            ggml_tensor * up_bias_tensor   = get_bias_tensor(up_bias_n, up_n, bias_op);
-                            ggml_tensor * gate_bias_tensor = get_bias_tensor(gate_bias_n, gate_n, bias_op);
-
-                            if (!up_bias_tensor || !gate_bias_tensor) {
-                                continue;
-                            }
-
-                            // we don't support repeating adds
-                            if (bias_op == GGML_OP_ADD &&
-                                (!ggml_are_same_shape(gate_bias_n->src[0], gate_bias_n->src[1]) ||
-                                 !ggml_are_same_shape(up_bias_n->src[0], up_bias_n->src[1]))) {
-                                continue;
-                            }
-
-                            const ggml_tensor * src0 = up_n->src[0];
-                            const ggml_tensor * src1 = up_n->src[1];
-                            const ggml_tensor * ids  = up_n->src[2];
-
-                            if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n)) {
-                                ggml_cuda_mm_fusion_args_host fusion_data{};
-                                fusion_data.gate      = gate_n->src[0];
-                                fusion_data.x_bias    = up_bias_tensor;
-                                fusion_data.gate_bias = gate_bias_tensor;
-                                fusion_data.glu_op    = ggml_get_glu_op(glu);
-
-                                ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
-                                fused_mul_mat_vec = true;
-                                fused_node_count = 5;
-                                break;
-                            }
-
-                            if (ggml_cuda_should_fuse_mul_mat_vec_q(up_n)) {
-                                ggml_cuda_mm_fusion_args_host fusion_data{};
-                                fusion_data.gate      = gate_n->src[0];
-                                fusion_data.x_bias    = up_bias_tensor;
-                                fusion_data.gate_bias = gate_bias_tensor;
-                                fusion_data.glu_op    = ggml_get_glu_op(glu);
-
-                                ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
-                                fused_mul_mat_vec = true;
-                                fused_node_count = 5;
-                                break;
-                            }
-                        } else if (ggml_cuda_can_fuse(cgraph, i, { op, op, GGML_OP_GLU }, {})) {
-                            ggml_tensor * glu  = cgraph->nodes[i + 2];
-                            ggml_tensor * gate = glu->src[0];
-                            ggml_tensor * up   = glu->src[1];
-
-                            bool ok = (gate == cgraph->nodes[i] && up == cgraph->nodes[i + 1])
-                                || (gate == cgraph->nodes[i + 1] && up == cgraph->nodes[i]);
-
-                            if (!ok) continue;
-
-                            const ggml_tensor * src0 = up->src[0];
-                            const ggml_tensor * src1 = up->src[1];
-                            const ggml_tensor * ids  = up->src[2];
-
-                            if (ggml_cuda_should_fuse_mul_mat_vec_f(up)) {
-                                ggml_cuda_mm_fusion_args_host fusion_data{};
-                                fusion_data.gate   = gate->src[0];
-                                fusion_data.glu_op = ggml_get_glu_op(glu);
-
-                                ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
-                                fused_mul_mat_vec = true;
-                                fused_node_count = 3;
-                                break;
-                            }
-
-                            if (ggml_cuda_should_fuse_mul_mat_vec_q(up)) {
-                                ggml_cuda_mm_fusion_args_host fusion_data{};
-                                fusion_data.gate   = gate->src[0];
-                                fusion_data.glu_op = ggml_get_glu_op(glu);
-
-                                ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
-                                fused_mul_mat_vec = true;
-                                fused_node_count = 3;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (fused_mul_mat_vec) {
-                        i += fused_node_count - 1;
-                        continue;
-                    }
-
-                    fused_mul_mat_vec = false;
-                    fused_node_count = 0;
-
-                    for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
-                        const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
-
-                        if (!ggml_can_fuse(cgraph, i, { op, bias_op })) {
-                            continue;
-                        }
-
-                        ggml_tensor * mm_node   = cgraph->nodes[i];
-                        ggml_tensor * bias_node = cgraph->nodes[i + 1];
-
-                        ggml_tensor * bias_tensor = nullptr;
-                        if (bias_op == GGML_OP_ADD) {
-                            if (bias_node->src[0] == mm_node) {
-                                bias_tensor = bias_node->src[1];
-                            } else if (bias_node->src[1] == mm_node) {
-                                bias_tensor = bias_node->src[0];
-                            } else {
-                                continue;
-                            }
-                        } else {
-                            if (bias_node->src[0] != mm_node) {
-                                continue;
-                            }
-                            bias_tensor = bias_node->src[1];
-                        }
-
-                        const ggml_tensor * src0 = mm_node->src[0];
-                        const ggml_tensor * src1 = mm_node->src[1];
-                        const ggml_tensor * ids  = mm_node->src[2];
-
-                        if (bias_op == GGML_OP_ADD_ID && bias_node->src[2] != ids) {
-                            continue;
-                        }
-
-                        if (bias_op == GGML_OP_ADD && !ggml_are_same_shape(bias_node->src[0], bias_node->src[1])) {
-                            continue;
-                        }
-
-                        ggml_cuda_mm_fusion_args_host fusion_data{};
-                        fusion_data.x_bias = bias_tensor;
-
-                        if (ggml_cuda_should_fuse_mul_mat_vec_f(mm_node)) {
-                            ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, bias_node, &fusion_data);
-                            fused_mul_mat_vec = true;
-                            fused_node_count = 2;
-                            break;
-                        }
-
-                        if (ggml_cuda_should_fuse_mul_mat_vec_q(mm_node)) {
-                            ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, bias_node, &fusion_data);
-                            fused_mul_mat_vec = true;
-                            fused_node_count = 2;
-                            break;
-                        }
-                    }
-
-                    if (fused_mul_mat_vec) {
-                        i += fused_node_count - 1;
-                        continue;
-                    }
-
-                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD}, {})) {
-                        ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i+1], cgraph->nodes[i+2]);
-                        i += 2;
-                        continue;
-                    }
-
-                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL}, {})) {
-                        ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i+1]);
-                        i++;
-                        continue;
-                    }
-
-                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
-                        i += 2;
-                        ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i], node);
-                        continue;
-                    }
+                    bias_tensor = bias_node->src[1];
                 }
+
+                const ggml_tensor * src0 = mm_node->src[0];
+                const ggml_tensor * src1 = mm_node->src[1];
+                const ggml_tensor * ids  = mm_node->src[2];
+
+                if (bias_op == GGML_OP_ADD_ID && bias_node->src[2] != ids) {
+                    continue;
+                }
+
+                if (bias_op == GGML_OP_ADD && !ggml_are_same_shape(bias_node->src[0], bias_node->src[1])) {
+                    continue;
+                }
+
+                ggml_cuda_mm_fusion_args_host fusion_data{};
+                fusion_data.x_bias = bias_tensor;
+
+                if (ggml_cuda_should_fuse_mul_mat_vec_f(mm_node)) {
+                    ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, bias_node, &fusion_data);
+                    fused_mul_mat_vec = true;
+                    fused_node_count = 2;
+                    break;
+                }
+
+                if (ggml_cuda_should_fuse_mul_mat_vec_q(mm_node)) {
+                    ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, bias_node, &fusion_data);
+                    fused_mul_mat_vec = true;
+                    fused_node_count = 2;
+                    break;
+                }
+            }
+
+            if (fused_mul_mat_vec) {
+                i += fused_node_count - 1;
+                continue;
+            }
+
+            if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD}, {})) {
+                ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i+1], cgraph->nodes[i+2]);
+                i += 2;
+                continue;
+            }
+
+            if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL}, {})) {
+                ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i+1]);
+                i++;
+                continue;
+            }
+
+            if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
+                i += 2;
+                ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i], node);
+                continue;
+            }
+        }
 #ifndef NDEBUG
-                assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
-                for (int j = 0; j < GGML_MAX_SRC; j++) {
-                    if (node->src[j] != nullptr) {
-                        assert(node->src[j]->buffer);
-                        assert(node->src[j]->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) ||
-                               ggml_backend_buft_is_cuda_split(node->src[j]->buffer->buft) || (integrated && ggml_backend_buft_is_cuda_host(node->src[j]->buffer->buft)));
-                    }
-                }
+        assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            if (node->src[j] != nullptr) {
+                assert(node->src[j]->buffer);
+                assert(node->src[j]->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) ||
+                        ggml_backend_buft_is_cuda_split(node->src[j]->buffer->buft) || (integrated && ggml_backend_buft_is_cuda_host(node->src[j]->buffer->buft)));
+            }
+        }
 #else
-                GGML_UNUSED(integrated);
+        GGML_UNUSED(integrated);
 #endif  // NDEBUG
 
-                bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
-                if (!ok) {
-                    GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
-                }
-                GGML_ASSERT(ok);
-
-                if (!is_concurrent_event_active) {
-                    try_launch_concurrent_event(node);
-               }
-            }
+        bool ok = ggml_cuda_compute_forward(*cuda_ctx, cuda_graph, node);
+        if (!ok) {
+            GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
         }
+        GGML_ASSERT(ok);
 
-#ifdef USE_CUDA_GRAPH
-        if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
-            if (cuda_ctx->cuda_graph->graph != nullptr) {
-                CUDA_CHECK(cudaGraphDestroy(cuda_ctx->cuda_graph->graph));
-                cuda_ctx->cuda_graph->graph = nullptr;
-            }
-
-            CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_ctx->cuda_graph->graph));
-            graph_evaluated_or_captured = true; // CUDA graph has been captured
-
-            std::lock_guard<std::mutex> lock(ggml_cuda_lock);
-            if (ggml_cuda_lock_counter.fetch_sub(1, std::memory_order_relaxed) == 1) {
-                ggml_cuda_lock_cv.notify_all();
-            }
-        } else {
-            graph_evaluated_or_captured = true; // ggml graph has been directly evaluated
+        if (!is_concurrent_event_active) {
+            try_launch_concurrent_event(node);
         }
-    }
-
-    if (use_cuda_graph) {
-        if (cuda_ctx->cuda_graph->instance == nullptr) { // Create executable graph from captured graph.
-            CUDA_CHECK(cudaGraphInstantiate(&cuda_ctx->cuda_graph->instance, cuda_ctx->cuda_graph->graph, NULL, NULL, 0));
-        }
-        if (cuda_graph_update_required) { // Update graph executable
-            update_cuda_graph_executable(cuda_ctx);
-        }
-        // Launch graph
-        CUDA_CHECK(cudaGraphLaunch(cuda_ctx->cuda_graph->instance, cuda_ctx->stream()));
-#else
-        graph_evaluated_or_captured = true;
-#endif  // USE_CUDA_GRAPH
     }
 }
 
-static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
-
-    ggml_cuda_set_device(cuda_ctx->device);
-
 #ifdef USE_CUDA_GRAPH
-    static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
-
-    // Objects required for CUDA Graph
-    if (cuda_ctx->cuda_graph == nullptr) {
-        cuda_ctx->cuda_graph.reset(new ggml_cuda_graph());
+static void capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cuda_graph * cuda_graph, const ggml_cgraph * cgraph) {
+    // Start CUDA graph capture
+    {
+        std::lock_guard<std::mutex> lock(ggml_cuda_lock);
+        ggml_cuda_lock_counter.fetch_add(1, std::memory_order_relaxed);
     }
 
-    bool use_cuda_graph = true;
-    bool cuda_graph_update_required = false;
+    CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
 
-    if (cuda_ctx->cuda_graph->graph == nullptr) {
+    evaluate_cuda_graph(cuda_ctx, cuda_graph, cgraph);
+
+    if (cuda_graph->graph != nullptr) {
+        CUDA_CHECK(cudaGraphDestroy(cuda_graph->graph));
+        cuda_graph->graph = nullptr;
+    }
+
+    CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_graph->graph));
+
+    if (cuda_graph->instance == nullptr) {
+        CUDA_CHECK(cudaGraphInstantiate(&cuda_graph->instance, cuda_graph->graph, NULL, NULL, 0));
+    } else {
+        update_cuda_graph_executable(cuda_graph);
+    }
+
+    std::lock_guard<std::mutex> lock(ggml_cuda_lock);
+    if (ggml_cuda_lock_counter.fetch_sub(1, std::memory_order_relaxed) == 1) {
+        ggml_cuda_lock_cv.notify_all();
+    }
+}
+
+static bool should_use_cuda_graph(ggml_backend_cuda_context * cuda_ctx, const struct ggml_cgraph * cgraph) {
+    bool use_cuda_graph = true;
+
+    if (!cuda_ctx->cuda_graph_initialized) {
+        cuda_ctx->disable_graph_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
+
         if (ggml_cuda_info().devices[cuda_ctx->device].cc < GGML_CUDA_CC_AMPERE) {
-            cuda_ctx->cuda_graph->disable_due_to_gpu_arch = true;
+            cuda_ctx->disable_graph_due_to_gpu_arch = true;
 #ifndef NDEBUG
             GGML_LOG_DEBUG("%s: disabling CUDA graphs due to GPU architecture\n", __func__);
 #endif
         }
+        cuda_ctx->cuda_graph_initialized = true;
     }
 
     // Disable CUDA graphs in presence of env var, old GPU, use-case which is changing too rapidly,
     // or previous graph capture failure.
     // Also disable for multi-gpu for now. TO DO investigate
-    if (disable_cuda_graphs_due_to_env
-        || cuda_ctx->cuda_graph->disable_due_to_gpu_arch
-        || cuda_ctx->cuda_graph->disable_due_to_too_many_updates
-        || cuda_ctx->cuda_graph->disable_due_to_failed_graph_capture) {
+    if (cuda_ctx->disable_graph_due_to_env || cuda_ctx->disable_graph_due_to_gpu_arch ||
+        cuda_ctx->disable_graph_due_to_too_many_updates) {
         use_cuda_graph = false;
     }
 
     if (use_cuda_graph) {
-        cuda_graph_update_required = is_cuda_graph_update_required(cuda_ctx, cgraph);
+        use_cuda_graph = check_node_graph_compatibility(cgraph);
+    }
 
-        use_cuda_graph = check_node_graph_compatibility(cgraph, use_cuda_graph);
+    return use_cuda_graph;
+}
 
-        // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
-        if (use_cuda_graph && cuda_graph_update_required) {
-            cuda_ctx->cuda_graph->number_consecutive_updates++;
+static ggml_backend_graph_plan_t ggml_backend_cuda_graph_plan_create(ggml_backend_t backend, const struct ggml_cgraph * cgraph) {
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
+
+    ggml_cuda_set_device(cuda_ctx->device);
+
+    ggml_cuda_graph * cuda_graph = new ggml_cuda_graph();
+
+    cuda_graph->cgraph = cgraph;
+
+    if (should_use_cuda_graph(cuda_ctx, cgraph)) {
+        capture_cuda_graph(cuda_ctx, cuda_graph, cgraph);
+        update_cuda_graph_properties(cuda_graph, cgraph);
+    }
+
+    return cuda_graph;
+}
+
+static void ggml_backend_cuda_graph_plan_free(ggml_backend_t backend, ggml_backend_graph_plan_t plan) {
+    delete (ggml_cuda_graph *) plan;
+
+    GGML_UNUSED(backend);
+}
+
+static void ggml_backend_cuda_graph_plan_update(ggml_backend_t backend, ggml_backend_graph_plan_t plan, const ggml_cgraph * cgraph) {
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+
+    ggml_cuda_set_device(cuda_ctx->device);
+
+    ggml_cuda_graph * cuda_graph = (ggml_cuda_graph *) plan;
+
+    cuda_graph->cgraph = cgraph;
+
+    bool use_cuda_graph = should_use_cuda_graph(cuda_ctx, cgraph);
+    bool cuda_graph_update_required = false;
+
+    // check if we are doing a graph update
+    if (cuda_graph->instance == nullptr && use_cuda_graph                          // no graph -> graph
+        || cuda_graph->instance != nullptr && !use_cuda_graph                      // graph -> no graph
+        || use_cuda_graph && is_cuda_graph_update_required(cuda_graph, cgraph)) {  // graph property mismatch
+        cuda_graph->number_consecutive_updates++;
+        if (cuda_graph->number_consecutive_updates >= 4) {
+            cuda_ctx->disable_graph_due_to_too_many_updates = true;
+            use_cuda_graph = false;
         } else {
-            cuda_ctx->cuda_graph->number_consecutive_updates = 0;
+            cuda_graph_update_required = true;
         }
-
-        if (cuda_ctx->cuda_graph->number_consecutive_updates >= 4) {
-            cuda_ctx->cuda_graph->disable_due_to_too_many_updates = true;
-#ifndef NDEBUG
-            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
-#endif
-        }
+        cuda_graph->number_consecutive_computes = 0;
     }
 
     if (use_cuda_graph && cuda_graph_update_required) {
-        // Start CUDA graph capture
-        {
-            std::lock_guard<std::mutex> lock(ggml_cuda_lock);
-            ggml_cuda_lock_counter.fetch_add(1, std::memory_order_relaxed);
+        capture_cuda_graph(cuda_ctx, cuda_graph, cgraph);
+        update_cuda_graph_properties(cuda_graph, cgraph);
+    } else if (!use_cuda_graph) {
+        if (cuda_graph->instance != nullptr) {
+            CUDA_CHECK(cudaGraphExecDestroy(cuda_graph->instance));
         }
+        if (cuda_graph->graph != nullptr) {
+            CUDA_CHECK(cudaGraphDestroy(cuda_graph->graph));
+        }
+        cuda_graph->instance = nullptr;
+        cuda_graph->graph = nullptr;
+    }
+}
 
-        CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
+static enum ggml_status ggml_backend_cuda_graph_plan_compute(ggml_backend_t backend, ggml_backend_graph_plan_t plan) {
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+
+    ggml_cuda_graph * cuda_graph = (ggml_cuda_graph *) plan;
+
+    ggml_cuda_set_device(cuda_ctx->device);
+
+    cuda_graph->number_consecutive_computes++;
+    if (cuda_graph->number_consecutive_computes > 1) {
+        cuda_graph->number_consecutive_updates = 0;
     }
 
-#else
-    bool use_cuda_graph = false;
-    bool cuda_graph_update_required = false;
-#endif // USE_CUDA_GRAPH
+    if (cuda_graph->instance) {
+        CUDA_CHECK(cudaGraphLaunch(cuda_graph->instance, cuda_ctx->stream()));
+    } else {
+        evaluate_cuda_graph(cuda_ctx, cuda_graph, cuda_graph->cgraph);
+    }
+    return GGML_STATUS_SUCCESS;
+}
+#endif
 
-    bool graph_evaluated_or_captured = false;
+static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
 
-    evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
+    ggml_cuda_set_device(cuda_ctx->device);
+
+    evaluate_cuda_graph(cuda_ctx, nullptr, cgraph);
 
     return GGML_STATUS_SUCCESS;
 }
@@ -4029,10 +4073,17 @@ static const ggml_backend_i ggml_backend_cuda_interface = {
     /* .get_tensor_async        = */ ggml_backend_cuda_get_tensor_async,
     /* .cpy_tensor_async        = */ ggml_backend_cuda_cpy_tensor_async,
     /* .synchronize             = */ ggml_backend_cuda_synchronize,
+#ifdef USE_CUDA_GRAPH
+    /* .graph_plan_create       = */ ggml_backend_cuda_graph_plan_create,
+    /* .graph_plan_free         = */ ggml_backend_cuda_graph_plan_free,
+    /* .graph_plan_update       = */ ggml_backend_cuda_graph_plan_update,
+    /* .graph_plan_compute      = */ ggml_backend_cuda_graph_plan_compute,
+#else
     /* .graph_plan_create       = */ NULL,
     /* .graph_plan_free         = */ NULL,
     /* .graph_plan_update       = */ NULL,
     /* .graph_plan_compute      = */ NULL,
+#endif
     /* .graph_compute           = */ ggml_backend_cuda_graph_compute,
     /* .event_record            = */ ggml_backend_cuda_event_record,
     /* .event_wait              = */ ggml_backend_cuda_event_wait,

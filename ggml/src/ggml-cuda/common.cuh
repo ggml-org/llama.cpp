@@ -1021,13 +1021,12 @@ struct ggml_cuda_graph {
     }
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
+    const ggml_cgraph * cgraph;
     size_t num_nodes = 0;
     std::vector<cudaGraphNode_t> nodes;
     std::vector<cudaKernelNodeParams> params;
-    bool disable_due_to_gpu_arch = false;
-    bool disable_due_to_too_many_updates = false;
-    bool disable_due_to_failed_graph_capture = false;
     int number_consecutive_updates = 0;
+    int number_consecutive_computes = 0;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
 #endif
 };
@@ -1191,7 +1190,12 @@ struct ggml_backend_cuda_context {
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
 
-    std::unique_ptr<ggml_cuda_graph> cuda_graph;
+#ifdef USE_CUDA_GRAPH
+    bool cuda_graph_initialized = false;
+    bool disable_graph_due_to_env = false;
+    bool disable_graph_due_to_gpu_arch = false;
+    bool disable_graph_due_to_too_many_updates = false;
+#endif
 
     int curr_stream_no = 0;
 
