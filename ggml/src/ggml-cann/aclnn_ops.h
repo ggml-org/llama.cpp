@@ -47,6 +47,7 @@
 #include <aclnnop/aclnn_sign.h>
 #include <aclnnop/aclnn_silu.h>
 #include <aclnnop/aclnn_sin.h>
+#include <aclnnop/aclnn_slice.h>
 #include <aclnnop/aclnn_sqrt.h>
 #include <aclnnop/aclnn_tanh.h>
 
