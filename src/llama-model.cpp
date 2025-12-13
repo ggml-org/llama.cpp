@@ -2294,30 +2294,42 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         default: throw std::runtime_error("unsupported model architecture");
     }
 
-    // ref: https://github.com/huggingface/transformers/blob/6d00f6b0a5679c36510f203e4226e36f517c3032/src/transformers/modeling_rope_utils.py#L336-L348
-    if (hparams.rope_yarn_log_mul != 0.0f) {
-        const float factor = 1.0f / hparams.rope_freq_scale_train;
-
-        // note: here we assume `mscale == 1.0f`
-        // TODO: start reading the actual value of mscale and handle the case where it is not 1.0f
-              float mscale          = 1.0f;
-        const float mscale_all_dims = hparams.rope_yarn_log_mul;
-
-        // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
-        // special-case DEEPSEEK v2:
-        // https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite-Chat/blob/main/config.json#L42-L43
-        if (arch == LLM_ARCH_DEEPSEEK2 && mscale_all_dims != 1.0f) {
-            mscale = mscale_all_dims;
-        }
-
+    // YaRN
+    if (hparams.yarn_ext_factor != 0) {
         static auto get_mscale = [](float scale, float mscale) {
             return scale <= 1.0f ? 1.0f : (0.1f * mscale * logf(scale) + 1.0f);
         };
 
-        hparams.yarn_attn_factor = get_mscale(factor, mscale) / get_mscale(factor, mscale_all_dims);
+        const float factor = 1.0f / hparams.rope_freq_scale_train;
 
-        LLAMA_LOG_WARN("%s: setting new yarn_attn_factor = %.4f (mscale == %.1f, mscale_all_dim = %.1f)\n",
-                __func__, hparams.yarn_attn_factor, mscale, mscale_all_dims);
+        // ref: https://github.com/huggingface/transformers/blob/6d00f6b0a5679c36510f203e4226e36f517c3032/src/transformers/modeling_rope_utils.py#L336-L348
+        if (hparams.rope_yarn_log_mul != 0.0f) {
+            // note: here we assume `mscale == 1.0f`
+            // TODO: start reading the actual value of mscale and handle the case where it is not 1.0f
+                  float mscale          = 1.0f;
+            const float mscale_all_dims = hparams.rope_yarn_log_mul;
+
+            // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+            // special-case DEEPSEEK v2:
+            // https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite-Chat/blob/main/config.json#L42-L43
+            if (arch == LLM_ARCH_DEEPSEEK2 && mscale_all_dims != 1.0f) {
+                mscale = mscale_all_dims;
+            }
+
+            hparams.yarn_attn_factor = get_mscale(factor, mscale) / get_mscale(factor, mscale_all_dims);
+
+            LLAMA_LOG_WARN("%s: setting new yarn_attn_factor = %.4f (mscale == %.1f, mscale_all_dim = %.1f)\n",
+                    __func__, hparams.yarn_attn_factor, mscale, mscale_all_dims);
+        } else {
+            hparams.yarn_attn_factor = get_mscale(factor, 1.0f);
+        }
+
+        // when YARN is applied with yarn_ext_factor != 0.0f, we need to cancel this factor:
+        // https://github.com/ggml-org/llama.cpp/blob/a81a569577cc38b32558958b048228150be63eae/ggml/src/ggml-cpu/ops.cpp#L5541-L5544
+        //
+        // ref: https://github.com/ggml-org/llama.cpp/discussions/7416
+        //      https://github.com/ggml-org/llama.cpp/pull/17945
+        hparams.yarn_attn_factor *= 1.0f / (1.0f + 0.1f * logf(factor));
     }
 
     pimpl->n_bytes = ml.n_bytes;
