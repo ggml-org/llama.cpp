@@ -1803,6 +1803,74 @@ void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backe
     sched->callback_eval_user_data = user_data;
 }
 
+static float ggml_get_float_value(const uint8_t * data, enum ggml_type type,
+        const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
+    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
+    switch (type) {
+        case GGML_TYPE_F16:
+            return ggml_fp16_to_fp32(*(const ggml_fp16_t *) &data[i]);
+        case GGML_TYPE_F32:
+            return *(const float *) &data[i];
+        case GGML_TYPE_I64:
+            return (float) *(const int64_t *) &data[i];
+        case GGML_TYPE_I32:
+            return (float) *(const int32_t *) &data[i];
+        case GGML_TYPE_I16:
+            return (float) *(const int16_t *) &data[i];
+        case GGML_TYPE_I8:
+            return (float) *(const int8_t *) &data[i];
+        case GGML_TYPE_BF16:
+            return ggml_compute_bf16_to_fp32(*(const ggml_bf16_t *) &data[i]);
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
+void ggml_backend_sched_debug_tensor(ggml_backend_sched_t sched, struct ggml_cgraph * graph, const char * name, size_t n_values_to_log) {
+    GGML_ASSERT(sched);
+    GGML_ASSERT(graph);
+
+    struct ggml_tensor * t = ggml_graph_get_tensor(graph, name);
+    if (t == nullptr) {
+        GGML_LOG_DEBUG("%s: Tensor '%s' not found in graph.\n", __func__, name);
+        return;
+    }
+
+    GGML_LOG_DEBUG("%s: Tensor '%s', type: %s\n", __func__, t->name, ggml_type_name(t->type));
+    GGML_LOG_DEBUG("%s: ne = [%lld %lld %lld %lld]\n", __func__, (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2], (long long) t->ne[3]);
+
+    size_t n_bytes = ggml_nbytes(t);
+    std::vector<uint8_t> data_bytes(n_bytes);
+
+    ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched, t);
+
+    ggml_backend_tensor_get_async(backend, t, data_bytes.data(), 0, n_bytes);
+    ggml_backend_sched_synchronize(sched);
+
+    float sum_sq = 0.0;
+    uint8_t * d = data_bytes.data();
+
+    size_t v_count = 0;
+    for (int64_t i3 = 0; i3 < t->ne[3]; i3++) {
+        for (int64_t i2 = 0; i2 < t->ne[2]; i2++) {
+            for (int64_t i1 = 0; i1 < t->ne[1]; i1++) {
+                for (int64_t i0 = 0; i0 < t->ne[0]; i0++) {
+                    const float v = ggml_get_float_value(d, t->type, t->nb, i0, i1, i2, i3);
+                    sum_sq += v * v;
+
+                    if (v_count++ < n_values_to_log) {
+                        GGML_LOG_DEBUG("%s: Tensor value at [%lld, %lld, %lld, %lld]: %.6f\n", __func__,
+                            (long long)i3, (long long)i2, (long long)i1, (long long)i0, v);
+                    }
+                }
+            }
+        }
+    }
+
+    double mean_sq = sum_sq / (double) ggml_nelements(t);
+    GGML_LOG_DEBUG("%s: %s mean_sq = %.10f\n", __func__, t->name, mean_sq);
+}
+
 int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     return sched->n_splits;

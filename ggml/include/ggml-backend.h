@@ -339,6 +339,13 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
+    // Debug/log the tensor mean squared value and optionally a specified number
+    // of values from the tensor.
+    //
+    // Note that the tensor in needs to be named using ggml_set_name or equivalent,
+    // and it also has to be prevented from being reused (optimized out) by the graph scheduler.
+    GGML_API void                 ggml_backend_sched_debug_tensor(ggml_backend_sched_t sched, struct ggml_cgraph * graph, const char * name, size_t n_values_to_log);
+
     //
     // Utils
     //
