@@ -9,6 +9,7 @@
 #include "llama-model.h"
 
 #include <cinttypes>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
