@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <winsock2.h>
