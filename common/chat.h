@@ -22,6 +22,19 @@ struct common_chat_tool_call {
     }
 };
 
+struct common_chat_reasoning_status {
+    bool detected = false;      // a reasoning block start was observed
+    bool active   = false;      // we are currently inside a reasoning block (not closed yet)
+    std::string end_tag;        // closing tag to use when forcing a close
+
+    bool operator==(const common_chat_reasoning_status & other) const {
+        return detected == other.detected && active == other.active && end_tag == other.end_tag;
+    }
+    bool operator!=(const common_chat_reasoning_status & other) const {
+        return !(*this == other);
+    }
+};
+
 struct common_chat_msg_content_part {
     std::string type;
     std::string text;
@@ -37,6 +50,8 @@ struct common_chat_msg {
     std::vector<common_chat_msg_content_part> content_parts;
     std::vector<common_chat_tool_call> tool_calls;
     std::string reasoning_content;
+    common_chat_reasoning_status reasoning_status;
+    bool tool_call_in_progress = false;
     std::string tool_name;
     std::string tool_call_id;
 
@@ -63,6 +78,7 @@ struct common_chat_msg {
             && content_parts == other.content_parts
             && tool_calls == other.tool_calls
             && reasoning_content == other.reasoning_content
+            && reasoning_status == other.reasoning_status
             && tool_name == other.tool_name
             && tool_call_id == other.tool_call_id;
     }

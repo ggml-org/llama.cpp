@@ -130,6 +130,7 @@ json task_params::to_json(bool only_metrics) const {
         {"reasoning_format",          common_reasoning_format_name(oaicompat_chat_syntax.reasoning_format)},
         {"reasoning_in_content",      oaicompat_chat_syntax.reasoning_in_content},
         {"thinking_forced_open",      oaicompat_chat_syntax.thinking_forced_open},
+        {"reasoning_force_close_message", reasoning_force_close_message},
         {"samplers",                  samplers},
         {"speculative.n_max",         speculative.n_max},
         {"speculative.n_min",         speculative.n_min},
@@ -137,6 +138,7 @@ json task_params::to_json(bool only_metrics) const {
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
         {"lora",                      lora},
+        {"thinking_budget_tokens",     reasoning_budget},
     };
 }
 
@@ -159,8 +161,8 @@ task_params server_task::params_from_json_cmpl(
     defaults.speculative   = params_base.speculative;
     defaults.n_keep        = params_base.n_keep;
     defaults.n_predict     = params_base.n_predict;
-    defaults.n_cache_reuse = params_base.n_cache_reuse;
     defaults.antiprompt    = params_base.antiprompt;
+    defaults.reasoning_force_close_message = params_base.reasoning_force_close_message;
 
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose           = params_base.verbosity > 9;
@@ -181,6 +183,9 @@ task_params server_task::params_from_json_cmpl(
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
     params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
+
+    params.reasoning_budget = json_value(data, "thinking_budget_tokens", params_base.reasoning_budget);
+    params.reasoning_force_close_message = json_value(data, "reasoning_force_close_message", defaults.reasoning_force_close_message);
 
     params.sampling.top_k              = json_value(data, "top_k",               defaults.sampling.top_k);
     params.sampling.top_p              = json_value(data, "top_p",               defaults.sampling.top_p);

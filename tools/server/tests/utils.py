@@ -95,6 +95,7 @@ class ServerProcess:
     jinja: bool | None = None
     reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
     reasoning_budget: int | None = None
+    reasoning_force_close_message: str | None = None
     chat_template: str | None = None
     chat_template_file: str | None = None
     server_path: str | None = None
@@ -222,6 +223,8 @@ class ServerProcess:
             server_args.extend(("--reasoning-format", self.reasoning_format))
         if self.reasoning_budget is not None:
             server_args.extend(("--reasoning-budget", self.reasoning_budget))
+        if self.reasoning_force_close_message is not None:
+            server_args.extend(("--reasoning-force-close-message", self.reasoning_force_close_message))
         if self.chat_template:
             server_args.extend(["--chat-template", self.chat_template])
         if self.chat_template_file:

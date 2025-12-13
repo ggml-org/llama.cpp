@@ -119,6 +119,9 @@ static void test_reasoning() {
     auto msg = common_chat_parse(input, false, syntax);
     assert_equals(variant, std::string("Pense"), msg.reasoning_content);
     assert_equals(variant, std::string("Bonjour"), msg.content);
+    assert_equals(variant, true, msg.reasoning_status.detected);
+    assert_equals(variant, false, msg.reasoning_status.active);
+    assert_equals(variant, std::string("</think>"), msg.reasoning_status.end_tag);
   }
   {
     const std::string variant("llama_3_inline_think");
@@ -133,6 +136,9 @@ static void test_reasoning() {
     auto msg = common_chat_parse(input, false, syntax);
     assert_equals(variant, std::string("Plan"), msg.reasoning_content);
     assert_equals(variant, std::string("Réponse"), msg.content);
+    assert_equals(variant, true, msg.reasoning_status.detected);
+    assert_equals(variant, false, msg.reasoning_status.active);
+    assert_equals(variant, std::string("</think>"), msg.reasoning_status.end_tag);
   }
   // Test DeepSeek V3.1 parsing - reasoning content followed by "</think>" and then regular content
   {
