@@ -313,7 +313,7 @@ The Hugging Face platform provides a variety of online tools for converting, qua
 
 To learn more about model quantization, [read this documentation](tools/quantize/README.md)
 
-## [`llama-cli`](tools/main)
+## [`llama-cli`](tools/cli)
 
 #### A CLI tool for accessing and experimenting with most of `llama.cpp`'s functionality.
 
@@ -525,7 +525,8 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
 ## Other documentation
 
-- [main (cli)](tools/main/README.md)
+- [cli](tools/cli/README.md)
+- [completion](tools/completion/README.md)
 - [server](tools/server/README.md)
 - [GBNF grammars](grammars/README.md)
 
