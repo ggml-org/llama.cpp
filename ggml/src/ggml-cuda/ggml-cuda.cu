@@ -623,11 +623,15 @@ static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
-static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+static void ggml_backend_cuda_buffer_set_tensor_async(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
     CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+}
+
+static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    ggml_backend_cuda_buffer_set_tensor_async(buffer, tensor, data, offset, size);
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
@@ -669,15 +673,16 @@ static void ggml_backend_cuda_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
 }
 
 static const ggml_backend_buffer_i ggml_backend_cuda_buffer_interface = {
-    /* .free_buffer     = */ ggml_backend_cuda_buffer_free_buffer,
-    /* .get_base        = */ ggml_backend_cuda_buffer_get_base,
-    /* .init_tensor     = */ ggml_backend_cuda_buffer_init_tensor,
-    /* .memset_tensor   = */ ggml_backend_cuda_buffer_memset_tensor,
-    /* .set_tensor      = */ ggml_backend_cuda_buffer_set_tensor,
-    /* .get_tensor      = */ ggml_backend_cuda_buffer_get_tensor,
-    /* .cpy_tensor      = */ ggml_backend_cuda_buffer_cpy_tensor,
-    /* .clear           = */ ggml_backend_cuda_buffer_clear,
-    /* .reset           = */ NULL,
+    /* .free_buffer      = */ ggml_backend_cuda_buffer_free_buffer,
+    /* .get_base         = */ ggml_backend_cuda_buffer_get_base,
+    /* .init_tensor      = */ ggml_backend_cuda_buffer_init_tensor,
+    /* .memset_tensor    = */ ggml_backend_cuda_buffer_memset_tensor,
+    /* .set_tensor       = */ ggml_backend_cuda_buffer_set_tensor,
+    /* .set_tensor_async = */ ggml_backend_cuda_buffer_set_tensor_async,
+    /* .get_tensor       = */ ggml_backend_cuda_buffer_get_tensor,
+    /* .cpy_tensor       = */ ggml_backend_cuda_buffer_cpy_tensor,
+    /* .clear            = */ ggml_backend_cuda_buffer_clear,
+    /* .reset            = */ NULL,
 };
 
 // cuda buffer type
@@ -981,15 +986,16 @@ static void ggml_backend_cuda_split_buffer_clear(ggml_backend_buffer_t buffer, u
 }
 
 static const ggml_backend_buffer_i ggml_backend_cuda_split_buffer_interface = {
-    /* .free_buffer     = */ ggml_backend_cuda_split_buffer_free_buffer,
-    /* .get_base        = */ ggml_backend_cuda_split_buffer_get_base,
-    /* .init_tensor     = */ ggml_backend_cuda_split_buffer_init_tensor,
-    /* .memset_tensor   = */ NULL,
-    /* .set_tensor      = */ ggml_backend_cuda_split_buffer_set_tensor,
-    /* .get_tensor      = */ ggml_backend_cuda_split_buffer_get_tensor,
-    /* .cpy_tensor      = */ NULL,
-    /* .clear           = */ ggml_backend_cuda_split_buffer_clear,
-    /* .reset           = */ NULL,
+    /* .free_buffer      = */ ggml_backend_cuda_split_buffer_free_buffer,
+    /* .get_base         = */ ggml_backend_cuda_split_buffer_get_base,
+    /* .init_tensor      = */ ggml_backend_cuda_split_buffer_init_tensor,
+    /* .memset_tensor    = */ NULL,
+    /* .set_tensor       = */ ggml_backend_cuda_split_buffer_set_tensor,
+    /* .set_tensor_async = */ NULL,
+    /* .get_tensor       = */ ggml_backend_cuda_split_buffer_get_tensor,
+    /* .cpy_tensor       = */ NULL,
+    /* .clear            = */ ggml_backend_cuda_split_buffer_clear,
+    /* .reset            = */ NULL,
 };
 
 // cuda split buffer type
