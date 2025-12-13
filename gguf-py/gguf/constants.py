@@ -683,6 +683,13 @@ class MODEL_TENSOR(IntEnum):
     V_MM_UP              = auto() # cogvlm
     V_MM_DOWN            = auto() # cogvlm
     V_MM_GATE            = auto() # cogvlm
+    V_MM_POST_CONV_LN    = auto() # glm4v
+    V_MM_DOWNSAMPLE      = auto() # glm4v
+    V_MM_MERGER_PROJ     = auto() # glm4v
+    V_MM_MERGER_NORM     = auto() # glm4v
+    V_MM_MERGER_GATE     = auto() # glm4v
+    V_MM_MERGER_UP       = auto() # glm4v
+    V_MM_MERGER_DOWN     = auto() # glm4v
     V_TOK_BOI            = auto() # cogvlm
     V_TOK_EOI            = auto() # cogvlm
     # audio (mtmd)
@@ -1055,6 +1062,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_UP:                   "mm.up",
     MODEL_TENSOR.V_MM_DOWN:                 "mm.down",
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
+    MODEL_TENSOR.V_MM_POST_CONV_LN:         "mm.post_conv_ln", # glm4v
+    MODEL_TENSOR.V_MM_DOWNSAMPLE:           "mm.downsample", # glm4v
+    MODEL_TENSOR.V_MM_MERGER_PROJ:          "mm.merger.proj", # glm4v
+    MODEL_TENSOR.V_MM_MERGER_NORM:          "mm.merger.norm", # glm4v
+    MODEL_TENSOR.V_MM_MERGER_GATE:          "mm.merger.gate", # glm4v
+    MODEL_TENSOR.V_MM_MERGER_UP:            "mm.merger.up", # glm4v
+    MODEL_TENSOR.V_MM_MERGER_DOWN:          "mm.merger.down", # glm4v
     MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
     MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
     # audio (mtmd)
@@ -1133,6 +1147,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MM_UP,
         MODEL_TENSOR.V_MM_DOWN,
         MODEL_TENSOR.V_MM_GATE,
+        MODEL_TENSOR.V_MM_POST_CONV_LN,
+        MODEL_TENSOR.V_MM_DOWNSAMPLE,
+        MODEL_TENSOR.V_MM_MERGER_PROJ,
+        MODEL_TENSOR.V_MM_MERGER_NORM,
+        MODEL_TENSOR.V_MM_MERGER_GATE,
+        MODEL_TENSOR.V_MM_MERGER_UP,
+        MODEL_TENSOR.V_MM_MERGER_DOWN,
         MODEL_TENSOR.V_TOK_BOI,
         MODEL_TENSOR.V_TOK_EOI,
         # audio
@@ -3324,6 +3345,7 @@ class VisionProjectorType:
     VOXTRAL = "voxtral"
     LFM2 = "lfm2"
     KIMIVL = "kimivl"
+    GLM4V = "glm4v"
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"

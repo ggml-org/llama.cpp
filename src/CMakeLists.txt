@@ -71,6 +71,7 @@ add_library(llama
             models/gemma3n-iswa.cpp
             models/glm4-moe.cpp
             models/glm4.cpp
+            models/glm4v.cpp
             models/gpt2.cpp
             models/gptneox.cpp
             models/granite-hybrid.cpp

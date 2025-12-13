@@ -17,6 +17,11 @@ struct clip_graph_qwen2vl : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_glm4v : clip_graph {
+    clip_graph_glm4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_qwen3vl : clip_graph {
     clip_graph_qwen3vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;

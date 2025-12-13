@@ -781,6 +781,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_qwen3vl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_GLM4V:
+            {
+                builder = std::make_unique<clip_graph_glm4v>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
                 builder = std::make_unique<clip_graph_minicpmv>(ctx, img);
@@ -1128,6 +1132,13 @@ struct clip_model_loader {
                             LOG_WRN("%s: more info: https://github.com/ggml-org/llama.cpp/issues/16842\n\n", __func__);
                         }
                     } break;
+                case PROJECTOR_TYPE_GLM4V:
+                    {
+                        // GLM4V uses spatial_merge_size = 2 from HuggingFace config
+                        hparams.n_merge = 2;
+                        // GLM4V Vision RoPE: Glm4vVisionRotaryEmbedding uses theta=10000.0 (default)
+                        hparams.rope_theta = 10000.0f;
+                    } break;
                 case PROJECTOR_TYPE_LLAMA4:
                     {
                         hparams.rope_theta = 10000.0f;
@@ -1431,6 +1442,20 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_GLM4V:
+                {
+                    // GLM4V merger/projector tensors
+                    model.mm_post_conv_ln_w = get_tensor(string_format(TN_GLM4V_POST_CONV_LN, "weight"));
+                    model.mm_post_conv_ln_b = get_tensor(string_format(TN_GLM4V_POST_CONV_LN, "bias"), false);
+                    model.mm_downsample_w   = get_tensor(string_format(TN_GLM4V_DOWNSAMPLE, "weight"));
+                    model.mm_downsample_b   = get_tensor(string_format(TN_GLM4V_DOWNSAMPLE, "bias"), false);
+                    model.mm_merger_proj_w  = get_tensor(string_format(TN_GLM4V_MERGER_PROJ, "weight"));
+                    model.mm_merger_norm_w  = get_tensor(string_format(TN_GLM4V_MERGER_NORM, "weight"));
+                    model.mm_merger_norm_b  = get_tensor(string_format(TN_GLM4V_MERGER_NORM, "bias"), false);
+                    model.mm_merger_gate_w  = get_tensor(string_format(TN_GLM4V_MERGER_GATE, "weight"));
+                    model.mm_merger_up_w    = get_tensor(string_format(TN_GLM4V_MERGER_UP, "weight"));
+                    model.mm_merger_down_w  = get_tensor(string_format(TN_GLM4V_MERGER_DOWN, "weight"));
                 } break;
             case PROJECTOR_TYPE_GEMMA3:
                 {
@@ -2604,6 +2629,17 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
 
+        case PROJECTOR_TYPE_GLM4V:
+            {
+                // GLM4V uses fixed image_size (336) with bicubic interpolation
+                clip_image_u8 resized_image;
+                int sz = params.image_size;
+                img_tool::resize(*img, resized_image, {sz, sz}, img_tool::RESIZE_ALGO_BICUBIC);
+                clip_image_f32_ptr img_f32(clip_image_f32_init());
+                normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(img_f32));
+            } break;
+
         case PROJECTOR_TYPE_JANUS_PRO:
             {
                 // Janus Pro preprocessing: pad to square with gray(127), resize to 384x384
@@ -2838,6 +2874,11 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 int x_patch = img->nx / (params.patch_size * 2);
                 int y_patch = img->ny / (params.patch_size * 2);
                 n_patches = x_patch * y_patch;
+            } break;
+        case PROJECTOR_TYPE_GLM4V:
+            {
+                // GLM4V uses spatial_merge_size=2, reducing patches by 4x
+                n_patches /= 4;
             } break;
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_IDEFICS3:
@@ -3173,6 +3214,23 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
                 set_input_i32("positions", positions);
             } break;
+        case PROJECTOR_TYPE_GLM4V:
+            {
+                // GLM4V uses M-RoPE positions (same format as Qwen2VL)
+                // RoPE is applied BEFORE patch merger, so positions are for all pre-merge patches
+                const int pw = image_size_width / patch_size;   // patches per row
+
+                std::vector<int> positions(n_pos * 4);
+                for (int i = 0; i < n_pos; i++) {
+                    int y = i / pw;  // h position
+                    int x = i % pw;  // w position
+                    positions[0 * n_pos + i] = y;  // chunk 0: h
+                    positions[1 * n_pos + i] = x;  // chunk 1: w
+                    positions[2 * n_pos + i] = y;  // chunk 2: h (repeat)
+                    positions[3 * n_pos + i] = x;  // chunk 3: w (repeat)
+                }
+                set_input_i32("positions", positions);
+            } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_LIGHTONOCR:
@@ -3341,6 +3399,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];
+        case PROJECTOR_TYPE_GLM4V:
+            return ctx->model.mm_merger_down_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }
