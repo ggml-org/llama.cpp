@@ -48,7 +48,7 @@ static void write_table(std::ofstream & file, std::vector<common_arg *> & opts) 
     }
 }
 
-static void export_md(std::string fname, llama_example ex) {
+static void export_md(std::string fname, llama_example ex, std::string name) {
     std::ofstream file(fname, std::ofstream::out | std::ofstream::trunc);
 
     common_params params;
@@ -72,13 +72,14 @@ static void export_md(std::string fname, llama_example ex) {
     write_table(file, common_options);
     file << "\n\n**Sampling params**\n\n";
     write_table(file, sparam_options);
-    file << "\n\n**Example-specific params**\n\n";
+    file << "\n\n**" << name << "-specific params**\n\n";
     write_table(file, specific_options);
 }
 
 int main(int, char **) {
-    export_md("autogen-main.md", LLAMA_EXAMPLE_COMPLETION);
-    export_md("autogen-server.md", LLAMA_EXAMPLE_SERVER);
+    // TODO: add CLI
+    export_md("autogen-completion.md", LLAMA_EXAMPLE_COMPLETION, "Tool");
+    export_md("autogen-server.md", LLAMA_EXAMPLE_SERVER, "Server");
 
     return 0;
 }
