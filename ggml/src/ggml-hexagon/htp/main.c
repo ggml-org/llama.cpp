@@ -798,6 +798,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 break;
 
             case HTP_OP_UNARY_SILU:
+            case HTP_OP_UNARY_GELU:
                 if (n_bufs != 2) {
                     FARF(ERROR, "Bad act-req buffer list");
                     continue;
