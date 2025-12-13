@@ -331,7 +331,7 @@ static void llama_params_fit_impl(
         uint32_t n_part  = 0; // number of partial layers, <= n_layer
 
         // for the first partial layer varying parts can overflow, all further layers use LAYER_FRACTION_MOE:
-        layer_fraction_t overflow_type = LAYER_FRACTION_NONE;
+        layer_fraction_t overflow_type = LAYER_FRACTION_MOE;
     };
 
     const size_t ntbo = llama_max_tensor_buft_overrides();
@@ -350,6 +350,8 @@ static void llama_params_fit_impl(
             }
         }
         assert(uint32_t(mparams.n_gpu_layers) <= hp_ngl);
+        uint32_t il0 = hp_ngl - mparams.n_gpu_layers; // start index for tensor buft overrides
+
         if (add_nonrepeating) {
             mparams.n_gpu_layers += 1;
             tensor_split[nd - 1] += 1;
@@ -357,7 +359,6 @@ static void llama_params_fit_impl(
         mparams.tensor_split = tensor_split;
 
         size_t itbo = 0;
-        uint32_t il0 = 0;
         for (size_t id = 0; id < nd; id++) {
             il0 += ngl_per_device[id].n_layer - ngl_per_device[id].n_part;
             for (uint32_t il = il0; il < il0 + ngl_per_device[id].n_part; il++) {
