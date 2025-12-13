@@ -116,6 +116,9 @@ option(LLAMA_HTTPLIB    "llama: if libcurl is disabled, use httplib to download 
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" OFF)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
+# llamax
+option(LLAMAX "llama: enable high-level C++ API." ON)
+
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)
@@ -233,6 +236,14 @@ endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
+endif()
+
+#
+# llamax
+#
+
+if (LLAMAX)
+    add_subdirectory(llamax)
 endif()
 
 #
