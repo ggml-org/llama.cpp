@@ -1149,8 +1149,7 @@ common_init_result::common_init_result(common_params & params) :
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
-                __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
         return;
     }
 
@@ -1182,15 +1181,13 @@ common_init_result_ptr common_init_from_params(common_params & params) {
 
     llama_model * model = res->model();
     if (model == NULL) {
-        LOG_ERR("%s: failed to load model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
-            __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
         return res;
     }
 
     llama_context * lctx = res->context();
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
-            __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
         return res;
     }
 
