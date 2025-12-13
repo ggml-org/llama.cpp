@@ -32,7 +32,7 @@ extern "C" {
             { /* Do nothing for simulator. */ \
             }
 #    else
-#        ifdef _WINDOWS
+#        ifdef _WIN32
 #            define SLEEP(x) Sleep(1000 * x) /* Sleep accepts input in milliseconds. */
 #        else
 #            define SLEEP(x) sleep(x)        /* sleep accepts input in seconds. */
@@ -41,7 +41,7 @@ extern "C" {
 #endif
 
 /* Include windows specific header files. */
-#ifdef _WINDOWS
+#ifdef _WIN32
 #    include <windows.h>
 #    include <sysinfoapi.h>
 #    define _CRT_SECURE_NO_WARNINGS         1
@@ -51,14 +51,14 @@ extern "C" {
 #endif
 
 /* Includes and defines for all HLOS except windows */
-#if !defined(__hexagon__) && !defined(_WINDOWS)
+#if !defined(__hexagon__) && !defined(_WIN32)
 #    include "unistd.h"
 
 #    include <sys/time.h>
 #endif
 
 /* Includes and defines for Hexagon and all HLOS except Windows. */
-#if !defined(_WINDOWS)
+#if !defined(_WIN32)
 /* Weak reference to remote symbol for compilation. */
 #    pragma weak remote_session_control
 #    pragma weak remote_handle_control
@@ -68,11 +68,11 @@ extern "C" {
 #    pragma weak rpcmem_alloc2
 #endif
 
-#if !defined(_WINDOWS)
+#if !defined(_WIN32)
 #    pragma weak remote_system_request
 #endif
 
-#ifdef _WINDOWS
+#ifdef _WIN32
 #     define DSPQUEUE_TIMEOUT DSPQUEUE_TIMEOUT_NONE
 #else
 #     define DSPQUEUE_TIMEOUT 1000000

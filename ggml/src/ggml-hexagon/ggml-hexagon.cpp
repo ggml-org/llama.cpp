@@ -14,9 +14,6 @@
 
 #ifdef _WIN32
 #    include <sal.h>
-#    ifndef _WINDOWS
-#        define _WINDOWS
-#    endif
 #else
 #    include <semaphore.h>
 #    include <unistd.h>
