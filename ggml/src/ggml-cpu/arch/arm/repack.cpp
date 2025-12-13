@@ -24,7 +24,7 @@
 
 #define UNUSED GGML_UNUSED
 
-#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
+#if defined(__aarch64__) && defined(__ARM_NEON) && (defined(__ARM_FEATURE_MATMUL_INT8) || defined(__ARM_FEATURE_DOTPROD))
 static inline void decode_q4_Kx8_scales_mins(const uint8_t * scales_in,
                                              int16x8_t *     out_mins,
                                              int8_t *        out_scales) {
