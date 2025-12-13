@@ -97,18 +97,50 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     if (!ggml_ifairy_lut_can_mul_mat(src0, src1, dst)) {
         return 0;
     }
+    const bool strict = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
+
     const int64_t K = src0->ne[0];
     const int64_t N = src1->ne[1];
     const int64_t blocks_per_col = K / QK_K;
-    const int64_t groups = blocks_per_col * ((QK_K + 2) / 3); // 85 triplets + 1 tail group per block
+    const int64_t groups_per_block = (QK_K + 2) / 3;
     size_t quant_bytes = 0;
     if (src1->type == GGML_TYPE_F32) {
         quant_bytes = GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64);
     }
-    const size_t lut_bytes = (size_t) N * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t);
-    const size_t scale_bytes = (size_t) N * (size_t) groups * 2 * sizeof(float);
+
+    // Optional BK tiling (by whole 256-element blocks) to reduce LUT working set.
+    // Disabled under strict validation (strict currently assumes full-K single-pass).
+    int tile_blocks = 0;
+    if (!strict) {
+        const char * env = getenv("GGML_IFAIRY_LUT_BK_BLOCKS");
+        if (env && strcmp(env, "0") != 0) {
+            tile_blocks = (int) strtol(env, NULL, 10);
+        }
+    }
+
+    int bm = 64;
+    if (tile_blocks > 0) {
+        const char * env = getenv("GGML_IFAIRY_LUT_BM");
+        if (env && strcmp(env, "0") != 0) {
+            bm = (int) strtol(env, NULL, 10);
+        }
+        if (bm < 1) {
+            bm = 1;
+        }
+    }
+
+    const int64_t blocks_tile = tile_blocks > 0 ? MIN((int64_t) tile_blocks, blocks_per_col) : blocks_per_col;
+    const int64_t groups_tile = blocks_tile * groups_per_block;
+
+    const size_t lut_bytes   = (size_t) N * (size_t) groups_tile * (size_t) (4 * 64) * sizeof(int16_t);
+    const size_t scale_bytes = (size_t) N * (size_t) groups_tile * 2 * sizeof(float);
     const size_t shared_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
-    const size_t tmp_bytes = GGML_PAD((size_t) N * sizeof(float), 64);
+
+    // tmp buffer:
+    // - non-tiled: N floats (bf16-pair packed into F32)
+    // - tiled:     BM*(4*N) floats accumulator (ac/ad/bc/bd), then combined and packed
+    const size_t tmp_bytes = GGML_PAD((size_t) (tile_blocks > 0 ? (bm * 4 * N) : N) * sizeof(float), 64);
+
     return quant_bytes + shared_bytes + tmp_bytes * (size_t) n_threads;
 }
 
@@ -314,9 +346,12 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
     }
 }
 
-void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uint8_t * indexes, const void * lut, const void * lut_scales, const void * act, size_t act_stride, float * dst, size_t dst_col_stride, size_t dst_row_stride, bool pack_bf16, bool strict) {
+void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const uint8_t * indexes, const void * lut, const void * lut_scales, const void * act, size_t act_stride, float * dst, size_t dst_col_stride, size_t dst_row_stride, bool pack_bf16, bool strict, bool add) {
     if (!indexes || !dst || !qweights || !lut || !lut_scales) {
         return;
+    }
+    if (strict) {
+        GGML_ASSERT(add == false);
     }
 
     const int64_t K = k;
@@ -454,10 +489,78 @@ void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uin
                 ((ggml_bf16_t *) out_base)[1] = bi;
             } else {
                 float * out_ptr = (float *) out_base;
-                out_ptr[0] = out_r;
-                out_ptr[1] = out_i;
+                if (add) {
+                    out_ptr[0] += out_r;
+                    out_ptr[1] += out_i;
+                } else {
+                    out_ptr[0] = out_r;
+                    out_ptr[1] = out_i;
+                }
             }
         }
+    }
+}
+
+void ggml_ifairy_lut_qgemm(int m, int k, int n, const void * qweights, const uint8_t * indexes, const void * lut, const void * lut_scales, const void * act, size_t act_stride, float * dst, size_t dst_col_stride, size_t dst_row_stride, bool pack_bf16, bool strict) {
+    ggml_ifairy_lut_qgemm_ex(m, k, n, qweights, indexes, lut, lut_scales, act, act_stride, dst, dst_col_stride, dst_row_stride, pack_bf16, strict, false);
+}
+
+// Accumulate the 4 basis sums for the iFairy complex dot product:
+//   dst[c*dst_col_stride + 0..3] += { acc_ac_xr, acc_ad_xi, acc_bc_xr, acc_bd_xi }
+// where each term already includes the per-block activation scales (real/imag).
+void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void * lut, const void * lut_scales, float * dst, size_t dst_col_stride, bool add) {
+    if (!indexes || !dst || !lut || !lut_scales) {
+        return;
+    }
+
+    const int64_t K = k;
+    const int64_t blocks = K / QK_K;
+    const int64_t groups_per_block = (QK_K + 2) / 3;
+    const int64_t groups = blocks * groups_per_block;
+
+    for (int col = 0; col < n; ++col) {
+        const int16_t * lut_base = (const int16_t *) ((const uint8_t *) lut + (size_t) col * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t));
+        const float * scales = (const float *) lut_scales + (size_t) col * (size_t) groups * 2;
+        float * out = (float *) ((uint8_t *) dst + (size_t) col * dst_col_stride);
+
+#if defined(__ARM_NEON) && defined(__aarch64__)
+        float32x4_t accv = add ? vld1q_f32(out) : vdupq_n_f32(0.0f);
+        for (int64_t g = 0; g < groups; ++g) {
+            const float32x2_t srsi = vld1_f32(scales + (size_t) g * 2);
+            const float32x4_t scv = vcombine_f32(srsi, srsi); // {sr, si, sr, si}
+
+            const uint8_t pat = (uint8_t) (indexes[g] & 0x3f);
+            const int16_t * tbl = lut_base + (size_t) g * (64 * 4) + (size_t) pat * 4;
+            const int16x4_t sums16 = vld1_s16(tbl); // {ac, ad, bc, bd}
+            const int32x4_t sums32 = vmovl_s16(sums16);
+            const float32x4_t sumsf = vcvtq_f32_s32(sums32);
+            accv = vmlaq_f32(accv, sumsf, scv);
+        }
+        vst1q_f32(out, accv);
+#else
+        float acc_ac_xr = add ? out[0] : 0.0f;
+        float acc_ad_xi = add ? out[1] : 0.0f;
+        float acc_bc_xr = add ? out[2] : 0.0f;
+        float acc_bd_xi = add ? out[3] : 0.0f;
+
+        for (int64_t g = 0; g < groups; ++g) {
+            const float act_scale_r = scales[g * 2 + 0];
+            const float act_scale_i = scales[g * 2 + 1];
+
+            const uint8_t pat = (uint8_t) (indexes[g] & 0x3f);
+            const int16_t * tbl = lut_base + (size_t) g * (64 * 4) + (size_t) pat * 4;
+
+            acc_ac_xr += act_scale_r * (float) tbl[0];
+            acc_ad_xi += act_scale_i * (float) tbl[1];
+            acc_bc_xr += act_scale_r * (float) tbl[2];
+            acc_bd_xi += act_scale_i * (float) tbl[3];
+        }
+
+        out[0] = acc_ac_xr;
+        out[1] = acc_ad_xi;
+        out[2] = acc_bc_xr;
+        out[3] = acc_bd_xi;
+#endif
     }
 }
 

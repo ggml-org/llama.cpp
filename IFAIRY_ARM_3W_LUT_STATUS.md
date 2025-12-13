@@ -71,16 +71,32 @@
 4) CLI 快速 sanity（tok/s 与输出可读性）  
 `GGML_IFAIRY_LUT=1 ./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv`
 
+5) 可选：BK/BM tile（用于探索 cache/带宽优化）  
+`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GGML_IFAIRY_LUT_BM=64 ./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv`  
+备注：`GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 时会自动禁用 tiling（strict 目前假设 full-K 单次计算）。
+
+6) 回归（tiling vs 非 tiling 一致性）  
+`./build-rel/bin/test-ifairy` 内置 `Test 5: iFairy LUT backend tiling regression`（会在测试内部设置 `GGML_IFAIRY_LUT=1`、并对比 `BK/BM` tiling 与非 tiling 的输出 bitwise 一致性；若 `GGML_IFAIRY_ARM_LUT` 未启用则自动跳过）。
+
 ## 4. 后续工作（按优先级）
 
-1) **BK tile + 更强 NEON 内核**（保持 `w * conj(x)` 语义不变）  
+> 目标：优先提升 Apple Silicon（ARM64 + NEON）的 tok/s，且不破坏 `w * conj(x)` 语义与现有输出一致性。
+
+1) **减少重复 preprocess 与同步开销（先让 BK/BM “不再变慢”）**  
    - 当前已落地：NEON 构表（`pat` 维度向量化）+ NEON 累加（标量回退）。  
-   - 下一步：引入 BK tile，降低 LUT/scale 的 cache 压力，并进一步 unroll/预取；再评估 DOTPROD 版本。
-2) **索引生命周期/缓存策略**  
-   - 当前 `transform_tensor()` 生成的索引缓冲挂在 `tensor->extra`，在 CPU backend free 时统一释放；后续可考虑更细粒度的生命周期绑定与复用策略。
-3) **降低 LUT 工作区与带宽**  
-   - 从 `4×64 int16` 的 correctness-first 结构，演进到 “16 canonical + factor” 或更紧凑布局，控制 cache 压力。
-4) **补充测试与回归策略**  
-   - 添加“LUT vs reference” 的针对性单测（覆盖多种 M/N/K 形状），并把 `GGML_IFAIRY_LUT_VALIDATE_STRICT` 纳入 CI/本地脚本流程（可仅跑小规模）。
-5) **性能记录与调参**  
-   - 固定 `llama-cli` 命令与 seed，记录 LUT=0 vs LUT=1 的 tok/s；引入 `llama-bench`/`llama-perplexity` 做质量与性能对照。
+   - 已有实验性 BK/BM tiling，但在部分 workload 上会因 `preprocess + barrier` 频繁而变慢。  
+   - 下一步优先项：减少 tile 粒度下的重复构表、降低 barrier 次数/成本，再在此基础上做 unroll/预取、评估 DOTPROD 版本。
+
+2) **降低 LUT 工作区与带宽（提高上限）**  
+   - 从 `4×64 int16` correctness-first 结构，演进到更紧凑的布局（例如 “16 canonical + factor” 等方向），降低 `lut/scales/indexes` 的带宽压力与 cache miss。
+
+3) **索引生命周期/缓存策略升级（工程化与复用）**  
+   - 现状：`transform_tensor()` 生成的索引缓冲挂在 `tensor->extra`，在 CPU backend free 时统一释放。  
+   - 下一步：把索引缓存与生命周期绑定做得更清晰（例如 index_tensor/后端 buffer 管理、复用策略、跨图复用边界），并确保 teardown 路径一致。
+
+4) **再做 BM/BK 调参（把调参放在结构优化之后）**  
+   - 在 1/2 完成前，单纯调 `GGML_IFAIRY_LUT_BK_BLOCKS / GGML_IFAIRY_LUT_BM` 往往波动大且不可复现；结构性开销下降后再调参更稳定。
+
+（贯穿）**测试与性能记录**  
+   - 已补充 `tests/test-ifairy.cpp` 的 **CPU backend tiling 回归**：固定小形状（`K=512` 强制多 tile），对比 tiling 与非 tiling 输出 **bitwise 一致**。  
+   - 继续补充 “LUT vs reference” 单测形状覆盖，并固定 `llama-cli` 命令/seed 记录 LUT=0 vs LUT=1 tok/s；必要时用 `llama-bench`/`llama-perplexity` 做对照。

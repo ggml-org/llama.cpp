@@ -1268,11 +1268,39 @@ void ggml_compute_forward_mul_mat(
         const int64_t blocks_per_col = K / QK_K;
         const int64_t groups = blocks_per_col * ((QK_K + 2) / 3);
 
+        const bool strict = getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT") && strcmp(getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT"), "0") != 0;
+
+        int tile_blocks = 0;
+        if (!strict) {
+            const char * env = getenv("GGML_IFAIRY_LUT_BK_BLOCKS");
+            if (env && strcmp(env, "0") != 0) {
+                tile_blocks = (int) strtol(env, NULL, 10);
+            }
+        }
+        if (tile_blocks < 0) {
+            tile_blocks = 0;
+        }
+
+        int bm = 64;
+        if (tile_blocks > 0) {
+            const char * env = getenv("GGML_IFAIRY_LUT_BM");
+            if (env && strcmp(env, "0") != 0) {
+                bm = (int) strtol(env, NULL, 10);
+            }
+            if (bm < 1) {
+                bm = 1;
+            }
+        }
+
+        const int64_t groups_per_block = (QK_K + 2) / 3;
+        const int64_t blocks_tile = tile_blocks > 0 ? MIN((int64_t) tile_blocks, blocks_per_col) : blocks_per_col;
+        const int64_t groups_tile = blocks_tile * groups_per_block;
+
         const size_t quant_bytes = src1->type == GGML_TYPE_F32 ? GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64) : 0;
-        const size_t lut_bytes   = (size_t) N * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t);
-        const size_t scale_bytes = (size_t) N * (size_t) groups * 2 * sizeof(float);
+        const size_t lut_bytes   = (size_t) N * (size_t) groups_tile * (size_t) (4 * 64) * sizeof(int16_t);
+        const size_t scale_bytes = (size_t) N * (size_t) groups_tile * 2 * sizeof(float);
         const size_t shared_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
-        const size_t tmp_bytes   = GGML_PAD((size_t) N * sizeof(float), 64);
+        const size_t tmp_bytes   = GGML_PAD((size_t) (tile_blocks > 0 ? (bm * 4 * N) : N) * sizeof(float), 64);
         const size_t need        = quant_bytes + shared_bytes + tmp_bytes * (size_t) nth;
 
         if (have_index && params->wdata && params->wsize >= need && shared_bytes > 0 && tmp_bytes > 0) {
@@ -1292,7 +1320,6 @@ void ggml_compute_forward_mul_mat(
                                         ? (size_t) blocks_per_col * sizeof(block_ifairy_q16)
                                         : nb11;
             const size_t index_stride = (size_t) groups;
-            const bool strict = getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT") && strcmp(getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT"), "0") != 0;
 
             // quantize activations once (thread 0) if needed
             if (src1->type == GGML_TYPE_F32) {
@@ -1305,28 +1332,91 @@ void ggml_compute_forward_mul_mat(
                 ggml_barrier(params->threadpool);
             }
 
-            // build LUT once (thread 0), shared across all threads
             const void * act_src = (src1->type == GGML_TYPE_F32) ? (const void *) act_q : src1->data;
-            if (ith == 0) {
-                ggml_ifairy_lut_preprocess((int) M, (int) K, (int) N, act_src, act_stride, scales, lut);
-            }
-            ggml_barrier(params->threadpool);
 
-            // each thread processes a subset of rows
             uint8_t * dst_base = (uint8_t *) dst->data;
+            if (tile_blocks == 0) {
+                // build LUT once (thread 0), shared across all threads
+                if (ith == 0) {
+                    ggml_ifairy_lut_preprocess((int) M, (int) K, (int) N, act_src, act_stride, scales, lut);
+                }
+                ggml_barrier(params->threadpool);
 
-            for (int64_t row = ith; row < M; row += nth) {
-                const uint8_t * row_indexes = indexes + (size_t) row * index_stride;
-                float * tmp_row = (float *) row_tmp_bytes;
-                const block_ifairy * w_row = (const block_ifairy *) src0->data + row * blocks_per_col;
-                ggml_ifairy_lut_qgemm(1, (int) K, (int) N, w_row, row_indexes, lut, scales,
-                                      act_src, act_stride, tmp_row, sizeof(float), sizeof(float), true, strict);
+                for (int64_t row = ith; row < M; row += nth) {
+                    const uint8_t * row_indexes = indexes + (size_t) row * index_stride;
+                    float * tmp_row = (float *) row_tmp_bytes;
+                    const block_ifairy * w_row = (const block_ifairy *) src0->data + row * blocks_per_col;
+                    ggml_ifairy_lut_qgemm(1, (int) K, (int) N, w_row, row_indexes, lut, scales,
+                                          act_src, act_stride, tmp_row, sizeof(float), 0, true, strict);
+                    for (int64_t col = 0; col < N; ++col) {
+                        uint8_t * dst_elem = dst_base + (size_t) col * nb1 + (size_t) row * nb0;
+                        memcpy(dst_elem,
+                               (uint8_t *) tmp_row + (size_t) col * sizeof(float),
+                               sizeof(float));
+                    }
+                }
+                return;
+            }
 
-                for (int64_t col = 0; col < N; ++col) {
-                    uint8_t * dst_elem = dst_base + (size_t) col * nb1 + (size_t) row * nb0;
-                    memcpy(dst_elem,
-                           (uint8_t *) tmp_row + (size_t) col * sizeof(float),
-                           sizeof(float));
+            // BK tiling over 256-element blocks, with BM row-blocking.
+            // Threads stay in lockstep over (row-block, K-tile) pairs via barriers,
+            // amortizing barrier overhead across BM rows.
+            const int64_t row_step = (int64_t) nth * (int64_t) bm;
+            for (int64_t row_base = 0; row_base < M; row_base += row_step) {
+                const int64_t row0 = row_base + (int64_t) ith * (int64_t) bm;
+                const int64_t nrows = row0 < M ? MIN((int64_t) bm, M - row0) : 0;
+
+                float * acc = (float *) row_tmp_bytes;
+                if (nrows > 0) {
+                    memset(acc, 0, (size_t) nrows * (size_t) (4 * N) * sizeof(float));
+                }
+
+                for (int64_t blk0 = 0; blk0 < blocks_per_col; blk0 += blocks_tile) {
+                    const int64_t blks = MIN(blocks_tile, blocks_per_col - blk0);
+                    const int64_t tile_k = blks * QK_K;
+                    const int64_t tile_g0 = blk0 * groups_per_block;
+
+                    const uint8_t * act_tile = (const uint8_t *) act_src + (size_t) blk0 * sizeof(block_ifairy_q16);
+
+                    if (ith == 0) {
+                        ggml_ifairy_lut_preprocess((int) M, (int) tile_k, (int) N, act_tile, act_stride, scales, lut);
+                    }
+                    ggml_barrier(params->threadpool);
+
+                    if (nrows > 0) {
+                        for (int64_t r = 0; r < nrows; ++r) {
+                            const int64_t row = row0 + r;
+                            const uint8_t * row_indexes = indexes + (size_t) row * index_stride + (size_t) tile_g0;
+                            float * acc_row = acc + (size_t) r * (size_t) (4 * N);
+                            ggml_ifairy_lut_accum4_ex((int) tile_k, (int) N, row_indexes, lut, scales, acc_row, 4 * sizeof(float), true);
+                        }
+                    }
+                    ggml_barrier(params->threadpool);
+                }
+
+                if (nrows > 0) {
+                    for (int64_t r = 0; r < nrows; ++r) {
+                        const int64_t row = row0 + r;
+                        const float * acc_row = acc + (size_t) r * (size_t) (4 * N);
+                        const block_ifairy * w_row = (const block_ifairy *) src0->data + row * blocks_per_col;
+                        const float coeff_w_real = GGML_FP16_TO_FP32(w_row[0].d_real);
+                        const float coeff_w_imag = GGML_FP16_TO_FP32(w_row[0].d_imag);
+                        for (int64_t col = 0; col < N; ++col) {
+                            uint8_t * dst_elem = dst_base + (size_t) col * nb1 + (size_t) row * nb0;
+                            const float ac = acc_row[col * 4 + 0];
+                            const float ad = acc_row[col * 4 + 1];
+                            const float bc = acc_row[col * 4 + 2];
+                            const float bd = acc_row[col * 4 + 3];
+
+                            const float out_r = coeff_w_real * ac + coeff_w_imag * bd;
+                            const float out_i = coeff_w_imag * bc - coeff_w_real * ad;
+
+                            const ggml_bf16_t br = GGML_FP32_TO_BF16(out_r);
+                            const ggml_bf16_t bi = GGML_FP32_TO_BF16(out_i);
+                            ((ggml_bf16_t *) dst_elem)[0] = br;
+                            ((ggml_bf16_t *) dst_elem)[1] = bi;
+                        }
+                    }
                 }
             }
             return;

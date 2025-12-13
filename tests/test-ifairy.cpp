@@ -19,6 +19,12 @@ extern "C" {
 #ifndef GGML_FP32_TO_FP16
 #define GGML_FP32_TO_FP16 ggml_fp32_to_fp16
 #endif
+#ifndef GGML_BF16_TO_FP32
+#define GGML_BF16_TO_FP32 ggml_bf16_to_fp32
+#endif
+#ifndef GGML_FP32_TO_BF16
+#define GGML_FP32_TO_BF16 ggml_fp32_to_bf16
+#endif
 
 #undef NDEBUG
 #include <assert.h>
@@ -167,6 +173,82 @@ bool compare_arrays(const float* a, const float* b, size_t n, float max_error = 
 
     printf("  Max diff: %.6f (threshold: %.6f) - PASS\n", max_diff, max_error);
     return true;
+}
+
+static bool compare_u32_arrays(const uint32_t * a, const uint32_t * b, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+        if (a[i] != b[i]) {
+            ggml_bf16_t a_pair[2];
+            ggml_bf16_t b_pair[2];
+            memcpy(a_pair, a + i, sizeof(uint32_t));
+            memcpy(b_pair, b + i, sizeof(uint32_t));
+            const float ar = GGML_BF16_TO_FP32(a_pair[0]);
+            const float ai = GGML_BF16_TO_FP32(a_pair[1]);
+            const float br = GGML_BF16_TO_FP32(b_pair[0]);
+            const float bi = GGML_BF16_TO_FP32(b_pair[1]);
+            fprintf(stderr,
+                    "  Mismatch at index %zu: 0x%08x vs 0x%08x (a=(%.6f,%.6f) b=(%.6f,%.6f))\n",
+                    i, a[i], b[i], ar, ai, br, bi);
+            return false;
+        }
+    }
+    printf("  Bitwise compare: PASS (%zu elements)\n", n);
+    return true;
+}
+
+static void set_env_var(const char * name, const char * value) {
+#if defined(_WIN32)
+    _putenv_s(name, value ? value : "");
+#else
+    setenv(name, value ? value : "", 1);
+#endif
+}
+
+static void unset_env_var(const char * name) {
+#if defined(_WIN32)
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+struct scoped_env_var {
+    std::string name;
+    std::string old_value;
+    bool had = false;
+
+    scoped_env_var(const char * name_) : name(name_) {
+        const char * v = getenv(name_);
+        if (v) {
+            had = true;
+            old_value = v;
+        }
+    }
+
+    void set(const char * v) {
+        set_env_var(name.c_str(), v);
+    }
+
+    void unset() {
+        unset_env_var(name.c_str());
+    }
+
+    ~scoped_env_var() {
+        if (had) {
+            set_env_var(name.c_str(), old_value.c_str());
+        } else {
+            unset_env_var(name.c_str());
+        }
+    }
+};
+
+static float pack_bf16_pair(float real, float imag) {
+    ggml_bf16_t pair[2];
+    pair[0] = GGML_FP32_TO_BF16(real);
+    pair[1] = GGML_FP32_TO_BF16(imag);
+    float out;
+    memcpy(&out, pair, sizeof(out));
+    return out;
 }
 
 // ============================================================================
@@ -499,11 +581,152 @@ bool test_ifairy_lut_scalar_matmul() {
 }
 
 // ============================================================================
+// 测试 5: CPU backend LUT tiling 回归（非 tiling vs BK/BM tiling）
+// ============================================================================
+
+static bool run_ifairy_backend_mul_mat(std::vector<uint32_t> & packed_out, bool tiling) {
+    // Keep other tests isolated.
+    scoped_env_var env_lut("GGML_IFAIRY_LUT");
+    scoped_env_var env_strict("GGML_IFAIRY_LUT_VALIDATE_STRICT");
+    scoped_env_var env_bk("GGML_IFAIRY_LUT_BK_BLOCKS");
+    scoped_env_var env_bm("GGML_IFAIRY_LUT_BM");
+
+    env_lut.set("1");
+    env_strict.unset();
+
+    if (tiling) {
+        // force multi-tile: K=512 => 2 blocks => BK_BLOCKS=1 => 2 tiles
+        env_bk.set("1");
+        env_bm.set("4");
+    } else {
+        env_bk.set("0");
+        env_bm.unset();
+    }
+
+    const int64_t M = 8;
+    const int64_t N = 3;
+    const int64_t K = 2 * QK_K;
+
+    const int64_t blocks_per_row = K / QK_K;
+
+    // Build deterministic weights and activations.
+    const float w_scale = 1.0f / 8.0f;
+
+    std::vector<block_ifairy> weights((size_t) M * (size_t) blocks_per_row);
+    for (int64_t r = 0; r < M; ++r) {
+        for (int64_t b = 0; b < blocks_per_row; ++b) {
+            block_ifairy blk{};
+            blk.d_real = GGML_FP32_TO_FP16(w_scale);
+            blk.d_imag = GGML_FP32_TO_FP16(w_scale);
+            for (int j = 0; j < QK_K; ++j) {
+                const int k_idx = (int) (b * QK_K + j);
+                const uint8_t code = (uint8_t) ((k_idx + 3 * (int) r + 1) & 0x3);
+                set_ifairy_code(blk, j, code);
+            }
+            weights[(size_t) r * (size_t) blocks_per_row + (size_t) b] = blk;
+        }
+    }
+
+    std::vector<float> act_f32((size_t) K * (size_t) N);
+    for (int64_t c = 0; c < N; ++c) {
+        for (int64_t k_idx = 0; k_idx < K; ++k_idx) {
+            const float xr = (float) (((k_idx + 7 * c) % 17) - 8) / 7.0f;
+            const float xi = (float) (((k_idx * 2 + 3 * c) % 15) - 7) / 6.0f;
+            act_f32[(size_t) c * (size_t) K + (size_t) k_idx] = pack_bf16_pair(xr, xi);
+        }
+    }
+
+    // Build a minimal backend graph to hit ggml_compute_forward_mul_mat() in ggml-cpu.
+    ggml_backend_t backend = ggml_backend_cpu_init();
+    if (!backend) {
+        fprintf(stderr, "Failed to init CPU backend\n");
+        return false;
+    }
+    ggml_backend_cpu_set_n_threads(backend, 4);
+
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ 128*1024*1024,
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+    struct ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        ggml_backend_free(backend);
+        fprintf(stderr, "Failed to init ggml context\n");
+        return false;
+    }
+
+    struct ggml_tensor * w = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY, K, M);
+    struct ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,    K, N);
+    struct ggml_tensor * out = ggml_mul_mat(ctx, w, a);
+
+    struct ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, out);
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (!buf) {
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        fprintf(stderr, "Failed to alloc backend buffer\n");
+        return false;
+    }
+
+    ggml_backend_tensor_set(w, weights.data(), 0, ggml_nbytes(w));
+    ggml_backend_tensor_set(a, act_f32.data(), 0, ggml_nbytes(a));
+
+    if (ggml_backend_graph_compute(backend, gf) != GGML_STATUS_SUCCESS) {
+        ggml_backend_buffer_free(buf);
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        fprintf(stderr, "backend graph compute failed\n");
+        return false;
+    }
+
+    std::vector<float> out_f32((size_t) M * (size_t) N);
+    ggml_backend_tensor_get(out, out_f32.data(), 0, ggml_nbytes(out));
+
+    packed_out.resize(out_f32.size());
+    for (size_t i = 0; i < out_f32.size(); ++i) {
+        memcpy(&packed_out[i], &out_f32[i], sizeof(uint32_t));
+    }
+
+    ggml_backend_buffer_free(buf);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+    return true;
+}
+
+bool test_ifairy_lut_backend_tiling_regression() {
+#if !defined(GGML_IFAIRY_ARM_LUT)
+    printf("\n=== Test 5: iFairy LUT backend tiling regression (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
+    return true;
+#else
+    printf("\n=== Test 5: iFairy LUT backend tiling regression ===\n");
+
+    std::vector<uint32_t> out_no_tile;
+    std::vector<uint32_t> out_tile;
+    if (!run_ifairy_backend_mul_mat(out_no_tile, false)) {
+        return false;
+    }
+    if (!run_ifairy_backend_mul_mat(out_tile, true)) {
+        return false;
+    }
+
+    if (out_no_tile.size() != out_tile.size()) {
+        fprintf(stderr, "Size mismatch: %zu vs %zu\n", out_no_tile.size(), out_tile.size());
+        return false;
+    }
+
+    return compare_u32_arrays(out_tile.data(), out_no_tile.data(), out_no_tile.size());
+#endif
+}
+
+// ============================================================================
 // 测试 5: 复数矩阵乘法
 // ============================================================================
 
 bool test_complex_matmul() {
-    printf("\n=== Test 5: Complex Matrix Multiplication ===\n");
+    printf("\n=== Test 6: Complex Matrix Multiplication ===\n");
 
     // 读取测试数据
     std::string json_data = read_file("tests/ifairy-test-data/matmul_test.json");
@@ -599,8 +822,13 @@ int main(int argc, char** argv) {
         num_failed++;
     }
 
-    if (!test_complex_matmul()) {
+    if (!test_ifairy_lut_backend_tiling_regression()) {
         fprintf(stderr, "Test 5 FAILED\n");
+        num_failed++;
+    }
+
+    if (!test_complex_matmul()) {
+        fprintf(stderr, "Test 6 FAILED\n");
         num_failed++;
     }
 
