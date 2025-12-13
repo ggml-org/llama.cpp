@@ -108,12 +108,15 @@ int main(int argc, char ** argv, char ** envp) {
         return 1;
     }
 
+    // Capture server start time for metrics
+    int64_t t_server_start = llama_time_us();
+
     //
     // Router
     //
 
     // register API routes
-    server_routes routes(params, ctx_server, [&ctx_http]() { return ctx_http.is_ready.load(); });
+    server_routes routes(params, ctx_server, [&ctx_http]() { return ctx_http.is_ready.load(); }, t_server_start);
 
     bool is_router_server = params.model.path.empty();
     std::optional<server_models_routes> models_routes{};
@@ -153,6 +156,7 @@ int main(int argc, char ** argv, char ** envp) {
 
     ctx_http.get ("/health",              ex_wrapper(routes.get_health)); // public endpoint (no API key check)
     ctx_http.get ("/v1/health",           ex_wrapper(routes.get_health)); // public endpoint (no API key check)
+    ctx_http.get ("/v1/metrics",          ex_wrapper(routes.get_v1_metrics)); // public endpoint (no API key check)
     ctx_http.get ("/metrics",             ex_wrapper(routes.get_metrics));
     ctx_http.get ("/props",               ex_wrapper(routes.get_props));
     ctx_http.post("/props",               ex_wrapper(routes.post_props));

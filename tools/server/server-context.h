@@ -51,8 +51,9 @@ struct server_context {
 struct server_res_generator;
 
 struct server_routes {
-    server_routes(const common_params & params, server_context & ctx_server, std::function<bool()> is_ready = []() { return true; })
-            : params(params), ctx_server(*ctx_server.impl), is_ready(is_ready) {
+    server_routes(const common_params & params, server_context & ctx_server, std::function<bool()> is_ready = []() { return true; }, int64_t t_start = 0)
+            : params(params), ctx_server(*ctx_server.impl), is_ready(is_ready), t_server_start(t_start),
+              system_info_str(common_params_get_system_info(params)) {
         init_routes();
     }
 
@@ -60,6 +61,7 @@ struct server_routes {
     // handlers using lambda function, so that they can capture `this` without `std::bind`
     server_http_context::handler_t get_health;
     server_http_context::handler_t get_metrics;
+    server_http_context::handler_t get_v1_metrics;
     server_http_context::handler_t get_slots;
     server_http_context::handler_t post_slots;
     server_http_context::handler_t get_props;
@@ -90,4 +92,6 @@ private:
     const common_params & params;
     server_context_impl & ctx_server;
     std::function<bool()> is_ready;
+    int64_t t_server_start;
+    std::string system_info_str;
 };

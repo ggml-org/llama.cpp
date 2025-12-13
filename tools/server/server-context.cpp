@@ -2912,6 +2912,27 @@ void server_routes::init_routes() {
         return res;
     };
 
+    this->get_v1_metrics = [this](const server_http_req &) {
+        auto res = std::make_unique<server_res_generator>(ctx_server);
+        
+        // Calculate uptime in seconds
+        int64_t uptime_sec = (llama_time_us() - t_server_start) / 1000000;
+        
+        json data = {
+            {"status", "online"},
+            {"uptime_sec", uptime_sec}
+        };
+        
+        // Include system_info if available
+        if (!system_info_str.empty()) {
+            data["system_info"] = system_info_str;
+        }
+        
+        res->ok(data);
+        return res;
+    };
+
+
     this->get_metrics = [this](const server_http_req &) {
         auto res = std::make_unique<server_res_generator>(ctx_server);
         if (!params.endpoint_metrics) {
