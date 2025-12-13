@@ -659,6 +659,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_cos_f32;
     vk_pipeline pipeline_log[2];
     vk_pipeline pipeline_tri[2];
+    vk_pipeline pipeline_diag[2];
     vk_pipeline pipeline_clamp_f32;
     vk_pipeline pipeline_pad_f32;
     vk_pipeline pipeline_roll_f32;
@@ -3923,6 +3924,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_tri[0], "tri_f32", tri_f32_len, tri_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_tri[1], "tri_f16", tri_f16_len, tri_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+
+    ggml_vk_create_pipeline(device, device->pipeline_diag[0], "diag_f32", diag_f32_len, diag_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_diag[1], "diag_f16", diag_f16_len, diag_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_clamp_f32, "clamp_f32", clamp_f32_len, clamp_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
@@ -8416,6 +8420,12 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_tri[dst->type == GGML_TYPE_F16];
         }
         return nullptr;
+    case GGML_OP_DIAG:
+        if (src0->type == dst->type &&
+            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
+            return ctx->device->pipeline_diag[dst->type == GGML_TYPE_F16];
+        }
+        return nullptr;
     case GGML_OP_CLAMP:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_clamp_f32;
@@ -9109,6 +9119,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_COS:
     case GGML_OP_LOG:
     case GGML_OP_TRI:
+    case GGML_OP_DIAG:
     case GGML_OP_CLAMP:
     case GGML_OP_PAD:
     case GGML_OP_ROLL:
@@ -9794,6 +9805,12 @@ static void ggml_vk_tri(ggml_backend_vk_context * ctx, vk_context& subctx, const
     p.param1 = ggml_get_op_params_f32(dst, 0);
 
     ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_TRI, std::move(p));
+}
+
+static void ggml_vk_diag(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    vk_op_unary_push_constants p = vk_op_unary_push_constants_init(src0, dst, ggml_nelements(dst));
+
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_DIAG, std::move(p));
 }
 
 static void ggml_vk_clamp(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
@@ -11923,6 +11940,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_TRI:
         ggml_vk_tri(ctx, compute_ctx, src0, node);
+
+        break;
+    case GGML_OP_DIAG:
+        ggml_vk_diag(ctx, compute_ctx, src0, node);
 
         break;
     case GGML_OP_CLAMP:
@@ -14067,6 +14088,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_LOG:
         case GGML_OP_TRI:
+        case GGML_OP_DIAG:
             return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                    op->type == op->src[0]->type;
         case GGML_OP_ARGSORT:
@@ -14657,6 +14679,8 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             tensor_clone = ggml_log(ggml_ctx, src_clone[0]);
         } else if (tensor->op == GGML_OP_TRI) {
             tensor_clone = ggml_tri(ggml_ctx, src_clone[0], ggml_get_op_params_i32(tensor, 0));
+        } else if (tensor->op == GGML_OP_DIAG) {
+            tensor_clone = ggml_diag(ggml_ctx, src_clone[0]);
         } else if (tensor->op == GGML_OP_CLAMP) {
             const float * params = (const float *)tensor->op_params;
             tensor_clone = ggml_clamp(ggml_ctx, src_clone[0], params[0], params[1]);
