@@ -333,7 +333,7 @@ struct common_params {
     int32_t main_gpu           = 0;                // the GPU that is used for scratch and small tensors
     float   tensor_split[128]  = {0};              // how split tensors should be distributed across GPUs
     bool    fit_params         = true;             // whether to fit unset model/context parameters to free device memory
-    size_t  fit_params_margin  = 1024 * 1024*1024; // margin per device in bytes for fitting parameters to free memory
+    size_t  fit_params_target  = 1024 * 1024*1024; // margin per device in bytes for fitting parameters to free memory
     int32_t fit_params_min_ctx = 4096;             // minimum context size to set when trying to reduce memory use
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs

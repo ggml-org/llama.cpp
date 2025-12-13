@@ -2171,12 +2171,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_FIT"));
     add_opt(common_arg(
-        { "-fitm", "--fit-margin" }, "MiB",
-        string_format("target margin per device for --fit option, default: %zu", params.fit_params_margin/(1024*1024)),
+        { "-fitt", "--fit-target" }, "MiB",
+        string_format("target margin per device for --fit option, default: %zu", params.fit_params_target/(1024*1024)),
         [](common_params & params, int value) {
-            params.fit_params_margin = value * size_t(1024*1024);
+            params.fit_params_target = value * size_t(1024*1024);
         }
-    ).set_env("LLAMA_ARG_FIT_MARGIN"));
+    ).set_env("LLAMA_ARG_FIT_TARGET"));
     add_opt(common_arg(
         { "-fitc", "--fit-ctx" }, "N",
         string_format("minimum ctx size that can be set by --fit option, default: %" PRIu32, params.fit_params_min_ctx),

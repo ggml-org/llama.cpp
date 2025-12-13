@@ -1094,7 +1094,7 @@ common_init_result::common_init_result(common_params & params) :
     if (params.fit_params) {
         LOG_INF("%s: fitting params to device memory, to report bugs during this step use -fit off (or --verbose if you can't)\n", __func__);
         llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
-            params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_margin, params.fit_params_min_ctx,
+            params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target, params.fit_params_min_ctx,
             params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
 

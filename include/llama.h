@@ -469,7 +469,7 @@ extern "C" {
 
     // fits mparams and cparams to free device memory (assumes system memory is unlimited)
     // returns true if the parameters could be successfully modified to fit device memory
-    // this function is NOT thread safe because it modifies the global ggml logger state
+    // this function is NOT thread safe because it modifies the global llama logger state
     LLAMA_API bool llama_params_fit(
                                    const char   * path_model,
                     struct llama_model_params   * mparams,
@@ -1369,6 +1369,7 @@ extern "C" {
 
     // Set callback for all future logging events.
     // If this is not called, or NULL is supplied, everything is output on stderr.
+    // The logger state is global so these functions are NOT thread safe.
     LLAMA_API void llama_log_get(ggml_log_callback * log_callback, void ** user_data);
     LLAMA_API void llama_log_set(ggml_log_callback   log_callback, void *  user_data);
 
