@@ -724,13 +724,16 @@ static void add_rpc_devices(const std::string & servers) {
     }
 }
 
-bool common_params_parse(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map) {
+bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map) {
     common_params dummy_params;
     common_params_context ctx_arg = common_params_parser_init(dummy_params, ex, nullptr);
 
     std::unordered_map<std::string, common_arg *> arg_to_options;
     for (auto & opt : ctx_arg.options) {
         for (const auto & arg : opt.args) {
+            arg_to_options[arg] = &opt;
+        }
+        for (const auto & arg : opt.args_neg) {
             arg_to_options[arg] = &opt;
         }
     }

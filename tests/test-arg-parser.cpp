@@ -72,6 +72,10 @@ int main(void) {
     argv = {"binary_name", "--draft", "123"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_EMBEDDING));
 
+    // negated arg
+    argv = {"binary_name", "--no-mmap"};
+    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+
 
     printf("test-arg-parser: test valid usage\n\n");
 

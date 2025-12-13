@@ -171,7 +171,7 @@ server_presets::server_presets(int argc, char ** argv, common_params & base_para
     }
 
     // read base args from router's argv
-    common_params_parse(argc, argv, LLAMA_EXAMPLE_SERVER, base_args);
+    common_params_to_map(argc, argv, LLAMA_EXAMPLE_SERVER, base_args);
 
     // remove any router-controlled args from base_args
     for (const auto & cargs : control_args) {
