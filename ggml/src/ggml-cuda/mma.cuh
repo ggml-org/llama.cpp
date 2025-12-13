@@ -529,7 +529,7 @@ namespace ggml_cuda_mma {
         
         static constexpr int         ne = I * J / 32 * 2;
         
-        T x[ne] = {{0.0f, 0.0f}};
+        T x[ne] = {0};
 
         static constexpr __device__ bool supported() {
             if (I == 16 && J == 16) return true;
