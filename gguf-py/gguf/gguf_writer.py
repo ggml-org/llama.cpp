@@ -777,6 +777,9 @@ class GGUFWriter:
     def add_sliding_window_pattern(self, value: Sequence[bool]) -> None:
         self.add_array(Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch), value)
 
+    def add_dense_every_n_layers(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.DENSE_EVERY_N_LAYERS.format(arch=self.arch), value)
+
     def add_dense_features_dims(self, dense:str, in_f:int, out_f:int) -> None:
         self.add_uint32(Keys.LLM.DENSE_FEAT_IN_SIZE.format(arch=self.arch, dense=dense), in_f)
         self.add_uint32(Keys.LLM.DENSE_FEAT_OUT_SIZE.format(arch=self.arch, dense=dense), out_f)
@@ -885,6 +888,9 @@ class GGUFWriter:
 
     def add_value_residual_mix_lora_rank(self, length: int) -> None:
         self.add_uint32(Keys.Attention.VALUE_RESIDUAL_MIX_LORA_RANK.format(arch=self.arch), length)
+
+    def add_rope_freq_base_swa(self, value: float) -> None:
+        self.add_float32(Keys.Rope.FREQ_BASE_SWA.format(arch=self.arch), value)
 
     def add_gate_lora_rank(self, length: int) -> None:
         self.add_uint32(Keys.Attention.GATE_LORA_RANK.format(arch=self.arch), length)
