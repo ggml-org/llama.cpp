@@ -3,6 +3,17 @@
 llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
+    float attn_factor = this->attn_factor;
+    float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+
+    // copied from deepseekv2
+    // TODO: clean it up later
+    if (hparams.rope_yarn_log_mul != 0.0f) {
+        float mscale  = attn_factor * (1.0f + hparams.rope_yarn_log_mul * logf(1.0f / freq_scale));
+        kq_scale      = 1.0f * mscale * mscale / sqrtf(float(n_embd_head_k));
+        attn_factor   = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
+    }
+
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
     GGML_ASSERT(n_embd_head == hparams.n_rot);
 
@@ -14,9 +25,13 @@ llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_para
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn = build_attn_inp_kv();
+    // (optional) temperature tuning
+    ggml_tensor * inp_attn_scale = nullptr;
+    if (hparams.f_attn_temp_scale != 0.0f) {
+        inp_attn_scale = build_inp_attn_scale();
+    }
 
-    const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+    auto * inp_attn = build_attn_inp_kv();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -72,6 +87,12 @@ llm_build_llama::llm_build_llama(const llama_model & model, const llm_graph_para
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
+
+            if (inp_attn_scale) {
+                // apply llama 4 temperature scaling
+                Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
+                cb(Qcur, "Qcur_attn_temp_scaled", il);
+            }
 
             if (hparams.use_kq_norm) {
                 // Llama4TextL2Norm
