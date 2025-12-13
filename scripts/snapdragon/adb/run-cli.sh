@@ -30,6 +30,9 @@ sched=
 profile=
 [ "$PROF" != "" ] && profile="GGML_HEXAGON_PROFILE=$PROF GGML_HEXAGON_OPSYNC=1"
 
+trace=
+[ "$TRACE" != "" ] && trace="GGML_HEXAGON_TRACE=$TRACE"
+
 opmask=
 [ "$OPMASK" != "" ] && opmask="GGML_HEXAGON_OPMASK=$OPMASK"
 
@@ -45,7 +48,7 @@ adb $adbserial shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $verbose $experimental $sched $opmask $profile $nhvx $ndev       \
+    $verbose $experimental $sched $opmask $profile $nhvx $ndev $trace \
       ./$branch/bin/llama-completion --no-mmap -m $basedir/../gguf/$model   \
          --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1             \
          --ctx-size 8192 --batch-size 128 -ctk q8_0 -ctv q8_0 -fa on \

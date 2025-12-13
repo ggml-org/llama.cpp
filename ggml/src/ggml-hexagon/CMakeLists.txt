@@ -11,6 +11,7 @@ target_include_directories(htp_iface PUBLIC
     ${HEXAGON_SDK_ROOT}/incs
     ${HEXAGON_SDK_ROOT}/incs/stddef
     ${HEXAGON_SDK_ROOT}/utils/examples
+    ${HEXAGON_SDK_ROOT}/libs/itrace/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/htp
     ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -32,6 +33,7 @@ ggml_add_backend_library(${TARGET_NAME}
     ggml-hexagon.cpp htp-utils.c htp-utils.h ../../include/ggml-hexagon.h)
 
 target_link_libraries(${TARGET_NAME} PRIVATE htp_iface)
+target_link_libraries(${TARGET_NAME} PRIVATE ${HEXAGON_SDK_ROOT}/libs/itrace/prebuilt/android_aarch64/libitrace.so)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/htp ${CMAKE_CURRENT_BINARY_DIR})
 
 # Build HTP bits

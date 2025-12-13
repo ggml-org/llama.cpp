@@ -11,6 +11,9 @@
 #include <string>
 #include <stdexcept>
 
+#include "itrace.h"
+#include "itrace_types.h"
+#include "itrace_cpu_events.h"
 #ifdef _WIN32
 #    include <sal.h>
 #    ifndef _WINDOWS
@@ -45,6 +48,9 @@ static int    opt_arch         = 0;  // autodetect
 static int    opt_etm          = 0;
 static int    opt_verbose      = 0;
 static int    opt_profile      = 0;
+static int    opt_trace        = 0;
+static itrace_logger_handle_t g_itrace_logger_handle = NULL;
+static itrace_profiler_handle_t g_itrace_cpu_profiler_handle = NULL;
 static int    opt_hostbuf      = 1;
 static int    opt_experimental = 0;
 
@@ -282,6 +288,9 @@ void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_
 
 // Flush HTP response queue i.e wait for all outstanding requests to complete
 void ggml_hexagon_session::flush() {
+    if (opt_trace) {
+        itrace_start_section(g_itrace_cpu_profiler_handle, "session-flush", NULL);
+    }
     dspqueue_t q = this->queue;
 
     // Repeatedly read packets from the queue until it's empty. We don't
@@ -331,6 +340,10 @@ void ggml_hexagon_session::flush() {
         this->prof_pkts   = rsp.prof_pkts;
 
         this->op_pending--;  // atomic dec
+    }
+    if (opt_trace) {
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+        itrace_flush_logs(g_itrace_logger_handle);
     }
 }
 
@@ -694,6 +707,9 @@ static void init_row_q4x4x2(block_q4_0 * x, int64_t k) {
 
 // repack q4_0 data into q4x4x2 tensor
 static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) {
+    if (opt_trace) {
+        itrace_start_section(g_itrace_cpu_profiler_handle, (std::string("repack-q4_0-q4x4x2-") + t->name).c_str(), NULL);
+    }
     int64_t nrows = ggml_nrows(t);
 
     size_t row_size    = ggml_row_size(t->type, t->ne[0]);
@@ -751,6 +767,9 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     ggml_aligned_free(buf_pd, row_size_pd);
     ggml_aligned_free(buf_rp, row_size_rp);
+    if (opt_trace) {
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+    }
 }
 
 // repack q4x4x2 tensor into q4_0 data
@@ -2323,6 +2342,9 @@ static void hex_dump_dspbuf(const struct ggml_tensor * t, const dspqueue_buffer 
 }
 
 static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) {
+    if (opt_trace) {
+        itrace_start_section(g_itrace_cpu_profiler_handle, (std::string("mul-mat-") + op->name).c_str(), NULL);
+    }
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
@@ -2390,9 +2412,16 @@ static void ggml_hexagon_mul_mat(const struct ggml_tensor * op, uint32_t flags) 
         (uint32_t) src1->ne[2], (uint32_t) src1->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1],
         (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
         (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
+
+    if (opt_trace) {
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+    }
 }
 
 static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flags) {
+    if (opt_trace) {
+        itrace_start_section(g_itrace_cpu_profiler_handle, (std::string("mul-mat-id-") + op->name).c_str(), NULL);
+    }
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * src2 = op->src[2];
@@ -2469,9 +2498,15 @@ static void ggml_hexagon_mul_mat_id(const struct ggml_tensor * op, uint32_t flag
         (uint32_t) src2->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2],
         (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
         (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
+    if (opt_trace) {
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+    }
 }
 
 static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
+    if (opt_trace) {
+        itrace_start_section(g_itrace_cpu_profiler_handle, "binary", NULL);
+    }
     const struct ggml_tensor * node = op;
     const struct ggml_tensor * src0 = node->src[0];
     const struct ggml_tensor * src1 = node->src[1];
@@ -2558,9 +2593,15 @@ static void ggml_hexagon_binary(const struct ggml_tensor * op, uint32_t flags) {
         (uint32_t) src1->ne[2], (uint32_t) src1->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1],
         (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
         (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
+    if (opt_trace) {
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+    }
 }
 
 static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
+    if (opt_trace) {
+        itrace_start_section(g_itrace_cpu_profiler_handle, (std::string("add-id-") + op->name).c_str(), NULL);
+    }
     const struct ggml_tensor * node = op;
     const struct ggml_tensor * src0 = node->src[0];
     const struct ggml_tensor * src1 = node->src[1];
@@ -2633,9 +2674,15 @@ static void ggml_hexagon_add_id(const struct ggml_tensor * op, uint32_t flags) {
         (uint32_t) src1->ne[2], (uint32_t) src1->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1],
         (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
         (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
+    if (opt_trace) {
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+    }
 }
 
 static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
+    if (opt_trace) {
+        itrace_start_section(g_itrace_cpu_profiler_handle, "unary", NULL);
+    }
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
@@ -2766,9 +2813,15 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
             (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
             (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
     }
+    if (opt_trace) {
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+    }
 }
 
 static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
+    if (opt_trace) {
+        itrace_start_section(g_itrace_cpu_profiler_handle, "rope", NULL);
+    }
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * src2 = op->src[2];
@@ -2874,6 +2927,9 @@ static void ggml_hexagon_rope(const struct ggml_tensor * op, uint32_t flags) {
             (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
             (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
     }
+    if (opt_trace) {
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+    }
 }
 
 static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
@@ -2882,6 +2938,13 @@ static const char * ggml_backend_hexagon_name(ggml_backend_t backend) {
 }
 
 static void ggml_backend_hexagon_free(ggml_backend_t backend) {
+    // Flush and close itrace logger if profiling was enabled
+    if (opt_trace) {
+        itrace_flush_logs(g_itrace_logger_handle);
+        itrace_close_logger(g_itrace_logger_handle);
+        HEX_VERBOSE("ggml-hex: close itrace\n");
+    }
+
     // we just need to delete the backend here
     // the sessions are allocated & freed as part of the registry
     delete backend;
@@ -2910,6 +2973,10 @@ static inline int last_compute_op(ggml_cgraph * graph) {
 
 static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
+
+    if (opt_trace) {
+        itrace_start_section(g_itrace_cpu_profiler_handle, (std::string("hexagon-graph-compute-") + sess->name).c_str(), NULL);
+    }
 
     HEX_VERBOSE("ggml-hex: %s graph-compute n_nodes %d\n", sess->name.c_str(), graph->n_nodes);
 
@@ -2982,6 +3049,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     // Wait until all pending ops complete
     sess->flush();
+
+    if (opt_trace) {
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+    }
 
     return GGML_STATUS_SUCCESS;
 }
@@ -3476,6 +3547,17 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_profile      = getenv("GGML_HEXAGON_PROFILE") != nullptr;
     opt_etm          = getenv("GGML_HEXAGON_ETM") != nullptr;
     opt_experimental = getenv("GGML_HEXAGON_EXPERIMENTAL") != nullptr;
+    opt_trace        = getenv("GGML_HEXAGON_TRACE") != nullptr;
+
+    // Initialize itrace if profiling is enabled
+    if (opt_trace) {
+        HEX_VERBOSE("ggml-hex: open itrace\n");
+        itrace_open_logger(CPU_DOMAIN_ID, &g_itrace_logger_handle);
+        itrace_open_profiler(g_itrace_logger_handle, CPU_DOMAIN_ID, 4*1024*1024, &g_itrace_cpu_profiler_handle);
+
+        itrace_start_section(g_itrace_cpu_profiler_handle, "open-itrace", NULL);
+        itrace_end_section(g_itrace_cpu_profiler_handle, NULL);
+    }
 
     const char * str_opmask = getenv("GGML_HEXAGON_OPMASK");
     if (str_opmask != nullptr) {
