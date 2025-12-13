@@ -442,8 +442,7 @@ namespace ggml_cuda_mma {
         T x[ne] = {0};
 
         static constexpr __device__ bool supported() {
-            if (I == 16 && J == 16) return true;
-            return false;
+            return tile<I_, J_, T, DATA_LAYOUT_I_MAJOR>::supported();
         }
 
         static __device__ __forceinline__ int get_i(const int l) {
