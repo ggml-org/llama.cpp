@@ -174,6 +174,8 @@ If an older version of Powershell is used, these commands may not work as they a
 
 ### I. Setup Environment
 
+The two steps below also apply to Linux.
+
 1. **Install OpenCL Headers and Library**
 
 ```powershell
