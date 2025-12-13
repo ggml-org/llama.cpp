@@ -1400,25 +1400,54 @@ jobs:
         chip_type: ['910b', '310p']
         build: ['Release']
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    container: ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.3.rc1.alpha001-910b-openeuler22.03-py3.11' || '8.2.rc1-310p-openeuler22.03-py3.11' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Dependencies
+      - name: Free up disk space
+        uses: ggml-org/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+
+      - name: Set container image
+        id: cann-image
         run: |
-          yum update -y
-          yum install -y git gcc gcc-c++ make cmake libcurl-devel
+          image="ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.3.rc2-910b-openeuler24.03-py3.11' || '8.3.rc2-310p-openeuler24.03-py3.11' }}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+
+      - name: Pull container image
+        run: docker pull "${{ steps.cann-image.outputs.image }}"
 
       - name: Build
+        env:
+          BUILD_TYPE: ${{ matrix.build }}
+          SOC_TYPE: ascend${{ matrix.chip_type }}
         run: |
-          export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
+          HOST_UID=$(id -u)
+          HOST_GID=$(id -g)
 
-          cmake -S . -B build \
-              -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
-              -DGGML_CANN=on \
-              -DSOC_TYPE=ascend${{ matrix.chip_type }}
-          cmake --build build -j $(nproc)
+          docker run --rm \
+            -v "${PWD}:/workspace" \
+            -w /workspace \
+            -e SOC_TYPE=${SOC_TYPE} \
+            -e BUILD_TYPE=${BUILD_TYPE} \
+            "${{ steps.cann-image.outputs.image }}" \
+            bash -lc '
+              set -e
+              yum install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs git gcc gcc-c++ make cmake libcurl-devel
+              yum clean all && rm -rf /var/cache/yum
+              git config --global --add safe.directory "/workspace"
+              export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
+              cmake -S . -B build \
+                  -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+                  -DGGML_CANN=on \
+                  -DSOC_TYPE=${SOC_TYPE}
+              cmake --build build -j $(nproc)
+
+              chown -R '"${HOST_UID}"':'"${HOST_GID}"' /workspace/build
+            '
 
 # TODO: simplify the following workflows using a matrix
 # TODO: run lighter CI on PRs and the full CI only on master (if needed)
