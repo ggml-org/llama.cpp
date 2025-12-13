@@ -302,7 +302,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             endif()
             if (GGML_BMI2)
                 # MSVC does not define macro __BMI2__
-                list(APPEND ARCH_DEFINITIONS __BMI2__ GGML_BMI2)
+                if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "amd64")
+                    # BMI2 is only available on amd64
+                    list(APPEND ARCH_DEFINITIONS __BMI2__ GGML_BMI2)
+                endif()
             endif()
         else ()
             if (GGML_NATIVE)
