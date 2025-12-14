@@ -1312,29 +1312,61 @@ common_chat_params UniversalPEGGenerator::generate_parser(
             }
         }
         
+        common_peg_arena arena;
+
         if (pattern.format == TemplatePattern::JSON_NATIVE) {
-            auto arena = build_native_parser(pattern, tmpl, inputs);
-            data.parser = arena.save();
+            arena = build_native_parser(pattern, tmpl, inputs);
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated JSON_NATIVE parser successfully");
         } else if (pattern.format == TemplatePattern::XML_CONSTRUCTED) {
-            auto arena = build_constructed_parser(pattern, tmpl, inputs);
-            data.parser = arena.save();
+            arena = build_constructed_parser(pattern, tmpl, inputs);
             data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
             LOG_DBG("Generated XML_CONSTRUCTED parser successfully");
         } else {
             // Treat as content only
-            auto arena = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+            arena = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
                 return p.content(p.rest());
             });
-            data.parser = arena.save();
             data.format = COMMON_CHAT_FORMAT_PEG_SIMPLE;
             LOG_DBG("Generated CONTENT_ONLY parser successfully");
         }
         
+        data.parser = arena.save();
+        
+        // Determine trigger word for lazy grammar
+        std::string trigger_word;
+        if (!pattern.special_markers.at("tool_call_start_marker").empty()) {
+            trigger_word = pattern.special_markers.at("tool_call_start_marker");
+        } else if (!pattern.special_markers.at("function_opener").empty()) {
+            trigger_word = pattern.special_markers.at("function_opener");
+        }
+
         // Build grammar for tool calls based on discovered patterns
-        data.grammar_lazy = true; // Assume lazy by default
-        data.grammar = build_grammar_from_tools(inputs.tools.is_array() ? inputs.tools : json::array(), inputs.parallel_tool_calls);
+        data.grammar_lazy = inputs.tools.is_array() && !inputs.tools.empty();
+        
+        if (data.grammar_lazy) {
+            if (!trigger_word.empty()) {
+                data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_word});
+            } else {
+                data.grammar_lazy = false;
+            }
+        }
+        
+        if (data.grammar_lazy) {
+             data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+                 if (inputs.tools.is_array()) {
+                     for (const auto & tool : inputs.tools) {
+                         if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) continue;
+                         const auto & function = tool.at("function");
+                         if (function.contains("parameters")) {
+                             auto params = function.at("parameters");
+                             builder.resolve_refs(params);
+                         }
+                     }
+                 }
+                 arena.build_grammar(builder, data.grammar_lazy);
+             });
+        }
         
         // Set preserved tokens
         data.preserved_tokens = pattern.preserved_tokens;
@@ -1383,7 +1415,7 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(
             // JSON-style parser (like Nemotron)
             std::string marker = pattern.special_markers.at("tool_call_start_marker");
             if (!marker.empty() && !pattern.special_markers.at("tool_call_end_marker").empty()) {
-                auto tool_call = p.tool(
+                auto tool_call_def = p.tool(
                     p.tool_open(p.literal(marker)) +
                     p.space() +
                     // Don't consume name greedily, let args parser handle it if it's inside JSON
@@ -1391,6 +1423,7 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(
                     p.tool_args(p.schema(p.json(), "args", json::object())) +
                     p.tool_close(p.literal(pattern.special_markers.at("tool_call_end_marker")))
                 );
+                auto tool_call = p.trigger_rule("tool_call", tool_call_def);
                 
                 auto safe_content = p.content(
                     p.choice({
@@ -1538,7 +1571,7 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(
                     args_parser = p.content(p.until(pattern.special_markers.at("tool_call_end_marker")));
                 }
 
-                auto function_call = p.tool(
+                auto function_call_def = p.tool(
                     p.tool_open(p.literal(marker)) +
                     p.space() +
                     
@@ -1575,6 +1608,7 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(
                     
                     p.tool_close(p.literal(pattern.special_markers.at("tool_call_end_marker")))
                 );
+                auto function_call = p.trigger_rule("tool_call", function_call_def);
                 
                 auto safe_content = p.content(
                     p.choice({
@@ -1620,11 +1654,12 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(
             } else if (!pattern.special_markers.at("tool_call_start_marker").empty()) {
                 std::string marker = pattern.special_markers.at("tool_call_start_marker");
                 // If we have start marker but no specific XML structure, try to build a generic tool parser
-                auto function_call = p.tool(
+                auto function_call_def = p.tool(
                     p.tool_open(p.literal(marker)) +
                     p.content(p.until(pattern.special_markers.at("tool_call_end_marker").empty() ? "\n" : pattern.special_markers.at("tool_call_end_marker"))) +
                     (pattern.special_markers.at("tool_call_end_marker").empty() ? p.eps() : p.tool_close(p.literal(pattern.special_markers.at("tool_call_end_marker"))))
                 );
+                auto function_call = p.trigger_rule("tool_call", function_call_def);
                 
                 auto safe_content = p.content(
                     p.choice({
@@ -1671,71 +1706,4 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(
     });
     
     return parser;
-}
-
-std::string UniversalPEGGenerator::build_grammar_from_tools(const json& tools, bool parallel_tool_calls) {
-    // Build a grammar for tool calls based on the tools provided
-    if (tools.is_array() && !tools.empty()) {
-        // Use the same approach as common_chat_params_init_generic to build tool schemas
-        auto tool_call_schemas = json::array();
-        for (const auto & tool : tools) {
-            if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
-                continue; // Skip non-function tools
-            }
-            const auto & function = tool.at("function");
-            auto tool_schema = json {
-                {"type", "object"},
-                {"properties", {
-                    {"name", {
-                        {"type", "string"},
-                        {"const", function.at("name")},
-                    }},
-                    {"arguments", function.at("parameters")},
-                }},
-                {"required", json::array({"name", "arguments"})},
-            };
-            if (function.contains("description")) {
-                tool_schema["description"] = function.at("description");
-            }
-            if (parallel_tool_calls) {
-                tool_schema.at("properties")["id"] = {
-                    {"type", "string"},
-                    {"minLength", 4},
-                };
-                tool_schema.at("required").push_back("id");
-            }
-            tool_call_schemas.emplace_back(tool_schema);
-        }
-        
-        const auto tool_call =
-            parallel_tool_calls
-                ? json {
-                    {"type", "object"},
-                    {"properties", {
-                        {"tool_calls", {
-                            {"type", "array"},
-                            {"items", tool_call_schemas.size() == 1 ? tool_call_schemas[0] : json {
-                                {"anyOf", tool_call_schemas},
-                            }},
-                            {"minItems", 1},
-                        }},
-                    }},
-                    {"required", json::array({"tool_calls"})},
-                }
-                : json {
-                    {"type", "object"},
-                    {"properties", {
-                        {"tool_call", tool_call_schemas.size() == 1 ? tool_call_schemas[0] : json {
-                            {"anyOf", tool_call_schemas},
-                        }},
-                    }},
-                    {"required", json::array({"tool_call"})},
-                };
-        
-        // Convert the JSON schema to grammar format
-        return json_schema_to_grammar(tool_call);
-    } else {
-        // Return a basic grammar for content-only
-        return json_schema_to_grammar(json{{"type", "string"}});
-    }
 }
