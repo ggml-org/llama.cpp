@@ -151,11 +151,11 @@ std::string common_params_sampling::print() const {
             "\trepeat_last_n = %d, repeat_penalty = %.3f, frequency_penalty = %.3f, presence_penalty = %.3f\n"
             "\tdry_multiplier = %.3f, dry_base = %.3f, dry_allowed_length = %d, dry_penalty_last_n = %d\n"
             "\ttop_k = %d, top_p = %.3f, min_p = %.3f, xtc_probability = %.3f, xtc_threshold = %.3f, typical_p = %.3f, top_n_sigma = %.3f, temp = %.3f\n"
-            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f",
+            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f, power_law_target = %.3f, power_law_decay = %.3f",
             penalty_last_n, penalty_repeat, penalty_freq, penalty_present,
             dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n,
             top_k, top_p, min_p, xtc_probability, xtc_threshold, typ_p, top_n_sigma, temp,
-            mirostat, mirostat_eta, mirostat_tau);
+            mirostat, mirostat_eta, mirostat_tau, power_law_target, power_law_decay);
 
     return std::string(result);
 }
