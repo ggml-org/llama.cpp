@@ -12,8 +12,8 @@
 	let processingDetails = $derived(processingState.getProcessingDetails());
 	let showSlotsInfo = $derived(isCurrentConversationLoading || config().keepStatsVisible);
 	let maxWidthClass = $derived(
-        config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
-    );
+		config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+	);
 
 	// Track loading state reactively by checking if conversation ID is in loading conversations array
 	$effect(() => {

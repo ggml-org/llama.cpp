@@ -101,10 +101,10 @@
 
 		return serverModel;
 	});
-	
+
 	let maxWidthClass = $derived(
-        config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
-    );
+		config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+	);
 
 	function handleCopyModel() {
 		const model = displayedModel();

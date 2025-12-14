@@ -64,8 +64,8 @@
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 	let maxWidthClass = $derived(
-        currentConfig.responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
-    );
+		currentConfig.responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+	);
 
 	function getAcceptStringForFileType(fileType: FileTypeCategory): string {
 		switch (fileType) {

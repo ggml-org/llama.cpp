@@ -88,8 +88,8 @@
 	let isCurrentConversationLoading = $derived(isLoading());
 
 	let maxWidthClass = $derived(
-        config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
-    );
+		config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+	);
 
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();

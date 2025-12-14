@@ -24,8 +24,8 @@
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 
 	let maxWidthClass = $derived(
-        config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
-    );
+		config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+	);
 
 	function refreshAllMessages() {
 		const conversation = activeConversation();
