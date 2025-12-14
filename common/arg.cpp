@@ -1559,18 +1559,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--power-law-target"}, "N",
-        string_format("target probability for Power Law sampling (valid range 0.0 to 1.0; <0 = disabled) "
-                      "(%.1f = default)\n[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927)",
+        string_format("power law sampler: select tokens near this probability (valid range 0.0 "
+                      "to 1.0; <0 = disabled) (default: %.2f)\n"
+                      "[(more info)]""(https://github.com/ggml-org/llama.cpp/pull/17927)",
                       (double)params.sampling.power_law_target),
         [](common_params & params, const std::string & value) {
             params.sampling.power_law_target = std::stof(value);
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--power-law-window-size"}, "N",
-        string_format("rolling window size for target adaptation in Power Law sampling (≤0 = fixed target; %d = default)", params.sampling.power_law_window_size),
+        {"--power-law-decay"}, "N",
+        string_format("power law sampler: decay rate for target adaptation over time. lower "
+                      "values -> faster but less stable adaptation. "
+                      "(valid range 0.0 to 1.0; ≤0 = no adaptation) (default: %.2f)",
+                      (double)params.sampling.power_law_decay),
         [](common_params & params, int value) {
-            params.sampling.power_law_window_size = value;
+            params.sampling.power_law_decay = value;
         }
     ).set_sparam());
     add_opt(common_arg(
