@@ -268,13 +268,6 @@ struct llama_hparams {
     // TODO: think of a better place for this function
     // TODO: pack the SWA params in a struct?
     static bool is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama_pos p0, llama_pos p1);
-
-    // when YARN is applied with yarn_ext_factor != 0.0f, we need to cancel this factor:
-    // https://github.com/ggml-org/llama.cpp/blob/a81a569577cc38b32558958b048228150be63eae/ggml/src/ggml-cpu/ops.cpp#L5541-L5544
-    //
-    // ref: https://github.com/ggml-org/llama.cpp/discussions/7416
-    //      https://github.com/ggml-org/llama.cpp/pull/17945
-    static float yarn_attn_factor_adjust(float attn_factor, float freq_scale, float ext_factor);
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

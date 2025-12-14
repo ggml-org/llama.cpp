@@ -2294,32 +2294,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         default: throw std::runtime_error("unsupported model architecture");
     }
 
-    // ref: https://github.com/huggingface/transformers/blob/6d00f6b0a5679c36510f203e4226e36f517c3032/src/transformers/modeling_rope_utils.py#L336-L348
-    if (hparams.rope_yarn_log_mul != 0.0f) {
-        const float factor = 1.0f / hparams.rope_freq_scale_train;
-
-        // note: here we assume `mscale == 1.0f`
-        // TODO: start reading the actual value of mscale and handle the case where it is not 1.0f
-              float mscale          = 1.0f;
-        const float mscale_all_dims = hparams.rope_yarn_log_mul;
-
-        // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
-        // special-case DEEPSEEK v2:
-        // https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite-Chat/blob/main/config.json#L42-L43
-        if (arch == LLM_ARCH_DEEPSEEK2 && mscale_all_dims != 1.0f) {
-            mscale = mscale_all_dims;
-        }
-
-        static auto get_mscale = [](float scale, float mscale) {
-            return scale <= 1.0f ? 1.0f : (0.1f * mscale * logf(scale) + 1.0f);
-        };
-
-        hparams.yarn_attn_factor = get_mscale(factor, mscale) / get_mscale(factor, mscale_all_dims);
-
-        LLAMA_LOG_WARN("%s: setting new yarn_attn_factor = %.4f (mscale == %.1f, mscale_all_dim = %.1f)\n",
-                __func__, hparams.yarn_attn_factor, mscale, mscale_all_dims);
-    }
-
     pimpl->n_bytes = ml.n_bytes;
 
     pimpl->desc_str = arch_name() + " " + type_name() + " " + ml.ftype_name();
