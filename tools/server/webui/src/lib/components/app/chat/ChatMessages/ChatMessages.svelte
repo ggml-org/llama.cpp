@@ -9,7 +9,9 @@
 		editAssistantMessage,
 		regenerateMessageWithBranching
 	} from '$lib/stores/chat.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { getMessageSiblings } from '$lib/utils/branching';
+	import { MAX_WIDTH_CLASSES, DEFAULT_MAX_WIDTH_CLASS } from '$lib/constants/width-classes';
 
 	interface Props {
 		class?: string;
@@ -20,6 +22,10 @@
 	let { class: className, messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
+
+	let maxWidthClass = $derived(
+        config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+    );
 
 	function refreshAllMessages() {
 		const conversation = activeConversation();
@@ -103,7 +109,7 @@
 <div class="flex h-full flex-col space-y-10 pt-16 md:pt-24 {className}" style="height: auto; ">
 	{#each displayMessages as { message, siblingInfo } (message.id)}
 		<ChatMessage
-			class="mx-auto w-full max-w-[48rem]"
+			class="mx-auto w-full {maxWidthClass}"
 			{message}
 			{siblingInfo}
 			onDelete={handleDeleteMessage}

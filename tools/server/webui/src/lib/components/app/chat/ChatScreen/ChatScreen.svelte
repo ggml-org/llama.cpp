@@ -14,6 +14,8 @@
 		ConfirmationDialog
 	} from '$lib/components/app';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import { config } from '$lib/stores/settings.svelte';
+	import { MAX_WIDTH_CLASSES, DEFAULT_MAX_WIDTH_CLASS } from '$lib/constants/width-classes';
 	import {
 		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
 		AUTO_SCROLL_INTERVAL,
@@ -84,6 +86,10 @@
 	let isServerLoading = $derived(serverLoading());
 
 	let isCurrentConversationLoading = $derived(isLoading());
+
+	let maxWidthClass = $derived(
+        config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+    );
 
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();
@@ -302,7 +308,7 @@
 			<ChatProcessingInfo />
 
 			{#if serverWarning()}
-				<ChatScreenWarning class="pointer-events-auto mx-auto max-w-[48rem] px-4" />
+				<ChatScreenWarning class="pointer-events-auto mx-auto {maxWidthClass} px-4" />
 			{/if}
 
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
@@ -333,7 +339,7 @@
 		ondrop={handleDrop}
 		role="main"
 	>
-		<div class="w-full max-w-[48rem] px-4">
+		<div class="w-full {maxWidthClass} px-4">
 			<div class="mb-8 text-center" in:fade={{ duration: 300 }}>
 				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
 

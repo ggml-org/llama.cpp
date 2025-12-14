@@ -4,12 +4,16 @@
 	import { slotsService } from '$lib/services/slots';
 	import { isLoading, activeMessages, activeConversation } from '$lib/stores/chat.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { MAX_WIDTH_CLASSES, DEFAULT_MAX_WIDTH_CLASS } from '$lib/constants/width-classes';
 
 	const processingState = useProcessingState();
 
 	let isCurrentConversationLoading = $derived(isLoading());
 	let processingDetails = $derived(processingState.getProcessingDetails());
 	let showSlotsInfo = $derived(isCurrentConversationLoading || config().keepStatsVisible);
+	let maxWidthClass = $derived(
+        config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+    );
 
 	// Track loading state reactively by checking if conversation ID is in loading conversations array
 	$effect(() => {
@@ -77,7 +81,7 @@
 </script>
 
 <div class="chat-processing-info-container pointer-events-none" class:visible={showSlotsInfo}>
-	<div class="chat-processing-info-content">
+	<div class="chat-processing-info-content {maxWidthClass}">
 		{#each processingDetails as detail (detail)}
 			<span class="chat-processing-info-detail pointer-events-auto">{detail}</span>
 		{/each}
@@ -108,7 +112,6 @@
 		align-items: center;
 		gap: 1rem;
 		justify-content: center;
-		max-width: 48rem;
 		margin: 0 auto;
 	}
 

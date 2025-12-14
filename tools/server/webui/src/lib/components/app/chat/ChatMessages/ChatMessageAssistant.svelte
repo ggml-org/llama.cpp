@@ -23,6 +23,7 @@
 	import { modelName as serverModelName } from '$lib/stores/server.svelte';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import type { ApiChatCompletionToolCall } from '$lib/types/api';
+	import { MAX_WIDTH_CLASSES, DEFAULT_MAX_WIDTH_CLASS } from '$lib/constants/width-classes';
 
 	interface Props {
 		class?: string;
@@ -100,6 +101,10 @@
 
 		return serverModel;
 	});
+	
+	let maxWidthClass = $derived(
+        config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+    );
 
 	function handleCopyModel() {
 		const model = displayedModel();
@@ -174,7 +179,7 @@
 	{/if}
 
 	{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
-		<div class="mt-6 w-full max-w-[48rem]" in:fade>
+		<div class="mt-6 w-full {maxWidthClass}" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
 					{processingState.getProcessingMessage()}
@@ -220,7 +225,7 @@
 		</div>
 	{:else if message.role === 'assistant'}
 		{#if config().disableReasoningFormat}
-			<pre class="raw-output">{messageContent || ''}</pre>
+			<pre class="raw-output {maxWidthClass}">{messageContent || ''}</pre>
 		{:else}
 			<MarkdownContent content={messageContent || ''} />
 		{/if}
@@ -375,7 +380,6 @@
 
 	.raw-output {
 		width: 100%;
-		max-width: 48rem;
 		margin-top: 1.5rem;
 		padding: 1rem 1.25rem;
 		border-radius: 1rem;
