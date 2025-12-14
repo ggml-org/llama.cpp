@@ -8238,6 +8238,7 @@ class NemotronModel(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
+
 @ModelBase.register("ExaoneForCausalLM")
 class ExaoneModel(TextModel):
     model_arch = gguf.MODEL_ARCH.EXAONE
