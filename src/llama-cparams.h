@@ -35,6 +35,10 @@ struct llama_cparams {
     bool op_offload;
     bool kv_unified;
 
+    // MoE self-drafting: override n_expert_used
+    // 0 = use model default, 1+ = force exactly N active experts
+    int32_t moe_n_expert_override;
+
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;
