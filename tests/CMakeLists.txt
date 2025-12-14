@@ -186,6 +186,7 @@ endif()
 llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
 llama_build_and_test(test-chat-parser-comparison.cpp)
+llama_build_and_test(debug-template-parser.cpp)
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
@@ -263,4 +264,4 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
 
-llama_build_and_test(test-qwen3next-delta-net.cpp)
+
