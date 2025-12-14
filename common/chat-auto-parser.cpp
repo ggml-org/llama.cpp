@@ -531,7 +531,9 @@ DiscoveredPattern TemplateAnalyzer::extract_patterns_from_differences(
             
             // Determine end of value1
             size_t value1_len = 6; // "value1"
+            (void)value1_len;
             size_t actual_val1_pos = value1_pos;
+            (void)actual_val1_pos;
             if (value1_pos > 0 && tool2_diff[value1_pos-1] == '"' && 
                 value1_pos + 6 < tool2_diff.length() && tool2_diff[value1_pos+6] == '"') {
                 // Quotes are part of the value if found by find("value1") inside quotes
@@ -1374,7 +1376,7 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(
         }
 
         // Build tool call parser based on discovered patterns
-        auto tool_choice = p.choice();
+        // auto tool_choice = p.choice();
         
         // Create parser based on the discovered format
         if (pattern.format == TemplatePattern::JSON_NATIVE) {
@@ -1507,7 +1509,7 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(
         }
 
         // Build tool call parser based on discovered patterns
-        auto tool_choice = p.choice();
+        // auto tool_choice = p.choice();
         
         // Create parser based on the discovered format
         if (pattern.format == TemplatePattern::XML_CONSTRUCTED) {
