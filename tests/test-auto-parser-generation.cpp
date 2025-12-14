@@ -405,6 +405,57 @@ void test_universal_peg_generator_edge_cases(testing &t) {
     }
 }
 
+void test_minimax_m2_template(testing &t) {
+    t.log("Testing MiniMax-M2 template analysis and parser generation");
+    
+    // Load the MiniMax-M2 template
+    auto tmpls = read_templates("models/templates/MiniMax-M2.jinja");
+    t.assert_true("MiniMax-M2 template loaded", tmpls != nullptr);
+    
+    // Test template analysis
+    auto template_source = common_chat_templates_source(tmpls.get());
+    minja::chat_template chat_template(template_source, "", "");
+    
+    // Use TemplateAnalyzer to detect patterns
+    TemplatePattern pattern = TemplateAnalyzer::analyze_template(chat_template);
+    
+    printf("MiniMax-M2 detected format: %d\n", static_cast<int>(pattern.format));
+    printf("MiniMax-M2 has reasoning support: %s\n", pattern.has_reasoning_support ? "true" : "false");
+    
+    // MiniMax-M2 uses XML style tool calls
+    t.assert_equal("MiniMax-M2 format should be XML_CONSTRUCTED",
+                   static_cast<int>(TemplatePattern::XML_CONSTRUCTED),
+                   static_cast<int>(pattern.format));
+    
+    // Verify reasoning support
+    t.assert_true("MiniMax-M2 should have reasoning support", pattern.has_reasoning_support);
+    
+    // Test parser generation with enable_thinking=true (should force thinking open)
+    templates_params params;
+    params.messages = json::array();
+    params.tools = json::array();
+    params.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    params.parallel_tool_calls = false;
+    params.enable_thinking = true;
+    params.add_generation_prompt = true;
+    
+    try {
+        auto parser_data = UniversalPEGGenerator::generate_parser(pattern, chat_template, params);
+        
+        // Verify thinking_forced_open is detected
+        t.assert_true("MiniMax-M2 should have thinking_forced_open detected", parser_data.thinking_forced_open);
+        
+        // Verify format
+        t.assert_equal("MiniMax-M2 parser format should be PEG_CONSTRUCTED",
+                       static_cast<int>(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED),
+                       static_cast<int>(parser_data.format));
+                       
+    } catch (const std::exception& e) {
+        printf("MiniMax-M2 parser generation failed: %s\n", e.what());
+        t.assert_true("MiniMax-M2 parser generation should not throw: " + std::string(e.what()), false);
+    }
+}
+
 int main(int argc, char *argv[]) {
     testing t(std::cout);
     if (argc >= 2) {
@@ -421,6 +472,7 @@ int main(int argc, char *argv[]) {
     t.test("nvidia_nemotron_nano_v2_template", test_nvidia_nemotron_nano_v2_template);
     t.test("template_pattern_structure", test_template_pattern_structure);
     t.test("universal_peg_generator_edge_cases", test_universal_peg_generator_edge_cases);
+    t.test("minimax_m2_template", test_minimax_m2_template);
 
     return t.summary();
 }

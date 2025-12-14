@@ -121,12 +121,14 @@ private:
     static common_peg_arena build_native_parser(
         const TemplatePattern& pattern,
         const minja::chat_template& tmpl,
-        const struct templates_params& inputs
+        const struct templates_params& inputs,
+        bool thinking_forced_open
     );
     
     static common_peg_arena build_constructed_parser(
         const TemplatePattern& pattern,
         const minja::chat_template& tmpl, 
-        const struct templates_params& inputs
+        const struct templates_params& inputs,
+        bool thinking_forced_open
     );
 };
