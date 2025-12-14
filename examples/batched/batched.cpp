@@ -2,6 +2,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include "sampling.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -64,17 +65,23 @@ int main(int argc, char ** argv) {
     ctx_params.n_ctx   = n_kv_req;
     ctx_params.n_batch = std::max(n_predict, n_parallel);
 
-    llama_context * ctx = llama_init_from_model(model, ctx_params);
-
     auto sparams = llama_sampler_chain_default_params();
     sparams.no_perf = false;
 
-    llama_sampler * smpl = llama_sampler_chain_init(sparams);
+    std::vector<llama_sampler *> samplers;
 
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(params.sampling.top_k));
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(params.sampling.top_p, params.sampling.min_keep));
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp (params.sampling.temp));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist (params.sampling.seed));
+    for (int32_t i = 0; i < n_parallel; ++i) {
+        llama_sampler * smpl = llama_sampler_chain_init(sparams);
+
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(params.sampling.top_k));
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_p(params.sampling.top_p, params.sampling.min_keep));
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp (params.sampling.temp));
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist (params.sampling.seed));
+
+        samplers.push_back(smpl);
+    }
+
+    llama_context * ctx = llama_init_from_model(model, ctx_params);
 
     if (ctx == NULL) {
         LOG_ERR("%s: error: failed to create the llama_context\n" , __func__);
@@ -173,7 +180,7 @@ int main(int argc, char ** argv) {
                 continue;
             }
 
-            const llama_token new_token_id = llama_sampler_sample(smpl, ctx, i_batch[i]);
+            const llama_token new_token_id = llama_sampler_sample(samplers[i], ctx, i_batch[i]);
 
             // is it an end of generation? -> mark the stream as finished
             if (llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_predict) {
@@ -229,14 +236,17 @@ int main(int argc, char ** argv) {
             __func__, n_decode, (t_main_end - t_main_start) / 1000000.0f, n_decode / ((t_main_end - t_main_start) / 1000000.0f));
 
     LOG("\n");
-    llama_perf_sampler_print(smpl);
+    llama_perf_sampler_print(samplers[0]);
     llama_perf_context_print(ctx);
 
     fprintf(stderr, "\n");
 
     llama_batch_free(batch);
 
-    llama_sampler_free(smpl);
+    for (auto & sampler_config : samplers) {
+        llama_sampler_free(sampler_config);
+    }
+
     llama_free(ctx);
     llama_model_free(model);
 
