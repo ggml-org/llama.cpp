@@ -14,6 +14,11 @@
 
 using json = nlohmann::ordered_json;
 
+static bool string_ends_with(const std::string & str, const std::string & suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 // Definition of templates_params to match the one in chat.cpp
 struct templates_params {
     json messages;
@@ -90,6 +95,11 @@ TemplatePattern TemplateAnalyzer::analyze_template(const minja::chat_template& t
     
     // Set format based on discovered patterns
     pattern.format = determine_format_from_patterns(discovered);
+    
+    // Set reasoning support based on discovered markers
+    if (!discovered.reasoning_start_marker.empty()) {
+        pattern.has_reasoning_support = true;
+    }
     
     // Store discovered patterns
     pattern.special_markers = {
@@ -1258,6 +1268,47 @@ TemplatePattern::ToolCallFormat TemplateAnalyzer::determine_format_from_patterns
                 }
             }
         }
+
+        // Method 3: If no markers found, check if the generation prompt ends with a tag (MiniMax case)
+        if (patterns.reasoning_start_marker.empty()) {
+            std::string prompt = prompt_think; // Reuse calculated prompt
+            // Trim whitespace from end for check
+            while (!prompt.empty() && std::isspace(static_cast<unsigned char>(prompt.back()))) {
+                prompt.pop_back();
+            }
+            
+            // Look for tag at the end
+            size_t last_open_angle = prompt.rfind('<');
+            size_t last_close_angle = prompt.rfind('>');
+            size_t last_open_bracket = prompt.rfind('[');
+            size_t last_close_bracket = prompt.rfind(']');
+            
+            size_t last_open = std::string::npos;
+            size_t last_close = std::string::npos;
+            
+            if (last_open_angle != std::string::npos && last_close_angle != std::string::npos && last_close_angle > last_open_angle) {
+                last_open = last_open_angle;
+                last_close = last_close_angle;
+            } else if (last_open_bracket != std::string::npos && last_close_bracket != std::string::npos && last_close_bracket > last_open_bracket) {
+                last_open = last_open_bracket;
+                last_close = last_close_bracket;
+            }
+            
+            if (last_open != std::string::npos && last_close == prompt.length() - 1) {
+                 std::string tag = prompt.substr(last_open);
+                 if (tag == "<think>" || tag == "<thinking>" || tag == "[THINK]") {
+                     patterns.reasoning_start_marker = tag;
+                     // Infer end marker
+                     if (tag[0] == '<') {
+                         std::string name = tag.substr(1, tag.length() - 2);
+                         patterns.reasoning_end_marker = "</" + name + ">";
+                     } else if (tag[0] == '[') {
+                         std::string name = tag.substr(1, tag.length() - 2);
+                         patterns.reasoning_end_marker = "[/" + name + "]";
+                     }
+                 }
+            }
+        }
     }
     
     LOG_DBG("Reasoning markers: start='%s', end='%s'", patterns.reasoning_start_marker.c_str(), patterns.reasoning_end_marker.c_str());
@@ -1296,6 +1347,29 @@ common_chat_params UniversalPEGGenerator::generate_parser(
         LOG_DBG("Tool call start marker: '%s'", pattern.special_markers.at("tool_call_start_marker").c_str());
         LOG_DBG("Tool call end marker: '%s'", pattern.special_markers.at("tool_call_end_marker").c_str());
         
+        // Calculate prompt first to detect forced thinking
+        data.prompt = apply(tmpl, inputs);
+        
+        bool thinking_forced_open = false;
+        std::string start_marker = pattern.special_markers.at("reasoning_start_marker");
+        
+        if (!start_marker.empty()) {
+            if (string_ends_with(data.prompt, start_marker)) {
+                if (!inputs.enable_thinking) {
+                    data.prompt += pattern.special_markers.at("reasoning_end_marker");
+                } else {
+                    thinking_forced_open = true;
+                }
+            } else if (string_ends_with(data.prompt, start_marker + "\n")) {
+                if (!inputs.enable_thinking) {
+                    data.prompt += pattern.special_markers.at("reasoning_end_marker");
+                } else {
+                    thinking_forced_open = true;
+                }
+            }
+        }
+        data.thinking_forced_open = thinking_forced_open;
+
         // Additional validation
         if (pattern.format == TemplatePattern::JSON_NATIVE) {
             if (pattern.special_markers.at("tool_call_start_marker").empty() && 
@@ -1315,17 +1389,24 @@ common_chat_params UniversalPEGGenerator::generate_parser(
         common_peg_arena arena;
 
         if (pattern.format == TemplatePattern::JSON_NATIVE) {
-            arena = build_native_parser(pattern, tmpl, inputs);
+            arena = build_native_parser(pattern, tmpl, inputs, thinking_forced_open);
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated JSON_NATIVE parser successfully");
         } else if (pattern.format == TemplatePattern::XML_CONSTRUCTED) {
-            arena = build_constructed_parser(pattern, tmpl, inputs);
+            arena = build_constructed_parser(pattern, tmpl, inputs, thinking_forced_open);
             data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
             LOG_DBG("Generated XML_CONSTRUCTED parser successfully");
         } else {
             // Treat as content only
             arena = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
-                return p.content(p.rest());
+                auto content = p.content(p.rest());
+                if (thinking_forced_open && !pattern.special_markers.at("reasoning_end_marker").empty()) {
+                     return p.reasoning_block(
+                         p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
+                         p.literal(pattern.special_markers.at("reasoning_end_marker"))
+                     ) + content;
+                }
+                return content;
             });
             data.format = COMMON_CHAT_FORMAT_PEG_SIMPLE;
             LOG_DBG("Generated CONTENT_ONLY parser successfully");
@@ -1366,12 +1447,15 @@ common_chat_params UniversalPEGGenerator::generate_parser(
                  }
                  arena.build_grammar(builder, data.grammar_lazy);
              });
+        } else {
+             // Fallback to content-only grammar
+             data.grammar = json_schema_to_grammar(json{{"type", "string"}});
         }
         
         // Set preserved tokens
         data.preserved_tokens = pattern.preserved_tokens;
         
-        data.prompt = apply(tmpl, inputs);
+        // data.prompt was already set
         
         LOG_DBG("=== PEG PARSER GENERATION COMPLETED ===");
         
@@ -1386,7 +1470,8 @@ common_chat_params UniversalPEGGenerator::generate_parser(
 common_peg_arena UniversalPEGGenerator::build_native_parser(
     const TemplatePattern& pattern,
     const minja::chat_template& tmpl,
-    const struct templates_params& inputs) {
+    const struct templates_params& inputs,
+    bool thinking_forced_open) {
     
     (void)tmpl; // Suppress unused parameter warning
     (void)inputs; // Suppress unused parameter warning
@@ -1394,17 +1479,24 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(
     auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
         // Reasoning parser
         auto reasoning = p.eps();
-        if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE && 
+        if ((inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE || thinking_forced_open) && 
             !pattern.special_markers.at("reasoning_start_marker").empty() && 
             !pattern.special_markers.at("reasoning_end_marker").empty()) {
             
-            reasoning = p.optional(
-                p.reasoning_block(
-                    p.literal(pattern.special_markers.at("reasoning_start_marker")) +
+            if (thinking_forced_open) {
+                reasoning = p.reasoning_block(
                     p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
                     p.literal(pattern.special_markers.at("reasoning_end_marker"))
-                )
-            );
+                );
+            } else {
+                reasoning = p.optional(
+                    p.reasoning_block(
+                        p.literal(pattern.special_markers.at("reasoning_start_marker")) +
+                        p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
+                        p.literal(pattern.special_markers.at("reasoning_end_marker"))
+                    )
+                );
+            }
         }
 
         // Build tool call parser based on discovered patterns
@@ -1520,7 +1612,8 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(
 common_peg_arena UniversalPEGGenerator::build_constructed_parser(
     const TemplatePattern& pattern,
     const minja::chat_template& tmpl,
-    const struct templates_params& inputs) {
+    const struct templates_params& inputs,
+    bool thinking_forced_open) {
     
     (void)tmpl; // Suppress unused parameter warning
     (void)inputs; // Suppress unused parameter warning
@@ -1528,17 +1621,24 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(
     auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
         // Reasoning parser
         auto reasoning = p.eps();
-        if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE && 
+        if ((inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE || thinking_forced_open) && 
             !pattern.special_markers.at("reasoning_start_marker").empty() && 
             !pattern.special_markers.at("reasoning_end_marker").empty()) {
             
-            reasoning = p.optional(
-                p.reasoning_block(
-                    p.literal(pattern.special_markers.at("reasoning_start_marker")) +
+            if (thinking_forced_open) {
+                reasoning = p.reasoning_block(
                     p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
                     p.literal(pattern.special_markers.at("reasoning_end_marker"))
-                )
-            );
+                );
+            } else {
+                reasoning = p.optional(
+                    p.reasoning_block(
+                        p.literal(pattern.special_markers.at("reasoning_start_marker")) +
+                        p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
+                        p.literal(pattern.special_markers.at("reasoning_end_marker"))
+                    )
+                );
+            }
         }
 
         // Build tool call parser based on discovered patterns
