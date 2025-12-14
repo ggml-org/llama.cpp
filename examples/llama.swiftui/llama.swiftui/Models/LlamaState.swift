@@ -14,9 +14,11 @@ class LlamaState: ObservableObject {
     @Published var cacheCleared = false
     @Published var downloadedModels: [Model] = []
     @Published var undownloadedModels: [Model] = []
+    @Published var selectedBackend: Backend = .metalTensor
     let NS_PER_S = 1_000_000_000.0
 
     private var llamaContext: LlamaContext?
+    private var currentModelUrl: URL?  // Track currently loaded model
     private var defaultModelUrl: URL? {
         Bundle.main.url(forResource: "ggml-model", withExtension: "gguf", subdirectory: "models")
         // Bundle.main.url(forResource: "llama-2-7b-chat", withExtension: "Q2_K.gguf", subdirectory: "models")
@@ -103,7 +105,9 @@ class LlamaState: ObservableObject {
     func loadModel(modelUrl: URL?) throws {
         if let modelUrl {
             messageLog += "Loading model...\n"
-            llamaContext = try LlamaContext.create_context(path: modelUrl.path())
+            messageLog += "Backend: \(selectedBackend.displayName)\n"
+            llamaContext = try LlamaContext.create_context(path: modelUrl.path(), backend: selectedBackend)
+            currentModelUrl = modelUrl  // Track the loaded model
             messageLog += "Loaded model \(modelUrl.lastPathComponent)\n"
 
             // Assuming that the model is successfully loaded, update the downloaded models
@@ -192,5 +196,110 @@ class LlamaState: ObservableObject {
 
         await llamaContext.clear()
         messageLog = ""
+    }
+
+    func compareAllBackends(prompt: String) async -> [InferenceMetrics] {
+        var results: [InferenceMetrics] = []
+
+        messageLog += "\n=== Backend Comparison ===\n"
+        messageLog += "Prompt: \(prompt)\n\n"
+
+        for backend in Backend.allCases {
+            messageLog += "Testing \(backend.displayName)...\n"
+
+            // Switch backend
+            selectedBackend = backend
+
+            // Reload model with new backend
+            if let modelPath = llamaContext {
+                // Clear existing context
+                llamaContext = nil
+            }
+
+            // Get current model path (we need to track this)
+            guard let currentModelUrl = getCurrentModelUrl() else {
+                messageLog += "No model loaded\n"
+                continue
+            }
+
+            do {
+                try loadModel(modelUrl: currentModelUrl)
+            } catch {
+                messageLog += "Failed to load model: \(error)\n"
+                continue
+            }
+
+            // Run inference and wait for completion
+            guard let llamaContext else {
+                messageLog += "Context not initialized\n"
+                continue
+            }
+
+            await llamaContext.completion_init(text: prompt)
+            messageLog += "\(prompt)"
+
+            // Run completion loop synchronously
+            while await !llamaContext.is_done {
+                let result = await llamaContext.completion_loop()
+                messageLog += "\(result)"
+            }
+
+            messageLog += "\nDone\n"
+
+            // Get metrics immediately after completion
+            if let metrics = await llamaContext.lastMetrics {
+                results.append(metrics)
+                messageLog += formatMetrics(metrics)
+                messageLog += "\n"
+            } else {
+                messageLog += "Warning: No metrics collected for \(backend.displayName)\n"
+            }
+
+            await llamaContext.clear()
+
+            // Small delay between tests
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+
+        messageLog += "\n=== Comparison Summary ===\n"
+        messageLog += formatComparisonTable(results)
+
+        return results
+    }
+
+    private func getCurrentModelUrl() -> URL? {
+        return currentModelUrl
+    }
+
+    func formatMetrics(_ metrics: InferenceMetrics) -> String {
+        let memoryMB = Double(metrics.memoryUsed) / (1024.0 * 1024.0)
+        return """
+        Backend: \(metrics.backend.displayName)
+        TTFT: \(String(format: "%.3f", metrics.ttft))s
+        Tokens/sec: \(String(format: "%.2f", metrics.tokensPerSecond))
+        Total tokens: \(metrics.totalTokens)
+        Total time: \(String(format: "%.3f", metrics.totalTime))s
+        Memory: \(String(format: "%.1f", memoryMB)) MB
+        Thermal: \(metrics.thermalState)
+        """
+    }
+
+    func formatComparisonTable(_ results: [InferenceMetrics]) -> String {
+        var table = "| Backend | TTFT (s) | Tokens/s | Tokens | Time (s) | Memory (MB) | Thermal |\n"
+        table += "|---------|----------|----------|--------|----------|-------------|---------|\n"
+
+        for metrics in results {
+            let memoryMB = Double(metrics.memoryUsed) / (1024.0 * 1024.0)
+            table += String(format: "| %@ | %.3f | %.2f | %d | %.3f | %.1f | %@ |\n",
+                          metrics.backend.displayName,
+                          metrics.ttft,
+                          metrics.tokensPerSecond,
+                          metrics.totalTokens,
+                          metrics.totalTime,
+                          memoryMB,
+                          metrics.thermalState)
+        }
+
+        return table
     }
 }
