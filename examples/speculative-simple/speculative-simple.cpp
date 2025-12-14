@@ -255,6 +255,8 @@ int main(int argc, char ** argv) {
     LOG_INF("target:\n\n");
     common_perf_print(ctx_tgt, smpl);
 
+    llama_batch_free(batch_tgt);
+
     common_sampler_free(smpl);
     common_speculative_free(spec);
 
