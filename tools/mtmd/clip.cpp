@@ -2230,7 +2230,14 @@ struct llava_uhd {
         clip_image_size refined_size;  // size of image right before slicing (must be multiple of slice size)
         clip_image_size grid_size;     // grid_size.width * grid_size.height = number of slices
         std::vector<slice_coordinates> slices;
+
+        img_tool::resize_algo interpolation_overview = img_tool::RESIZE_ALGO_BILINEAR;
+        bool padding_overview = false;  // if true, refine image will be padded to the grid size (e.g. llava-1.6)
+        std::array<uint8_t, 3> pad_color_overview = {0, 0, 0};
+
+        img_tool::resize_algo interpolation_refined = img_tool::RESIZE_ALGO_BICUBIC;
         bool padding_refined = false;  // if true, refine image will be padded to the grid size (e.g. llava-1.6)
+        std::array<uint8_t, 3> pad_color_refined = {0, 0, 0};
     };
 
     static slice_instructions get_slice_instructions(struct clip_ctx * ctx, const clip_image_size & original_size) {
@@ -2257,10 +2264,11 @@ struct llava_uhd {
             auto refine_size = llava_uhd::select_best_resolution(
                 original_size,
                 ctx->model.hparams.image_res_candidates);
-            res.overview_size   = clip_image_size{slice_size, slice_size};
-            res.refined_size    = refine_size;
-            res.grid_size       = clip_image_size{0, 0};
-            res.padding_refined = true;
+            res.overview_size         = clip_image_size{slice_size, slice_size};
+            res.refined_size          = refine_size;
+            res.grid_size             = clip_image_size{0, 0};
+            res.padding_refined       = true;
+            res.interpolation_refined = img_tool::RESIZE_ALGO_BILINEAR;  // preserve old behavior when padding
 
             LOG_DBG("%s: using pinpoints for slicing\n", __func__);
             LOG_DBG("%s: original size: %d x %d, overview size: %d x %d, refined size: %d x %d\n",
@@ -2339,12 +2347,13 @@ struct llava_uhd {
 
     static std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 * img, const slice_instructions & inst) {
         std::vector<clip_image_u8_ptr> output;
-        img_tool::resize_algo interpolation = img_tool::RESIZE_ALGO_BILINEAR; // TODO: make it configurable
 
         // resize to overview size
         clip_image_u8_ptr resized_img(clip_image_u8_init());
-        img_tool::resize(*img, *resized_img, inst.overview_size, interpolation);
+        img_tool::resize(*img, *resized_img, inst.overview_size, inst.interpolation_overview,
+                         inst.padding_overview, inst.pad_color_overview);
         output.push_back(std::move(resized_img));
+
         if (inst.slices.empty()) {
             // no slices, just return the resized image
             return output;
@@ -2352,13 +2361,8 @@ struct llava_uhd {
 
         // resize to refined size
         clip_image_u8_ptr refined_img(clip_image_u8_init());
-        if (inst.padding_refined) {
-            img_tool::resize(*img, *refined_img, inst.refined_size, interpolation);
-        } else {
-            // only algo bicubic preserves the ratio; old models rely on this behavior
-            // TODO: do we need to support other algos here?
-            img_tool::resize(*img, *refined_img, inst.refined_size, img_tool::RESIZE_ALGO_BICUBIC, false);
-        }
+        img_tool::resize(*img, *refined_img, inst.refined_size, inst.interpolation_refined,
+                         inst.padding_refined, inst.pad_color_refined);
 
         // create slices
         for (const auto & slice : inst.slices) {
