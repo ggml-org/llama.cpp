@@ -218,6 +218,10 @@ struct common_params_sampling {
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
 
+    bool has_logit_bias() const {
+        return !logit_bias.empty();
+    }
+
     // print the parameters into a string
     std::string print() const;
 };
@@ -671,15 +675,29 @@ bool tty_can_use_colors();
 // Model utils
 //
 
-// note: defines object's lifetime
-struct common_init_result {
-    llama_model_ptr   model;
-    llama_context_ptr context;
+struct common_sampler;
 
-    std::vector<llama_adapter_lora_ptr> lora;
+// note: defines the model, context, samplers, ets. lifetimes
+struct common_init_result {
+    common_init_result(common_params & params);
+    ~common_init_result();
+
+    llama_model * model();
+    llama_context * context();
+    common_sampler * sampler(llama_seq_id seq_id);
+
+    std::vector<llama_adapter_lora_ptr> & lora();
+
+    void free_context();
+
+private:
+    struct impl;
+    std::unique_ptr<impl> pimpl;
 };
 
-struct common_init_result     common_init_from_params(common_params & params);
+using common_init_result_ptr = std::unique_ptr<common_init_result>;
+
+common_init_result_ptr common_init_from_params(common_params & params);
 
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);
