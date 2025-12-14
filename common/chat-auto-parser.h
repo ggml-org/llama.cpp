@@ -129,6 +129,4 @@ private:
         const minja::chat_template& tmpl, 
         const struct templates_params& inputs
     );
-    
-    static std::string build_grammar_from_tools(const json& tools, bool parallel_tool_calls);
 };
