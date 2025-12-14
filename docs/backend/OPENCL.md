@@ -174,7 +174,7 @@ If an older version of Powershell is used, these commands may not work as they a
 
 ### I. Setup Environment
 
-The two steps below also apply to Linux. Simply replace the backticks with back slashes. Ensure you have Git, CMake, Clang, Ninja and Python installed.
+The two steps below also apply to Linux. If building for Linux, simply replace the backticks with back slashes. Ensure you have Git, CMake, Clang, Ninja and Python installed.
 
 1. **Install OpenCL Headers and Library**
 
