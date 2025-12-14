@@ -1157,6 +1157,9 @@ class TextModel(ModelBase):
         if chkhsh == "f4f37b6c8eb9ea29b3eac6bb8c8487c5ab7885f8d8022e67edc1c68ce8403e95":
             # ref: https://huggingface.co/MiniMaxAI/MiniMax-M2
             res = "minimax-m2"
+        if chkhsh == "4a2e2abae11ca2b86d570fc5b44be4d5eb5e72cc8f22dd136a94b37da83ab665":
+            # ref: https://huggingface.co/KORMo-Team/KORMo-tokenizer
+            res = "kormo"
 
         if res is None:
             logger.warning("\n")
