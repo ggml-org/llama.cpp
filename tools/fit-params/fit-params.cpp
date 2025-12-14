@@ -24,7 +24,7 @@ int main(int argc, char ** argv) {
     auto cparams = common_context_params_to_llama(params);
     llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
         params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target, params.fit_params_min_ctx,
-        params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+        params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
 
     LOG_INF("Printing fitted CLI arguments to stdout...\n");
     std::cout << "-c "    << cparams.n_ctx;
