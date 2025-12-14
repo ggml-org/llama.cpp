@@ -53,6 +53,11 @@
 					]
 				},
 				{
+                    key: 'responsiveChatWidth',
+                    label: 'Responsive chat width',
+                    type: 'checkbox'
+                },
+				{
 					key: 'showMessageStats',
 					label: 'Show message generation statistics',
 					type: 'checkbox'

@@ -9,6 +9,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	showToolCalls: false,
 	disableReasoningFormat: false,
 	keepStatsVisible: false,
+	responsiveChatWidth: false,
 	showMessageStats: true,
 	askForTitleConfirmation: false,
 	pasteLongTextToFileLen: 2500,
@@ -86,6 +87,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	disableReasoningFormat:
 		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
+	responsiveChatWidth:
+		'Enable responsive chat width that adapts to your screen size. When disabled, uses a fixed width optimized for readability.',
 	showMessageStats:
 		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
 	askForTitleConfirmation:
