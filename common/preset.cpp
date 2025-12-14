@@ -157,6 +157,21 @@ static std::map<std::string, common_arg> get_map_key_opt(common_params_context &
     return mapping;
 }
 
+static bool is_bool_arg(const common_arg & arg) {
+    return !arg.args_neg.empty();
+}
+
+static std::string parse_bool_arg(const common_arg & arg, const std::string & key, const std::string & value) {
+    // if this is a negated arg, we need to reverse the value
+    for (const auto & neg_arg : arg.args_neg) {
+        if (rm_leading_dashes(neg_arg) == key) {
+            return common_arg_utils::is_truthy(value) ? "false" : "true";
+        }
+    }
+    // otherwise, not negated
+    return value;
+}
+
 common_presets common_presets_load(const std::string & path, common_params_context & ctx_params) {
     common_presets out;
     auto key_to_opt = get_map_key_opt(ctx_params);
@@ -173,8 +188,13 @@ common_presets common_presets_load(const std::string & path, common_params_conte
         for (const auto & [key, value] : section.second) {
             LOG_DBG("option: %s = %s\n", key.c_str(), value.c_str());
             if (key_to_opt.find(key) != key_to_opt.end()) {
-                preset.options[key_to_opt[key]] = value;
-                LOG_DBG("accepted option: %s = %s\n", key.c_str(), value.c_str());
+                auto & opt = key_to_opt[key];
+                if (is_bool_arg(opt)) {
+                    preset.options[opt] = parse_bool_arg(opt, key, value);
+                } else {
+                    preset.options[opt] = value;
+                }
+                LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
             } else {
                 // TODO: maybe warn about unknown key?
             }
