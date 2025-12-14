@@ -144,7 +144,7 @@ class ModelBase:
 
         # Ensure "rope_theta" and "rope_type" is mirrored in rope_parameters
         if "full_attention" not in self.rope_parameters and "sliding_attention" not in self.rope_parameters:
-            if "rope_theta" not in self.rope_parameters and (rope_theta := self.hparams.get("rope_theta") or self.hparams.get("global_rope_theta") or self.hparams.get("rotary_emb_base")) is not None:
+            if "rope_theta" not in self.rope_parameters and (rope_theta := self.find_hparam(["rope_theta", "global_rope_theta", "rotary_emb_base"], optional=True)) is not None:
                 self.rope_parameters["rope_theta"] = rope_theta
             if "rope_type" not in self.rope_parameters and (rope_type := self.rope_parameters.get("type")) is not None:
                 self.rope_parameters["rope_type"] = rope_type
