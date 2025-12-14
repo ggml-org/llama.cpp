@@ -15,6 +15,7 @@ if (CUDAToolkit_FOUND)
         # 80     == Ampere, asynchronous data loading, faster tensor core instructions
         # 86     == RTX 3000, needs CUDA v11.1
         # 89     == RTX 4000, needs CUDA v11.8
+        # 120    == Blackwell (RTX 5000), needs CUDA v13.0
         #
         # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
         # XX-real    == compile CUDA code as device code for this specific architecture
@@ -33,6 +34,11 @@ if (CUDAToolkit_FOUND)
 
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
                 list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real)
+            endif()
+
+            # sm120 == Blackwell (RTX 5000), needs CUDA v13.0
+            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "13.0")
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 120-real)
             endif()
         endif()
     endif()
