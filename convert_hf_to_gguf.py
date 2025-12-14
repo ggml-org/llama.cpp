@@ -197,10 +197,10 @@ class ModelBase:
             return tensors
 
         prefix = "model" if not self.is_mistral_format else "consolidated"
-        part_names: set[str] = set(ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors"))
+        part_names: list[str] = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
         is_safetensors: bool = len(part_names) > 0
         if not is_safetensors:
-            part_names = set(ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin"))
+            part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
 
         tensor_names_from_index: set[str] = set()
 
@@ -217,7 +217,8 @@ class ModelBase:
                     if weight_map is None or not isinstance(weight_map, dict):
                         raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
                     tensor_names_from_index.update(weight_map.keys())
-                    part_names |= set(weight_map.values())
+                    part_dict: dict[str, None] = dict.fromkeys(list(weight_map.values()) + part_names, None)
+                    part_names = list(part_dict.keys())
             else:
                 weight_map = {}
         else:
