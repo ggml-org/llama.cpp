@@ -2427,8 +2427,11 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
 
     // update running history with the original probability of the selected token
     float original_p  = original_probs[idx];
+    fprintf(stderr, "power-law: original prob was %.3f\n", original_p); fflush(stderr);
     ctx->weighted_sum = original_p + decay * ctx->weighted_sum;
+    fprintf(stderr, "power-law: updated ctx->weighted_sum = %.3f\n", ctx->weighted_sum); fflush(stderr);
     ctx->total_weight = 1.0f + decay * ctx->total_weight;
+    fprintf(stderr, "power-law: updated ctx->total_weight = %.3f\n", ctx->total_weight); fflush(stderr);
 }
 
 static void llama_sampler_power_law_reset(struct llama_sampler * smpl) {

@@ -1569,12 +1569,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sparam());
     add_opt(common_arg(
         {"--power-law-decay"}, "N",
-        string_format("power law sampler: decay rate for target adaptation over time. lower "
-                      "values -> faster but less stable adaptation. "
-                      "(valid range 0.0 to 1.0; ≤0 = no adaptation) (default: %.2f)",
-                      (double)params.sampling.power_law_decay),
-        [](common_params & params, int value) {
-            params.sampling.power_law_decay = value;
+        string_format("decay rate for target adaptation over time. lower values -> faster but less stable adaptation.\n"
+        "(valid range 0.0 to 1.0; ≤0 = no adaptation) (default: %.2f)", (double)params.sampling.power_law_decay),
+        [](common_params & params, const std::string & value) {
+            params.sampling.power_law_decay = std::stof(value);
         }
     ).set_sparam());
     add_opt(common_arg(
