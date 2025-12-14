@@ -160,7 +160,7 @@ struct llama_file::impl {
         }
     }
 #elif defined(__linux__)
-    impl(const char * fname, const char * mode) : impl(fname, mode, false) {} 
+    impl(const char * fname, const char * mode) : impl(fname, mode, false) {}
 
     impl(const char * fname, const char * mode, bool uncached_read) {
         if (uncached_read) {

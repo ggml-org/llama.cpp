@@ -502,7 +502,7 @@ llama_model_loader::llama_model_loader(
 
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
-    
+
 #if defined(__linux__)
     files.emplace_back(new llama_file(fname.c_str(), "rb", !use_mmap));
 #else
@@ -1047,21 +1047,21 @@ bool llama_model_loader::load_all_data(
         off_t aligned_offset = offset & ~(alignment - 1);
         off_t offset_from_alignment = offset - aligned_offset;
         size_t bytes_to_read = (offset_from_alignment + size + alignment - 1) & ~(alignment - 1);
-        
+
         void * raw_buffer = nullptr;
         int ret = posix_memalign(&raw_buffer, alignment, bytes_to_read);
         if (ret != 0) {
             throw std::runtime_error(format("posix_memalign failed with error %d", ret));
         }
-        
+
         struct aligned_buffer_deleter {
             void operator()(void * p) const { free(p); }
         };
         std::unique_ptr<void, aligned_buffer_deleter> buffer(raw_buffer);
-        
+
         file->seek(aligned_offset, SEEK_SET);
         file->read_raw(buffer.get(), bytes_to_read);
-        
+
         uintptr_t actual_data = reinterpret_cast<uintptr_t>(buffer.get()) + offset_from_alignment;
         memcpy(dest, reinterpret_cast<void *>(actual_data), size);
     };
@@ -1150,7 +1150,7 @@ bool llama_model_loader::load_all_data(
 
                         // Wait for previous upload to complete before reusing buffer
                         ggml_backend_event_synchronize(events[buffer_idx]);
-                        
+
                         // Read aligned chunk from file
                         file->read_raw(reinterpret_cast<void *>(ptr_dest_aligned), read_size);
 
@@ -1163,7 +1163,7 @@ bool llama_model_loader::load_all_data(
                             ptr_data += offset_from_alignment;
                             data_to_copy -= offset_from_alignment;
                         }
-                        
+
                         // Trim alignment padding at end of last chunk
                         if (aligned_offset + bytes_read + read_size > offset + n_size) {
                             data_to_copy -= (read_end - (offset + n_size));
@@ -1204,9 +1204,9 @@ bool llama_model_loader::load_all_data(
                     read_aligned_chunk(file.get(), weight->offs, read_buf.data(), n_size, alignment);
 #else
                     file->seek(weight->offs, SEEK_SET);
-                    file->read_raw(read_buf.data(), n_size);           
+                    file->read_raw(read_buf.data(), n_size);
 #endif
-                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);   
+                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
                     if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
                         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
                     }
