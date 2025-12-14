@@ -3965,6 +3965,9 @@ class Eagle2VLVisionModel(MmprojModel):
                     return [(new_name, data_torch)]
                 return [(new_name, data_torch)]
             # Map second Linear (mlp1.3.*) -> mm.2.*
+            # Note: In the HuggingFace model, the projector is implemented as a Sequential module:
+            #   [0]: LayerNorm, [1]: Linear, [2]: GELU, [3]: Linear
+            # So the second Linear layer is at index 3 (mlp1.3.*), not 2, because GELU occupies index 2.
             if mlp_suffix.startswith("3."):
                 new_name = "mm.2." + mlp_suffix[2:]
                 if new_name.endswith(".weight"):
