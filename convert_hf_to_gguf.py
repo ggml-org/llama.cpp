@@ -2370,7 +2370,8 @@ class StableLMModel(TextModel):
     "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
-    "LlamaModel")
+    "LlamaModel",
+    "KORMoForCausalLM")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     undo_permute = True
@@ -8236,7 +8237,6 @@ class NemotronModel(TextModel):
             data_torch = data_torch + 1
 
         return [(self.map_tensor_name(name), data_torch)]
-
 
 @ModelBase.register("ExaoneForCausalLM")
 class ExaoneModel(TextModel):
