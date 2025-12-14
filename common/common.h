@@ -185,7 +185,7 @@ struct common_params_sampling {
     int32_t dry_allowed_length = 2;      // tokens extending repetitions beyond this receive penalty
     int32_t dry_penalty_last_n = -1;     // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
     float   power_law_target   = -1.0f;  // select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
-    float   power_law_decay    = 0.9f;   // decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
+    float   power_law_decay    = 0.50f;  // decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
     int32_t mirostat           = 0;      // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
     float   top_n_sigma        = -1.00f; // -1.0 = disabled
     float   mirostat_tau       = 5.00f;  // target entropy
