@@ -3372,17 +3372,6 @@ class QwenModel(TextModel):
     def set_vocab(self):
         self._set_vocab_qwen()
 
-    def set_gguf_parameters(self):
-        self.gguf_writer.add_context_length(self.hparams["max_position_embeddings"])
-        self.gguf_writer.add_block_count(self.block_count)
-        self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
-        self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
-        self.gguf_writer.add_rope_freq_base(self.hparams["rotary_emb_base"])
-        self.gguf_writer.add_rope_dimension_count(self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
-        self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
-        self.gguf_writer.add_layer_norm_rms_eps(self.hparams["layer_norm_epsilon"])
-        self.gguf_writer.add_file_type(self.ftype)
-
 
 @ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration")
 class Qwen2Model(TextModel):
@@ -5520,7 +5509,6 @@ class NomicBertModel(BertModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_rope_freq_base(self.hparams["rotary_emb_base"])
         if self.is_moe:
             self.gguf_writer.add_moe_every_n_layers(self.hparams["moe_every_n_layers"])
             self.gguf_writer.add_expert_count(self.hparams["num_experts"])
@@ -5643,8 +5631,6 @@ class XLMRobertaModel(BertModel):
         super().set_gguf_parameters()
 
         # jina-embeddings-v3
-        if rotary_emb_base := self.hparams.get("rotary_emb_base"):
-            self.gguf_writer.add_rope_freq_base(rotary_emb_base)
         lora_alpha = self.hparams.get("lora_alpha")
         if lora_prompt_prefixes := self.hparams.get("task_instructions"):
             assert self._lora_files and all(lora_name in lora_prompt_prefixes for lora_name in self._lora_files.keys())
