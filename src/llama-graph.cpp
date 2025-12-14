@@ -590,6 +590,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    eagle3           (params.eagle3),
     cb_func          (params.cb),
     res              (params.res),
     ctx0             (res->get_ctx()),

@@ -58,6 +58,7 @@ add_library(llama
             models/deepseek2.cpp
             models/dots1.cpp
             models/dream.cpp
+            models/eagle3.cpp
             models/ernie4-5-moe.cpp
             models/ernie4-5.cpp
             models/exaone.cpp

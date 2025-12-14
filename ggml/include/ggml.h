@@ -629,6 +629,7 @@ extern "C" {
         GGML_TENSOR_FLAG_OUTPUT =  2, // ...is an output for the GGML compute graph
         GGML_TENSOR_FLAG_PARAM  =  4, // ...contains trainable parameters
         GGML_TENSOR_FLAG_LOSS   =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
+        GGML_TENSOR_FLAG_SYNC   = 16, // ...forces a new split/sync point in the scheduler (e.g. for EAGLE3 decoder)
     };
 
     enum ggml_tri_type {
@@ -853,6 +854,7 @@ extern "C" {
     GGML_API void ggml_set_output(struct ggml_tensor * tensor);
     GGML_API void ggml_set_param(struct ggml_tensor * tensor);
     GGML_API void ggml_set_loss(struct ggml_tensor * tensor);
+    GGML_API void ggml_set_sync(struct ggml_tensor * tensor);  // force sync point in scheduler
 
     //
     // operations on tensors with backpropagation

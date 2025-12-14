@@ -7451,6 +7451,10 @@ void ggml_set_loss(struct ggml_tensor * tensor) {
     tensor->flags |= GGML_TENSOR_FLAG_LOSS;
 }
 
+void ggml_set_sync(struct ggml_tensor * tensor) {
+    tensor->flags |= GGML_TENSOR_FLAG_SYNC;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 void ggml_quantize_init(enum ggml_type type) {

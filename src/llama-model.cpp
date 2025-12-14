@@ -2230,6 +2230,28 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_EAGLE3:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                // EAGLE3 layer extraction configuration
+                // Use array<int, 4> (has template instantiation), then copy first 3 elements
+                std::array<int, 4> extract_layers_tmp = {};
+                if (!ml.get_key_or_arr(LLM_KV_EAGLE3_EXTRACT_LAYERS, extract_layers_tmp, 3, false)) {
+                    throw std::runtime_error("EAGLE3 model requires 'extract_layers' in GGUF metadata");
+                }
+                std::copy_n(extract_layers_tmp.begin(), 3, hparams.eagle3_extract_layers.begin());
+                LLAMA_LOG_INFO("%s: EAGLE3 extract_layers = [%d, %d, %d]\n", __func__,
+                               hparams.eagle3_extract_layers[0],
+                               hparams.eagle3_extract_layers[1],
+                               hparams.eagle3_extract_layers[2]);
+
+                // EAGLE3 target model hidden size
+                ml.get_key(LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE, hparams.eagle3_target_hidden_size);
+                LLAMA_LOG_INFO("%s: EAGLE3 target_hidden_size = %u (draft n_embd = %u)\n", __func__,
+                               hparams.eagle3_target_hidden_size, hparams.n_embd);
+                               
+                type = LLM_TYPE_UNKNOWN;
+            } break;
         case LLM_ARCH_COGVLM:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -6408,6 +6430,62 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
                     }
                 } break;
+            case LLM_ARCH_EAGLE3:
+                {
+                    const int64_t n_embd_target_features = 3 * hparams.eagle3_target_hidden_size;  
+                    const int64_t n_embd_attn_input = 2 * n_embd;       
+                    
+                    // Get vocab size from the d2t tensor in the GGUF file
+                    // d2t: draft to target mapping (size = draft_vocab_size)
+                    const struct ggml_tensor * d2t_meta = ml.get_tensor_meta("d2t");
+                    if (!d2t_meta) {
+                        throw std::runtime_error("EAGLE3 model requires 'd2t' tensor but it was not found in the model file");
+                    }
+                    const int64_t n_draft_vocab = d2t_meta->ne[0];   
+                    
+                    // Feature fusion layer: projects 3 target layers to draft hidden size
+                    fc = create_tensor(tn(LLM_TENSOR_EAGLE3_FC, "weight"), {n_embd_target_features, n_embd}, 0);
+                    
+                    // Draft to target vocabulary mapping tensor
+                    d2t = create_tensor(tn(LLM_TENSOR_EAGLE3_D2T), {n_draft_vocab}, 0);
+                    
+                    // Output layer (uses draft vocab size)
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_draft_vocab}, 0);
+                    
+                    // Token embeddings (optional - Llama 3.3 70B EAGLE3 has its own)
+                    const struct ggml_tensor * tok_embd_meta = ml.get_tensor_meta(tn(LLM_TENSOR_TOKEN_EMBD, "weight").str().c_str());
+                    if (tok_embd_meta) {
+                        const int64_t n_target_vocab = tok_embd_meta->ne[1];
+                        tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_target_vocab}, 0);
+                        LLAMA_LOG_INFO("%s: EAGLE3 using its own token_embd (vocab = %lld)\n", __func__, (long long)n_target_vocab);
+                    }
+                    
+                    // Single decoder layer
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+                        
+                        // input_layernorm: applied to token embeddings
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        
+                        // Attention takes input_embeds_normed + fused_target_normed as input
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd_attn_input, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd_attn_input, n_embd_k_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd_attn_input, n_embd_v_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+                        
+                        // EAGLE-3 specific: hidden_norm applied to fused target features
+                        layer.eagle3_hidden_norm = create_tensor(tn(LLM_TENSOR_EAGLE3_HIDDEN_NORM, "weight", i), {n_embd}, 0);
+                        
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        
+                        // rope_freqs for llama3 rope scaling (optional - only if EAGLE3 config has rope_scaling)
+                        layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED);
+                    }
+                } break;
             case LLM_ARCH_COGVLM:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -7564,6 +7642,14 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_minimax_m2>(*this, params);
             } break;
+        case LLM_ARCH_EAGLE3:
+            {
+                if (params.gtype == LLM_GRAPH_TYPE_ENCODER) {
+                    llm = std::make_unique<llm_build_eagle3_encode>(*this, params);
+                } else {
+                    llm = std::make_unique<llm_build_eagle3_decode>(*this, params);
+                }
+            } break;
         case LLM_ARCH_COGVLM:
             {
                 llm = std::make_unique<llm_build_cogvlm>(*this, params);
@@ -7749,6 +7835,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
         case LLM_ARCH_MISTRAL3:
+        case LLM_ARCH_EAGLE3:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2

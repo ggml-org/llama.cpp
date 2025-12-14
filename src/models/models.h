@@ -150,6 +150,14 @@ struct llm_build_dream : public llm_graph_context {
     llm_build_dream(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_eagle3_encode : public llm_graph_context {
+    llm_build_eagle3_encode(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_eagle3_decode : public llm_graph_context {
+    llm_build_eagle3_decode(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_ernie4_5 : public llm_graph_context {
     llm_build_ernie4_5(const llama_model & model, const llm_graph_params & params);
 };

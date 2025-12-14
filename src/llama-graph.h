@@ -70,6 +70,30 @@ struct llama_cross {
     std::vector<std::set<llama_seq_id>> seq_ids_enc;
 };
 
+// EAGLE3 support - stores intermediate features from target model
+struct llama_eagle3 {
+    // Configuration: which layers to extract from target model
+    std::vector<int> extract_layer_indices;
+    
+    // Extracted features from target model (for encoder input)
+    // Concatenated [layer_l, layer_m, layer_h] embeddings
+    // Shape: [n_layers * n_embd, n_tokens] where n_layers = extract_layer_indices.size()
+    std::vector<float> target_features;
+    
+    // Encoder output (for decoder input)
+    std::vector<float> g_embeddings;
+    
+    // Tensor references for feature extraction from target model
+    std::vector<ggml_tensor *> extract_tensors;
+    
+    // Clear all stored data
+    void clear() {
+        target_features.clear();
+        g_embeddings.clear();
+        extract_tensors.clear();
+    }
+};
+
 struct llm_graph_params;
 
 //
@@ -416,6 +440,7 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    llama_eagle3                 * eagle3;  // non-const: we write extracted features here
 
     uint32_t n_outputs;
 
@@ -579,6 +604,7 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    llama_eagle3                 * eagle3;  // non-const: we write extracted features here
 
     const llm_graph_cb & cb_func;
 

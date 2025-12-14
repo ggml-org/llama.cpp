@@ -1202,6 +1202,11 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 }
             }
 
+            // check if this node requires a sync point (e.g. for EAGLE3 parallel path fix)
+            if (node->flags & GGML_TENSOR_FLAG_SYNC) {
+                need_new_split = true;
+            }
+
             if (node_backend_id != cur_backend_id || need_new_split) {
                 split->i_end = i;
                 i_split++;
@@ -1575,6 +1580,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
+            }
+            
+            // If any node in this split has SYNC flag, synchronize after compute
+            // This ensures the sync node is complete before next split (e.g. for EAGLE3 parallel path sync fix)
+            for (int j = 0; j < split->graph.n_nodes; j++) {
+                if (split->graph.nodes[j]->flags & GGML_TENSOR_FLAG_SYNC) {
+                    ggml_backend_synchronize(split_backend);
+                    break;
+                }
             }
         } else {
             // similar to ggml_backend_compare_graph_backend

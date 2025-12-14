@@ -404,6 +404,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_act_beta    = nullptr;
     struct ggml_tensor * ffn_act_eps     = nullptr;
 
+    // eagle3
+    struct ggml_tensor * eagle3_hidden_norm = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
@@ -452,6 +455,13 @@ struct llama_model {
     struct ggml_tensor * altup_unembd_proj    = nullptr;
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
+
+    // eagle3
+    struct ggml_tensor * fc  = nullptr;  // feature fusion layer
+    struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
+    // Reference to target model's embedding layer
+    // This allows EAGLE3 to use target model's embeddings without copying
+    struct ggml_tensor * target_tok_embd = nullptr;
 
     std::vector<llama_layer> layers;
 
