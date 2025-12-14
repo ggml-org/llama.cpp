@@ -3975,9 +3975,16 @@ class Eagle2VLVisionModel(MmprojModel):
                         expected = getattr(self, "n_embd_text", None)
                         if isinstance(expected, int) and expected > 0:
                             if d0 == expected and d1 == expected:
-                                pass
+                                pass  # already canonical
                             elif d1 == expected and d0 != expected:
+                                logging.warning(
+                                    f"mm.2 weight shape {data_torch.shape} for {name}: d1 matches expected ({expected}), d0={d0} does not. Transposing, but please verify correctness."
+                                )
                                 data_torch = data_torch.transpose(-1, -2)
+                            else:
+                                logging.warning(
+                                    f"mm.2 weight shape {data_torch.shape} for {name}: neither dimension matches expected ({expected}). Leaving as-is, but this may be incorrect."
+                                )
                     return [(new_name, data_torch)]
                 return [(new_name, data_torch)]
             # Unknown mlp1 component -> skip
