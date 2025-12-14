@@ -443,8 +443,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint sl = (data_a[ib].scales_l[ib32/2] >> (4 * (ib32 & 1))) & 0xF;
             const uint sh = ((data_a[ib].scales_h) >> (2 * ib32)) & 3;
             const uint qshift = (idx & 8) >> 1;
-            u8vec2 qs = u8vec2(data_a[ib].qs[iq], data_a[ib].qs[iq + 1]);
-            qs = (qs >> qshift) & uint8_t(0xF);
+            u8vec2 qs = unpack8((uint32_t(data_a_packed16[ib].qs[iq/2]) >> qshift) & 0x0F0F0F0F).xy; // vec4 used due to #12147
 
             const float d = float(data_a[ib].d);
             const vec2 v = d * float(int(sl | (sh << 4)) - 32) * vec2(kvalues_iq4nl[qs.x], kvalues_iq4nl[qs.y]);
