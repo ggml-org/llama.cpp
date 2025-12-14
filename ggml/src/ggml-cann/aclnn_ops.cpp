@@ -3037,7 +3037,7 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
     int64_t interval = max_kernel_size;
 
     int64_t left_pad_len = dilationVal[0] * (max_kernel_size - 1) + 1 - 2 * paddingVal[0];
-    int64_t right_pad_len = 0; 
+    int64_t right_pad_len = 0;
 
     acl_scalar_ptr alpha = nullptr;
     float alphaValue = 1.0;
@@ -3084,7 +3084,7 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
             part_dst_ne[i] = *(dst->ne + i);
         }
         part_dst_ne[0] = (input_len - 1) * strideVal[0] - 2 * paddingVal[0] + dilationVal[0] * (part_ne[0] - 1) + 1;
-        
+
         size_t part_dst_nb[4];
         part_dst_nb[0] = sizeof(weight_type);
         for (int i = 1; i < 4; i++) {
@@ -3120,13 +3120,13 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
         for(int i = 0; i < 4; i++){
             conv_result_ne[i] = *(dst->ne + i);
         }
-        
+
         size_t conv_result_nb[4];
         conv_result_nb[0] = sizeof(weight_type);
         for (int i = 1; i < 4; i++) {
             conv_result_nb[i] = conv_result_nb[i - 1] * conv_result_ne[i - 1];
         }
-        
+
         ggml_cann_pool_alloc conv_result_allocator;
         conv_result_allocator.alloc(ctx.pool(), conv_result_nb[3]);
         void* conv_result_buf = conv_result_allocator.get();
@@ -3136,7 +3136,7 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
 
         GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, conv_result.get());
         GGML_CANN_CALL_ACLNN_OP(ctx, ConstantPadNd, acl_part_dst.get(), padData.get(), pad_value.get(), conv_result.get());
-        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdd, acl_dst.get(), conv_result.get(), alpha.get());            
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdd, acl_dst.get(), conv_result.get(), alpha.get());
     }
 }
 
