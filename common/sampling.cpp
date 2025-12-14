@@ -287,7 +287,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                     llama_sampler_chain_add(result->chain, llama_sampler_init_penalties   (params.penalty_last_n, params.penalty_repeat, params.penalty_freq, params.penalty_present));
                     break;
                 case COMMON_SAMPLER_TYPE_POWER_LAW:
-                    llama_sampler_chain_add(result->chain, llama_sampler_init_power_law   (params.power_law_target, params.power_law_window_size, params.seed));
+                    llama_sampler_chain_add(result->chain, llama_sampler_init_power_law   (params.power_law_target, params.power_law_decay, params.seed));
                     has_distribution_sampler = true;
                     break;
                 default:
