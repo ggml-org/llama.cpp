@@ -1289,24 +1289,28 @@ extern "C" {
                           const char ** seq_breakers,
                               size_t    num_breakers);
 
-    /// @details power-law sampler - reshapes probability distribution to target specific probability ranges
+    /// power-law
+    ///
+    /// this sampler implements a power law probability transformation with adaptive
+    /// target tracking. it reshapes token probability distributions to favor tokens near a
+    /// configurable target probability, rather than always selecting from the highest probability
+    /// candidates. it is ideal for creative, unpredictable text generation.
     ///
     /// this sampler is like `greedy`, `dist`, and `mirostat` in that it actually selects a token ID
     /// rather than just transforming logits. therefore it must always be the last sampler in the
     /// sampler chain.
     ///
-    /// it is recommended to only perform minimal truncation before this sampler.
+    /// minimal truncation before this sampler is recommended.
     ///
-    /// @param target target probability (valid range 0.0 to 1.0; <0 = disabled)
-    /// @param window_size rolling window size for target adaptation (≤0 = fixed target)
-    /// @param seed RNG seed
+    /// @param target select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
+    /// @param decay decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
     ///
-    /// ref: https://github.com/MrJackSpade/llama.cpp/tree/master (original impl, documentation)
+    /// ref: https://github.com/MrJackSpade/llama.cpp/tree/master (original impl)
     /// ref: https://github.com/ggml-org/llama.cpp/pull/17927     (llama.cpp PR)
     LLAMA_API struct llama_sampler * llama_sampler_init_power_law(
-                               float    target,
-                             int32_t    window_size,
-                            uint32_t    seed);
+                               float   target,
+                               float   decay,
+                            uint32_t   seed);
 
     LLAMA_API struct llama_sampler * llama_sampler_init_logit_bias(
                              int32_t   n_vocab,
