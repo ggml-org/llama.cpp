@@ -2192,12 +2192,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--override-kv"}, "KEY=TYPE:VALUE",
-        "advanced option to override model metadata by key. may be specified multiple times.\n"
-        "types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false",
+        {"--override-kv"}, "KEY=TYPE:VALUE,...",
+        "advanced option to override model metadata by key. use comma-separated list of overrides.\n"
+        "types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false,tokenizer.ggml.add_eos_token=bool:false",
         [](common_params & params, const std::string & value) {
-            if (!string_parse_kv_override(value.c_str(), params.kv_overrides)) {
-                throw std::runtime_error(string_format("error: Invalid type for KV override: %s\n", value.c_str()));
+            for (const auto & kv_override : string_split<std::string>(value, ',')) {
+                if (!string_parse_kv_override(kv_override.c_str(), params.kv_overrides)) {
+                    throw std::runtime_error(string_format("error: Invalid type for KV override: %s\n", kv_override.c_str()));
+                }
             }
         }
     ));
