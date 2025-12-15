@@ -2193,7 +2193,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--override-kv"}, "KEY=TYPE:VALUE,...",
-        "advanced option to override model metadata by key. use comma-separated list of overrides.\n"
+        "advanced option to override model metadata by key. to specify multiple overrides, either use comma-separated or repeat this argument.\n"
         "types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false,tokenizer.ggml.add_eos_token=bool:false",
         [](common_params & params, const std::string & value) {
             for (const auto & kv_override : string_split<std::string>(value, ',')) {
