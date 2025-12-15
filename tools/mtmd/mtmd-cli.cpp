@@ -311,8 +311,21 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
+    auto eval_system_prompt_if_present = [&] {
+        if (params.system_prompt.empty()) {
+            return 0;
+        }
+
+        common_chat_msg msg;
+        msg.role = "system";
+        msg.content = params.system_prompt;
+        return eval_message(ctx, msg);
+    };
+
     LOG_WRN("WARN: This is an experimental CLI for testing multimodal capability.\n");
     LOG_WRN("      For normal use cases, please use the standard llama-cli\n");
+
+    eval_system_prompt_if_present();
 
     if (is_single_turn) {
         g_is_generating = true;
@@ -323,6 +336,7 @@ int main(int argc, char ** argv) {
                 params.prompt = mtmd_default_marker() + params.prompt;
             }
         }
+
         common_chat_msg msg;
         msg.role = "user";
         msg.content = params.prompt;
@@ -372,6 +386,7 @@ int main(int argc, char ** argv) {
                 ctx.chat_history.clear();
                 llama_memory_clear(llama_get_memory(ctx.lctx), true);
                 LOG("Chat history cleared\n\n");
+                eval_system_prompt_if_present();
                 continue;
             }
             g_is_generating = true;

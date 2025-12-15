@@ -17,6 +17,7 @@ add_library(mtmd
             models/cogvlm.cpp
             models/internvl.cpp
             models/kimivl.cpp
+            models/lfm2-audio-enc.cpp
             models/llama4.cpp
             models/llava.cpp
             models/minicpmv.cpp
