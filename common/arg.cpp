@@ -420,6 +420,8 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     };
 
+    std::set<std::string> seen_args;
+
     for (int i = 1; i < argc; i++) {
         const std::string arg_prefix = "--";
 
@@ -430,6 +432,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         if (arg_to_options.find(arg) == arg_to_options.end()) {
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
         }
+        if (seen_args.count(arg) > 0) {
+            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+        }
+        seen_args.insert(arg);
         auto & tmp = arg_to_options[arg];
         auto opt = *tmp.first;
         bool is_positive = tmp.second;
@@ -750,6 +756,8 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         }
     };
 
+    std::set<std::string> seen_args;
+
     for (int i = 1; i < argc; i++) {
         const std::string arg_prefix = "--";
 
@@ -760,6 +768,10 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         if (arg_to_options.find(arg) == arg_to_options.end()) {
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
         }
+        if (seen_args.count(arg) > 0) {
+            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+        }
+        seen_args.insert(arg);
         auto opt = *arg_to_options[arg];
         std::string val;
         if (opt.value_hint != nullptr) {
