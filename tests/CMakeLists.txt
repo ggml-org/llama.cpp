@@ -225,9 +225,9 @@ llama_build_and_test(test-autorelease.cpp        LABEL "model")
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
 if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
-    llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -hf ggml-org/models -hff tinyllamas/stories15M-q4_0.gguf -ngl 99 -c 256 -np 3)
+    llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -hf ggml-org/models -hff tinyllamas/stories15M-q4_0.gguf)
 else()
-    llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -hf ggml-org/models -hff tinyllamas/stories15M-be.Q4_0.gguf -ngl 99 -c 256 -np 3)
+    llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -hf ggml-org/models -hff tinyllamas/stories15M-be.Q4_0.gguf)
 endif()
 
 if (NOT GGML_BACKEND_DL)

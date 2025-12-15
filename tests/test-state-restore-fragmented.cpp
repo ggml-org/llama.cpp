@@ -1,5 +1,5 @@
 // Test for state restore with fragmented KV cache
-// This tests the fix for: https://github.com/ggml-org/llama.cpp/pull/XXXX
+// This tests the fix for: https://github.com/ggml-org/llama.cpp/issues/17527
 // The issue was that state restore required contiguous KV cache slots,
 // which fails when the cache is fragmented.
 //
@@ -17,29 +17,22 @@
 int main(int argc, char ** argv) {
     common_params params;
 
-    params.prompt = "The quick brown fox";
     params.sampling.seed = 1234;
+    params.kv_unified = true;
+    params.n_parallel = 3;
+    params.n_ctx = 256;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
 
-    // Need multiple sequences to create fragmentation
-    if (params.n_parallel < 3) {
-        params.n_parallel = 3;
-    }
-
     common_init();
 
-    if (params.n_predict < 0) {
-        params.n_predict = 8;
-    }
-
     // init
-    common_init_result llama_init = common_init_from_params(params);
+    common_init_result_ptr llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model.get();
-    llama_context * ctx = llama_init.context.get();
+    llama_model * model = llama_init->model();
+    llama_context * ctx = llama_init->context();
 
     if (model == nullptr || ctx == nullptr) {
         fprintf(stderr, "%s : failed to init\n", __func__);
@@ -49,12 +42,15 @@ int main(int argc, char ** argv) {
     GGML_UNUSED(model);
 
     // tokenize prompt
-    auto tokens = common_tokenize(ctx, params.prompt, true);
+    std::vector<llama_token> tokens(70, 1);
 
-    // Step 1: Process tokens on seq 0
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
+    // interleave the 3 sequences:
+    // 01201230123...
+    llama_batch batch = llama_batch_init(params.n_parallel*tokens.size(), 0, 1);
     for (size_t i = 0; i < tokens.size(); i++) {
-        common_batch_add(batch, tokens[i], i, {0}, false);
+        for (int s = 0; s < params.n_parallel; ++s) {
+            common_batch_add(batch, tokens[i], i, {s}, false);
+        }
     }
     batch.logits[batch.n_tokens - 1] = true;
 
@@ -63,58 +59,28 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Step 2: Process tokens on seq 1 (to create fragmentation later)
-    common_batch_clear(batch);
-    for (size_t i = 0; i < tokens.size(); i++) {
-        common_batch_add(batch, tokens[i], i, {1}, false);
-    }
-    batch.logits[batch.n_tokens - 1] = true;
-
-    if (llama_decode(ctx, batch)) {
-        fprintf(stderr, "%s : failed to decode seq 1\n", __func__);
-        return 1;
-    }
-
-    // Step 3: Process tokens on seq 2 (to create more fragmentation)
-    common_batch_clear(batch);
-    for (size_t i = 0; i < tokens.size(); i++) {
-        common_batch_add(batch, tokens[i], i, {2}, false);
-    }
-    batch.logits[batch.n_tokens - 1] = true;
-
-    if (llama_decode(ctx, batch)) {
-        fprintf(stderr, "%s : failed to decode seq 2\n", __func__);
-        return 1;
-    }
-
     fprintf(stderr, "%s : processed prompt on seq 0, 1, 2 (%zu tokens each)\n", __func__, tokens.size());
 
-    // Step 4: Save state of seq 0
-    std::vector<uint8_t> seq_state(llama_state_seq_get_size(ctx, 0));
-    const size_t ncopy = llama_state_seq_get_data(ctx, seq_state.data(), seq_state.size(), 0);
+    // Save state of seq 1
+    std::vector<uint8_t> seq_state(llama_state_seq_get_size(ctx, 1));
+    const size_t ncopy = llama_state_seq_get_data(ctx, seq_state.data(), seq_state.size(), 1);
     if (ncopy != seq_state.size()) {
-        fprintf(stderr, "%s : failed to save seq 0 state\n", __func__);
+        fprintf(stderr, "%s : failed to save seq 1 state\n", __func__);
         return 1;
     }
-    fprintf(stderr, "%s : saved seq 0 state, %zu bytes\n", __func__, ncopy);
+    fprintf(stderr, "%s : saved seq 1 state, %zu bytes\n", __func__, ncopy);
 
-    // Step 5: Clear seq 1 to create a "hole" in the KV cache (fragmentation)
+    // clear seq 1 to create a "hole" in the KV cache (fragmentation)
+    // 0.20.20.20.2....
     llama_memory_t mem = llama_get_memory(ctx);
     llama_memory_seq_rm(mem, 1, -1, -1);
     fprintf(stderr, "%s : cleared seq 1 to create fragmentation\n", __func__);
 
-    // Step 6: Clear seq 0 as well
-    llama_memory_seq_rm(mem, 0, -1, -1);
-    fprintf(stderr, "%s : cleared seq 0\n", __func__);
-
-    // Now the cache has:
-    // - A hole where seq 0 was (at the beginning)
-    // - A hole where seq 1 was (in the middle)
-    // - seq 2 data (at the end)
+    // Now the cache has holes where seq 1 was
     // This creates fragmentation - there's no contiguous block large enough
-    // for the seq 0 state if we only look for contiguous slots
+    // for the seq 1 state if we only look for contiguous slots
 
-    // Step 7: Restore seq 0 state into seq 1 (should work with non-contiguous allocation)
+    // Restore seq 1 state into seq 1 (should work with non-contiguous allocation)
     // We use seq 1 since it's a valid sequence ID (0 to n_parallel-1)
     // Before the fix, this would fail with "failed to find available cells in kv cache"
     const size_t nset = llama_state_seq_set_data(ctx, seq_state.data(), seq_state.size(), 1);
@@ -127,7 +93,7 @@ int main(int argc, char ** argv) {
     }
     fprintf(stderr, "%s : restored state into seq 1, %zu bytes\n", __func__, nset);
 
-    // Step 8: Verify we can decode with the restored state
+    // Verify we can decode with the restored state
     // Generate one token to verify the restored state is usable
     auto sparams = llama_sampler_chain_default_params();
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
