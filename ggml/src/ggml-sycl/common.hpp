@@ -642,5 +642,22 @@ static __dpct_inline__ sycl::uint2 fast_div_modulo(uint32_t n, const sycl::uint3
     return sycl::uint2(div_val, mod_val);
 }
 
+static __dpct_inline__ int ggml_sycl_dp4a(const int a, const int b, int c) {
+    return dpct::dp4a(a, b, c);
+}
+
+static __dpct_inline__ float ggml_sycl_e8m0_to_fp32(uint8_t x) {
+    uint32_t bits;
+    if (x == 0) {
+        bits = 0x00400000;
+    } else {
+        bits = (uint32_t) x << 23;
+    }
+
+    float result;
+    memcpy(&result, &bits, sizeof(float));
+    return result;
+}
+
 
 #endif // GGML_SYCL_COMMON_HPP
