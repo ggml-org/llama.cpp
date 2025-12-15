@@ -28,13 +28,13 @@ int main(int argc, char ** argv){
     llama_numa_init(params.numa);
 
     // load the model
-    common_init_result llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params);
 
-    llama_context_ptr & ctx = llama_init.context;
+    llama_context * ctx = llama_init->context();
 
     // tokenize the prompt
     std::vector<llama_token> inp;
-    inp = common_tokenize(ctx.get(), params.prompt, true, true);
+    inp = common_tokenize(ctx, params.prompt, true, true);
 
     common_ngram_cache ngram_cache_context;
     common_ngram_cache ngram_cache_dynamic;
@@ -65,7 +65,7 @@ int main(int argc, char ** argv){
     }
 
     const int n_input = inp.size();
-    const int n_ctx = llama_n_ctx(ctx.get());
+    const int n_ctx = llama_n_ctx(ctx);
 
     int n_drafted = 0;
     int n_accept  = 0;

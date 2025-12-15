@@ -1,3 +1,5 @@
+#pragma once
+
 #include "ggml.h"
 #include "gguf.h"
 #include "clip.h"
@@ -133,6 +135,10 @@
 
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
+
+// forward declaration
+// TODO: improve this later
+struct clip_ctx;
 
 enum projector_type {
     PROJECTOR_TYPE_MLP,

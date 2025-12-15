@@ -20,20 +20,20 @@ int main(void) {
             std::unordered_set<std::string> seen_env_vars;
             for (const auto & opt : ctx_arg.options) {
                 // check for args duplications
-                for (const auto & arg : opt.args) {
+                for (const auto & arg : opt.get_args()) {
                     if (seen_args.find(arg) == seen_args.end()) {
                         seen_args.insert(arg);
                     } else {
-                        fprintf(stderr, "test-arg-parser: found different handlers for the same argument: %s", arg);
+                        fprintf(stderr, "test-arg-parser: found different handlers for the same argument: %s", arg.c_str());
                         exit(1);
                     }
                 }
                 // check for env var duplications
-                if (opt.env) {
-                    if (seen_env_vars.find(opt.env) == seen_env_vars.end()) {
-                        seen_env_vars.insert(opt.env);
+                for (const auto & env : opt.get_env()) {
+                    if (seen_env_vars.find(env) == seen_env_vars.end()) {
+                        seen_env_vars.insert(env);
                     } else {
-                        fprintf(stderr, "test-arg-parser: found different handlers for the same env var: %s", opt.env);
+                        fprintf(stderr, "test-arg-parser: found different handlers for the same env var: %s", env.c_str());
                         exit(1);
                     }
                 }
@@ -71,6 +71,10 @@ int main(void) {
     // non-existence arg in specific example (--draft cannot be used outside llama-speculative)
     argv = {"binary_name", "--draft", "123"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_EMBEDDING));
+
+    // negated arg
+    argv = {"binary_name", "--no-mmap"};
+    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
 
 
     printf("test-arg-parser: test valid usage\n\n");
@@ -115,6 +119,14 @@ int main(void) {
     assert(params.model.path == "blah.gguf");
     assert(params.cpuparams.n_threads == 1010);
 
+    printf("test-arg-parser: test negated environment variables\n\n");
+
+    setenv("LLAMA_ARG_MMAP", "0", true);
+    setenv("LLAMA_ARG_NO_PERF", "1", true); // legacy format
+    argv = {"binary_name"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.use_mmap == false);
+    assert(params.no_perf == true);
 
     printf("test-arg-parser: test environment variables being overwritten\n\n");
 
