@@ -34,12 +34,3 @@ export function getFileTypeLabel(input: string | undefined): string {
 	// Handle AttachmentType or other plain strings
 	return input.toUpperCase();
 }
-
-/**
- * Truncates text content for preview display
- * @param content - The text content to truncate
- * @returns Truncated content with ellipsis if needed
- */
-export function getPreviewText(content: string): string {
-	return content.length > 150 ? content.substring(0, 150) + '...' : content;
-}
