@@ -1,4 +1,8 @@
-export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
+// Ensure all built-in tools are registered before deriving defaults
+import '$lib/services/tools';
+import { getToolConfigDefaults, getToolSettingDefaults } from '$lib/services/tools/registry';
+
+const BASE_SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
@@ -45,6 +49,12 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	// experimental features
 	pyInterpreterEnabled: false,
 	enableContinueGeneration: false
+};
+
+export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
+	...BASE_SETTING_CONFIG_DEFAULT,
+	...getToolSettingDefaults(),
+	...getToolConfigDefaults()
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -97,6 +107,10 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
 	showRawOutputSwitch:
 		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
+	enableCalculatorTool:
+		'Expose a simple calculator tool to the model. When the model calls it, the web UI evaluates the expression locally and resumes generation with the result.',
+	enableCodeInterpreterTool:
+		'Expose a JavaScript code interpreter to the model. Code runs in a sandboxed Worker and the result is sent back to the conversation.',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
 	showMessageStats:
 		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
