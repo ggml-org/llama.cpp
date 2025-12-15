@@ -18,9 +18,45 @@
 #include <cstring>
 
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
-    if (ubatch->token) {
-        const int64_t n_tokens = ubatch->n_tokens;
+    // Check for device tokens: first from ubatch, then from thread-local pending token
+    void * device_token_ptr = nullptr;
+    size_t device_n_tokens = 0;
 
+#ifdef GGML_USE_SYCL
+    // Declare the internal getter function (defined in ggml-sycl.cpp)
+    extern void * ggml_sycl_get_pending_device_token(size_t * n_tokens);
+
+    // Check ubatch first
+    if (ubatch->tokens_on_device && ubatch->token_device_ptr) {
+        device_token_ptr = ubatch->token_device_ptr;
+        device_n_tokens = ubatch->n_tokens;
+    } else {
+        // Check thread-local pending device token
+        device_token_ptr = ggml_sycl_get_pending_device_token(&device_n_tokens);
+    }
+
+    if (device_token_ptr && device_n_tokens == ubatch->n_tokens) {
+        // Multi-step GPU decode: tokens are already on device memory
+        const int64_t n_tokens = ubatch->n_tokens;
+        const size_t size = n_tokens * ggml_element_size(tokens);
+
+        // Use SYCL device-to-device copy if possible
+        if (tokens->buffer && ggml_backend_buffer_is_sycl(tokens->buffer)) {
+            ggml_backend_sycl_copy_device_to_tensor(device_token_ptr, tokens, size);
+        } else {
+            // Fallback: copy from device to host, then to tensor
+            // This happens when tokens tensor is on CPU backend
+            std::vector<int32_t> host_tokens(n_tokens);
+            // Use synchronous device-to-host copy
+            extern void ggml_sycl_copy_device_to_host(void * src_device, void * dst_host, size_t bytes);
+            ggml_sycl_copy_device_to_host(device_token_ptr, host_tokens.data(), size);
+            ggml_backend_tensor_set(tokens, host_tokens.data(), 0, size);
+        }
+    } else
+#endif
+    if (ubatch->token) {
+        // Standard path: copy from host memory
+        const int64_t n_tokens = ubatch->n_tokens;
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
     }
 

@@ -261,3 +261,28 @@ target_link_libraries(test-ggml-flash-attn-ext PRIVATE ggml)
 target_include_directories(test-ggml-flash-attn-ext PRIVATE ${PROJECT_SOURCE_DIR}/ggml/include)
 install(TARGETS test-ggml-flash-attn-ext RUNTIME)
 add_test(NAME test-ggml-flash-attn-ext COMMAND $<TARGET_FILE:test-ggml-flash-attn-ext>)
+
+# test-gpu-sampler: unit tests for SYCL GPU sampling (temp, argmax, random sampling)
+if(GGML_SYCL)
+    add_executable(test-gpu-sampler test-gpu-sampler.cpp)
+    target_link_libraries(test-gpu-sampler PRIVATE ggml)
+    target_include_directories(test-gpu-sampler PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    # Enable SYCL compilation
+    target_compile_options(test-gpu-sampler PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-gpu-sampler PRIVATE "-fsycl")
+    install(TARGETS test-gpu-sampler RUNTIME)
+    add_test(NAME test-gpu-sampler COMMAND $<TARGET_FILE:test-gpu-sampler>)
+
+    # test-multi-seq-sampler: unit tests for multi-sequence GPU sampling API
+    add_executable(test-multi-seq-sampler test-multi-seq-sampler.cpp)
+    target_link_libraries(test-multi-seq-sampler PRIVATE ggml)
+    target_include_directories(test-multi-seq-sampler PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-multi-seq-sampler PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-multi-seq-sampler PRIVATE "-fsycl")
+    install(TARGETS test-multi-seq-sampler RUNTIME)
+    add_test(NAME test-multi-seq-sampler COMMAND $<TARGET_FILE:test-multi-seq-sampler>)
+endif()

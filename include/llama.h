@@ -193,7 +193,8 @@ extern "C" {
         LLAMA_SPLIT_MODE_LAYER            = 1, // split layers and KV across GPUs
         LLAMA_SPLIT_MODE_ROW              = 2, // split layers and KV across GPUs, use tensor parallelism if supported
         LLAMA_SPLIT_MODE_TENSOR_PARALLEL  = 3, // Megatron-style tensor parallelism (column/row parallel with all-reduce)
-        LLAMA_SPLIT_MODE_PIPELINE         = 4, // pipeline parallelism (1F1B schedule)
+        LLAMA_SPLIT_MODE_PIPELINE         = 4, // pipeline parallelism (vLLM-style with chunked prefill)
+        LLAMA_SPLIT_MODE_HYBRID           = 5, // hybrid PP+TP (pipeline across nodes, tensor parallel within)
     };
 
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
@@ -348,6 +349,11 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
+        // Pipeline parallelism parameters (vLLM-style)
+        int32_t pp_size;        // number of pipeline stages (0 = auto, based on device count)
+        int32_t tp_size;        // tensor parallelism degree within each PP stage (for hybrid mode)
+        int32_t pp_chunk_size;  // max tokens per prefill chunk (0 = disabled, default: 256)
+
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
         // currently works only with CPU execution
@@ -371,6 +377,8 @@ extern "C" {
                             // enables Paged Attention V2 kernel, requires paged_attn to be enabled
         bool prefix_cache;  // [EXPERIMENTAL] enable prefix caching for paged attention
                             // requires paged_attn to be enabled
+        bool pp_chunked_prefill;  // enable chunked prefill for pipeline parallelism
+                                  // splits large prompts into chunks, interleaves with decode
     };
 
     // model quantization parameters
@@ -908,6 +916,53 @@ extern "C" {
             struct llama_context * ctx,
               struct llama_batch   batch);
 
+    // Decode with a single token that is already in device memory (GPU)
+    // This is used for multi-step GPU decode where tokens are kept on device
+    // between decode steps to avoid host round-trips.
+    // token_device_ptr: pointer to a single token ID in GPU device memory
+    // pos: the position of the token in the sequence
+    // seq_id: the sequence ID (default 0)
+    LLAMA_API int32_t llama_decode_with_device_token(
+            struct llama_context * ctx,
+            void * token_device_ptr,
+            llama_pos pos,
+            llama_seq_id seq_id);
+
+    // ===========================================================================
+    // Multi-Token Decode API (Speculative Decoding / Multi-Step Generation)
+    // ===========================================================================
+    //
+    // Multi-token decode allows processing multiple new tokens in a single forward pass.
+    // Each token has its own position and can only attend to KV positions <= its position.
+    // This is used for:
+    //   - Speculative decoding: verify N draft tokens in one pass
+    //   - Multi-step generation: generate and verify tokens without CPU round-trips
+    //
+    // IMPORTANT: Requires flash attention (-fa 1 or --flash-attn on)
+    //
+    // Example usage for 4-token speculative decode:
+    //   int32_t tokens[4] = {tok0, tok1, tok2, tok3};
+    //   int32_t positions[4] = {1000, 1001, 1002, 1003};  // Each token's position
+    //   llama_decode_multi_token(ctx, tokens, positions, 4, 0);
+    //   // Then check logits to verify which tokens were correct
+
+    // Decode multiple new tokens in a single forward pass
+    // tokens: array of token IDs to decode
+    // positions: array of positions for each token (for per-token causal masking)
+    // n_tokens: number of tokens to decode
+    // seq_id: sequence ID (default 0)
+    // Returns: 0 on success, error code otherwise (same as llama_decode)
+    LLAMA_API int32_t llama_decode_multi_token(
+            struct llama_context * ctx,
+            const llama_token * tokens,
+            const llama_pos * positions,
+            int32_t n_tokens,
+            llama_seq_id seq_id);
+
+    // Check if multi-token decode is supported by the current context
+    // Returns true if flash attention is enabled and backend supports it
+    LLAMA_API bool llama_supports_multi_token_decode(struct llama_context * ctx);
+
     // Set the number of threads used for decoding
     // n_threads is the number of threads used for generation (single token)
     // n_threads_batch is the number of threads used for prompt and batch processing (multiple tokens)
@@ -952,6 +1007,43 @@ extern "C" {
     // Negative indicies can be used to access logits in reverse order, -1 is the last logit.
     // returns NULL for invalid ids.
     LLAMA_API float * llama_get_logits_ith(struct llama_context * ctx, int32_t i);
+
+    // Get the logits tensor row index for a given batch position.
+    // This returns the mapping from batch position to the actual row in the logits tensor,
+    // accounting for the output_ids reordering that llama_decode applies.
+    // Useful for GPU sampling where direct tensor access is needed without host copy.
+    // Returns -1 for invalid indices.
+    LLAMA_API int32_t llama_get_logits_row(struct llama_context * ctx, int32_t batch_pos);
+
+    // Get the raw logits tensor on GPU (for GPU sampling)
+    // Returns the ggml_tensor containing logits before host copy
+    // Returns NULL if no decode has been performed or logits not available
+    // Note: The tensor is only valid until the next decode() call
+    // For multi-ubatch decode, use llama_get_gpu_logits_buffer() instead
+    LLAMA_API struct ggml_tensor * llama_get_logits_tensor(struct llama_context * ctx);
+
+    // Get the backend where the logits tensor resides (for GPU sampling)
+    LLAMA_API ggml_backend_t llama_get_logits_backend(struct llama_context * ctx);
+
+    // Check if last decode had multiple ubatches
+    // When true, logits are in accumulated GPU buffer (use llama_get_gpu_logits_buffer)
+    // When false, logits are in the tensor from llama_get_logits_tensor
+    LLAMA_API bool llama_had_multi_ubatch(struct llama_context * ctx);
+
+    // Get the accumulated GPU logits buffer (for multi-ubatch decode)
+    // Returns pointer to GPU memory containing all logits in output_ids order
+    // Returns NULL if not in multi-ubatch mode or no GPU buffer available
+    LLAMA_API float * llama_get_gpu_logits_buffer(struct llama_context * ctx);
+
+    // Enable/disable keeping logits on device (skip host copy for GPU sampling)
+    // When enabled, logits remain on GPU device memory after decode()
+    // Call llama_sync_logits_to_host() if you need to access logits on host
+    LLAMA_API void llama_set_logits_device(struct llama_context * ctx, bool enable);
+
+    // Manually sync logits from device to host memory
+    // Only needed if llama_set_logits_device() was called with enable=true
+    // and you need to access logits via llama_get_logits()
+    LLAMA_API void llama_sync_logits_to_host(struct llama_context * ctx);
 
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,

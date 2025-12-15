@@ -38,6 +38,12 @@ struct llama_cparams {
     bool paged_layout;  // Paged KV layout: 4D format [D, block_size, n_heads, num_blocks] for V2 dispatch
     bool prefix_cache;  // Prefix caching: share KV blocks with identical content (requires paged_attn)
 
+    // Pipeline parallelism parameters (vLLM-style)
+    int32_t pp_size;           // number of pipeline stages (0 = auto)
+    int32_t tp_size;           // tensor parallelism degree within each PP stage
+    int32_t pp_chunk_size;     // max tokens per prefill chunk (0 = disabled)
+    bool    pp_chunked_prefill; // enable chunked prefill for pipeline parallelism
+
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;

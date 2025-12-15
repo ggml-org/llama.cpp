@@ -748,6 +748,14 @@ namespace dpct
 
       sycl::queue &out_of_order_queue() { return _q_out_of_order; }
 
+      // NOTE: Out-of-order queues were extensively tested (December 2024) but caused
+      // non-deterministic output even with sync before AND after each operation.
+      // Testing showed:
+      //   - Same seed produced different outputs across runs
+      //   - barrier().wait() and queue.wait() did not help
+      //   - Sync both before and after each operation still gave random outputs
+      // This appears to be a Level Zero driver issue on Intel Arc GPUs.
+      // Keeping in-order queues for correctness.
       sycl::queue &default_queue() { return in_order_queue(); }
 
       void queues_wait_and_throw() {

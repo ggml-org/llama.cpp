@@ -1209,8 +1209,9 @@ void ggml_sycl_op_rms_norm_fused(ggml_backend_sycl_context & ctx, ggml_tensor * 
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
-    const float * src0_dd = static_cast<const float *>(rms_norm_src->data);
-    float * mul_dst_dd = static_cast<float *>(mul_tensor->data);
+    // Use device-specific data pointers for TP support
+    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(rms_norm_src, ctx.device));
+    float * mul_dst_dd = static_cast<float *>(ggml_sycl_get_data_ptr(mul_tensor, ctx.device));
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -1236,7 +1237,8 @@ void ggml_sycl_op_rms_norm_fused(ggml_backend_sycl_context & ctx, ggml_tensor * 
     }
     GGML_ASSERT(mul_src != nullptr);
 
-    const float * mul_dd = static_cast<const float *>(mul_src->data);
+    // Use device-specific data pointers for TP support
+    const float * mul_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(mul_src, ctx.device));
 
     // Get mul weights dimensions and strides
     const int mul_ncols = mul_src->ne[0];
@@ -1280,8 +1282,9 @@ void ggml_sycl_op_rms_norm_fused_add(ggml_backend_sycl_context & ctx, ggml_tenso
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
-    const float * src0_dd = static_cast<const float *>(rms_norm_src->data);
-    float * add_dst_dd = static_cast<float *>(add_tensor->data);
+    // Use device-specific data pointers for TP support
+    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(rms_norm_src, ctx.device));
+    float * add_dst_dd = static_cast<float *>(ggml_sycl_get_data_ptr(add_tensor, ctx.device));
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -1307,7 +1310,8 @@ void ggml_sycl_op_rms_norm_fused_add(ggml_backend_sycl_context & ctx, ggml_tenso
     }
     GGML_ASSERT(mul_src != nullptr);
 
-    const float * mul_dd = static_cast<const float *>(mul_src->data);
+    // Use device-specific data pointers for TP support
+    const float * mul_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(mul_src, ctx.device));
 
     // Get mul weights dimensions and strides
     const int mul_ncols = mul_src->ne[0];
@@ -1329,7 +1333,8 @@ void ggml_sycl_op_rms_norm_fused_add(ggml_backend_sycl_context & ctx, ggml_tenso
     }
     GGML_ASSERT(add_src != nullptr);
 
-    const float * add_dd = static_cast<const float *>(add_src->data);
+    // Use device-specific data pointers for TP support
+    const float * add_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(add_src, ctx.device));
 
     // Get add tensor dimensions and strides
     const int add_ncols = add_src->ne[0];
@@ -1526,8 +1531,9 @@ void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     const int64_t ne00 = dst->src[0]->ne[0];
     const int64_t nrows = ggml_nrows(dst->src[0]);
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float * dst_dd = static_cast<float *>(dst->data);
+    // Use device-specific data pointers for TP support
+    const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(dst->src[0], ctx.device));
+    float * dst_dd = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -1559,10 +1565,11 @@ void ggml_sycl_op_add_rms_norm_fused(ggml_backend_sycl_context & ctx, ggml_tenso
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
-    const float * x_dd = static_cast<const float *>(add_src0->data);  // First ADD input (x)
-    const float * add_dd = static_cast<const float *>(add_src1->data);  // Second ADD input (add)
-    float * add_dst_dd = static_cast<float *>(add_tensor->data);  // ADD output (for other consumers)
-    float * rms_dst_dd = static_cast<float *>(rms_norm_tensor->data);  // RMS_NORM output
+    // Use device-specific data pointers for TP support
+    const float * x_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(add_src0, ctx.device));  // First ADD input (x)
+    const float * add_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(add_src1, ctx.device));  // Second ADD input (add)
+    float * add_dst_dd = static_cast<float *>(ggml_sycl_get_data_ptr(add_tensor, ctx.device));  // ADD output (for other consumers)
+    float * rms_dst_dd = static_cast<float *>(ggml_sycl_get_data_ptr(rms_norm_tensor, ctx.device));  // RMS_NORM output
 
     float eps;
     memcpy(&eps, rms_norm_tensor->op_params, sizeof(float));

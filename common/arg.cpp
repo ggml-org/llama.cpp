@@ -1063,6 +1063,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_PAGED_LAYOUT"));
     add_opt(common_arg(
+        {"--gpu-sampling"},
+        "run sampling on GPU (SYCL only, avoids CPU sync during token generation)",
+        [](common_params & params) {
+            params.gpu_sampling = true;
+        }
+    ).set_env("LLAMA_ARG_GPU_SAMPLING"));
+    add_opt(common_arg(
+        {"--gpu-multistep"}, "N",
+        "multi-step GPU decode - generate N tokens (1-8) without CPU sync (SYCL only, implies --gpu-sampling)",
+        [](common_params & params, int value) {
+            if (value < 1 || value > 8) {
+                throw std::invalid_argument("--gpu-multistep must be between 1 and 8");
+            }
+            params.gpu_multistep = value;
+            if (value > 1) {
+                params.gpu_sampling = true;  // Multi-step requires GPU sampling
+            }
+        }
+    ).set_env("LLAMA_ARG_GPU_MULTISTEP"));
+    add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
         [](common_params & params, const std::string & value) {
@@ -2004,13 +2024,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
     add_opt(common_arg(
-        {"-sm", "--split-mode"}, "{none,layer,row,tp,pipeline}",
+        {"-sm", "--split-mode"}, "{none,layer,row,tp,pipeline,hybrid}",
         "how to split the model across multiple GPUs, one of:\n"
         "- none: use one GPU only\n"
         "- layer (default): split layers and KV across GPUs\n"
         "- row: split rows across GPUs\n"
         "- tp: Megatron-style tensor parallelism (column/row parallel with all-reduce)\n"
-        "- pipeline: pipeline parallelism (1F1B schedule)",
+        "- pipeline: pipeline parallelism (vLLM-style with chunked prefill)\n"
+        "- hybrid: combined PP+TP (pipeline across nodes, tensor parallel within)",
         [](common_params & params, const std::string & value) {
             std::string arg_next = value;
             if (arg_next == "none") {
@@ -2023,6 +2044,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.split_mode = LLAMA_SPLIT_MODE_TENSOR_PARALLEL;
             } else if (arg_next == "pipeline") {
                 params.split_mode = LLAMA_SPLIT_MODE_PIPELINE;
+            } else if (arg_next == "hybrid") {
+                params.split_mode = LLAMA_SPLIT_MODE_HYBRID;
             } else {
                 throw std::invalid_argument("invalid value");
             }
@@ -2068,6 +2091,34 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_MAIN_GPU"));
+    add_opt(common_arg(
+        {"--pp-size"}, "N",
+        string_format("number of pipeline stages for pipeline parallelism (0 = auto, default: %d)", params.pp_size),
+        [](common_params & params, int value) {
+            params.pp_size = value;
+        }
+    ).set_env("LLAMA_ARG_PP_SIZE"));
+    add_opt(common_arg(
+        {"--tp-size"}, "N",
+        string_format("tensor parallelism degree within each pipeline stage for hybrid mode (default: %d)", params.tp_size),
+        [](common_params & params, int value) {
+            params.tp_size = value;
+        }
+    ).set_env("LLAMA_ARG_TP_SIZE"));
+    add_opt(common_arg(
+        {"--pp-chunk-size"}, "N",
+        string_format("max tokens per prefill chunk for chunked prefill (0 = disabled, default: %d)", params.pp_chunk_size),
+        [](common_params & params, int value) {
+            params.pp_chunk_size = value;
+        }
+    ).set_env("LLAMA_ARG_PP_CHUNK_SIZE"));
+    add_opt(common_arg(
+        {"--pp-chunked-prefill"},
+        string_format("enable chunked prefill for pipeline parallelism (default: %s)", params.pp_chunked_prefill ? "true" : "false"),
+        [](common_params & params) {
+            params.pp_chunked_prefill = true;
+        }
+    ).set_env("LLAMA_ARG_PP_CHUNKED_PREFILL"));
     add_opt(common_arg(
         {"--check-tensors"},
         string_format("check model tensor data for invalid values (default: %s)", params.check_tensors ? "true" : "false"),

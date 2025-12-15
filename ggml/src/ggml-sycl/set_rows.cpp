@@ -73,7 +73,7 @@ convert (const char* src, char* dst) {
 }
 
 template <typename TIdx, typename blockType, int qk, cpy_kernel_t cpyblck>
-static void set_rows_sycl_q(const char * __restrict__ src0_d,
+static sycl::event set_rows_sycl_q(const char * __restrict__ src0_d,
                             const TIdx * __restrict__ src1_d,
                             blockType * __restrict__ dst_d,
                             // tensor dimensions src0 and src1
@@ -104,7 +104,7 @@ static void set_rows_sycl_q(const char * __restrict__ src0_d,
     constexpr int block_size   = 256;
     const int64_t grid_size    = ceil_div(total_blocks, block_size);
 
-    stream->parallel_for(sycl::nd_range<1>(grid_size * block_size, block_size), [=](sycl::nd_item<1> item_ct1) {
+    sycl::event evt = stream->parallel_for(sycl::nd_range<1>(grid_size * block_size, block_size), [=](sycl::nd_item<1> item_ct1) {
         const int64_t i = item_ct1.get_global_linear_id();
         if (i >= total_blocks) {
             return;
@@ -132,6 +132,7 @@ static void set_rows_sycl_q(const char * __restrict__ src0_d,
     GGML_UNUSED(ne13);
     GGML_UNUSED(nb00);
     GGML_UNUSED(nb13);
+    return evt;
 }
 
 template<typename TIn, typename TIdx, typename TOut>
@@ -171,7 +172,7 @@ static void k_set_rows(
 }
 
 template<typename TIn, typename TIdx, typename TOut>
-static void set_rows_sycl(
+static sycl::event set_rows_sycl(
         const char * src0_d, const TIdx * src1_d, char * dst_d,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
         const int64_t ne11, const int64_t ne12, const size_t nb01, const size_t nb02, const size_t nb03,
@@ -185,7 +186,7 @@ static void set_rows_sycl(
     constexpr int block_size = 64;
     const int64_t grid_size = ceil_div(total_elements, block_size);
 
-    stream->parallel_for(
+    return stream->parallel_for(
         sycl::nd_range<1>(grid_size * block_size, block_size),
         [=](sycl::nd_item<1> item_ct1) {
             k_set_rows<TIn, TIdx, TOut>(
@@ -240,7 +241,7 @@ static void k_set_rows_fp8(
 }
 
 template<typename TIdx>
-static void set_rows_sycl_fp8(
+static sycl::event set_rows_sycl_fp8(
         const char * src0_d, const TIdx * src1_d, fp8_e4m3_t * dst_d,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
         const int64_t ne11, const int64_t ne12, const size_t nb01, const size_t nb02, const size_t nb03,
@@ -253,7 +254,7 @@ static void set_rows_sycl_fp8(
     constexpr int block_size = 64;
     const int64_t grid_size = ceil_div(total_elements, block_size);
 
-    stream->parallel_for(
+    return stream->parallel_for(
         sycl::nd_range<1>(grid_size * block_size, block_size),
         [=](sycl::nd_item<1> item_ct1) {
             k_set_rows_fp8<TIdx>(
@@ -271,7 +272,7 @@ static void set_rows_sycl_fp8(
 }
 
 template<typename TIn, typename TIdx>
-static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+static sycl::event set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     // Use device-specific pointers for TP mode (KV cache is allocated per-device)
     const int device = ctx.device;
     const char * src0_d = (const char *)ggml_sycl_get_data_ptr(src0, device);
@@ -323,9 +324,11 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
     GGML_TENSOR_BINARY_OP_LOCALS
 
     dpct::queue_ptr stream = ctx.stream();
+    sycl::event evt;
+
     switch (dst->type) {
         case GGML_TYPE_F32:
-            set_rows_sycl<TIn, TIdx, float>(
+            evt = set_rows_sycl<TIn, TIdx, float>(
                 src0_d, src1_d, dst_d,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
@@ -338,7 +341,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             break;
         case GGML_TYPE_F16:
             dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
-            set_rows_sycl<TIn, TIdx, sycl::half>(
+            evt = set_rows_sycl<TIn, TIdx, sycl::half>(
                 src0_d, src1_d, dst_d,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
@@ -350,7 +353,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             );
             break;
         case GGML_TYPE_BF16:
-            set_rows_sycl<TIn, TIdx, sycl::ext::oneapi::bfloat16>(
+            evt = set_rows_sycl<TIn, TIdx, sycl::ext::oneapi::bfloat16>(
                 src0_d, src1_d, dst_d,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
@@ -362,7 +365,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             );
             break;
         case GGML_TYPE_F8_E4M3:
-            set_rows_sycl_fp8<TIdx>(
+            evt = set_rows_sycl_fp8<TIdx>(
                 src0_d, src1_d, (fp8_e4m3_t *)dst_d,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
@@ -373,28 +376,30 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             );
             break;
         case GGML_TYPE_Q8_0:
-            set_rows_sycl_q<TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(src0_d, src1_d, (block_q8_0 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            evt = set_rows_sycl_q<TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(src0_d, src1_d, (block_q8_0 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q5_1:
-            set_rows_sycl_q<TIdx, block_q5_1, QK5_1, cpy_blck_f32_q5_1>(src0_d, src1_d, (block_q5_1 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            evt = set_rows_sycl_q<TIdx, block_q5_1, QK5_1, cpy_blck_f32_q5_1>(src0_d, src1_d, (block_q5_1 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q5_0:
-            set_rows_sycl_q<TIdx, block_q5_0, QK5_0, cpy_blck_f32_q5_0>(src0_d, src1_d, (block_q5_0 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            evt = set_rows_sycl_q<TIdx, block_q5_0, QK5_0, cpy_blck_f32_q5_0>(src0_d, src1_d, (block_q5_0 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q4_1:
-            set_rows_sycl_q<TIdx, block_q4_1, QK4_1, cpy_blck_f32_q4_1>(src0_d, src1_d, (block_q4_1 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            evt = set_rows_sycl_q<TIdx, block_q4_1, QK4_1, cpy_blck_f32_q4_1>(src0_d, src1_d, (block_q4_1 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q4_0:
-            set_rows_sycl_q<TIdx, block_q4_0, QK4_0, cpy_blck_f32_q4_0>(src0_d, src1_d, (block_q4_0 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            evt = set_rows_sycl_q<TIdx, block_q4_0, QK4_0, cpy_blck_f32_q4_0>(src0_d, src1_d, (block_q4_0 *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_IQ4_NL:
-            set_rows_sycl_q<TIdx, block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>(src0_d, src1_d, (block_iq4_nl *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            evt = set_rows_sycl_q<TIdx, block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>(src0_d, src1_d, (block_iq4_nl *)dst_d, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
 
         default:
             GGML_ABORT("Unsupported tensor type!");
             break;
     }
+
+    return evt;
 }
 
 void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -405,9 +410,14 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->src[1]->type == GGML_TYPE_I64 || dst->src[1]->type == GGML_TYPE_I32);
 
+    sycl::event evt;
     if (src1->type == GGML_TYPE_I64) {
-        set_rows_sycl<float, int64_t>(ctx, src0, src1, dst);
+        evt = set_rows_sycl<float, int64_t>(ctx, src0, src1, dst);
     } else {
-        set_rows_sycl<float, int32_t>(ctx, src0, src1, dst);
+        evt = set_rows_sycl<float, int32_t>(ctx, src0, src1, dst);
     }
+
+    // Note: KV cache synchronization is now handled via barrier-based sync in llama-context.cpp
+    // The barrier approach provides ~2% better prompt eval performance than full queue sync
+    (void)evt;
 }

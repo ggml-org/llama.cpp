@@ -13,6 +13,10 @@
 // Flash Attention constants
 #define FATTN_KQ_STRIDE       256
 #define SOFTMAX_FTZ_THRESHOLD -20.0f  // Softmax exp. values smaller than this are flushed to zero
+// log(2) = 0.6931, by adding this to the KQ maximum used for the softmax the numerical range
+// representable by the VKQ accumulators is effectively being shifted up by a factor of 2.
+// This reduces issues with numerical overflow but also causes larger values to be flushed to zero.
+#define FATTN_KQ_MAX_OFFSET   0.6931f  // log(2)
 
 // Default thread configuration for flash attention vector kernel
 #define FATTN_VEC_NTHREADS    128
@@ -121,6 +125,20 @@ struct fattn_params {
     // When kv_is_fp8 is true, K and V are stored as FP8 E4M3 (1 byte per element) instead of FP16
     // The kernel will dequantize to FP16 during K/V loading
     bool kv_is_fp8;                   // True when K/V cache uses FP8 E4M3 format
+
+    // Multi-token decode support (speculative decoding / multi-step generation)
+    // When multi_token_decode is enabled, each query in the batch has its own position
+    // and can only attend to KV positions <= its position (causal constraint per-query).
+    // This is different from standard batching where all queries share the same causal boundary.
+    //
+    // Example: For 4-token decode starting at position 1000:
+    //   q_positions[0] = 1000  -> can attend to KV[0..1000]
+    //   q_positions[1] = 1001  -> can attend to KV[0..1001]
+    //   q_positions[2] = 1002  -> can attend to KV[0..1002]
+    //   q_positions[3] = 1003  -> can attend to KV[0..1003]
+    bool multi_token_decode;          // Enable per-query position-based causal masking
+    const int32_t * q_positions;      // [n_queries] Position for each query token (for causal boundary)
+    int32_t kv_base_pos;              // Base position of KV cache (typically 0, used for offset calculation)
 };
 
 #endif // GGML_SYCL_FATTN_COMMON_HPP

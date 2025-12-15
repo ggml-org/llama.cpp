@@ -273,17 +273,6 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
     void * src1_d = ggml_sycl_get_data_ptr(src1, device);
     void * dst_d  = ggml_sycl_get_data_ptr(dst, device);
 
-    // DEBUG: Check ADD values for ffn_inp (attention + residual) at layer 0
-    static int add_dbg = 0;
-    if (g_ggml_sycl_tp_debug && add_dbg++ < 5 && dst->name && strstr(dst->name, "ffn_inp") && strstr(dst->name, "-0")) {
-        float src0_vals[4], src1_vals[4];
-        main_stream->memcpy(src0_vals, src0_d, 4*sizeof(float)).wait();
-        main_stream->memcpy(src1_vals, src1_d, 4*sizeof(float)).wait();
-        fprintf(stderr, "TP DEBUG ADD %s: src0[0..3]=[%f,%f,%f,%f], src1[0..3]=[%f,%f,%f,%f]\n",
-                dst->name, src0_vals[0], src0_vals[1], src0_vals[2], src0_vals[3],
-                src1_vals[0], src1_vals[1], src1_vals[2], src1_vals[3]);
-    }
-
     if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         op()((const float *) src0_d, (const float *) src1_d, (float *) dst_d, ne00, ne01, ne02, ne03, ne10,
              ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2, nb3,
@@ -313,7 +302,6 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
 }
 
 inline void ggml_sycl_op_add(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-
     ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_add>>(ctx, dst->src[0], dst->src[1], dst);
 }
 
@@ -358,16 +346,18 @@ void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         strncmp(dst->name, "ffn_norm-", 9) == 0) {
         int layer = atoi(dst->name + 9);
         size_t size = ggml_nbytes(dst);
+        // IMPORTANT: Use device-specific pointer for TP mode!
+        void * dst_ptr = ggml_sycl_get_data_ptr(dst, ctx.device);
         // DEBUG: Check if MUL runs for batch=1
         static int mul_b1_dbg = 0;
         if (g_ggml_sycl_tp_debug && dst->ne[1] == 1 && layer == 0 && mul_b1_dbg++ < 5) {
             ctx.stream()->wait();
             float check[4];
-            ctx.stream()->memcpy(check, dst->data, 4*sizeof(float)).wait();
-            fprintf(stderr, "TP DEBUG MUL ffn_norm-0 batch=1: caching dst[0..3]=[%f,%f,%f,%f]\n",
-                    check[0], check[1], check[2], check[3]);
+            ctx.stream()->memcpy(check, dst_ptr, 4*sizeof(float)).wait();
+            fprintf(stderr, "TP DEBUG MUL ffn_norm-0 batch=1: caching dst_ptr=%p dst[0..3]=[%f,%f,%f,%f]\n",
+                    dst_ptr, check[0], check[1], check[2], check[3]);
         }
-        ggml_sycl_tp_cache_ffn_norm(layer, dst->data, dst->ne[0], dst->ne[1],
+        ggml_sycl_tp_cache_ffn_norm(layer, dst_ptr, dst->ne[0], dst->ne[1],
                                      size, ctx.stream());
     }
 }

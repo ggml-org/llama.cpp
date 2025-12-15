@@ -64,6 +64,12 @@ struct llama_ubatch {
 
     // the llama_ubatch pointers above point to this data if set. otherwise - points to non-owning data
     std::shared_ptr<data_t> data;
+
+    // Multi-step GPU decode support: when tokens are already on device memory
+    // If tokens_on_device is true, token_device_ptr points to device memory
+    // and 'token' field is ignored (may be nullptr)
+    bool              tokens_on_device = false;  // tokens already in device memory
+    llama_token *     token_device_ptr = nullptr; // device pointer to tokens
 };
 
 // a helper for sanitizing, fulfilling and splitting a batch

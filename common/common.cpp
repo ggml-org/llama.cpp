@@ -1342,6 +1342,12 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.paged_layout      = params.paged_layout;
     cparams.prefix_cache      = params.prefix_cache;
 
+    // Pipeline parallelism parameters (vLLM-style)
+    cparams.pp_size           = params.pp_size;
+    cparams.tp_size           = params.tp_size;
+    cparams.pp_chunk_size     = params.pp_chunk_size;
+    cparams.pp_chunked_prefill = params.pp_chunked_prefill;
+
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
 

@@ -20,10 +20,12 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "dpct/helper.hpp"
 #include "ggml-sycl.h"
@@ -69,6 +71,9 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_tp_debug;  // Tensor Parallelism debug output
 extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
+
+// Track when SYCL graph recording is active
+extern thread_local bool g_ggml_sycl_graph_recording;
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
 // Hint the optimizer to pipeline the more likely following instruction in branches
@@ -313,6 +318,29 @@ void ggml_sycl_tp_allreduce_sum_multi(float** buf_per_device, size_t count,
 // Get/ensure shared buffer for optimized ALL_REDUCE (malloc_shared for zero-copy)
 float* ggml_sycl_tp_ensure_shared_reduce_buffer(size_t bytes);
 
+// Get persistent host buffers for CPU-based ALL_REDUCE (avoids per-call malloc/free)
+// Returns two host buffers: one for dev0 data, one for dev1 data
+// Grows buffers as needed, reuses across calls
+void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float** buf0, float** buf1);
+
+// Get persistent shared buffer for device-to-device transfers (PP optimization)
+// Uses malloc_shared to avoid per-transfer malloc/free overhead
+// Auto-grows buffer as needed, reuses across calls
+void* ggml_sycl_get_dev2dev_transfer_buffer(size_t bytes);
+
+// Get buffer for double-buffered transfer (returns buffer index via out param)
+// Double-buffering allows overlapping src->host copy with host->dst copy
+void* ggml_sycl_get_dev2dev_transfer_buffer_double(size_t bytes, int* buf_idx);
+
+// Record that a buffer has a pending transfer (for double-buffering)
+void ggml_sycl_set_dev2dev_transfer_event(int buf_idx, sycl::event evt);
+
+// Wait for all pending double-buffered transfers to complete
+void ggml_sycl_wait_dev2dev_transfers();
+
+// Free persistent device-to-device transfer buffer (cleanup)
+void ggml_sycl_free_dev2dev_transfer_buffer();
+
 // Get the TP rank for a given device
 int ggml_sycl_tp_get_rank(int device);
 
@@ -354,6 +382,133 @@ void ggml_sycl_tp_copy_weight_shard(void* dst_device, const void* src_host,
 
 // Get the size in bytes of a sharded tensor for this rank
 size_t ggml_sycl_tp_get_shard_size(const ggml_tensor* tensor, int rank, int world_size);
+
+// =============================================================================
+// Quantized Communication Buffers (Flash Communication)
+// Pre-allocated buffers for INT16 quantized AllReduce - 33% bandwidth reduction
+// INT16 has 65536 levels vs INT8's 256 → 0.0015% max error vs 0.4%
+// Total bandwidth: 8N bytes (2N×2 INT16 + 4N FP32 result) vs 12N standard
+// =============================================================================
+
+struct ggml_sycl_tp_quant_comm_buffers {
+    int16_t* dev_q[GGML_SYCL_MAX_DEVICES];     // INT16 device buffers (2 bytes per element)
+    float* dev_minmax[GGML_SYCL_MAX_DEVICES];  // [min, max] per device
+    int16_t* host_q0;                           // Host buffer for device 0 INT16
+    int16_t* host_q1;                           // Host buffer for device 1 INT16
+    float* host_result;                         // Host buffer for FP32 result
+    size_t capacity;                            // Current allocation size (elements)
+    bool allocated;
+};
+
+// Check if quantized AllReduce is enabled via GGML_SYCL_QUANT_ALLREDUCE env var
+bool ggml_sycl_quant_allreduce_enabled();
+
+// Pre-allocate quantized comm buffers (called from ggml_sycl_tp_init)
+void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size);
+
+// Ensure buffers are large enough (resize if needed, called during forward pass)
+void ggml_sycl_tp_ensure_quant_comm_buffers(size_t n_elements);
+
+// Get buffer pointers (returns nullptr if not allocated)
+ggml_sycl_tp_quant_comm_buffers* ggml_sycl_tp_get_quant_comm_buffers();
+
+// Free quantized comm buffers
+void ggml_sycl_tp_free_quant_comm_buffers();
+
+// =============================================================================
+// Pipeline Parallelism (PP) configuration
+// Implements vLLM-style pipeline parallelism with layer-based device distribution
+// =============================================================================
+
+#define GGML_SYCL_PP_MAX_LAYERS 256
+
+struct ggml_sycl_pp_config {
+    bool enabled = false;                           // Whether pipeline parallelism is active
+    int num_stages = 0;                             // Number of pipeline stages (typically = num_devices)
+    int layers_per_stage[GGML_SYCL_MAX_DEVICES] = {0};  // Layers per stage (for uneven distribution)
+    int layer_to_device[GGML_SYCL_PP_MAX_LAYERS] = {0}; // Quick lookup: layer_id -> device_id
+    int devices[GGML_SYCL_MAX_DEVICES] = {0};       // Device IDs in PP order
+
+    // Inter-stage buffers (malloc_shared for Intel Arc without P2P)
+    void* stage_output_buf[GGML_SYCL_MAX_DEVICES] = {nullptr};
+    size_t stage_output_size = 0;                   // Current buffer size per stage
+
+    // Synchronization events for pipelining
+    sycl::event stage_complete[GGML_SYCL_MAX_DEVICES];
+
+    // Chunked prefill state
+    int32_t chunk_size = 0;                         // Max tokens per prefill chunk (0 = disabled)
+    bool chunked_prefill_enabled = false;           // Whether chunked prefill is active
+
+    // Statistics
+    int64_t total_stage_transfers = 0;
+    int64_t total_sync_waits = 0;
+};
+
+// Global PP config (set during init)
+extern ggml_sycl_pp_config g_sycl_pp_config;
+
+// PP debug output - controlled by GGML_SYCL_PP_DEBUG env var
+extern int g_ggml_sycl_pp_debug;
+
+#define GGML_SYCL_PP_DEBUG(...)              \
+    do {                                     \
+        if (UNLIKELY(g_ggml_sycl_pp_debug))  \
+            fprintf(stderr, __VA_ARGS__);    \
+    } while (0)
+
+// Initialize pipeline parallelism with specified devices and layer distribution
+// If layers_per_stage is nullptr, layers are distributed evenly
+void ggml_sycl_pp_init(const int* device_ids, int num_devices, int total_layers,
+                        const int* layers_per_stage = nullptr);
+
+// Clean up pipeline parallelism resources
+void ggml_sycl_pp_free();
+
+// Get the device ID for a given layer
+int ggml_sycl_pp_get_device_for_layer(int layer);
+
+// Allocate/ensure inter-stage buffer for given size
+// Uses malloc_shared for Intel Arc (no P2P support)
+void* ggml_sycl_pp_ensure_stage_buffer(int stage, size_t size);
+
+// Transfer layer output from one stage to the next
+// src_device: device that produced the output
+// dst_device: device that will consume it
+// Returns event that signals transfer completion
+sycl::event ggml_sycl_pp_stage_transfer(int src_device, int dst_device,
+                                         const void* src, size_t size,
+                                         queue_ptr src_queue, queue_ptr dst_queue);
+
+// Wait for a stage to complete (blocking)
+void ggml_sycl_pp_sync_stage(int stage);
+
+// Wait for all stages to complete
+void ggml_sycl_pp_sync_all();
+
+// Check if PP is enabled
+bool ggml_sycl_pp_enabled();
+
+// Get number of pipeline stages
+int ggml_sycl_pp_num_stages();
+
+// Get layer range for a stage: [start_layer, end_layer)
+void ggml_sycl_pp_get_stage_layers(int stage, int* start_layer, int* end_layer);
+
+// Get stage for a given layer
+int ggml_sycl_pp_get_stage_for_layer(int layer);
+
+// Set chunked prefill configuration
+void ggml_sycl_pp_set_chunked_prefill(int32_t chunk_size, bool enabled);
+
+// Get staging buffer for reading (after stage transfer is complete)
+void* ggml_sycl_pp_get_stage_buffer(int stage);
+
+// Get PP statistics (transfers and sync waits)
+void ggml_sycl_pp_get_stats(int64_t* transfers, int64_t* syncs);
+
+// Reset PP statistics
+void ggml_sycl_pp_reset_stats();
 
 // FFN norm cache for TP: stores FFN norm output immediately after MUL to prevent buffer aliasing
 // The GGML scheduler may reuse the FFN norm buffer before TP can use it on device 1
@@ -513,6 +668,72 @@ void ggml_sycl_tp_submit_ffn_work(const tp_ffn_work_item & work);  // Submit wor
 tp_ffn_result * ggml_sycl_tp_get_ffn_result(int layer, bool wait);  // Get result (optional wait)
 void ggml_sycl_tp_release_ffn_result(int layer);  // Release result memory
 
+// =============================================================================
+// Persistent FFN compute buffers for TP mode
+// Pre-allocate all FFN buffers once per layer to eliminate 535K+ malloc/free calls
+// =============================================================================
+
+struct tp_ffn_compute_buffers {
+    // Input quantization buffer
+    char * input_q8_dev;
+    size_t input_q8_size;
+
+    // Intermediate float buffers (gate, up, hidden outputs)
+    float * gate_out;
+    float * up_out;
+    float * hidden_out;
+    size_t hidden_size;  // Size of gate_out, up_out, hidden_out
+
+    // Hidden quantization buffer for down matmul
+    char * hidden_q8_dev;
+    size_t hidden_q8_size;
+
+    // Output buffer for partial result
+    float * partial_out;
+    size_t partial_size;
+
+    // Track allocated sizes (for resize detection)
+    int64_t K_full_padded;
+    int64_t N_hidden_shard_padded;
+    int64_t batch_max;
+    int64_t N_out;
+
+    // Flag indicating if buffers are allocated
+    bool allocated;
+};
+
+// Global map of persistent FFN buffers indexed by layer
+extern std::unordered_map<int, tp_ffn_compute_buffers> g_tp_ffn_buffers;
+extern std::mutex g_tp_ffn_buffers_mutex;
+
+// Ensure persistent FFN buffers are allocated for a layer
+// Returns pointer to buffers, allocates if needed, resizes if dimensions changed
+tp_ffn_compute_buffers * ggml_sycl_tp_ensure_ffn_buffers(
+    int layer, int device, queue_ptr stream,
+    int64_t K_full_padded, int64_t N_hidden_shard_padded, int64_t batch, int64_t N_out);
+
+// Free all persistent FFN buffers (called during cleanup)
+void ggml_sycl_tp_free_ffn_buffers();
+
+// =============================================================================
+// Persistent host staging buffer for TP input copies
+// =============================================================================
+
+struct tp_host_staging_buffer {
+    float * buf;
+    size_t size;
+    size_t capacity;
+};
+
+extern tp_host_staging_buffer g_tp_host_staging;
+extern std::mutex g_tp_host_staging_mutex;
+
+// Ensure host staging buffer has at least the given capacity
+float * ggml_sycl_tp_ensure_host_staging(size_t size, queue_ptr stream);
+
+// Free host staging buffer
+void ggml_sycl_tp_free_host_staging();
+
 struct ggml_sycl_pool {
     virtual ~ggml_sycl_pool() = default;
 
@@ -646,6 +867,7 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
 }
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;
+
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
@@ -771,6 +993,11 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
     int exec_graph_n_nodes = 0;  // Track graph size for cache invalidation
 #endif
+
+    // Barrier event for cross-ubatch synchronization
+    // This provides lighter-weight sync than full queue wait
+    std::optional<sycl::event> barrier_event;
+    bool has_pending_barrier = false;
 
     ggml_sycl_pool & host_pool(int device) {
         if (host_pools[device] == nullptr) {

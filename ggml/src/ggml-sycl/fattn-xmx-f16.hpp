@@ -97,7 +97,7 @@ inline int64_t paged_kv_offset(
 // XMX Configuration for Intel Arc GPUs
 // =============================================================================
 
-// Debug flag
+// Debug flag - set to 1 to enable debug output
 #define FATTN_XMX_DEBUG 0
 
 // Intel Arc XMX tile dimensions (verified working)
@@ -165,6 +165,10 @@ static void flash_attn_xmx_f16_kernel(
     int32_t max_blocks_per_seq,
     const int32_t * __restrict__ block_table,  // [batch, max_blocks] logical->physical block mapping
     const int32_t * __restrict__ seq_lens,     // [batch] sequence lengths
+    // Multi-token decode parameters (speculative decoding / multi-step generation):
+    bool multi_token_decode,
+    const int32_t * __restrict__ q_positions,  // [ne01] Position for each query (for per-query causal boundary)
+    int32_t kv_base_pos,                       // Base position of KV cache
     const sycl::nd_item<3> & item,
     sycl::half * shared_mem) {
 
@@ -471,6 +475,14 @@ static void flash_attn_xmx_f16_kernel(
         // ---------------------------------------------------------------------
         // PHASE 1: Compute Q @ K^T using XMX (using tile_KT_cur)
         // ---------------------------------------------------------------------
+#if FATTN_XMX_DEBUG
+        // Debug: Check K data in tile_KT_cur for first few elements
+        if (head == 0 && tid == 0 && (ic0 + ncols - 1) == (ne01 - 1)) {
+            sycl::ext::oneapi::experimental::printf(
+                "[K_CHECK] kv_batch=%d kv_start=%d ne01=%d ne11=%d kv_loop_end=%d seq_kv_end=%d\n",
+                kv_start / XMX_BATCH_KV, kv_start, ne01, ne11, kv_loop_end_bound, seq_kv_end);
+        }
+#endif
         // Phase 2b DISABLED - no need to initialize QK_acc since all tiles computed
         {
 
@@ -577,6 +589,18 @@ static void flash_attn_xmx_f16_kernel(
                     if (kv_seq3 >= 0 && kv_seq3 != q_seq) qk.w() = -FLT_MAX;
                 }
 
+                // Multi-token decode: per-query position-based causal masking
+                // Each query can only attend to KV positions <= its own position
+                if (multi_token_decode && q_positions) {
+                    const int32_t q_pos = q_positions[ic0 + j];
+                    const int kv_idx_base = kv_start + k;
+                    // KV position = kv_base_pos + kv_idx
+                    if (kv_base_pos + kv_idx_base + 0 > q_pos) qk.x() = -FLT_MAX;
+                    if (kv_base_pos + kv_idx_base + 1 > q_pos) qk.y() = -FLT_MAX;
+                    if (kv_base_pos + kv_idx_base + 2 > q_pos) qk.z() = -FLT_MAX;
+                    if (kv_base_pos + kv_idx_base + 3 > q_pos) qk.w() = -FLT_MAX;
+                }
+
                 *reinterpret_cast<sycl::float4*>(&qk_row[k]) = qk;
             }
             // Handle remainder
@@ -592,6 +616,13 @@ static void flash_attn_xmx_f16_kernel(
                 if (q_seq >= 0 && kv_seq_ids) {
                     const int32_t kv_seq = kv_seq_ids[kv_start + k];
                     if (kv_seq >= 0 && kv_seq != q_seq) {
+                        qk_val = -FLT_MAX;
+                    }
+                }
+                // Multi-token decode: per-query position-based causal masking
+                if (multi_token_decode && q_positions) {
+                    const int32_t q_pos = q_positions[ic0 + j];
+                    if (kv_base_pos + kv_start + k > q_pos) {
                         qk_val = -FLT_MAX;
                     }
                 }
@@ -674,12 +705,27 @@ static void flash_attn_xmx_f16_kernel(
             }
         }
 
+#if FATTN_XMX_DEBUG
+        // Debug: Log prefetch info
+        if (head == 0 && tid == 0 && (ic0 + ncols - 1) == (ne01 - 1)) {
+            sycl::ext::oneapi::experimental::printf(
+                "[PREFETCH] kv_batch=%d has_next=%d next_kv_start=%d next_kv_count=%d buf_load=%d\n",
+                kv_start / XMX_BATCH_KV, has_next ? 1 : 0, next_kv_start, next_kv_count, buf_load);
+        }
+#endif
         // Prefetch next K batch into tile_KT_next
         if (has_next) {
+#if FATTN_XMX_DEBUG
+            // Debug: Check we are actually loading K
+            int load_count = 0;
+#endif
             for (int idx = tid; idx < next_kv_count * D; idx += XMX_NTHREADS) {
                 const int k = idx / D;
                 const int d = idx % D;
                 const int kv_pos = next_kv_start + k;
+#if FATTN_XMX_DEBUG
+                load_count++;
+#endif
 
                 const char * K_row_base;
                 if (use_paged_attn && block_table != nullptr) {
@@ -692,14 +738,36 @@ static void flash_attn_xmx_f16_kernel(
                     K_row_base = K_base + nb11 * kv_pos;
                 }
 
+                sycl::half val;
                 if constexpr (kv_is_fp8) {
                     const uint8_t * K_row_fp8 = reinterpret_cast<const uint8_t*>(K_row_base);
-                    tile_KT_next[d * KT_STRIDE + k] = fp8_e4m3_to_half(K_row_fp8[d]);
+                    val = fp8_e4m3_to_half(K_row_fp8[d]);
                 } else {
                     const sycl::half * K_row = reinterpret_cast<const sycl::half*>(K_row_base);
-                    tile_KT_next[d * KT_STRIDE + k] = K_row[d];
+                    val = K_row[d];
                 }
+                tile_KT_next[d * KT_STRIDE + k] = val;
+#if FATTN_XMX_DEBUG
+                // Debug: Log what we're loading
+                if (head == 0 && (ic0 + ncols - 1) == (ne01 - 1) && idx == 0) {
+                    sycl::ext::oneapi::experimental::printf(
+                        "[PREFETCH_ELEM] tid=%d kv_pos=%d k=%d d=%d pos=%d val=%.4f K_base_offset=%ld\n",
+                        tid, kv_pos, k, d, d * KT_STRIDE + k, static_cast<float>(val),
+                        (long)(K_row_base - K_base));
+                }
+#endif
             }
+#if FATTN_XMX_DEBUG
+            // Debug: Log prefetch result - check at position [0*KT_STRIDE + 0] which should have d=0,k=0
+            if (head == 0 && tid == 0 && (ic0 + ncols - 1) == (ne01 - 1)) {
+                sycl::ext::oneapi::experimental::printf(
+                    "[PREFETCH_DONE] loaded %d elems into buf[%d], tile_KT_next[0,KT_STRIDE,2*KT_STRIDE]=%.4f %.4f %.4f\n",
+                    load_count, buf_load,
+                    static_cast<float>(tile_KT_next[0]),
+                    static_cast<float>(tile_KT_next[KT_STRIDE]),
+                    static_cast<float>(tile_KT_next[2*KT_STRIDE]));
+            }
+#endif
             // Zero-pad if next batch is partial
             if (next_kv_count < XMX_BATCH_KV) {
                 for (int idx = tid; idx < D * (XMX_BATCH_KV - next_kv_count); idx += XMX_NTHREADS) {
@@ -723,10 +791,29 @@ static void flash_attn_xmx_f16_kernel(
 
         // First pass: compute max per query row and store to shared memory
         // Use vectorized reduction for better performance
+        // NOTE: FATTN_KQ_MAX_OFFSET removed - was causing bug by being inconsistent
+        // between batch_max computation and softmax weight computation
+#if FATTN_XMX_DEBUG
+        // Debug: Log before batch_max computation for last query, head 0
+        const bool dbg_log = (head == 0 && tid == 0 && (ic0 + ncols - 1) == (ne01 - 1));
+        if (dbg_log) {
+            sycl::ext::oneapi::experimental::printf(
+                "\n=== Query ic0=%d (last=%d), head=%d, kv_start=%d, kv_count=%d ===\n",
+                ic0, ne01-1, head, kv_start, kv_count);
+        }
+#endif
         for (int j = tid; j < ncols; j += XMX_NTHREADS) {
             float batch_max = -FLT_MAX;
             if (ic0 + j < ne01) {
                 const float * row = &QK_acc[j * XMX_BATCH_KV];
+#if FATTN_XMX_DEBUG
+                // Debug: Check QK_acc values for tid=0 and 1
+                if (head == 0 && (ic0 + ncols - 1) == (ne01 - 1) && j == 0) {
+                    sycl::ext::oneapi::experimental::printf(
+                        "[QK_ACC] kv_batch=%d j=%d QK_acc[0..7]=%.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n",
+                        kv_start / XMX_BATCH_KV, j, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7]);
+                }
+#endif
                 int k = 0;
                 // Vectorized max using float4 (process 4 elements at a time)
                 sycl::float4 vmax = sycl::float4(-FLT_MAX);
@@ -753,7 +840,13 @@ static void flash_attn_xmx_f16_kernel(
 
             const float batch_max = batch_max_shared[j];
             const float new_max = sycl::fmax(KQ_max[j], batch_max);
-            const float scale_old = sycl::native::exp(KQ_max[j] - new_max);
+            // CRITICAL: Do NOT apply FTZ threshold to the rescaling factor!
+            // The rescaling factor exp(old_max - new_max) preserves the relative
+            // contribution of previous batches. Zeroing it would lose all previous
+            // accumulation, which is incorrect.
+            // FTZ should ONLY be applied to softmax weights (exp(kq - max)), not rescaling.
+            const float diff_val = KQ_max[j] - new_max;
+            const float scale_old = sycl::exp(diff_val);  // Never explicitly zero
             KQ_max[j] = new_max;
 
             // Rescale previous VKQ accumulator
@@ -762,6 +855,15 @@ static void flash_attn_xmx_f16_kernel(
                 VKQ[j][i] *= scale_old;
             }
             KQ_sum[j] *= scale_old;
+
+#if FATTN_XMX_DEBUG
+            // Debug: Log the update for query j (only for last query in work-group)
+            if (dbg_log && j == (ncols - 1)) {
+                sycl::ext::oneapi::experimental::printf(
+                    "  kv_batch=%d: batch_max=%.6f, KQ_max_old->new=%.6f->%.6f, scale_old=%.6f, KQ_sum=%.6f\n",
+                    kv_start / XMX_BATCH_KV, batch_max, batch_max_shared[j] - (new_max - KQ_max[j]), KQ_max[j], scale_old, KQ_sum[j]);
+            }
+#endif
         }
 
         // Second pass: compute softmax weights and store to tile_S
@@ -776,7 +878,9 @@ static void flash_attn_xmx_f16_kernel(
             }
 
             const float kq_val = QK_acc[j * XMX_BATCH_KV + k];
-            const float w = sycl::native::exp(kq_val - KQ_max[j]);
+            // Use FTZ threshold to avoid numerical issues with very small softmax weights
+            const float diff = kq_val - KQ_max[j];
+            const float w = diff >= SOFTMAX_FTZ_THRESHOLD ? sycl::exp(diff) : 0.0f;
             tile_S[j * S_STRIDE + k] = sycl::half(w);
         }
         // Zero-pad S for positions beyond kv_count in each query row
@@ -944,6 +1048,15 @@ static void flash_attn_xmx_f16_kernel(
         sycl::group_barrier(item.get_group());
     }
 
+#if FATTN_XMX_DEBUG
+    // Debug: Log final state for last query, head 0
+    if (head == 0 && tid == 0 && (ic0 + ncols - 1) == (ne01 - 1)) {
+        const int j = ncols - 1;  // Last query in work-group
+        sycl::ext::oneapi::experimental::printf(
+            "\n  FINAL: KQ_max=%.6f, KQ_sum=%.6f\n", KQ_max[j], KQ_sum[j]);
+    }
+#endif
+
     // =========================================================================
     // Apply attention sinks if present
     // =========================================================================
@@ -1069,6 +1182,11 @@ void launch_fattn_xmx_f16(
         const int32_t * pa_block_table = params.block_table;
         const int32_t * pa_seq_lens = params.seq_lens;
 
+        // Multi-token decode parameters
+        const bool multi_token_decode = params.multi_token_decode;
+        const int32_t * q_positions = params.q_positions;
+        const int32_t kv_base_pos = params.kv_base_pos;
+
         // Capture kv_is_fp8 flag for runtime dispatch
         const bool kv_fp8 = params.kv_is_fp8;
 
@@ -1092,6 +1210,7 @@ void launch_fattn_xmx_f16(
                         n_seqs, seq_q_offsets, seq_kv_offsets,
                         q_seq_ids, kv_seq_ids,
                         use_paged_attn, pa_block_size, pa_max_blocks, pa_block_table, pa_seq_lens,
+                        multi_token_decode, q_positions, kv_base_pos,
                         item, shared);
                 } else {
                     flash_attn_xmx_f16_kernel<D, ncols, use_logit_softcap, Q_type, false>(
@@ -1107,6 +1226,7 @@ void launch_fattn_xmx_f16(
                         n_seqs, seq_q_offsets, seq_kv_offsets,
                         q_seq_ids, kv_seq_ids,
                         use_paged_attn, pa_block_size, pa_max_blocks, pa_block_table, pa_seq_lens,
+                        multi_token_decode, q_positions, kv_base_pos,
                         item, shared);
                 }
             });

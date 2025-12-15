@@ -13,10 +13,15 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"  // For GPU sampling API
+#endif
+
 #include <cstddef>
 #include <cinttypes>
 #include <memory>
 #include <unordered_set>
+#include <unordered_map>
 #include <filesystem>
 
 // fix problem with std::min and std::max
@@ -520,7 +525,27 @@ struct server_context_impl {
     common_chat_templates_ptr chat_templates;
     oaicompat_parser_options  oai_parser_opt;
 
+#ifdef GGML_USE_SYCL
+    // GPU sampling support (single-sequence)
+    ggml_sycl_sampler_t gpu_sampler = nullptr;
+    bool gpu_sampling_enabled = false;
+
+    // Multi-sequence GPU sampling support (continuous batching optimization)
+    ggml_sycl_multi_seq_sampler_t multi_seq_sampler = nullptr;
+    bool multi_seq_sampling_enabled = false;
+#endif
+
     ~server_context_impl() {
+#ifdef GGML_USE_SYCL
+        if (gpu_sampler) {
+            ggml_backend_sycl_sampler_free(gpu_sampler);
+            gpu_sampler = nullptr;
+        }
+        if (multi_seq_sampler) {
+            ggml_backend_sycl_multi_seq_sampler_free(multi_seq_sampler);
+            multi_seq_sampler = nullptr;
+        }
+#endif
         mtmd_free(mctx);
 
         // Clear any sampling context
@@ -657,6 +682,45 @@ struct server_context_impl {
                 SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
             }
         }
+
+#ifdef GGML_USE_SYCL
+        // Initialize GPU sampler if enabled
+        // Note: We don't set skip_logits_host_copy here because we still need
+        // CPU sampling as fallback when GPU sampling conditions aren't met
+        // (e.g., when top_k, top_p, min_p are non-default)
+        if (params_base.gpu_sampling) {
+            ggml_backend_t logits_backend = llama_get_logits_backend(ctx);
+            if (logits_backend && ggml_backend_is_sycl(logits_backend)) {
+                const int n_vocab = llama_vocab_n_tokens(vocab);
+                gpu_sampler = ggml_backend_sycl_sampler_create(logits_backend, n_vocab, params_base.sampling.seed);
+                if (gpu_sampler) {
+                    gpu_sampling_enabled = true;
+                    // Don't call llama_set_logits_device(ctx, true) here!
+                    // CPU sampling fallback needs logits on host.
+                    // GPU sampling will work fine reading from device memory.
+                    SRV_INF("GPU sampling enabled (n_vocab=%d)\n", n_vocab);
+                } else {
+                    SRV_WRN("%s\n", "failed to create GPU sampler, falling back to CPU sampling");
+                }
+
+                // Create multi-sequence sampler for continuous batching optimization
+                // This enables sampling multiple sequences in parallel on GPU
+                const int max_seqs = params_base.n_parallel;
+                if (max_seqs > 1) {
+                    multi_seq_sampler = ggml_backend_sycl_multi_seq_sampler_create(
+                        logits_backend, max_seqs, n_vocab, params_base.sampling.seed);
+                    if (multi_seq_sampler) {
+                        multi_seq_sampling_enabled = true;
+                        SRV_INF("Multi-sequence GPU sampling enabled (max_seqs=%d, n_vocab=%d)\n", max_seqs, n_vocab);
+                    } else {
+                        SRV_WRN("%s\n", "failed to create multi-seq GPU sampler");
+                    }
+                }
+            } else {
+                SRV_WRN("%s\n", "GPU sampling requested but logits backend is not SYCL");
+            }
+        }
+#endif
 
         return true;
     }
@@ -2336,6 +2400,7 @@ struct server_context_impl {
             // on successful decode, restore the original batch size
             n_batch = llama_n_batch(ctx);
 
+            // First pass: handle parent/child slot copying and state transitions
             for (auto & slot : slots) {
                 // may need to copy state to other slots
                 if (slot.state == SLOT_STATE_DONE_PROMPT && slot.is_parent()) {
@@ -2363,7 +2428,179 @@ struct server_context_impl {
                         send_partial_response(slot, {}, true);
                     }
                 }
+            }
 
+#ifdef GGML_USE_SYCL
+            // Multi-sequence GPU sampling: collect eligible slots and sample all at once
+            std::vector<server_slot*> multi_seq_slots;
+            std::vector<int> multi_seq_batch_indices;
+
+            if (multi_seq_sampling_enabled && multi_seq_sampler) {
+                // Collect slots eligible for multi-seq GPU sampling
+                for (auto & slot : slots) {
+                    if (slot.i_batch < (int) i || slot.i_batch >= (int) (i + n_tokens)) {
+                        continue;
+                    }
+
+                    // Handle state transitions
+                    if (slot.state == SLOT_STATE_DONE_PROMPT) {
+                        if (slot.task->type == SERVER_TASK_TYPE_EMBEDDING ||
+                            slot.task->type == SERVER_TASK_TYPE_RERANK) {
+                            continue;  // Skip embedding/rerank tasks
+                        }
+                        slot.state = SLOT_STATE_GENERATING;
+                    } else if (slot.state != SLOT_STATE_GENERATING) {
+                        continue;
+                    }
+
+                    // Check if this slot can use GPU sampling
+                    const auto & samp = slot.task->params.sampling;
+                    const bool can_use_gpu = samp.grammar.empty() &&
+                                             samp.n_probs == 0 &&
+                                             samp.typ_p >= 1.0f;
+
+                    if (can_use_gpu) {
+                        multi_seq_slots.push_back(&slot);
+                    }
+                }
+
+                // Compute the actual logits tensor row index for each slot.
+                // We must use llama_get_logits_row() to apply the output_ids mapping,
+                // because llama_decode() may reorder outputs (output_ids[batch_pos] != batch_pos).
+                // Without this mapping, GPU sampling reads from wrong logits rows and tokens get swapped.
+                //
+                // IMPORTANT: We use VIEW-RELATIVE position (slot->i_batch - i), NOT absolute batch position.
+                // llama_decode() receives batch_view starting at offset i, so output_ids_gpu is indexed
+                // by positions 0 to n_tokens-1 (view-relative), not original absolute positions.
+                for (auto* slot : multi_seq_slots) {
+                    int batch_pos = slot->i_batch - (int)i;  // view-relative position
+                    int batch_idx = llama_get_logits_row(ctx, batch_pos);  // actual tensor row
+                    if (batch_idx < 0) {
+                        SRV_ERR("llama_get_logits_row returned %d for batch_pos=%d (slot=%d, slot->i_batch=%d, i=%d)\n",
+                                batch_idx, batch_pos, slot->id, slot->i_batch, (int)i);
+                        // Fall back to identity mapping as last resort
+                        batch_idx = batch_pos;
+                    }
+                    multi_seq_batch_indices.push_back(batch_idx);
+                }
+
+                // If we have multiple eligible slots, use multi-seq sampling
+                if (multi_seq_slots.size() >= 2) {
+                    llama_synchronize(ctx);
+
+                    // Get the correct logits pointer:
+                    // - For single-ubatch: use logits_tensor->data directly
+                    // - For multi-ubatch: use the accumulated GPU buffer
+                    float* logits = nullptr;
+                    if (llama_had_multi_ubatch(ctx)) {
+                        // Multi-ubatch case: logits are in accumulated GPU buffer
+                        logits = llama_get_gpu_logits_buffer(ctx);
+                        if (!logits) {
+                            SRV_ERR("Multi-ubatch decode but no GPU logits buffer available%s", "");
+                        }
+                    } else {
+                        // Single-ubatch case: logits are in tensor directly
+                        ggml_tensor * logits_tensor = llama_get_logits_tensor(ctx);
+                        if (logits_tensor) {
+                            logits = (float*)logits_tensor->data;
+                        }
+                    }
+
+                    if (logits) {
+
+                        // Build seq_ids array (use slot.id as seq_id)
+                        std::vector<int> seq_ids;
+                        for (auto* slot : multi_seq_slots) {
+                            seq_ids.push_back(slot->id);
+
+                            // Add/update sequence in multi-seq sampler with its params
+                            const auto & samp = slot->task->params.sampling;
+                            if (ggml_backend_sycl_multi_seq_get_active_count(multi_seq_sampler) == 0 ||
+                                slot->n_decoded == 0) {
+                                // First token for this slot - add to sampler
+                                ggml_backend_sycl_multi_seq_add(multi_seq_sampler, slot->id, samp.temp);
+                                ggml_backend_sycl_multi_seq_set_params(multi_seq_sampler, slot->id,
+                                    samp.temp, samp.top_k, samp.top_p, samp.min_p);
+                            }
+                        }
+
+                        // Debug: print batch indices and seq_ids
+                        // batch_pos = slot->i_batch (absolute batch position)
+                        // batch_idx = output_ids_gpu[batch_pos] (actual logits tensor row)
+                        SRV_DBG("Multi-seq sampling: %zu slots, i=%d, n_tokens=%d\n", multi_seq_slots.size(), (int)i, n_tokens);
+                        for (size_t k = 0; k < multi_seq_slots.size(); k++) {
+                            SRV_DBG("  [slot %d: i_batch=%d, logits_row=%d]\n",
+                                    seq_ids[k], multi_seq_slots[k]->i_batch, multi_seq_batch_indices[k]);
+                        }
+
+                        // Sample all sequences at once
+                        int n_sampled = ggml_backend_sycl_multi_seq_sample_indexed(
+                            multi_seq_sampler, logits, seq_ids.data(),
+                            multi_seq_batch_indices.data(), (int)multi_seq_slots.size());
+
+                        if (n_sampled > 0) {
+                            // Get sampled tokens
+                            std::vector<int32_t> tokens(multi_seq_slots.size());
+                            std::vector<int> out_seq_ids(multi_seq_slots.size());
+                            ggml_backend_sycl_multi_seq_get_tokens(multi_seq_sampler,
+                                tokens.data(), out_seq_ids.data(), (int)multi_seq_slots.size());
+
+                            // Build a map from seq_id to token for proper matching
+                            std::unordered_map<int, llama_token> seq_id_to_token;
+                            for (size_t idx = 0; idx < multi_seq_slots.size(); idx++) {
+                                seq_id_to_token[out_seq_ids[idx]] = tokens[idx];
+                            }
+
+                            // Distribute results back to slots using seq_id matching
+                            for (auto* slot : multi_seq_slots) {
+                                // Look up token by slot->id (which is the seq_id)
+                                auto it = seq_id_to_token.find(slot->id);
+                                if (it == seq_id_to_token.end()) {
+                                    SRV_ERR("Multi-seq sampling: no token for slot %d\n", slot->id);
+                                    continue;
+                                }
+                                llama_token id = it->second;
+
+                                slot->i_batch = -1;
+                                common_sampler_accept(slot->smpl, id, true);
+                                slot->n_decoded += 1;
+
+                                const int64_t t_current = ggml_time_us();
+                                if (slot->n_decoded == 1) {
+                                    slot->t_start_generation = t_current;
+                                    slot->t_prompt_processing = (slot->t_start_generation - slot->t_start_process_prompt) / 1e3;
+                                    metrics.on_prompt_eval(*slot);
+                                }
+                                slot->t_token_generation = std::max<int64_t>(1, t_current - slot->t_start_generation) / 1e3;
+
+                                completion_token_output result;
+                                result.tok = id;
+                                result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(*slot, result.tok));
+                                result.prob = 1.0f;
+
+                                if (!process_token(result, *slot)) {
+                                    slot->print_timings();
+                                    send_final_response(*slot);
+                                    metrics.on_prediction(*slot);
+                                    slot->release();
+                                }
+                            }
+
+                            SRV_INF("Multi-seq GPU sampling: sampled %d tokens for %zu slots\n",
+                                    n_sampled, multi_seq_slots.size());
+
+                            // Remove processed slots from regular processing
+                            for (auto* slot : multi_seq_slots) {
+                                slot->i_batch = -1;  // Mark as processed
+                            }
+                        }
+                    }
+                }
+            }
+#endif
+
+            // Regular per-slot processing (for slots not handled by multi-seq sampling)
+            for (auto & slot : slots) {
                 if (slot.i_batch < (int) i || slot.i_batch >= (int) (i + n_tokens)) {
                     continue; // continue loop of slots
                 }
@@ -2392,7 +2629,53 @@ struct server_context_impl {
 
                 const int tok_idx = slot.i_batch - i;
 
-                llama_token id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+                llama_token id;
+
+#ifdef GGML_USE_SYCL
+                // Use GPU sampling when available and conditions allow
+                // GPU sampling bypasses grammar/advanced sampling - only use for simple temp-based sampling
+                const auto & samp = slot.task->params.sampling;
+
+                // Debug: Log sampling parameters
+                if (gpu_sampling_enabled && slot.n_decoded < 3) {
+                    SLT_INF(slot, "GPU sampling check: enabled=%d, top_k=%d, top_p=%.3f, min_p=%.3f, typ_p=%.3f, grammar=%s\n",
+                            (int)gpu_sampling_enabled, samp.top_k, samp.top_p, samp.min_p, samp.typ_p,
+                            samp.grammar.empty() ? "empty" : "set");
+                }
+
+                // GPU sampling now supports top-k, top-p, min-p filtering
+                // Only fall back to CPU for: grammar, n_probs, typ_p
+                const bool can_use_gpu_sampling = gpu_sampling_enabled && gpu_sampler &&
+                    samp.grammar.empty() &&           // No grammar constraints
+                    samp.n_probs == 0 &&              // Not returning token probabilities
+                    samp.typ_p >= 1.0f;               // No typical-p filtering (not implemented on GPU)
+
+                if (can_use_gpu_sampling) {
+                    // Must sync before GPU sampling to ensure decode has completed
+                    llama_synchronize(ctx);
+                    ggml_tensor * logits_tensor = llama_get_logits_tensor(ctx);
+                    if (logits_tensor) {
+                        // Debug: log tensor info
+                        SLT_INF(slot, "GPU sampling ACTIVE: tok_idx=%d, tensor ne=[%lld, %lld], temp=%.2f, top_k=%d, top_p=%.2f, min_p=%.2f\n",
+                                tok_idx, (long long)logits_tensor->ne[0], (long long)logits_tensor->ne[1],
+                                samp.temp, samp.top_k, samp.top_p, samp.min_p);
+                        // For single-token decode, tok_idx should be 0 regardless of batch index
+                        // because n_outputs=1 and logits_tensor only has 1 row
+                        int effective_idx = (logits_tensor->ne[1] == 1) ? 0 : tok_idx;
+                        // Use full sampling API with top-k, top-p, min-p support
+                        id = ggml_backend_sycl_sample_token_full(gpu_sampler, logits_tensor, effective_idx,
+                            samp.temp, samp.top_k, samp.top_p, samp.min_p);
+                    } else {
+                        // Fall back to CPU sampling if logits tensor not available
+                        SLT_WRN(slot, "GPU sampling fallback: no logits tensor%s", "");
+                        id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+                    }
+                } else {
+                    id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+                }
+#else
+                id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+#endif
 
                 slot.i_batch = -1;
 

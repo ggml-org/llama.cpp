@@ -8,6 +8,10 @@
 #include "../src/llama-context.h" // For full definition of llama_context C++ class
 #include "ggml-backend.h"     // For ggml_backend_sched_t and API functions
 
+#ifdef GGML_USE_SYCL
+#include "ggml-sycl.h"        // For GPU sampling API
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -482,6 +486,19 @@ int main(int argc, char ** argv) {
     LOG_INF("sampler params: \n%s\n", sparams.print().c_str());
     LOG_INF("sampler chain: %s\n",    common_sampler_print(smpl).c_str());
 
+    // GPU sampler initialization (SYCL only)
+    // Note: Sampler is created lazily on first decode to use the correct backend
+#ifdef GGML_USE_SYCL
+    ggml_sycl_sampler_t gpu_sampler = nullptr;
+    bool gpu_sampling_enabled = params.gpu_sampling;
+    int gpu_multistep = params.gpu_multistep;
+    if (gpu_sampling_enabled) {
+        // Enable device logits - skip host copy since GPU sampling reads from device directly
+        llama_set_logits_device(ctx, true);
+        LOG_DBG("GPU sampling enabled%s\n", gpu_multistep > 1 ? " (multi-step)" : "");
+    }
+#endif
+
     LOG_INF("generate: n_ctx = %d, n_batch = %d, n_predict = %d, n_keep = %d\n", n_ctx, params.n_batch, params.n_predict, params.n_keep);
 
     // group-attention state
@@ -532,6 +549,7 @@ int main(int argc, char ** argv) {
     bool is_antiprompt        = false;
     bool input_echo           = true;
     bool display              = true;
+    bool skip_embd_decode     = false;  // Set true after multi-step GPU decode to skip re-decode
     bool need_to_save_session = !path_session.empty() && n_matching_session_tokens < embd_inp.size();
 
     int n_past             = 0;
@@ -676,25 +694,31 @@ int main(int argc, char ** argv) {
                 }
             }
 
-            for (int i = 0; i < (int) embd.size(); i += params.n_batch) {
-                int n_eval = (int) embd.size() - i;
-                if (n_eval > params.n_batch) {
-                    n_eval = params.n_batch;
-                }
+            // Skip decode if we just did multi-step GPU decode (tokens already decoded)
+            if (skip_embd_decode) {
+                LOG_DBG("skipping embd decode (multi-step already decoded)\n");
+                skip_embd_decode = false;
+            } else {
+                for (int i = 0; i < (int) embd.size(); i += params.n_batch) {
+                    int n_eval = (int) embd.size() - i;
+                    if (n_eval > params.n_batch) {
+                        n_eval = params.n_batch;
+                    }
 
-                LOG_DBG("eval: %s\n", string_from(ctx, embd).c_str());
+                    LOG_DBG("eval: %s\n", string_from(ctx, embd).c_str());
 
-                if (llama_decode(ctx, llama_batch_get_one(&embd[i], n_eval))) {
-                    LOG_ERR("%s : failed to eval\n", __func__);
-                    return 1;
-                }
+                    if (llama_decode(ctx, llama_batch_get_one(&embd[i], n_eval))) {
+                        LOG_ERR("%s : failed to eval\n", __func__);
+                        return 1;
+                    }
 
-                n_past += n_eval;
+                    n_past += n_eval;
 
-                LOG_DBG("n_past = %d\n", n_past);
-                // Display total tokens alongside total time
-                if (params.n_print > 0 && n_past % params.n_print == 0) {
-                    LOG_DBG("\n\033[31mTokens consumed so far = %d / %d \033[0m\n", n_past, n_ctx);
+                    LOG_DBG("n_past = %d\n", n_past);
+                    // Display total tokens alongside total time
+                    if (params.n_print > 0 && n_past % params.n_print == 0) {
+                        LOG_DBG("\n\033[31mTokens consumed so far = %d / %d \033[0m\n", n_past, n_ctx);
+                    }
                 }
             }
 
@@ -715,25 +739,160 @@ int main(int argc, char ** argv) {
                 LOG_DBG("saved session to %s\n", path_session.c_str());
             }
 
-            const llama_token id = common_sampler_sample(smpl, ctx, -1);
+            llama_token id;
+#ifdef GGML_USE_SYCL
+            // Lazy initialization of GPU sampler - uses the backend where logits reside
+            if (gpu_sampling_enabled && !gpu_sampler) {
+                ggml_backend_t logits_backend = llama_get_logits_backend(ctx);
+                if (logits_backend && ggml_backend_is_sycl(logits_backend)) {
+                    const int n_vocab = llama_vocab_n_tokens(vocab);
+                    gpu_sampler = ggml_backend_sycl_sampler_create(logits_backend, n_vocab, sparams.seed);
+                    if (gpu_sampler) {
+                        LOG_DBG("GPU sampler created on '%s' (n_vocab=%d)\n",
+                               ggml_backend_name(logits_backend), n_vocab);
+                    } else {
+                        LOG_WRN("Failed to create GPU sampler, falling back to CPU sampling\n");
+                        gpu_sampling_enabled = false;
+                    }
+                } else {
+                    LOG_WRN("Logits backend is not SYCL, falling back to CPU sampling\n");
+                    gpu_sampling_enabled = false;
+                }
+            }
 
+            if (gpu_sampler && gpu_multistep > 1 && n_remain >= gpu_multistep) {
+                // Multi-step GPU decode path - generate multiple tokens without CPU sync
+                // Uses full top-k/top-p/min-p sampling support
+                ggml_tensor * logits_tensor = llama_get_logits_tensor(ctx);
+                if (logits_tensor) {
+                    // Reset the token buffer
+                    ggml_backend_sycl_sampler_reset_buffer(gpu_sampler);
+
+                    // First token - sample to device buffer with full sampling params
+                    ggml_backend_sycl_sample_token_to_device_full(gpu_sampler, logits_tensor,
+                        sparams.temp, sparams.top_k, sparams.top_p, sparams.min_p);
+
+                    // Generate remaining tokens without CPU sync
+                    llama_token dummy_token = 0;  // Placeholder - actual token comes from pending device token
+                    for (int step = 1; step < gpu_multistep; step++) {
+                        // Set pending device token for this decode step
+                        int32_t * token_ptr = ggml_backend_sycl_get_current_token_ptr(gpu_sampler);
+                        ggml_backend_sycl_set_pending_device_token(token_ptr, 1);
+
+                        // Decode with pending device token (token value ignored, uses device pointer)
+                        if (llama_decode(ctx, llama_batch_get_one(&dummy_token, 1))) {
+                            LOG_ERR("%s : failed to eval in multi-step decode\n", __func__);
+                            ggml_backend_sycl_clear_pending_device_token();
+                            break;
+                        }
+                        n_past++;
+
+                        // Clear pending device token
+                        ggml_backend_sycl_clear_pending_device_token();
+
+                        // Sample next token to device buffer with full sampling params
+                        logits_tensor = llama_get_logits_tensor(ctx);
+                        if (!logits_tensor) break;
+                        ggml_backend_sycl_sample_token_to_device_full(gpu_sampler, logits_tensor,
+                            sparams.temp, sparams.top_k, sparams.top_p, sparams.min_p);
+                    }
+
+                    // Decode the last sampled token (wasn't decoded in the loop)
+                    // This ensures the KV cache has all tokens for the next batch
+                    {
+                        int32_t * last_token_ptr = ggml_backend_sycl_get_current_token_ptr(gpu_sampler);
+                        ggml_backend_sycl_set_pending_device_token(last_token_ptr, 1);
+                        llama_token dummy = 0;
+                        if (llama_decode(ctx, llama_batch_get_one(&dummy, 1))) {
+                            LOG_ERR("%s : failed to decode last multi-step token\n", __func__);
+                        }
+                        ggml_backend_sycl_clear_pending_device_token();
+                        n_past++;
+                    }
+
+                    // Sync all tokens back to host
+                    int n_generated = ggml_backend_sycl_get_token_count(gpu_sampler);
+                    std::vector<int32_t> generated_tokens(n_generated);
+                    ggml_backend_sycl_get_sampled_tokens(gpu_sampler, generated_tokens.data(), n_generated);
+
+                    // Process all generated tokens (filter post-EOS, update state)
+                    bool hit_eos = false;
+                    for (int i = 0; i < n_generated && !hit_eos; i++) {
+                        id = generated_tokens[i];
+
+                        // Check for EOS
+                        if (llama_vocab_is_eog(vocab, id)) {
+                            hit_eos = true;
+                        }
+
+                        common_sampler_accept(smpl, id, /* accept_grammar= */ true);
+                        embd.push_back(id);
+
+                        if (params.conversation_mode && !waiting_for_first_input && !hit_eos) {
+                            assistant_ss << common_token_to_piece(ctx, id, false);
+                        }
+
+                        --n_remain;
+                    }
+
+                    // echo this to console
+                    input_echo = true;
+                    skip_embd_decode = true;  // Tokens already decoded in multi-step loop
+                    LOG_DBG("n_remain: %d (multi-step generated %d tokens)\n", n_remain, n_generated);
+                } else {
+                    // Fall back to single-step CPU sampling
+                    id = common_sampler_sample(smpl, ctx, -1);
+                    common_sampler_accept(smpl, id, /* accept_grammar= */ true);
+                    embd.push_back(id);
+                    if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
+                        assistant_ss << common_token_to_piece(ctx, id, false);
+                    }
+                    input_echo = true;
+                    --n_remain;
+                    LOG_DBG("n_remain: %d\n", n_remain);
+                }
+            } else if (gpu_sampler) {
+                // Single-step GPU sampling path with full top-k/top-p support
+                // Synchronize to ensure decode timing is properly accounted for
+                llama_synchronize(ctx);
+                ggml_tensor * logits_tensor = llama_get_logits_tensor(ctx);
+                if (logits_tensor) {
+                    // Use full sampling API with top-k, top-p, min-p support
+                    id = ggml_backend_sycl_sample_token_full(gpu_sampler, logits_tensor, 0,
+                        sparams.temp, sparams.top_k, sparams.top_p, sparams.min_p);
+                } else {
+                    id = common_sampler_sample(smpl, ctx, -1);
+                }
+                common_sampler_accept(smpl, id, /* accept_grammar= */ true);
+                embd.push_back(id);
+                if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
+                    assistant_ss << common_token_to_piece(ctx, id, false);
+                }
+                input_echo = true;
+                --n_remain;
+                LOG_DBG("n_remain: %d\n", n_remain);
+            } else {
+                id = common_sampler_sample(smpl, ctx, -1);
+                common_sampler_accept(smpl, id, /* accept_grammar= */ true);
+                embd.push_back(id);
+                if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
+                    assistant_ss << common_token_to_piece(ctx, id, false);
+                }
+                input_echo = true;
+                --n_remain;
+                LOG_DBG("n_remain: %d\n", n_remain);
+            }
+#else
+            id = common_sampler_sample(smpl, ctx, -1);
             common_sampler_accept(smpl, id, /* accept_grammar= */ true);
-
-            // LOG_DBG("last: %s\n", string_from(ctx, smpl->prev.to_vector()).c_str());
-
             embd.push_back(id);
-
             if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
                 assistant_ss << common_token_to_piece(ctx, id, false);
             }
-
-            // echo this to console
             input_echo = true;
-
-            // decrement remaining sampling budget
             --n_remain;
-
             LOG_DBG("n_remain: %d\n", n_remain);
+#endif
         } else {
             // some user input remains from prompt or interaction, forward it to processing
             LOG_DBG("embd_inp.size(): %d, n_consumed: %d\n", (int) embd_inp.size(), n_consumed);
@@ -1004,6 +1163,13 @@ int main(int argc, char ** argv) {
     }
 
     common_sampler_free(smpl);
+
+#ifdef GGML_USE_SYCL
+    if (gpu_sampler) {
+        ggml_backend_sycl_sampler_free(gpu_sampler);
+    }
+    // Note: We don't free the backend - it's owned by llama_context
+#endif
 
     llama_backend_free();
 

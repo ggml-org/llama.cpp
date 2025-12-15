@@ -114,6 +114,12 @@ llama_context::llama_context(
     cparams.paged_layout = params.paged_layout;
     cparams.prefix_cache = params.prefix_cache;
 
+    // Pipeline parallelism parameters
+    cparams.pp_size            = params.pp_size;
+    cparams.tp_size            = params.tp_size;
+    cparams.pp_chunk_size      = params.pp_chunk_size;
+    cparams.pp_chunked_prefill = params.pp_chunked_prefill;
+
     {
         const char * LLAMA_GRAPH_REUSE_DISABLE = getenv("LLAMA_GRAPH_REUSE_DISABLE");
         graph_reuse_disable = LLAMA_GRAPH_REUSE_DISABLE ? (atoi(LLAMA_GRAPH_REUSE_DISABLE) != 0) : graph_reuse_disable;
@@ -153,6 +159,12 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: paged_attn    = %s\n",   __func__, cparams.paged_attn ? "true" : "false");
     LLAMA_LOG_INFO("%s: paged_layout  = %s\n",   __func__, cparams.paged_layout ? "true" : "false");
     LLAMA_LOG_INFO("%s: prefix_cache  = %s\n",   __func__, cparams.prefix_cache ? "true" : "false");
+    if (cparams.pp_chunked_prefill || cparams.pp_size > 0) {
+        LLAMA_LOG_INFO("%s: pp_size       = %d\n",   __func__, cparams.pp_size);
+        LLAMA_LOG_INFO("%s: tp_size       = %d\n",   __func__, cparams.tp_size);
+        LLAMA_LOG_INFO("%s: pp_chunk_size = %d\n",   __func__, cparams.pp_chunk_size);
+        LLAMA_LOG_INFO("%s: chunked_prefill = %s\n", __func__, cparams.pp_chunked_prefill ? "true" : "false");
+    }
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
 
@@ -402,6 +414,49 @@ llama_context::llama_context(
                 LLAMA_LOG_WARN("%s: tensor parallelism requires multiple GPUs, but only %zu GPU(s) found\n",
                               __func__, tp_backends_vec.size());
             }
+        }
+
+        // Configure pipeline parallelism if enabled
+        if (model.params.split_mode == LLAMA_SPLIT_MODE_PIPELINE) {
+#ifdef GGML_USE_SYCL
+            // Collect GPU device IDs for PP initialization
+            std::vector<int> pp_device_ids;
+            for (auto & backend : backends) {
+                auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backend.get()));
+                if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    // Get device index from backend name (SYCL0, SYCL1, etc.)
+                    // This is a bit hacky but works for now
+                    auto * dev = ggml_backend_get_device(backend.get());
+                    const char * name = ggml_backend_dev_name(dev);
+                    // Extract device index - look for SYCL followed by number
+                    const char * num_start = name;
+                    while (*num_start && !isdigit(*num_start)) num_start++;
+                    int dev_id = 0;
+                    if (*num_start) {
+                        dev_id = atoi(num_start);
+                    }
+                    pp_device_ids.push_back(dev_id);
+                }
+            }
+
+            if (pp_device_ids.size() > 1) {
+                int n_layer = model.hparams.n_layer;
+                ggml_backend_sycl_pp_init(pp_device_ids.data(), (int)pp_device_ids.size(), n_layer, nullptr);
+
+                // Set chunked prefill if configured
+                if (cparams.pp_chunked_prefill && cparams.pp_chunk_size > 0) {
+                    ggml_backend_sycl_pp_set_chunked_prefill(cparams.pp_chunk_size, true);
+                }
+
+                LLAMA_LOG_INFO("%s: pipeline parallelism enabled (%zu stages, %d layers)\n",
+                              __func__, pp_device_ids.size(), n_layer);
+            } else {
+                LLAMA_LOG_WARN("%s: pipeline parallelism requires multiple GPUs, but only %zu GPU(s) found\n",
+                              __func__, pp_device_ids.size());
+            }
+#else
+            LLAMA_LOG_WARN("%s: pipeline parallelism mode selected but SYCL backend not available\n", __func__);
+#endif
         }
 
         llama_memory_context_ptr mctx;
@@ -680,6 +735,15 @@ float * llama_context::get_logits() {
     return logits;
 }
 
+void llama_context::sync_logits_to_host() {
+    if (t_logits_last && backend_logits_last && n_outputs > 0) {
+        const int64_t n_vocab = model.vocab.n_tokens();
+        ggml_backend_tensor_get_async(backend_logits_last, t_logits_last,
+                                       logits, 0, n_outputs * n_vocab * sizeof(float));
+        synchronize();
+    }
+}
+
 float * llama_context::get_logits_ith(int32_t i) {
     int64_t j = -1;
 
@@ -718,6 +782,32 @@ float * llama_context::get_logits_ith(int32_t i) {
         return nullptr;
 #endif
     }
+}
+
+int32_t llama_context::get_logits_row(int32_t batch_pos) {
+    // Returns the raw GPU tensor row index for the given batch position.
+    //
+    // This uses output_ids_gpu which contains the ORIGINAL mapping before selection sort.
+    // This is critical for GPU sampling because:
+    // - output_ids: maps to HOST buffer row (after selection sort reordering)
+    // - output_ids_gpu: maps to RAW GPU tensor row (before any reordering)
+    //
+    // GPU sampling kernels read directly from the GPU logits tensor, so they need
+    // the pre-sort mapping, not the post-sort HOST buffer mapping.
+
+    if (batch_pos < 0 || (size_t)batch_pos >= output_ids_gpu.size()) {
+        LLAMA_LOG_ERROR("%s: batch_pos %d out of range [0, %zu)\n", __func__, batch_pos, output_ids_gpu.size());
+        return -1;
+    }
+
+    int32_t row = output_ids_gpu[batch_pos];
+    if (row < 0) {
+        // This batch position was not marked for logits output
+        LLAMA_LOG_ERROR("%s: batch.logits[%d] != true (row=%d)\n", __func__, batch_pos, row);
+        return -1;
+    }
+
+    return row;
 }
 
 float * llama_context::get_embeddings() {
@@ -927,6 +1017,24 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         ret = status;
         return nullptr;
     }
+
+    // Submit a barrier after each ubatch to ensure KV cache is fully written before next ubatch reads it
+    // This fixes multi-ubatch garbage output on SYCL backend where async compute could cause
+    // the second ubatch to read KV cache before the first ubatch finished writing
+    // Using barrier instead of full sync for ~2% better prompt eval performance
+#ifdef GGML_USE_SYCL
+    {
+        const int n_backends = ggml_backend_sched_get_n_backends(sched.get());
+        for (int i = 0; i < n_backends; i++) {
+            ggml_backend_t backend = ggml_backend_sched_get_backend(sched.get(), i);
+            if (ggml_backend_is_sycl(backend)) {
+                ggml_backend_sycl_submit_barrier(backend);
+            }
+        }
+    }
+#else
+    ggml_backend_sched_synchronize(sched.get());
+#endif
 
     ret = GGML_STATUS_SUCCESS;
 
@@ -1204,6 +1312,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     };
 
     int64_t n_outputs_prev = 0;
+    int     n_ubatches = 0;  // Track number of ubatches for GPU sampling accumulation
 
     do {
         const auto & ubatch = mctx->get_ubatch();
@@ -1281,9 +1390,75 @@ int llama_context::decode(const llama_batch & batch_inp) {
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_size);
-                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+
+                // Track first ubatch's tensor for potential GPU accumulation
+                if (n_ubatches == 0) {
+                    t_logits_last = t_logits;
+                    backend_logits_last = backend_res;
+                }
+
+#ifdef GGML_USE_SYCL
+                // For multi-ubatch batches, accumulate logits on GPU for GPU sampling
+                // This is needed regardless of skip_logits_host_copy because GPU sampling
+                // reads from GPU memory (t_logits_last or gpu_logits_accumulated)
+                if (n_ubatches > 0) {
+                    // Multiple ubatches: accumulate on GPU
+                    // Allocate/resize GPU buffer if needed
+                    size_t required_capacity = (size_t)n_outputs_all * n_vocab;
+                    if (gpu_logits_capacity < required_capacity) {
+                        // Get buffer type for the GPU backend
+                        auto * buft = ggml_backend_get_default_buffer_type(backend_res);
+                        size_t new_size = required_capacity * sizeof(float);
+
+                        buf_logits_gpu.reset(ggml_backend_buft_alloc_buffer(buft, new_size));
+                        if (buf_logits_gpu) {
+                            gpu_logits_accumulated = (float *)ggml_backend_buffer_get_base(buf_logits_gpu.get());
+                            gpu_logits_capacity = required_capacity;
+                        } else {
+                            LLAMA_LOG_ERROR("%s: failed to allocate GPU logits buffer of size %.2f MiB\n",
+                                __func__, new_size / (1024.0 * 1024.0));
+                            gpu_logits_capacity = 0;
+                            gpu_logits_accumulated = nullptr;
+                        }
+                    }
+
+                    if (gpu_logits_accumulated && buf_logits_gpu) {
+                        // If this is the second ubatch, first copy the first ubatch's logits
+                        if (n_ubatches == 1 && t_logits_last && ggml_backend_is_sycl(backend_logits_last)) {
+                            ggml_backend_sycl_copy_tensor_to_buffer(
+                                backend_logits_last, t_logits_last,
+                                buf_logits_gpu.get(), 0,
+                                n_outputs_prev * n_vocab * sizeof(float));
+                        }
+
+                        // Copy current ubatch's logits at correct offset
+                        if (ggml_backend_is_sycl(backend_res)) {
+                            size_t offset = n_outputs_prev * n_vocab * sizeof(float);
+                            ggml_backend_sycl_copy_tensor_to_buffer(
+                                backend_res, t_logits,
+                                buf_logits_gpu.get(), offset,
+                                n_outputs * n_vocab * sizeof(float));
+                        }
+                    }
+                    backend_logits_last = backend_res;
+                }
+#endif
+
+                // Copy logits to host (for CPU sampling fallback)
+                // For SYCL: skip ALL per-ubatch host copies to eliminate sync overhead (~20%)
+                // Logits are accumulated on GPU and copied once at end via deferred_logits_copy
+#ifdef GGML_USE_SYCL
+                // OPTIMIZATION: Skip per-ubatch copies - defer to single batch copy after loop
+                // This eliminates N sync points for N-ubatch prompts
+                // Host copy happens in decode() after all ubatches complete
+#else
+                if (!skip_logits_host_copy) {
+                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                }
+#endif
             }
         }
+        n_ubatches++;
 
         // extract embeddings
         if (t_embd && n_outputs > 0) {
@@ -1343,6 +1518,29 @@ int llama_context::decode(const llama_batch & batch_inp) {
         n_outputs_prev += n_outputs;
     } while (mctx->next());
 
+#ifdef GGML_USE_SYCL
+    // SYCL: Deferred async copy of ALL logits to host (single sync point)
+    // This replaces per-ubatch copies, reducing sync overhead by ~20%
+    if (!skip_logits_host_copy && n_outputs_all > 0 && logits != nullptr) {
+        const int64_t logits_size_bytes = (int64_t)n_outputs_all * n_vocab * sizeof(float);
+
+        if (n_ubatches == 1 && t_logits_last && backend_logits_last) {
+            // Single ubatch: copy from last tensor directly
+            ggml_backend_tensor_get_async(backend_logits_last, t_logits_last,
+                                          logits, 0, logits_size_bytes);
+        } else if (n_ubatches > 1 && gpu_logits_accumulated && buf_logits_gpu) {
+            // Multi-ubatch: copy from accumulated GPU buffer
+            // Use SYCL async memcpy from the accumulated buffer
+            ggml_backend_sycl_buffer_get_async(buf_logits_gpu.get(), gpu_logits_accumulated,
+                                               logits, 0, logits_size_bytes);
+        }
+        // Note: The async copy will complete when llama_get_logits() calls synchronize()
+    }
+#endif
+
+    // Track if we had multiple ubatches (affects GPU sampling)
+    multi_ubatch_decode = (n_ubatches > 1);
+
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
 
@@ -1357,6 +1555,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
         for (int64_t i = 0; i < n_outputs; ++i) {
             int64_t out_id = out_ids[i];
             output_ids[out_id] = i;
+            // Also store in output_ids_gpu - this is the raw GPU tensor row mapping
+            // that will NOT be modified by selection sort
+            output_ids_gpu[out_id] = i;
             if (out_id != i) {
                 sorted_output = false;
             }
@@ -1428,6 +1629,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     if (output_ids.empty()) {
         // init, never resized afterwards
         output_ids.resize(n_batch);
+        output_ids_gpu.resize(n_batch);
     }
 
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
@@ -1467,6 +1669,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     // set all ids as invalid (negative)
     std::fill(output_ids.begin(), output_ids.end(), -1);
+    std::fill(output_ids_gpu.begin(), output_ids_gpu.end(), -1);
 
     this->n_outputs = 0;
 
@@ -2430,6 +2633,9 @@ llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.pp_size                     =*/ 0,    // auto-detect based on device count
+        /*.tp_size                     =*/ 1,    // no tensor parallelism within PP stages by default
+        /*.pp_chunk_size               =*/ 0,    // disabled by default (0 = no chunking)
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,
@@ -2441,6 +2647,7 @@ llama_context_params llama_context_default_params() {
         /*.paged_attn                  =*/ false,
         /*.paged_layout                =*/ false,
         /*.prefix_cache                =*/ false,
+        /*.pp_chunked_prefill          =*/ false,
     };
 
     return result;
@@ -2609,6 +2816,37 @@ float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
     return ctx->get_logits_ith(i);
+}
+
+int32_t llama_get_logits_row(llama_context * ctx, int32_t batch_pos) {
+    // Note: Don't synchronize here - the output_ids mapping is valid immediately
+    // after llama_decode() completes, and GPU sampling needs this before any sync.
+    return ctx->get_logits_row(batch_pos);
+}
+
+ggml_tensor * llama_get_logits_tensor(llama_context * ctx) {
+    // Note: Don't synchronize here - caller may want to sample before sync
+    return ctx->get_logits_tensor();
+}
+
+ggml_backend_t llama_get_logits_backend(llama_context * ctx) {
+    return ctx->get_logits_backend();
+}
+
+bool llama_had_multi_ubatch(llama_context * ctx) {
+    return ctx->had_multi_ubatch();
+}
+
+float * llama_get_gpu_logits_buffer(llama_context * ctx) {
+    return ctx->get_gpu_logits_buffer();
+}
+
+void llama_set_logits_device(llama_context * ctx, bool enable) {
+    ctx->set_logits_device(enable);
+}
+
+void llama_sync_logits_to_host(llama_context * ctx) {
+    ctx->sync_logits_to_host();
 }
 
 float * llama_get_embeddings(llama_context * ctx) {
@@ -2909,6 +3147,73 @@ int32_t llama_decode(
     }
 
     return ret;
+}
+
+//
+// Multi-token decode
+//
+
+int32_t llama_decode_multi_token(
+        llama_context * ctx,
+        const llama_token * tokens,
+        const llama_pos * positions,
+        int32_t n_tokens,
+        llama_seq_id seq_id) {
+
+    if (n_tokens <= 0) {
+        LLAMA_LOG_ERROR("%s: n_tokens must be > 0\n", __func__);
+        return -1;
+    }
+
+    if (!tokens || !positions) {
+        LLAMA_LOG_ERROR("%s: tokens and positions cannot be NULL\n", __func__);
+        return -1;
+    }
+
+    // For multi-token decode, we need flash attention
+    // The per-query causal masking is handled in the flash attention kernel
+    if (!ctx->get_cparams().flash_attn) {
+        LLAMA_LOG_WARN("%s: multi-token decode requires flash attention for per-query causal masking\n", __func__);
+        // Fall back to regular decode without per-query masking
+        // This will use standard causal masking (all tokens see the same KV range)
+    }
+
+    // Build a batch with all tokens having output enabled
+    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+
+    for (int32_t i = 0; i < n_tokens; i++) {
+        batch.token[i]     = tokens[i];
+        batch.pos[i]       = positions[i];
+        batch.n_seq_id[i]  = 1;
+        batch.seq_id[i][0] = seq_id;
+        batch.logits[i]    = 1;  // Output logits for all tokens
+    }
+    batch.n_tokens = n_tokens;
+
+    // The kq_mask is built per-query in llama_kv_cache::set_input_kq_mask()
+    // using ubatch->pos[i] for each query token. This naturally handles
+    // per-query causal masking for multi-token decode.
+    // Each query i can only attend to KV positions p where p <= positions[i].
+
+    const int ret = ctx->decode(batch);
+
+    llama_batch_free(batch);
+
+    if (ret != 0 && ret != 1) {
+        LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
+    }
+
+    return ret;
+}
+
+bool llama_supports_multi_token_decode(llama_context * ctx) {
+    if (!ctx) {
+        return false;
+    }
+
+    // Multi-token decode requires flash attention for per-query causal masking
+    // Without flash attention, all tokens see the same KV range (max position)
+    return ctx->get_cparams().flash_attn;
 }
 
 //

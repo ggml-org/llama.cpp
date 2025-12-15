@@ -330,6 +330,12 @@ struct common_params {
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
+    // Pipeline parallelism parameters (vLLM-style)
+    int32_t pp_size        = 0;    // number of pipeline stages (0 = auto-detect based on device count)
+    int32_t tp_size        = 1;    // tensor parallelism degree within each PP stage (for hybrid mode)
+    int32_t pp_chunk_size  = 0;    // max tokens per prefill chunk (0 = disabled)
+    bool pp_chunked_prefill = false; // enable chunked prefill for pipeline parallelism
+
     struct cpu_params cpuparams;
     struct cpu_params cpuparams_batch;
 
@@ -424,6 +430,8 @@ struct common_params {
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
+    bool gpu_sampling      = false; // run sampling on GPU (SYCL only)
+    int  gpu_multistep     = 1;     // multi-step GPU decode (SYCL only, 1=disabled, >1=tokens per batch)
 
     bool single_turn       = false; // single turn chat conversation
 

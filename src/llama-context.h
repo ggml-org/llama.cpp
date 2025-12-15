@@ -61,6 +61,7 @@ struct llama_context {
 
     float * get_logits();
     float * get_logits_ith(int32_t i);
+    int32_t get_logits_row(int32_t batch_pos);
 
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
@@ -256,7 +257,8 @@ private:
 
     uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 
-    std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
+    std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers (HOST buffer after reorder)
+    std::vector<int32_t> output_ids_gpu; // map batch token positions to raw GPU tensor rows (before reorder)
 
     struct swap_info {
         uint32_t i0;
@@ -317,4 +319,43 @@ private:
         int  world_size = 1;
         std::vector<ggml_backend_t> backends;  // Backends in TP group (subset of this->backends)
     } tp;
+
+    // GPU sampling support - stores logits on GPU for direct GPU sampling
+    ggml_tensor *   t_logits_last      = nullptr;  // Last logits tensor (on GPU) - points to gpu_logits_accumulated when multi-ubatch
+    ggml_backend_t  backend_logits_last = nullptr;  // Backend where logits reside
+    bool            skip_logits_host_copy = false;  // When true, skip async host copy of logits (for GPU sampling)
+
+    // Persistent GPU logits buffer for multi-ubatch accumulation
+    // When GPU sampling is enabled and there are multiple ubatches, we accumulate logits here
+    ggml_backend_buffer_ptr buf_logits_gpu;  // GPU buffer for accumulated logits
+    float *                 gpu_logits_accumulated = nullptr;  // Pointer to accumulated logits on GPU
+    size_t                  gpu_logits_capacity = 0;  // Capacity in floats
+
+    // Track if the last decode had multiple ubatches (GPU logits are in accumulated buffer)
+    bool multi_ubatch_decode = false;
+
+public:
+    // Get the last logits tensor (on GPU, before host copy)
+    // For single-ubatch: returns the compute graph's logits tensor
+    // For multi-ubatch: returns nullptr (use get_gpu_logits_buffer instead)
+    ggml_tensor * get_logits_tensor() const { return t_logits_last; }
+
+    // Check if last decode had multiple ubatches (logits are in accumulated GPU buffer)
+    bool had_multi_ubatch() const { return multi_ubatch_decode; }
+
+    // Get the accumulated GPU logits buffer (for multi-ubatch case)
+    // Returns pointer to GPU memory containing all logits in output_ids order
+    float * get_gpu_logits_buffer() const { return gpu_logits_accumulated; }
+
+    // Get the GPU logits buffer handle (for SYCL operations)
+    ggml_backend_buffer_t get_gpu_logits_buffer_handle() const { return buf_logits_gpu.get(); }
+
+    // Get the backend where logits tensor resides
+    ggml_backend_t get_logits_backend() const { return backend_logits_last; }
+
+    // Enable/disable keeping logits on device (skip host copy for GPU sampling)
+    void set_logits_device(bool enable) { skip_logits_host_copy = enable; }
+
+    // Manually sync logits from device to host memory
+    void sync_logits_to_host();
 };

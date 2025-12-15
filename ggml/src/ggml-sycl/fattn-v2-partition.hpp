@@ -69,8 +69,8 @@ static void paged_attention_v2_partition_kernel(
     float * __restrict__ max_logits,    // [num_seqs, num_heads, max_num_partitions]
     float * __restrict__ tmp_out,       // [num_seqs, num_heads, max_num_partitions, D]
     const sycl::half * __restrict__ Q,  // [num_seqs, num_heads, D]
-    const sycl::half * __restrict__ K,  // [n_kv, num_kv_heads, D] (3D contiguous, block_tables for logical addressing)
-    const sycl::half * __restrict__ V,  // [n_kv, num_kv_heads, D] (3D contiguous, block_tables for logical addressing)
+    const char * __restrict__ K,        // K cache with byte strides
+    const char * __restrict__ V,        // V cache with byte strides
     const float scale,
     const int * __restrict__ block_tables,  // [num_seqs, max_blocks_per_seq]
     const int * __restrict__ context_lens,  // [num_seqs]
@@ -79,6 +79,11 @@ static void paged_attention_v2_partition_kernel(
     const int max_num_blocks_per_seq,
     const int max_num_partitions,
     const int block_size,
+    // Byte strides for K/V addressing (matching XMX kernel pattern)
+    const int64_t nb11,    // K: stride between KV positions (bytes)
+    const int64_t nb12,    // K: stride between KV heads (bytes)
+    const int64_t nb21,    // V: stride between KV positions (bytes)
+    const int64_t nb22,    // V: stride between KV heads (bytes)
     const sycl::nd_item<3> & item,
     float * shared_mem) {
 
@@ -147,12 +152,11 @@ static void paged_attention_v2_partition_kernel(
         const int offset_in_block = kv_pos % block_size;
         const int physical_block = block_tables[seq_idx * max_num_blocks_per_seq + logical_block];
 
-        // K layout: [n_kv, num_kv_heads, D] (3D contiguous after permute)
-        // token_pos is the physical position in the contiguous KV cache
+        // Use byte-stride addressing (matches XMX kernel pattern)
+        // nb11 = stride between KV positions (bytes), nb12 = stride between KV heads (bytes)
         const int token_pos = physical_block * block_size + offset_in_block;
-        const sycl::half * k_ptr = K +
-            token_pos * num_kv_heads * D +
-            kv_head_idx * D;
+        const char * K_row = K + nb11 * token_pos + nb12 * kv_head_idx;
+        const sycl::half * k_ptr = reinterpret_cast<const sycl::half*>(K_row);
 
         // Compute dot product Q · K
         float qk = 0.0f;
@@ -245,12 +249,11 @@ static void paged_attention_v2_partition_kernel(
             const int offset_in_block = kv_pos % block_size;
             const int physical_block = block_tables[seq_idx * max_num_blocks_per_seq + logical_block];
 
-            // V layout: [n_kv, num_kv_heads, D] (3D contiguous after permute)
-            // token_pos is the physical position in the contiguous KV cache
+            // Use byte-stride addressing (matches XMX kernel pattern)
+            // nb21 = stride between KV positions (bytes), nb22 = stride between KV heads (bytes)
             const int token_pos = physical_block * block_size + offset_in_block;
-            const sycl::half * v_ptr = V +
-                token_pos * num_kv_heads * D +
-                kv_head_idx * D;
+            const char * V_row = V + nb21 * token_pos + nb22 * kv_head_idx;
+            const sycl::half * v_ptr = reinterpret_cast<const sycl::half*>(V_row);
 
             const float weight = logits[token_idx];
             acc += weight * static_cast<float>(v_ptr[d]);
@@ -435,8 +438,8 @@ void launch_paged_attention_v2(
     float * max_logits,          // [num_seqs, num_heads, max_num_partitions]
     float * tmp_out,             // [num_seqs, num_heads, max_num_partitions, D]
     const sycl::half * Q,        // [num_seqs, num_heads, D]
-    const sycl::half * K,        // [n_kv, num_kv_heads, D] (3D contiguous, block_tables for logical addressing)
-    const sycl::half * V,        // [n_kv, num_kv_heads, D] (3D contiguous, block_tables for logical addressing)
+    const char * K,              // K cache with byte-stride addressing (nb11, nb12)
+    const char * V,              // V cache with byte-stride addressing (nb21, nb22)
     const float scale,
     const int * block_tables,    // [num_seqs, max_blocks_per_seq]
     const int * context_lens,    // [num_seqs]
@@ -446,6 +449,11 @@ void launch_paged_attention_v2(
     const int max_num_blocks_per_seq,
     const int max_context_len,
     const int block_size,
+    // Byte strides for K/V addressing (matching XMX kernel pattern)
+    const int64_t nb11,          // K: stride between KV positions (bytes)
+    const int64_t nb12,          // K: stride between KV heads (bytes)
+    const int64_t nb21,          // V: stride between KV positions (bytes)
+    const int64_t nb22,          // V: stride between KV heads (bytes)
     sycl::queue * stream) {
 
     const int max_num_partitions = (max_context_len + V2_PARTITION_SIZE - 1) / V2_PARTITION_SIZE;
@@ -470,7 +478,9 @@ void launch_paged_attention_v2(
                         block_tables, context_lens,
                         num_heads, num_kv_heads,
                         max_num_blocks_per_seq, max_num_partitions,
-                        block_size, item, shared);
+                        block_size,
+                        nb11, nb12, nb21, nb22,  // Stride parameters
+                        item, shared);
                 });
         });
     }
