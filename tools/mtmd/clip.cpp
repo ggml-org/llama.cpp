@@ -720,6 +720,32 @@ ggml_tensor * clip_graph::build_rope_2d(
     return cur;
 }
 
+// Generic function to stack frames for audio processing
+// Abstracts out the StackAudioFrames logic used by ultravox
+ggml_tensor * clip_graph::build_stack(ggml_tensor * cur, int32_t stack_factor, int32_t n_embed) {
+    if (stack_factor <= 1) {
+        return cur;
+    }
+
+    int64_t total_elements = ggml_nelements(cur);
+    int64_t stride = n_embed * stack_factor;
+
+    // Calculate padded length
+    int64_t padded_len = GGML_PAD(total_elements, stride);
+    int64_t pad = padded_len - total_elements;
+
+    if (pad > 0) {
+        // Pad the tensor to make it divisible by stride
+        cur = ggml_view_1d(ctx0, cur, total_elements, 0);
+        cur = ggml_pad(ctx0, cur, pad, 0, 0, 0);
+    }
+
+    // Reshape to [stride, padded_len / stride]
+    cur = ggml_view_2d(ctx0, cur, stride, padded_len / stride,
+                        ggml_row_size(cur->type, stride), 0);
+    return cur;
+}
+
 // aka pixel_shuffle / pixel_unshuffle / patch_merger (Kimi-VL)
 // support dynamic resolution
 ggml_tensor * clip_graph::build_patch_merge_permute(ggml_tensor * cur, int scale_factor) {
@@ -796,6 +822,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_QWEN2A:
+        case PROJECTOR_TYPE_GLMA:
             {
                 builder = std::make_unique<clip_graph_whisper_enc>(ctx, img);
             } break;
@@ -1136,10 +1163,12 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_ULTRAVOX:
                 case PROJECTOR_TYPE_QWEN2A:
+                case PROJECTOR_TYPE_GLMA:
                 case PROJECTOR_TYPE_VOXTRAL:
                     {
                         bool require_stack = model.proj_type == PROJECTOR_TYPE_ULTRAVOX ||
-                                             model.proj_type == PROJECTOR_TYPE_VOXTRAL;
+                                             model.proj_type == PROJECTOR_TYPE_VOXTRAL ||
+                                             model.proj_type == PROJECTOR_TYPE_GLMA;
                         get_u32(KEY_A_PROJ_STACK_FACTOR, hparams.proj_stack_factor, require_stack);
                         if (hparams.n_mel_bins != 128) {
                             throw std::runtime_error(string_format("%s: only 128 mel bins are supported for ultravox\n", __func__));
@@ -1509,6 +1538,21 @@ struct clip_model_loader {
                     model.mm_1_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "bias"));
                     model.mm_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
                     model.mm_3_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "bias"));
+                } break;
+            case PROJECTOR_TYPE_GLMA:
+                {
+                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
+                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "bias"));
+                    model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"));
+                    model.mm_norm_pre_b = get_tensor(string_format(TN_MM_NORM_PRE, "bias"));
+                    model.mm_boi = get_tensor(string_format(TN_TOK_BOI, "weight"));
+                    model.mm_eoi = get_tensor(string_format(TN_TOK_EOI, "weight"));
                 } break;
             case PROJECTOR_TYPE_LLAMA4:
                 {
@@ -2230,7 +2274,14 @@ struct llava_uhd {
         clip_image_size refined_size;  // size of image right before slicing (must be multiple of slice size)
         clip_image_size grid_size;     // grid_size.width * grid_size.height = number of slices
         std::vector<slice_coordinates> slices;
+
+        img_tool::resize_algo interpolation_overview = img_tool::RESIZE_ALGO_BILINEAR;
+        bool padding_overview = false;  // if true, refine image will be padded to the grid size (e.g. llava-1.6)
+        std::array<uint8_t, 3> pad_color_overview = {0, 0, 0};
+
+        img_tool::resize_algo interpolation_refined = img_tool::RESIZE_ALGO_BICUBIC;
         bool padding_refined = false;  // if true, refine image will be padded to the grid size (e.g. llava-1.6)
+        std::array<uint8_t, 3> pad_color_refined = {0, 0, 0};
     };
 
     static slice_instructions get_slice_instructions(struct clip_ctx * ctx, const clip_image_size & original_size) {
@@ -2257,10 +2308,11 @@ struct llava_uhd {
             auto refine_size = llava_uhd::select_best_resolution(
                 original_size,
                 ctx->model.hparams.image_res_candidates);
-            res.overview_size   = clip_image_size{slice_size, slice_size};
-            res.refined_size    = refine_size;
-            res.grid_size       = clip_image_size{0, 0};
-            res.padding_refined = true;
+            res.overview_size         = clip_image_size{slice_size, slice_size};
+            res.refined_size          = refine_size;
+            res.grid_size             = clip_image_size{0, 0};
+            res.padding_refined       = true;
+            res.interpolation_refined = img_tool::RESIZE_ALGO_BILINEAR;  // preserve old behavior when padding
 
             LOG_DBG("%s: using pinpoints for slicing\n", __func__);
             LOG_DBG("%s: original size: %d x %d, overview size: %d x %d, refined size: %d x %d\n",
@@ -2339,12 +2391,13 @@ struct llava_uhd {
 
     static std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 * img, const slice_instructions & inst) {
         std::vector<clip_image_u8_ptr> output;
-        img_tool::resize_algo interpolation = img_tool::RESIZE_ALGO_BILINEAR; // TODO: make it configurable
 
         // resize to overview size
         clip_image_u8_ptr resized_img(clip_image_u8_init());
-        img_tool::resize(*img, *resized_img, inst.overview_size, interpolation);
+        img_tool::resize(*img, *resized_img, inst.overview_size, inst.interpolation_overview,
+                         inst.padding_overview, inst.pad_color_overview);
         output.push_back(std::move(resized_img));
+
         if (inst.slices.empty()) {
             // no slices, just return the resized image
             return output;
@@ -2352,13 +2405,8 @@ struct llava_uhd {
 
         // resize to refined size
         clip_image_u8_ptr refined_img(clip_image_u8_init());
-        if (inst.padding_refined) {
-            img_tool::resize(*img, *refined_img, inst.refined_size, interpolation);
-        } else {
-            // only algo bicubic preserves the ratio; old models rely on this behavior
-            // TODO: do we need to support other algos here?
-            img_tool::resize(*img, *refined_img, inst.refined_size, img_tool::RESIZE_ALGO_BICUBIC, false);
-        }
+        img_tool::resize(*img, *refined_img, inst.refined_size, inst.interpolation_refined,
+                         inst.padding_refined, inst.pad_color_refined);
 
         // create slices
         for (const auto & slice : inst.slices) {
@@ -2891,6 +2939,16 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                     n_patches /= 2;
                 }
             } break;
+        case PROJECTOR_TYPE_GLMA:
+            {
+                n_patches = img->nx;
+                // whisper downscales input token by half after conv1d
+                n_patches /= 2;
+                // reshape by merge_factor
+                n_patches /= ctx->model.hparams.proj_stack_factor;
+                // for BOI and EOI token embeddings
+                n_patches += 2;
+            } break;
         case PROJECTOR_TYPE_COGVLM:
             {
                 n_patches += 2; // for BOI and EOI token embeddings
@@ -3226,6 +3284,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_QWEN2A:
+        case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_VOXTRAL:
@@ -3336,6 +3395,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_model_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2A:
             return ctx->model.mm_fc_w->ne[1];
+        case PROJECTOR_TYPE_GLMA:
+            return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
             return ctx->model.mm_2_w->ne[1];
@@ -3382,6 +3443,7 @@ bool clip_has_audio_encoder(const struct clip_ctx * ctx) {
 bool clip_has_whisper_encoder(const struct clip_ctx * ctx) {
     return ctx->proj_type() == PROJECTOR_TYPE_ULTRAVOX
         || ctx->proj_type() == PROJECTOR_TYPE_QWEN2A
+        || ctx->proj_type() == PROJECTOR_TYPE_GLMA
         || ctx->proj_type() == PROJECTOR_TYPE_VOXTRAL;
 }
 
