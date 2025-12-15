@@ -165,6 +165,10 @@ struct llama_file::impl {
     impl(const char * fname, const char * mode, bool uncached_read) {
         if (uncached_read) {
             fd = open(fname, O_RDONLY | O_DIRECT);
+            if (fd == -1 && (errno == EINVAL || errno == EOPNOTSUPP)) {
+                fd = open(fname, O_RDONLY);   // retry without O_DIRECT
+            }
+
             if (fd == -1) {
                 throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
             }
