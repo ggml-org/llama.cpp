@@ -1,6 +1,6 @@
 # GBNF Guide
 
-GBNF (GGML BNF) is a format for defining [formal grammars](https://en.wikipedia.org/wiki/Formal_grammar) to constrain model outputs in `llama.cpp`. For example, you can use it to force the model to generate valid JSON, or speak only in emojis. GBNF grammars are supported in various ways in `tools/main` and `tools/server`.
+GBNF (GGML BNF) is a format for defining [formal grammars](https://en.wikipedia.org/wiki/Formal_grammar) to constrain model outputs in `llama.cpp`. For example, you can use it to force the model to generate valid JSON, or speak only in emojis. GBNF grammars are supported in various ways in `tools/cli`, `tools/completion` and `tools/server`.
 
 ## Background
 
@@ -135,7 +135,7 @@ While semantically correct, the syntax `x? x? x?.... x?` (with N repetitions) ma
 You can use GBNF grammars:
 
 - In [llama-server](../tools/server)'s completion endpoints, passed as the `grammar` body field
-- In [llama-cli](../tools/main), passed as the `--grammar` & `--grammar-file` flags
+- In [llama-cli](../tools/cli) and [llama-completion](../tools/completion), passed as the `--grammar` & `--grammar-file` flags
 - With [test-gbnf-validator](../tests/test-gbnf-validator.cpp), to test them against strings.
 
 ## JSON Schemas → GBNF
@@ -145,7 +145,7 @@ You can use GBNF grammars:
 - In [llama-server](../tools/server):
     - For any completion endpoints, passed as the `json_schema` body field
     - For the `/chat/completions` endpoint, passed inside the `response_format` body field (e.g. `{"type", "json_object", "schema": {"items": {}}}` or `{ type: "json_schema", json_schema: {"schema": ...} }`)
-- In [llama-cli](../tools/main), passed as the `--json` / `-j` flag
+- In [llama-cli](../tools/cli) and [llama-completion](../tools/completion), passed as the `--json` / `-j` flag
 - To convert to a grammar ahead of time:
     - in CLI, with [examples/json_schema_to_grammar.py](../examples/json_schema_to_grammar.py)
     - in JavaScript with [json-schema-to-grammar.mjs](../tools/server/public_legacy/json-schema-to-grammar.mjs) (this is used by the [server](../tools/server)'s Web UI)
