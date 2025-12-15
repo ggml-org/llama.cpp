@@ -114,6 +114,11 @@
 					key: 'alwaysShowSidebarOnDesktop',
 					label: 'Always show sidebar on desktop',
 					type: 'checkbox'
+				},
+				{
+					key: 'autoShowSidebarOnNewChat',
+					label: 'Auto-show sidebar on new chat',
+					type: 'checkbox'
 				}
 			]
 		},

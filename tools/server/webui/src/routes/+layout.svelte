@@ -23,6 +23,7 @@
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
+	let autoShowSidebarOnNewChat = $derived(config().autoShowSidebarOnNewChat);
 	const isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
@@ -92,8 +93,11 @@
 			// Keep sidebar open in new chat mode
 			sidebarOpen = true;
 		} else if (isChatRoute) {
-			// On chat routes, show sidebar by default
-			sidebarOpen = true;
+			// On chat routes, only auto-show sidebar if setting is enabled
+			if (autoShowSidebarOnNewChat) {
+				sidebarOpen = true;
+			}
+			// If setting is disabled, don't change sidebar state - let user control it manually
 		} else {
 			// Other routes follow default behavior
 			sidebarOpen = showSidebarByDefault;
