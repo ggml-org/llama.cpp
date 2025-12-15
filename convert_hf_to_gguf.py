@@ -8500,7 +8500,6 @@ class NemotronHModel(GraniteHybridModel):
 
         super().__init__(*args, **kwargs)
 
-
         # Save the top-level head_dim for later
         self.head_dim = self.hparams.get("head_dim", self.hparams.get("attention_head_dim"))
         assert self.head_dim is not None, "Could not find the attention head dim in config"
@@ -8552,7 +8551,6 @@ class NemotronHModel(GraniteHybridModel):
             # number of experts used per token (top-k)
             if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
                 self.gguf_writer.add_expert_used_count(n_experts_used)
-
 
     def set_vocab(self):
         super().set_vocab()
