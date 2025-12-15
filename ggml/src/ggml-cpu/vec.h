@@ -539,7 +539,7 @@ inline static void ggml_vec_mad_f16(const int n, ggml_fp16_t * GGML_RESTRICT y, 
     // calculate step size
     const int epr = __riscv_vsetvlmax_e16m4();
     const int step = epr * 2;
-    const int np = (n & ~(step - 1));
+    int np = (n & ~(step - 1));
 
     // unroll by 2
     for (int i = 0; i < np; i += step) {
@@ -560,11 +560,12 @@ inline static void ggml_vec_mad_f16(const int n, ggml_fp16_t * GGML_RESTRICT y, 
     int vl;
     for (int i = np; i < n; i += vl) {
         vl = __riscv_vsetvl_e16m4(n - i);
-        vfloat16m4_t ax0 = __riscv_vle16_v_f16m4((const _Float16*)x + i , vl);
+        vfloat16m4_t ax0 = __riscv_vle16_v_f16m4((const _Float16*)x + i, vl);
         vfloat16m4_t ay0 = __riscv_vle16_v_f16m4((const _Float16*)y + i, vl);
         ay0 = __riscv_vfmacc_vf_f16m4(ay0, scale, ax0, vl);
         __riscv_vse16_v_f16m4((_Float16*)y + i, ay0, vl);
     }
+    np = n;
 #elif defined(GGML_SIMD)
     const int np = (n & ~(GGML_F16_STEP - 1));
 

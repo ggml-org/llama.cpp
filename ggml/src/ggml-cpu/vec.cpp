@@ -232,11 +232,8 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
     }
 
     // reduce
-    vl = __riscv_vsetvlmax_e32m2();
-    vfloat32m2_t acc0 = __riscv_vfadd_vv_f32m2(__riscv_vget_v_f32m4_f32m2(vsum0, 0), __riscv_vget_v_f32m4_f32m2(vsum0, 1), vl);
-    vl = __riscv_vsetvlmax_e32m1();
-    vfloat32m1_t acc1 = __riscv_vfadd_vv_f32m1(__riscv_vget_v_f32m2_f32m1(acc0, 0), __riscv_vget_v_f32m2_f32m1(acc0, 1), vl);
-    vfloat32m1_t redsum = __riscv_vfredusum_vs_f32m1_f32m1(acc1, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl);
+    vl = __riscv_vsetvlmax_e32m4();
+    vfloat32m1_t redsum = __riscv_vfredusum_vs_f32m4_f32m1(vsum0, __riscv_vfmv_v_f_f32m1(0.0f, 1), vl);
     sumf += __riscv_vfmv_f_s_f32m1_f32(redsum);
 
 #endif
