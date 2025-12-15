@@ -1245,6 +1245,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--n-layer-exit"}, "N",
+        string_format("exit after N layers (default: %d, 0 = compute all layers)\n"
+            "for layer skip / early exit speculation (CAS-Spec, CLaSp)", params.n_layer_exit),
+        [](common_params & params, int value) {
+            params.n_layer_exit = value;
+        }
+    ).set_env("LLAMA_ARG_N_LAYER_EXIT"));
+    add_opt(common_arg(
         {"--swa-full"},
         string_format("use full-size SWA cache (default: %s)\n"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)", params.swa_full ? "true" : "false"),

@@ -28,7 +28,11 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    for (int il = 0; il < n_layer; ++il) {
+    // Layer skip support: compute fewer layers for early exit speculation
+    const int64_t n_layer_exit = cparams.n_layer_exit;
+    const int64_t n_layer_to_use = (n_layer_exit > 0 && n_layer_exit < n_layer) ? n_layer_exit : n_layer;
+
+    for (int il = 0; il < n_layer_to_use; ++il) {
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -93,7 +97,8 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
-        if (il == n_layer - 1 && inp_out_ids) {
+        // Handle last layer (or early exit layer)
+        if (il == n_layer_to_use - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }

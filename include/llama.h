@@ -381,6 +381,10 @@ extern "C" {
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
+
+        // Layer skipping for speculative decoding (Track 7/9)
+        int32_t n_layer_exit;  // exit after this many layers, 0 = compute all layers (default)
+                               // use for early exit / layer skip speculation
     };
 
     // model quantization parameters
