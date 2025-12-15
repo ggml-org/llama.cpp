@@ -1131,7 +1131,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.CONVNEXT_NORM: (
             "backbone.convnext.{bid}.norm", # wavtokenizer
-            "conformer.layers.{bid}.conv.batch_norm", #lfm2
+            "conformer.layers.{bid}.conv.batch_norm", # lfm2
         ),
 
         MODEL_TENSOR.CONVNEXT_PW1: (
