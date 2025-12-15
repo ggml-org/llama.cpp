@@ -285,6 +285,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                     break;
                 case COMMON_SAMPLER_TYPE_POWER_LAW:
                     has_distribution_sampler = true;
+                    samplers.push_back(llama_sampler_init_power_law  (params.power_law_target, params.power_law_decay, params.seed));
                     break;
                 default:
                     GGML_ASSERT(false && "unknown sampler type");
