@@ -1170,11 +1170,15 @@ struct clip_model_loader {
                                              model.proj_type == PROJECTOR_TYPE_VOXTRAL ||
                                              model.proj_type == PROJECTOR_TYPE_GLMA;
                         get_u32(KEY_A_PROJ_STACK_FACTOR, hparams.proj_stack_factor, require_stack);
-                        if (hparams.n_mel_bins != 128) {
-                            throw std::runtime_error(string_format("%s: only 128 mel bins are supported for ultravox\n", __func__));
-                        }
                         hparams.ffn_op = FFN_GELU_ERF;
                         log_ffn_op = "gelu_erf"; // temporary solution for logging
+
+                        // audio preprocessing params
+                        hparams.audio_chunk_len    = 30; // in seconds
+                        hparams.audio_sample_rate  = 16000;
+                        hparams.audio_n_fft        = 400;
+                        hparams.audio_window_len   = 400;
+                        hparams.audio_hop_len      = 160;
                     } break;
                 default:
                     break;
@@ -1212,6 +1216,11 @@ struct clip_model_loader {
                 LOG_INF("\n--- audio hparams ---\n");
                 LOG_INF("%s: n_mel_bins:         %d\n", __func__, hparams.n_mel_bins);
                 LOG_INF("%s: proj_stack_factor:  %d\n", __func__, hparams.proj_stack_factor);
+                LOG_INF("%s: audio_chunk_len:    %d\n", __func__, hparams.audio_chunk_len);
+                LOG_INF("%s: audio_sample_rate:  %d\n", __func__, hparams.audio_sample_rate);
+                LOG_INF("%s: audio_n_fft:        %d\n", __func__, hparams.audio_n_fft);
+                LOG_INF("%s: audio_window_len:   %d\n", __func__, hparams.audio_window_len);
+                LOG_INF("%s: audio_hop_len:      %d\n", __func__, hparams.audio_hop_len);
             }
             LOG_INF("\n");
             LOG_INF("%s: model size:         %.2f MiB\n", __func__, model_size / 1024.0 / 1024.0);
@@ -3477,4 +3486,8 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
     batch->entries.push_back(clip_image_f32_ptr(audio));
     batch->is_audio = true;
+}
+
+const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx) {
+    return &ctx->model.hparams;
 }
