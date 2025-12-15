@@ -1060,7 +1060,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_LOOKUP}));
     add_opt(common_arg(
         {"-c", "--ctx-size"}, "N",
-        string_format("size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx),
+        string_format("size of the prompt context (default: %d, 0 = loaded from model). "
+            "Note: when using --parallel N, this is the TOTAL context divided among all slots, "
+            "not per-slot. For X tokens per slot with N parallel slots, use --ctx-size X*N", params.n_ctx),
         [](common_params & params, int value) {
             params.n_ctx = value;
         }
@@ -1890,7 +1892,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_DEFRAG_THOLD"));
     add_opt(common_arg(
         {"-np", "--parallel"}, "N",
-        string_format("number of parallel sequences to decode (default: %d)", params.n_parallel),
+        string_format("number of parallel sequences to decode (default: %d). "
+            "Note: total context (--ctx-size) is divided equally among parallel slots", params.n_parallel),
         [](common_params & params, int value) {
             params.n_parallel = value;
         }
