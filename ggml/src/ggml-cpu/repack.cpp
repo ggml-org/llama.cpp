@@ -2008,25 +2008,11 @@ template <> void gemv<block_iq4_nl, 8, 8, GGML_TYPE_Q8_0>(int n, float * s, size
     ggml_gemv_iq4_nl_8x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <>
-void gemv<block_q8_0, 4, 4, GGML_TYPE_Q8_0>(int          n,
-                                            float *      s,
-                                            size_t       bs,
-                                            const void * vx,
-                                            const void * vy,
-                                            int          nr,
-                                            int          nc) {
+template <> void gemv<block_q8_0, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemv_q8_0_4x4_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <>
-void gemv<block_q8_0, 8, 4, GGML_TYPE_Q8_0>(int          n,
-                                            float *      s,
-                                            size_t       bs,
-                                            const void * vx,
-                                            const void * vy,
-                                            int          nr,
-                                            int          nc) {
+template <> void gemv<block_q8_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemv_q8_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
@@ -2050,25 +2036,11 @@ template <> void gemm<block_q4_0, 8, 8, GGML_TYPE_Q8_0>(int n, float * s, size_t
     ggml_gemm_q4_0_8x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <>
-void gemm<block_q4_K, 8, 8, GGML_TYPE_Q8_K>(int          n,
-                                            float *      s,
-                                            size_t       bs,
-                                            const void * vx,
-                                            const void * vy,
-                                            int          nr,
-                                            int          nc) {
+template <> void gemm<block_q4_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
-template <>
-void gemm<block_q2_K, 8, 8, GGML_TYPE_Q8_K>(int          n,
-                                            float *      s,
-                                            size_t       bs,
-                                            const void * vx,
-                                            const void * vy,
-                                            int          nr,
-                                            int          nc) {
+template <> void gemm<block_q2_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q2_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
@@ -2080,25 +2052,11 @@ template <> void gemm<block_iq4_nl, 8, 8, GGML_TYPE_Q8_0>(int n, float * s, size
     ggml_gemm_iq4_nl_8x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <>
-void gemm<block_q8_0, 4, 4, GGML_TYPE_Q8_0>(int          n,
-                                            float *      s,
-                                            size_t       bs,
-                                            const void * vx,
-                                            const void * vy,
-                                            int          nr,
-                                            int          nc) {
+template <> void gemm<block_q8_0, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q8_0_4x4_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <>
-void gemm<block_q8_0, 8, 4, GGML_TYPE_Q8_0>(int          n,
-                                            float *      s,
-                                            size_t       bs,
-                                            const void * vx,
-                                            const void * vy,
-                                            int          nr,
-                                            int          nc) {
+template <> void gemm<block_q8_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q8_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
