@@ -3166,7 +3166,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     for(int i = 0; i < n_layer; ++i) {
                         auto& layer = layers[i];
-                        
+
                         if ( i != 0 ) {
                             layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
                         } else{
@@ -7803,7 +7803,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DBRX:
         case LLM_ARCH_BERT:
         case LLM_ARCH_JINA_BERT_V3:
-        case LLM_ARCH_MODERN_BERT: 
+        case LLM_ARCH_MODERN_BERT:
         case LLM_ARCH_NOMIC_BERT:
         case LLM_ARCH_NOMIC_BERT_MOE:
         case LLM_ARCH_STABLELM:
