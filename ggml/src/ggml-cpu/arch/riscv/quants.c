@@ -23,6 +23,103 @@
 
 #define UNUSED GGML_UNUSED
 
+void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    block_q8_K * y_blocks = (block_q8_K *)y;
+    size_t nb = k / QK_K;
+
+#if defined(__riscv_v_intrinsic)
+    const size_t vlmax_f32m8 = __riscv_vsetvlmax_e32m8();
+
+    for (size_t i = 0; i < nb; i++) {
+        const float* x_block = x + i * QK_K;
+        block_q8_K* y_block = &y_blocks[i];
+
+        // 1. Calculate Min/Max
+        vfloat32m8_t max_v = __riscv_vfmv_v_f_f32m8(-__builtin_inff(), vlmax_f32m8);
+        vfloat32m8_t min_v = __riscv_vfmv_v_f_f32m8(__builtin_inff(), vlmax_f32m8);
+
+        size_t rem = QK_K;
+        size_t offset = 0;
+        while (rem > 0) {
+            size_t vl = __riscv_vsetvl_e32m8(rem);
+            vfloat32m8_t v_curr = __riscv_vle32_v_f32m8(x_block + offset, vl);
+            max_v = __riscv_vfmax_vv_f32m8(max_v, v_curr, vl);
+            min_v = __riscv_vfmin_vv_f32m8(min_v, v_curr, vl);
+            rem -= vl;
+            offset += vl;
+        }
+
+        vfloat32m1_t v_init_max = __riscv_vfmv_s_f_f32m1(-__builtin_inff(), 1);
+        vfloat32m1_t v_init_min = __riscv_vfmv_s_f_f32m1(__builtin_inff(), 1);
+
+        vfloat32m1_t v_scalar_max = __riscv_vfredmax_vs_f32m8_f32m1(max_v, v_init_max, vlmax_f32m8);
+        vfloat32m1_t v_scalar_min = __riscv_vfredmin_vs_f32m8_f32m1(min_v, v_init_min, vlmax_f32m8);
+
+        float max_val = __riscv_vfmv_f_s_f32m1_f32(v_scalar_max);
+        float min_val = __riscv_vfmv_f_s_f32m1_f32(v_scalar_min);
+
+        float amax = fabsf(max_val) > fabsf(min_val) ? fabsf(max_val) : fabsf(min_val);
+
+        if (amax == 0.0f) {
+            y_block->d = 0.0f;
+            memset(y_block->qs, 0, QK_K);
+            memset(y_block->bsums, 0, sizeof(y_block->bsums));
+            continue;
+        }
+
+        const float iscale = -127.f / (fabsf(max_val) > fabsf(min_val) ? max_val : min_val);
+        y_block->d = 1.0f / iscale;
+
+        // 2. Quantize and Calculate Sums
+        offset = 0;
+        rem = QK_K;
+        vint16m1_t v_zero_sum = __riscv_vmv_v_x_i16m1(0, 1);
+
+        while (rem > 0) {
+            size_t vl = __riscv_vsetvl_e32m8(rem);
+            vfloat32m8_t v_f = __riscv_vle32_v_f32m8(x_block + offset, vl);
+
+            v_f = __riscv_vfmul_vf_f32m8(v_f, iscale, vl);
+
+            vint32m8_t v_i32 = __riscv_vfcvt_x_f_v_i32m8_rm(v_f, __RISCV_FRM_RNE, vl);
+            vint16m4_t v_i16 = __riscv_vnclip_wx_i16m4(v_i32, 0, __RISCV_VXRM_RNE, vl);
+            vint8m2_t v_q = __riscv_vnclip_wx_i8m2(v_i16, 0, __RISCV_VXRM_RNE, vl);
+
+            __riscv_vse8_v_i8m2(y_block->qs + offset, v_q, vl);
+
+            //first iteration
+            int sum_idx;
+            vint8m1_t chunk_m1;
+            vint16m1_t v_sum;
+            sum_idx = offset / 16;
+            chunk_m1 = __riscv_vget_v_i8m2_i8m1(v_q, 0);
+            v_sum = __riscv_vwredsum_vs_i8m1_i16m1(chunk_m1, v_zero_sum, 16);
+            y_block->bsums[sum_idx] = (int16_t)__riscv_vmv_x_s_i16m1_i16(v_sum);
+
+            //remaining iterations
+            vint8m2_t slid_q = v_q;
+            for (size_t k = 16; k < vl; k += 16) {
+                slid_q = __riscv_vslidedown_vx_i8m2(slid_q, 16, vl);
+
+                sum_idx = (offset + k) / 16;
+                chunk_m1 = __riscv_vget_v_i8m2_i8m1(slid_q, 0);
+
+                v_sum = __riscv_vwredsum_vs_i8m1_i16m1(chunk_m1, v_zero_sum, 16);
+                y_block->bsums[sum_idx] =(int16_t)__riscv_vmv_x_s_i16m1_i16(v_sum);
+            }
+
+            rem -= vl;
+            offset += vl;
+        }
+    }
+#else
+    GGML_UNUSED(nb);
+    // scalar
+    quantize_row_q8_K_ref(x, y, k);
+#endif
+}
+
 void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
@@ -111,6 +208,97 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
     // scalar
     quantize_row_q8_1_ref(x, y, k);
 #endif
+}
+
+void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    block_q8_K *y_blocks = (block_q8_K *)y;
+
+#if defined(__riscv_v)
+    size_t nb = k / QK_K;
+
+    const size_t vlmax_f32m8 = __riscv_vsetvlmax_e32m8();
+    for (size_t i = 0; i < nb; i++) {
+        const float* x_block = x + i * QK_K;
+        block_q8_K* y_block = &y_blocks[i];
+        vfloat32m8_t max_v = __riscv_vfmv_v_f_f32m8(-__builtin_inff(), 64);
+        vfloat32m8_t min_v = __riscv_vfmv_v_f_f32m8(__builtin_inff(), 64);
+
+        size_t rem = QK_K;
+        size_t offset = 0;
+        while (rem > 0) {
+            size_t vl = __riscv_vsetvl_e32m8(rem);
+            vfloat32m8_t v_curr = __riscv_vle32_v_f32m8(x_block + offset, vl);
+
+            max_v = __riscv_vfmax_vv_f32m8(max_v, v_curr, vl);
+            min_v = __riscv_vfmin_vv_f32m8(min_v, v_curr, vl);
+
+            rem -= vl;
+            offset += vl;
+        }
+
+        vfloat32m1_t v_init_max = __riscv_vfmv_s_f_f32m1(-__builtin_inff(), 1);
+        vfloat32m1_t v_init_min = __riscv_vfmv_s_f_f32m1(__builtin_inff(), 1);
+
+        vfloat32m1_t v_scalar_max = __riscv_vfredmax_vs_f32m8_f32m1(max_v, v_init_max, vlmax_f32m8);
+        vfloat32m1_t v_scalar_min = __riscv_vfredmin_vs_f32m8_f32m1(min_v, v_init_min, vlmax_f32m8);
+
+        float max_val = __riscv_vfmv_f_s_f32m1_f32(v_scalar_max);
+        float min_val = __riscv_vfmv_f_s_f32m1_f32(v_scalar_min);
+        float amax = fabsf(max_val) > fabsf(min_val) ? fabsf(max_val) : fabsf(min_val);
+
+        if (amax == 0.0f) {
+            y_block->d = 0.0f;
+            memset(y_block->qs, 0, QK_K);
+            memset(y_block->bsums, 0, sizeof(y_block->bsums));
+            continue;
+        }
+
+        const float iscale = -127.f / (fabsf(max_val) > fabsf(min_val) ? max_val : min_val);
+        y_block->d = 1.0f / iscale;
+
+        offset = 0;
+        rem = QK_K;
+        int sum_idx = 0;
+
+        vint16m1_t v_zero_sum = __riscv_vmv_v_x_i16m1(0, 1);
+
+        while (rem > 0) {
+            size_t vl = __riscv_vsetvl_e32m8(rem);
+            vfloat32m8_t v_f = __riscv_vle32_v_f32m8(x_block + offset, vl);
+            v_f = __riscv_vfmul_vf_f32m8(v_f, iscale, vl);
+            vint32m8_t v_i32 = __riscv_vfcvt_x_f_v_i32m8(v_f, vl);
+            vint16m4_t v_i16 = __riscv_vnclip_wx_i16m4(v_i32, 0, __RISCV_VXRM_RNE, vl);
+            vint8m2_t v_q = __riscv_vnclip_wx_i8m2(v_i16, 0, __RISCV_VXRM_RNE, vl);
+            __riscv_vse8_v_i8m2(y_block->qs + offset, v_q, vl);
+
+            //calculate bsums
+            vint8m1_t part0_31 = __riscv_vget_v_i8m2_i8m1(v_q, 0);
+            vint8m1_t part31_63 = __riscv_vget_v_i8m2_i8m1(v_q, 1);
+
+            size_t sum_idx = offset / 16;
+            vint8m1_t chunk_m1 = __riscv_vget_v_i8m2_i8m1(v_q, 0);
+            vint16m1_t v_sum = __riscv_vwredsum_vs_i8m1_i16m1(chunk_m1, v_zero_sum, 16);
+            y_block->bsums[sum_idx] = __riscv_vmv_x_s_i16m1_i16(v_sum);
+
+            vint8m2_t slid_q = v_q;
+            for (size_t k = 16; k < vl; k += 16) {
+                sum_idx = (offset + k) / 16;
+                vint8m2_t slid_q = __riscv_vslidedown_vx_i8m2(slid_q, 16, vl);
+                vint8m1_t chunk_m1 = __riscv_vget_v_i8m2_i8m1(v_q, 0);
+                v_sum = __riscv_vwredsum_vs_i8m1_i16m1(chunk_m1, v_zero_sum, 16);
+                y_block->bsums[sum_idx] = __riscv_vmv_x_s_i16m1_i16(v_sum);
+                slid_q = __riscv_vslidedown_vx_i8m2(slid_q, 16, vl);
+            }
+
+            rem -= vl;
+            offset += vl;
+        }
+    }
+#else
+    GGML_UNUSED(nb);
+    // scalar
+    quantize_row_q8_K_ref(x, y, k);
 }
 
 //===================================== Dot products =================================
