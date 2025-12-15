@@ -23,11 +23,16 @@ export const NUMERIC_FIELDS = [
 	'dry_allowed_length',
 	'dry_penalty_last_n',
 	'agenticMaxTurns',
-	'agenticMaxToolPreviewLines'
+	'agenticMaxToolPreviewLines',
+	'codeInterpreterTimeoutSeconds'
 ] as const;
 
 /**
  * Fields that must be positive integers (>= 1).
  * These will be clamped to minimum 1 and rounded during save.
  */
-export const POSITIVE_INTEGER_FIELDS = ['agenticMaxTurns', 'agenticMaxToolPreviewLines'] as const;
+export const POSITIVE_INTEGER_FIELDS = [
+	'agenticMaxTurns',
+	'agenticMaxToolPreviewLines',
+	'codeInterpreterTimeoutSeconds'
+] as const;

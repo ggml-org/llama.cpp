@@ -84,6 +84,9 @@
 		font-family:
 			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
 			'Liberation Mono', Menlo, monospace;
+		overflow: auto;
+		min-width: 0;
+		max-width: 100%;
 	}
 
 	.code-preview-wrapper pre {

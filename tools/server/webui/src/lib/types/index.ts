@@ -20,6 +20,8 @@ export type {
 	ApiChatCompletionToolCall,
 	ApiChatCompletionStreamChunk,
 	ApiChatCompletionResponse,
+	ApiChatCompletionRequestMessage,
+	ApiToolDefinition,
 	ApiSlotData,
 	ApiProcessingState,
 	ApiRouterModelMeta,
@@ -34,6 +36,8 @@ export type {
 
 // Chat types
 export type {
+	ChatMessageType,
+	ChatRole,
 	ChatUploadedFile,
 	ChatAttachmentDisplayItem,
 	ChatAttachmentPreviewItem,
