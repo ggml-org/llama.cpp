@@ -20,6 +20,8 @@ export type {
 	ApiChatCompletionToolCall,
 	ApiChatCompletionStreamChunk,
 	ApiChatCompletionResponse,
+	ApiChatCompletionRequestMessage,
+	ApiToolDefinition,
 	ApiSlotData,
 	ApiProcessingState,
 	ApiRouterModelMeta,

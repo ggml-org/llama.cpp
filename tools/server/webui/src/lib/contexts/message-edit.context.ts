@@ -23,6 +23,22 @@ export interface MessageEditActions {
 export type MessageEditContext = MessageEditState & MessageEditActions;
 
 const MESSAGE_EDIT_KEY = Symbol.for('chat-message-edit');
+const DEFAULT_MESSAGE_EDIT_CONTEXT: MessageEditContext = {
+	isEditing: false,
+	editedContent: '',
+	editedExtras: [],
+	editedUploadedFiles: [],
+	originalContent: '',
+	originalExtras: [],
+	showSaveOnlyOption: false,
+	setContent: () => {},
+	setExtras: () => {},
+	setUploadedFiles: () => {},
+	save: () => {},
+	saveOnly: () => {},
+	cancel: () => {},
+	startEdit: () => {}
+};
 
 /**
  * Sets the message edit context. Call this in the parent component (ChatMessage.svelte).
@@ -35,5 +51,5 @@ export function setMessageEditContext(ctx: MessageEditContext): MessageEditConte
  * Gets the message edit context. Call this in child components.
  */
 export function getMessageEditContext(): MessageEditContext {
-	return getContext(MESSAGE_EDIT_KEY);
+	return getContext<MessageEditContext | undefined>(MESSAGE_EDIT_KEY) ?? DEFAULT_MESSAGE_EDIT_CONTEXT;
 }
