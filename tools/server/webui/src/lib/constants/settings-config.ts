@@ -3,8 +3,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
 	systemMessage: '',
+	showSystemMessage: true,
 	theme: 'system',
-	showTokensPerSecond: false,
 	showThoughtInProgress: false,
 	showToolCalls: false,
 	disableReasoningFormat: false,
@@ -13,10 +13,9 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	askForTitleConfirmation: false,
 	pasteLongTextToFileLen: 2500,
 	pdfAsImage: false,
-	showModelInfo: false,
 	disableAutoScroll: false,
 	renderUserContentAsMarkdown: false,
-	modelSelectorEnabled: false,
+	autoMicOnEmpty: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
 	temperature: 0.8,
@@ -44,8 +43,9 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
-	apiKey: 'Set the API Key if you are using --api-key option for the server.',
+	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
 	systemMessage: 'The starting message that defines how model should behave.',
+	showSystemMessage: 'Display the system message at the top of each conversation.',
 	theme:
 		'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',
 	pasteLongTextToFileLen:
@@ -81,7 +81,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets DRY penalty for the last n tokens.',
 	max_tokens: 'The maximum number of token per output. Use -1 for infinite (no limit).',
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
-	showTokensPerSecond: 'Display generation speed in tokens per second during streaming.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
 	showToolCalls:
 		'Display tool call labels and payloads from Harmony-compatible delta.tool_calls data below assistant messages.',
@@ -92,13 +91,13 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
 	askForTitleConfirmation:
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
-	pdfAsImage: 'Parse PDF as image instead of text (requires vision-capable model).',
-	showModelInfo: 'Display the model name used to generate each message below the message content.',
+	pdfAsImage:
+		'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
 	disableAutoScroll:
 		'Disable automatic scrolling while messages stream so you can control the viewport position manually.',
 	renderUserContentAsMarkdown: 'Render user messages using markdown formatting in the chat.',
-	modelSelectorEnabled:
-		'Enable the model selector in the chat input to choose the inference model. Sends the associated model field in API requests.',
+	autoMicOnEmpty:
+		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
 	enableContinueGeneration:

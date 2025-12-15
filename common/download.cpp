@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <map>
+#include <mutex>
 #include <regex>
 #include <string>
 #include <thread>
@@ -24,6 +26,7 @@
 #include "http.h"
 #endif
 
+#ifndef __EMSCRIPTEN__
 #ifdef __linux__
 #include <linux/limits.h>
 #elif defined(_WIN32)
@@ -35,6 +38,8 @@
 #else
 #include <sys/syslimits.h>
 #endif
+#endif
+
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
 // isatty
@@ -430,7 +435,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 0L);
     typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
     auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
         auto data_vec = static_cast<std::vector<char> *>(data);
@@ -469,36 +474,79 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 
 #elif defined(LLAMA_USE_HTTPLIB)
 
-static bool is_output_a_tty() {
+class ProgressBar {
+    static inline std::mutex mutex;
+    static inline std::map<const ProgressBar *, int> lines;
+    static inline int max_line = 0;
+
+    static void cleanup(const ProgressBar * line) {
+        lines.erase(line);
+        if (lines.empty()) {
+            max_line = 0;
+        }
+    }
+
+    static bool is_output_a_tty() {
 #if defined(_WIN32)
-    return _isatty(_fileno(stdout));
+        return _isatty(_fileno(stdout));
 #else
-    return isatty(1);
+        return isatty(1);
 #endif
-}
-
-static void print_progress(size_t current, size_t total) {
-    if (!is_output_a_tty()) {
-        return;
     }
 
-    if (!total) {
-        return;
+public:
+    ProgressBar() = default;
+
+    ~ProgressBar() {
+        std::lock_guard<std::mutex> lock(mutex);
+        cleanup(this);
     }
 
-    size_t width = 50;
-    size_t pct = (100 * current) / total;
-    size_t pos = (width * current) / total;
+    void update(size_t current, size_t total) {
+        if (!is_output_a_tty()) {
+            return;
+        }
 
-    std::cout << "["
-              << std::string(pos, '=')
-              << (pos < width ? ">" : "")
-              << std::string(width - pos, ' ')
-              << "] " << std::setw(3) << pct << "%  ("
-              << current / (1024 * 1024) << " MB / "
-              << total / (1024 * 1024) << " MB)\r";
-    std::cout.flush();
-}
+        if (!total) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex);
+
+        if (lines.find(this) == lines.end()) {
+            lines[this] = max_line++;
+            std::cout << "\n";
+        }
+        int lines_up = max_line - lines[this];
+
+        size_t width = 50;
+        size_t pct = (100 * current) / total;
+        size_t pos = (width * current) / total;
+
+        std::cout << "\033[s";
+
+        if (lines_up > 0) {
+            std::cout << "\033[" << lines_up << "A";
+        }
+        std::cout << "\033[2K\r["
+            << std::string(pos, '=')
+            << (pos < width ? ">" : "")
+            << std::string(width - pos, ' ')
+            << "] " << std::setw(3) << pct << "%  ("
+            << current / (1024 * 1024) << " MB / "
+            << total / (1024 * 1024) << " MB) "
+            << "\033[u";
+
+        std::cout.flush();
+
+        if (current == total) {
+             cleanup(this);
+        }
+    }
+
+    ProgressBar(const ProgressBar &) = delete;
+    ProgressBar & operator=(const ProgressBar &) = delete;
+};
 
 static bool common_pull_file(httplib::Client & cli,
                              const std::string & resolve_path,
@@ -517,16 +565,19 @@ static bool common_pull_file(httplib::Client & cli,
         headers.emplace("Range", "bytes=" + std::to_string(existing_size) + "-");
     }
 
-    std::atomic<size_t> downloaded{existing_size};
+    const char * func = __func__; // avoid __func__ inside a lambda
+    size_t downloaded = existing_size;
+    size_t progress_step = 0;
+    ProgressBar bar;
 
     auto res = cli.Get(resolve_path, headers,
         [&](const httplib::Response &response) {
             if (existing_size > 0 && response.status != 206) {
-                LOG_WRN("%s: server did not respond with 206 Partial Content for a resume request. Status: %d\n", __func__, response.status);
+                LOG_WRN("%s: server did not respond with 206 Partial Content for a resume request. Status: %d\n", func, response.status);
                 return false;
             }
             if (existing_size == 0 && response.status != 200) {
-                LOG_WRN("%s: download received non-successful status code: %d\n", __func__, response.status);
+                LOG_WRN("%s: download received non-successful status code: %d\n", func, response.status);
                 return false;
             }
             if (total_size == 0 && response.has_header("Content-Length")) {
@@ -534,7 +585,7 @@ static bool common_pull_file(httplib::Client & cli,
                     size_t content_length = std::stoull(response.get_header_value("Content-Length"));
                     total_size = existing_size + content_length;
                 } catch (const std::exception &e) {
-                    LOG_WRN("%s: invalid Content-Length header: %s\n", __func__, e.what());
+                    LOG_WRN("%s: invalid Content-Length header: %s\n", func, e.what());
                 }
             }
             return true;
@@ -542,17 +593,20 @@ static bool common_pull_file(httplib::Client & cli,
         [&](const char *data, size_t len) {
             ofs.write(data, len);
             if (!ofs) {
-                LOG_ERR("%s: error writing to file: %s\n", __func__, path_tmp.c_str());
+                LOG_ERR("%s: error writing to file: %s\n", func, path_tmp.c_str());
                 return false;
             }
             downloaded += len;
-            print_progress(downloaded, total_size);
+            progress_step += len;
+
+            if (progress_step >= total_size / 1000 || downloaded == total_size) {
+                bar.update(downloaded, total_size);
+                progress_step = 0;
+            }
             return true;
         },
         nullptr
     );
-
-    std::cout << "\n";
 
     if (!res) {
         LOG_ERR("%s: error during download. Status: %d\n", __func__, res ? res->status : -1);
@@ -1047,7 +1101,7 @@ std::string common_docker_resolve_model(const std::string &) {
 std::vector<common_cached_model_info> common_list_cached_models() {
     std::vector<common_cached_model_info> models;
     const std::string cache_dir = fs_get_cache_directory();
-    const std::vector<common_file_info> files = fs_list_files(cache_dir);
+    const std::vector<common_file_info> files = fs_list(cache_dir, false);
     for (const auto & file : files) {
         if (string_starts_with(file.name, "manifest=") && string_ends_with(file.name, ".json")) {
             common_cached_model_info model_info;

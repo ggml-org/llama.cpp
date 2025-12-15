@@ -684,7 +684,7 @@ def test_anthropic_streaming_content_block_indices():
     # Request that might produce both text and tool use
     res = server.make_stream_request("POST", "/v1/messages", data={
         "model": "test",
-        "max_tokens": 200,
+        "max_tokens": 400,
         "stream": True,
         "tools": [{
             "name": "test_tool",

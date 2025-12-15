@@ -11,7 +11,7 @@ body:
         (i.e. the generated text) are incorrect or llama.cpp crashes during model evaluation.
         If you encountered the issue while using an external UI (e.g. ollama),
         please reproduce your issue using one of the examples/binaries in this repository.
-        The `llama-cli` binary can be used for simple and reproducible model inference.
+        The `llama-completion` binary can be used for simple and reproducible model inference.
   - type: textarea
     id: version
     attributes:
@@ -74,9 +74,12 @@ body:
         Please give us a summary of the problem and tell us how to reproduce it.
         If you can narrow down the bug to specific hardware, compile flags, or command line arguments,
         that information would be very much appreciated by us.
+
+        If possible, please try to reproduce the issue using `llama-completion` with `-fit off`.
+        If you can only reproduce the issue with `-fit on`, please provide logs both with and without `--verbose`.
       placeholder: >
-        e.g. when I run llama-cli with -ngl 99 I get garbled outputs.
-        When I use -ngl 0 it works correctly.
+        e.g. when I run llama-completion with `-fa on` I get garbled outputs for very long prompts.
+        With short prompts or `-fa off` it works correctly.
         Here are the exact commands that I used: ...
     validations:
       required: true
