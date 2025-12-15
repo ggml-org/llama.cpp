@@ -8625,8 +8625,7 @@ class NemotronHModel(GraniteHybridModel):
                 else:
                     return []
 
-        new_name = self.map_tensor_name(name)
-        return [(new_name, data_torch)]
+        return super().modify_tensors(data_torch, name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
