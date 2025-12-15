@@ -2384,8 +2384,7 @@ class StableLMModel(TextModel):
     "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
-    "LlamaModel",
-    "KORMoForCausalLM")
+    "LlamaModel")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     undo_permute = True
@@ -3402,7 +3401,7 @@ class QwenModel(TextModel):
         self._set_vocab_qwen()
 
 
-@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration")
+@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration", "KORMoForCausalLM")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
