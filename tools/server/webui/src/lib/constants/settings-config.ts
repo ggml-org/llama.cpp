@@ -101,7 +101,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	alwaysShowSidebarOnDesktop:
 		'Always keep the sidebar visible on desktop instead of auto-hiding it.',
 	autoShowSidebarOnNewChat:
-		'Automatically show sidebar when starting a new chat. Disable for cleaner screen recordings.',
+		'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
 	autoMicOnEmpty:
 		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
 	pyInterpreterEnabled:
