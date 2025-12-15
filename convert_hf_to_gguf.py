@@ -8486,9 +8486,20 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
 class NemotronHModel(GraniteHybridModel):
     """Hybrid mamba2/attention model from NVIDIA"""
     model_arch = gguf.MODEL_ARCH.NEMOTRON_H
+    is_moe: bool = False
 
     def __init__(self, *args, **kwargs):
+        # We have to determine the correct model architecture (MoE vs non-MoE) before
+        # calling the parent __init__. This is because the parent constructor
+        # uses self.model_arch to build the tensor name map, and all MoE-specific
+        # mappings would be missed if it were called with the default non-MoE arch.
+        hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
+        if "num_experts_per_tok" in hparams:
+            self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
+            self.is_moe = True
+
         super().__init__(*args, **kwargs)
+
 
         # Save the top-level head_dim for later
         self.head_dim = self.hparams.get("head_dim", self.hparams.get("attention_head_dim"))
@@ -8499,9 +8510,11 @@ class NemotronHModel(GraniteHybridModel):
 
         # Update the ssm / attn / mlp layers
         # M: Mamba2, *: Attention, -: MLP
+        # MoE:
+        # M: Mamba2, *: Attention, E: Expert
         hybrid_override_pattern = self.hparams["hybrid_override_pattern"]
         self._ssm_layers = [i for i, val in enumerate(hybrid_override_pattern) if val == "M"]
-        self._mlp_layers = [i for i, val in enumerate(hybrid_override_pattern) if val == "-"]
+        self._mlp_layers = [i for i, val in enumerate(hybrid_override_pattern) if val == ("E" if self.is_moe else "-")]
 
     def get_attn_layers(self):
         hybrid_override_pattern = self.hparams["hybrid_override_pattern"]
@@ -8517,10 +8530,29 @@ class NemotronHModel(GraniteHybridModel):
         # Set feed_forward_length
         # NOTE: This will trigger an override warning. This is preferrable to
         #   duplicating all the parent logic
-        n_ff = self.find_hparam(["intermediate_size", "n_inner", "hidden_dim"])
-        self.gguf_writer.add_feed_forward_length([
-            n_ff if i in self._mlp_layers else 0 for i in range(self.block_count)
-        ])
+        if not self.is_moe:
+            n_ff = self.find_hparam(["intermediate_size", "n_inner", "hidden_dim"])
+            self.gguf_writer.add_feed_forward_length([
+                n_ff if i in self._mlp_layers else 0 for i in range(self.block_count)
+            ])
+        else:
+            moe_intermediate_size = self.hparams.get("moe_intermediate_size")
+            self.gguf_writer.add_feed_forward_length([
+                moe_intermediate_size if i in self._mlp_layers else 0 for i in range(self.block_count)
+            ])
+            self.gguf_writer.add_expert_used_count(self.hparams["num_experts_per_tok"])
+            self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+            self.gguf_writer.add_expert_shared_feed_forward_length(self.hparams["moe_shared_expert_intermediate_size"])
+            self.gguf_writer.add_expert_count(self.hparams["n_routed_experts"])
+            self.gguf_writer.add_expert_shared_count(self.hparams["n_shared_experts"])
+            self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
+            self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
+            self.gguf_writer.add_expert_group_count(self.hparams["n_group"])
+
+            # number of experts used per token (top-k)
+            if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
+                self.gguf_writer.add_expert_used_count(n_experts_used)
+
 
     def set_vocab(self):
         super().set_vocab()
@@ -8528,7 +8560,82 @@ class NemotronHModel(GraniteHybridModel):
         # The tokenizer _does_ add a BOS token (via post_processor type
         # TemplateProcessing) but does not set add_bos_token to true in the
         # config, so we need to explicitly override it here.
-        self.gguf_writer.add_add_bos_token(True)
+        if not self.is_moe:
+            self.gguf_writer.add_add_bos_token(True)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if self.is_moe and bid is not None:
+            if name.endswith("mixer.gate.e_score_correction_bias"):
+                new_name = name.replace("e_score_correction_bias", "e_score_correction_bias.bias")
+                mapped_name = self.map_tensor_name(new_name)
+                return [(mapped_name, data_torch)]
+
+            if name.endswith("mixer.dt_bias"):
+                new_name = name.replace("dt_bias", "dt.bias")
+                mapped_name = self.map_tensor_name(new_name)
+                return [(mapped_name, data_torch)]
+
+            if name.endswith("mixer.conv1d.weight"):
+                squeezed_data = data_torch.squeeze()
+                mapped_name = self.map_tensor_name(name)
+                return [(mapped_name, squeezed_data)]
+
+            if name.endswith("mixer.A_log"):
+                transformed_data = -torch.exp(data_torch)
+                reshaped_data = transformed_data.squeeze().reshape(-1, 1)
+                mapped_name = self.map_tensor_name(name)
+                return [(mapped_name, reshaped_data)]
+
+            if name.endswith("mixer.D"):
+                reshaped_data = data_torch.squeeze().reshape(-1, 1)
+                mapped_name = self.map_tensor_name(name)
+                return [(mapped_name, reshaped_data)]
+
+            if name.endswith("mixer.norm.weight"):
+                reshaped_data = data_torch.reshape(8, 512)
+                mapped_name = self.map_tensor_name(name)
+                return [(mapped_name, reshaped_data)]
+
+            if name.find("mixer.experts") != -1:
+                n_experts = self.hparams["n_routed_experts"]
+                assert bid is not None
+
+                if self._experts is None:
+                    self._experts = [{} for _ in range(self.block_count)]
+
+                self._experts[bid][name] = data_torch
+
+                if len(self._experts[bid]) >= n_experts * 2:
+                    # merge the experts into a single tensor
+                    tensors: list[tuple[str, Tensor]] = []
+                    for w_name in ["down_proj", "up_proj"]:
+                        datas: list[Tensor] = []
+
+                        for xid in range(n_experts):
+                            ename = f"backbone.layers.{bid}.mixer.experts.{xid}.{w_name}.weight"
+                            datas.append(self._experts[bid][ename])
+                            del self._experts[bid][ename]
+
+                        data_torch = torch.stack(datas, dim=0)
+                        merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                        new_name = self.map_tensor_name(merged_name)
+                        tensors.append((new_name, data_torch))
+
+                    return tensors
+                else:
+                    return []
+
+        new_name = self.map_tensor_name(name)
+        return [(new_name, data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("BailingMoeForCausalLM")
