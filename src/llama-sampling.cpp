@@ -2466,16 +2466,19 @@ struct llama_sampler * llama_sampler_init_power_law(
     float    decay,
     uint32_t seed
 ) {
+    const float _decay = std::min(decay, 0.99f);
+    fprintf(stderr, "power-law: init: target %.3f, decay %.3f\n", (double)target, (double)_decay);
+    fflush(stderr);
     auto seed_cur = get_rng_seed(seed);
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_power_law_i,
         /* .ctx   = */ new llama_sampler_power_law {
-            /* .target       = */ target,
-            /* .decay        = */ std::min(decay, 0.99f),
-            /* .seed         = */ seed_cur,
-            /* .rng          = */ std::mt19937(seed_cur),
-            /* .weighted_sum = */ 0.0f,
-            /* .total_weight = */ 0.0f,
+            /* .target         = */ target,
+            /* .decay          = */ _decay,
+            /* .seed           = */ seed_cur,
+            /* .rng            = */ std::mt19937(seed_cur),
+            /* .weighted_sum   = */ 0.0f,
+            /* .total_weight   = */ 0.0f,
             /* .original_probs = */ {},
         }
     );
