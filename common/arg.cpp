@@ -1224,13 +1224,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DIFFUSION}));
     add_opt(common_arg(
         {"--in-file"}, "FNAME",
-        "an input file (repeat to specify multiple files)",
+        "an input file (use comma-separated values to specify multiple files)",
         [](common_params & params, const std::string & value) {
-            std::ifstream file(value);
-            if (!file) {
-                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                std::ifstream file(item);
+                if (!file) {
+                    throw std::runtime_error(string_format("error: failed to open file '%s'\n", item.c_str()));
+                }
+                params.in_files.push_back(item);
             }
-            params.in_files.push_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
@@ -1953,9 +1955,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_OFFLOAD"));
     add_opt(common_arg(
         {"--image", "--audio"}, "FILE",
-        "path to an image or audio file. use with multimodal models, can be repeated if you have multiple files\n",
+        "path to an image or audio file. use with multimodal models, use comma-separated values for multiple files\n",
         [](common_params & params, const std::string & value) {
-            params.image.emplace_back(value);
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                params.image.emplace_back(item);
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
@@ -2248,33 +2252,50 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--lora"}, "FNAME",
-        "path to LoRA adapter (can be repeated to use multiple adapters)",
+        "path to LoRA adapter (use comma-separated values to load multiple adapters)",
         [](common_params & params, const std::string & value) {
-            params.lora_adapters.push_back({ std::string(value), 1.0, "", "", nullptr });
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                params.lora_adapters.push_back({ item, 1.0, "", "", nullptr });
+            }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
     add_opt(common_arg(
-        {"--lora-scaled"}, "FNAME", "SCALE",
-        "path to LoRA adapter with user defined scaling (can be repeated to use multiple adapters)",
-        [](common_params & params, const std::string & fname, const std::string & scale) {
-            params.lora_adapters.push_back({ fname, std::stof(scale), "", "", nullptr });
+        {"--lora-scaled"}, "FNAME:SCALE,...",
+        "path to LoRA adapter with user defined scaling (format: FNAME:SCALE,...)\n"
+        "note: use comma-separated values",
+        [](common_params & params, const std::string & value) {
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                auto parts = string_split<std::string>(item, ':');
+                if (parts.size() != 2) {
+                    throw std::invalid_argument("lora-scaled format: FNAME:SCALE");
+                }
+                params.lora_adapters.push_back({ parts[0], std::stof(parts[1]), "", "", nullptr });
+            }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
     add_opt(common_arg(
         {"--control-vector"}, "FNAME",
-        "add a control vector\nnote: this argument can be repeated to add multiple control vectors",
+        "add a control vector\nnote: use comma-separated values to add multiple control vectors",
         [](common_params & params, const std::string & value) {
-            params.control_vectors.push_back({ 1.0f, value, });
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                params.control_vectors.push_back({ 1.0f, item, });
+            }
         }
     ));
     add_opt(common_arg(
-        {"--control-vector-scaled"}, "FNAME", "SCALE",
+        {"--control-vector-scaled"}, "FNAME:SCALE,...",
         "add a control vector with user defined scaling SCALE\n"
-        "note: this argument can be repeated to add multiple scaled control vectors",
-        [](common_params & params, const std::string & fname, const std::string & scale) {
-            params.control_vectors.push_back({ std::stof(scale), fname });
+        "note: use comma-separated values (format: FNAME:SCALE,...)",
+        [](common_params & params, const std::string & value) {
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                auto parts = string_split<std::string>(item, ':');
+                if (parts.size() != 2) {
+                    throw std::invalid_argument("control-vector-scaled format: FNAME:SCALE");
+                }
+                params.control_vectors.push_back({ std::stof(parts[1]), parts[0] });
+            }
         }
     ));
     add_opt(common_arg(
@@ -2364,13 +2385,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("HF_TOKEN"));
     add_opt(common_arg(
         {"--context-file"}, "FNAME",
-        "file to load context from (repeat to specify multiple files)",
+        "file to load context from (use comma-separated values to specify multiple files)",
         [](common_params & params, const std::string & value) {
-            std::ifstream file(value, std::ios::binary);
-            if (!file) {
-                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                std::ifstream file(item, std::ios::binary);
+                if (!file) {
+                    throw std::runtime_error(string_format("error: failed to open file '%s'\n", item.c_str()));
+                }
+                params.context_files.push_back(item);
             }
-            params.context_files.push_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_RETRIEVAL}));
     add_opt(common_arg(
