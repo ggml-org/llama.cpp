@@ -2576,6 +2576,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                         return false;
                 }
             }
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            return true;
         case GGML_OP_SCALE:
             float bias;
             memcpy(&bias, (const float *) (op->op_params) + 1, sizeof(float));
