@@ -9,6 +9,7 @@ export interface SettingsFieldConfig {
 	key: string;
 	label: string;
 	type: SettingsFieldType;
+	disabled?: boolean;
 	isExperimental?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof import('@lucide/svelte').Icon }>;
@@ -48,6 +49,9 @@ export interface SettingsChatServiceOptions {
 	backend_sampling?: boolean;
 	// Custom parameters
 	custom?: string;
+	// Tools
+	tools?: unknown[];
+	tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
 	timings_per_token?: boolean;
 	// Callbacks
 	onChunk?: (chunk: string) => void;

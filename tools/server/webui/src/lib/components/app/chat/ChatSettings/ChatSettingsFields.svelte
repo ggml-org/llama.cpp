@@ -71,6 +71,7 @@
 				<Input
 					id={field.key}
 					value={currentValue}
+					disabled={Boolean(field.disabled)}
 					oninput={(e) => {
 						// Update local config immediately for real-time badge feedback
 						onConfigChange(field.key, e.currentTarget.value);
@@ -112,6 +113,7 @@
 			<Textarea
 				id={field.key}
 				value={String(localConfig[field.key] ?? '')}
+				disabled={Boolean(field.disabled)}
 				onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
 				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
 				class="min-h-[10rem] w-full md:max-w-2xl"
@@ -167,6 +169,7 @@
 			<Select.Root
 				type="single"
 				value={currentValue}
+				disabled={Boolean(field.disabled)}
 				onValueChange={(value) => {
 					if (field.key === SETTINGS_KEYS.THEME && value && onThemeChange) {
 						onThemeChange(value);
@@ -229,6 +232,7 @@
 				<Checkbox
 					id={field.key}
 					checked={Boolean(localConfig[field.key])}
+					disabled={Boolean(field.disabled)}
 					onCheckedChange={(checked) => onConfigChange(field.key, checked)}
 					class="mt-1"
 				/>
