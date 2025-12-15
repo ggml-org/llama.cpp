@@ -2401,7 +2401,6 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
     }
 
     float computed_target = llama_sampler_power_law_compute_target(ctx);
-    fprintf(stderr, "power-law: computed_target = %.3f\n", computed_target);
 
     //
     // power law transform
