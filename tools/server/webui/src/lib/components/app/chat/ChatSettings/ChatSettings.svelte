@@ -5,6 +5,9 @@
 		AlertTriangle,
 		Code,
 		Monitor,
+		Sun,
+		Moon,
+		Wrench,
 		ChevronLeft,
 		ChevronRight,
 		Database
@@ -23,13 +26,15 @@
 		type SettingsSectionTitle,
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
-		SETTINGS_COLOR_MODES_CONFIG,
 		SETTINGS_KEYS
 	} from '$lib/constants';
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui';
 	import { SettingsFieldType } from '$lib/enums/settings';
 	import type { Component } from 'svelte';
+	import '$lib/services/tools';
+	import { getAllTools } from '$lib/services/tools';
+	import type { ToolRegistration } from '$lib/services/tools/registry';
 
 	interface Props {
 		onSave?: () => void;
@@ -38,7 +43,13 @@
 
 	let { onSave, initialSection }: Props = $props();
 
-	const settingSections: Array<{
+	const THEME_OPTIONS = [
+		{ value: ColorMode.SYSTEM, label: 'System', icon: Monitor },
+		{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
+		{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
+	];
+
+	const baseSettingSections: Array<{
 		fields: SettingsFieldConfig[];
 		icon: Component;
 		title: SettingsSectionTitle;
@@ -51,7 +62,7 @@
 					key: SETTINGS_KEYS.THEME,
 					label: 'Theme',
 					type: SettingsFieldType.SELECT,
-					options: SETTINGS_COLOR_MODES_CONFIG
+					options: THEME_OPTIONS
 				},
 				{ key: SETTINGS_KEYS.API_KEY, label: 'API Key', type: SettingsFieldType.INPUT },
 				{
@@ -323,13 +334,69 @@
 		// }
 	];
 
+	let localConfig: SettingsConfigType = $state({ ...config() });
+
+	function getToolFields(cfg: SettingsConfigType): SettingsFieldConfig[] {
+		const toolGroups = new Map<string, ToolRegistration[]>();
+
+		for (const tool of getAllTools()) {
+			const existing = toolGroups.get(tool.enableConfigKey);
+			if (existing) {
+				existing.push(tool);
+			} else {
+				toolGroups.set(tool.enableConfigKey, [tool]);
+			}
+		}
+
+		return Array.from(toolGroups.values()).flatMap((tools) => {
+			const [primaryTool] = tools;
+			const enabled = Boolean(cfg[primaryTool.enableConfigKey]);
+			const mergedSettings = new Map<string, SettingsFieldConfig>();
+
+			for (const tool of tools) {
+				for (const setting of tool.settings ?? []) {
+					if (!mergedSettings.has(setting.key)) {
+						mergedSettings.set(setting.key, setting);
+					}
+				}
+			}
+
+			return [
+				{
+					key: primaryTool.enableConfigKey,
+					label: primaryTool.label,
+					type: SettingsFieldType.CHECKBOX,
+					help: primaryTool.description
+				},
+				...Array.from(mergedSettings.values()).map((setting) => ({
+					...setting,
+					disabled: !enabled
+				}))
+			];
+		});
+	}
+
+	let settingSections = $derived.by(
+		(): Array<{
+			fields: SettingsFieldConfig[];
+			icon: Component;
+			title: SettingsSectionTitle;
+		}> => [
+			...baseSettingSections,
+			{
+				title: SETTINGS_SECTION_TITLES.TOOLS,
+				icon: Wrench,
+				fields: getToolFields(localConfig)
+			}
+		]
+	);
+
 	let activeSection = $derived<SettingsSectionTitle>(
 		initialSection ?? SETTINGS_SECTION_TITLES.GENERAL
 	);
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
-	let localConfig: SettingsConfigType = $state({ ...config() });
 
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
