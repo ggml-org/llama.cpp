@@ -2386,17 +2386,15 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
 
     if (ctx->target < 0.0f) {
         // no-op: just sample from the distribution as-is
-        fprintf(stderr, "power-law: no-op!");
+        fprintf(stderr, "power-law: no-op!\n"); fflush(stderr);
         llama_sampler_softmax_impl(cur_p, false);
         const int idx = llama_sample_dist(cur_p, ctx->rng);
         cur_p->selected = idx;
         return;
     }
 
-    // get the original probabilities
+    // softmax and store the original probabilities
     llama_sampler_softmax_impl(cur_p, false);
-
-    // store the original probabilities
     ctx->original_probs.resize(cur_p->size);
     for (size_t i = 0; i < cur_p->size; ++i) {
         ctx->original_probs[i] = cur_p->data[i].p;
@@ -2409,6 +2407,7 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
     // power law transform
     //
 
+    fprintf(stderr, "power-law: transform: cur_p->size = %.3f\n", cur_p->size);
     for (size_t i = 0; i < cur_p->size; ++i) {
         float dist = (cur_p->data[i].p - computed_target) * INV_WIDTH;
         cur_p->data[i].logit = PEAK_LOGIT_VALUE / (1.0f + dist * dist);
