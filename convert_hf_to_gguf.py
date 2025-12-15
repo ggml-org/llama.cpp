@@ -8536,7 +8536,7 @@ class NemotronHModel(GraniteHybridModel):
                 n_ff if i in self._mlp_layers else 0 for i in range(self.block_count)
             ])
         else:
-            moe_intermediate_size = self.hparams.get("moe_intermediate_size")
+            moe_intermediate_size = self.hparams["moe_intermediate_size"]
             self.gguf_writer.add_feed_forward_length([
                 moe_intermediate_size if i in self._mlp_layers else 0 for i in range(self.block_count)
             ])
