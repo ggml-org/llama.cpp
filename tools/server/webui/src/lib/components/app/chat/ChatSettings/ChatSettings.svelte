@@ -414,7 +414,7 @@
 	</div>
 
 	<!-- Mobile Header with Horizontal Scrollable Menu -->
-	<div class="flex flex-col md:hidden">
+	<div class="flex flex-col pt-6 md:hidden">
 		<div class="border-b border-border/30 py-4">
 			<!-- Horizontal Scrollable Category Menu with Navigation -->
 			<div class="relative flex items-center" style="scroll-padding: 1rem;">
