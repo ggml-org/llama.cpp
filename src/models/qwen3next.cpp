@@ -608,13 +608,6 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_autoregressive(
         ggml_tensor * beta,
         ggml_tensor * state,
         int           il) {
-    GGML_ASSERT(ggml_is_contiguous(q));
-    GGML_ASSERT(ggml_is_contiguous(k));
-    GGML_ASSERT(ggml_is_contiguous(v));
-    GGML_ASSERT(ggml_is_contiguous(g));
-    GGML_ASSERT(ggml_is_contiguous(beta));
-    GGML_ASSERT(ggml_is_contiguous(state));
-
     const int64_t S_k      = q->ne[0];
     const int64_t H_k      = q->ne[1];
     const int64_t n_tokens = q->ne[2];
@@ -653,8 +646,8 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_autoregressive(
 
     state = ggml_reshape_4d(ctx0, state, S_v, S_v, H_v, n_seqs);
 
-    ggml_tensor * g_t    = ggml_cont_4d(ctx0, ggml_transpose(ctx0, g), 1, 1, H_k, n_seqs);
-    ggml_tensor * beta_t = ggml_cont_4d(ctx0, ggml_transpose(ctx0, beta), 1, 1, H_k, n_seqs);
+    ggml_tensor * g_t    = ggml_reshape_4d(ctx0, ggml_transpose(ctx0, g), 1, 1, H_k, n_seqs);
+    ggml_tensor * beta_t = ggml_reshape_4d(ctx0, ggml_transpose(ctx0, beta), 1, 1, H_k, n_seqs);
 
     // Apply exponential to g_t
     g_t = ggml_exp(ctx0, g_t);
@@ -664,13 +657,13 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_autoregressive(
     state = ggml_mul(ctx0, state, g_t);
 
     // kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
-    ggml_tensor * k_t_unsqueezed = ggml_cont_4d(ctx0, k, 1, S_v, H_v, n_seqs);
+    ggml_tensor * k_t_unsqueezed = ggml_reshape_4d(ctx0, k, 1, S_v, H_v, n_seqs);
     ggml_tensor * kv_mem         = ggml_mul(ctx0, state, k_t_unsqueezed);
     // we need to sum over dim=-2, so we transpose, sum, then transpose again
     kv_mem = ggml_transpose(ctx0, ggml_sum_rows(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, kv_mem))));
 
     // v_t = v.unsqueeze(2) (we insert the singleton dimension after n_seqs and H_v)
-    ggml_tensor * v_t    = ggml_cont_4d(ctx0, v, S_v, 1, H_v, n_seqs);
+    ggml_tensor * v_t    = ggml_reshape_4d(ctx0, v, S_v, 1, H_v, n_seqs);
     // delta = (v_t - kv_mem) * beta_t
     ggml_tensor * v_diff = ggml_sub(ctx0, v_t, kv_mem);  // both should be [S_v, 1, H_v, n_seqs]
     ggml_tensor * delta  = ggml_mul(ctx0, v_diff, beta_t);
@@ -681,7 +674,7 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_autoregressive(
 
     // Compute the attention output
     // core_attn_out = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
-    ggml_tensor * q_t_unsqueezed = ggml_cont_4d(ctx0, q, 1, S_v, H_v, n_seqs);  // unsqueeze q_t
+    ggml_tensor * q_t_unsqueezed = ggml_reshape_4d(ctx0, q, 1, S_v, H_v, n_seqs);  // unsqueeze q_t
     ggml_tensor * state_q        = ggml_mul(ctx0, state, q_t_unsqueezed);
     // again, since it's over dim = -2, transpose, sum, transpose back
     ggml_tensor * core_attn_out =
@@ -692,8 +685,8 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_autoregressive(
     cb(state, "new_state", il);
 
     // flatten output, no need to permute since n_tokens is 1 so [S_v, 1, H_v, n_seqs] and [S_v, H_v, 1, n_seqs] are equivalent memory-layout wise
-    ggml_tensor * flat_output = ggml_cont_1d(ctx0, core_attn_out, S_v * H_v * n_tokens * n_seqs);
-    ggml_tensor * flat_state  = ggml_cont_1d(ctx0, state, S_v * S_v * H_v * n_seqs);
+    ggml_tensor * flat_output = ggml_reshape_1d(ctx0, core_attn_out, S_v * H_v * n_tokens * n_seqs);
+    ggml_tensor * flat_state  = ggml_reshape_1d(ctx0, state, S_v * S_v * H_v * n_seqs);
 
     return ggml_concat(ctx0, flat_output, flat_state, 0);
 }
