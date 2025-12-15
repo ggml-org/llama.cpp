@@ -11,7 +11,7 @@ body:
         (i.e. the generated text) are incorrect or llama.cpp crashes during model evaluation.
         If you encountered the issue while using an external UI (e.g. ollama),
         please reproduce your issue using one of the examples/binaries in this repository.
-        The `llama-cimpletion` binary can be used for simple and reproducible model inference.
+        The `llama-completion` binary can be used for simple and reproducible model inference.
   - type: textarea
     id: version
     attributes:
