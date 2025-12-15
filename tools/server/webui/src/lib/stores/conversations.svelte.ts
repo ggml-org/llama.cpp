@@ -385,12 +385,34 @@ class ConversationsStore {
 			this.conversations = this.conversations.filter((c) => c.id !== convId);
 
 			if (this.activeConversation?.id === convId) {
-				this.activeConversation = null;
-				this.activeMessages = [];
+				this.clearActiveConversation();
 				await goto(`?new_chat=true#/`);
 			}
 		} catch (error) {
 			console.error('Failed to delete conversation:', error);
+		}
+	}
+
+	/**
+	 * Deletes all conversations and their messages
+	 */
+	async deleteAll(): Promise<void> {
+		try {
+			const allConversations = await DatabaseService.getAllConversations();
+
+			for (const conv of allConversations) {
+				await DatabaseService.deleteConversation(conv.id);
+			}
+
+			this.clearActiveConversation();
+			this.conversations = [];
+
+			toast.success('All conversations deleted');
+
+			await goto(`?new_chat=true#/`);
+		} catch (error) {
+			console.error('Failed to delete all conversations:', error);
+			toast.error('Failed to delete conversations');
 		}
 	}
 
