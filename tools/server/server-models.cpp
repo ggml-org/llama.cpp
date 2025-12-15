@@ -209,7 +209,7 @@ void server_presets::render_args(server_model_meta & meta) {
     }
     // 3. control args (from router)
     // set control values
-    preset.options[control_args["LLAMA_ARG_HOST"]] = CHILD_ADDR;
+    preset.options[control_args["LLAMA_ARG_HOST"]] = meta.hostname;
     preset.options[control_args["LLAMA_ARG_PORT"]] = std::to_string(meta.port);
     preset.options[control_args["LLAMA_ARG_ALIAS"]] = meta.name;
     if (meta.in_cache) {
@@ -308,7 +308,8 @@ void server_models::load_models() {
             /* status      */ SERVER_MODEL_STATUS_UNLOADED,
             /* last_used   */ 0,
             /* args        */ std::vector<std::string>(),
-            /* exit_code   */ 0
+            /* exit_code   */ 0,
+	    /* host_name   */ CHILD_ADDR
         };
         add_model(std::move(meta));
     }
@@ -330,7 +331,8 @@ void server_models::load_models() {
                 /* status      */ SERVER_MODEL_STATUS_UNLOADED,
                 /* last_used   */ 0,
                 /* args        */ std::vector<std::string>(),
-                /* exit_code   */ 0
+                /* exit_code   */ 0,
+		/* host_name   */ CHILD_ADDR
             };
             add_model(std::move(meta));
         }
@@ -348,7 +350,8 @@ void server_models::load_models() {
             /* status      */ SERVER_MODEL_STATUS_UNLOADED,
             /* last_used   */ 0,
             /* args        */ std::vector<std::string>(),
-            /* exit_code   */ 0
+            /* exit_code   */ 0,
+	    /* host_name   */ CHILD_ADDR
         };
         add_model(std::move(meta));
     }
@@ -510,6 +513,7 @@ void server_models::load(const std::string & name) {
     inst.meta.port      = get_free_port();
     inst.meta.status    = SERVER_MODEL_STATUS_LOADING;
     inst.meta.last_used = ggml_time_ms();
+    inst.meta.hostname  = base_params.hostname; // Use router's cmdline value
 
     if (inst.meta.port <= 0) {
         throw std::runtime_error("failed to get a port number");
@@ -698,7 +702,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     auto proxy = std::make_unique<server_http_proxy>(
             method,
-            CHILD_ADDR,
+	    base_params.hostname,
             meta->port,
             req.path,
             req.headers,
@@ -726,7 +730,8 @@ std::thread server_models::setup_child_server(const common_params & base_params,
     body["value"] = server_model_status_to_string(SERVER_MODEL_STATUS_LOADED);
     req.body = body.dump();
 
-    SRV_INF("notifying router server (port=%d) that model %s is ready\n", router_port, name.c_str());
+    SRV_INF("notifying router server (%s:port=%d) that model %s is ready\n",
+        base_params.hostname.c_str(), router_port, name.c_str());
     auto result = cli.send(std::move(req));
     if (result.error() != httplib::Error::Success) {
         auto err_str = httplib::to_string(result.error());
