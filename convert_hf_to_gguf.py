@@ -9706,6 +9706,7 @@ class LFM2AudioModel(MmprojModel):
         return self.global_config.get("encoder")
 
     def set_gguf_parameters(self):
+        assert self.hparams_audio is not None
         self.hparams_audio["hidden_size"] = self.hparams_audio["d_model"]
         self.hparams_audio["intermediate_size"] = self.hparams_audio["d_model"]
         self.hparams_audio["num_attention_heads"] = self.hparams_audio["n_heads"]
@@ -9754,6 +9755,10 @@ class LFM2AudioModel(MmprojModel):
                 (self.map_tensor_name(f"conformer.layers.{bid}.conv.batch_norm.weight"), a),
                 (self.map_tensor_name(f"conformer.layers.{bid}.conv.batch_norm.bias"), b),
             ]
+
+        # reshape conv weights
+        if name.startswith("conformer.pre_encode.conv.") and name.endswith(".bias"):
+            data_torch = data_torch[:, None, None]
 
         return [(self.map_tensor_name(name), data_torch)]
 
