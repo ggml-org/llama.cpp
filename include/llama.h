@@ -363,6 +363,10 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+
+        // Layer skipping for speculative decoding (Track 7/9)
+        int32_t n_layer_exit;  // exit after this many layers, 0 = compute all layers (default)
+                               // use for early exit / layer skip speculation
     };
 
     // model quantization parameters
