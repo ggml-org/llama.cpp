@@ -447,17 +447,6 @@ private:
                 ggml_tensor * cur,
                         int   il);
 
-    ggml_tensor * build_delta_net_recurrent(
-                ggml_tensor * q,
-                ggml_tensor * k,
-                ggml_tensor * v,
-                ggml_tensor * g,
-                ggml_tensor * beta,
-                ggml_tensor * state,
-                ggml_tensor * causal_mask,
-                ggml_tensor * identity,
-                        int   il);
-
     ggml_tensor * build_delta_net_chunking(
                 ggml_tensor * q,
                 ggml_tensor * k,
