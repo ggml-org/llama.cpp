@@ -9567,7 +9567,6 @@ class LFM2Model(TextModel):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
         self.gguf_writer.add_shortconv_l_cache(self.hparams["conv_L_cache"])
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["norm_eps"])
-        self.gguf_writer.add_rope_freq_base(self.hparams.get("rope_theta", 1000000))
         self._add_feed_forward_length()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
