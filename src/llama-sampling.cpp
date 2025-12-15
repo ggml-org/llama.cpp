@@ -2407,7 +2407,7 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
     // power law transform
     //
 
-    fprintf(stderr, "power-law: transform: cur_p->size = %.3f\n", cur_p->size);
+    fprintf(stderr, "power-law: transform: cur_p->size = %.3f\n", (double)cur_p->size);
     for (size_t i = 0; i < cur_p->size; ++i) {
         float dist = (cur_p->data[i].p - computed_target) * INV_WIDTH;
         cur_p->data[i].logit = PEAK_LOGIT_VALUE / (1.0f + dist * dist);
