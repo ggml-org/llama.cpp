@@ -1283,6 +1283,11 @@ struct server_context_impl {
         queue_results.send(std::move(res));
     }
 
+    template <typename T, typename... Args>
+    void send_error(const T & obj, const enum error_type type, const char * fmt, Args... args) {
+        send_error(obj, string_format(fmt, args...), type);
+    }
+
     // if multimodal is enabled, send an error and return false
     bool check_no_mtmd(const int id_task) {
         if (mctx) {
@@ -1962,19 +1967,28 @@ struct server_context_impl {
 
                         if (!slot.can_split()) {
                             if (slot.task->n_tokens() > n_ubatch) {
-                                send_error(slot, "input is too large to process. increase the physical batch size", ERROR_TYPE_SERVER);
+                                send_error(slot, ERROR_TYPE_SERVER,
+                                           "input (%d tokens) is too large to process. increase the physical batch "
+                                           "size (current batch size: %d)",
+                                           slot.task->n_tokens(), n_ubatch);
                                 slot.release();
                                 continue;
                             }
 
                             if (slot.task->n_tokens() > slot.n_ctx) {
-                                send_error(slot, "input is larger than the max context size. skipping", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
+                                send_error(
+                                    slot, ERROR_TYPE_EXCEED_CONTEXT_SIZE,
+                                    "input (%d tokens) is larger than the max context size (%d tokens). skipping",
+                                    slot.task->n_tokens(), slot.n_ctx);
                                 slot.release();
                                 continue;
                             }
                         } else {
                             if (slot.task->n_tokens() >= slot.n_ctx) {
-                                send_error(slot, "the request exceeds the available context size, try increasing it", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
+                                send_error(
+                                    slot, ERROR_TYPE_EXCEED_CONTEXT_SIZE,
+                                    "request (%d tokens) exceeds available context size (%d tokens), try increasing it",
+                                    slot.task->n_tokens(), slot.n_ctx);
                                 slot.release();
                                 continue;
                             }
