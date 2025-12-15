@@ -210,97 +210,6 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 #endif
 }
 
-void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_K == 0);
-    block_q8_K *y_blocks = (block_q8_K *)y;
-
-#if defined(__riscv_v)
-    size_t nb = k / QK_K;
-
-    const size_t vlmax_f32m8 = __riscv_vsetvlmax_e32m8();
-    for (size_t i = 0; i < nb; i++) {
-        const float* x_block = x + i * QK_K;
-        block_q8_K* y_block = &y_blocks[i];
-        vfloat32m8_t max_v = __riscv_vfmv_v_f_f32m8(-__builtin_inff(), 64);
-        vfloat32m8_t min_v = __riscv_vfmv_v_f_f32m8(__builtin_inff(), 64);
-
-        size_t rem = QK_K;
-        size_t offset = 0;
-        while (rem > 0) {
-            size_t vl = __riscv_vsetvl_e32m8(rem);
-            vfloat32m8_t v_curr = __riscv_vle32_v_f32m8(x_block + offset, vl);
-
-            max_v = __riscv_vfmax_vv_f32m8(max_v, v_curr, vl);
-            min_v = __riscv_vfmin_vv_f32m8(min_v, v_curr, vl);
-
-            rem -= vl;
-            offset += vl;
-        }
-
-        vfloat32m1_t v_init_max = __riscv_vfmv_s_f_f32m1(-__builtin_inff(), 1);
-        vfloat32m1_t v_init_min = __riscv_vfmv_s_f_f32m1(__builtin_inff(), 1);
-
-        vfloat32m1_t v_scalar_max = __riscv_vfredmax_vs_f32m8_f32m1(max_v, v_init_max, vlmax_f32m8);
-        vfloat32m1_t v_scalar_min = __riscv_vfredmin_vs_f32m8_f32m1(min_v, v_init_min, vlmax_f32m8);
-
-        float max_val = __riscv_vfmv_f_s_f32m1_f32(v_scalar_max);
-        float min_val = __riscv_vfmv_f_s_f32m1_f32(v_scalar_min);
-        float amax = fabsf(max_val) > fabsf(min_val) ? fabsf(max_val) : fabsf(min_val);
-
-        if (amax == 0.0f) {
-            y_block->d = 0.0f;
-            memset(y_block->qs, 0, QK_K);
-            memset(y_block->bsums, 0, sizeof(y_block->bsums));
-            continue;
-        }
-
-        const float iscale = -127.f / (fabsf(max_val) > fabsf(min_val) ? max_val : min_val);
-        y_block->d = 1.0f / iscale;
-
-        offset = 0;
-        rem = QK_K;
-        int sum_idx = 0;
-
-        vint16m1_t v_zero_sum = __riscv_vmv_v_x_i16m1(0, 1);
-
-        while (rem > 0) {
-            size_t vl = __riscv_vsetvl_e32m8(rem);
-            vfloat32m8_t v_f = __riscv_vle32_v_f32m8(x_block + offset, vl);
-            v_f = __riscv_vfmul_vf_f32m8(v_f, iscale, vl);
-            vint32m8_t v_i32 = __riscv_vfcvt_x_f_v_i32m8(v_f, vl);
-            vint16m4_t v_i16 = __riscv_vnclip_wx_i16m4(v_i32, 0, __RISCV_VXRM_RNE, vl);
-            vint8m2_t v_q = __riscv_vnclip_wx_i8m2(v_i16, 0, __RISCV_VXRM_RNE, vl);
-            __riscv_vse8_v_i8m2(y_block->qs + offset, v_q, vl);
-
-            //calculate bsums
-            vint8m1_t part0_31 = __riscv_vget_v_i8m2_i8m1(v_q, 0);
-            vint8m1_t part31_63 = __riscv_vget_v_i8m2_i8m1(v_q, 1);
-
-            size_t sum_idx = offset / 16;
-            vint8m1_t chunk_m1 = __riscv_vget_v_i8m2_i8m1(v_q, 0);
-            vint16m1_t v_sum = __riscv_vwredsum_vs_i8m1_i16m1(chunk_m1, v_zero_sum, 16);
-            y_block->bsums[sum_idx] = __riscv_vmv_x_s_i16m1_i16(v_sum);
-
-            vint8m2_t slid_q = v_q;
-            for (size_t k = 16; k < vl; k += 16) {
-                sum_idx = (offset + k) / 16;
-                vint8m2_t slid_q = __riscv_vslidedown_vx_i8m2(slid_q, 16, vl);
-                vint8m1_t chunk_m1 = __riscv_vget_v_i8m2_i8m1(v_q, 0);
-                v_sum = __riscv_vwredsum_vs_i8m1_i16m1(chunk_m1, v_zero_sum, 16);
-                y_block->bsums[sum_idx] = __riscv_vmv_x_s_i16m1_i16(v_sum);
-                slid_q = __riscv_vslidedown_vx_i8m2(slid_q, 16, vl);
-            }
-
-            rem -= vl;
-            offset += vl;
-        }
-    }
-#else
-    GGML_UNUSED(nb);
-    // scalar
-    quantize_row_q8_K_ref(x, y, k);
-}
-
 //===================================== Dot products =================================
 
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
@@ -2142,3 +2051,510 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
+#if defined(__riscv_v)
+static const int8_t keven_signs_q2xs[1024] = {
+     1,  1,  1,  1,  1,  1,  1,  1, -1,  1,  1,  1,  1,  1,  1, -1,  1, -1,  1,  1,  1,  1,  1, -1, -1, -1,  1,  1,  1,  1,  1,  1,
+     1,  1, -1,  1,  1,  1,  1, -1, -1,  1, -1,  1,  1,  1,  1,  1,  1, -1, -1,  1,  1,  1,  1,  1, -1, -1, -1,  1,  1,  1,  1, -1,
+     1,  1,  1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1,  1,  1,  1, -1,  1, -1,  1,  1,  1,  1, -1, -1,  1, -1,  1,  1,  1, -1,
+     1,  1, -1, -1,  1,  1,  1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1, -1, -1, -1,  1,  1,  1, -1, -1, -1, -1, -1,  1,  1,  1,  1,
+     1,  1,  1,  1, -1,  1,  1, -1, -1,  1,  1,  1, -1,  1,  1,  1,  1, -1,  1,  1, -1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1, -1,
+     1,  1, -1,  1, -1,  1,  1,  1, -1,  1, -1,  1, -1,  1,  1, -1,  1, -1, -1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1,  1,  1,
+     1,  1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1,  1,  1, -1,  1, -1,  1, -1, -1,  1,  1, -1, -1, -1,  1, -1, -1,  1,  1,  1,
+     1,  1, -1, -1, -1,  1,  1, -1, -1,  1, -1, -1, -1,  1,  1,  1,  1, -1, -1, -1, -1,  1,  1,  1, -1, -1, -1, -1, -1,  1,  1, -1,
+     1,  1,  1,  1,  1, -1,  1, -1, -1,  1,  1,  1,  1, -1,  1,  1,  1, -1,  1,  1,  1, -1,  1,  1, -1, -1,  1,  1,  1, -1,  1, -1,
+     1,  1, -1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1,  1, -1,  1, -1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1,  1, -1,  1,  1,
+     1,  1,  1, -1,  1, -1,  1,  1, -1,  1,  1, -1,  1, -1,  1, -1,  1, -1,  1, -1,  1, -1,  1, -1, -1, -1,  1, -1,  1, -1,  1,  1,
+     1,  1, -1, -1,  1, -1,  1, -1, -1,  1, -1, -1,  1, -1,  1,  1,  1, -1, -1, -1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1, -1,
+     1,  1,  1,  1, -1, -1,  1,  1, -1,  1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1, -1, -1,  1,  1, -1, -1,  1,  1,
+     1,  1, -1,  1, -1, -1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1, -1,  1, -1, -1,  1,  1, -1, -1, -1,  1, -1, -1,  1, -1,
+     1,  1,  1, -1, -1, -1,  1, -1, -1,  1,  1, -1, -1, -1,  1,  1,  1, -1,  1, -1, -1, -1,  1,  1, -1, -1,  1, -1, -1, -1,  1, -1,
+     1,  1, -1, -1, -1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1, -1,  1,  1,
+     1,  1,  1,  1,  1,  1, -1, -1, -1,  1,  1,  1,  1,  1, -1,  1,  1, -1,  1,  1,  1,  1, -1,  1, -1, -1,  1,  1,  1,  1, -1, -1,
+     1,  1, -1,  1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1, -1, -1,  1, -1, -1,  1,  1,  1, -1, -1, -1, -1, -1,  1,  1,  1, -1,  1,
+     1,  1,  1, -1,  1,  1, -1,  1, -1,  1,  1, -1,  1,  1, -1, -1,  1, -1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1,  1, -1,  1,
+     1,  1, -1, -1,  1,  1, -1, -1, -1,  1, -1, -1,  1,  1, -1,  1,  1, -1, -1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1,  1, -1, -1,
+     1,  1,  1,  1, -1,  1, -1,  1, -1,  1,  1,  1, -1,  1, -1, -1,  1, -1,  1,  1, -1,  1, -1, -1, -1, -1,  1,  1, -1,  1, -1,  1,
+     1,  1, -1,  1, -1,  1, -1, -1, -1,  1, -1,  1, -1,  1, -1,  1,  1, -1, -1,  1, -1,  1, -1,  1, -1, -1, -1,  1, -1,  1, -1, -1,
+     1,  1,  1, -1, -1,  1, -1, -1, -1,  1,  1, -1, -1,  1, -1,  1,  1, -1,  1, -1, -1,  1, -1,  1, -1, -1,  1, -1, -1,  1, -1, -1,
+     1,  1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1, -1,  1, -1, -1,  1, -1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1, -1,  1, -1,  1,
+     1,  1,  1,  1,  1, -1, -1,  1, -1,  1,  1,  1,  1, -1, -1, -1,  1, -1,  1,  1,  1, -1, -1, -1, -1, -1,  1,  1,  1, -1, -1,  1,
+     1,  1, -1,  1,  1, -1, -1, -1, -1,  1, -1,  1,  1, -1, -1,  1,  1, -1, -1,  1,  1, -1, -1,  1, -1, -1, -1,  1,  1, -1, -1, -1,
+     1,  1,  1, -1,  1, -1, -1, -1, -1,  1,  1, -1,  1, -1, -1,  1,  1, -1,  1, -1,  1, -1, -1,  1, -1, -1,  1, -1,  1, -1, -1, -1,
+     1,  1, -1, -1,  1, -1, -1,  1, -1,  1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1, -1,  1, -1, -1,  1,
+     1,  1,  1,  1, -1, -1, -1, -1, -1,  1,  1,  1, -1, -1, -1,  1,  1, -1,  1,  1, -1, -1, -1,  1, -1, -1,  1,  1, -1, -1, -1, -1,
+     1,  1, -1,  1, -1, -1, -1,  1, -1,  1, -1,  1, -1, -1, -1, -1,  1, -1, -1,  1, -1, -1, -1, -1, -1, -1, -1,  1, -1, -1, -1,  1,
+     1,  1,  1, -1, -1, -1, -1,  1, -1,  1,  1, -1, -1, -1, -1, -1,  1, -1,  1, -1, -1, -1, -1, -1, -1, -1,  1, -1, -1, -1, -1,  1,
+     1,  1, -1, -1, -1, -1, -1, -1, -1,  1, -1, -1, -1, -1, -1,  1,  1, -1, -1, -1, -1, -1, -1,  1, -1, -1, -1, -1, -1, -1, -1, -1,
+};
+#endif
+
+void ggml_vec_dot_iq2_xxs_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq2_xxs * GGML_RESTRICT x = vx;
+    const block_q8_K    * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+    const uint64_t * signs64 = (const uint64_t *)keven_signs_q2xs;
+    const uint64_t * grid64  = (const uint64_t *)iq2xxs_grid;
+
+    uint32_t shift_constants[4] = {0, 7, 14, 21};
+    vuint32m1_t v_shifts = __riscv_vle32_v_u32m1(shift_constants, 4);
+
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        const float combined_scale = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+
+        const uint8_t  * GGML_RESTRICT q2_ptr = (const uint8_t *) x[i].qs;
+        const int8_t   * GGML_RESTRICT q8 = y[i].qs;
+
+        float sum = 0.0f;
+
+        #pragma GCC unroll 1 //GCC unrolls the loop aggressively causing register spilling
+        for (int ib32 = 0; ib32 < QK_K / 32; ib32 += 2) {
+            vint8m2_t q8_1 = __riscv_vle8_v_i8m2(q8, 32); q8 += 32;
+            vint8m2_t q8_2 = __riscv_vle8_v_i8m2(q8, 32); q8 += 32;
+
+            vuint8mf4_t v_raw_q2_1 = __riscv_vle8_v_u8mf4(q2_ptr, 4);
+            vuint8mf4_t v_raw_q2_2 = __riscv_vle8_v_u8mf4(q2_ptr + 8, 4);
+
+            vuint16mf2_t vidx_q2_1 = __riscv_vwcvtu_x_x_v_u16mf2(v_raw_q2_1, 4);
+            vuint16mf2_t vidx_q2_2 = __riscv_vwcvtu_x_x_v_u16mf2(v_raw_q2_2, 4);
+
+            vidx_q2_1 = __riscv_vsll_vx_u16mf2(vidx_q2_1, 3, 4);
+            vidx_q2_2 = __riscv_vsll_vx_u16mf2(vidx_q2_2, 3, 4);
+
+            uint32_t s_packed_1, s_packed_2;
+            memcpy(&s_packed_1, q2_ptr + 4, 4);
+            memcpy(&s_packed_2, q2_ptr + 12, 4);
+
+            vuint32m1_t v_s_1 = __riscv_vmv_v_x_u32m1(s_packed_1, 4);
+            vuint32m1_t v_s_2 = __riscv_vmv_v_x_u32m1(s_packed_2, 4);
+            v_s_1 = __riscv_vsrl_vv_u32m1(v_s_1, v_shifts, 4);
+            v_s_2 = __riscv_vsrl_vv_u32m1(v_s_2, v_shifts, 4);
+
+            v_s_1 = __riscv_vand_vx_u32m1(v_s_1, 127, 4);
+            v_s_2 = __riscv_vand_vx_u32m1(v_s_2, 127, 4);
+
+            vuint16mf2_t vidx_s2_1 = __riscv_vsll_vx_u16mf2(__riscv_vncvt_x_x_w_u16mf2(v_s_1, 4), 3, 4);
+            vuint16mf2_t vidx_s2_2 = __riscv_vsll_vx_u16mf2(__riscv_vncvt_x_x_w_u16mf2(v_s_2, 4), 3, 4);
+
+            vuint64m2_t vq2_64_1 = __riscv_vluxei16_v_u64m2(grid64, vidx_q2_1, 4);
+            vuint64m2_t vq2_64_2 = __riscv_vluxei16_v_u64m2(grid64, vidx_q2_2, 4);
+
+            vint8m2_t q2_1 = __riscv_vreinterpret_v_u8m2_i8m2(__riscv_vreinterpret_v_u64m2_u8m2(vq2_64_1));
+            vint8m2_t q2_2 = __riscv_vreinterpret_v_u8m2_i8m2(__riscv_vreinterpret_v_u64m2_u8m2(vq2_64_2));
+
+            vuint64m2_t vs2_64_1 = __riscv_vluxei16_v_u64m2(signs64, vidx_s2_1, 4);
+            vuint64m2_t vs2_64_2 = __riscv_vluxei16_v_u64m2(signs64, vidx_s2_2, 4);
+            vint8m2_t s2_1 = __riscv_vreinterpret_v_u8m2_i8m2(__riscv_vreinterpret_v_u64m2_u8m2(vs2_64_1));
+            vint8m2_t s2_2 = __riscv_vreinterpret_v_u8m2_i8m2(__riscv_vreinterpret_v_u64m2_u8m2(vs2_64_2));
+
+            vint8m2_t q8s_1 = __riscv_vmul_vv_i8m2(q8_1, s2_1, 32);
+            vint8m2_t q8s_2 = __riscv_vmul_vv_i8m2(q8_2, s2_2, 32);
+
+            vint16m4_t dot1 = __riscv_vwmul_vv_i16m4(q8s_1, q2_1, 32);
+            vint16m4_t dot2 = __riscv_vwmul_vv_i16m4(q8s_2, q2_2, 32);
+
+            vint32m1_t zero_vec = __riscv_vmv_v_x_i32m1(0, 1);
+            vint32m1_t sumv1 = __riscv_vwredsum_vs_i16m4_i32m1(dot1, zero_vec, 32);
+            vint32m1_t sumv2 = __riscv_vwredsum_vs_i16m4_i32m1(dot2, zero_vec, 32);
+
+            int32_t scalar_sum1 = __riscv_vmv_x_s_i32m1_i32(sumv1);
+            int32_t scalar_sum2 = __riscv_vmv_x_s_i32m1_i32(sumv2);
+
+            int16_t scale1 = 2 * ((s_packed_1 >> 28) & 0xF) + 1;
+            int16_t scale2 = 2 * ((s_packed_2 >> 28) & 0xF) + 1;
+
+            sum += scalar_sum1 * scale1 + scalar_sum2 * scale2;
+            q2_ptr += 16;
+        }
+        sumf += sum * combined_scale;
+    }
+    *s = 0.125f * sumf;
+}
+
+void ggml_vec_dot_iq2_xxs_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq2_xxs * GGML_RESTRICT x = vx;
+    const block_q8_K    * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+    const uint64_t * signs64 = (const uint64_t *)keven_signs_q2xs;
+    const uint64_t * grid64  = (const uint64_t *)iq2xxs_grid;
+
+    uint32_t shift_constants[4] = {0, 7, 14, 21};
+    vuint32mf2_t v_shifts = __riscv_vle32_v_u32mf2(shift_constants, 4);
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; ++i) {
+        const float combined_scale = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+
+        const uint8_t  * GGML_RESTRICT q2_ptr = (const uint8_t *) x[i].qs;
+        const int8_t   * GGML_RESTRICT q8 = y[i].qs;
+
+        float sum = 0.0f;
+
+        for (int ib32 = 0; ib32 < QK_K / 32; ib32 += 2) {
+            vint8m1_t q8_1 = __riscv_vle8_v_i8m1(q8, 32); q8 += 32;
+            vint8m1_t q8_2 = __riscv_vle8_v_i8m1(q8, 32); q8 += 32;
+
+            vuint8mf8_t v_raw_q2_1 = __riscv_vle8_v_u8mf8(q2_ptr, 4);
+            vuint8mf8_t v_raw_q2_2 = __riscv_vle8_v_u8mf8(q2_ptr + 8, 4);
+
+            vuint16mf4_t vidx_q2_1 = __riscv_vwcvtu_x_x_v_u16mf4(v_raw_q2_1, 4);
+            vuint16mf4_t vidx_q2_2 = __riscv_vwcvtu_x_x_v_u16mf4(v_raw_q2_2, 4);
+
+            vidx_q2_1 = __riscv_vsll_vx_u16mf4(vidx_q2_1, 3, 4);
+            vidx_q2_2 = __riscv_vsll_vx_u16mf4(vidx_q2_2, 3, 4);
+
+            uint32_t s_packed_1, s_packed_2;
+            memcpy(&s_packed_1, q2_ptr + 4, 4);
+            memcpy(&s_packed_2, q2_ptr + 12, 4);
+
+            vuint32mf2_t v_s_1 = __riscv_vmv_v_x_u32mf2(s_packed_1, 4);
+            vuint32mf2_t v_s_2 = __riscv_vmv_v_x_u32mf2(s_packed_2, 4);
+
+            v_s_1 = __riscv_vsrl_vv_u32mf2(v_s_1, v_shifts, 4);
+            v_s_2 = __riscv_vsrl_vv_u32mf2(v_s_2, v_shifts, 4);
+
+            v_s_1 = __riscv_vand_vx_u32mf2(v_s_1, 127, 4);
+            v_s_2 = __riscv_vand_vx_u32mf2(v_s_2, 127, 4);
+
+            // Narrow u32 -> u16 (vncvt) and Scale by 8 to get byte offsets
+            vuint16mf4_t vidx_s2_1 = __riscv_vsll_vx_u16mf4(__riscv_vncvt_x_x_w_u16mf4(v_s_1, 4), 3, 4);
+            vuint16mf4_t vidx_s2_2 = __riscv_vsll_vx_u16mf4(__riscv_vncvt_x_x_w_u16mf4(v_s_2, 4), 3, 4);
+
+            // Load q2 values from lookup grid
+            vuint64m1_t vq2_64_1 = __riscv_vluxei16_v_u64m1(grid64, vidx_q2_1, 4);
+            vuint64m1_t vq2_64_2 = __riscv_vluxei16_v_u64m1(grid64, vidx_q2_2, 4);
+            vint8m1_t q2_1 = __riscv_vreinterpret_v_u8m1_i8m1(__riscv_vreinterpret_v_u64m1_u8m1(vq2_64_1));
+            vint8m1_t q2_2 = __riscv_vreinterpret_v_u8m1_i8m1(__riscv_vreinterpret_v_u64m1_u8m1(vq2_64_2));
+
+            // Load sign values
+            vuint64m1_t vs2_64_1 = __riscv_vluxei16_v_u64m1(signs64, vidx_s2_1, 4);
+            vuint64m1_t vs2_64_2 = __riscv_vluxei16_v_u64m1(signs64, vidx_s2_2, 4);
+            vint8m1_t s2_1 = __riscv_vreinterpret_v_u8m1_i8m1(__riscv_vreinterpret_v_u64m1_u8m1(vs2_64_1));
+            vint8m1_t s2_2 = __riscv_vreinterpret_v_u8m1_i8m1(__riscv_vreinterpret_v_u64m1_u8m1(vs2_64_2));
+
+            // Apply signs to q8
+            vint8m1_t q8s_1 = __riscv_vmul_vv_i8m1(q8_1, s2_1, 32);
+            vint8m1_t q8s_2 = __riscv_vmul_vv_i8m1(q8_2, s2_2, 32);
+
+            // multiplying q2 with q8
+            vint16m2_t dot1 = __riscv_vwmul_vv_i16m2(q8s_1, q2_1, 32);
+            vint16m2_t dot2 = __riscv_vwmul_vv_i16m2(q8s_2, q2_2, 32);
+
+            vint32m1_t zero_vec = __riscv_vmv_v_x_i32m1(0, 1);
+            vint32m1_t sumv1 = __riscv_vwredsum_vs_i16m2_i32m1(dot1, zero_vec, 32);
+            vint32m1_t sumv2 = __riscv_vwredsum_vs_i16m2_i32m1(dot2, zero_vec, 32);
+            int32_t scalar_sum1 = __riscv_vmv_x_s_i32m1_i32(sumv1);
+            int32_t scalar_sum2 = __riscv_vmv_x_s_i32m1_i32(sumv2);
+            int16_t scale1 = 2 * ((s_packed_1 >> 28) & 0xF) + 1;
+            int16_t scale2 = 2 * ((s_packed_2 >> 28) & 0xF) + 1;
+
+            sum += scalar_sum1 * scale1 + scalar_sum2 * scale2;
+            q2_ptr += 16;
+        }
+        sumf += sum * combined_scale;
+    }
+    *s = 0.125f * sumf;
+}
+
+static void (*resolve_ggml_vec_dot_iq2_xxs_q8_K(void))(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc){
+#if defined __riscv_v_intrinsic
+    size_t vlen = __riscv_vlenb() * 8;
+    switch (vlen) {
+        case 128:
+            return ggml_vec_dot_iq2_xxs_q8_K_vl128;
+        case 256:
+            return ggml_vec_dot_iq2_xxs_q8_K_vl256;
+        default:
+            return ggml_vec_dot_iq2_xxs_q8_K_vl256;
+    }
+#endif
+    return ggml_vec_dot_iq2_xxs_q8_K_generic;
+}
+
+// Declare "ggml_vec_dot_iq2_xxs_q8_K" as an ifunc.
+void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) __attribute__((ifunc("resolve_ggml_vec_dot_iq2_xxs_q8_K")));
+
+void ggml_vec_dot_iq4_nl_q8_0_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK4_NL == 0);
+    static_assert(QK4_NL == QK8_0, "QK4_NL and QK8_0 must be the same");
+
+    const block_iq4_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK4_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+    // Block sizes (in bytes).
+    const int iq4_block_size = 16;
+    const int q8_block_size = 32;
+
+    // Load the codebook once.
+    const vint8m2_t values = __riscv_vle8_v_i8m2(kvalues_iq4nl, 16);
+    int acc1, acc2;
+
+    // We process 2 blocks at once.
+    for (; ib + 1 < nb; ib += 2) {
+        // Weights and activations.
+        vuint8m1_t iq4_packed1 = __riscv_vle8_v_u8m1(x[ib + 0].qs, 16);
+        vuint8m1_t iq4_packed2 = __riscv_vle8_v_u8m1(x[ib + 1].qs, 16);
+        vint8m2_t q8b1 = __riscv_vle8_v_i8m2(y[ib + 0].qs, 32);
+        vint8m2_t q8b2 = __riscv_vle8_v_i8m2(y[ib + 1].qs, 32);
+
+        // Unpack the weight blocks.
+        vuint8m1_t iq4bits_lo1 = __riscv_vand_vx_u8m1(iq4_packed1, 0xf, 16);
+        vuint8m1_t iq4bits_hi1 = __riscv_vsrl_vx_u8m1(iq4_packed1, 4, 16);
+        vuint8m2_t iq4bits1;
+        iq4bits1 = __riscv_vset_v_u8m1_u8m2(iq4bits1, 0, iq4bits_lo1);
+        iq4bits1 = __riscv_vset_v_u8m1_u8m2(iq4bits1, 1, iq4bits_hi1);
+        vuint8m1_t iq4bits_lo2 = __riscv_vand_vx_u8m1(iq4_packed2, 0xf, 16);
+        vuint8m1_t iq4bits_hi2 = __riscv_vsrl_vx_u8m1(iq4_packed2, 4, 16);
+        vuint8m2_t iq4bits2;
+        iq4bits2 = __riscv_vset_v_u8m1_u8m2(iq4bits2, 0, iq4bits_lo2);
+        iq4bits2 = __riscv_vset_v_u8m1_u8m2(iq4bits2, 1, iq4bits_hi2);
+
+        // Gather values from the codebook.
+        vint8m2_t iq4b1 = __riscv_vrgather_vv_i8m2(values, iq4bits1, 32);
+        vint8m2_t iq4b2 = __riscv_vrgather_vv_i8m2(values, iq4bits2, 32);
+
+        // Accumulation.
+        vint16m4_t sum1 = __riscv_vwmul_vv_i16m4(q8b1, iq4b1, 32);
+        vint16m4_t sum2 = __riscv_vwmul_vv_i16m4(q8b2, iq4b2, 32);
+        __riscv_vse32_v_i32m1(&acc1,__riscv_vwredsum_vs_i16m4_i32m1(sum1, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        __riscv_vse32_v_i32m1(&acc2,__riscv_vwredsum_vs_i16m4_i32m1(sum2, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        sumf +=
+            (GGML_CPU_FP16_TO_FP32(x[ib + 0].d) * GGML_CPU_FP16_TO_FP32(y[ib + 0].d) * acc1) +
+            (GGML_CPU_FP16_TO_FP32(x[ib + 1].d) * GGML_CPU_FP16_TO_FP32(y[ib + 1].d) * acc2);
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_iq4_nl_q8_0_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK4_NL == 0);
+    static_assert(QK4_NL == QK8_0, "QK4_NL and QK8_0 must be the same");
+
+    const block_iq4_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK4_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+    // Block sizes (in bytes).
+    const int iq4_block_size = 16;
+    const int q8_block_size = 32;
+
+    // Load the codebook once.
+    const vint8m1_t values = __riscv_vle8_v_i8m1(kvalues_iq4nl, 16);
+    int acc1, acc2;
+
+    // We process 2 blocks at once.
+    for (; ib + 1 < nb; ib += 2) {
+        // Weights and activations.
+        vuint8m1_t iq4_packed1 = __riscv_vle8_v_u8m1(x[ib + 0].qs, 16);
+        vuint8m1_t iq4_packed2 = __riscv_vle8_v_u8m1(x[ib + 1].qs, 16);
+        vint8m1_t q8b1 = __riscv_vle8_v_i8m1(y[ib + 0].qs, 32);
+        vint8m1_t q8b2 = __riscv_vle8_v_i8m1(y[ib + 1].qs, 32);
+
+        // Unpack the weight blocks.
+        vuint8m1_t iq4bits_lo1 = __riscv_vand_vx_u8m1(iq4_packed1, 0xf, 16);
+        vuint8m1_t iq4bits_hi1 = __riscv_vsrl_vx_u8m1(iq4_packed1, 4, 16);
+        vuint8m1_t iq4bits1 = __riscv_vslideup_vx_u8m1(iq4bits_lo1, iq4bits_hi1, 16, 32);
+        vuint8m1_t iq4bits_lo2 = __riscv_vand_vx_u8m1(iq4_packed2, 0xf, 16);
+        vuint8m1_t iq4bits_hi2 = __riscv_vsrl_vx_u8m1(iq4_packed2, 4, 16);
+        vuint8m1_t iq4bits2 = __riscv_vslideup_vx_u8m1(iq4bits_lo2, iq4bits_hi2, 16, 32);
+
+        // Gather values from the codebook.
+        vint8m1_t iq4b1 = __riscv_vrgather_vv_i8m1(values, iq4bits1, 32);
+        vint8m1_t iq4b2 = __riscv_vrgather_vv_i8m1(values, iq4bits2, 32);
+
+        // Accumulation.
+        vint16m2_t sum1 = __riscv_vwmul_vv_i16m2(q8b1, iq4b1, 32);
+        vint16m2_t sum2 = __riscv_vwmul_vv_i16m2(q8b2, iq4b2, 32);
+        __riscv_vse32_v_i32m1(&acc1,__riscv_vwredsum_vs_i16m2_i32m1(sum1, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        __riscv_vse32_v_i32m1(&acc2,__riscv_vwredsum_vs_i16m2_i32m1(sum2, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        sumf += ((GGML_CPU_FP16_TO_FP32(x[ib + 0].d) * GGML_CPU_FP16_TO_FP32(y[ib + 0].d) * acc1));
+        sumf += ((GGML_CPU_FP16_TO_FP32(x[ib + 1].d) * GGML_CPU_FP16_TO_FP32(y[ib + 1].d) * acc2));
+    }
+
+    *s = sumf;
+}
+
+static void (*resolve_ggml_vec_dot_iq4_nl_q8_0(void))(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined __riscv_v_intrinsic
+    size_t vlen = __riscv_vlenb() * 8;
+    switch (vlen) {
+        case 128:
+            return ggml_vec_dot_iq4_nl_q8_0_vl128;
+        case 256:
+            return ggml_vec_dot_iq4_nl_q8_0_vl256;
+        default:
+            return ggml_vec_dot_iq4_nl_q8_0_vl256;
+    }
+#endif
+    return ggml_vec_dot_iq4_nl_q8_0_generic;
+}
+
+// Declare "ggml_vec_dot_iq4_nl_q8_0" as an ifunc.
+void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) __attribute__((ifunc("resolve_ggml_vec_dot_iq4_nl_q8_0")));
+
+void ggml_vec_dot_mxfp4_q8_0_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_MXFP4 == 0);
+    static_assert(QK_MXFP4 == QK8_0, "QK_MXFP4 and QK8_0 must be the same");
+
+    const block_iq4_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_MXFP4;
+
+    int ib = 0;
+    float sumf = 0;
+
+    // Block sizes (in bytes).
+    const int iq4_block_size = 16;
+    const int q8_block_size = 32;
+
+    // Load the lookup table once.
+    const vint8m2_t values = __riscv_vle8_v_i8m2(kvalues_mxfp4, 16);
+    int acc1, acc2;
+
+    // We process 2 blocks at once.
+    for (; ib + 1 < nb; ib += 2) {
+        // Weights and activations.
+        vuint8m1_t mx_packed1 = __riscv_vle8_v_u8m1(x[ib + 0].qs, 16);
+        vuint8m1_t mx_packed2 = __riscv_vle8_v_u8m1(x[ib + 1].qs, 16);
+        vint8m2_t q8b1 = __riscv_vle8_v_i8m2(y[ib + 0].qs, 32);
+        vint8m2_t q8b2 = __riscv_vle8_v_i8m2(y[ib + 1].qs, 32);
+
+        // Unpack the weight blocks.
+        vuint8m1_t mxbits_lo1 = __riscv_vand_vx_u8m1(mx_packed1, 0xf, 16);
+        vuint8m1_t mxbits_hi1 = __riscv_vsrl_vx_u8m1(mx_packed1, 4, 16);
+        vuint8m2_t mxbits1;
+        mxbits1 = __riscv_vset_v_u8m1_u8m2(mxbits1, 0, mxbits_lo1);
+        mxbits1 = __riscv_vset_v_u8m1_u8m2(mxbits1, 1, mxbits_hi1);
+        vuint8m1_t mxbits_lo2 = __riscv_vand_vx_u8m1(mx_packed2, 0xf, 16);
+        vuint8m1_t mxbits_hi2 = __riscv_vsrl_vx_u8m1(mx_packed2, 4, 16);
+        vuint8m2_t mxbits2;
+        mxbits2 = __riscv_vset_v_u8m1_u8m2(mxbits2, 0, mxbits_lo2);
+        mxbits2 = __riscv_vset_v_u8m1_u8m2(mxbits2, 1, mxbits_hi2);
+
+        // Gather values from the codebook.
+        vint8m2_t mxb1 = __riscv_vrgather_vv_i8m2(values, mxbits1, 32);
+        vint8m2_t mxb2 = __riscv_vrgather_vv_i8m2(values, mxbits2, 32);
+
+        // Accumulation.
+        vint16m4_t sum1 = __riscv_vwmul_vv_i16m4(q8b1, mxb1, 32);
+        vint16m4_t sum2 = __riscv_vwmul_vv_i16m4(q8b2, mxb2, 32);
+        __riscv_vse32_v_i32m1(&acc1,__riscv_vwredsum_vs_i16m4_i32m1(sum1, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        __riscv_vse32_v_i32m1(&acc2,__riscv_vwredsum_vs_i16m4_i32m1(sum2, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        sumf +=
+            (GGML_CPU_FP16_TO_FP32(x[ib + 0].d) * GGML_CPU_FP16_TO_FP32(y[ib + 0].d) * acc1) +
+            (GGML_CPU_FP16_TO_FP32(x[ib + 1].d) * GGML_CPU_FP16_TO_FP32(y[ib + 1].d) * acc2);
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_mxfp4_q8_0_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_MXFP4 == 0);
+    static_assert(QK_MXFP4 == QK8_0, "QK_MXFP4 and QK8_0 must be the same");
+
+    const block_mxfp4 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_MXFP4;
+
+    int ib = 0;
+    float sumf = 0;
+
+    // Load the lookup table once.
+    const vint8m1_t values = __riscv_vle8_v_i8m1(kvalues_mxfp4, 16);
+    int acc1, acc2;
+
+    // We process 2 blocks at once.
+    for (; ib + 1 < nb; ib += 2) {
+        // Weights and activations.
+        vuint8m1_t mx_packed1 = __riscv_vle8_v_u8m1(x[ib + 0].qs, 16);
+        vuint8m1_t mx_packed2 = __riscv_vle8_v_u8m1(x[ib + 1].qs, 16);
+        vint8m1_t q8b1 = __riscv_vle8_v_i8m1(y[ib + 0].qs, 32);
+        vint8m1_t q8b2 = __riscv_vle8_v_i8m1(y[ib + 1].qs, 32);
+
+        // Unpack the weight blocks.
+        vuint8m1_t mxbits_lo1 = __riscv_vand_vx_u8m1(mx_packed1, 0xf, 16);
+        vuint8m1_t mxbits_hi1 = __riscv_vsrl_vx_u8m1(mx_packed1, 4, 16);
+        vuint8m1_t mxbits1 = __riscv_vslideup_vx_u8m1(mxbits_lo1, mxbits_hi1, 16, 32);
+        vuint8m1_t mxbits_lo2 = __riscv_vand_vx_u8m1(mx_packed2, 0xf, 16);
+        vuint8m1_t mxbits_hi2 = __riscv_vsrl_vx_u8m1(mx_packed2, 4, 16);
+        vuint8m1_t mxbits2 = __riscv_vslideup_vx_u8m1(mxbits_lo2, mxbits_hi2, 16, 32);
+
+        // Gather values from the codebook.
+        vint8m1_t mxb1 = __riscv_vrgather_vv_i8m1(values, mxbits1, 32);
+        vint8m1_t mxb2 = __riscv_vrgather_vv_i8m1(values, mxbits2, 32);
+
+        // Accumulation.
+        vint16m2_t sum1 = __riscv_vwmul_vv_i16m2(q8b1, mxb1, 32);
+        vint16m2_t sum2 = __riscv_vwmul_vv_i16m2(q8b2, mxb2, 32);
+        __riscv_vse32_v_i32m1(&acc1,__riscv_vwredsum_vs_i16m2_i32m1(sum1, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        __riscv_vse32_v_i32m1(&acc2,__riscv_vwredsum_vs_i16m2_i32m1(sum2, __riscv_vmv_v_x_i32m1(0, 1), 32), 1);
+        sumf += ((GGML_E8M0_TO_FP32_HALF(x[ib + 0].e) * GGML_CPU_FP16_TO_FP32(y[ib + 0].d) * acc1));
+        sumf += ((GGML_E8M0_TO_FP32_HALF(x[ib + 1].e) * GGML_CPU_FP16_TO_FP32(y[ib + 1].d) * acc2));
+    }
+
+    *s = sumf;
+}
+
+static void (*resolve_ggml_vec_dot_mxfp4_q8_0(void))(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined __riscv_v_intrinsic
+    size_t vlen = __riscv_vlenb() * 8;
+    switch (vlen) {
+        case 128:
+            return ggml_vec_dot_mxfp4_q8_0_vl128;
+        case 256:
+            return ggml_vec_dot_mxfp4_q8_0_vl256;
+        default:
+            return ggml_vec_dot_mxfp4_q8_0_vl256;
+    }
+#endif
+    return ggml_vec_dot_mxfp4_q8_0_generic;
+}
+
+// Declare "ggml_vec_dot_mxfp4_q8_0" as an ifunc.
+void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) __attribute__((ifunc("resolve_ggml_vec_dot_mxfp4_q8_0")));
