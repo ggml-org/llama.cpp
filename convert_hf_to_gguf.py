@@ -136,18 +136,10 @@ class ModelBase:
         self.remote_hf_model_id = remote_hf_model_id
         self.sentence_transformers_dense_modules = sentence_transformers_dense_modules
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
-        self.rope_parameters = self.find_hparam(["rope_parameters", "rope_scaling"], optional=True, subparams=["text_config"]) or {}
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
-
-        # Ensure "rope_theta" and "rope_type" is mirrored in rope_parameters
-        if "full_attention" not in self.rope_parameters and "sliding_attention" not in self.rope_parameters:
-            if "rope_theta" not in self.rope_parameters and (rope_theta := self.find_hparam(["rope_theta", "global_rope_theta", "rotary_emb_base"], optional=True, subparams=["text_config"])) is not None:
-                self.rope_parameters["rope_theta"] = rope_theta
-            if "rope_type" not in self.rope_parameters and (rope_type := self.rope_parameters.get("type")) is not None:
-                self.rope_parameters["rope_type"] = rope_type
 
         # Apply heuristics to figure out typical tensor encoding based on first layer tensor encoding type
         if self.ftype == gguf.LlamaFileType.GUESSED:
@@ -175,11 +167,10 @@ class ModelBase:
         new_name = f"{prefix}{stem}{suffix}"
         return path.with_name(new_name)
 
-    def find_hparam(self, keys: Iterable[str], optional: bool = False, subparams: Iterable[str] = ()) -> Any:
-        for hparams in [self.hparams[k] for k in subparams if k in self.hparams and isinstance(self.hparams[k], dict)] + [self.hparams]:
-            key = next((k for k in keys if k in hparams), None)
-            if key is not None:
-                return hparams[key]
+    def find_hparam(self, keys: Iterable[str], optional: bool = False) -> Any:
+        key = next((k for k in keys if k in self.hparams), None)
+        if key is not None:
+            return self.hparams[key]
         if optional:
             return None
         raise KeyError(f"could not find any of: {keys}")
@@ -765,6 +756,15 @@ class TextModel(ModelBase):
 
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+        self.rope_parameters = self.hparams.get("rope_parameters", self.hparams.get("rope_scaling")) or {}
+
+        # Ensure "rope_theta" and "rope_type" is mirrored in rope_parameters
+        if "full_attention" not in self.rope_parameters and "sliding_attention" not in self.rope_parameters:
+            if "rope_theta" not in self.rope_parameters and (rope_theta := self.find_hparam(["rope_theta", "global_rope_theta", "rotary_emb_base"], optional=True)) is not None:
+                self.rope_parameters["rope_theta"] = rope_theta
+            if "rope_type" not in self.rope_parameters and (rope_type := self.rope_parameters.get("type")) is not None:
+                self.rope_parameters["rope_type"] = rope_type
 
     @classmethod
     def __init_subclass__(cls):
