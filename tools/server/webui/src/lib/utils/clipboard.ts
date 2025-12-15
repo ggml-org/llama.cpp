@@ -65,13 +65,8 @@ export async function copyCodeToClipboard(
 	successMessage = 'Code copied to clipboard',
 	errorMessage = 'Failed to copy code'
 ): Promise<boolean> {
-	// Decode HTML entities
-	const decodedCode = rawCode
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'");
+	const doc = new DOMParser().parseFromString(rawCode, 'text/html');
+	const decodedCode = doc.body.textContent ?? rawCode;
 
 	return copyToClipboard(decodedCode, successMessage, errorMessage);
 }
