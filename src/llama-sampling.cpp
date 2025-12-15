@@ -2477,6 +2477,7 @@ struct llama_sampler * llama_sampler_init_power_law(
             /* .rng          = */ std::mt19937(seed_cur),
             /* .weighted_sum = */ 0.0f,
             /* .total_weight = */ 0.0f,
+            /* .original_probs = */ {},
         }
     );
 }
