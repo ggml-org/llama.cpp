@@ -107,6 +107,7 @@ struct llama_hparams {
     float    rope_freq_base_train_swa;
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa;
+
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
 
@@ -164,6 +165,7 @@ struct llama_hparams {
     uint32_t n_no_rope_layer_step    = 4;
     uint32_t n_attn_temp_floor_scale = 0;
     float    f_attn_temp_scale       = 0.0f;
+    float    f_attn_temp_offset      = 0.0f; // offset position index
 
     // gemma3n altup
     uint32_t n_altup      = 4; // altup_num_inputs
@@ -270,4 +272,3 @@ struct llama_hparams {
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");
-

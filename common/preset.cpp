@@ -23,8 +23,14 @@ std::vector<std::string> common_preset::to_args() const {
         if (opt.value_hint == nullptr && opt.value_hint_2 == nullptr) {
             // flag option, no value
             if (common_arg_utils::is_falsey(value)) {
-                // skip the flag
-                args.pop_back();
+                // use negative arg if available
+                if (!opt.args_neg.empty()) {
+                    args.back() = opt.args_neg.back();
+                } else {
+                    // otherwise, skip the flag
+                    // TODO: maybe throw an error instead?
+                    args.pop_back();
+                }
             }
         }
         if (opt.value_hint != nullptr) {
@@ -141,14 +147,29 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
 static std::map<std::string, common_arg> get_map_key_opt(common_params_context & ctx_params) {
     std::map<std::string, common_arg> mapping;
     for (const auto & opt : ctx_params.options) {
-        if (opt.env != nullptr) {
-            mapping[opt.env] = opt;
+        for (const auto & env : opt.get_env()) {
+            mapping[env] = opt;
         }
-        for (const auto & arg : opt.args) {
+        for (const auto & arg : opt.get_args()) {
             mapping[rm_leading_dashes(arg)] = opt;
         }
     }
     return mapping;
+}
+
+static bool is_bool_arg(const common_arg & arg) {
+    return !arg.args_neg.empty();
+}
+
+static std::string parse_bool_arg(const common_arg & arg, const std::string & key, const std::string & value) {
+    // if this is a negated arg, we need to reverse the value
+    for (const auto & neg_arg : arg.args_neg) {
+        if (rm_leading_dashes(neg_arg) == key) {
+            return common_arg_utils::is_truthy(value) ? "false" : "true";
+        }
+    }
+    // otherwise, not negated
+    return value;
 }
 
 common_presets common_presets_load(const std::string & path, common_params_context & ctx_params) {
@@ -167,8 +188,13 @@ common_presets common_presets_load(const std::string & path, common_params_conte
         for (const auto & [key, value] : section.second) {
             LOG_DBG("option: %s = %s\n", key.c_str(), value.c_str());
             if (key_to_opt.find(key) != key_to_opt.end()) {
-                preset.options[key_to_opt[key]] = value;
-                LOG_DBG("accepted option: %s = %s\n", key.c_str(), value.c_str());
+                auto & opt = key_to_opt[key];
+                if (is_bool_arg(opt)) {
+                    preset.options[opt] = parse_bool_arg(opt, key, value);
+                } else {
+                    preset.options[opt] = value;
+                }
+                LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
             } else {
                 // TODO: maybe warn about unknown key?
             }
