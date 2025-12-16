@@ -328,7 +328,7 @@ struct mtmd_context {
                 audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
                 break;
             case PROJECTOR_TYPE_LFM2A:
-                audio_preproc = std::make_unique<mtmd_audio_preprocessor_lfm2>(ctx_a);
+                audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
                 break;
             default:
                 GGML_ABORT("unsupported audio projector type");

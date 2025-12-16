@@ -133,7 +133,7 @@
 #define TN_TOK_BOI         "v.boi"
 #define TN_TOK_EOI         "v.eoi"
 
-// lfm2
+// (conformer) lfm2
 #define TN_PRE_ENCODE_OUT  "a.pre_encode.out.%s"
 #define TN_FFN_NORM        "%s.blk.%d.ffn_norm.%s"
 #define TN_FFN_NORM_1      "%s.blk.%d.ffn_norm_1.%s"

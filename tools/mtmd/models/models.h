@@ -57,7 +57,7 @@ struct clip_graph_whisper_enc : clip_graph {
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_lfm2_audio_enc : clip_graph {
-    clip_graph_lfm2_audio_enc(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+struct clip_graph_conformer : clip_graph {
+    clip_graph_conformer(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };

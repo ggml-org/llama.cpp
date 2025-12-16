@@ -537,9 +537,10 @@ bool mtmd_audio_preprocessor_whisper::preprocess(
 }
 
 //
-// mtmd_audio_preprocessor_lfm2
+// mtmd_audio_preprocessor_conformer
 //
-void mtmd_audio_preprocessor_lfm2::initialize() {
+
+void mtmd_audio_preprocessor_conformer::initialize() {
     g_cache.fill_sin_cos_table(hparams.audio_n_fft);
     g_cache.fill_hann_window(hparams.audio_window_len, true);
     g_cache.fill_mel_filterbank_matrix(
@@ -548,7 +549,7 @@ void mtmd_audio_preprocessor_lfm2::initialize() {
         hparams.audio_sample_rate);
 }
 
-bool mtmd_audio_preprocessor_lfm2::preprocess(
+bool mtmd_audio_preprocessor_conformer::preprocess(
         const float * samples,
         size_t n_samples,
         std::vector<mtmd_audio_mel> & output) {

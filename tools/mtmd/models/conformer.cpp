@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_lfm2_audio_enc::build() {
+ggml_cgraph * clip_graph_conformer::build() {
     const int n_frames   = img.nx;
     const int n_pos      = n_frames / 2;
     const int n_pos_embd = (((((n_frames + 1) / 2) + 1) / 2 + 1) / 2) * 2 - 1;
