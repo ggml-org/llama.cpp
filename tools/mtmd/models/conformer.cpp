@@ -92,10 +92,11 @@ ggml_cgraph * clip_graph_conformer::build() {
             Qcur                   = ggml_add(ctx0, Qcur, layer.q_b);
             Qcur                   = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, Qcur->ne[1]);
             ggml_tensor * Q_bias_u = ggml_add(ctx0, Qcur, layer.pos_bias_u);
-            Q_bias_u               = ggml_cont(ctx0, ggml_permute(ctx0, Q_bias_u, 0, 2, 1, 3));
+            Q_bias_u               = ggml_permute(ctx0, Q_bias_u, 0, 2, 1, 3);
             ggml_tensor * Q_bias_v = ggml_add(ctx0, Qcur, layer.pos_bias_v);
-            Q_bias_v               = ggml_cont(ctx0, ggml_permute(ctx0, Q_bias_v, 0, 2, 1, 3));
+            Q_bias_v               = ggml_permute(ctx0, Q_bias_v, 0, 2, 1, 3);
 
+            // TODO @ngxson : some cont can/should be removed when ggml_mul_mat support these cases
             ggml_tensor * Kcur = ggml_mul_mat(ctx0, layer.k_w, cur);
             Kcur               = ggml_add(ctx0, Kcur, layer.k_b);
             Kcur               = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, Kcur->ne[1]);
@@ -114,7 +115,7 @@ ggml_cgraph * clip_graph_conformer::build() {
             auto * p = ggml_mul_mat(ctx0, layer.linear_pos_w, pos_emb);
             cb(p, "conformer.layers.{}.self_attn.linear_pos", il);
             p = ggml_reshape_3d(ctx0, p, d_head, n_head, p->ne[1]);
-            p = ggml_cont(ctx0, ggml_permute(ctx0, p, 0, 2, 1, 3));
+            p = ggml_permute(ctx0, p, 0, 2, 1, 3);
 
             auto * matrix_bd = ggml_mul_mat(ctx0, Q_bias_v, p);
             matrix_bd        = ggml_cont(ctx0, ggml_permute(ctx0, matrix_bd, 1, 0, 2, 3));
@@ -127,24 +128,24 @@ ggml_cgraph * clip_graph_conformer::build() {
                 matrix_bd          = ggml_pad(ctx0, matrix_bd, 1, 0, 0, 0);
                 matrix_bd          = ggml_roll(ctx0, matrix_bd, 1, 0, 0, 0);
                 matrix_bd          = ggml_reshape_3d(ctx0, matrix_bd, q_len, pos_len + 1, h);
-                matrix_bd          = ggml_cont(ctx0, ggml_view_3d(ctx0, matrix_bd, q_len, pos_len, h, matrix_bd->nb[1],
-                                                                  matrix_bd->nb[2], matrix_bd->nb[0] * q_len));
-                matrix_bd          = ggml_reshape_3d(ctx0, matrix_bd, pos_len, q_len, h);
+                matrix_bd          = ggml_view_3d(ctx0, matrix_bd, q_len, pos_len, h, matrix_bd->nb[1],
+                                                        matrix_bd->nb[2], matrix_bd->nb[0] * q_len);
+                matrix_bd          = ggml_cont_3d(ctx0, matrix_bd, pos_len, q_len, h);
             }
 
-            matrix_bd     = ggml_cont(ctx0, ggml_view_3d(ctx0, matrix_bd, matrix_ac->ne[0], matrix_bd->ne[1],
-                                                         matrix_bd->ne[2], matrix_bd->nb[1], matrix_bd->nb[2], 0));
+            matrix_bd     = ggml_view_3d(ctx0, matrix_bd, matrix_ac->ne[0], matrix_bd->ne[1],
+                                               matrix_bd->ne[2], matrix_bd->nb[1], matrix_bd->nb[2], 0);
             auto * scores = ggml_add(ctx0, matrix_ac, matrix_bd);
             scores        = ggml_scale(ctx0, scores, 1.0f / std::sqrt(d_head));
             cb(scores, "conformer.layers.{}.self_attn.id0", il);
 
             ggml_tensor * attn = ggml_soft_max(ctx0, scores);
             ggml_tensor * x    = ggml_mul_mat(ctx0, attn, Vcur);
-            x                  = ggml_cont(ctx0, ggml_permute(ctx0, x, 2, 0, 1, 3));
-            x                  = ggml_reshape_2d(ctx0, x, x->ne[0] * x->ne[1], x->ne[2]);
+            x                  = ggml_permute(ctx0, x, 2, 0, 1, 3);
+            x                  = ggml_cont_2d(ctx0, x, x->ne[0] * x->ne[1], x->ne[2]);
 
-            x                 = ggml_mul_mat(ctx0, layer.o_w, x);
-            ggml_tensor * out = ggml_add(ctx0, x, layer.o_b);
+            ggml_tensor * out = ggml_mul_mat(ctx0, layer.o_w, x);
+            out               = ggml_add(ctx0, out, layer.o_b);
             cb(out, "conformer.layers.{}.self_attn.linear_out", il);
 
             cur = out;
@@ -164,6 +165,7 @@ ggml_cgraph * clip_graph_conformer::build() {
             cb(x, "conformer.layers.{}.conv.pointwise_conv1", il);
 
             // ggml_glu doesn't support sigmoid
+            // TODO @ngxson : support this ops in ggml
             {
                 int64_t       d    = x->ne[0] / 2;
                 ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_view_2d(ctx0, x, d, x->ne[1], x->nb[1], d * x->nb[0]));
@@ -175,7 +177,6 @@ ggml_cgraph * clip_graph_conformer::build() {
             x                = ggml_pad(ctx0, x, 4, 0, 0, 0);
             x                = ggml_roll(ctx0, x, 4, 0, 0, 0);
             x                = ggml_pad(ctx0, x, 4, 0, 0, 0);
-            x                = ggml_cont(ctx0, x);
             auto * conv_dw_w = ggml_reshape_2d(ctx0, layer.conv_dw_w, layer.conv_dw_w->ne[0], layer.conv_dw_w->ne[2]);
             x                = ggml_ssm_conv(ctx0, x, conv_dw_w);
             x                = ggml_add(ctx0, x, ggml_reshape_1d(ctx0, layer.conv_dw_b, layer.conv_dw_b->ne[0]));
