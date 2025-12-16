@@ -1358,39 +1358,4 @@ vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
 #endif
 }
 
-#define VDR_MXFP4_Q8_1_MMVQ 2
-
-static __dpct_inline__ float
-vec_dot_mxfp4_q8_1(const void *__restrict__ vbq,
-                   const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
-
-    const block_mxfp4 * bq4 = (const block_mxfp4 *) vbq;
-
-    const int * q8 = (const int *) bq8_1->qs + iqs;
-
-    // Inline table to ensure it's accessible from device code
-    // kvalues_mxfp4 = {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
-    // Cast to uint8_t: {0, 1, 2, 3, 4, 6, 8, 12, 0, 255, 254, 253, 252, 250, 248, 244}
-    static constexpr uint8_t local_kvalues[16] = {0, 1, 2, 3, 4, 6, 8, 12, 0, 255, 254, 253, 252, 250, 248, 244};
-    const uint8_t * values = local_kvalues;
-
-    int sumi = 0;
-
-#pragma unroll
-    for (int l = 0; l < VDR_MXFP4_Q8_1_MMVQ; ++l) {
-        const int aux_q4 = get_int_from_uint8(bq4->qs, iqs + l);
-
-        int v1, v2;
-        get_int_from_table_16(aux_q4, values, v1, v2);
-
-        sumi = dpct::dp4a(v1, q8[l + 0], sumi);
-        sumi = dpct::dp4a(v2, q8[l + 4], sumi);
-    }
-
-    // sycl_e8m0_to_fp32_half already includes 0.5f factor (via e-1 in exponent)
-    // This matches CUDA's ggml_cuda_e8m0_to_fp32() * 0.5f
-    const float d = sycl_e8m0_to_fp32_half(bq4->e) * bq8_1->ds[0];
-    return d * sumi;
-}
-
 #endif // GGML_SYCL_VECDOTQ_HPP

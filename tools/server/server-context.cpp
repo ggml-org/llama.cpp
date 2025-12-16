@@ -2684,7 +2684,7 @@ struct server_context_impl {
                                 llama_token id = it->second;
 
                                 slot->i_batch = -1;
-                                common_sampler_accept(slot->smpl, id, true);
+                                common_sampler_accept(slot->smpl.get(), id, true);
                                 slot->n_decoded += 1;
 
                                 const int64_t t_current = ggml_time_us();

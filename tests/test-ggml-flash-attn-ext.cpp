@@ -24,6 +24,11 @@
     printf("PASSED\n"); \
 } while(0)
 
+// Define KQ mask padding constant (matches llama.cpp's internal value)
+#ifndef GGML_KQ_MASK_PAD
+#define GGML_KQ_MASK_PAD 64
+#endif
+
 // Helper to pad up to GGML_KQ_MASK_PAD (64)
 static inline int pad_to_mask(int n) {
     return ((n + GGML_KQ_MASK_PAD - 1) / GGML_KQ_MASK_PAD) * GGML_KQ_MASK_PAD;

@@ -1153,7 +1153,8 @@ int main(int argc, char ** argv) {
         ggml_backend_sched_print_pipeline_stats(sched);
     }
 
-    common_sampler_free(smpl);
+    // Note: smpl is owned by llama_init and will be freed when it goes out of scope
+    // Do NOT call common_sampler_free(smpl) here as it would cause a double free
 
 #ifdef GGML_USE_SYCL
     if (gpu_sampler) {
