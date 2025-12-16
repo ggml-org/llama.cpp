@@ -426,6 +426,78 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_autoregressive(
     return ggml_concat(ctx0, flat_output, flat_state, 0);
 }
 
+ggml_tensor * llm_build_qwen3next::build_delta_net_fused(
+        ggml_tensor * q,
+        ggml_tensor * k,
+        ggml_tensor * v,
+        ggml_tensor * g,
+        ggml_tensor * beta,
+        ggml_tensor * state,
+        int           il) {
+    GGML_ASSERT(ggml_is_contiguous(q));
+    GGML_ASSERT(ggml_is_contiguous(k));
+    GGML_ASSERT(ggml_is_contiguous(v));
+    GGML_ASSERT(ggml_is_contiguous(g));
+    GGML_ASSERT(ggml_is_contiguous(beta));
+    GGML_ASSERT(ggml_is_contiguous(state));
+
+    const int64_t S_k      = q->ne[0];
+    const int64_t H_k      = q->ne[1];
+    const int64_t n_tokens = q->ne[2];
+    const int64_t n_seqs   = q->ne[3];
+
+    const int64_t S_v = v->ne[0];
+    const int64_t H_v = v->ne[1];
+
+    GGML_ASSERT(v->ne[2] == n_tokens);
+    GGML_ASSERT(k->ne[2] == n_tokens);
+    GGML_ASSERT(g->ne[0] == H_v && g->ne[1] == n_tokens && g->ne[2] == n_seqs);
+    GGML_ASSERT(beta->ne[0] == H_v && beta->ne[2] == n_tokens && beta->ne[3] == n_seqs);
+    GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v * H_v && state->ne[2] == 1 && state->ne[3] == n_seqs);
+
+    GGML_ASSERT(q->ne[0] == S_k && q->ne[1] == H_k && q->ne[2] == n_tokens && q->ne[3] == n_seqs);
+    GGML_ASSERT(k->ne[0] == S_k && k->ne[1] == H_k && k->ne[2] == n_tokens && k->ne[3] == n_seqs);
+
+    GGML_ASSERT(H_k == H_v);
+
+    q = ggml_cont_4d(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3), S_k, n_tokens, H_k, n_seqs);
+    k = ggml_cont_4d(ctx0, ggml_permute(ctx0, k, 0, 2, 1, 3), S_k, n_tokens, H_k, n_seqs);
+    v = ggml_cont_4d(ctx0, ggml_permute(ctx0, v, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
+    g = ggml_cont_4d(ctx0, ggml_permute(ctx0, g, 1, 3, 0, 2), n_tokens, 1, H_k, n_seqs);
+    beta = ggml_cont_4d(ctx0, ggml_permute(ctx0, beta, 1, 2, 0, 3), 1, n_tokens, H_k, n_seqs);
+
+    cb(q, "q_fused", il);
+    cb(k, "k_fused", il);
+    cb(v, "v_fused", il);
+    cb(g, "g_fused", il);
+    cb(beta, "beta_fused", il);
+
+    ggml_tensor * fused_result = ggml_delta_net(ctx0, q, k, v, g, beta, state);
+    cb(fused_result, "delta_net_fused_raw", il);
+
+    const int64_t output_size = S_v * H_v * n_tokens * n_seqs;
+    const int64_t state_size = S_v * S_v * H_v * n_seqs;
+
+    ggml_tensor * output_4d = ggml_view_4d(ctx0, fused_result,
+        S_v, H_v, n_tokens, n_seqs,
+        S_v * ggml_element_size(fused_result),
+        S_v * H_v * ggml_element_size(fused_result),
+        S_v * H_v * n_tokens * ggml_element_size(fused_result),
+        0);
+    cb(output_4d, "fused_output_4d", il);
+
+    ggml_tensor * flat_output = ggml_cont_1d(ctx0, output_4d, output_size);
+    cb(flat_output, "fused_flat_output", il);
+
+    ggml_tensor * flat_state = ggml_view_1d(ctx0, fused_result, state_size,
+        output_size * ggml_element_size(fused_result));
+    cb(flat_state, "fused_flat_state", il);
+
+    ggml_tensor * result = ggml_concat(ctx0, flat_output, flat_state, 0);
+
+    return result;
+}
+
 ggml_tensor * llm_build_qwen3next::build_norm_gated(
         ggml_tensor * input,
         ggml_tensor * weights,
@@ -737,13 +809,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     cb(k_conv, "k_conv_predelta", il);
     cb(v_conv, "v_conv_predelta", il);
 
-    // Choose between build_delta_net_chunking, build_delta_net_recurrent, and build_delta_net_autoregressive based on n_tokens
-    ggml_tensor * attn_out;
-    if (n_seq_tokens == 1) {
-        attn_out = build_delta_net_autoregressive(q_conv, k_conv, v_conv, gate, beta, state, il);
-    } else {
-        attn_out = build_delta_net_chunking(q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, diag_mask, il);
-    }
+    ggml_tensor * attn_out = build_delta_net_fused(q_conv, k_conv, v_conv, gate, beta, state, il);
     cb(attn_out, "attn_out", il);
 
     // The tensors were concatenated 1d, so we need to extract them 1d as well
@@ -844,7 +910,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_ffn(ggml_tensor * cur, const int 
             cur = moe_out;
         }
     } else {
-        // Dense FFN branch (not currently used I believe)
+        // Dense FFN branch
         cur = build_ffn(cur,
             model.layers[il].ffn_up, NULL, NULL,
             model.layers[il].ffn_gate, NULL, NULL,
