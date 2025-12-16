@@ -10,6 +10,7 @@
 	import type { Root as HastRoot } from 'hast';
 	import type { Root as MdastRoot, RootContent } from 'mdast';
 	import { browser } from '$app/environment';
+	import { onDestroy } from 'svelte';
 	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
@@ -17,6 +18,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
+	import { v4 as uuid } from 'uuid';
 	import CodePreviewDialog from './CodePreviewDialog.svelte';
 
 	interface Props {
@@ -32,6 +34,9 @@
 	let previewDialogOpen = $state(false);
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
+
+	let pendingMarkdown: string | null = $state(null);
+	let isProcessing = $state(false);
 
 	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
@@ -129,7 +134,7 @@
 			}
 
 			const rawCode = codeElement.textContent || '';
-			const codeId = `code-${Date.now()}-${index}`;
+			const codeId = `code-${uuid()}-${index}`;
 			codeElement.setAttribute('data-code-id', codeId);
 			codeElement.setAttribute('data-raw-code', rawCode);
 
@@ -312,9 +317,6 @@
 		return enhanceCodeBlocks(enhanceLinks(html));
 	}
 
-	let pendingMarkdown: string | null = null;
-	let isProcessing = false;
-
 	async function processMarkdown(markdown: string) {
 		if (!markdown) {
 			renderedBlocks = [];
@@ -331,11 +333,9 @@
 		const processedRoot = (await processorInstance.run(ast)) as HastRoot;
 		const processedChildren = processedRoot.children ?? [];
 		const stableCount = Math.max(processedChildren.length - 1, 0);
-		const availableStable = Math.min(stableCount, processedChildren.length);
-
 		const nextBlocks: MarkdownBlock[] = [];
 
-		for (let index = 0; index < availableStable; index++) {
+		for (let index = 0; index < stableCount; index++) {
 			const id = nodeIds[index] ?? `processed-${index}`;
 			const existing = renderedBlocks[index];
 
@@ -355,8 +355,8 @@
 
 		let unstableHtml = '';
 
-		if (processedChildren.length > availableStable) {
-			const unstableChild = processedChildren[availableStable];
+		if (processedChildren.length > stableCount) {
+			const unstableChild = processedChildren[stableCount];
 			unstableHtml = stringifyProcessedNode(processorInstance, processedRoot, unstableChild);
 		}
 
@@ -400,6 +400,33 @@
 		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
 		}
+	});
+
+	function cleanupEventListeners() {
+		if (!containerRef) return;
+
+		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>('.copy-code-btn');
+		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
+
+		for (const button of copyButtons) {
+			button.removeEventListener('click', handleCopyClick);
+		}
+
+		for (const button of previewButtons) {
+			button.removeEventListener('click', handlePreviewClick);
+		}
+	}
+
+	function cleanupHighlightTheme() {
+		if (!browser) return;
+
+		const existingThemes = document.querySelectorAll('style[data-highlight-theme]');
+		existingThemes.forEach((style) => style.remove());
+	}
+
+	onDestroy(() => {
+		cleanupEventListeners();
+		cleanupHighlightTheme();
 	});
 </script>
 
