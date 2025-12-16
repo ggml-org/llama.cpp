@@ -255,7 +255,6 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
          src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-
 static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
                                        struct htp_tensor *       dst,
                                        const int32_t *           op_params,
@@ -301,7 +300,7 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
     const int BLOCK = 8;
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
         const uint32_t block_end = MIN(ir + BLOCK, src0_end_row);
-        
+
         // Prefetch next block
         if (block_end < src0_end_row) {
             const float * restrict prefetch_ptr = (float *) (data_src0 + (block_end * src0_row_size));
@@ -315,12 +314,11 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
 
             // gelu = x * sigmoid(1.702 * x) // current implementation
             if (1 == opt_path) {
-                hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
+                hvx_mul_scalar_f32((const uint8_t *) src0, (float) 1.702, (uint8_t *) src0_spad_data, ne0);
                 hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
                 hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
-            } 
-            else {
-                hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
+            } else {
+                hvx_mul_scalar_f32((const uint8_t *) src0, (float) 1.702, (uint8_t *) src0_spad_data, ne0);
                 hvx_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
                 hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
             }
@@ -338,8 +336,6 @@ static void unary_gelu_fp32(unsigned int n, unsigned int i, void * data) {
     unary_gelu_fp32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
                                octx->src0_nrows_per_thread);
 }
-
-
 
 static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
                                        struct htp_tensor *       dst,

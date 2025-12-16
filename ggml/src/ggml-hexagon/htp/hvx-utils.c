@@ -49,27 +49,24 @@ void hvx_mul_f32(const uint8_t * restrict src0,
         FARF(HIGH, "hvx_mul_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
-
     bool handled_leftover = false;
     if (0 == unaligned_loop) {
         HVX_Vector * restrict vec_in1 = (HVX_Vector *) src0;
         HVX_Vector * restrict vec_in2 = (HVX_Vector *) src1;
         HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(*vec_in1++, *vec_in2++);
             *vec_out++   = Q6_Vsf_equals_Vqf32(v);
         }
     } else {
-        int step_of_1 = num_elems_whole >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
+        int step_of_1     = num_elems_whole >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
         int leftover_size = left_over * sizeof(float);
 
-
-        HVX_Vector * restrict vec_in1 = (HVX_Vector *) src0;
-        HVX_Vector * restrict vec_in2 = (HVX_Vector *) src1;
+        HVX_Vector * restrict vec_in1  = (HVX_Vector *) src0;
+        HVX_Vector * restrict vec_in2  = (HVX_Vector *) src1;
         HVX_UVector * restrict vec_out = (HVX_UVector *) dst;
-
 
         HVX_Vector slinep;
         HVX_Vector slinec;
@@ -78,47 +75,41 @@ void hvx_mul_f32(const uint8_t * restrict src0,
         HVX_Vector sline2c;
         HVX_Vector sline2;
 
-        slinep = *vec_in1++; 
+        slinep  = *vec_in1++;
         sline2p = *vec_in2++;
-        #pragma unroll(4)
-        for(uint32_t i = step_of_1 -1; i> 0; i--){
-            slinec = *vec_in1++;
+#pragma unroll(4)
+        for (uint32_t i = step_of_1 - 1; i > 0; i--) {
+            slinec  = *vec_in1++;
             sline2c = *vec_in2++;
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);       
-            sline2 = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
-           
-            *((HVX_UVector *)(vec_out++)) =Q6_Vsf_equals_Vqf32(  Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
-            slinep = slinec;
-            sline2p = sline2c;  
+            sline   = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
+            sline2  = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
+
+            *((HVX_UVector *) (vec_out++)) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
+            slinep                         = slinec;
+            sline2p                        = sline2c;
         }
-        if(step_of_1 > 1){
-            slinec = htp_is_aligned(vec_in1, VLEN) && left_over == 0 ? slinep : *vec_in1++;
+        if (step_of_1 > 1) {
+            slinec  = htp_is_aligned(vec_in1, VLEN) && left_over == 0 ? slinep : *vec_in1++;
             sline2c = htp_is_aligned(vec_in2, VLEN) && left_over == 0 ? sline2p : *vec_in2++;
 
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);       
-            sline2 = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
-            *((HVX_UVector *)(vec_out++)) =Q6_Vsf_equals_Vqf32(  Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
-            slinep = slinec;
-            sline2p = sline2c;
+            sline                          = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
+            sline2                         = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
+            *((HVX_UVector *) (vec_out++)) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
+            slinep                         = slinec;
+            sline2p                        = sline2c;
         }
-        if(left_over > 0 ){
+        if (left_over > 0) {
+            slinec = (is_in_one_chunk(vec_in1, leftover_size, VLEN) ? slinep : *vec_in1++);
 
-            slinec = (is_in_one_chunk(vec_in1, leftover_size, VLEN)
-                    ? slinep
-                    : *vec_in1++);
-
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
-            sline2c = (is_in_one_chunk(vec_in2, leftover_size, VLEN)
-                    ? sline2p
-                    : *vec_in2++);
-            sline2 = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
+            sline   = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
+            sline2c = (is_in_one_chunk(vec_in2, leftover_size, VLEN) ? sline2p : *vec_in2++);
+            sline2  = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
 
             HVX_Vector out = Q6_Vqf32_vmpy_VsfVsf(sline, sline2);
-            hvx_vec_store_u(vec_out, leftover_size, Q6_Vsf_equals_Vqf32(out));  
+            hvx_vec_store_u(vec_out, leftover_size, Q6_Vsf_equals_Vqf32(out));
             handled_leftover = true;
         }
     }
-
 
     if (left_over > 0 && !handled_leftover) {
         const float * src0f = (const float *) src0 + num_elems_whole;
@@ -315,13 +306,13 @@ void hvx_add_f32(const uint8_t * restrict src0,
         HVX_Vector * restrict vec_in2 = (HVX_Vector *) src1;
         HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector v = Q6_Vqf32_vadd_VsfVsf(*vec_in1++, *vec_in2++);
             *vec_out++   = Q6_Vsf_equals_Vqf32(v);
         }
     } else {
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in1 = *(HVX_UVector *) (src0 + i * SIZEOF_FP32);
             HVX_Vector in2 = *(HVX_UVector *) (src1 + i * SIZEOF_FP32);
@@ -458,7 +449,7 @@ void hvx_add_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
         HVX_Vector * restrict vec_in1 = (HVX_Vector *) src;
         HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector           in       = *vec_in1++;
             const HVX_VectorPred pred_inf = Q6_Q_vcmp_eq_VwVw(inf, in);
@@ -468,7 +459,7 @@ void hvx_add_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
             *vec_out++                    = v;
         }
     } else {
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
 
@@ -512,60 +503,54 @@ void hvx_mul_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
         FARF(HIGH, "hvx_mul_scalar_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
-    HVX_Vector val_vec = hvx_vec_splat_fp32(val);
-    bool handled_leftover = false;
+    HVX_Vector val_vec          = hvx_vec_splat_fp32(val);
+    bool       handled_leftover = false;
     if (0 == unaligned_loop) {
         HVX_Vector * restrict vec_in1 = (HVX_Vector *) src;
         HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(*vec_in1++, val_vec);
             *vec_out++   = Q6_Vsf_equals_Vqf32(v);
         }
     } else {
-        int step_of_1 = num_elems >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
+        int step_of_1     = num_elems >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
         int leftover_size = left_over * sizeof(float);
 
-
-
-        HVX_Vector *  input_v_ptr = (HVX_Vector *) src;
-        HVX_UVector *  output_v_ptr       = (HVX_UVector *) dst;
-
+        HVX_Vector *  input_v_ptr  = (HVX_Vector *) src;
+        HVX_UVector * output_v_ptr = (HVX_UVector *) dst;
 
         HVX_Vector slinep;
         HVX_Vector slinec;
         HVX_Vector sline;
-            
-        slinep = *input_v_ptr++; 
 
-        #pragma unroll(4)
-        for(uint32_t i = step_of_1 - 1; i > 0; i--){
-            slinec = *input_v_ptr++;
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
-            *((HVX_UVector *)(output_v_ptr++)) =  Q6_Vsf_equals_Vqf32( Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
+        slinep = *input_v_ptr++;
+
+#pragma unroll(4)
+        for (uint32_t i = step_of_1 - 1; i > 0; i--) {
+            slinec                              = *input_v_ptr++;
+            sline                               = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
+            *((HVX_UVector *) (output_v_ptr++)) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
             /* Prepare slinep for next iteration */
-            slinep = slinec;        
+            slinep                              = slinec;
         }
 
-        if(step_of_1 > 0){
-
+        if (step_of_1 > 0) {
             slinec = htp_is_aligned(input_v_ptr, VLEN) && left_over == 0 ? slinep : *input_v_ptr++;
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
-            *((HVX_UVector *)(output_v_ptr++)) =  Q6_Vsf_equals_Vqf32( Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
+            sline  = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
+            *((HVX_UVector *) (output_v_ptr++)) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
 
             slinep = slinec;
         }
 
-        if(leftover_size > 0){
-            slinec = (is_in_one_chunk(input_v_ptr, leftover_size, VLEN)
-                    ? slinep
-                    : *input_v_ptr++);
+        if (leftover_size > 0) {
+            slinec = (is_in_one_chunk(input_v_ptr, leftover_size, VLEN) ? slinep : *input_v_ptr++);
 
             sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
 
-            HVX_Vector sout = Q6_Vsf_equals_Vqf32( Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
-            hvx_vec_store_u(output_v_ptr, leftover_size, sout);  
+            HVX_Vector sout = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
+            hvx_vec_store_u(output_v_ptr, leftover_size, sout);
             handled_leftover = true;
         }
     }
@@ -606,13 +591,13 @@ void hvx_sub_f32(const uint8_t * restrict src0,
         HVX_Vector * restrict vec_in2 = (HVX_Vector *) src1;
         HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector v = Q6_Vqf32_vsub_VsfVsf(*vec_in1++, *vec_in2++);
             *vec_out++   = Q6_Vsf_equals_Vqf32(v);
         }
     } else {
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in1 = *(HVX_UVector *) (src0 + i * SIZEOF_FP32);
             HVX_Vector in2 = *(HVX_UVector *) (src1 + i * SIZEOF_FP32);
@@ -747,13 +732,13 @@ void hvx_sub_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
         HVX_Vector * restrict vec_in1 = (HVX_Vector *) src;
         HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector v = Q6_Vqf32_vsub_VsfVsf(*vec_in1++, val_vec);
             *vec_out++   = Q6_Vsf_equals_Vqf32(v);
         }
     } else {
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
 
@@ -789,7 +774,7 @@ float hvx_sum_of_squares_f32(const uint8_t * restrict src, const int num_elems) 
     HVX_Vector sum_vec_acc = Q6_V_vsplat_R(0x00000000);
     HVX_Vector zero_vec    = Q6_V_vsplat_R(0x00000000);
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
         HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(*vec_in1, *vec_in1);
         sum_vec_acc  = Q6_Vqf32_vadd_Vqf32Vqf32(sum_vec_acc, v);
@@ -833,13 +818,13 @@ float hvx_self_sum_f32(const uint8_t * restrict src, const int num_elems) {
     if (0 == unaligned_loop) {
         HVX_Vector * vec_in = (HVX_Vector *) src;
 
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             // sum_vec = Q6_Vqf32_vadd_Vqf32Vsf(sum_vec, *vec_in++);
             sum_vec = Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(sum_vec), *vec_in++);
         }
     } else {
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
 
@@ -882,13 +867,13 @@ void hvx_scale_f32(const uint8_t * restrict src, uint8_t * restrict dst, const i
         HVX_Vector * vec_in1 = (HVX_Vector *) src;
         HVX_Vector * vec_out = (HVX_Vector *) dst;
 
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(*vec_in1++, scale_vec);
             *vec_out++   = Q6_Vsf_equals_Vqf32(v);
         }
     } else {
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
 
@@ -931,12 +916,12 @@ float hvx_self_max_f32(const uint8_t * restrict src, const int num_elems) {
     if (0 == unaligned_loop) {
         HVX_Vector * restrict vec_in = (HVX_Vector *) src;
 
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             vec_max = Q6_Vsf_vmax_VsfVsf(vec_max, *vec_in++);
         }
     } else {
-        #pragma unroll(4)
+#pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
 
@@ -974,7 +959,7 @@ void hvx_min_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
     HVX_Vector * restrict vec_in  = (HVX_Vector *) src;
     HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
         vec_min    = Q6_Vsf_vmin_VsfVsf(vec_min, *vec_in++);
         *vec_out++ = Q6_Vsf_equals_Vqf32(vec_min);
@@ -1012,7 +997,7 @@ void hvx_clamp_scalar_f32(const uint8_t * restrict src,
     HVX_Vector range_left  = hvx_vec_splat_fp32(limit_left);
     HVX_Vector range_right = hvx_vec_splat_fp32(limit_right);
 
-    #pragma unroll(4)
+#pragma unroll(4)
     for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
         HVX_Vector in_vec = *vec_in++;
         HVX_Vector temp_v = in_vec;
