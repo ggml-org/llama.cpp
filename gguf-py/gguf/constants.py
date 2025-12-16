@@ -643,6 +643,7 @@ class MODEL_TENSOR(IntEnum):
     V_MMPROJ_PEG         = auto()
     V_ENC_EMBD_CLS       = auto()
     V_ENC_EMBD_PATCH     = auto()
+    V_ENC_EMBD_NORM      = auto()
     V_ENC_EMBD_POS       = auto()
     V_ENC_INPUT_NORM     = auto()
     V_ENC_ATTN_QKV       = auto()
@@ -661,6 +662,7 @@ class MODEL_TENSOR(IntEnum):
     V_LAYER_SCALE_2      = auto()
     V_PRE_NORM           = auto()
     V_POST_NORM          = auto()
+    V_MM_POST_NORM       = auto()
     V_MM_INP_NORM        = auto()
     V_MM_INP_PROJ        = auto() # gemma3
     V_MM_SOFT_EMB_NORM   = auto() # gemma3
@@ -1016,6 +1018,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MMPROJ_PEG:              "mm.model.peg.{bid}",
     MODEL_TENSOR.V_ENC_EMBD_CLS:            "v.class_embd",
     MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
+    MODEL_TENSOR.V_ENC_EMBD_NORM:           "v.norm_embd",
     MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
     MODEL_TENSOR.V_ENC_ATTN_QKV:            "v.blk.{bid}.attn_qkv",
     MODEL_TENSOR.V_ENC_ATTN_Q:              "v.blk.{bid}.attn_q",
@@ -1034,6 +1037,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_LAYER_SCALE_2:           "v.blk.{bid}.ls2",
     MODEL_TENSOR.V_PRE_NORM:                "v.pre_ln",
     MODEL_TENSOR.V_POST_NORM:               "v.post_ln",
+    MODEL_TENSOR.V_MM_POST_NORM:            "mm.post_norm",
     MODEL_TENSOR.V_MM_INP_PROJ:             "mm.input_projection",
     MODEL_TENSOR.V_MM_INP_NORM:             "mm.input_norm",
     MODEL_TENSOR.V_MM_SOFT_EMB_NORM:        "mm.soft_emb_norm",
@@ -1094,6 +1098,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MMPROJ_PEG,
         MODEL_TENSOR.V_ENC_EMBD_CLS,
         MODEL_TENSOR.V_ENC_EMBD_PATCH,
+        MODEL_TENSOR.V_ENC_EMBD_NORM,
         MODEL_TENSOR.V_ENC_EMBD_POS,
         MODEL_TENSOR.V_ENC_INPUT_NORM,
         MODEL_TENSOR.V_ENC_ATTN_QKV,
@@ -1112,6 +1117,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_LAYER_SCALE_2,
         MODEL_TENSOR.V_PRE_NORM,
         MODEL_TENSOR.V_POST_NORM,
+        MODEL_TENSOR.V_MM_POST_NORM,
         MODEL_TENSOR.V_MM_INP_PROJ,
         MODEL_TENSOR.V_MM_INP_NORM,
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM,
@@ -3357,6 +3363,7 @@ class VisionProjectorType:
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"
+    GLM4V = "glm4v"
 
 
 # Items here are (block size, type size)
