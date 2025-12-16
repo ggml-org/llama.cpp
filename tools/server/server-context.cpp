@@ -1487,9 +1487,33 @@ struct server_context_impl {
         try {
             auto & opt = oai_parser_opt;
             common_chat_templates_inputs inputs;
-            inputs.messages              = common_chat_msgs_parse_oaicompat(task.cli_input);
-            inputs.tools                 = {}; // TODO
-            inputs.tool_choice           = COMMON_CHAT_TOOL_CHOICE_NONE;
+
+            // Support both formats:
+            // 1. Plain array of messages (original format)
+            // 2. Object with "messages" and optionally "tools" fields (extended format)
+            json messages_json;
+            json tools_json;
+            common_chat_tool_choice tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+
+            if (task.cli_input.is_object() && task.cli_input.contains("messages")) {
+                messages_json = task.cli_input.at("messages");
+                if (task.cli_input.contains("tools")) {
+                    tools_json = task.cli_input.at("tools");
+                    // When tools are provided, default to auto tool choice
+                    tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+                }
+                if (task.cli_input.contains("tool_choice")) {
+                    std::string tc_str = task.cli_input.at("tool_choice").get<std::string>();
+                    tool_choice = common_chat_tool_choice_parse_oaicompat(tc_str);
+                }
+            } else {
+                // Original format: cli_input is just an array of messages
+                messages_json = task.cli_input;
+            }
+
+            inputs.messages              = common_chat_msgs_parse_oaicompat(messages_json);
+            inputs.tools                 = common_chat_tools_parse_oaicompat(tools_json);
+            inputs.tool_choice           = tool_choice;
             inputs.json_schema           = ""; // TODO
             inputs.grammar               = ""; // TODO
             inputs.use_jinja             = opt.use_jinja;
@@ -1498,8 +1522,20 @@ struct server_context_impl {
             inputs.reasoning_format      = opt.reasoning_format;
             inputs.enable_thinking       = opt.enable_thinking;
 
+            // Enable tool call parsing when tools are provided
+            if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+                task.params.oaicompat_chat_syntax.parse_tool_calls = true;
+            }
+
             // Apply chat template to the list of messages
             auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
+
+            // Set the chat syntax format from the template result
+            task.params.oaicompat_chat_syntax.format = chat_params.format;
+            task.params.oaicompat_chat_syntax.thinking_forced_open = chat_params.thinking_forced_open;
+            if (!chat_params.parser.empty()) {
+                task.params.oaicompat_chat_syntax.parser.load(chat_params.parser);
+            }
 
             // tokenize the resulting prompt
             auto & prompt = chat_params.prompt;

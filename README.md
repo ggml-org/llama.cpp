@@ -513,6 +513,84 @@ To learn more about model quantization, [read this documentation](tools/quantize
     </details>
 
 
+## [`llama-agent`](tools/agent)
+
+#### An agentic coding assistant that can read, write, and edit files, run shell commands, and help with software engineering tasks.
+
+`llama-agent` transforms llama.cpp into a powerful coding assistant that can autonomously complete multi-step programming tasks. It uses tool calling to interact with your filesystem and execute commands, enabling it to explore codebases, make edits, run tests, and more.
+
+- <details open>
+    <summary>Start an interactive agent session</summary>
+
+    ```bash
+    # Using a local model
+    llama-agent -m model.gguf
+
+    # Using a model from Hugging Face (recommended: NVIDIA Nemotron)
+    llama-agent -hf nvidia/Nemotron-3-Nano-30B-A3B-FP8-GGUF
+
+    # > Find all TODO comments in the src/ directory
+    # [Tool: bash] grep -r "TODO" src/
+    # Found 3 TODO comments...
+    #
+    # > Create a new file with a hello world function
+    # [Tool: write] Creating src/hello.cpp...
+    # Done!
+    ```
+
+    </details>
+
+- <details>
+    <summary>Available tools</summary>
+
+    | Tool | Description |
+    |------|-------------|
+    | `bash` | Execute shell commands with configurable timeout |
+    | `read` | Read files with optional line range (displays line numbers) |
+    | `write` | Create or overwrite files |
+    | `edit` | Search and replace text in files |
+    | `glob` | Find files matching a pattern |
+
+    </details>
+
+- <details>
+    <summary>Permission system</summary>
+
+    The agent includes a permission system to keep you in control:
+
+    - **bash**: Prompts for confirmation before executing commands
+    - **read**: Allowed by default (blocks sensitive files like `.env`, `*.key`)
+    - **write/edit**: Prompts for confirmation before modifying files
+
+    When prompted, you can choose:
+    - `y` - Allow this action once
+    - `n` - Deny this action
+    - `a` - Always allow this tool for this session
+    - `N` - Never allow this tool for this session
+
+    </details>
+
+- <details>
+    <summary>Example: Fix a bug</summary>
+
+    ```bash
+    llama-agent -m model.gguf -c 32768
+
+    # > There's a null pointer bug in parser.cpp, can you find and fix it?
+    # Let me search for potential null pointer issues...
+    # [Tool: read] Reading parser.cpp...
+    # [Tool: glob] Finding related header files...
+    #
+    # I found the issue on line 142. The pointer 'node' is dereferenced
+    # without checking if it's null. Let me fix that:
+    # [Tool: edit] Fixing parser.cpp...
+    #
+    # Done! The fix adds a null check before dereferencing.
+    ```
+
+    </details>
+
+
 ## Contributing
 
 - Contributors can open PRs
@@ -526,6 +604,7 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
 ## Other documentation
 
+- [agent](tools/agent/README.md)
 - [cli](tools/cli/README.md)
 - [completion](tools/completion/README.md)
 - [server](tools/server/README.md)

@@ -2665,12 +2665,13 @@ static common_chat_params common_chat_templates_apply_jinja(
     // Qwen3-Coder XML format detection (must come before Hermes 2 Pro)
     // Detect via explicit XML markers unique to Qwen3-Coder to avoid false positives in other templates.
     // Require presence of <tool_call>, <function=...>, and <parameter=...> blocks.
+    // Note: Nemotron 3 Nano uses <function=name> without bare <function> tags
     if (src.find("<tool_call>") != std::string::npos &&
-        src.find("<function>") != std::string::npos &&
         src.find("<function=") != std::string::npos &&
-        src.find("<parameters>") != std::string::npos &&
-        src.find("<parameter=") != std::string::npos) {
-        // Nemotron 3 Nano 30B A3B
+        src.find("<parameter=") != std::string::npos &&
+        src.find("</function>") != std::string::npos &&
+        src.find("</tool_call>") != std::string::npos) {
+        // Nemotron 3 Nano 30B A3B (with reasoning support)
         if (src.find("<think>") != std::string::npos) {
             return common_chat_params_init_nemotron_v3(tmpl, params);
         }
