@@ -43,7 +43,8 @@ export { createMessageCountMap, getMessageCount } from './conversation-utils';
 export { copyToClipboard, copyCodeToClipboard } from './copy';
 
 // File preview utilities
-export { getFileTypeLabel, getPreviewText } from './file-preview';
+export { getFileTypeLabel } from './file-preview';
+export { getPreviewText } from './text';
 
 // File type utilities
 export {

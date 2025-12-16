@@ -154,7 +154,8 @@ class TensorNameMap:
             "model.layers.{bid}.operator_norm",                     # lfm2
             "model.transformer.blocks.{bid}.attn_norm",             # llada
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
-            "model.layers.{bid}.attention_layernorm"                # apertus
+            "model.layers.{bid}.attention_layernorm",               # apertus
+            "model.layers.{bid}.pre_attention_layernorm",           # kormo
         ),
 
         # Attention norm 2
@@ -342,6 +343,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.ff_norm",                        # llada
             "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
+            "model.layers.{bid}.pre_mlp_layernorm",                          # kormo
         ),
 
         # Pre feed-forward norm

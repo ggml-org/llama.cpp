@@ -87,7 +87,8 @@
 /tests/                                 @ggerganov
 /tests/test-chat-.*                     @pwilkin
 /tools/batched-bench/                   @ggerganov
-/tools/main/                            @ggerganov
+/tools/cli/                             @ngxson
+/tools/completion/                      @ggerganov
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
 /tools/quantize/                        @ggerganov
