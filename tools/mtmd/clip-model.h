@@ -65,6 +65,13 @@ struct clip_hparams {
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
 
+    // audio-to-mel preprocessor params
+    int32_t audio_chunk_len   = -1; // in seconds
+    int32_t audio_sample_rate = -1;
+    int32_t audio_n_fft       = -1;
+    int32_t audio_window_len  = -1;
+    int32_t audio_hop_len     = -1;
+
     // legacy
     bool has_llava_projector = false;
     int minicpmv_version = 0;
@@ -151,6 +158,8 @@ struct clip_model {
     ggml_tensor * patch_embeddings_1 = nullptr;  // second Conv2D kernel when we decouple Conv3D along temproal dimension (Qwen2VL)
     ggml_tensor * patch_bias = nullptr;
     ggml_tensor * position_embeddings = nullptr;
+    ggml_tensor * norm_embd_w = nullptr;
+    ggml_tensor * norm_embd_b = nullptr;
 
     ggml_tensor * pre_ln_w = nullptr;
     ggml_tensor * pre_ln_b = nullptr;
@@ -165,6 +174,14 @@ struct clip_model {
     ggml_tensor * projection; // TODO: rename it to fc (fully connected layer)
     ggml_tensor * mm_fc_w;
     ggml_tensor * mm_fc_b;
+    ggml_tensor * mm_ffn_up_w = nullptr;
+    ggml_tensor * mm_ffn_up_b = nullptr;
+    ggml_tensor * mm_ffn_gate_w = nullptr;
+    ggml_tensor * mm_ffn_gate_b = nullptr;
+    ggml_tensor * mm_ffn_down_w = nullptr;
+    ggml_tensor * mm_ffn_down_b = nullptr;
+    ggml_tensor * mm_post_norm_w = nullptr;
+    ggml_tensor * mm_post_norm_b = nullptr;
 
     // LLaVA projection
     ggml_tensor * mm_input_norm_w = nullptr;
@@ -246,9 +263,10 @@ struct clip_model {
     ggml_tensor * mm_input_proj_w = nullptr;
     ggml_tensor * mm_soft_emb_norm_w = nullptr;
 
-    // pixtral
+    // pixtral, glm4v
     ggml_tensor * token_embd_img_break = nullptr;
     ggml_tensor * mm_patch_merger_w = nullptr;
+    ggml_tensor * mm_patch_merger_b = nullptr;
 
     // ultravox / whisper encoder
     ggml_tensor * conv1d_1_w = nullptr;
@@ -278,3 +296,5 @@ struct clip_model {
             || proj_type == PROJECTOR_TYPE_VOXTRAL;
     }
 };
+
+const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx);
