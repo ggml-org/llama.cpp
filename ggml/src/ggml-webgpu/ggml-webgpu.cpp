@@ -1077,7 +1077,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     };
 
     uint32_t wg_per_head = CEIL_DIV(Q->ne[1], WEBGPU_FLASH_ATTN_Q_TILE);
-    uint32_t wg_x        = wg_per_head * Q->ne[2]; // wg per head * number of heads
+    uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3]; // wg per head * number of heads * number of batches
     std::cout << "ggml_webgpu_flash_attn: wg_x: " << wg_x << "\n";
     return ggml_backend_webgpu_build(ctx, ctx->flash_attn_pipeline, params, entries, wg_x);
 }
