@@ -4,8 +4,45 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <vector>
 
 namespace fs = std::filesystem;
+
+// ANSI color codes
+static const char * ANSI_RED    = "\033[31m";
+static const char * ANSI_GREEN  = "\033[32m";
+static const char * ANSI_RESET  = "\033[0m";
+static const char * ANSI_DIM    = "\033[2m";
+
+// Split string into lines
+static std::vector<std::string> split_lines(const std::string & text) {
+    std::vector<std::string> lines;
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line)) {
+        lines.push_back(line);
+    }
+    return lines;
+}
+
+// Generate a simple colored diff
+static std::string generate_diff(const std::string & old_text, const std::string & new_text, const std::string & file_path) {
+    auto old_lines = split_lines(old_text);
+    auto new_lines = split_lines(new_text);
+
+    std::ostringstream diff;
+    diff << ANSI_DIM << "--- " << file_path << ANSI_RESET << "\n";
+    diff << ANSI_DIM << "+++ " << file_path << ANSI_RESET << "\n";
+
+    for (const auto & line : old_lines) {
+        diff << ANSI_RED << "- " << line << ANSI_RESET << "\n";
+    }
+    for (const auto & line : new_lines) {
+        diff << ANSI_GREEN << "+ " << line << ANSI_RESET << "\n";
+    }
+
+    return diff.str();
+}
 
 static std::string read_file(const fs::path & path) {
     std::ifstream file(path, std::ios::binary);
@@ -104,7 +141,8 @@ static tool_result edit_execute(const json & args, const tool_context & ctx) {
         return {false, "", "Failed to write changes to file"};
     }
 
-    std::string msg = "Successfully replaced " + std::to_string(replacements) + " occurrence(s) in " + path.string();
+    std::string diff = generate_diff(old_string, new_string, path.string());
+    std::string msg = "Successfully replaced " + std::to_string(replacements) + " occurrence(s) in " + path.string() + "\n\n" + diff;
     return {true, msg, ""};
 }
 

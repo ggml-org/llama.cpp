@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <memory>
 #include <sstream>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -16,6 +17,29 @@
 #endif
 
 static const int MAX_OUTPUT_LENGTH = 30000;
+static const int MAX_OUTPUT_LINES = 50;
+
+// Truncate output to max lines
+static std::string truncate_lines(const std::string & text, int max_lines) {
+    std::vector<std::string> lines;
+    std::istringstream stream(text);
+    std::string line;
+
+    while (std::getline(stream, line)) {
+        lines.push_back(line);
+    }
+
+    if ((int)lines.size() <= max_lines) {
+        return text;
+    }
+
+    std::ostringstream result;
+    for (int i = 0; i < max_lines; i++) {
+        result << lines[i] << "\n";
+    }
+    result << "… +" << (lines.size() - max_lines) << " more lines";
+    return result.str();
+}
 
 static tool_result bash_execute(const json & args, const tool_context & ctx) {
     std::string command = args.value("command", "");
@@ -197,20 +221,22 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
     }
 #endif
 
-    // Build result
+    // Build result with line truncation
+    std::string truncated_output = truncate_lines(output, MAX_OUTPUT_LINES);
+
     std::ostringstream result_output;
-    result_output << output;
+    result_output << truncated_output;
 
     if (output.length() >= MAX_OUTPUT_LENGTH) {
-        result_output << "\n\n[Output truncated at " << MAX_OUTPUT_LENGTH << " characters]";
+        result_output << "\n[Output truncated at " << MAX_OUTPUT_LENGTH << " characters]";
     }
 
     if (timed_out) {
-        result_output << "\n\n[Command timed out after " << timeout_ms << "ms]";
+        result_output << "\n[Timed out after " << timeout_ms << "ms]";
     }
 
     if (exit_code != 0) {
-        result_output << "\n\n[Exit code: " << exit_code << "]";
+        result_output << "\n[Exit code: " << exit_code << "]";
     }
 
     return {exit_code == 0 && !timed_out, result_output.str(), ""};

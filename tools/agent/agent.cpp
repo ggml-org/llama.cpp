@@ -23,12 +23,12 @@
 namespace fs = std::filesystem;
 
 const char * LLAMA_AGENT_LOGO = R"(
-▄▄ ▄▄
-██ ██
-██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▀▀█▄ ▄█▀██ ▄███▄ ██▀██▄ ██▀
-██ ██ ▄█▀██ ██ ██ ██ ▄█▀██   ▄█▀██ ▀█▄██ ██▄▄▄ ██ ██▄ ██
-██ ██ ▀█▄██ ██ ██ ██ ▀█▄██ ██▀█▄██ █▀ ██ ▀▀▀██ ██ ▀██ ██
-                                              ▀████▀    ▀▀
+  _ _                                                _
+ | | | __ _ _ __ ___   __ _        __ _  __ _  ___ _ __ | |_
+ | | |/ _` | '_ ` _ \ / _` |      / _` |/ _` |/ _ \ '_ \| __|
+ | | | (_| | | | | | | (_| |  _  | (_| | (_| |  __/ | | | |_
+ |_|_|\__,_|_| |_| |_|\__,_| (_)  \__,_|\__, |\___|_| |_|\__|
+                                        |___/
 )";
 
 static std::atomic<bool> g_is_interrupted = false;
@@ -129,24 +129,17 @@ int main(int argc, char ** argv) {
     console::log("working dir: %s\n", working_dir.c_str());
     console::log("\n");
 
-    // List available tools
-    console::log("available tools:\n");
-    auto tools = tool_registry::instance().get_all_tools();
-    for (const auto * tool : tools) {
-        console::log("  - %s: %s\n", tool->name.c_str(), tool->description.c_str());
-    }
-    console::log("\n");
-
     console::log("commands:\n");
-    console::log("  /exit     exit the agent\n");
-    console::log("  /clear    clear conversation history\n");
-    console::log("  /tools    list available tools\n");
+    console::log("  /exit       exit the agent\n");
+    console::log("  /clear      clear conversation history\n");
+    console::log("  /tools      list available tools\n");
+    console::log("  ESC/Ctrl+C  abort generation\n");
     console::log("\n");
 
     // Interactive loop
     while (true) {
         console::set_display(DISPLAY_TYPE_USER_INPUT);
-        console::log("\n> ");
+        console::log("\n› ");
 
         std::string buffer;
         std::string line;
@@ -184,7 +177,7 @@ int main(int argc, char ** argv) {
         }
         if (buffer == "/tools") {
             console::log("\nAvailable tools:\n");
-            for (const auto * tool : tools) {
+            for (const auto * tool : tool_registry::instance().get_all_tools()) {
                 console::log("  %s:\n", tool->name.c_str());
                 console::log("    %s\n", tool->description.c_str());
             }

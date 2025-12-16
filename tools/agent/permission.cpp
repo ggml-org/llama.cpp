@@ -5,6 +5,29 @@
 #include <iostream>
 #include <filesystem>
 
+#if defined(_WIN32)
+#include <conio.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
+
+// Read a single character without waiting for Enter
+static char read_single_char() {
+#if defined(_WIN32)
+    return static_cast<char>(_getch());
+#else
+    struct termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    char ch = static_cast<char>(getchar());
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    return ch;
+#endif
+}
+
 namespace fs = std::filesystem;
 
 permission_manager::permission_manager() {
@@ -105,32 +128,31 @@ permission_response permission_manager::prompt_user(const permission_request & r
     for (int i = 0; i < 59; i++) console::log("-");
     console::log("+\n");
 
-    console::log("| [y]es  [n]o  [a]lways  [N]ever\n");
-    console::log("> ");
+    console::log("| [y]es  [n]o  [a]lways  [d]eny always: ");
     console::flush();
 
-    std::string input;
-    std::getline(std::cin, input);
+    char ch = read_single_char();
+    console::log("%c\n", ch);  // Echo the character
 
-    if (input.empty() || input == "n" || input == "N" || input == "no") {
+    if (ch == 'n' || ch == 'N') {
         return permission_response::DENY_ONCE;
     }
-    if (input == "y" || input == "Y" || input == "yes") {
+    if (ch == 'y' || ch == 'Y') {
         return permission_response::ALLOW_ONCE;
     }
-    if (input == "a" || input == "A" || input == "always") {
+    if (ch == 'a' || ch == 'A') {
         // Store session override
         std::string key = request.tool_name + ":" + request.details;
         session_overrides_[key] = permission_state::ALLOW_SESSION;
         return permission_response::ALLOW_ALWAYS;
     }
-    if (input == "never") {
+    if (ch == 'd' || ch == 'D') {  // 'd' for deny always (since 'N' is deny once)
         std::string key = request.tool_name + ":" + request.details;
         session_overrides_[key] = permission_state::DENY_SESSION;
         return permission_response::DENY_ALWAYS;
     }
 
-    // Default to deny
+    // Default to deny for any other key
     return permission_response::DENY_ONCE;
 }
 

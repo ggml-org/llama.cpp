@@ -1,8 +1,44 @@
 #include "agent-loop.h"
 #include "console.h"
 
+#include <chrono>
 #include <functional>
 #include <sstream>
+
+#if defined(_WIN32)
+#include <conio.h>
+#else
+#include <sys/select.h>
+#include <unistd.h>
+#include <termios.h>
+#endif
+
+// Check for ESC key press without blocking
+static bool check_escape_key() {
+#if defined(_WIN32)
+    if (_kbhit()) {
+        int ch = _getch();
+        if (ch == 27) { // ESC
+            return true;
+        }
+    }
+    return false;
+#else
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+
+    struct timeval tv = {0, 0}; // Zero timeout = non-blocking
+
+    if (select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0) {
+        char ch;
+        if (read(STDIN_FILENO, &ch, 1) == 1 && ch == 27) { // ESC
+            return true;
+        }
+    }
+    return false;
+#endif
+}
 
 agent_loop::agent_loop(server_context & server_ctx,
                        const common_params & params,
@@ -34,16 +70,104 @@ agent_loop::agent_loop(server_context & server_ctx,
     permission_mgr_.set_project_root(tool_ctx_.working_dir);
 
     // Add system prompt for tool usage
-    std::string system_prompt = R"(You are an AI coding assistant with access to tools. Use tools to help the user with their coding tasks.
+    std::string system_prompt = R"(You are llama.agent, a powerful local AI coding assistant running on llama.cpp.
 
-Available tools:
-- bash: Execute shell commands
-- read: Read file contents
-- write: Create or overwrite files
-- edit: Make targeted edits to files using search/replace
-- glob: Find files matching a pattern
+You help users with software engineering tasks by reading files, writing code, running commands, and navigating codebases. You run entirely on the user's machine - no data leaves their system.
 
-When using tools, think step by step about what you need to do. After getting tool results, analyze them and continue working toward the user's goal. When the task is complete, provide a summary of what you did.)";
+# Tools
+
+You have access to the following tools:
+
+- **bash**: Execute shell commands. Use for git, build commands, running tests, etc.
+- **read**: Read file contents with line numbers. Always read files before editing them.
+- **write**: Create new files or overwrite existing ones.
+- **edit**: Make targeted edits using search/replace. The old_string must match exactly. Use replace_all=true to replace all occurrences of a word or phrase.
+- **glob**: Find files matching a pattern. Use to explore project structure.
+
+## Using the edit tool
+The edit tool finds and replaces text in files. Key points:
+- **old_string must match exactly** - include correct whitespace and indentation
+- **Always read the file first** - so you know the exact text to match
+- **Use replace_all=true** when replacing a word or short phrase everywhere in the file
+- **Use more context** when there are multiple matches and you only want to change one
+
+# Guidelines
+
+## Be direct and concise
+- Give short, clear responses. No filler or excessive explanation.
+- Use markdown for code blocks and formatting.
+- No emojis unless the user asks for them.
+
+## Think step by step
+- Break complex tasks into smaller steps.
+- After each tool result, analyze what you learned and decide the next action.
+- When stuck, explain your reasoning and ask for clarification.
+
+## Read before you write
+- ALWAYS read a file before editing it.
+- Understand existing code patterns before making changes.
+- Check if similar code exists before creating new files.
+
+## Be careful with destructive operations
+- Double-check paths before deleting or overwriting files.
+- Prefer targeted edits over full file rewrites.
+- Run tests after making changes when possible.
+
+# Tool Usage
+
+## Parallel execution
+When multiple operations are independent, execute them together. For example, reading multiple files or running independent commands.
+
+## Search strategy
+When looking for code:
+1. Use `glob` to find candidate files
+2. Use `read` to examine promising files
+3. Use `bash` with grep for text search across files
+
+## Code references
+When referring to code, use the format `file_path:line_number` so users can navigate easily.
+
+Example: "The bug is in the `processRequest` function in src/server.cpp:142"
+
+# Examples
+
+<example>
+User: Fix the typo in README.md
+Assistant: Let me read the file first.
+[Tool: read README.md]
+I see the typo on line 15. Let me fix it.
+[Tool: edit README.md - fixes "teh" -> "the"]
+Done. Fixed "teh" to "the" on line 15.
+</example>
+
+<example>
+User: Find where the API routes are defined
+Assistant: Let me search for route definitions.
+[Tool: glob **/*route*.{js,ts}]
+Found src/routes/api.ts and src/routes/auth.ts.
+[Tool: read src/routes/api.ts]
+The API routes are defined in src/routes/api.ts. The main endpoints are:
+- GET /users (line 12)
+- POST /users (line 24)
+- GET /users/:id (line 36)
+</example>
+
+<example>
+User: Run the tests and fix any failures
+Assistant: Running the test suite.
+[Tool: bash npm test]
+3 tests failed. Let me examine each failure:
+1. test/auth.test.js - "should validate token"
+[Tool: read test/auth.test.js]
+[Tool: read src/auth.js]
+The issue is on src/auth.js:45 - the token expiry check is inverted.
+[Tool: edit src/auth.js - fixes the condition]
+Let me run the tests again.
+[Tool: bash npm test]
+All tests passing now.
+</example>
+
+When the task is complete, provide a brief summary of what you did.)";
 
     messages_.push_back({
         {"role", "system"},
@@ -113,8 +237,39 @@ static bool parse_function_block(const std::string & block, common_chat_tool_cal
         while (!param_value.empty() && (param_value.back() == '\n' || param_value.back() == '\r')) {
             param_value.pop_back();
         }
+        // Trim leading/trailing whitespace for type inference
+        std::string trimmed = param_value;
+        while (!trimmed.empty() && std::isspace(trimmed.front())) trimmed.erase(0, 1);
+        while (!trimmed.empty() && std::isspace(trimmed.back())) trimmed.pop_back();
 
-        args[param_name] = param_value;
+        // Convert to appropriate JSON type
+        std::string lower_trimmed = trimmed;
+        for (auto & c : lower_trimmed) c = std::tolower(c);
+
+        if (lower_trimmed == "true") {
+            args[param_name] = true;
+        } else if (lower_trimmed == "false") {
+            args[param_name] = false;
+        } else {
+            // Try to parse as number
+            bool is_number = !trimmed.empty();
+            bool has_dot = false;
+            for (size_t i = 0; i < trimmed.size(); i++) {
+                char c = trimmed[i];
+                if (c == '-' && i == 0) continue;
+                if (c == '.' && !has_dot) { has_dot = true; continue; }
+                if (!std::isdigit(c)) { is_number = false; break; }
+            }
+            if (is_number && !trimmed.empty() && trimmed != "-" && trimmed != ".") {
+                if (has_dot) {
+                    args[param_name] = std::stod(trimmed);
+                } else {
+                    args[param_name] = std::stoll(trimmed);
+                }
+            } else {
+                args[param_name] = param_value;
+            }
+        }
         param_pos = value_end;
     }
 
@@ -217,7 +372,17 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
         rd.post_task({std::move(task)});
     }
 
-    auto should_stop = [this]() { return is_interrupted_.load(); };
+    auto should_stop = [this]() {
+        if (is_interrupted_.load()) {
+            return true;
+        }
+        // Check for ESC key to abort generation
+        if (check_escape_key()) {
+            is_interrupted_.store(true);
+            return true;
+        }
+        return false;
+    };
 
     // Wait for first result
     console::spinner::start();
@@ -226,9 +391,11 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
     console::spinner::stop();
     std::string full_content;
     bool is_thinking = false;
+    bool was_aborted = false;
 
     while (result) {
         if (should_stop()) {
+            was_aborted = true;
             break;
         }
         if (result->is_error()) {
@@ -246,7 +413,7 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
             for (const auto & diff : res_partial->oaicompat_msg_diffs) {
                 if (!diff.content_delta.empty()) {
                     if (is_thinking) {
-                        console::log("\n[End thinking]\n\n");
+                        console::log("\n───\n\n");
                         console::set_display(DISPLAY_TYPE_RESET);
                         is_thinking = false;
                     }
@@ -257,7 +424,7 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
                 if (!diff.reasoning_content_delta.empty()) {
                     console::set_display(DISPLAY_TYPE_REASONING);
                     if (!is_thinking) {
-                        console::log("[Start thinking]\n");
+                        console::log("───\n");
                     }
                     is_thinking = true;
                     console::log("%s", diff.reasoning_content_delta.c_str());
@@ -279,7 +446,17 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
         result = rd.next(should_stop);
     }
 
+    // Reset interrupted flag for next interaction
     is_interrupted_.store(false);
+
+    if (was_aborted) {
+        console::log("\n[Generation aborted]\n");
+        // Return partial content without tool calls so conversation can continue
+        common_chat_msg msg;
+        msg.role = "assistant";
+        msg.content = full_content;
+        return msg;
+    }
 
     // Parse tool calls ourselves using the qwen3-coder/nemotron XML format
     return parse_tool_calls_xml(full_content);
@@ -359,11 +536,14 @@ tool_result agent_loop::execute_tool_call(const common_chat_tool_call & call) {
 
     // Display tool execution
     console::set_display(DISPLAY_TYPE_INFO);
-    console::log("\n[Tool: %s]\n", call.name.c_str());
+    console::log("\n› %s\n", call.name.c_str());
     console::set_display(DISPLAY_TYPE_RESET);
 
-    // Execute the tool
+    // Execute the tool with timing
+    auto start_time = std::chrono::steady_clock::now();
     tool_result result = registry.execute(call.name, args, tool_ctx_);
+    auto end_time = std::chrono::steady_clock::now();
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
     // Display result summary
     if (result.success) {
@@ -376,6 +556,15 @@ tool_result agent_loop::execute_tool_call(const common_chat_tool_call & call) {
     } else {
         console::error("Error: %s\n", result.error.c_str());
     }
+
+    // Display elapsed time
+    console::set_display(DISPLAY_TYPE_INFO);
+    if (elapsed_ms < 1000) {
+        console::log("└─ %lldms\n", elapsed_ms);
+    } else {
+        console::log("└─ %.1fs\n", elapsed_ms / 1000.0);
+    }
+    console::set_display(DISPLAY_TYPE_RESET);
 
     return result;
 }
