@@ -1418,17 +1418,15 @@ static void delta_net_f32_cuda(
             // - Vectors (Q,K,V,KBeta,VBeta,KCumdecay,VPrime,VNew,Out): 9 × HEAD_DIM × sizeof(float) = 4608 bytes
             // - Warp scratch: 16 × sizeof(float) = 64 bytes
             // Total: 65536 + 4608 + 64 = 70208 bytes (~68.6KB)
-            // Note: __shared__ scalars (decay, beta, etc.) are static, not dynamic
+            // __shared__ scalars (decay, beta, etc.) are static, not dynamic
             constexpr size_t state_bytes = 128 * 128 * sizeof(float);       // 64KB
             constexpr size_t vector_bytes = 9 * 128 * sizeof(float);         // 4.5KB
             constexpr size_t warp_scratch_bytes = 16 * sizeof(float);        // 64B
             constexpr size_t blackwell_smem_size = state_bytes + vector_bytes + warp_scratch_bytes;
 
-            // Sanity check: ensure we allocated enough
             static_assert(blackwell_smem_size == 70208, "Shared memory size mismatch");
 
-            // Check for A/B comparison mode
-            // Use a function-local static for thread-safe lazy initialization
+            // A/B comparison mode (set GGML_CUDA_DELTA_NET_AB=1)
             static const bool ab_mode = []() {
                 const char* env = std::getenv("GGML_CUDA_DELTA_NET_AB");
                 if (env != nullptr) {
