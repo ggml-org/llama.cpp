@@ -441,6 +441,7 @@ private:
                 ggml_tensor * cur,
                 ggml_tensor * causal_mask,
                 ggml_tensor * identity,
+                ggml_tensor * diag_mask,
                         int   il);
 
     ggml_tensor * build_layer_ffn(
@@ -456,6 +457,7 @@ private:
                 ggml_tensor * state,
                 ggml_tensor * causal_mask,
                 ggml_tensor * identity,
+                ggml_tensor * diag_mask,
                         int   il);
 
     ggml_tensor * build_delta_net_autoregressive(

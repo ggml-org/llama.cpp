@@ -17,13 +17,15 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     ggml_tensor * causal_mask =
-        ggml_tri(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens, ubatch.n_seq_tokens), 1.0f),
+        ggml_tri(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, CHUNK_SIZE, CHUNK_SIZE), 1.0f),
                     GGML_TRI_TYPE_LOWER);
 
-    ggml_tensor * identity = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, ubatch.n_seq_tokens), 1.0f));
+    ggml_tensor * identity = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, CHUNK_SIZE), 1.0f));
+    ggml_tensor * diag_mask = ggml_add(ctx0, causal_mask, identity);
 
     ggml_build_forward_expand(gf, causal_mask);
     ggml_build_forward_expand(gf, identity);
+    ggml_build_forward_expand(gf, diag_mask);
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
@@ -34,7 +36,7 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
         // Determine layer type and build appropriate attention mechanism
         if (hparams.is_recurrent(il)) {
             // Linear attention layer (gated delta net)
-            cur = build_layer_attn_linear(inp->get_recr(), cur, causal_mask, identity, il);
+            cur = build_layer_attn_linear(inp->get_recr(), cur, causal_mask, identity, diag_mask, il);
         } else {
             // Full attention layer
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il);
@@ -93,6 +95,7 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_chunking(
         ggml_tensor * state,
         ggml_tensor * causal_mask,
         ggml_tensor * identity,
+        ggml_tensor * diag_mask,
         int           il) {
     const int64_t S_k      = q->ne[0];
     const int64_t H_k      = q->ne[1];
@@ -123,8 +126,6 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_chunking(
     q = ggml_scale(ctx0, q, scale);
 
     beta = ggml_sigmoid(ctx0, beta);
-
-    ggml_tensor * causal_diag_mask = ggml_add(ctx0, causal_mask, identity);
 
     cb(q, "q_in", il);
     cb(k, "k_in", il);
@@ -176,28 +177,6 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_chunking(
     cb(v_beta, "v_beta", il);
     cb(k_beta, "k_beta", il);
 
-    ggml_tensor * chunked_mask =
-        n_tokens >= chunk_size ?
-            ggml_view_4d(ctx0, causal_mask, chunk_size,
-                chunk_size,         causal_mask->ne[2], causal_mask->ne[3],
-                causal_mask->nb[1], causal_mask->nb[2], causal_mask->nb[3], 0) :
-            ggml_tri(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, chunk_size, chunk_size), 1.0f),
-                GGML_TRI_TYPE_LOWER);
-
-    ggml_tensor * chunked_identity =
-        n_tokens >= chunk_size ?
-            ggml_view_4d(ctx0, identity, chunk_size,
-                chunk_size,      identity->ne[2], identity->ne[3],
-                identity->nb[1], identity->nb[2], identity->nb[3], 0) :
-            ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, chunk_size), 1.0f));
-
-    ggml_tensor * chunked_diag_mask =
-        n_tokens >= chunk_size ?
-            ggml_view_4d(ctx0, causal_diag_mask, chunk_size,
-                chunk_size,              causal_diag_mask->ne[2], causal_diag_mask->ne[3],
-                causal_diag_mask->nb[1], causal_diag_mask->nb[2], causal_diag_mask->nb[3], 0) :
-            ggml_add(ctx0, chunked_mask, chunked_identity);
-
     q      = ggml_reshape_4d(ctx0, q,      S_k, chunk_size, n_chunks, H_k * n_seqs);
     k      = ggml_reshape_4d(ctx0, k,      S_k, chunk_size, n_chunks, H_k * n_seqs);
     k_beta = ggml_reshape_4d(ctx0, k_beta, S_k, chunk_size, n_chunks, H_k * n_seqs);
@@ -221,23 +200,23 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_chunking(
 
     cb(decay_mask, "decay_mask", il);
 
-    decay_mask = ggml_mul(ctx0, decay_mask, chunked_diag_mask);
+    decay_mask = ggml_mul(ctx0, decay_mask, diag_mask);
     decay_mask = ggml_exp(ctx0, decay_mask);
-    decay_mask = ggml_mul(ctx0, decay_mask, chunked_diag_mask);
+    decay_mask = ggml_mul(ctx0, decay_mask, diag_mask);
 
     ggml_tensor * kmulkbeta = ggml_mul_mat(ctx0, k, k_beta);
 
     ggml_tensor * k_decay = ggml_mul(ctx0, kmulkbeta, decay_mask);
-    ggml_tensor * attn    = ggml_neg(ctx0, ggml_mul(ctx0, k_decay, chunked_mask));
+    ggml_tensor * attn    = ggml_neg(ctx0, ggml_mul(ctx0, k_decay, causal_mask));
 
     cb(attn, "attn_pre_solve", il);
 
-    ggml_tensor * attn_lower = ggml_mul(ctx0, attn, chunked_mask);
-    ggml_tensor * lhs        = ggml_sub(ctx0, ggml_repeat(ctx0, chunked_identity, attn_lower), attn_lower);
+    ggml_tensor * attn_lower = ggml_mul(ctx0, attn, causal_mask);
+    ggml_tensor * lhs        = ggml_sub(ctx0, ggml_repeat(ctx0, identity, attn_lower), attn_lower);
 
     ggml_tensor * lin_solve  = ggml_solve_tri(ctx0, lhs, attn, true, true, false);
-    attn                     = ggml_mul(ctx0, lin_solve, chunked_mask);
-    attn                     = ggml_add(ctx0, attn, chunked_identity);
+    attn                     = ggml_mul(ctx0, lin_solve, causal_mask);
+    attn                     = ggml_add(ctx0, attn, identity);
 
     cb(attn, "attn_solved", il);
 
@@ -286,7 +265,7 @@ ggml_tensor * llm_build_qwen3next::build_delta_net_chunking(
         // attn = (q_i @ k_i.transpose(-1, -2) * decay_mask[:, :, i]).masked_fill_(mask, 0)
         attn = ggml_mul_mat(ctx0, k_chunk, q_chunk);
         attn = ggml_mul(ctx0, attn, decay_mask_chunk);
-        attn = ggml_mul(ctx0, attn, ggml_add(ctx0, chunked_identity, chunked_mask));
+        attn = ggml_mul(ctx0, attn, diag_mask);
 
         ggml_tensor * state_t = ggml_cont_4d(ctx0, ggml_permute(ctx0, new_state, 1, 0, 2, 3), S_v, S_v, 1, H_v * n_seqs);
 
@@ -549,6 +528,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
         ggml_tensor *        cur,
         ggml_tensor *        causal_mask,
         ggml_tensor *        identity,
+        ggml_tensor *        diag_mask,
         int                  il) {
     const auto * mctx_cur = inp->mctx;
 
@@ -762,7 +742,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     if (n_seq_tokens == 1) {
         attn_out = build_delta_net_autoregressive(q_conv, k_conv, v_conv, gate, beta, state, il);
     } else {
-        attn_out = build_delta_net_chunking(q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, il);
+        attn_out = build_delta_net_chunking(q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, diag_mask, il);
     }
     cb(attn_out, "attn_out", il);
 
