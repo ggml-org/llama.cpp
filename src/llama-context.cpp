@@ -1261,7 +1261,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     // Read only the last token's draft logits
                     eagle3_draft_logits.resize(draft_vocab_size);
                     const size_t last_offset = last_idx * draft_vocab_size * sizeof(float);
-                    ggml_backend_tensor_get(t_logits, eagle3_draft_logits.data(), last_offset, draft_vocab_size * sizeof(float));
+                    ggml_backend_tensor_get_async(backend_res, t_logits, eagle3_draft_logits.data(), last_offset, draft_vocab_size * sizeof(float));
+                    synchronize();
                     
                     
                     // Map only the last token's draft logits to target vocab

@@ -63,10 +63,6 @@ llm_build_eagle3_decode::llm_build_eagle3_decode(const llama_model & model, cons
                 LLM_NORM_RMS, 0);
         cb(input_embeds_normed, "input_layernorm", -1);
 
-        // Force a sync point between the two parallel RMS_NORM paths
-        // This prevents buffer reuse issues on GPU (EAGLE3 GPU fix)
-        ggml_set_sync(input_embeds_normed);
-
         // Apply hidden_norm to g_embeddings
         ggml_tensor * g_embeddings_normed = build_norm(g_embeddings,
                 model.layers[0].eagle3_hidden_norm, NULL,
