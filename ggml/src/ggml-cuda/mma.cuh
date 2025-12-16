@@ -533,9 +533,9 @@ namespace ggml_cuda_mma {
         static constexpr int         I  = I_;
         static constexpr int         J  = J_;
         static constexpr data_layout dl = DATA_LAYOUT_I_MAJOR_DUAL;
-        
+
         static constexpr int         ne = I * J / 32 * 2;
-        
+
         T x[ne] = {0};
 
         static constexpr __device__ bool supported() {
@@ -612,7 +612,7 @@ namespace ggml_cuda_mma {
             ggml_cuda_memcpy_1<sizeof(t.x)>(t.x, xs0 + t.get_i(0) * stride + t.get_j(0));
         }
 #elif defined(AMD_WMMA_AVAILABLE)
-        // All wmma layout has continues data when i-major.
+        // All wmma layout has contiguous data when i-major.
         if constexpr (is_i_major(dl)) {
             // the data must be aligned to 16 bytes when bigger than ggml_cuda_get_max_cpy_bytes()
             constexpr int aligned_copy_bytes = ggml_cuda_get_max_cpy_bytes();
@@ -900,7 +900,7 @@ namespace ggml_cuda_mma {
         NO_DEVICE_CODE;
 #endif // AMPERE_MMA_AVAILABLE
     }
-    
+
     template <data_layout dl_ab, data_layout dl_d>
     static __device__ __forceinline__ void mma(
             tile<16, 16, float, dl_d> & D, const tile<16, 8, half2, dl_ab> & A, const tile<16, 8, half2, dl_ab> & B) {
@@ -954,7 +954,7 @@ namespace ggml_cuda_mma {
         NO_DEVICE_CODE;
 #endif // TURING_MMA_AVAILABLE
     }
-    
+
     template <data_layout dl_ab, data_layout dl_d>
     static __device__ __forceinline__ void mma(
             tile<16, 16, float, dl_d> & D, const tile<16, 8, nv_bfloat162, dl_ab> & A, const tile<16, 8, nv_bfloat162, dl_ab> & B) {
